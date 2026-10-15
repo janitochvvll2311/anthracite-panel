@@ -1,6 +1,6 @@
 use anth_conf::{Config, DEFAULT_CONFIG_PATH};
-use anthd::serve;
 use anthd::cli::Cli;
+use anthd::serve;
 use std::process::ExitCode;
 
 #[tokio::main]
