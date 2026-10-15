@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anth-conf = { version = "0.1.0", path = "../anth-conf" }
 anth-proto = { path = "../anth-proto" }
 clap = { version = "4.6.7", features = ["derive"] }
 futures = "0.3.34"

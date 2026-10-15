@@ -1,3 +1,4 @@
+use anth_conf::Config;
 use anth_proto::{Request, Response};
 use futures::{SinkExt, StreamExt};
 use std::error::Error;
@@ -7,7 +8,7 @@ use tokio_util::codec::{Framed, LinesCodec};
 
 pub fn handle_request(request: Request) -> Response {
     match request {
-        Request::Echo { message } => Response::Ok { message }
+        Request::Echo { message } => Response::Ok { message },
     }
 }
 
@@ -49,16 +50,16 @@ pub async fn serve_connection(socket: UnixStream) -> Result<(), Box<dyn Error + 
     Ok(())
 }
 
-pub fn clear_socket_path(path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
+pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
+    match std::fs::remove_file(path.as_ref()) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
 }
 
-pub async fn serve() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let socket_path = Path::new("/tmp/anth.sock");
+pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let socket_path = Path::new(&config.socket_path);
     clear_socket_path(&socket_path)?;
 
     let listener = UnixListener::bind(&socket_path)?;
