@@ -1,10 +1,10 @@
+pub mod cli;
+
 use anth_conf::Config;
-use anth_proto::{Request, Response};
-use futures::{SinkExt, StreamExt};
+use anth_proto::{AnthServer, Request, Response};
 use std::error::Error;
 use std::path::Path;
 use tokio::net::{UnixListener, UnixStream};
-use tokio_util::codec::{Framed, LinesCodec};
 
 pub fn handle_request(request: Request) -> Response {
     match request {
@@ -22,28 +22,13 @@ pub fn handle_line(line: &str) -> Response {
 }
 
 pub async fn serve_connection(socket: UnixStream) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut framed = Framed::new(socket, LinesCodec::new());
+    let mut server = AnthServer::new(socket);
 
-    while let Some(result) = framed.next().await {
-        let response = match result {
-            Ok(line) => handle_line(&line),
-            Err(e) => {
-                eprintln!("Error reading from socket: {e}");
-                return Err(Box::new(e));
-            }
-        };
-
-        let response_json = match response.to_json() {
-            Ok(json) => json,
-            Err(e) => {
-                eprintln!("Error serializing response: {e}");
-                return Err(Box::new(e));
-            }
-        };
-
-        if let Err(e) = framed.send(response_json).await {
+    while let Ok(request) = server.receive_request().await {
+        let response = handle_request(request);
+        if let Err(e) = server.send_response(&response).await {
             eprintln!("Error writing to socket: {e}");
-            return Err(Box::new(e));
+            return Err(e);
         }
     }
 

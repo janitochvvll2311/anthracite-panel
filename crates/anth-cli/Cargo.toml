@@ -1,0 +1,10 @@
+[package]
+name = "anth-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anth-conf = { path = "../anth-conf" }
+anth-proto = { path = "../anth-proto" }
+clap = { version = "4.6.7", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }

@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/anth-proto", "crates/anthd", "crates/anth-conf"]
+members = ["crates/anth-proto", "crates/anthd", "crates/anth-conf", "crates/anth-cli"]
 resolver = "2"

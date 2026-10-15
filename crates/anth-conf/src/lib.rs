@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{error::Error, path::Path};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/anth/config.toml";
 pub const DEFAULT_SOCKET_PATH: &str = "/var/tmp/anth.sock";
@@ -19,13 +19,13 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn from_toml(text: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(text)
+    pub fn from_toml(text: &str) -> Result<Self, Box<dyn Error>> {
+        toml::from_str(text).map_err(|e| Box::new(e) as Box<dyn Error>)
     }
 
-    pub fn to_toml(&self) -> String {
-        let body = toml::to_string_pretty(self).expect("Config is always serializable");
-        format!("{body}")
+    pub fn to_toml(&self) -> Result<String, Box<dyn Error>> {
+        let body = toml::to_string_pretty(self).map_err(|e| Box::new(e) as Box<dyn Error>)?;
+        Ok(body)
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
@@ -53,7 +53,12 @@ impl Config {
             })?;
         }
 
-        std::fs::write(path, self.to_toml())
-            .map_err(|source| format!("Error writing config at {}: {source}", path.display()))
+        std::fs::write(
+            path,
+            self.to_toml().map_err(|source| {
+                format!("Error serializing config at {}: {source}", path.display())
+            })?,
+        )
+        .map_err(|source| format!("Error writing config at {}: {source}", path.display()))
     }
 }

@@ -53,6 +53,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-cli"
+version = "0.1.0"
+dependencies = [
+ "anth-conf",
+ "anth-proto",
+ "clap",
+ "tokio",
+]
+
+[[package]]
 name = "anth-conf"
 version = "0.1.0"
 dependencies = [
@@ -65,8 +75,11 @@ dependencies = [
 name = "anth-proto"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -76,9 +89,7 @@ dependencies = [
  "anth-conf",
  "anth-proto",
  "clap",
- "futures",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
