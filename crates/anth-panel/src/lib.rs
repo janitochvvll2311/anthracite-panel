@@ -62,7 +62,6 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
                 .unwrap()
         }
         None => {
-            // SPA Fallback a index.html para rutas del cliente
             if let Some(content) = Asset::get("index.html") {
                 Response::builder()
                     .header("content-type", "text/html")
