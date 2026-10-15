@@ -6,7 +6,7 @@ use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LinesCodec};
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "type", content = "payload")]
+#[serde(tag = "type", content = "data")]
 pub enum Request {
     Echo { message: String },
 }
@@ -34,7 +34,7 @@ impl Request {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "status", content = "data")]
+#[serde(tag = "type", content = "data")]
 pub enum Response {
     Ok { message: String },
     Error { detail: String },

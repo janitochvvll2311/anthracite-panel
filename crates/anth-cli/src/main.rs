@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use anth_cli::{handle_response, request_for, Cli};
+use anth_cli::{cli::Cli, handle_response, request_for};
 use anth_conf::{Config, DEFAULT_CONFIG_PATH};
 use anth_proto::AnthClient;
 use std::path::Path;
