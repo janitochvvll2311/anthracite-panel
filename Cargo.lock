@@ -88,6 +88,7 @@ dependencies = [
  "anth-proto",
  "axum",
  "clap",
+ "mime_guess",
  "rust-embed",
  "serde",
  "serde_json",
