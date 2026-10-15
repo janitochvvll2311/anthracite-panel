@@ -19,13 +19,24 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn from_toml(text: &str) -> Result<Self, Box<dyn Error>> {
-        toml::from_str(text).map_err(|e| Box::new(e) as Box<dyn Error>)
+    pub fn from_toml(text: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        match toml::from_str(text) {
+            Ok(config) => Ok(config),
+            Err(e) => {
+                eprintln!("Error parsing TOML: {e}");
+                Err(Box::new(e).into())
+            }
+        }
     }
 
-    pub fn to_toml(&self) -> Result<String, Box<dyn Error>> {
-        let body = toml::to_string_pretty(self).map_err(|e| Box::new(e) as Box<dyn Error>)?;
-        Ok(body)
+    pub fn to_toml(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
+        match toml::to_string_pretty(self) {
+            Ok(body) => Ok(body),
+            Err(e) => {
+                eprintln!("Error serializing config to TOML: {e}");
+                Err(Box::new(e).into())
+            }
+        }
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {

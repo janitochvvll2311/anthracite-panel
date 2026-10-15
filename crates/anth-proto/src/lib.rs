@@ -13,11 +13,23 @@ pub enum Request {
 
 impl Request {
     pub fn to_json(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
-        serde_json::to_string(self).map_err(|e| Box::new(e).into())
+        match serde_json::to_string(self) {
+            Ok(json) => Ok(json),
+            Err(e) => {
+                eprintln!("Error serializing request to JSON: {e}");
+                Err(Box::new(e).into())
+            }
+        }
     }
 
     pub fn from_json(json: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        serde_json::from_str(json).map_err(|e| Box::new(e).into())
+        match serde_json::from_str(json) {
+            Ok(request) => Ok(request),
+            Err(e) => {
+                eprintln!("Error parsing request from JSON: {e}");
+                Err(Box::new(e).into())
+            }
+        }
     }
 }
 
@@ -30,11 +42,23 @@ pub enum Response {
 
 impl Response {
     pub fn to_json(&self) -> Result<String, Box<dyn Error + Send + Sync>> {
-        serde_json::to_string(self).map_err(|e| Box::new(e).into())
+        match serde_json::to_string(self) {
+            Ok(json) => Ok(json),
+            Err(e) => {
+                eprintln!("Error serializing response to JSON: {e}");
+                Err(Box::new(e).into())
+            }
+        }
     }
 
     pub fn from_json(json: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        serde_json::from_str(json).map_err(|e| Box::new(e).into())
+        match serde_json::from_str(json) {
+            Ok(response) => Ok(response),
+            Err(e) => {
+                eprintln!("Error parsing response from JSON: {e}");
+                Err(Box::new(e).into())
+            }
+        }
     }
 }
 
@@ -49,13 +73,20 @@ impl AnthServer {
         }
     }
 
-    pub async fn receive_request(&mut self) -> Result<Request, Box<dyn Error + Send + Sync>> {
+    pub async fn receive_request(
+        &mut self,
+    ) -> Option<Result<Request, Box<dyn Error + Send + Sync>>> {
         if let Some(line) = self.framed.next().await {
-            let json = line?;
-            let request = Request::from_json(&json)?;
-            Ok(request)
+            match line {
+                Ok(json) => Some(Request::from_json(&json)),
+                Err(e) => {
+                    eprintln!("Error reading line from stream: {e}");
+                    Some(Err(Box::new(e).into()))
+                }
+            }
         } else {
-            Err("Stream closed".into())
+            eprintln!("Stream closed while waiting for request");
+            None
         }
     }
 
@@ -64,7 +95,10 @@ impl AnthServer {
         response: &Response,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let json = response.to_json()?;
-        self.framed.send(json).await?;
+        if let Err(e) = self.framed.send(json).await {
+            eprintln!("Error sending response: {e}");
+            return Err(Box::new(e).into());
+        }
         Ok(())
     }
 }
@@ -85,17 +119,27 @@ impl AnthClient {
         request: &Request,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let json = request.to_json()?;
-        self.framed.send(json).await?;
+        if let Err(e) = self.framed.send(json).await {
+            eprintln!("Error sending request: {e}");
+            return Err(Box::new(e).into());
+        }
         Ok(())
     }
 
-    pub async fn receive_response(&mut self) -> Result<Response, Box<dyn Error + Send + Sync>> {
+    pub async fn receive_response(
+        &mut self,
+    ) -> Option<Result<Response, Box<dyn Error + Send + Sync>>> {
         if let Some(line) = self.framed.next().await {
-            let json = line?;
-            let response = Response::from_json(&json)?;
-            Ok(response)
+            match line {
+                Ok(json) => Some(Response::from_json(&json)),
+                Err(e) => {
+                    eprintln!("Error reading line from stream: {e}");
+                    Some(Err(Box::new(e).into()))
+                }
+            }
         } else {
-            Err("Stream closed".into())
+            eprintln!("Stream closed while waiting for response");
+            None
         }
     }
 }

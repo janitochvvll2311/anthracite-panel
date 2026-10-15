@@ -34,12 +34,17 @@ async fn main() -> ExitCode {
     match client.send_request(&request).await {
         Ok(_) => {
             println!("Request sent successfully.");
-            match client.receive_response().await {
-                Ok(response) => handle_response(&response),
-                Err(e) => {
-                    eprintln!("Failed to receive response: {e}");
-                    return ExitCode::FAILURE;
+            if let Some(result) = client.receive_response().await {
+                match result {
+                    Ok(response) => handle_response(&response),
+                    Err(e) => {
+                        eprintln!("Failed to receive response: {e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
+            } else {
+                eprintln!("Stream closed while waiting for response");
+                return ExitCode::FAILURE;
             }
         }
         Err(e) => {

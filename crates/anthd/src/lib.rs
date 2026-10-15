@@ -24,11 +24,25 @@ pub fn handle_line(line: &str) -> Response {
 pub async fn serve_connection(socket: UnixStream) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut server = AnthServer::new(socket);
 
-    while let Ok(request) = server.receive_request().await {
-        let response = handle_request(request);
-        if let Err(e) = server.send_response(&response).await {
-            eprintln!("Error writing to socket: {e}");
-            return Err(e);
+    while let Some(result) = server.receive_request().await {
+        match result {
+            Ok(request) => {
+                let response = handle_request(request);
+                if let Err(e) = server.send_response(&response).await {
+                    eprintln!("Error writing to socket: {e}");
+                    return Err(e);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error receiving request: {e}");
+                let response = Response::Error {
+                    detail: format!("Error receiving request: {e}"),
+                };
+                if let Err(e) = server.send_response(&response).await {
+                    eprintln!("Error writing error response to socket: {e}");
+                }
+                return Err(e);
+            }
         }
     }
 
