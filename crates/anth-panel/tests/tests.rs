@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_api::app::AppState;
 use anth_conf::Config;
+use anth_panel::app::AppState;
 use anth_proto::{AnthServer, Request, Response};
 use axum::body::{to_bytes, Body};
 use axum::http::{Request as HttpRequest, StatusCode};
@@ -14,7 +14,7 @@ fn unique_socket(name: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "anth-api-{name}-{}-{nanos}.sock",
+        "anth-panel-{name}-{}-{nanos}.sock",
         std::process::id()
     ))
 }
@@ -55,17 +55,17 @@ fn app_state_stores_the_configuration() {
 
 #[test]
 fn router_can_be_built() {
-    let _app = anth_api::router(AppState::new(Config::default()));
+    let _app = anth_panel::router(AppState::new(Config::default()));
 }
 
 #[tokio::test]
 async fn get_healthz_returns_ok() {
-    assert_eq!(anth_api::get_healthz().await, "ok");
+    assert_eq!(anth_panel::get_healthz().await, "ok");
 }
 
 #[tokio::test]
 async fn healthz_route_responds_ok() {
-    let app = anth_api::router(AppState::new(Config::default()));
+    let app = anth_panel::router(AppState::new(Config::default()));
     let response = app
         .oneshot(
             HttpRequest::builder()
@@ -112,7 +112,7 @@ async fn post_command_forwards_the_request_to_the_daemon() {
     let server = spawn_echo_server(&path);
 
     let state = AppState::new(config_at(&path));
-    let result = anth_api::post_command(
+    let result = anth_panel::post_command(
         axum::extract::State(state),
         axum::Json(Request::Echo {
             message: "proxy".to_string(),
@@ -135,7 +135,7 @@ async fn command_route_proxies_and_returns_the_response() {
     let _ = std::fs::remove_file(&path);
     let server = spawn_echo_server(&path);
 
-    let app = anth_api::router(AppState::new(config_at(&path)));
+    let app = anth_panel::router(AppState::new(config_at(&path)));
     let body = serde_json::to_vec(&Request::Echo {
         message: "routed".to_string(),
     })
@@ -169,7 +169,7 @@ async fn post_command_returns_service_unavailable_when_the_daemon_is_absent() {
     let _ = std::fs::remove_file(&path);
     let state = AppState::new(config_at(&path));
 
-    let err = anth_api::post_command(
+    let err = anth_panel::post_command(
         axum::extract::State(state),
         axum::Json(Request::Echo {
             message: "nobody".to_string(),

@@ -2,8 +2,8 @@ pub mod app;
 
 use std::process::ExitCode;
 
-use anth_api::{app::AppState, cli::Cli, router};
 use anth_conf::{Config, DEFAULT_CONFIG_PATH};
+use anth_panel::{app::AppState, cli::Cli, router};
 use axum::serve;
 use tokio::net::TcpListener;
 

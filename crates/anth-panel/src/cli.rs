@@ -1,8 +1,8 @@
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "anthd")]
-#[command(version = "1.0", about = "Anthracite Panel Daemon", long_about = None)]
+#[command(name = "anth-panel")]
+#[command(version = "1.0", about = "Anthracite Panel API", long_about = None)]
 pub struct Cli {
     #[arg(
         name = "config",
