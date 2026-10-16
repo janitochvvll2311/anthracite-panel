@@ -24,8 +24,9 @@ docker/entrypoint.sh        # starts anthd then anth-panel
 Dockerfile                  # multi-stage alpine/musl build
 ```
 
-Dependencies flow: `anth-proto` and `anth-conf` are leaves; `anthd`, `anth-cli`
-and `anth-panel` depend on both.
+Dependencies flow: `anth-proto` is the leaf; `anth-conf` declares a dependency on
+it (currently unused in code), and `anthd`, `anth-cli` and `anth-panel` depend on
+both.
 
 ## Build and test
 
@@ -52,7 +53,7 @@ There is no CI configuration, no `rustfmt.toml` and no `clippy.toml` — default
 cd crates/anth-panel/webui && npm install && npm run build   # produces dist/
 ```
 
-A missing `dist/` surfaces as `no associated function named 'get' found for struct 'Asset'`.
+A missing `dist/` surfaces as `no associated function or constant named 'get' found for struct 'Asset'`.
 The webui has a `bun.lock`, but `npm` works fine and `bun` is not required.
 
 ## Running locally
@@ -81,7 +82,10 @@ ANTH_PANEL_ADDR=0.0.0.0:8080 cargo run -p anth-panel
   and falls back to `index.html`. Table tests exercise the router through
   `tower::ServiceExt::oneshot`.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
-  `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
+  `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG` (set by the
+  Dockerfile, but nothing initialises a `tracing` subscriber yet, so it has no effect).
+  The binaries themselves read only `ANTH_PANEL_ADDR`; configuration comes from the
+  `-c`/`--config` flag.
 
 ## Code style
 
