@@ -97,3 +97,89 @@ fn load_invalid_file_reports_a_parse_error() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn load_or_default_falls_back_without_touching_the_filesystem() {
+    let dir = unique_dir("no-write");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+
+    let config = Config::load_or_default(&path);
+
+    assert_eq!(config, Config::default());
+    assert!(
+        !path.exists(),
+        "load_or_default must not create the config file"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn load_or_create_writes_the_default_when_the_file_is_missing() {
+    let dir = unique_dir("create");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    assert!(!path.exists());
+
+    let config = Config::load_or_create(&path);
+
+    assert_eq!(config, Config::default());
+    assert!(path.exists(), "a default config should have been written");
+    assert_eq!(Config::load(&path).unwrap(), Config::default());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn load_or_create_creates_missing_parent_directories() {
+    let dir = unique_dir("create-nested");
+    let path = dir.join("etc").join("anth").join("config.toml");
+
+    let config = Config::load_or_create(&path);
+
+    assert_eq!(config, Config::default());
+    assert!(path.exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn load_or_create_keeps_an_existing_file_untouched() {
+    let dir = unique_dir("keep");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+
+    let custom = Config {
+        socket_path: "/tmp/custom.sock".to_string(),
+    };
+    custom.save(&path).unwrap();
+
+    let config = Config::load_or_create(&path);
+
+    assert_eq!(config, custom);
+    assert_eq!(Config::load(&path).unwrap(), custom);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An unreadable or malformed file is replaced by a freshly written default,
+/// matching what the pre-refactor `anthd` did: the error branch always saved.
+#[test]
+fn load_or_create_replaces_a_malformed_file_with_defaults() {
+    let dir = unique_dir("malformed");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "not = = toml\n").unwrap();
+
+    let config = Config::load_or_create(&path);
+
+    assert_eq!(config, Config::default());
+    assert_eq!(
+        Config::load(&path).unwrap(),
+        Config::default(),
+        "the malformed file should have been replaced by a valid default"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

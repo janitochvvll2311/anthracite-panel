@@ -9,16 +9,6 @@ use tokio::net::{TcpListener, UnixStream};
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 
-fn load_config(path: &str) -> Config {
-    match Config::load(path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Failed to load config: {e}");
-            Config::default()
-        }
-    }
-}
-
 fn resolve_addr(args: &EndpointArgs) -> String {
     args.addr
         .clone()
@@ -106,13 +96,15 @@ async fn main() -> ExitCode {
     let config_path = cli.config_path.as_deref().unwrap_or(DEFAULT_CONFIG_PATH);
 
     let result = match &cli.command {
-        Command::Echo { message } => return send_echo(&load_config(config_path), message).await,
-        Command::Daemon => anth_panel::daemon::serve(&load_config(config_path))
+        Command::Echo { message } => {
+            return send_echo(&Config::load_or_default(config_path), message).await;
+        }
+        Command::Daemon => anth_panel::daemon::serve(&Config::load_or_create(config_path))
             .await
             .map(|()| ExitCode::SUCCESS)
             .map_err(|e| e.to_string()),
-        Command::Api(args) => serve_api(load_config(config_path), args).await,
-        Command::Run(args) => serve_run(load_config(config_path), args).await,
+        Command::Api(args) => serve_api(Config::load_or_create(config_path), args).await,
+        Command::Run(args) => serve_run(Config::load_or_create(config_path), args).await,
     };
 
     match result {

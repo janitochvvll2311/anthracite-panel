@@ -99,7 +99,10 @@ cargo run -p anth-panel -- echo "hola"    # CLI client; needs a running daemon
   `match` arms in `anth_panel::daemon::handle_request` and `anth_panel::client::request_for`.
 - **Config**: `anth_panel::config::Config` (currently just `socket_path`) is TOML with
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at `/etc/anth/config.toml`,
-  socket at `/var/tmp/anth.sock`.
+  socket at `/var/tmp/anth.sock`. The server subcommands load it through
+  `Config::load_or_create`, which writes a default file when the path cannot be read,
+  so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
+  `Config::load_or_default`, which never writes.
 - **Panel routes**: `GET /healthz`, `POST /command` (proxies a JSON `Request` to the
   daemon over the socket), and a fallback static handler that serves the embedded SPA
   and falls back to `index.html`. Table tests exercise the router through
