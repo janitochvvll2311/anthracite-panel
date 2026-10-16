@@ -37,6 +37,8 @@ pub enum Command {
         #[arg(help = "Message to echo")]
         message: String,
     },
+    /// Print the operating system and resources of the daemon host as a table.
+    HostInfo,
 }
 
 #[derive(Args, Debug, Default)]

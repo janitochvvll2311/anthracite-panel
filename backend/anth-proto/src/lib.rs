@@ -8,7 +8,11 @@ use tokio_util::codec::{Framed, LinesCodec};
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum Request {
-    Echo { message: String },
+    Echo {
+        message: String,
+    },
+    /// Ask the daemon for a snapshot of the host it runs on.
+    HostInfo,
 }
 
 impl Request {
@@ -36,8 +40,52 @@ impl Request {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", content = "data")]
 pub enum Response {
-    Ok { message: String },
-    Error { detail: String },
+    Ok {
+        message: String,
+    },
+    Error {
+        detail: String,
+    },
+    /// Boxed to keep the enum small; the payload is much larger than the others.
+    HostInfo(Box<HostInfo>),
+}
+
+/// Operating system identity reported by the daemon host.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct OsInfo {
+    pub name: String,
+    pub version: String,
+    pub kernel: String,
+    pub arch: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct LoadAverage {
+    pub one: f64,
+    pub five: f64,
+    pub fifteen: f64,
+}
+
+/// Memory figures in kibibytes, as reported by the kernel.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct MemoryInfo {
+    pub total_kib: u64,
+    pub available_kib: u64,
+    pub swap_total_kib: u64,
+    pub swap_free_kib: u64,
+}
+
+/// Snapshot of the host the daemon runs on. Deliberately excludes per-process
+/// inspection.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct HostInfo {
+    pub hostname: String,
+    pub os: OsInfo,
+    pub uptime_seconds: u64,
+    pub cpu_model: String,
+    pub logical_cores: usize,
+    pub load: LoadAverage,
+    pub memory: MemoryInfo,
 }
 
 impl Response {

@@ -10,8 +10,39 @@ fn request_for_echo_builds_an_echo_request() {
     };
 
     match request_for(&command) {
-        Request::Echo { message } => assert_eq!(message, "hello"),
+        Some(Request::Echo { message }) => assert_eq!(message, "hello"),
+        other => panic!("expected an Echo request, got {other:?}"),
     }
+}
+
+#[test]
+fn request_for_host_info_builds_a_host_info_request() {
+    match request_for(&Command::HostInfo) {
+        Some(Request::HostInfo) => {}
+        other => panic!("expected a HostInfo request, got {other:?}"),
+    }
+}
+
+#[test]
+fn request_for_is_none_for_locally_served_commands() {
+    assert!(request_for(&Command::Daemon).is_none());
+    assert!(request_for(&Command::Api(Default::default())).is_none());
+    assert!(request_for(&Command::Run(Default::default())).is_none());
+}
+
+#[test]
+fn cli_parses_a_host_info_subcommand() {
+    let cli = Cli::try_parse_from(["anth-panel", "host-info"]).unwrap();
+    assert_eq!(cli.config_path, None);
+    assert!(matches!(cli.command, Command::HostInfo));
+}
+
+#[test]
+fn cli_accepts_a_config_flag_before_host_info() {
+    let cli =
+        Cli::try_parse_from(["anth-panel", "--config", "/tmp/anth.toml", "host-info"]).unwrap();
+    assert_eq!(cli.config_path.as_deref(), Some("/tmp/anth.toml"));
+    assert!(matches!(cli.command, Command::HostInfo));
 }
 
 #[test]

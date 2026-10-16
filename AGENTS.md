@@ -18,7 +18,7 @@ backend/
   anth-proto/               # wire protocol only: Request/Response + AnthServer/AnthClient
   anth-panel/               # everything else, one binary
     src/
-      main.rs               #   subcommand dispatch: daemon / api / run / echo
+      main.rs               #   subcommand dispatch: daemon / api / run / echo / host-info
       lib.rs                #   module re-exports
       cli.rs                #   clap definitions
       config.rs             #   Config struct, TOML load/save, default paths
@@ -26,8 +26,10 @@ backend/
       client.rs             #   CLI client: builds a Request, prints the Response
       api.rs                #   axum HTTP API + rust-embed static SPA
       app.rs                #   AppState shared by the routes
+      hostinfo.rs           #   host inspection from /proc and /etc/os-release
+      render.rs             #   bordered table renderer for the CLI
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
-    tests/                  #   api.rs, client.rs, config.rs, daemon.rs
+    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /command to the backend in dev
   src/  public/  index.html
@@ -52,9 +54,8 @@ cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu
 ```
 
 There is no CI configuration, no `rustfmt.toml` and no `clippy.toml` — defaults apply.
-`cargo clippy` reports two `needless_borrows_for_generic_args` warnings in `daemon.rs`
-and two `unreachable pattern` warnings in the `anth-proto` tests; all four predate the
-current layout.
+`cargo clippy` reports two `needless_borrows_for_generic_args` warnings in
+`anth_panel::daemon::serve`; they predate the current layout and are unrelated to it.
 
 ### The backend compiles without a frontend build
 
@@ -86,17 +87,32 @@ Single-purpose invocations:
 cargo run -p anth-panel -- daemon         # daemon only, reads /etc/anth/config.toml
 cargo run -p anth-panel -- api            # HTTP API only; needs a daemon
 cargo run -p anth-panel -- echo "hola"    # CLI client; needs a running daemon
+cargo run -p anth-panel -- host-info      # host snapshot as a table; needs a daemon
 ```
+
+`host-info` prints the operating system and resources of the host the daemon runs on
+(hostname, distro, kernel, architecture, CPU, cores, uptime, load average, memory and
+swap) as a bordered table. It deliberately excludes per-process inspection.
 
 ## Architecture notes
 
 - **Transport**: newline-delimited JSON over a Unix socket (`tokio_util` `LinesCodec`
   wrapped in `Framed`), exposed as `AnthServer`/`AnthClient` in `anth-proto`.
 - **Protocol**: `Request` and `Response` are serde-tagged enums using
-  `#[serde(tag = "type", content = "data")]`. Today the only request is
-  `Request::Echo { message }`; responses are `Response::Ok { message }` or
-  `Response::Error { detail }`. Add a new operation by extending both enums plus the
-  `match` arms in `anth_panel::daemon::handle_request` and `anth_panel::client::request_for`.
+  `#[serde(tag = "type", content = "data")]`. Requests are `Request::Echo { message }`
+  and the payload-less `Request::HostInfo`; responses are `Response::Ok { message }`,
+  `Response::Error { detail }` or the boxed `Response::HostInfo`. Add a new operation by
+  extending both enums plus the `match` arms in `anth_panel::daemon::handle_request` and
+  `anth_panel::client::request_for`, and a subcommand in `cli.rs`.
+- **Host inspection**: `anth_panel::hostinfo` reads `/proc` and `/etc/os-release` with the
+  standard library only — no `sysinfo`-style dependency and no `unsafe`, which keeps the
+  static musl build trivial. `collect_from` takes a filesystem root so tests can exercise
+  the parsing against fixture files; the `parse_*` helpers are pure functions over file
+  contents. Unreadable fields degrade to `unknown`/zero rather than failing the request.
+- **Table rendering**: `anth_panel::render::Table` draws a bordered box (top, bottom, a
+  rule under the header and optional separators between groups) and pads columns by
+  character count so multi-byte text stays aligned. `render_host_info` maps a `HostInfo`
+  onto it. It is a local renderer, not a dependency.
 - **Config**: `anth_panel::config::Config` (currently just `socket_path`) is TOML with
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at `/etc/anth/config.toml`,
   socket at `/var/tmp/anth.sock`.

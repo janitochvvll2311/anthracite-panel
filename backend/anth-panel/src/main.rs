@@ -64,11 +64,7 @@ async fn serve_run(config: Config, args: &EndpointArgs) -> Result<ExitCode, Stri
     result.map(|_| ExitCode::SUCCESS)
 }
 
-async fn send_echo(config: &Config, message: &str) -> ExitCode {
-    let request = request_for(&Command::Echo {
-        message: message.to_string(),
-    });
-
+async fn send(config: &Config, request: &anth_proto::Request) -> ExitCode {
     let socket_path = Path::new(&config.socket_path);
     let socket = match UnixStream::connect(socket_path).await {
         Ok(stream) => stream,
@@ -79,7 +75,7 @@ async fn send_echo(config: &Config, message: &str) -> ExitCode {
     };
 
     let mut client = AnthClient::new(socket);
-    if let Err(e) = client.send_request(&request).await {
+    if let Err(e) = client.send_request(request).await {
         eprintln!("Failed to send request: {e}");
         return ExitCode::FAILURE;
     }
@@ -87,7 +83,10 @@ async fn send_echo(config: &Config, message: &str) -> ExitCode {
     match client.receive_response().await {
         Some(Ok(response)) => {
             handle_response(&response);
-            ExitCode::SUCCESS
+            match response {
+                anth_proto::Response::Error { .. } => ExitCode::FAILURE,
+                _ => ExitCode::SUCCESS,
+            }
         }
         Some(Err(e)) => {
             eprintln!("Failed to receive response: {e}");
@@ -100,19 +99,30 @@ async fn send_echo(config: &Config, message: &str) -> ExitCode {
     }
 }
 
+/// Runs a client-only subcommand against the daemon. Subcommands that serve
+/// locally return `None` so `main` can handle them itself.
+async fn send_command(config: &Config, command: &Command) -> Option<ExitCode> {
+    let request = request_for(command)?;
+    Some(send(config, &request).await)
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let config_path = cli.config_path.as_deref().unwrap_or(DEFAULT_CONFIG_PATH);
 
+    if let Some(code) = send_command(&load_config(config_path), &cli.command).await {
+        return code;
+    }
+
     let result = match &cli.command {
-        Command::Echo { message } => return send_echo(&load_config(config_path), message).await,
         Command::Daemon => anth_panel::daemon::serve(&load_config(config_path))
             .await
             .map(|()| ExitCode::SUCCESS)
             .map_err(|e| e.to_string()),
         Command::Api(args) => serve_api(load_config(config_path), args).await,
         Command::Run(args) => serve_run(load_config(config_path), args).await,
+        Command::Echo { .. } | Command::HostInfo => unreachable!("handled by send_command"),
     };
 
     match result {
