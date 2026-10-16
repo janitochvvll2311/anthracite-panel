@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_conf::{Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH};
+use anth_panel::config::{Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH};
 
 fn unique_dir(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("anth-conf-{name}-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!("anth-panel-{name}-{}-{nanos}", std::process::id()))
 }
 
 #[test]

@@ -1,6 +1,4 @@
-pub mod cli;
-
-use anth_conf::Config;
+use crate::config::Config;
 use anth_proto::{AnthServer, Request, Response};
 use std::error::Error;
 use std::path::Path;

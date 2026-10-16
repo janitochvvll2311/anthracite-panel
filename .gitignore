@@ -26,3 +26,8 @@ rustc-ice-*.txt
 config.toml
 request.json
 request.http
+
+# Files copied from frontend/dist for rust-embed during packaging; only the
+# placeholder is tracked so a clean clone still compiles.
+backend/anth-panel/www/*
+!backend/anth-panel/www/.gitkeep

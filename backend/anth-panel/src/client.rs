@@ -1,5 +1,3 @@
-pub mod cli;
-
 use anth_proto::{Request, Response};
 
 use crate::cli::Command;
@@ -9,6 +7,7 @@ pub fn request_for(command: &Command) -> Request {
         Command::Echo { message } => Request::Echo {
             message: message.clone(),
         },
+        other => unreachable!("no client request maps to {other:?}"),
     }
 }
 

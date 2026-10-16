@@ -62,29 +62,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "anth-cli"
-version = "0.1.0"
-dependencies = [
- "anth-conf",
- "anth-proto",
- "clap",
- "tokio",
-]
-
-[[package]]
-name = "anth-conf"
-version = "0.1.0"
-dependencies = [
- "anth-proto",
- "serde",
- "toml",
-]
-
-[[package]]
 name = "anth-panel"
 version = "0.1.0"
 dependencies = [
- "anth-conf",
  "anth-proto",
  "axum",
  "clap",
@@ -93,6 +73,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -107,16 +88,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "anthd"
-version = "0.1.0"
-dependencies = [
- "anth-conf",
- "anth-proto",
- "clap",
- "tokio",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use std::{error::Error, path::Path};
 
-use anth_conf::Config;
+use crate::config::Config;
 use anth_proto::AnthClient;
 use tokio::net::UnixStream;
 
