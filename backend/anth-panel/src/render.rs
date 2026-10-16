@@ -127,28 +127,34 @@ fn width(text: &str) -> usize {
     text.chars().count()
 }
 
-/// Formats kibibytes with a binary unit, picking the largest unit that keeps the
-/// number at or above one.
+/// Formats kibibytes with a binary unit. The unit is the largest one whose value
+/// rounds to at least one whole unit *at that unit's own precision*, so a quantity
+/// that would print as `1024.0 MiB` is promoted to `1.0 GiB` instead.
 pub fn format_kib(kib: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = KIB * 1024;
     const GIB: u64 = MIB * 1024;
     const TIB: u64 = GIB * 1024;
 
-    let bytes = kib.saturating_mul(KIB);
-    let as_f = |unit: u64| bytes as f64 / unit as f64;
+    // (unit in bytes, suffix, decimal places used when printing it)
+    const UNITS: [(u64, &str, usize); 4] = [
+        (TIB, "TiB", 1),
+        (GIB, "GiB", 1),
+        (MIB, "MiB", 1),
+        (KIB, "KiB", 0),
+    ];
 
-    if bytes >= TIB {
-        format!("{:.1} TiB", as_f(TIB))
-    } else if bytes >= GIB {
-        format!("{:.1} GiB", as_f(GIB))
-    } else if bytes >= MIB {
-        format!("{:.1} MiB", as_f(MIB))
-    } else if bytes >= KIB {
-        format!("{:.0} KiB", as_f(KIB))
-    } else {
-        format!("{bytes} B")
+    let bytes = kib.saturating_mul(KIB);
+
+    for (unit, suffix, decimals) in UNITS {
+        let value = bytes as f64 / unit as f64;
+        let scale = 10_f64.powi(decimals as i32);
+        if (value * scale).round() >= scale {
+            return format!("{value:.decimals$} {suffix}");
+        }
     }
+
+    format!("{bytes} B")
 }
 
 /// Formats uptime as `1d 2h 3m 4s`, omitting zero components. A fully zero

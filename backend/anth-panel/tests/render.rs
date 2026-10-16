@@ -183,6 +183,47 @@ fn format_kib_picks_the_largest_unit() {
 }
 
 #[test]
+fn format_kib_never_renders_a_value_of_1024_or_more() {
+    // A quantity that rounds to 1024 at its own precision belongs to the next
+    // unit up, otherwise it prints as e.g. "1024.0 MiB".
+    assert_eq!(format_kib(1024 * 1024 - 1), "1.0 GiB");
+    assert_eq!(format_kib(1024 * 1024 * 1024 - 1), "1.0 TiB");
+
+    // Sweep both sides of every unit boundary and assert the invariant directly,
+    // rather than pinning the exact largest value that stays in the lower unit.
+    let mut candidates = vec![0_u64, 1, 1023, 1024, 1024 * 1024, 1024 * 1024 * 1024];
+    for base in [1024_u64, 1024 * 1024, 1024 * 1024 * 1024] {
+        for delta in 1..64 {
+            candidates.push(base - delta);
+            candidates.push(base + delta);
+        }
+    }
+
+    for kib in candidates {
+        let rendered = format_kib(kib);
+        let value: f64 = rendered
+            .split_whitespace()
+            .next()
+            .unwrap_or_else(|| panic!("format_kib({kib}) rendered nothing"))
+            .parse()
+            .unwrap_or_else(|_| panic!("format_kib({kib}) rendered {rendered:?}"));
+
+        assert!(
+            value < 1024.0,
+            "format_kib({kib}) rendered {rendered:?}, whose value is not below 1024"
+        );
+    }
+}
+
+#[test]
+fn format_kib_does_not_overflow_on_extreme_input() {
+    // saturating_mul keeps the byte count from wrapping into a bogus unit.
+    let rendered = format_kib(u64::MAX);
+    assert!(rendered.ends_with("TiB"), "got {rendered:?}");
+    assert_ne!(rendered, "0 B", "got {rendered:?}");
+}
+
+#[test]
 fn format_uptime_omits_zero_components() {
     assert_eq!(format_uptime(0), "0s");
     assert_eq!(format_uptime(59), "59s");
