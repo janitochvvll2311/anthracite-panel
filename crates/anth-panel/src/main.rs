@@ -21,8 +21,8 @@ async fn main() -> ExitCode {
     };
 
     let state = AppState::new(config);
-    let address = "127.0.0.1:8080";
-    match TcpListener::bind(address).await {
+    let address = std::env::var("ANTH_PANEL_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    match TcpListener::bind(&address).await {
         Ok(listener) => {
             println!("Server is listening on {address}");
             if let Err(e) = serve(listener, router(state)).await {

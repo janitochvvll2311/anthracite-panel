@@ -43,8 +43,6 @@ pub async fn post_command(
     }
 }
 
-
-
 #[derive(RustEmbed)]
 #[folder = "webui/dist"]
 struct Asset;
