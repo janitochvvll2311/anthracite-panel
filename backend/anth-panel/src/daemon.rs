@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::hostinfo;
 use anth_proto::{AnthServer, Request, Response};
 use std::error::Error;
 use std::path::Path;
@@ -7,6 +8,7 @@ use tokio::net::{UnixListener, UnixStream};
 pub fn handle_request(request: Request) -> Response {
     match request {
         Request::Echo { message } => Response::Ok { message },
+        Request::HostInfo => Response::HostInfo(Box::new(hostinfo::collect())),
     }
 }
 

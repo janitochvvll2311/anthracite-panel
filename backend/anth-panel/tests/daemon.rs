@@ -30,6 +30,27 @@ fn handle_request_echoes_the_message() {
 }
 
 #[test]
+fn handle_request_reports_host_info() {
+    match anth_panel::daemon::handle_request(Request::HostInfo) {
+        Response::HostInfo(info) => {
+            // Assertions stay host-agnostic so the test passes in any container.
+            assert!(!info.hostname.is_empty(), "hostname should be collected");
+            assert!(!info.os.arch.is_empty(), "arch should be collected");
+            assert!(info.logical_cores >= 1, "expected at least one core");
+            assert!(
+                info.memory.total_kib > 0,
+                "expected a non-zero total memory"
+            );
+            assert!(
+                info.memory.available_kib <= info.memory.total_kib,
+                "available memory cannot exceed total memory"
+            );
+        }
+        other => panic!("expected HostInfo, got {other:?}"),
+    }
+}
+
+#[test]
 fn handle_line_decodes_and_replies() {
     let line = Request::Echo {
         message: "from-line".to_string(),
@@ -149,6 +170,39 @@ async fn serve_binds_the_configured_socket_and_echoes() {
     match client.receive_response().await.unwrap().unwrap() {
         Response::Ok { message } => assert_eq!(message, "served"),
         other => panic!("expected Ok, got {other:?}"),
+    }
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn serve_binds_the_socket_and_answers_host_info() {
+    let path = unique_socket("hostinfo-serve");
+    let _ = std::fs::remove_file(&path);
+
+    let config = Config {
+        socket_path: path.to_string_lossy().into_owned(),
+    };
+    let server = tokio::spawn(async move { anth_panel::daemon::serve(&config).await });
+
+    for _ in 0..50 {
+        if path.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let stream = UnixStream::connect(&path).await.unwrap();
+    let mut client = AnthClient::new(stream);
+    client.send_request(&Request::HostInfo).await.unwrap();
+
+    match client.receive_response().await.unwrap().unwrap() {
+        Response::HostInfo(info) => {
+            assert!(!info.hostname.is_empty());
+            assert!(info.memory.total_kib > 0);
+        }
+        other => panic!("expected HostInfo, got {other:?}"),
     }
 
     server.abort();

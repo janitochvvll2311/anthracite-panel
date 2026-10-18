@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_proto::{AnthClient, AnthServer, Request, Response};
+use anth_proto::{AnthClient, AnthServer, HostInfo, Request, Response};
 use tokio::net::{UnixListener, UnixStream};
 
 fn unique_socket(name: &str) -> std::path::PathBuf {
@@ -25,7 +25,7 @@ fn echo_request_roundtrip_preserves_message() {
 
     match decoded {
         Request::Echo { message } => assert_eq!(message, "hola"),
-        other => panic!("expected Echo, got {other:?}"),
+        Request::HostInfo => panic!("expected Echo, got HostInfo"),
     }
 }
 
@@ -38,6 +38,14 @@ fn request_wire_format_is_tagged_with_data_payload() {
     .unwrap();
 
     assert_eq!(json, r#"{"type":"Echo","data":{"message":"sync"}}"#);
+}
+
+#[test]
+fn host_info_request_wire_format_has_no_payload() {
+    assert_eq!(
+        Request::HostInfo.to_json().unwrap(),
+        r#"{"type":"HostInfo"}"#
+    );
 }
 
 #[test]
@@ -89,6 +97,42 @@ fn malformed_json_is_rejected() {
 }
 
 #[test]
+fn host_info_roundtrips_over_the_wire() {
+    let info = HostInfo {
+        hostname: "box".to_string(),
+        os: anth_proto::OsInfo {
+            name: "Debian GNU/Linux".to_string(),
+            version: "13".to_string(),
+            kernel: "6.12.0".to_string(),
+            arch: "x86_64".to_string(),
+        },
+        uptime_seconds: 90_061,
+        cpu_model: "Intel".to_string(),
+        logical_cores: 8,
+        load: anth_proto::LoadAverage {
+            one: 0.5,
+            five: 0.25,
+            fifteen: 0.1,
+        },
+        memory: anth_proto::MemoryInfo {
+            total_kib: 8_000_000,
+            available_kib: 4_000_000,
+            swap_total_kib: 1_000,
+            swap_free_kib: 400,
+        },
+    };
+
+    let response = Response::HostInfo(Box::new(info.clone()));
+    let json = response.to_json().unwrap();
+    assert!(json.starts_with(r#"{"type":"HostInfo","data":{"hostname":"box""#));
+
+    match Response::from_json(&json).unwrap() {
+        Response::HostInfo(decoded) => assert_eq!(*decoded, info),
+        other => panic!("expected HostInfo, got {other:?}"),
+    }
+}
+
+#[test]
 fn unicode_and_escapes_survive_roundtrip() {
     let text = "café \"quoted\"\\ line\nbreak 🚀".to_string();
     let request = Request::Echo {
@@ -98,7 +142,7 @@ fn unicode_and_escapes_survive_roundtrip() {
     let decoded = Request::from_json(&request.to_json().unwrap()).unwrap();
     match decoded {
         Request::Echo { message } => assert_eq!(message, text),
-        other => panic!("expected Echo, got {other:?}"),
+        Request::HostInfo => panic!("expected Echo, got HostInfo"),
     }
 }
 
@@ -115,6 +159,9 @@ async fn server_and_client_exchange_an_echo_over_a_socket() {
         if let Some(Ok(request)) = server.receive_request().await {
             let response = match request {
                 Request::Echo { message } => Response::Ok { message },
+                Request::HostInfo => Response::Error {
+                    detail: "unexpected host info request".to_string(),
+                },
             };
             server.send_response(&response).await.unwrap();
         }
@@ -133,6 +180,36 @@ async fn server_and_client_exchange_an_echo_over_a_socket() {
     match response {
         Response::Ok { message } => assert_eq!(message, "ping"),
         other => panic!("expected Ok, got {other:?}"),
+    }
+
+    server.await.unwrap();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn server_and_client_exchange_a_host_info_request() {
+    let path = unique_socket("host-info");
+    let _ = std::fs::remove_file(&path);
+
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut server = AnthServer::new(socket);
+
+        if let Some(Ok(request)) = server.receive_request().await {
+            assert!(matches!(request, Request::HostInfo));
+            let response = Response::HostInfo(Box::default());
+            server.send_response(&response).await.unwrap();
+        }
+    });
+
+    let stream = UnixStream::connect(&path).await.unwrap();
+    let mut client = AnthClient::new(stream);
+    client.send_request(&Request::HostInfo).await.unwrap();
+
+    match client.receive_response().await.unwrap().unwrap() {
+        Response::HostInfo(info) => assert_eq!(info.hostname, ""),
+        other => panic!("expected HostInfo, got {other:?}"),
     }
 
     server.await.unwrap();
