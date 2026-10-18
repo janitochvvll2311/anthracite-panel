@@ -9,16 +9,6 @@ use tokio::net::{TcpListener, UnixStream};
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 
-fn load_config(path: &str) -> Config {
-    match Config::load(path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Failed to load config: {e}");
-            Config::default()
-        }
-    }
-}
-
 fn resolve_addr(args: &EndpointArgs) -> String {
     args.addr
         .clone()
@@ -101,9 +91,10 @@ async fn send(config: &Config, request: &anth_proto::Request) -> ExitCode {
 
 /// Runs a client-only subcommand against the daemon. Subcommands that serve
 /// locally return `None` so `main` can handle them itself.
-async fn send_command(config: &Config, command: &Command) -> Option<ExitCode> {
+async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> {
     let request = request_for(command)?;
-    Some(send(config, &request).await)
+    let config = Config::load_or_default(config_path);
+    Some(send(&config, &request).await)
 }
 
 #[tokio::main]
@@ -111,17 +102,17 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     let config_path = cli.config_path.as_deref().unwrap_or(DEFAULT_CONFIG_PATH);
 
-    if let Some(code) = send_command(&load_config(config_path), &cli.command).await {
+    if let Some(code) = send_command(config_path, &cli.command).await {
         return code;
     }
 
     let result = match &cli.command {
-        Command::Daemon => anth_panel::daemon::serve(&load_config(config_path))
+        Command::Daemon => anth_panel::daemon::serve(&Config::load_or_create(config_path))
             .await
             .map(|()| ExitCode::SUCCESS)
             .map_err(|e| e.to_string()),
-        Command::Api(args) => serve_api(load_config(config_path), args).await,
-        Command::Run(args) => serve_run(load_config(config_path), args).await,
+        Command::Api(args) => serve_api(Config::load_or_create(config_path), args).await,
+        Command::Run(args) => serve_run(Config::load_or_create(config_path), args).await,
         Command::Echo { .. } | Command::HostInfo => unreachable!("handled by send_command"),
     };
 

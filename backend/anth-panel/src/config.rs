@@ -52,6 +52,36 @@ impl Config {
         }
     }
 
+    /// Loads the configuration at `path`, falling back to in-memory defaults when
+    /// it cannot be read. Never touches the filesystem, so it is the right entry
+    /// point for the client subcommands.
+    pub fn load_or_default(path: impl AsRef<Path>) -> Self {
+        Self::load(path).unwrap_or_else(|e| {
+            eprintln!("Failed to load config: {e}");
+            Self::default()
+        })
+    }
+
+    /// Loads the configuration at `path`, or writes a default one first when it
+    /// cannot be read, so a first server run bootstraps the configuration file.
+    /// A failure to persist the default is reported but not fatal: the freshly
+    /// built defaults are still usable for this run.
+    pub fn load_or_create(path: impl AsRef<Path>) -> Self {
+        match Self::load(&path) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("Failed to load config: {e}");
+                eprintln!("Using default config.");
+
+                let config = Self::default();
+                if let Err(e) = config.save(&path) {
+                    eprintln!("Failed to save default config: {e}");
+                }
+                config
+            }
+        }
+    }
+
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
 
