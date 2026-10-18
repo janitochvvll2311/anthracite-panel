@@ -1,11 +1,8 @@
-pub mod app;
-pub mod cli;
-
 use axum::extract::State;
 use axum::http::{Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::{body::Body, Json, Router};
+use axum::{Json, Router, body::Body};
 use rust_embed::RustEmbed;
 
 use crate::app::AppState;
@@ -44,7 +41,7 @@ pub async fn post_command(
 }
 
 #[derive(RustEmbed)]
-#[folder = "webui/dist"]
+#[folder = "www"]
 struct Asset;
 
 async fn static_handler(uri: Uri) -> impl IntoResponse {

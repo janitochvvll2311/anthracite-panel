@@ -1,5 +1,5 @@
-use anth_cli::cli::{Cli, Command};
-use anth_cli::{handle_response, request_for};
+use anth_panel::cli::{Cli, Command};
+use anth_panel::{handle_response, request_for};
 use anth_proto::{Request, Response};
 use clap::Parser;
 
@@ -16,32 +16,33 @@ fn request_for_echo_builds_an_echo_request() {
 
 #[test]
 fn cli_parses_an_echo_subcommand() {
-    let cli = Cli::try_parse_from(["anth-cli", "echo", "hello"]).unwrap();
+    let cli = Cli::try_parse_from(["anth-panel", "echo", "hello"]).unwrap();
     assert_eq!(cli.config_path, None);
 
     match cli.command {
         Command::Echo { message } => assert_eq!(message, "hello"),
+        other => panic!("expected Echo, got {other:?}"),
     }
 }
 
 #[test]
 fn cli_accepts_a_config_flag_before_the_subcommand() {
     let cli =
-        Cli::try_parse_from(["anth-cli", "--config", "/tmp/anth.toml", "echo", "hi"]).unwrap();
+        Cli::try_parse_from(["anth-panel", "--config", "/tmp/anth.toml", "echo", "hi"]).unwrap();
     assert_eq!(cli.config_path.as_deref(), Some("/tmp/anth.toml"));
 
-    let cli = Cli::try_parse_from(["anth-cli", "-c", "/tmp/short.toml", "echo", "hi"]).unwrap();
+    let cli = Cli::try_parse_from(["anth-panel", "-c", "/tmp/short.toml", "echo", "hi"]).unwrap();
     assert_eq!(cli.config_path.as_deref(), Some("/tmp/short.toml"));
 }
 
 #[test]
 fn cli_requires_a_subcommand() {
-    assert!(Cli::try_parse_from(["anth-cli"]).is_err());
+    assert!(Cli::try_parse_from(["anth-panel"]).is_err());
 }
 
 #[test]
 fn cli_rejects_an_echo_without_a_message() {
-    assert!(Cli::try_parse_from(["anth-cli", "echo"]).is_err());
+    assert!(Cli::try_parse_from(["anth-panel", "echo"]).is_err());
 }
 
 #[test]

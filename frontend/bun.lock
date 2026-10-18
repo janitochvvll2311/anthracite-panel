@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "webui",
+      "name": "anth-panel",
       "dependencies": {
         "lit": "^3.3.3",
       },

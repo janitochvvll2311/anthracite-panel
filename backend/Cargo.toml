@@ -1,0 +1,3 @@
+[workspace]
+members = ["anth-proto", "anth-panel"]
+resolver = "2"
