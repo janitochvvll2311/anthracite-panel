@@ -21,8 +21,8 @@ backend/
   Cargo.toml          workspace root
   anth-proto/         wire protocol: Request/Response + AnthServer/AnthClient
   anth-panel/         the single binary: daemon, API, CLI and web UI server
-    webui/            built frontend, embedded into the API binary
-frontend/             Vite + Lit source
+    www/              built frontend, embedded into the binary at compile time
+frontend/             Vite + Lit source, built into backend/anth-panel/www
 docs/                 the documentation above
 ```
 
@@ -31,19 +31,32 @@ client or daemon can implement against, so it must stay free of panel internals.
 
 ## Quick start
 
+The binary embeds the built frontend with `rust-embed`, so `backend/anth-panel/www/`
+must be populated before `anth-panel` compiles. Build the frontend first:
+
+```bash
+cd frontend
+npm install && npm run build      # or: bun install && bun run build
+cp -r dist/. ../backend/anth-panel/www/
+```
+
+Then run everything from one process:
+
 ```bash
 cd backend
-
-# Build the frontend first; anth-panel embeds it at compile time.
-(cd anth-panel/webui && npm install && npm run build)
-
-# One process serving the daemon and the API on 127.0.0.1:8080
 cargo run -p anth-panel -- run --addr 127.0.0.1:8080
-
-# In another shell
-cargo run -p anth-panel -- host-info
-cargo run -p anth-panel -- host-info --watch 2s
 ```
+
+In another shell, using the same binary:
+
+```bash
+anth-panel host-info
+anth-panel host-info --watch 2s
+```
+
+`www/` is gitignored apart from a placeholder. Without a frontend build the
+binary still compiles and the API works, but `GET /` answers `404` because there
+is no UI to serve. Build the frontend once to get the panel.
 
 The workspace pins the `x86_64-unknown-linux-musl` target. If that target is not
 installed, pass `--target x86_64-unknown-linux-gnu` to `cargo`.

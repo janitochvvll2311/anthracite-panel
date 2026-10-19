@@ -1,4 +1,4 @@
-use axum::extract::rejection::JsonRejection;
+use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{Query, State};
 use axum::http::{Response, StatusCode, Uri};
 use axum::response::IntoResponse;
@@ -109,8 +109,10 @@ pub async fn post_echo(
 /// `GET /api/host-info/watch?interval=2s` — a snapshot per interval as SSE.
 pub async fn watch_host_info(
     State(state): State<AppState>,
-    Query(query): Query<WatchQuery>,
+    query: Result<Query<WatchQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
+
     let period = match query.interval.as_deref() {
         None => stream::DEFAULT_INTERVAL,
         Some(raw) => stream::parse_interval(raw).map_err(ApiError::bad_request)?,

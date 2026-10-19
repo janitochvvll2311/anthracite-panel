@@ -356,3 +356,27 @@ async fn a_daemon_error_response_becomes_a_json_gateway_error() {
     server.abort();
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn a_rejected_query_uses_the_unified_error_shape() {
+    let app = anth_panel::router(AppState::new(Config::default()));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/host-info/watch?interval=1s&interval=2s")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/json",
+        "a query rejected by the extractor must not fall back to text/plain"
+    );
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["error"].is_string(), "{value}");
+}

@@ -153,8 +153,11 @@ Before the first event the status is still writable:
 
 | Status | When |
 | --- | --- |
-| `400` | `interval` is malformed, below `10ms`, or above `24h` |
+| `400` | `interval` is malformed, below `10ms`, above `24h`, or repeated |
 | `503` | No daemon is listening |
+
+A repeated parameter (`?interval=1s&interval=2s`) is also a `400` in the usual
+JSON shape, not axum's text/plain rejection.
 
 After streaming starts the status is already `200`, so a failure is reported as
 an event instead, and then the stream ends:

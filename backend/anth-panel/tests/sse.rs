@@ -77,3 +77,50 @@ async fn the_stream_ends_after_the_source_ends() {
 fn keep_alive_is_fifteen_seconds() {
     assert_eq!(anth_panel::sse::KEEP_ALIVE, Duration::from_secs(15));
 }
+
+#[tokio::test]
+async fn an_error_event_is_followed_by_the_end_of_the_stream() {
+    // The source keeps yielding errors: a stream that ignores failures would
+    // emit a frame per tick forever instead of closing after the first.
+    let errors = stream::iter(vec![
+        Err::<serde_json::Value, _>("first"),
+        Err("second"),
+        Err("third"),
+    ]);
+
+    let response = SseStream::new("host-info").stream(errors).into_response();
+    let collected = tokio::time::timeout(Duration::from_secs(5), response.into_body().collect())
+        .await
+        .expect("the stream must terminate after the first error")
+        .unwrap();
+    let text = String::from_utf8_lossy(&collected.to_bytes()).into_owned();
+
+    assert_eq!(text.matches("event: error").count(), 1, "{text}");
+    assert!(text.contains("data: first"), "{text}");
+    assert!(
+        !text.contains("second"),
+        "later items must not be read: {text}"
+    );
+}
+
+#[tokio::test]
+async fn values_before_an_error_are_sent_and_then_the_stream_ends() {
+    let items = stream::iter(vec![
+        Ok::<_, &str>(serde_json::json!({ "n": 1 })),
+        Ok(serde_json::json!({ "n": 2 })),
+        Err("daemon went away"),
+    ]);
+
+    let response = SseStream::new("host-info").stream(items).into_response();
+    let collected = tokio::time::timeout(Duration::from_secs(5), response.into_body().collect())
+        .await
+        .expect("an error must close the stream")
+        .unwrap();
+    let text = String::from_utf8_lossy(&collected.to_bytes()).into_owned();
+
+    assert_eq!(text.matches("event: host-info").count(), 2, "{text}");
+    assert_eq!(text.matches("event: error").count(), 1, "{text}");
+    assert!(text.contains("id: 1"), "{text}");
+    assert!(text.contains("id: 2"), "{text}");
+    assert!(text.trim_end().ends_with("daemon went away"), "{text}");
+}
