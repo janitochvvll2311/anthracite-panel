@@ -27,6 +27,7 @@ fn default_config_uses_the_default_socket_path() {
 fn toml_roundtrip_preserves_values() {
     let config = Config {
         socket_path: "/tmp/custom.sock".to_string(),
+        ..Config::default()
     };
 
     let text = config.to_toml().expect("serialization should work");
@@ -63,6 +64,7 @@ fn load_and_save_roundtrip_creates_missing_parent_directories() {
 
     let config = Config {
         socket_path: "/tmp/roundtrip.sock".to_string(),
+        ..Config::default()
     };
     config.save(&path).expect("save should create parents");
 
@@ -152,6 +154,7 @@ fn load_or_create_keeps_an_existing_file_untouched() {
 
     let custom = Config {
         socket_path: "/tmp/custom.sock".to_string(),
+        ..Config::default()
     };
     custom.save(&path).unwrap();
 

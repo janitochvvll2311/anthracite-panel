@@ -176,6 +176,23 @@ fn host_info_json(response: CommandResponse) -> Result<Value, ApiError> {
             StatusCode::BAD_GATEWAY,
             format!("unexpected daemon response: {message}"),
         )),
+        // No REST route opens a terminal yet; a one-shot route could not carry
+        // the stream anyway.
+        CommandResponse::TerminalOpened(opened) => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "unexpected terminal response on a one-shot route: {}",
+                opened.id
+            ),
+        )),
+        CommandResponse::TerminalOutput { id, .. } => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected terminal output for session {id} on a one-shot route"),
+        )),
+        CommandResponse::TerminalExited { id, status } => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected terminal exit for session {id} (status {status})"),
+        )),
     }
 }
 

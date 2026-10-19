@@ -62,6 +62,20 @@ fn render_frame(response: &Response) -> String {
         Response::HostInfo(info) => anth_panel::render_host_info(info),
         Response::Ok { message } => format!("[OK] {message}"),
         Response::Error { detail } => format!("[ERROR] {detail}"),
+        // A CLI subcommand never opens a terminal, so these are only reachable
+        // if a daemon sends frames nobody asked for.
+        Response::TerminalOpened(opened) => {
+            format!("[ERROR] unexpected terminal session {}", opened.id)
+        }
+        Response::TerminalOutput { id, bytes } => {
+            format!(
+                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
+                bytes.len()
+            )
+        }
+        Response::TerminalExited { id, status } => {
+            format!("[ERROR] unexpected terminal exit for session {id} (status {status})")
+        }
     }
 }
 

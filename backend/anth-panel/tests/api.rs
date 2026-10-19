@@ -22,6 +22,7 @@ fn unique_socket(name: &str) -> PathBuf {
 fn config_at(path: &std::path::Path) -> Config {
     Config {
         socket_path: path.to_string_lossy().into_owned(),
+        ..Config::default()
     }
 }
 
@@ -67,6 +68,7 @@ fn spawn_host_info_server(
 fn app_state_stores_the_configuration() {
     let config = Config {
         socket_path: "/tmp/state.sock".to_string(),
+        ..Config::default()
     };
     let state = AppState::new(config.clone());
     assert_eq!(state.config, config);

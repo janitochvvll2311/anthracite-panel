@@ -1,14 +1,43 @@
-use crate::config::Config;
-use crate::hostinfo;
-use anth_proto::{AnthServer, Request, Response};
+//! The daemon's per-connection loop.
+//!
+//! Requests are served one at a time, in order, as before. The terminal is the
+//! reason this file splits the socket: once a session is open, output must be
+//! written while further input is still being read.
+//!
+//! Each session owns a thread that reads the PTY and forwards bytes into a
+//! channel. The connection loop merges those channels and never touches the PTY
+//! directly, so a shell sitting idle at a prompt cannot stall the socket.
+
 use std::error::Error;
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use anth_proto::{AnthReader, AnthWriter, Request, Response, TerminalSize};
+use futures::{Stream, StreamExt};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+
+use crate::config::Config;
+use crate::hostinfo;
+use crate::terminal::{OpenError, Output, Sessions};
+
+/// Size used when a client opens a terminal without stating one.
+const DEFAULT_TERMINAL_SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
+
+/// One session's output as a stream tagged with its id.
+type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
 
 pub fn handle_request(request: Request) -> Response {
     match request {
         Request::Echo { message } => Response::Ok { message },
         Request::HostInfo => Response::HostInfo(Box::new(hostinfo::collect())),
+        // Terminal operations need a registry and a live socket; they are
+        // served by `serve_connection`, which owns both.
+        other => Response::Error {
+            detail: format!("{other:?} requires an open connection"),
+        },
     }
 }
 
@@ -21,32 +50,162 @@ pub fn handle_line(line: &str) -> Response {
     }
 }
 
-pub async fn serve_connection(socket: UnixStream) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut server = AnthServer::new(socket);
+/// Serves one connection until the peer disconnects.
+///
+/// `sessions` is shared across connections so the cap applies to the daemon as
+/// a whole. Sessions are tracked per connection and closed when it ends, so a
+/// dropped client never leaves a shell behind.
+pub async fn serve_connection(
+    socket: UnixStream,
+    sessions: Arc<Sessions>,
+    program: Arc<str>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut owned: Vec<u32> = Vec::new();
 
-    while let Some(result) = server.receive_request().await {
-        match result {
-            Ok(request) => {
-                let response = handle_request(request);
-                if let Err(e) = server.send_response(&response).await {
-                    eprintln!("Error writing to socket: {e}");
-                    return Err(e);
+    // The pump can exit early on a write error, which is exactly what happens
+    // when a client disappears. Cleanup lives outside it so a dropped socket
+    // cannot skip it: that would leave a shell running with no owner.
+    let outcome = pump(socket, Arc::clone(&sessions), program, &mut owned).await;
+
+    for id in owned {
+        sessions.close(id).await;
+    }
+
+    outcome
+}
+
+async fn pump(
+    socket: UnixStream,
+    sessions: Arc<Sessions>,
+    program: Arc<str>,
+    owned: &mut Vec<u32>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let (read_half, write_half) = socket.into_split();
+    let mut reader = AnthReader::from_read_half(read_half);
+    let mut writer = AnthWriter::from_write_half(write_half);
+
+    let mut output = futures::stream::select_all(Vec::<OutputStream>::new());
+
+    loop {
+        // With no sessions open there is nothing to watch but the socket, which
+        // keeps the common case identical to the old request/response loop.
+        let next = if owned.is_empty() {
+            reader.receive_request().await
+        } else {
+            tokio::select! {
+                request = reader.receive_request() => request,
+                event = output.next() => {
+                    if let Some((id, event)) = event
+                        && let Some(response) = exit_response(&sessions, id, event).await
+                    {
+                        writer.send_response(&response).await?;
+                    }
+                    continue;
                 }
             }
-            Err(e) => {
-                eprintln!("Error receiving request: {e}");
-                let response = Response::Error {
-                    detail: format!("Error receiving request: {e}"),
-                };
-                if let Err(e) = server.send_response(&response).await {
-                    eprintln!("Error writing error response to socket: {e}");
-                }
-                return Err(e);
+        };
+
+        let request = match next {
+            Some(Ok(request)) => request,
+            Some(Err(e)) => {
+                writer
+                    .send_response(&Response::Error {
+                        detail: format!("Error receiving request: {e}"),
+                    })
+                    .await?;
+                break;
             }
-        }
+            None => break,
+        };
+
+        let response = match request {
+            Request::TerminalOpen(args) => {
+                let size = args.size.unwrap_or(DEFAULT_TERMINAL_SIZE);
+                match sessions.open(&program, size).await {
+                    Ok((id, size, program)) => {
+                        owned.push(id);
+                        if let Some(receiver) = sessions.take_output(id).await {
+                            output.push(session_stream(id, receiver));
+                        }
+                        Response::TerminalOpened(anth_proto::TerminalOpened { id, size, program })
+                    }
+                    Err(OpenError::Spawn(detail)) => Response::Error { detail },
+                    Err(e) => Response::Error { detail: e.detail() },
+                }
+            }
+            Request::TerminalInput { id, bytes } => {
+                if !owned.contains(&id) {
+                    Response::Error {
+                        detail: format!("session {id} was not opened on this connection"),
+                    }
+                } else {
+                    match sessions.write(id, &bytes).await {
+                        // Success is silent. An `Ok` per keystroke would double
+                        // the traffic of a typing session, and it could not be
+                        // correlated anyway: responses carry no request id, and
+                        // output frames interleave with them.
+                        Some(Ok(())) => continue,
+                        Some(Err(detail)) => Response::Error { detail },
+                        None => Response::Error {
+                            detail: format!("session {id} is closed"),
+                        },
+                    }
+                }
+            }
+            Request::TerminalResize { id, size } => {
+                if !owned.contains(&id) {
+                    Response::Error {
+                        detail: format!("session {id} was not opened on this connection"),
+                    }
+                } else {
+                    match sessions.resize(id, size).await {
+                        Some(Ok(())) => continue,
+                        Some(Err(detail)) => Response::Error { detail },
+                        None => Response::Error {
+                            detail: format!("session {id} is closed"),
+                        },
+                    }
+                }
+            }
+            Request::TerminalClose { id } => {
+                sessions.close(id).await;
+                owned.retain(|&open| open != id);
+                // Silent for the same reason as input, and because the client
+                // asked for the session to end: there is nothing to confirm.
+                continue;
+            }
+            other => handle_request(other),
+        };
+
+        writer.send_response(&response).await?;
     }
 
     Ok(())
+}
+
+fn session_stream(id: u32, receiver: mpsc::Receiver<Output>) -> OutputStream {
+    Box::pin(ReceiverStream::new(receiver).map(move |event| (id, event)))
+}
+
+/// Turns one output event into the frame to send, if any.
+///
+/// Data becomes `TerminalOutput`. An exit closes the session and reports the
+/// real status once, so the client can tell a finished shell from a dropped
+/// connection.
+async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> Option<Response> {
+    match event {
+        Output::Data(bytes) if !bytes.is_empty() => Some(Response::TerminalOutput { id, bytes }),
+        Output::Data(_) => None,
+        Output::Exited(_) | Output::Failed => {
+            let status = match sessions.with(id, |session| session.try_exit()).await {
+                Some(Ok(Some(code))) => code,
+                // No status available: say failure rather than invent a success.
+                _ => -1,
+            };
+            sessions.close(id).await;
+            Some(Response::TerminalExited { id, status })
+        }
+    }
 }
 
 pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
@@ -59,15 +218,20 @@ pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
 
 pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> {
     let socket_path = Path::new(&config.socket_path);
-    clear_socket_path(&socket_path)?;
+    clear_socket_path(socket_path)?;
 
-    let listener = UnixListener::bind(&socket_path)?;
+    let listener = UnixListener::bind(socket_path)?;
     println!("Listening on {}", socket_path.display());
+
+    let sessions = Sessions::new(config.terminal.max_sessions);
+    let program: Arc<str> = Arc::from(config.terminal.shell.as_str());
 
     loop {
         let (socket, _) = listener.accept().await?;
+        let sessions = Arc::clone(&sessions);
+        let program = Arc::clone(&program);
         tokio::spawn(async move {
-            if let Err(e) = serve_connection(socket).await {
+            if let Err(e) = serve_connection(socket, sessions, program).await {
                 eprintln!("Error handling connection: {e}");
             }
         });
