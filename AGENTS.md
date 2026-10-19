@@ -13,7 +13,7 @@ live in `docs/` and are indexed from `README.md`.
 
 ```
 README.md                   # project overview, indexes docs/
-.vscode/settings.json       # nests *.test.ts under its matching *.ts
+.vscode/settings.json       # nests *.test.ts and *.test.html under their *.ts
 docs/
   cli.md                    # commands, flags, exit codes
   api-endpoints.md          # HTTP/WebSocket routes, bodies, SSE frames, error shape
@@ -54,11 +54,8 @@ backend/
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
   vitest.config.ts          # frontend unit tests, happy-dom environment
-  anth-terminal.test.html   # dev-only xterm/API harness, never built
-  anth-process.test.html    # dev-only process monitor harness, never built
-  anth-file.test.html       # dev-only file explorer harness, never built
   src/
-    components/             # terminal, process and file components and their Vitest tests
+    components/             # terminal, process and file components, tests and dev harnesses
     harness/                # anth-harness page shell + shared harness.css for dev pages
     lib/ws/                 # generic JSON WebSocket transport and tests
     lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
@@ -229,7 +226,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   centered in the footer. `anth-process-monitor` owns filtering, the flat/tree
   toggle, SSE lifecycle and confirmed signals, and only depends on the injected
   `ProcessClient`. Both are exercised by Vitest component tests and the
-  `anth-process.test.html` dev harness.
+  `src/components/anth-process-monitor.test.html` dev harness.
 - **Filesystem explorer**: `files.rs` validates `[files] root`, normalizes virtual
   paths, rejects `..` and symlink escapes, lists directories, reads stateless chunks
   and performs atomic uploads through a per-connection temporary file. Writes are
@@ -242,12 +239,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   depends on the injected `FileClient`; `lib/files/file-client.ts` implements
   `/api/files` and `lib/files/display.ts` owns path, size and sort helpers. The
   read-only state comes from the listing's `write_enabled`. Tests live under
-  `src/components/` and `src/lib/files/`; `anth-file.test.html` is the dev harness.
+  `src/components/` and `src/lib/files/`; the
+  `src/components/anth-file-explorer.test.html` file is the dev harness.
 - **Dev harnesses**: `src/harness/anth-harness.ts` provides the shared page shell
   (eyebrow, heading, `description`/`actions`/default slots), while
   `src/harness/harness.css` owns the common light-DOM controls, notes and page
-  background. The `anth-*.test.html` files keep only their specific markup and
-  wiring; none of this is a Vite build entry.
+  background. The `src/components/anth-*.test.html` files keep only their
+  specific markup and wiring; none of this is a Vite build entry.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
@@ -266,7 +264,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   the component's local history/completion. The alternate buffer (btop, vim,
   htop) always keeps the program's arrows and Tab. The default height is sized
   for full-screen TUIs.
-  `anth-terminal.test.html` is the dev harness and is not a Vite build entry.
+  `src/components/anth-terminal.test.html` is the dev harness and is not a
+  Vite build entry.
 - **Subcommands**: `daemon`, `api` and `run` share `--addr`, which falls back to
   `ANTH_PANEL_ADDR` and then `0.0.0.0:8080`. `run` binds the HTTP port before starting
   the daemon and aborts it when the API stops, which is what the container uses.

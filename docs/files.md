@@ -138,13 +138,14 @@ anth-file-explorer {
 }
 ```
 
-The dev harness is `frontend/anth-file.test.html`. It is not part of the Vite
-production build. Run it with:
+The dev harness is
+`frontend/src/components/anth-file-explorer.test.html`. It is not part of the
+Vite production build. Run it with:
 
 ```bash
 cd backend && cargo run -p anth-panel -- run
 cd frontend && npm run dev
-# open http://localhost:5173/anth-file.test.html
+# open http://localhost:5173/src/components/anth-file-explorer.test.html
 ```
 
 Unit tests cover the client, display helpers and component under
