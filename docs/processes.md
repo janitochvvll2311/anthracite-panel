@@ -95,8 +95,10 @@ The endpoints are documented in [api-endpoints.md](api-endpoints.md):
 
 The browser components live in `frontend/src/components/`:
 
-- `<anth-process-table>` displays rows, sorts by clicking a column header and
-  can render a flat table or a ppid tree. It emits the selected pid.
+- `<anth-process-table>` owns sort state and switches between two renderers:
+  `anth-process-flat-table` for the compact flat table and `anth-process-tree`
+  for the tree-grid with connector prefixes. Both sort by clicking a column
+  header; tree mode sorts siblings and indents children under their parent.
 - `<anth-process-monitor>` fetches snapshots, follows the SSE stream, computes
   CPU percentages and sends signals through an injected `ProcessClient`. It
   owns the flat/tree toggle and filtering.
