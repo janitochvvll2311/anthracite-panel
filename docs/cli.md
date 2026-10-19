@@ -13,6 +13,7 @@ Commands:
   echo       Send a request to the running daemon and print the response
   host-info  Print the operating system and resources of the daemon host as a table
   process    Inspect processes and send signals
+  network    Inspect network interfaces and change their state
   file       Browse and manage files on the daemon host
   terminal   Open an interactive terminal on the daemon host
   help       Print this message or the help of the given subcommand(s)
@@ -48,6 +49,9 @@ socket_path = "/var/tmp/anth.sock"
 [process]
 control = false
 
+[network]
+control = false
+
 [files]
 root = "/"
 write = false
@@ -59,13 +63,13 @@ max_upload_bytes = 67108864
 Unknown keys are rejected rather than ignored, so a typo fails loudly. A
 relative or missing file is not fatal for serving subcommands: they write a
 default config when it cannot be loaded. Client subcommands (`echo`,
-`host-info`, `process`, `file`) never create the file — they use defaults if it
-is absent, so probing a machine does not leave files behind.
+`host-info`, `process`, `network`, `file`) never create the file — they use
+defaults if it is absent, so probing a machine does not leave files behind.
 
-Debug builds bootstrap a missing file with `[process] control = true` and
-`[files] write = true` so the whole UI is testable locally. Release builds keep
-both off. An existing file is never rewritten; remove it or edit it to change
-the generated defaults.
+Debug builds bootstrap a missing file with `[process] control = true`,
+`[network] control = true` and `[files] write = true` so the whole UI is
+testable locally. Release builds keep all three off. An existing file is never
+rewritten; remove it or edit it to change the generated defaults.
 
 ## Serving
 
@@ -223,6 +227,40 @@ Without `--yes`, the command asks for confirmation on a TTY and refuses to run
 when stdin is not a terminal. The daemon still enforces its own policy:
 `[process] control` must be `true`, the target must belong to the daemon user,
 and pid 1 or the daemon itself are rejected.
+
+### `network`
+
+Inspects network interfaces and, when `[network] control = true`, brings one up
+or down. Control is off by default; see [network.md](network.md) for the policy,
+data sources and safety limits.
+
+#### `network list [--watch]`
+
+```bash
+anth-panel network list
+anth-panel network ls
+anth-panel network list --watch 2s
+```
+
+Prints IFACE, STATE, ADDRESS, SPEED, RX and TX. `ls` is an alias for `list`.
+`--watch` takes the same interval rules as `host-info --watch`.
+
+RX and TX are cumulative counters, not rates. The web monitor computes rates
+between snapshots.
+
+#### `network up <INTERFACE>` and `network down <INTERFACE>`
+
+```bash
+anth-panel network up eth0
+anth-panel network down eth0
+anth-panel network down eth0 --yes
+```
+
+Without `--yes`, the command asks for confirmation on a TTY and refuses to run
+when stdin is not a terminal. The daemon refuses changes when
+`[network] control = false`, rejects invalid or unknown interface names, and
+will not bring a loopback interface down. The daemon user needs `CAP_NET_ADMIN` for the kernel
+operation to succeed.
 
 ### `file`
 

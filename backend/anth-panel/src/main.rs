@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use anth_panel::cli::{
     Cli, Command, EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs,
-    FileUploadArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs,
+    FileUploadArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
+    ProcessSignalArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::stream;
@@ -60,51 +61,6 @@ async fn serve_run(config: Config, args: &EndpointArgs) -> Result<ExitCode, Stri
     result.map(|_| ExitCode::SUCCESS)
 }
 
-/// How a response becomes one printed frame.
-fn render_frame(response: &Response) -> String {
-    match response {
-        Response::HostInfo(info) => anth_panel::render_host_info(info),
-        Response::ProcessSnapshot(snapshot) => anth_panel::render_process_snapshot(snapshot),
-        Response::ProcessSignalled { pid, signal } => {
-            format!("[OK] sent {signal} to process {pid}")
-        }
-        Response::FileListing(listing) => anth_panel::render_file_listing(listing),
-        Response::FileChunk(chunk) => format!(
-            "[ERROR] unexpected file chunk for {} ({} bytes)",
-            chunk.path,
-            chunk.bytes.len()
-        ),
-        Response::FileWritten(written) => {
-            format!("[OK] wrote {} ({} bytes)", written.path, written.size)
-        }
-        Response::FileCreated { path } => format!("[OK] created {path}"),
-        Response::FileDeleted { path } => format!("[OK] deleted {path}"),
-        Response::FileRenamed { from, to } => format!("[OK] renamed {from} to {to}"),
-        Response::FileWriteStarted { id } => format!("[OK] upload {id} started"),
-        Response::FileWriteAccepted { id, received } => {
-            format!("[OK] upload {id} received {received} bytes")
-        }
-        Response::FileWriteAborted { id } => format!("[OK] upload {id} aborted"),
-        Response::FileError(error) => format!("[ERROR] {}", error.detail),
-        Response::Ok { message } => format!("[OK] {message}"),
-        Response::Error { detail } => format!("[ERROR] {detail}"),
-        // A CLI subcommand never opens a terminal, so these are only reachable
-        // if a daemon sends frames nobody asked for.
-        Response::TerminalOpened(opened) => {
-            format!("[ERROR] unexpected terminal session {}", opened.id)
-        }
-        Response::TerminalOutput { id, bytes } => {
-            format!(
-                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
-                bytes.len()
-            )
-        }
-        Response::TerminalExited { id, status } => {
-            format!("[ERROR] unexpected terminal exit for session {id} (status {status})")
-        }
-    }
-}
-
 /// How often a subcommand repeats, or `None` to read once. A subcommand opts
 /// into streaming by answering `Some` here; nothing else needs to change.
 fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
@@ -119,23 +75,33 @@ fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
             None => Ok(None),
             Some(raw) => stream::parse_interval(raw).map(Some),
         },
+        Command::Network(NetworkArgs {
+            command: NetworkCommand::List(WatchArgs { watch }),
+        }) => match watch.as_deref() {
+            None => Ok(None),
+            Some(raw) => stream::parse_interval(raw).map(Some),
+        },
         _ => Ok(None),
     }
 }
 
-fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
+fn confirm_action(
+    yes: bool,
+    prompt: impl FnOnce() -> String,
+    refusal: &str,
+) -> Result<bool, String> {
     use std::io::{IsTerminal, Write};
 
-    if args.yes {
+    if yes {
         return Ok(true);
     }
 
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
-        return Err("refusing to signal without --yes when stdin is not a terminal".to_string());
+        return Err(refusal.to_string());
     }
 
-    print!("Send {} to process {}? [y/N] ", args.signal, args.pid);
+    print!("{}", prompt());
     let _ = std::io::stdout().flush();
 
     let mut answer = String::new();
@@ -149,35 +115,39 @@ fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
     ))
 }
 
+fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || format!("Send {} to process {}? [y/N] ", args.signal, args.pid),
+        "refusing to signal without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_network_state(args: &NetworkStateArgs, up: bool) -> Result<bool, String> {
+    let action = if up { "Bring up" } else { "Bring down" };
+    confirm_action(
+        args.yes,
+        || {
+            format!(
+                "{action} interface `{}`? This can disconnect the host. [y/N] ",
+                args.name
+            )
+        },
+        "refusing to change a network interface without --yes when stdin is not a terminal",
+    )
+}
+
 fn confirm_delete(args: &FileDeleteArgs) -> Result<bool, String> {
-    use std::io::{IsTerminal, Write};
-
-    if args.yes {
-        return Ok(true);
-    }
-
-    let stdin = std::io::stdin();
-    if !stdin.is_terminal() {
-        return Err("refusing to delete without --yes when stdin is not a terminal".to_string());
-    }
-
     let verb = if args.recursive {
         "Recursively delete"
     } else {
         "Delete"
     };
-    print!("{verb} `{}`? [y/N] ", args.path);
-    let _ = std::io::stdout().flush();
-
-    let mut answer = String::new();
-    stdin
-        .read_line(&mut answer)
-        .map_err(|error| format!("failed to read confirmation: {error}"))?;
-
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    confirm_action(
+        args.yes,
+        || format!("{verb} `{}`? [y/N] ", args.path),
+        "refusing to delete without --yes when stdin is not a terminal",
+    )
 }
 
 fn client_config(config_path: &str) -> Config {
@@ -427,6 +397,40 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    if let Command::Network(NetworkArgs {
+        command: NetworkCommand::Up(args),
+    }) = command
+    {
+        match confirm_network_state(args, true) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
+    if let Command::Network(NetworkArgs {
+        command: NetworkCommand::Down(args),
+    }) = command
+    {
+        match confirm_network_state(args, false) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
     if let Command::File(FileArgs {
         command: FileCommand::Delete(args),
     }) = command
@@ -460,7 +464,7 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
             Path::new(&config.socket_path),
             &request,
             interval,
-            render_frame,
+            anth_panel::render_response,
         )
         .await,
     )
@@ -486,7 +490,11 @@ async fn main() -> ExitCode {
             let config = Config::load_or_default(config_path);
             Ok(anth_panel::terminal_client::run(Path::new(&config.socket_path), args).await)
         }
-        Command::Echo { .. } | Command::HostInfo(_) | Command::Process(_) | Command::File(_) => {
+        Command::Echo { .. }
+        | Command::HostInfo(_)
+        | Command::Process(_)
+        | Command::Network(_)
+        | Command::File(_) => {
             unreachable!("handled by send_command")
         }
     };

@@ -68,12 +68,7 @@ export function stateLabel(state: string): string {
   return STATE_LABELS[state] ?? state
 }
 
-export function formatKib(kib: number): string {
-  const mib = kib / 1024
-  if (mib >= 1024) return `${(mib / 1024).toFixed(1)} GiB`
-  if (mib >= 1) return `${mib.toFixed(1)} MiB`
-  return `${Math.round(kib)} KiB`
-}
+export { formatKib } from '../format'
 
 /** Numeric metrics default to descending; identifiers and names to ascending. */
 export function defaultDirection(key: ProcessSortKey): ProcessSortDirection {

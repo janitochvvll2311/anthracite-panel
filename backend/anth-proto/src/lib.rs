@@ -8,12 +8,17 @@ use tokio_util::codec::{Framed, FramedRead, FramedWrite, LinesCodec};
 
 pub mod b64;
 pub mod files;
+pub mod network;
 pub mod process;
 pub mod terminal;
 
 pub use files::{
     FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten,
     DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
+};
+pub use network::{
+    NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind, NetworkInterface,
+    NetworkSnapshot,
 };
 pub use process::{ProcessInfo, ProcessSignal, ProcessSnapshot};
 pub use terminal::{
@@ -42,6 +47,13 @@ pub enum Request {
     ProcessSignal {
         pid: u32,
         signal: ProcessSignal,
+    },
+    /// Ask the daemon for one snapshot of every network interface.
+    NetworkList,
+    /// Bring one interface up or down. Requires `[network] control`.
+    NetworkSetState {
+        name: String,
+        up: bool,
     },
     /// List one directory below the configured filesystem root.
     FileList {
@@ -148,6 +160,15 @@ pub enum Response {
         pid: u32,
         signal: ProcessSignal,
     },
+    /// One network-interface snapshot.
+    NetworkSnapshot(NetworkSnapshot),
+    /// An interface was brought up or down.
+    NetworkStateChanged {
+        name: String,
+        up: bool,
+    },
+    /// A network operation failed with a machine-readable reason.
+    NetworkError(NetworkError),
     /// One directory listing.
     FileListing(FileListing),
     /// One chunk of a file.

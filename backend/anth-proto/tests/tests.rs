@@ -444,6 +444,87 @@ fn process_snapshot_and_signal_responses_roundtrip() {
 }
 
 #[test]
+fn network_requests_use_the_shared_tagged_envelope() {
+    assert_eq!(
+        Request::NetworkList.to_json().unwrap(),
+        r#"{"type":"NetworkList"}"#
+    );
+
+    let change = Request::NetworkSetState {
+        name: "eth0".to_string(),
+        up: false,
+    };
+    assert_eq!(
+        change.to_json().unwrap(),
+        r#"{"type":"NetworkSetState","data":{"name":"eth0","up":false}}"#
+    );
+}
+
+#[test]
+fn network_snapshot_and_state_responses_roundtrip() {
+    let snapshot = anth_proto::NetworkSnapshot {
+        interfaces: vec![anth_proto::NetworkInterface {
+            name: "eth0".to_string(),
+            index: 2,
+            state: "up".to_string(),
+            up: true,
+            running: true,
+            loopback: false,
+            mac: "aa:bb:cc:dd:ee:ff".to_string(),
+            mtu: 1500,
+            speed_mbps: Some(1000),
+            duplex: Some("full".to_string()),
+            addresses: vec![anth_proto::NetworkAddress {
+                family: anth_proto::NetworkAddressFamily::Ipv4,
+                address: "192.0.2.10".to_string(),
+                prefix_len: 24,
+            }],
+            rx_bytes: 10,
+            tx_bytes: 20,
+            rx_packets: 1,
+            tx_packets: 2,
+            rx_errors: 0,
+            tx_errors: 0,
+            rx_dropped: 0,
+            tx_dropped: 0,
+        }],
+        timestamp_ms: 1_700_000_000_000,
+        control_enabled: true,
+        total: 1,
+        truncated: false,
+        warning: None,
+    };
+    let response = Response::NetworkSnapshot(snapshot.clone());
+    match Response::from_json(&response.to_json().unwrap()).unwrap() {
+        Response::NetworkSnapshot(decoded) => assert_eq!(decoded, snapshot),
+        other => panic!("expected NetworkSnapshot, got {other:?}"),
+    }
+
+    let changed = Response::NetworkStateChanged {
+        name: "eth0".to_string(),
+        up: true,
+    };
+    match Response::from_json(&changed.to_json().unwrap()).unwrap() {
+        Response::NetworkStateChanged { name, up } => {
+            assert_eq!(name, "eth0");
+            assert!(up);
+        }
+        other => panic!("expected NetworkStateChanged, got {other:?}"),
+    }
+
+    let error = Response::NetworkError(anth_proto::NetworkError::new(
+        anth_proto::NetworkErrorKind::Protected,
+        "refusing to bring the loopback interface down",
+    ));
+    match Response::from_json(&error.to_json().unwrap()).unwrap() {
+        Response::NetworkError(decoded) => {
+            assert_eq!(decoded.kind, anth_proto::NetworkErrorKind::Protected);
+        }
+        other => panic!("expected NetworkError, got {other:?}"),
+    }
+}
+
+#[test]
 fn process_signal_names_are_case_insensitive() {
     use anth_proto::ProcessSignal;
     use std::str::FromStr;

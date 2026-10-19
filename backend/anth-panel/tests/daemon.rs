@@ -52,6 +52,30 @@ fn handle_request_reports_host_info() {
 }
 
 #[test]
+fn handle_request_reports_network_interfaces() {
+    match anth_panel::daemon::handle_request(Request::NetworkList) {
+        Response::NetworkSnapshot(snapshot) => {
+            assert!(snapshot.timestamp_ms > 0, "timestamp should be collected");
+            assert!(!snapshot.control_enabled);
+        }
+        other => panic!("expected NetworkSnapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn network_state_is_refused_when_control_is_disabled() {
+    match anth_panel::daemon::handle_request(Request::NetworkSetState {
+        name: "lo".to_string(),
+        up: true,
+    }) {
+        Response::NetworkError(error) => {
+            assert_eq!(error.kind, anth_proto::NetworkErrorKind::Disabled);
+        }
+        other => panic!("expected NetworkError, got {other:?}"),
+    }
+}
+
+#[test]
 fn handle_line_decodes_and_replies() {
     let line = Request::Echo {
         message: "from-line".to_string(),
@@ -243,6 +267,7 @@ fn handle_request_with_files_lists_the_configured_root() {
             path: "/".to_string(),
         },
         false,
+        false,
         &files,
     ) {
         Response::FileListing(listing) => {
@@ -257,6 +282,7 @@ fn handle_request_with_files_lists_the_configured_root() {
             path: "/x".to_string(),
             overwrite: false,
         },
+        false,
         false,
         &files,
     ) {

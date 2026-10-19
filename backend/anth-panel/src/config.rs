@@ -85,6 +85,16 @@ pub struct ProcessConfig {
     pub control: bool,
 }
 
+/// Network interface monitoring and control settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkConfig {
+    /// Whether the daemon accepts up/down requests. Off by default: bringing an
+    /// interface down can disconnect the host, and the panel has no
+    /// authentication yet.
+    pub control: bool,
+}
+
 /// Filesystem explorer settings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -121,6 +131,7 @@ pub struct Config {
     pub socket_path: String,
     pub terminal: TerminalConfig,
     pub process: ProcessConfig,
+    pub network: NetworkConfig,
     pub files: FilesConfig,
 }
 
@@ -130,6 +141,7 @@ impl Default for Config {
             socket_path: DEFAULT_SOCKET_PATH.to_string(),
             terminal: TerminalConfig::default(),
             process: ProcessConfig::default(),
+            network: NetworkConfig::default(),
             files: FilesConfig::default(),
         }
     }
@@ -138,11 +150,12 @@ impl Default for Config {
 impl Config {
     /// Defaults that make a debug build convenient for local development.
     ///
-    /// Production defaults stay safe: process control and file writes are off
-    /// unless an existing config file explicitly enables them.
+    /// Production defaults stay safe: process control, network control and file
+    /// writes are off unless an existing config file explicitly enables them.
     pub fn dev_default() -> Self {
         let mut config = Self::default();
         config.process.control = true;
+        config.network.control = true;
         config.files.write = true;
         config
     }
@@ -216,7 +229,7 @@ impl Config {
                 let config = Self::server_default();
                 if cfg!(debug_assertions) {
                     eprintln!(
-                        "Debug build: process control and file writes are enabled in the generated config."
+                        "Debug build: process control, network control and file writes are enabled in the generated config."
                     );
                 }
                 if let Err(e) = config.save(&path) {
@@ -266,6 +279,27 @@ mod tests {
         assert_eq!(files.max_entries, 5000);
         assert_eq!(files.max_preview_bytes, 1024 * 1024);
         assert_eq!(files.max_upload_bytes, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn network_control_is_off_by_default_and_on_in_debug_defaults() {
+        assert!(!NetworkConfig::default().control);
+        if cfg!(debug_assertions) {
+            assert!(Config::dev_default().network.control);
+        }
+    }
+
+    #[test]
+    fn network_section_is_loaded_from_toml() {
+        let config = Config::from_toml(
+            r#"
+[network]
+control = true
+"#,
+        )
+        .unwrap();
+
+        assert!(config.network.control);
     }
 
     #[test]

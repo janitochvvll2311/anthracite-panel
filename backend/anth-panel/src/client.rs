@@ -1,6 +1,6 @@
 use anth_proto::{Request, Response};
 
-use crate::cli::{Command, FileCommand, ProcessCommand};
+use crate::cli::{Command, FileCommand, NetworkCommand, ProcessCommand};
 use crate::render;
 
 /// Maps a client-only subcommand to the request it sends over the socket.
@@ -17,6 +17,17 @@ pub fn request_for(command: &Command) -> Option<Request> {
             ProcessCommand::Signal(signal) => Some(Request::ProcessSignal {
                 pid: signal.pid,
                 signal: signal.signal,
+            }),
+        },
+        Command::Network(args) => match &args.command {
+            NetworkCommand::List(_) => Some(Request::NetworkList),
+            NetworkCommand::Up(args) => Some(Request::NetworkSetState {
+                name: args.name.clone(),
+                up: true,
+            }),
+            NetworkCommand::Down(args) => Some(Request::NetworkSetState {
+                name: args.name.clone(),
+                up: false,
             }),
         },
         Command::File(args) => match &args.command {
@@ -42,72 +53,11 @@ pub fn request_for(command: &Command) -> Option<Request> {
 }
 
 pub fn handle_response(response: &Response) {
+    let frame = render::render_response(response);
     match response {
-        Response::Ok { message } => {
-            println!("[OK] {}", message);
+        Response::Error { .. } | Response::FileError(_) | Response::NetworkError(_) => {
+            eprintln!("{frame}");
         }
-        Response::Error { detail } => {
-            eprintln!("[ERROR] {}", detail);
-        }
-        Response::HostInfo(info) => {
-            println!("{}", render::render_host_info(info));
-        }
-        Response::ProcessSnapshot(snapshot) => {
-            println!("{}", render::render_process_snapshot(snapshot));
-        }
-        Response::ProcessSignalled { pid, signal } => {
-            println!("[OK] sent {signal} to process {pid}");
-        }
-        Response::FileListing(listing) => {
-            println!("{}", render::render_file_listing(listing));
-        }
-        Response::FileChunk(chunk) => {
-            eprintln!(
-                "[ERROR] unexpected file chunk for {} ({} bytes)",
-                chunk.path,
-                chunk.bytes.len()
-            );
-        }
-        Response::FileWritten(written) => {
-            println!("[OK] wrote {} ({} bytes)", written.path, written.size);
-        }
-        Response::FileCreated { path } => {
-            println!("[OK] created {path}");
-        }
-        Response::FileDeleted { path } => {
-            println!("[OK] deleted {path}");
-        }
-        Response::FileRenamed { from, to } => {
-            println!("[OK] renamed {from} to {to}");
-        }
-        Response::FileWriteStarted { id } => {
-            println!("[OK] upload {id} started");
-        }
-        Response::FileWriteAccepted { id, received } => {
-            println!("[OK] upload {id} received {received} bytes");
-        }
-        Response::FileWriteAborted { id } => {
-            println!("[OK] upload {id} aborted");
-        }
-        Response::FileError(error) => {
-            eprintln!("[ERROR] {}", error.detail);
-        }
-        // The CLI has no terminal subcommand; these only reach it if a daemon
-        // volunteers frames nobody asked for.
-        Response::TerminalOpened(opened) => {
-            eprintln!(
-                "[ERROR] unexpected terminal session {} from the daemon",
-                opened.id
-            );
-        }
-        Response::TerminalOutput { id, bytes } => {
-            eprintln!(
-                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
-                bytes.len()
-            );
-        }
-        Response::TerminalExited { id, status } => {
-            eprintln!("[ERROR] unexpected terminal exit for session {id} (status {status})");
-        }
+        _ => println!("{frame}"),
     }
 }

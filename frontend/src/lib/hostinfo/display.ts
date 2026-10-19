@@ -16,16 +16,7 @@ export function formatUptime(seconds: number): string {
   return parts.join(' ')
 }
 
-/** Formats a kibibyte count using the largest sensible unit. */
-export function formatKib(kib: number): string {
-  const value = Math.max(0, kib)
-  const mib = value / 1024
-  const gib = mib / 1024
-
-  if (gib >= 1) return `${gib.toFixed(1)} GiB`
-  if (mib >= 1) return `${mib.toFixed(1)} MiB`
-  return `${value.toFixed(0)} KiB`
-}
+export { formatKib } from '../format'
 
 export function memoryUsedKib(memory: HostMemoryInfo): number {
   return Math.max(0, memory.total_kib - memory.available_kib)

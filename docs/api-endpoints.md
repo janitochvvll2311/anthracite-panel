@@ -30,6 +30,9 @@ it into a stream becomes `/watch`.
 | `anth-panel process list` | `GET /api/processes` |
 | `anth-panel process list --watch 2s` | `GET /api/processes/watch?interval=2s` |
 | `anth-panel process signal 123 term` | `POST /api/processes/123/signal` with `{"signal":"term"}` |
+| `anth-panel network list` | `GET /api/network` |
+| `anth-panel network list --watch 2s` | `GET /api/network/watch?interval=2s` |
+| `anth-panel network down eth0` | `POST /api/network/eth0/state` with `{"up":false}` |
 | `anth-panel file list /tmp` | `GET /api/files?path=/tmp` |
 | `anth-panel file read /tmp/a` | `GET /api/files/content?path=/tmp/a` |
 | `anth-panel file mkdir /tmp/a` | `POST /api/files/mkdir` with `{"path":"/tmp/a"}` |
@@ -59,6 +62,9 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/processes` | One process-table snapshot |
 | `GET` | `/api/processes/watch` | Process snapshots as SSE |
 | `POST` | `/api/processes/{pid}/signal` | Send an allowlisted signal |
+| `GET` | `/api/network` | One network-interface snapshot |
+| `GET` | `/api/network/watch` | Network snapshots as SSE |
+| `POST` | `/api/network/{name}/state` | Bring an interface up or down |
 | `GET` | `/api/files` | One directory listing |
 | `GET` | `/api/files/content` | Inline file preview |
 | `GET` | `/api/files/download` | File download |
@@ -322,6 +328,118 @@ detail.
 | `400` | Invalid body/signal, or the daemon rejected the target |
 | `403` | Process control is disabled |
 | `502` | The daemon answered with an unexpected error |
+| `503` | No daemon is listening on the socket |
+
+
+## `GET /api/network`
+
+One snapshot of every network interface on the daemon host.
+
+```bash
+curl -s localhost:8080/api/network
+```
+
+```json
+{
+  "interfaces": [
+    {
+      "name": "eth0",
+      "index": 2,
+      "state": "up",
+      "up": true,
+      "running": true,
+      "loopback": false,
+      "mac": "aa:bb:cc:dd:ee:ff",
+      "mtu": 1500,
+      "speed_mbps": 1000,
+      "duplex": "full",
+      "addresses": [
+        { "family": "ipv4", "address": "192.0.2.10", "prefix_len": 24 }
+      ],
+      "rx_bytes": 12345,
+      "tx_bytes": 67890,
+      "rx_packets": 10,
+      "tx_packets": 20,
+      "rx_errors": 0,
+      "tx_errors": 0,
+      "rx_dropped": 0,
+      "tx_dropped": 0
+    }
+  ],
+  "timestamp_ms": 1700000000000,
+  "control_enabled": false,
+  "total": 1,
+  "truncated": false
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `state` | Operational state from `/sys/class/net/<name>/operstate` |
+| `up` | Administrative `IFF_UP` flag |
+| `running` | Carrier/running `IFF_RUNNING` flag |
+| `loopback` | Loopback `IFF_LOOPBACK` flag |
+| `speed_mbps` | Negotiated link speed, or `null` |
+| `duplex` | `full`, `half`, or `null` |
+| `addresses` | IPv4/IPv6 addresses with a prefix length |
+| `timestamp_ms` | Wall-clock time of the snapshot |
+| `control_enabled` | Whether `[network] control` allows up/down requests |
+| `total` | Interfaces found before the row cap |
+| `truncated` | Whether the interface list was shortened |
+| `warning` | Present only when the list was shortened |
+
+RX/TX counters are cumulative. Clients compute rates from two snapshots with
+`timestamp_ms`; the server never keeps a sampler. A snapshot returns at most
+2000 interfaces and is shrunk further to fit the 1 MiB line cap; either case
+sets `truncated` and includes a `warning`.
+
+| Status | When |
+| --- | --- |
+| `200` | Snapshot returned |
+| `502` | The daemon answered with an error |
+| `503` | No daemon is listening on the socket |
+
+See [network.md](network.md) for the data sources and policy.
+
+## `GET /api/network/watch`
+
+A network snapshot per interval as Server-Sent Events. The event name is
+`network`; each `data` line is the same object `GET /api/network` returns.
+
+```bash
+curl -N "localhost:8080/api/network/watch?interval=2s"
+```
+
+The interval uses the same parser as `host-info/watch`, including the `10ms`
+minimum and `24h` maximum. Errors before the stream starts are `400`/`503`;
+a failure mid-stream becomes an `error` event and ends the stream.
+
+## `POST /api/network/{name}/state`
+
+Brings one interface up or down.
+
+```bash
+curl -s -X POST localhost:8080/api/network/eth0/state \
+  -H 'content-type: application/json' \
+  -d '{"up":false}'
+```
+
+```json
+{"name":"eth0","up":false}
+```
+
+The route returns `403` when `[network] control = false`. The daemon also
+refuses invalid names, unknown interfaces, and bringing a loopback interface
+down. State changes
+require a daemon user with `CAP_NET_ADMIN`; a permission failure is `403`.
+
+| Status | When |
+| --- | --- |
+| `200` | State changed |
+| `400` | Invalid name or body |
+| `403` | Network control is disabled, the interface is protected, or permission was denied |
+| `404` | The interface does not exist |
+| `500` | The kernel operation failed |
 | `503` | No daemon is listening on the socket |
 
 ## Files

@@ -6,7 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anth_panel::app::AppState;
 use anth_panel::config::{Config, FilesConfig};
 use anth_panel::files::{FileService, PendingUpload};
-use anth_proto::{AnthServer, FileError, FileErrorKind, Request, Response};
+use anth_proto::{
+    AnthServer, FileError, FileErrorKind, NetworkAddress, NetworkAddressFamily, NetworkError,
+    NetworkErrorKind, NetworkInterface, NetworkSnapshot, Request, Response,
+};
 use axum::body::{Body, Bytes, to_bytes};
 use axum::http::{Request as HttpRequest, StatusCode};
 use tower::ServiceExt;
@@ -392,6 +395,73 @@ fn config_with_process_control(path: &std::path::Path, control: bool) -> Config 
     config
 }
 
+fn network_snapshot() -> NetworkSnapshot {
+    NetworkSnapshot {
+        interfaces: vec![NetworkInterface {
+            name: "eth0".to_string(),
+            index: 2,
+            state: "up".to_string(),
+            up: true,
+            running: true,
+            loopback: false,
+            mac: "aa:bb:cc:dd:ee:ff".to_string(),
+            mtu: 1500,
+            speed_mbps: Some(1000),
+            duplex: Some("full".to_string()),
+            addresses: vec![NetworkAddress {
+                family: NetworkAddressFamily::Ipv4,
+                address: "192.0.2.10".to_string(),
+                prefix_len: 24,
+            }],
+            rx_bytes: 2048,
+            tx_bytes: 1024,
+            rx_packets: 10,
+            tx_packets: 5,
+            rx_errors: 0,
+            tx_errors: 0,
+            rx_dropped: 0,
+            tx_dropped: 0,
+        }],
+        timestamp_ms: 1_700_000_000_000,
+        control_enabled: true,
+        total: 1,
+        truncated: false,
+        warning: None,
+    }
+}
+
+fn config_with_network_control(path: &std::path::Path, control: bool) -> Config {
+    let mut config = config_at(path);
+    config.network.control = control;
+    config
+}
+
+fn spawn_network_server(
+    path: &std::path::Path,
+    snapshot: NetworkSnapshot,
+) -> tokio::task::JoinHandle<()> {
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(request)) = server.receive_request().await {
+                let response = match request {
+                    Request::NetworkList => Response::NetworkSnapshot(snapshot.clone()),
+                    Request::NetworkSetState { name, up } => {
+                        Response::NetworkStateChanged { name, up }
+                    }
+                    other => Response::Error {
+                        detail: format!("unexpected request: {other:?}"),
+                    },
+                };
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    })
+}
+
 fn process_snapshot() -> anth_proto::ProcessSnapshot {
     anth_proto::ProcessSnapshot {
         processes: vec![anth_proto::ProcessInfo {
@@ -582,6 +652,164 @@ async fn process_signal_rejects_a_non_numeric_pid_as_json() {
     assert!(value["error"].is_string(), "{value}");
 }
 
+#[tokio::test]
+async fn network_route_returns_the_bare_snapshot() {
+    let path = unique_socket("network-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_network_server(&path, network_snapshot());
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/network")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["timestamp_ms"], 1_700_000_000_000u64);
+    assert_eq!(value["control_enabled"], true);
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["truncated"], false);
+    assert_eq!(value["interfaces"][0]["name"], "eth0");
+    assert_eq!(value["interfaces"][0]["addresses"][0]["family"], "ipv4");
+    assert!(value.get("type").is_none(), "no tag envelope: {value}");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn network_route_returns_service_unavailable_without_a_daemon() {
+    let path = unique_socket("network-down");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/network")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn network_watch_route_rejects_an_invalid_interval() {
+    let app = anth_panel::router(AppState::new(Config::default()));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/network/watch?interval=abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn network_state_requires_control_to_be_enabled() {
+    let path = unique_socket("network-control-off");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/network/eth0/state")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"up":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn network_state_route_maps_the_request() {
+    let path = unique_socket("network-state-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_network_server(&path, network_snapshot());
+
+    let app = anth_panel::router(AppState::new(config_with_network_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/network/eth0/state")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"up":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value, serde_json::json!({"name":"eth0","up":true}));
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn network_state_route_maps_daemon_errors() {
+    let path = unique_socket("network-state-error");
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let server = tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(_)) = server.receive_request().await {
+                let response = Response::NetworkError(NetworkError::new(
+                    NetworkErrorKind::Protected,
+                    "refusing to bring the loopback interface down",
+                ));
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    let app = anth_panel::router(AppState::new(config_with_network_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/network/lo/state")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"up":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["error"].as_str().unwrap().contains("loopback"));
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
 fn unique_dir(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -687,7 +915,9 @@ fn spawn_file_server(path: &Path, service: FileService) -> tokio::task::JoinHand
                             uploads.remove(&id);
                             Response::FileWriteAborted { id }
                         }
-                        other => anth_panel::daemon::handle_request_with(other, false, &service),
+                        other => {
+                            anth_panel::daemon::handle_request_with(other, false, false, &service)
+                        }
                     };
 
                     if server.send_response(&response).await.is_err() {

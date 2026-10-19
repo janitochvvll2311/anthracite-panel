@@ -1,7 +1,12 @@
 use anth_panel::render::{
-    format_kib, format_uptime, render_file_listing, render_host_info, render_process_snapshot,
+    format_kib, format_uptime, render_file_listing, render_host_info, render_network_snapshot,
+    render_process_snapshot, render_response,
 };
-use anth_proto::{HostInfo, LoadAverage, MemoryInfo, OsInfo, ProcessInfo, ProcessSnapshot};
+use anth_proto::{
+    HostInfo, LoadAverage, MemoryInfo, NetworkAddress, NetworkAddressFamily, NetworkError,
+    NetworkErrorKind, NetworkInterface, NetworkSnapshot, OsInfo, ProcessInfo, ProcessSnapshot,
+    Response,
+};
 
 fn sample() -> HostInfo {
     HostInfo {
@@ -305,4 +310,95 @@ fn render_file_listing_shows_types_sizes_and_warning() {
     assert!(out.contains("2.0 KiB"));
     assert!(out.contains("1970-01-01 00:00 UTC"));
     assert!(out.contains("Warning: showing 2 of 3 entries"));
+}
+
+#[test]
+fn render_network_snapshot_shows_addresses_speed_and_traffic() {
+    let snapshot = NetworkSnapshot {
+        interfaces: vec![
+            NetworkInterface {
+                name: "eth0".to_string(),
+                index: 2,
+                state: "up".to_string(),
+                up: true,
+                running: true,
+                loopback: false,
+                mac: "aa:bb:cc:dd:ee:ff".to_string(),
+                mtu: 1500,
+                speed_mbps: Some(1000),
+                duplex: Some("full".to_string()),
+                addresses: vec![NetworkAddress {
+                    family: NetworkAddressFamily::Ipv4,
+                    address: "192.0.2.10".to_string(),
+                    prefix_len: 24,
+                }],
+                rx_bytes: 2048,
+                tx_bytes: 1024,
+                rx_packets: 10,
+                tx_packets: 5,
+                rx_errors: 1,
+                tx_errors: 2,
+                rx_dropped: 3,
+                tx_dropped: 4,
+            },
+            NetworkInterface {
+                name: "lo".to_string(),
+                index: 1,
+                state: "unknown".to_string(),
+                up: true,
+                running: true,
+                mac: "00:00:00:00:00:00".to_string(),
+                mtu: 65536,
+                speed_mbps: None,
+                duplex: None,
+                addresses: Vec::new(),
+                ..NetworkInterface::default()
+            },
+        ],
+        timestamp_ms: 1_700_000_000_000,
+        control_enabled: true,
+        total: 3,
+        truncated: true,
+        warning: Some("showing 2 of 3 interfaces".to_string()),
+    };
+
+    let out = render_network_snapshot(&snapshot);
+    for expected in [
+        "IFACE",
+        "eth0",
+        "UP",
+        "192.0.2.10/24",
+        "1000 Mb/s",
+        "2.0 KiB",
+        "1.0 KiB",
+        "lo",
+        "00:00:00:00:00:00",
+    ] {
+        assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
+    }
+    assert!(out.contains("Warning: showing 2 of 3 interfaces"));
+}
+
+#[test]
+fn render_response_uses_the_shared_cli_prefixes() {
+    assert_eq!(
+        render_response(&Response::Ok {
+            message: "done".to_string(),
+        }),
+        "[OK] done"
+    );
+    assert_eq!(
+        render_response(&Response::NetworkStateChanged {
+            name: "eth0".to_string(),
+            up: false,
+        }),
+        "[OK] brought eth0 down"
+    );
+    assert_eq!(
+        render_response(&Response::NetworkError(NetworkError::new(
+            NetworkErrorKind::Protected,
+            "loopback is protected",
+        ))),
+        "[ERROR] loopback is protected"
+    );
 }

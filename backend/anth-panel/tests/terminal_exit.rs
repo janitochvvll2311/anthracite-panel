@@ -32,6 +32,7 @@ fn config_at(path: &Path) -> Config {
             max_sessions: 1,
         },
         process: ProcessConfig::default(),
+        network: anth_panel::config::NetworkConfig::default(),
         files: FilesConfig::default(),
     }
 }

@@ -42,6 +42,8 @@ pub enum Command {
     HostInfo(WatchArgs),
     /// Inspect processes on the daemon host and optionally signal one.
     Process(ProcessArgs),
+    /// Inspect network interfaces and optionally bring one up or down.
+    Network(NetworkArgs),
     /// Browse and manage files on the daemon host.
     File(FileArgs),
     /// Open an interactive terminal on the daemon host.
@@ -82,6 +84,33 @@ pub struct ProcessSignalArgs {
 
 fn parse_signal(value: &str) -> Result<ProcessSignal, String> {
     value.parse()
+}
+
+#[derive(Args, Debug)]
+pub struct NetworkArgs {
+    #[command(subcommand)]
+    pub command: NetworkCommand,
+}
+
+/// `network` subcommands. `list` keeps the short `ls` alias.
+#[derive(Subcommand, Debug)]
+pub enum NetworkCommand {
+    /// List network interfaces as a table.
+    #[command(alias = "ls")]
+    List(WatchArgs),
+    /// Bring one interface up.
+    Up(NetworkStateArgs),
+    /// Bring one interface down.
+    Down(NetworkStateArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct NetworkStateArgs {
+    #[arg(value_name = "INTERFACE", help = "Network interface name, e.g. eth0")]
+    pub name: String,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
 }
 
 #[derive(Args, Debug)]

@@ -1,6 +1,7 @@
 use anth_panel::cli::{
     Cli, Command, FileArgs, FileCommand, FileDeleteArgs, FileListArgs, FileMkdirArgs, FileReadArgs,
-    FileRenameArgs, FileUploadArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs,
+    FileRenameArgs, FileUploadArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs,
+    ProcessCommand, ProcessSignalArgs, WatchArgs,
 };
 use anth_panel::{handle_response, request_for};
 use anth_proto::{ProcessSignal, Request, Response};
@@ -15,6 +16,64 @@ fn request_for_echo_builds_an_echo_request() {
     match request_for(&command) {
         Some(Request::Echo { message }) => assert_eq!(message, "hello"),
         other => panic!("expected an Echo request, got {other:?}"),
+    }
+}
+
+#[test]
+fn request_for_network_builds_list_and_state_requests() {
+    match request_for(&Command::Network(NetworkArgs {
+        command: NetworkCommand::List(WatchArgs::default()),
+    })) {
+        Some(Request::NetworkList) => {}
+        other => panic!("expected a NetworkList request, got {other:?}"),
+    }
+
+    match request_for(&Command::Network(NetworkArgs {
+        command: NetworkCommand::Up(NetworkStateArgs {
+            name: "eth0".to_string(),
+            yes: true,
+        }),
+    })) {
+        Some(Request::NetworkSetState { name, up }) => {
+            assert_eq!(name, "eth0");
+            assert!(up);
+        }
+        other => panic!("expected a NetworkSetState request, got {other:?}"),
+    }
+
+    match request_for(&Command::Network(NetworkArgs {
+        command: NetworkCommand::Down(NetworkStateArgs {
+            name: "eth0".to_string(),
+            yes: false,
+        }),
+    })) {
+        Some(Request::NetworkSetState { name, up }) => {
+            assert_eq!(name, "eth0");
+            assert!(!up);
+        }
+        other => panic!("expected a NetworkSetState request, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_parses_network_list_and_state_subcommands() {
+    let cli = Cli::try_parse_from(["anth-panel", "network", "list", "--watch", "1s"]).unwrap();
+    match cli.command {
+        Command::Network(NetworkArgs {
+            command: NetworkCommand::List(args),
+        }) => assert_eq!(args.watch.as_deref(), Some("1s")),
+        other => panic!("expected network list, got {other:?}"),
+    }
+
+    let cli = Cli::try_parse_from(["anth-panel", "network", "down", "eth0", "--yes"]).unwrap();
+    match cli.command {
+        Command::Network(NetworkArgs {
+            command: NetworkCommand::Down(args),
+        }) => {
+            assert_eq!(args.name, "eth0");
+            assert!(args.yes);
+        }
+        other => panic!("expected network down, got {other:?}"),
     }
 }
 

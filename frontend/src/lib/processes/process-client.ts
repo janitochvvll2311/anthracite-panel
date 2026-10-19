@@ -5,6 +5,11 @@
  * different backend can implement the same interface.
  */
 
+import { responseError } from '../http'
+import { watchJson } from '../stream'
+import type { HttpStreamClientOptions } from '../http'
+import type { StreamConnectionStatus, StreamHandlers } from '../stream'
+
 export type ProcessSignal =
   | 'term'
   | 'kill'
@@ -43,18 +48,9 @@ export interface ProcessRow extends ProcessInfo {
   cpu_percent: number | null
 }
 
-export type ProcessConnectionStatus =
-  | 'idle'
-  | 'connecting'
-  | 'live'
-  | 'error'
-  | 'closed'
+export type ProcessConnectionStatus = StreamConnectionStatus
 
-export interface ProcessHandlers {
-  onSnapshot: (snapshot: ProcessSnapshot) => void
-  onError?: (error: Error) => void
-  onStatus?: (status: ProcessConnectionStatus) => void
-}
+export interface ProcessHandlers extends StreamHandlers<ProcessSnapshot> {}
 
 export interface ProcessClient {
   list: () => Promise<ProcessSnapshot>
@@ -62,11 +58,7 @@ export interface ProcessClient {
   signal: (pid: number, signal: ProcessSignal) => Promise<void>
 }
 
-export interface HttpProcessClientOptions {
-  baseUrl?: string
-  fetchImpl?: typeof fetch
-  EventSourceImpl?: typeof EventSource
-}
+export interface HttpProcessClientOptions extends HttpStreamClientOptions {}
 
 export class HttpProcessClient implements ProcessClient {
   private readonly baseUrl: string
@@ -90,33 +82,14 @@ export class HttpProcessClient implements ProcessClient {
   }
 
   watch(intervalMs: number, handlers: ProcessHandlers): () => void {
-    const interval = Math.max(10, Math.round(intervalMs))
-    const source = new this.EventSourceImpl(
-      `${this.baseUrl}/watch?interval=${interval}ms`,
-    )
-
-    handlers.onStatus?.('connecting')
-    source.onopen = () => handlers.onStatus?.('live')
-    source.addEventListener('processes', (event) => {
-      try {
-        handlers.onSnapshot(
-          JSON.parse((event as MessageEvent<string>).data) as ProcessSnapshot,
-        )
-      } catch (error) {
-        handlers.onError?.(
-          error instanceof Error ? error : new Error(String(error)),
-        )
-      }
+    return watchJson({
+      baseUrl: this.baseUrl,
+      event: 'processes',
+      intervalMs,
+      disconnectedMessage: 'process stream disconnected',
+      handlers,
+      EventSourceImpl: this.EventSourceImpl,
     })
-    source.onerror = () => {
-      handlers.onError?.(new Error('process stream disconnected'))
-      handlers.onStatus?.('error')
-    }
-
-    return () => {
-      source.close()
-      handlers.onStatus?.('closed')
-    }
   }
 
   async signal(pid: number, signal: ProcessSignal): Promise<void> {
@@ -133,19 +106,4 @@ export class HttpProcessClient implements ProcessClient {
       throw await responseError(response)
     }
   }
-}
-
-async function responseError(response: Response): Promise<Error> {
-  let detail = `${response.status} ${response.statusText}`.trim()
-
-  try {
-    const body = (await response.json()) as { error?: unknown }
-    if (typeof body.error === 'string') {
-      detail = body.error
-    }
-  } catch {
-    // The body was not JSON; keep the status text.
-  }
-
-  return new Error(detail)
 }
