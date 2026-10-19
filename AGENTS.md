@@ -6,11 +6,17 @@ Repository-specific knowledge for agents working on Anthracite Panel.
 
 Two sibling projects: a Rust backend and a Vite/Lit frontend. The backend ships a
 single binary, `anth-panel`, that serves the Unix-socket daemon, the CLI client and
-the HTTP panel with an embedded web UI. License is Apache-2.0. No README exists yet.
+the HTTP panel with an embedded web UI. License is Apache-2.0. User-facing docs
+live in `docs/` and are indexed from `README.md`.
 
 ## Layout
 
 ```
+README.md                   # project overview, indexes docs/
+docs/
+  cli.md                    # commands, flags, exit codes
+  api-endpoints.md          # HTTP routes, bodies, SSE frames, error shape
+  socket-protocol.md        # anth-proto wire format
 backend/
   Cargo.toml                # workspace root, resolver = "2"
   Cargo.lock
@@ -35,7 +41,7 @@ backend/
     tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs,
                             #   stream.rs, sse.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
-  vite.config.ts            # proxies /healthz and /command to the backend in dev
+  vite.config.ts            # proxies /healthz and /api to the backend in dev
   src/  public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
 Dockerfile                  # bun frontend stage, musl backend stage, alpine runtime
@@ -148,7 +154,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE) and
   `POST /api/echo`. The route names the command, so bodies carry the command's
   arguments at the top level (`{"message":"hi"}`) with no `type`/`data` envelope;
-  the envelope stays a `anth-proto` concern for socket clients only. A fallback
+  the envelope stays a `anth-proto` concern for socket clients only. See
+  `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via `api::ApiError`,
+  including bodies axum rejects before the handler runs. A fallback
   static handler that serves the embedded SPA
   and falls back to `index.html`. Table tests exercise the router through
   `tower::ServiceExt::oneshot`.
@@ -158,6 +166,20 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `--config` is `global = true`, so it is accepted before or after the subcommand.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
+
+## Documentation
+
+User-facing docs live in `docs/` and are indexed from `README.md`. Keep them in
+sync with behaviour; they are the contract for people writing clients:
+
+- `docs/cli.md` — every subcommand and flag. Update when a flag is added.
+- `docs/api-endpoints.md` — routes, request/response bodies, SSE fields, error
+  shape, status codes. Update when a route is added or its payload changes.
+- `docs/socket-protocol.md` — the `anth-proto` wire format. Update when either
+  enum changes; an alternative client depends on this being accurate.
+
+`AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
+duplicate route tables here — point at the doc.
 
 ## Code style
 

@@ -168,7 +168,7 @@ async fn echo_route_rejects_a_body_without_a_message() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -238,7 +238,11 @@ async fn watch_route_rejects_an_invalid_interval() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert!(String::from_utf8_lossy(&bytes).contains("unit suffix"));
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        value["error"].as_str().unwrap().contains("unit suffix"),
+        "{value}"
+    );
 }
 
 #[tokio::test]
@@ -274,4 +278,81 @@ async fn watch_route_returns_service_unavailable_without_a_daemon() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn every_failure_uses_the_same_json_shape() {
+    // One shape for errors raised by the handler itself...
+    let app = anth_panel::router(AppState::new(Config::default()));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/host-info/watch?interval=nope")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value.as_object().unwrap().len(), 1, "{value}");
+    assert!(value["error"].is_string(), "{value}");
+
+    // ...and one for bodies axum rejects before the handler runs.
+    let app = anth_panel::router(AppState::new(Config::default()));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/echo")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"nope":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value.as_object().unwrap().len(), 1, "{value}");
+    assert!(value["error"].is_string(), "{value}");
+}
+
+#[tokio::test]
+async fn a_daemon_error_response_becomes_a_json_gateway_error() {
+    let path = unique_socket("daemon-error");
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let server = tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(_)) = server.receive_request().await {
+                let response = Response::Error {
+                    detail: "nope".to_string(),
+                };
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/host-info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "nope");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
 }

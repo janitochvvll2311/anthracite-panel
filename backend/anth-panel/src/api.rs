@@ -1,3 +1,4 @@
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Query, State};
 use axum::http::{Response, StatusCode, Uri};
 use axum::response::IntoResponse;
@@ -29,6 +30,45 @@ pub async fn get_healthz() -> &'static str {
     "ok"
 }
 
+/// Every API failure, serialized as `{"error": "..."}` so clients parse one
+/// shape regardless of which layer rejected the request.
+#[derive(Debug)]
+pub struct ApiError {
+    status: StatusCode,
+    detail: String,
+}
+
+impl ApiError {
+    fn new(status: StatusCode, detail: impl Into<String>) -> Self {
+        Self {
+            status,
+            detail: detail.into(),
+        }
+    }
+
+    fn bad_request(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, detail)
+    }
+
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        (
+            self.status,
+            Json(serde_json::json!({ "error": self.detail })),
+        )
+            .into_response()
+    }
+}
+
 /// Body of `POST /api/echo`. The command is implied by the route, so the
 /// argument is a top-level member rather than nested under a tag.
 #[derive(Debug, Deserialize)]
@@ -42,23 +82,27 @@ pub struct WatchQuery {
 }
 
 /// `GET /api/host-info` — one snapshot.
-pub async fn get_host_info(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
+pub async fn get_host_info(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let response = exchange(&state, &Request::HostInfo).await?;
-    Ok(Json(host_info_json(response)?))
+    host_info_json(response).map(Json)
 }
 
 /// `GET /api/echo` — one echo.
 pub async fn post_echo(
     State(state): State<AppState>,
-    Json(args): Json<EchoArgs>,
-) -> Result<Json<Value>, StatusCode> {
+    payload: Result<Json<EchoArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+
     let request = Request::Echo {
         message: args.message,
     };
-    let response = exchange(&state, &request).await?;
-    match response {
+    match exchange(&state, &request).await? {
         CommandResponse::Ok { message } => Ok(Json(serde_json::json!({ "message": message }))),
-        _ => Err(StatusCode::BAD_GATEWAY),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
     }
 }
 
@@ -66,18 +110,16 @@ pub async fn post_echo(
 pub async fn watch_host_info(
     State(state): State<AppState>,
     Query(query): Query<WatchQuery>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, ApiError> {
     let period = match query.interval.as_deref() {
         None => stream::DEFAULT_INTERVAL,
-        Some(raw) => stream::parse_interval(raw).map_err(|e| (StatusCode::BAD_REQUEST, e))?,
+        Some(raw) => stream::parse_interval(raw).map_err(ApiError::bad_request)?,
     };
 
-    let client = state.create_client().await.map_err(|_| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "daemon unavailable".to_string(),
-        )
-    })?;
+    let client = state
+        .create_client()
+        .await
+        .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "daemon unavailable"))?;
 
     // One socket for the whole stream, shared by successive reads.
     let client = Arc::new(tokio::sync::Mutex::new(client));
@@ -97,47 +139,47 @@ pub async fn watch_host_info(
 
 /// Sends one request and returns the daemon response, mapping failures to
 /// status codes that a one-shot endpoint can still express.
-async fn exchange(state: &AppState, request: &Request) -> Result<CommandResponse, StatusCode> {
+async fn exchange(state: &AppState, request: &Request) -> Result<CommandResponse, ApiError> {
     let mut client = state
         .create_client()
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "daemon unavailable"))?;
     query_command(&mut client, request).await
 }
 
 async fn query_command(
     client: &mut AnthClient,
     request: &Request,
-) -> Result<CommandResponse, StatusCode> {
+) -> Result<CommandResponse, ApiError> {
     client
         .send_request(request)
         .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("send failed: {e}")))?;
 
     match client.receive_response().await {
         Some(Ok(response)) => Ok(response),
-        Some(Err(_)) => Err(StatusCode::BAD_REQUEST),
-        None => Err(StatusCode::BAD_GATEWAY),
+        Some(Err(e)) => Err(ApiError::bad_request(format!("malformed response: {e}"))),
+        None => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "daemon closed the connection",
+        )),
     }
 }
 
-fn host_info_json(response: CommandResponse) -> Result<Value, StatusCode> {
+fn host_info_json(response: CommandResponse) -> Result<Value, ApiError> {
     match response {
         CommandResponse::HostInfo(info) => Ok(Value::from(info.as_ref())),
-        CommandResponse::Error { .. } => Err(StatusCode::BAD_GATEWAY),
-        CommandResponse::Ok { .. } => Err(StatusCode::BAD_GATEWAY),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        CommandResponse::Ok { message } => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {message}"),
+        )),
     }
 }
 
-/// Human-readable text for a status, used in SSE error events where only a
-/// payload is possible.
-fn error_detail(status: StatusCode) -> String {
-    match status {
-        StatusCode::SERVICE_UNAVAILABLE => "daemon unavailable".to_string(),
-        StatusCode::BAD_GATEWAY => "daemon did not answer".to_string(),
-        StatusCode::BAD_REQUEST => "daemon rejected the request".to_string(),
-        other => other.to_string(),
-    }
+/// Text for an SSE error frame, where only a payload is possible.
+fn error_detail(error: ApiError) -> String {
+    error.detail
 }
 
 #[derive(RustEmbed)]

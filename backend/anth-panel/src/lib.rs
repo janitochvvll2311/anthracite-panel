@@ -10,7 +10,7 @@ pub mod render;
 pub mod sse;
 pub mod stream;
 
-pub use api::{get_healthz, get_host_info, post_echo, router, watch_host_info};
+pub use api::{ApiError, get_healthz, get_host_info, post_echo, router, watch_host_info};
 pub use app::AppState;
 pub use cli::Cli;
 pub use client::{handle_response, request_for};
