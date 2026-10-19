@@ -77,9 +77,11 @@ does not inherit the old process's CPU counters.
 
 ## Truncation
 
-One protocol line is capped at 1 MiB, so a snapshot returns at most 2000
-processes and truncates each command line to 256 characters. Processes are sorted
-by accumulated CPU before truncation, so the busiest ones stay visible.
+One protocol line is capped at 1 MiB. A snapshot returns at most 2000
+processes, truncates each command line to 256 characters, and then checks the
+serialized size of the whole snapshot. If it is still too large, commands are
+shortened further (down to 8 characters) before the least busy rows are dropped.
+Processes are sorted by accumulated CPU, so the busiest ones stay visible.
 
 When rows or command lines were shortened, `warning` is a human-readable notice
 and `truncated` is `true`. The CLI prints the warning below the table; the web

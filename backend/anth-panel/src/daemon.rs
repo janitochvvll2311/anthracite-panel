@@ -34,7 +34,10 @@ pub fn handle_request(request: Request) -> Response {
 /// Handles a request with the daemon policy that is not part of the wire type.
 ///
 /// Process control is the only policy today: the socket protocol itself does
-/// not know whether the deployment allows signals.
+/// not know whether the deployment allows signals. This synchronous path is
+/// used by the line helper and unit tests. The async connection loop
+/// special-cases `ProcessList` so the blocking `/proc` walk runs on a blocking
+/// worker instead of a Tokio task.
 pub fn handle_request_with(request: Request, process_control: bool) -> Response {
     match request {
         Request::Echo { message } => Response::Ok { message },
@@ -174,6 +177,14 @@ async fn pump(
         };
 
         let response = match request {
+            Request::ProcessList => {
+                match tokio::task::spawn_blocking(move || process::collect(process_control)).await {
+                    Ok(snapshot) => Response::ProcessSnapshot(snapshot),
+                    Err(error) => Response::Error {
+                        detail: format!("failed to read the process table: {error}"),
+                    },
+                }
+            }
             Request::TerminalOpen(args) => {
                 let size = args.size.unwrap_or(DEFAULT_TERMINAL_SIZE);
                 match sessions.open(&program, size).await {

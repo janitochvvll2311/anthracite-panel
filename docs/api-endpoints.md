@@ -237,11 +237,13 @@ curl -s localhost:8080/api/processes
 | `timestamp_ms` | Wall-clock time of the snapshot |
 | `control_enabled` | Whether `[process] control` allows signals |
 | `total` | Processes found before truncation |
-| `truncated` | Whether the row cap was reached |
+| `truncated` | Whether rows or command lines were shortened |
 | `warning` | Present only when rows or command lines were shortened |
 
 A snapshot returns at most 2000 processes and truncates each command line to
-256 characters. Processes are sorted by accumulated CPU before truncation. When
+256 characters. Processes are sorted by accumulated CPU before truncation. The
+serialized snapshot is then fitted to the 1 MiB protocol line cap by shortening
+commands further and, if necessary, dropping the least busy rows. When any of
 that happens, `truncated` is `true` and `warning` contains a human-readable
 message such as:
 

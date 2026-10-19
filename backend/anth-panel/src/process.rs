@@ -12,13 +12,17 @@ use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_proto::{ProcessInfo, ProcessSignal, ProcessSnapshot};
+use anth_proto::{MAX_LINE_LEN, ProcessInfo, ProcessSignal, ProcessSnapshot, Response};
 
 /// Maximum rows returned in one snapshot. The protocol is newline-delimited and
-/// one line is capped at 1 MiB, so a full `/proc` cannot always fit.
+/// one line is capped at 1 MiB, so the serialized snapshot is also fitted to
+/// that budget below.
 pub const MAX_PROCESSES: usize = 2000;
 /// Maximum command-line length in a snapshot, in characters.
 pub const MAX_COMMAND_CHARS: usize = 256;
+/// Commands are shortened down to this many characters before rows are dropped
+/// to satisfy the protocol line limit.
+const MIN_COMMAND_CHARS: usize = 8;
 const CLOCK_TICKS_FALLBACK: u64 = 100;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -69,15 +73,17 @@ pub fn collect_from(root: impl AsRef<Path>, control_enabled: bool) -> ProcessSna
         processes.truncate(MAX_PROCESSES);
     }
 
-    ProcessSnapshot {
+    let snapshot = ProcessSnapshot {
         processes,
         clock_ticks: clock_ticks(),
         timestamp_ms: timestamp_ms(),
         control_enabled,
         total,
         truncated,
-        warning: warning(total, truncated, command_truncated),
-    }
+        warning: None,
+    };
+
+    fit_snapshot(snapshot, command_truncated)
 }
 
 /// Sends an allowlisted signal after checking the daemon-side policy.
@@ -129,16 +135,95 @@ fn raw_signal(signal: ProcessSignal) -> i32 {
     }
 }
 
-fn warning(total: usize, truncated: bool, command_truncated: bool) -> Option<String> {
+fn fit_snapshot(mut snapshot: ProcessSnapshot, command_truncated: bool) -> ProcessSnapshot {
+    let total = snapshot.total;
+    let mut command_truncated = command_truncated;
+    let mut command_limit = MAX_COMMAND_CHARS;
+    let rows_truncated = snapshot.processes.len() < total;
+
+    snapshot.truncated = rows_truncated || command_truncated;
+    snapshot.warning = warning(
+        snapshot.processes.len(),
+        total,
+        rows_truncated,
+        command_truncated,
+        command_limit,
+    );
+    let mut encoded_len = snapshot_json_len(&snapshot);
+
+    // Commands are the bulk of a snapshot. Shorten them first so the useful
+    // process rows survive, then drop the least busy rows only if necessary.
+    while encoded_len > MAX_LINE_LEN && command_limit > MIN_COMMAND_CHARS {
+        command_limit = (command_limit / 2).max(MIN_COMMAND_CHARS);
+        for process in &mut snapshot.processes {
+            let (command, truncated) = truncate_chars(&process.command, command_limit);
+            process.command = command;
+            command_truncated |= truncated;
+        }
+
+        snapshot.truncated = rows_truncated || command_truncated;
+        snapshot.warning = warning(
+            snapshot.processes.len(),
+            total,
+            rows_truncated,
+            command_truncated,
+            command_limit,
+        );
+        encoded_len = snapshot_json_len(&snapshot);
+    }
+
+    if encoded_len > MAX_LINE_LEN {
+        // Rows are sorted by CPU descending, so the tail is the least busy.
+        // Binary-search the largest prefix that still fits the frame.
+        let processes = snapshot.processes.clone();
+        let mut low = 0;
+        let mut high = processes.len();
+
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            let mut candidate = snapshot.clone();
+            candidate.processes.truncate(mid);
+            candidate.truncated = true;
+            candidate.warning = warning(mid, total, true, command_truncated, command_limit);
+
+            if snapshot_json_len(&candidate) <= MAX_LINE_LEN {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+
+        snapshot.processes.truncate(low);
+        snapshot.truncated = true;
+        snapshot.warning = warning(low, total, true, command_truncated, command_limit);
+    }
+
+    snapshot
+}
+
+fn snapshot_json_len(snapshot: &ProcessSnapshot) -> usize {
+    Response::ProcessSnapshot(snapshot.clone())
+        .to_json()
+        .map(|json| json.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn warning(
+    shown: usize,
+    total: usize,
+    rows_truncated: bool,
+    command_truncated: bool,
+    command_limit: usize,
+) -> Option<String> {
     let mut notes = Vec::new();
-    if truncated {
+    if rows_truncated {
         notes.push(format!(
-            "showing {MAX_PROCESSES} of {total} processes, highest CPU first"
+            "showing {shown} of {total} processes, highest CPU first"
         ));
     }
     if command_truncated {
         notes.push(format!(
-            "command lines are limited to {MAX_COMMAND_CHARS} characters"
+            "command lines are limited to {command_limit} characters"
         ));
     }
 
@@ -355,19 +440,94 @@ mod tests {
 
     #[test]
     fn warnings_explain_truncation() {
-        assert_eq!(warning(10, false, false), None);
+        assert_eq!(warning(10, 10, false, false, MAX_COMMAND_CHARS), None);
         assert_eq!(
-            warning(MAX_PROCESSES + 1, true, false),
+            warning(
+                MAX_PROCESSES,
+                MAX_PROCESSES + 1,
+                true,
+                false,
+                MAX_COMMAND_CHARS
+            ),
             Some(format!(
                 "showing {MAX_PROCESSES} of {} processes, highest CPU first",
                 MAX_PROCESSES + 1
             ))
         );
         assert_eq!(
-            warning(10, false, true),
+            warning(10, 10, false, true, MAX_COMMAND_CHARS),
             Some(format!(
                 "command lines are limited to {MAX_COMMAND_CHARS} characters"
             ))
+        );
+    }
+
+    #[test]
+    fn serialized_snapshots_fit_the_line_limit() {
+        let cases = [
+            ("CJK", "汉".repeat(MAX_COMMAND_CHARS)),
+            ("quote-heavy", "\"".repeat(MAX_COMMAND_CHARS)),
+            ("ASCII", "a".repeat(MAX_COMMAND_CHARS)),
+        ];
+
+        for (name, command) in cases {
+            let processes = (0..MAX_PROCESSES)
+                .map(|index| ProcessInfo {
+                    pid: index as u32 + 1,
+                    command: command.clone(),
+                    ..ProcessInfo::default()
+                })
+                .collect();
+
+            let snapshot = ProcessSnapshot {
+                processes,
+                clock_ticks: 100,
+                timestamp_ms: 1_700_000_000_000,
+                control_enabled: false,
+                total: MAX_PROCESSES,
+                truncated: false,
+                warning: None,
+            };
+            let before = Response::ProcessSnapshot(snapshot.clone())
+                .to_json()
+                .unwrap()
+                .len();
+            let fitted = fit_snapshot(snapshot, false);
+            let json = Response::ProcessSnapshot(fitted.clone()).to_json().unwrap();
+
+            assert!(
+                json.len() <= MAX_LINE_LEN,
+                "{name} snapshot is {} bytes",
+                json.len()
+            );
+            if before > MAX_LINE_LEN {
+                assert!(fitted.truncated, "{name} should be marked truncated");
+                assert!(fitted.warning.is_some(), "{name} should have a warning");
+            }
+            assert!(!fitted.processes.is_empty());
+        }
+    }
+
+    #[test]
+    fn command_truncation_sets_the_truncated_flag() {
+        let snapshot = ProcessSnapshot {
+            processes: vec![ProcessInfo {
+                pid: 42,
+                command: "x".repeat(MAX_COMMAND_CHARS + 1),
+                ..ProcessInfo::default()
+            }],
+            clock_ticks: 100,
+            timestamp_ms: 1_700_000_000_000,
+            total: 1,
+            ..ProcessSnapshot::default()
+        };
+
+        let fitted = fit_snapshot(snapshot, true);
+
+        assert!(fitted.truncated);
+        assert_eq!(
+            fitted.warning.as_deref(),
+            Some("command lines are limited to 256 characters")
         );
     }
 

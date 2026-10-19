@@ -175,11 +175,12 @@ Reply to `ProcessList`.
 `timestamp_ms` let a client compute CPU percent between two snapshots. Use
 `pid` + `start_ticks` as the process identity because pids can be reused.
 
-The daemon returns at most 2000 processes, sorted by accumulated CPU, and
-truncates command lines to 256 characters. When either happens `truncated` is
-`true`, `total` reports the untruncated count, and `warning` carries a
-human-readable notice. Clients must not treat the list as complete without
-checking those fields.
+The daemon returns at most 2000 processes, sorted by accumulated CPU. To keep
+every snapshot within the 1 MiB line cap, command lines are shortened (first to
+256 characters, then further if needed) and, as a last resort, the least busy
+rows are dropped. When any of those happens `truncated` is `true`, `total`
+reports the untruncated count, and `warning` carries a human-readable notice.
+Clients must not treat the list as complete without checking those fields.
 
 ### `ProcessSignalled`
 
