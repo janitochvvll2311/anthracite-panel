@@ -1,4 +1,7 @@
-use anth_panel::cli::{Cli, Command, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs};
+use anth_panel::cli::{
+    Cli, Command, FileArgs, FileCommand, FileDeleteArgs, FileListArgs, FileMkdirArgs, FileReadArgs,
+    FileRenameArgs, FileUploadArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs,
+};
 use anth_panel::{handle_response, request_for};
 use anth_proto::{ProcessSignal, Request, Response};
 use clap::Parser;
@@ -232,4 +235,137 @@ fn cli_parses_process_signal() {
 #[test]
 fn cli_rejects_an_unknown_process_signal() {
     assert!(Cli::try_parse_from(["anth-panel", "process", "signal", "42", "nope"]).is_err());
+}
+
+#[test]
+fn request_for_file_list_mkdir_rename_and_delete() {
+    let cases = [
+        (
+            Command::File(FileArgs {
+                command: FileCommand::List(FileListArgs {
+                    path: "/tmp".to_string(),
+                }),
+            }),
+            Request::FileList {
+                path: "/tmp".to_string(),
+            },
+        ),
+        (
+            Command::File(FileArgs {
+                command: FileCommand::Mkdir(FileMkdirArgs {
+                    path: "/tmp/new".to_string(),
+                    parents: true,
+                }),
+            }),
+            Request::FileMkdir {
+                path: "/tmp/new".to_string(),
+                recursive: true,
+            },
+        ),
+        (
+            Command::File(FileArgs {
+                command: FileCommand::Rename(FileRenameArgs {
+                    from: "/tmp/a".to_string(),
+                    to: "/tmp/b".to_string(),
+                }),
+            }),
+            Request::FileRename {
+                from: "/tmp/a".to_string(),
+                to: "/tmp/b".to_string(),
+            },
+        ),
+        (
+            Command::File(FileArgs {
+                command: FileCommand::Delete(FileDeleteArgs {
+                    path: "/tmp/a".to_string(),
+                    recursive: true,
+                    yes: true,
+                }),
+            }),
+            Request::FileDelete {
+                path: "/tmp/a".to_string(),
+                recursive: true,
+            },
+        ),
+    ];
+
+    for (command, expected) in cases {
+        let request = request_for(&command).expect("expected a file request");
+        assert_eq!(request.to_json().unwrap(), expected.to_json().unwrap());
+    }
+}
+
+#[test]
+fn read_and_upload_are_handled_outside_the_generic_request_path() {
+    assert!(
+        request_for(&Command::File(FileArgs {
+            command: FileCommand::Read(FileReadArgs {
+                path: "/tmp/a".to_string(),
+                output: None,
+            }),
+        }))
+        .is_none()
+    );
+    assert!(
+        request_for(&Command::File(FileArgs {
+            command: FileCommand::Upload(FileUploadArgs {
+                local: "a".to_string(),
+                dest: "/tmp/a".to_string(),
+                overwrite: false,
+            }),
+        }))
+        .is_none()
+    );
+}
+
+#[test]
+fn file_command_has_no_aliases() {
+    assert!(Cli::try_parse_from(["anth-panel", "file", "list", "/"]).is_ok());
+    assert!(Cli::try_parse_from(["anth-panel", "fs", "list", "/"]).is_err());
+    assert!(Cli::try_parse_from(["anth-panel", "file", "ls", "/"]).is_err());
+    assert!(Cli::try_parse_from(["anth-panel", "file", "cat", "/a"]).is_err());
+    assert!(Cli::try_parse_from(["anth-panel", "file", "rm", "/a"]).is_err());
+}
+
+#[test]
+fn file_commands_parse_their_flags() {
+    let cli = Cli::try_parse_from([
+        "anth-panel",
+        "file",
+        "upload",
+        "local.bin",
+        "/remote.bin",
+        "--overwrite",
+    ])
+    .unwrap();
+    match cli.command {
+        Command::File(FileArgs {
+            command: FileCommand::Upload(args),
+        }) => {
+            assert_eq!(args.local, "local.bin");
+            assert_eq!(args.dest, "/remote.bin");
+            assert!(args.overwrite);
+        }
+        other => panic!("expected file upload, got {other:?}"),
+    }
+
+    let cli = Cli::try_parse_from([
+        "anth-panel",
+        "file",
+        "delete",
+        "/tmp/a",
+        "--recursive",
+        "--yes",
+    ])
+    .unwrap();
+    match cli.command {
+        Command::File(FileArgs {
+            command: FileCommand::Delete(args),
+        }) => {
+            assert_eq!(args.path, "/tmp/a");
+            assert!(args.recursive);
+            assert!(args.yes);
+        }
+        other => panic!("expected file delete, got {other:?}"),
+    }
 }

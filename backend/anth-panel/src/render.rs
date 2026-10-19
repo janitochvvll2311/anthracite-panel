@@ -1,6 +1,6 @@
 //! Rendering of host information as a bordered text table.
 
-use anth_proto::{HostInfo, ProcessSnapshot};
+use anth_proto::{FileKind, FileListing, HostInfo, ProcessSnapshot};
 
 const TOP_LEFT: char = '┌';
 const TOP_RIGHT: char = '┐';
@@ -294,6 +294,92 @@ pub fn render_process_snapshot(snapshot: &ProcessSnapshot) -> String {
         output.push_str(warning);
     }
     output
+}
+
+/// Renders one directory listing as a table, followed by a warning when the
+/// daemon shortened it.
+pub fn render_file_listing(listing: &FileListing) -> String {
+    let mut table = Table::new(vec![
+        "TYPE".to_string(),
+        "NAME".to_string(),
+        "SIZE".to_string(),
+        "MODIFIED".to_string(),
+    ]);
+
+    for entry in &listing.entries {
+        let kind = match entry.kind {
+            FileKind::Directory => "dir",
+            FileKind::File => "file",
+            FileKind::Symlink => "link",
+            FileKind::Other => "other",
+        };
+        let modified = entry
+            .modified_ms
+            .map(format_timestamp)
+            .unwrap_or_else(|| "?".to_string());
+        table.push(vec![
+            kind.to_string(),
+            entry.name.clone(),
+            if matches!(entry.kind, FileKind::Directory) {
+                "-".to_string()
+            } else {
+                format_bytes(entry.size)
+            },
+            modified,
+        ]);
+    }
+
+    let mut output = table.render();
+    if let Some(warning) = &listing.warning {
+        output.push('\n');
+        output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    let value = bytes as f64;
+    if value >= GIB {
+        format!("{:.1} GiB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MiB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// Minimal UTC formatter so the CLI does not pull in a date dependency.
+fn format_timestamp(millis: u64) -> String {
+    let seconds = millis / 1000;
+    let days = (seconds / 86_400) as i64;
+    let remaining = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = remaining / 3_600;
+    let minute = (remaining % 3_600) / 60;
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02} UTC")
+}
+
+/// Converts days since 1970-01-01 to a Gregorian date (Howard Hinnant's
+/// algorithm), avoiding a time crate for one label.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = if month <= 2 { y + 1 } else { y };
+    (year, month as u32, day as u32)
 }
 
 fn elide(text: &str, limit: usize) -> String {

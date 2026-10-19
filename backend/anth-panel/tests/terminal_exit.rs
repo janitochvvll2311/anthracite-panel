@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anth_panel::config::{Config, ProcessConfig, TerminalConfig};
+use anth_panel::config::{Config, FilesConfig, ProcessConfig, TerminalConfig};
 use anth_proto::{AnthClient, Request, Response, TerminalOpenArgs, TerminalSize};
 use tokio::net::UnixStream;
 
@@ -32,6 +32,7 @@ fn config_at(path: &Path) -> Config {
             max_sessions: 1,
         },
         process: ProcessConfig::default(),
+        files: FilesConfig::default(),
     }
 }
 

@@ -1,4 +1,6 @@
-use anth_panel::render::{format_kib, format_uptime, render_host_info, render_process_snapshot};
+use anth_panel::render::{
+    format_kib, format_uptime, render_file_listing, render_host_info, render_process_snapshot,
+};
 use anth_proto::{HostInfo, LoadAverage, MemoryInfo, OsInfo, ProcessInfo, ProcessSnapshot};
 
 fn sample() -> HostInfo {
@@ -262,4 +264,45 @@ fn renders_process_rows_and_a_truncation_warning() {
         assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
     }
     assert!(out.contains("Warning: showing 2000 of 2500 processes"));
+}
+
+#[test]
+fn render_file_listing_shows_types_sizes_and_warning() {
+    let listing = anth_proto::FileListing {
+        path: "/".to_string(),
+        parent: None,
+        entries: vec![
+            anth_proto::FileEntry {
+                name: "docs".to_string(),
+                path: "/docs".to_string(),
+                kind: anth_proto::FileKind::Directory,
+                size: 0,
+                modified_ms: Some(0),
+                hidden: false,
+                target: None,
+            },
+            anth_proto::FileEntry {
+                name: "note.txt".to_string(),
+                path: "/note.txt".to_string(),
+                kind: anth_proto::FileKind::File,
+                size: 2048,
+                modified_ms: Some(0),
+                hidden: false,
+                target: None,
+            },
+        ],
+        total: 2,
+        truncated: false,
+        warning: Some("showing 2 of 3 entries".to_string()),
+        write_enabled: false,
+    };
+
+    let out = render_file_listing(&listing);
+    assert!(out.contains("TYPE"));
+    assert!(out.contains("docs"));
+    assert!(out.contains("dir"));
+    assert!(out.contains("note.txt"));
+    assert!(out.contains("2.0 KiB"));
+    assert!(out.contains("1970-01-01 00:00 UTC"));
+    assert!(out.contains("Warning: showing 2 of 3 entries"));
 }

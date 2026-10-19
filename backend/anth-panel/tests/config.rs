@@ -203,3 +203,25 @@ fn process_control_can_be_enabled_from_toml() {
 fn unknown_process_keys_are_rejected() {
     assert!(Config::from_toml("[process]\ncontroll = true\n").is_err());
 }
+
+#[test]
+fn file_writes_are_off_by_default_and_can_be_enabled() {
+    assert!(!Config::default().files.write);
+    assert!(!Config::from_toml("").unwrap().files.write);
+    assert_eq!(Config::default().files.root, "/");
+
+    let config = Config::from_toml(
+        "[files]\nroot = \"/srv\"\nwrite = true\nmax_entries = 7\nmax_preview_bytes = 8\nmax_upload_bytes = 9\n",
+    )
+    .unwrap();
+    assert_eq!(config.files.root, "/srv");
+    assert!(config.files.write);
+    assert_eq!(config.files.max_entries, 7);
+    assert_eq!(config.files.max_preview_bytes, 8);
+    assert_eq!(config.files.max_upload_bytes, 9);
+}
+
+#[test]
+fn unknown_files_keys_are_rejected() {
+    assert!(Config::from_toml("[files]\nroot = \"/\"\nwrit = true\n").is_err());
+}

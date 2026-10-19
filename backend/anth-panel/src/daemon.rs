@@ -8,6 +8,7 @@
 //! channel. The connection loop merges those channels and never touches the PTY
 //! directly, so a shell sitting idle at a prompt cannot stall the socket.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
 use std::pin::Pin;
@@ -19,7 +20,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::config::Config;
+use crate::config::{Config, FilesConfig};
+use crate::files::{FileService, PendingUpload};
 use crate::hostinfo;
 use crate::process;
 use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
@@ -28,17 +30,23 @@ use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
 type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
 
 pub fn handle_request(request: Request) -> Response {
-    handle_request_with(request, false)
+    let files = FileService::new(&FilesConfig::default())
+        .expect("the default filesystem root must be usable");
+    handle_request_with(request, false, &files)
 }
 
 /// Handles a request with the daemon policy that is not part of the wire type.
 ///
-/// Process control is the only policy today: the socket protocol itself does
-/// not know whether the deployment allows signals. This synchronous path is
+/// Process control and file writes are deployment policy: the socket protocol
+/// itself does not know whether the host allows them. This synchronous path is
 /// used by the line helper and unit tests. The async connection loop
 /// special-cases `ProcessList` so the blocking `/proc` walk runs on a blocking
 /// worker instead of a Tokio task.
-pub fn handle_request_with(request: Request, process_control: bool) -> Response {
+pub fn handle_request_with(
+    request: Request,
+    process_control: bool,
+    files: &FileService,
+) -> Response {
     match request {
         Request::Echo { message } => Response::Ok { message },
         Request::HostInfo => Response::HostInfo(Box::new(hostinfo::collect())),
@@ -51,10 +59,36 @@ pub fn handle_request_with(request: Request, process_control: bool) -> Response 
                 },
             }
         }
-        // Terminal operations need a registry and a live socket; they are
-        // served by `serve_connection`, which owns both.
-        other => Response::Error {
-            detail: format!("{other:?} requires an open connection"),
+        Request::FileList { path } => match files.list(&path) {
+            Ok(listing) => Response::FileListing(listing),
+            Err(error) => Response::FileError(error),
+        },
+        Request::FileRead { path, offset, len } => match files.read(&path, offset, len) {
+            Ok(chunk) => Response::FileChunk(chunk),
+            Err(error) => Response::FileError(error),
+        },
+        Request::FileMkdir { path, recursive } => match files.mkdir(&path, recursive) {
+            Ok(path) => Response::FileCreated { path },
+            Err(error) => Response::FileError(error),
+        },
+        Request::FileRename { from, to } => match files.rename(&from, &to) {
+            Ok((from, to)) => Response::FileRenamed { from, to },
+            Err(error) => Response::FileError(error),
+        },
+        Request::FileDelete { path, recursive } => match files.delete(&path, recursive) {
+            Ok(path) => Response::FileDeleted { path },
+            Err(error) => Response::FileError(error),
+        },
+        // Uploads are stateful and need a live connection; `pump` owns them.
+        Request::FileWriteStart { .. }
+        | Request::FileWriteChunk { .. }
+        | Request::FileWriteFinish { .. }
+        | Request::FileWriteAbort { .. }
+        | Request::TerminalOpen(_)
+        | Request::TerminalInput { .. }
+        | Request::TerminalResize { .. }
+        | Request::TerminalClose { .. } => Response::Error {
+            detail: "this request requires an open connection".to_string(),
         },
     }
 }
@@ -78,15 +112,20 @@ pub async fn serve_connection(
     sessions: Arc<Sessions>,
     program: Arc<str>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    serve_connection_with(socket, sessions, program, false).await
+    let files = Arc::new(
+        FileService::new(&FilesConfig::default())
+            .expect("the default filesystem root must be usable"),
+    );
+    serve_connection_with(socket, sessions, program, false, files).await
 }
 
-/// Serves one connection with the process-control policy applied to requests.
+/// Serves one connection with the process and file policies applied to requests.
 pub async fn serve_connection_with(
     socket: UnixStream,
     sessions: Arc<Sessions>,
     program: Arc<str>,
     process_control: bool,
+    files: Arc<FileService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut owned: Vec<u32> = Vec::new();
 
@@ -98,6 +137,7 @@ pub async fn serve_connection_with(
         Arc::clone(&sessions),
         program,
         process_control,
+        files,
         &mut owned,
     )
     .await;
@@ -122,6 +162,7 @@ async fn pump(
     sessions: Arc<Sessions>,
     program: Arc<str>,
     process_control: bool,
+    files: Arc<FileService>,
     owned: &mut Vec<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (read_half, write_half) = socket.into_split();
@@ -129,6 +170,8 @@ async fn pump(
     let mut writer = AnthWriter::from_write_half(write_half);
 
     let mut output = futures::stream::select_all(Vec::<OutputStream>::new());
+    let mut uploads: HashMap<u32, PendingUpload> = HashMap::new();
+    let mut next_upload_id: u32 = 1;
 
     loop {
         // With no sessions open there is nothing to watch but the socket, which
@@ -184,6 +227,47 @@ async fn pump(
                         detail: format!("failed to read the process table: {error}"),
                     },
                 }
+            }
+            Request::FileWriteStart { path, overwrite } => {
+                match files.start_upload(&path, overwrite) {
+                    Ok(upload) => {
+                        let id = allocate_upload_id(&mut next_upload_id, &uploads);
+                        uploads.insert(id, upload);
+                        Response::FileWriteStarted { id }
+                    }
+                    Err(error) => Response::FileError(error),
+                }
+            }
+            Request::FileWriteChunk { id, bytes } => match uploads.get_mut(&id) {
+                Some(upload) => match upload.write_chunk(&bytes) {
+                    Ok(received) => Response::FileWriteAccepted { id, received },
+                    Err(error) => {
+                        // A failed chunk invalidates the upload; dropping it
+                        // removes the temporary file.
+                        uploads.remove(&id);
+                        Response::FileError(error)
+                    }
+                },
+                None => Response::FileError(anth_proto::FileError::new(
+                    anth_proto::FileErrorKind::NotFound,
+                    format!("upload {id} is not open"),
+                )),
+            },
+            Request::FileWriteFinish { id } => match uploads.remove(&id) {
+                Some(upload) => match upload.finish() {
+                    Ok(written) => Response::FileWritten(written),
+                    Err(error) => Response::FileError(error),
+                },
+                None => Response::FileError(anth_proto::FileError::new(
+                    anth_proto::FileErrorKind::NotFound,
+                    format!("upload {id} is not open"),
+                )),
+            },
+            Request::FileWriteAbort { id } => {
+                // Removing the PendingUpload drops it, which removes the temp
+                // file. Aborting an unknown id is idempotent.
+                uploads.remove(&id);
+                Response::FileWriteAborted { id }
             }
             Request::TerminalOpen(args) => {
                 let size = args.size.unwrap_or(DEFAULT_TERMINAL_SIZE);
@@ -245,7 +329,7 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
-            other => handle_request_with(other, process_control),
+            other => handle_request_with(other, process_control, &files),
         };
 
         writer.send_response(&response).await?;
@@ -256,6 +340,19 @@ async fn pump(
 
 fn session_stream(id: u32, receiver: mpsc::Receiver<Output>) -> OutputStream {
     Box::pin(ReceiverStream::new(receiver).map(move |event| (id, event)))
+}
+
+fn allocate_upload_id(next: &mut u32, uploads: &HashMap<u32, PendingUpload>) -> u32 {
+    loop {
+        let id = *next;
+        *next = next.wrapping_add(1);
+        if *next == 0 {
+            *next = 1;
+        }
+        if !uploads.contains_key(&id) {
+            return id;
+        }
+    }
 }
 
 /// Turns one output event into the frame to send and whether the session ended.
@@ -311,13 +408,18 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
     );
     let program: Arc<str> = Arc::from(shell);
     let process_control = config.process.control;
+    let files = Arc::new(
+        FileService::new(&config.files).map_err(|e| format!("invalid files configuration: {e}"))?,
+    );
 
     loop {
         let (socket, _) = listener.accept().await?;
         let sessions = Arc::clone(&sessions);
         let program = Arc::clone(&program);
+        let files = Arc::clone(&files);
         tokio::spawn(async move {
-            if let Err(e) = serve_connection_with(socket, sessions, program, process_control).await
+            if let Err(e) =
+                serve_connection_with(socket, sessions, program, process_control, files).await
             {
                 eprintln!("Error handling connection: {e}");
             }

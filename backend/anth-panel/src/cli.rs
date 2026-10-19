@@ -42,6 +42,8 @@ pub enum Command {
     HostInfo(WatchArgs),
     /// Inspect processes on the daemon host and optionally signal one.
     Process(ProcessArgs),
+    /// Browse and manage files on the daemon host.
+    File(FileArgs),
     /// Open an interactive terminal on the daemon host.
     Terminal(TerminalArgs),
 }
@@ -80,6 +82,95 @@ pub struct ProcessSignalArgs {
 
 fn parse_signal(value: &str) -> Result<ProcessSignal, String> {
     value.parse()
+}
+
+#[derive(Args, Debug)]
+pub struct FileArgs {
+    #[command(subcommand)]
+    pub command: FileCommand,
+}
+
+/// `file` subcommands. There are deliberately no aliases.
+#[derive(Subcommand, Debug)]
+pub enum FileCommand {
+    /// List a directory as a table.
+    List(FileListArgs),
+    /// Read a file and write its bytes to stdout or to --output.
+    Read(FileReadArgs),
+    /// Create a directory.
+    Mkdir(FileMkdirArgs),
+    /// Upload a local file to the daemon host.
+    Upload(FileUploadArgs),
+    /// Rename a file or directory.
+    Rename(FileRenameArgs),
+    /// Delete a file or directory.
+    Delete(FileDeleteArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct FileListArgs {
+    #[arg(
+        value_name = "PATH",
+        default_value = "/",
+        help = "Virtual path below the configured filesystem root"
+    )]
+    pub path: String,
+}
+
+#[derive(Args, Debug)]
+pub struct FileReadArgs {
+    #[arg(value_name = "PATH", help = "File to read")]
+    pub path: String,
+
+    #[arg(
+        short,
+        long,
+        value_name = "FILE",
+        help = "Write the bytes to FILE instead of stdout"
+    )]
+    pub output: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct FileMkdirArgs {
+    #[arg(value_name = "PATH", help = "Directory to create")]
+    pub path: String,
+
+    #[arg(long, help = "Create missing parent directories")]
+    pub parents: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FileUploadArgs {
+    #[arg(value_name = "LOCAL", help = "Local file to upload")]
+    pub local: String,
+
+    #[arg(value_name = "DEST", help = "Destination virtual path")]
+    pub dest: String,
+
+    #[arg(long, help = "Replace DEST when it already exists")]
+    pub overwrite: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FileRenameArgs {
+    #[arg(value_name = "FROM", help = "Existing virtual path")]
+    pub from: String,
+
+    #[arg(value_name = "TO", help = "New virtual path")]
+    pub to: String,
+}
+
+#[derive(Args, Debug)]
+pub struct FileDeleteArgs {
+    #[arg(value_name = "PATH", help = "Entry to delete")]
+    pub path: String,
+
+    #[arg(long, help = "Delete a directory and everything below it")]
+    pub recursive: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
 }
 
 /// `--watch` takes an optional interval: bare, it repeats every 2s.

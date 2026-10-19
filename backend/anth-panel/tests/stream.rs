@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anth_panel::stream::{Frames, MIN_INTERVAL, parse_interval};
+use anth_panel::stream::{Frames, MIN_INTERVAL, follow, parse_interval};
+use anth_proto::{AnthServer, FileError, FileErrorKind, Request, Response};
+use std::process::ExitCode;
 
 #[test]
 fn parse_interval_accepts_every_unit() {
@@ -120,4 +122,48 @@ fn frames_count_trailing_line_breaks_in_the_height() {
 
 fn frames_count(output: &str) -> usize {
     output.lines().filter(|line| !line.is_empty()).count()
+}
+
+#[tokio::test]
+async fn follow_returns_failure_for_a_file_error_response() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "anth-stream-file-error-{}-{nanos}.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut server = AnthServer::new(socket);
+        assert!(matches!(
+            server.receive_request().await,
+            Some(Ok(Request::FileList { .. }))
+        ));
+        server
+            .send_response(&Response::FileError(FileError::new(
+                FileErrorKind::NotFound,
+                "missing",
+            )))
+            .await
+            .unwrap();
+    });
+
+    let code = follow(
+        &path,
+        &Request::FileList {
+            path: "/".to_string(),
+        },
+        None,
+        |_| String::new(),
+    )
+    .await;
+
+    assert_eq!(code, ExitCode::FAILURE);
+    server.await.unwrap();
+    let _ = std::fs::remove_file(&path);
 }

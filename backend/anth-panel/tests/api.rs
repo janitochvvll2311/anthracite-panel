@@ -1,9 +1,12 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::app::AppState;
-use anth_panel::config::Config;
-use anth_proto::{AnthServer, Request, Response};
+use anth_panel::config::{Config, FilesConfig};
+use anth_panel::files::{FileService, PendingUpload};
+use anth_proto::{AnthServer, FileError, FileErrorKind, Request, Response};
 use axum::body::{Body, to_bytes};
 use axum::http::{Request as HttpRequest, StatusCode};
 use tower::ServiceExt;
@@ -577,4 +580,376 @@ async fn process_signal_rejects_a_non_numeric_pid_as_json() {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(value["error"].is_string(), "{value}");
+}
+
+fn unique_dir(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "anth-api-files-{name}-{}-{nanos}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+
+struct FileFixture {
+    root: PathBuf,
+    socket: PathBuf,
+    config: Config,
+    server: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for FileFixture {
+    fn drop(&mut self) {
+        self.server.abort();
+        let _ = fs::remove_file(&self.socket);
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn file_fixture(name: &str, write: bool, max_preview_bytes: u64) -> FileFixture {
+    let root = unique_dir(name);
+    let socket = unique_socket(name);
+    let _ = fs::remove_file(&socket);
+
+    let mut config = config_at(&socket);
+    config.files = FilesConfig {
+        root: root.to_string_lossy().into_owned(),
+        write,
+        max_entries: 5000,
+        max_preview_bytes,
+        max_upload_bytes: 1024 * 1024,
+    };
+    let service = FileService::new(&config.files).unwrap();
+    let server = spawn_file_server(&socket, service);
+
+    FileFixture {
+        root,
+        socket,
+        config,
+        server,
+    }
+}
+
+fn spawn_file_server(path: &Path, service: FileService) -> tokio::task::JoinHandle<()> {
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((socket, _)) = listener.accept().await else {
+                break;
+            };
+            let service = service.clone();
+            tokio::spawn(async move {
+                let mut server = AnthServer::new(socket);
+                let mut uploads: HashMap<u32, PendingUpload> = HashMap::new();
+                let mut next_upload = 1u32;
+
+                while let Some(Ok(request)) = server.receive_request().await {
+                    let response = match request {
+                        Request::FileWriteStart { path, overwrite } => {
+                            match service.start_upload(&path, overwrite) {
+                                Ok(upload) => {
+                                    let id = next_upload;
+                                    next_upload += 1;
+                                    uploads.insert(id, upload);
+                                    Response::FileWriteStarted { id }
+                                }
+                                Err(error) => Response::FileError(error),
+                            }
+                        }
+                        Request::FileWriteChunk { id, bytes } => match uploads.get_mut(&id) {
+                            Some(upload) => match upload.write_chunk(&bytes) {
+                                Ok(received) => Response::FileWriteAccepted { id, received },
+                                Err(error) => {
+                                    uploads.remove(&id);
+                                    Response::FileError(error)
+                                }
+                            },
+                            None => Response::FileError(FileError::new(
+                                FileErrorKind::NotFound,
+                                format!("upload {id} is not open"),
+                            )),
+                        },
+                        Request::FileWriteFinish { id } => match uploads.remove(&id) {
+                            Some(upload) => match upload.finish() {
+                                Ok(written) => Response::FileWritten(written),
+                                Err(error) => Response::FileError(error),
+                            },
+                            None => Response::FileError(FileError::new(
+                                FileErrorKind::NotFound,
+                                format!("upload {id} is not open"),
+                            )),
+                        },
+                        Request::FileWriteAbort { id } => {
+                            uploads.remove(&id);
+                            Response::FileWriteAborted { id }
+                        }
+                        other => anth_panel::daemon::handle_request_with(other, false, &service),
+                    };
+
+                    if server.send_response(&response).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    })
+}
+
+fn file_app(fixture: &FileFixture) -> axum::Router {
+    anth_panel::router(AppState::new(fixture.config.clone()))
+}
+
+#[tokio::test]
+async fn files_route_returns_a_directory_listing() {
+    let fixture = file_fixture("list-route", false, 1024);
+    fs::write(fixture.root.join("hello.txt"), b"hello").unwrap();
+    fs::create_dir(fixture.root.join("nested")).unwrap();
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files?path=/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["path"], "/");
+    assert_eq!(value["write_enabled"], false);
+    assert_eq!(value["entries"][0]["name"], "hello.txt");
+    assert_eq!(value["entries"][1]["kind"], "directory");
+}
+
+#[tokio::test]
+async fn content_route_truncates_at_max_preview_bytes() {
+    let fixture = file_fixture("content-route", false, 4);
+    fs::write(fixture.root.join("hello.txt"), b"abcdef").unwrap();
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/content?path=/hello.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-anth-size"], "6");
+    assert_eq!(response.headers()["x-anth-truncated"], "true");
+    assert_eq!(response.headers()["content-type"], "text/plain");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"abcd");
+}
+
+#[tokio::test]
+async fn download_route_streams_the_whole_file() {
+    let fixture = file_fixture("download-route", false, 1024);
+    fs::write(fixture.root.join("hello.txt"), b"abcdef").unwrap();
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/download?path=/hello.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"hello.txt\""
+    );
+    assert_eq!(response.headers()["x-anth-size"], "6");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"abcdef");
+}
+
+#[tokio::test]
+async fn missing_files_return_not_found() {
+    let fixture = file_fixture("missing-route", false, 1024);
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/content?path=/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["error"].is_string());
+}
+
+#[tokio::test]
+async fn mkdir_rename_and_delete_routes_mutate_the_root() {
+    let fixture = file_fixture("mutate-routes", true, 1024);
+    fs::write(fixture.root.join("file.txt"), b"hello").unwrap();
+    let app = file_app(&fixture);
+
+    let response = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/mkdir")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"path":"/nested"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(fixture.root.join("nested").is_dir());
+
+    let response = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/rename")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"from":"/file.txt","to":"/nested/moved.txt"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(fixture.root.join("nested/moved.txt").is_file());
+
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/delete")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"path":"/nested","recursive":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!fixture.root.join("nested").exists());
+}
+
+#[tokio::test]
+async fn write_routes_are_forbidden_when_disabled() {
+    let fixture = file_fixture("read-only-routes", false, 1024);
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/mkdir")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"path":"/nested"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn upload_route_writes_the_raw_body() {
+    let fixture = file_fixture("upload-route", true, 1024);
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/upload?path=/uploaded.bin")
+                .header("content-type", "application/octet-stream")
+                .body(Body::from(vec![1u8, 2, 3, 4, 5]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({"path": "/uploaded.bin", "size": 5})
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("uploaded.bin")).unwrap(),
+        [1, 2, 3, 4, 5]
+    );
+}
+
+#[tokio::test]
+async fn path_traversal_is_rejected_by_the_daemon() {
+    let fixture = file_fixture("traversal-route", false, 1024);
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/content?path=/../etc/passwd")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn upload_route_rejects_a_body_above_the_configured_limit() {
+    let mut fixture = file_fixture("upload-limit-route", true, 1024);
+    fixture.config.files.max_upload_bytes = 4;
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/upload?path=/too-big")
+                .header("content-type", "application/octet-stream")
+                .body(Body::from(vec![1u8, 2, 3, 4, 5]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn download_route_streams_multiple_chunks() {
+    let fixture = file_fixture("download-chunks", false, 1024);
+    let content = vec![7u8; 600 * 1024];
+    fs::write(fixture.root.join("big.bin"), &content).unwrap();
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/download?path=/big.bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(bytes.len(), content.len());
+    assert!(bytes.iter().all(|byte| *byte == 7));
 }

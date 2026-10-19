@@ -462,3 +462,113 @@ fn process_signal_names_are_case_insensitive() {
     );
     assert!(ProcessSignal::from_str("nope").is_err());
 }
+
+#[test]
+fn file_requests_roundtrip() {
+    let requests = [
+        Request::FileList {
+            path: "/tmp".to_string(),
+        },
+        Request::FileRead {
+            path: "/tmp/file".to_string(),
+            offset: 10,
+            len: 20,
+        },
+        Request::FileMkdir {
+            path: "/tmp/new".to_string(),
+            recursive: true,
+        },
+        Request::FileRename {
+            from: "/tmp/a".to_string(),
+            to: "/tmp/b".to_string(),
+        },
+        Request::FileDelete {
+            path: "/tmp/a".to_string(),
+            recursive: false,
+        },
+        Request::FileWriteStart {
+            path: "/tmp/upload".to_string(),
+            overwrite: true,
+        },
+        Request::FileWriteChunk {
+            id: 3,
+            bytes: vec![0, 1, 2, 255],
+        },
+        Request::FileWriteFinish { id: 3 },
+        Request::FileWriteAbort { id: 3 },
+    ];
+
+    for request in requests {
+        let json = request.to_json().unwrap();
+        let decoded = Request::from_json(&json).unwrap();
+        assert_eq!(json, decoded.to_json().unwrap());
+    }
+}
+
+#[test]
+fn file_response_roundtrip_and_wire_format() {
+    let listing = anth_proto::FileListing {
+        path: "/".to_string(),
+        parent: None,
+        entries: vec![anth_proto::FileEntry {
+            name: "a.txt".to_string(),
+            path: "/a.txt".to_string(),
+            kind: anth_proto::FileKind::File,
+            size: 3,
+            modified_ms: Some(1_700_000_000_000),
+            hidden: false,
+            target: None,
+        }],
+        total: 1,
+        truncated: false,
+        warning: None,
+        write_enabled: true,
+    };
+
+    let responses = [
+        Response::FileListing(listing),
+        Response::FileChunk(anth_proto::FileChunk {
+            path: "/a.txt".to_string(),
+            offset: 0,
+            size: 3,
+            eof: true,
+            bytes: b"abc".to_vec(),
+        }),
+        Response::FileWritten(anth_proto::FileWritten {
+            path: "/a.txt".to_string(),
+            size: 3,
+        }),
+        Response::FileCreated {
+            path: "/new".to_string(),
+        },
+        Response::FileDeleted {
+            path: "/a.txt".to_string(),
+        },
+        Response::FileRenamed {
+            from: "/a".to_string(),
+            to: "/b".to_string(),
+        },
+        Response::FileWriteStarted { id: 1 },
+        Response::FileWriteAccepted { id: 1, received: 3 },
+        Response::FileWriteAborted { id: 1 },
+        Response::FileError(anth_proto::FileError::new(
+            anth_proto::FileErrorKind::NotFound,
+            "missing",
+        )),
+    ];
+
+    for response in responses {
+        let json = response.to_json().unwrap();
+        let decoded = Response::from_json(&json).unwrap();
+        assert_eq!(json, decoded.to_json().unwrap());
+    }
+
+    let chunk = Response::FileChunk(anth_proto::FileChunk {
+        path: "/a".to_string(),
+        offset: 0,
+        size: 3,
+        eof: true,
+        bytes: b"abc".to_vec(),
+    });
+    assert!(chunk.to_json().unwrap().contains(r#""bytes":"YWJj""#));
+}
