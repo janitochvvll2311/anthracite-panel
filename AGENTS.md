@@ -201,11 +201,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `timestamp_ms`; the daemon never keeps a sampler.
 - **Frontend process monitor**: `anth-process-table` is a controller that owns
   sort state and renders one of two renderers: `anth-process-flat-table` (compact
-  table) or `anth-process-tree` (tree-grid with connector prefixes). Both receive
-  rows already sorted, so a header click behaves the same in either view; in tree
-  mode siblings are sorted. `anth-process-monitor` owns filtering, the flat/tree
-  toggle, SSE lifecycle and confirmed signals, and only depends on the injected
-  `ProcessClient`. Both are exercised by `anth-process.test.html`.
+  table) or `anth-process-tree` (free-form tree with connector prefixes and
+  expand/collapse controls). Both show PID, COMMAND, USER, STATE, MEM and CPU;
+  PPID is used only for nesting. Both receive rows already sorted, so a header
+  click behaves the same in either view; in tree mode siblings are sorted.
+  `anth-process-monitor` owns filtering, the flat/tree toggle, SSE lifecycle and
+  confirmed signals, and only depends on the injected `ProcessClient`. Both are
+  exercised by `anth-process.test.html`.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one

@@ -49,7 +49,7 @@ export class AnthProcessFlatTable extends LitElement {
             ${this.rows.length === 0
               ? html`
                   <tr>
-                    <td class="empty" colspan="7">${this.emptyMessage}</td>
+                    <td class="empty" colspan="6">${this.emptyMessage}</td>
                   </tr>
                 `
               : this.rows.map((process) => this.renderRow(process))}
@@ -102,20 +102,19 @@ export class AnthProcessFlatTable extends LitElement {
         @keydown=${(event: KeyboardEvent) => this.onRowKeydown(event, process.pid)}
       >
         <td class="mono">${process.pid}</td>
-        <td class="mono muted">${process.ppid}</td>
+        <td class="command" title=${process.command}>${process.command}</td>
         <td>${process.user}</td>
-        <td class="number mono">
-          ${process.cpu_percent === null
-            ? '—'
-            : `${process.cpu_percent.toFixed(1)}%`}
-        </td>
-        <td class="number mono">${formatKib(process.rss_kib)}</td>
         <td>
           <span class="state" data-state=${process.state}>
             ${stateLabel(process.state)}
           </span>
         </td>
-        <td class="command" title=${process.command}>${process.command}</td>
+        <td class="number mono">${formatKib(process.rss_kib)}</td>
+        <td class="number mono">
+          ${process.cpu_percent === null
+            ? '—'
+            : `${process.cpu_percent.toFixed(1)}%`}
+        </td>
       </tr>
     `
   }
@@ -263,10 +262,6 @@ export class AnthProcessFlatTable extends LitElement {
 
     .mono {
       font-variant-numeric: tabular-nums;
-    }
-
-    .muted {
-      color: var(--process-muted, #7f90a3);
     }
 
     .empty {

@@ -11,7 +11,7 @@ import {
   type AnthProcessSortDetail,
   type ProcessSortDirection,
   type ProcessSortKey,
-  type ProcessTreeRow,
+  type ProcessTreeNode,
   type ProcessView,
 } from '../lib/processes/display'
 
@@ -66,7 +66,7 @@ export class AnthProcessTable extends LitElement {
         ${this.view === 'tree'
           ? html`
               <anth-process-tree
-                .rows=${this.treeRows()}
+                .nodes=${this.treeNodes()}
                 .selectedPid=${this.selectedPid}
                 .sortKey=${this.sortKey}
                 .sortDirection=${this.sortDirection}
@@ -96,7 +96,7 @@ export class AnthProcessTable extends LitElement {
     )
   }
 
-  private treeRows(): ProcessTreeRow[] {
+  private treeNodes(): ProcessTreeNode[] {
     const byPid = new Map(this.processes.map((process) => [process.pid, process]))
     const children = new Map<number, ProcessRow[]>()
     const roots: ProcessRow[] = []
@@ -112,48 +112,38 @@ export class AnthProcessTable extends LitElement {
       children.set(process.ppid, siblings)
     }
 
-    const rows: ProcessTreeRow[] = []
     const visited = new Set<number>()
 
-    const walk = (
-      process: ProcessRow,
-      depth: number,
-      ancestorsLast: boolean[],
-      isLast: boolean,
-    ) => {
-      if (visited.has(process.pid)) return
+    const build = (process: ProcessRow, path: Set<number>): ProcessTreeNode => {
       visited.add(process.pid)
+      path.add(process.pid)
 
-      const prefix =
-        depth === 0
-          ? ''
-          : ancestorsLast.map((last) => (last ? '   ' : '│  ')).join('') +
-            (isLast ? '└─ ' : '├─ ')
+      const descendants = (children.get(process.pid) ?? [])
+        .filter((child) => !path.has(child.pid))
+        .sort((left, right) =>
+          compareProcesses(left, right, this.sortKey, this.sortDirection),
+        )
 
-      rows.push({ process, depth, prefix })
-
-      const siblings = (children.get(process.pid) ?? []).sort((left, right) =>
-        compareProcesses(left, right, this.sortKey, this.sortDirection),
-      )
-      siblings.forEach((child, index) => {
-        walk(child, depth + 1, [...ancestorsLast, isLast], index === siblings.length - 1)
-      })
+      return {
+        process,
+        children: descendants.map((child) => build(child, new Set(path))),
+      }
     }
 
-    roots
+    const nodes = roots
       .sort((left, right) =>
         compareProcesses(left, right, this.sortKey, this.sortDirection),
       )
-      .forEach((root, index) => {
-        walk(root, 0, [], index === roots.length - 1)
-      })
+      .map((root) => build(root, new Set()))
 
     // Malformed parent cycles have no natural root; show them at depth zero.
     for (const process of this.processes) {
-      if (!visited.has(process.pid)) walk(process, 0, [], true)
+      if (!visited.has(process.pid)) {
+        nodes.push(build(process, new Set()))
+      }
     }
 
-    return rows
+    return nodes
   }
 
   private onSort(event: CustomEvent<AnthProcessSortDetail>): void {

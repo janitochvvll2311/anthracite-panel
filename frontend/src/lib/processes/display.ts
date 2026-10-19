@@ -2,7 +2,6 @@ import type { ProcessRow } from './process-client'
 
 export type ProcessSortKey =
   | 'pid'
-  | 'ppid'
   | 'user'
   | 'cpu'
   | 'memory'
@@ -21,12 +20,11 @@ export interface ProcessColumn {
 /** Data columns shared by the flat table and the tree header. */
 export const PROCESS_COLUMNS: ProcessColumn[] = [
   { key: 'pid', label: 'PID', numeric: true },
-  { key: 'ppid', label: 'PPID', numeric: true },
-  { key: 'user', label: 'USER', numeric: false },
-  { key: 'cpu', label: 'CPU', numeric: true },
-  { key: 'memory', label: 'MEM', numeric: true },
-  { key: 'state', label: 'STATE', numeric: false },
   { key: 'command', label: 'COMMAND', numeric: false },
+  { key: 'user', label: 'USER', numeric: false },
+  { key: 'state', label: 'STATE', numeric: false },
+  { key: 'memory', label: 'MEM', numeric: true },
+  { key: 'cpu', label: 'CPU', numeric: true },
 ]
 
 export const ANTH_PROCESS_SELECT_EVENT = 'anth-process-select'
@@ -45,6 +43,12 @@ export interface ProcessTreeRow {
   process: ProcessRow
   depth: number
   prefix: string
+}
+
+/** Nested tree node consumed by `anth-process-tree`. */
+export interface ProcessTreeNode {
+  process: ProcessRow
+  children: ProcessTreeNode[]
 }
 
 const STATE_LABELS: Record<string, string> = {
@@ -85,8 +89,6 @@ export function sortValue(
       return process.rss_kib
     case 'pid':
       return process.pid
-    case 'ppid':
-      return process.ppid
     case 'user':
       return process.user
     case 'state':

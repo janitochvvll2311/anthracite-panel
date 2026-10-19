@@ -595,10 +595,11 @@ export class AnthProcessMonitor extends LitElement {
     }
 
     .command {
-      max-width: 38rem;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      max-width: none;
+      overflow: visible;
+      text-overflow: clip;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .signal {

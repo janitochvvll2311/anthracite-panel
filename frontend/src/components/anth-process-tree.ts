@@ -1,5 +1,6 @@
-import { LitElement, css, html } from 'lit'
-import { customElement, property } from 'lit/decorators.js'
+import { LitElement, css, html, nothing } from 'lit'
+import { customElement, property, state } from 'lit/decorators.js'
+import type { ProcessRow } from '../lib/processes/process-client'
 import {
   ANTH_PROCESS_SELECT_EVENT,
   ANTH_PROCESS_SORT_EVENT,
@@ -10,12 +11,23 @@ import {
   type AnthProcessSortDetail,
   type ProcessSortDirection,
   type ProcessSortKey,
-  type ProcessTreeRow,
+  type ProcessTreeNode,
 } from '../lib/processes/display'
 
+interface TreeDisplayRow {
+  process: ProcessRow
+  depth: number
+  prefix: string
+  hasChildren: boolean
+  expanded: boolean
+}
+
 /**
- * Tree-grid process view. `rows` arrive already ordered, with a precomputed
- * connector prefix per depth. The parent owns sorting and selection.
+ * Free-form tree process view.
+ *
+ * `nodes` arrive already sorted by the parent. The tree component owns the
+ * collapsed set, computes connector prefixes and renders rows without wrapping
+ * them in a table. Branching nodes get an expand/collapse control.
  *
  * @fires anth-process-select - `{ pid }`
  * @fires anth-process-sort - `{ key }`
@@ -23,7 +35,7 @@ import {
 @customElement('anth-process-tree')
 export class AnthProcessTree extends LitElement {
   @property({ attribute: false })
-  rows: ProcessTreeRow[] = []
+  nodes: ProcessTreeNode[] = []
 
   @property({ type: Number, attribute: 'selected-pid' })
   selectedPid?: number
@@ -37,7 +49,12 @@ export class AnthProcessTree extends LitElement {
   @property({ type: String, attribute: 'empty-message' })
   emptyMessage = 'No processes.'
 
+  @state()
+  private collapsed = new Set<number>()
+
   override render() {
+    const rows = this.visibleRows()
+
     return html`
       <div class="tree-scroll" part="scroll">
         <div class="grid head" role="row">
@@ -46,9 +63,9 @@ export class AnthProcessTree extends LitElement {
         </div>
 
         <div class="tree" role="tree" aria-label="Process tree">
-          ${this.rows.length === 0
+          ${rows.length === 0
             ? html`<div class="empty">${this.emptyMessage}</div>`
-            : this.rows.map((row) => this.renderRow(row))}
+            : rows.map((row) => this.renderRow(row))}
         </div>
       </div>
     `
@@ -84,8 +101,8 @@ export class AnthProcessTree extends LitElement {
     `
   }
 
-  private renderRow(row: ProcessTreeRow) {
-    const { process, depth, prefix } = row
+  private renderRow(row: TreeDisplayRow) {
+    const { process, depth, prefix, hasChildren, expanded } = row
     const selected = process.pid === this.selectedPid
 
     return html`
@@ -94,30 +111,99 @@ export class AnthProcessTree extends LitElement {
         role="treeitem"
         aria-level=${depth + 1}
         aria-selected=${selected}
+        aria-expanded=${hasChildren ? expanded : nothing}
         tabindex="0"
         @click=${() => this.select(process.pid)}
         @keydown=${(event: KeyboardEvent) => this.onRowKeydown(event, process.pid)}
       >
-        <span class="cell tree-prefix" aria-hidden="true">${prefix}</span>
-        <span class="cell mono">${process.pid}</span>
-        <span class="cell mono muted">${process.ppid}</span>
-        <span class="cell">${process.user}</span>
-        <span class="cell number mono">
-          ${process.cpu_percent === null
-            ? '—'
-            : `${process.cpu_percent.toFixed(1)}%`}
+        <span class="cell tree-cell">
+          <span class="tree-prefix" aria-hidden="true">${prefix}</span>
+          ${hasChildren
+            ? html`
+                <button
+                  type="button"
+                  class="toggle"
+                  aria-expanded=${expanded}
+                  aria-label=${`${expanded ? 'Collapse' : 'Expand'} process ${process.pid}`}
+                  @click=${(event: MouseEvent) => this.toggle(process.pid, event)}
+                >
+                  ${expanded ? '▾' : '▸'}
+                </button>
+              `
+            : html`<span class="toggle-spacer" aria-hidden="true"></span>`}
         </span>
-        <span class="cell number mono">${formatKib(process.rss_kib)}</span>
+        <span class="cell mono">${process.pid}</span>
+        <span class="cell command" title=${process.command}>
+          ${process.command}
+        </span>
+        <span class="cell">${process.user}</span>
         <span class="cell">
           <span class="state" data-state=${process.state}>
             ${stateLabel(process.state)}
           </span>
         </span>
-        <span class="cell command" title=${process.command}>
-          ${process.command}
+        <span class="cell number mono">${formatKib(process.rss_kib)}</span>
+        <span class="cell number mono">
+          ${process.cpu_percent === null
+            ? '—'
+            : `${process.cpu_percent.toFixed(1)}%`}
         </span>
       </div>
     `
+  }
+
+  private visibleRows(): TreeDisplayRow[] {
+    const rows: TreeDisplayRow[] = []
+
+    const walk = (
+      node: ProcessTreeNode,
+      depth: number,
+      ancestorsLast: boolean[],
+      isLast: boolean,
+    ) => {
+      const expanded = !this.collapsed.has(node.process.pid)
+      const prefix =
+        depth === 0
+          ? ''
+          : ancestorsLast.map((last) => (last ? '   ' : '│  ')).join('') +
+            (isLast ? '└─ ' : '├─ ')
+
+      rows.push({
+        process: node.process,
+        depth,
+        prefix,
+        hasChildren: node.children.length > 0,
+        expanded,
+      })
+
+      if (!expanded || node.children.length === 0) return
+
+      node.children.forEach((child, index) => {
+        walk(
+          child,
+          depth + 1,
+          [...ancestorsLast, isLast],
+          index === node.children.length - 1,
+        )
+      })
+    }
+
+    this.nodes.forEach((node, index) => {
+      walk(node, 0, [], index === this.nodes.length - 1)
+    })
+
+    return rows
+  }
+
+  private toggle(pid: number, event: MouseEvent): void {
+    event.stopPropagation()
+    const collapsed = new Set(this.collapsed)
+    if (collapsed.has(pid)) {
+      collapsed.delete(pid)
+    } else {
+      collapsed.add(pid)
+    }
+    this.collapsed = collapsed
   }
 
   private sort(key: ProcessSortKey): void {
@@ -166,16 +252,15 @@ export class AnthProcessTree extends LitElement {
     .grid {
       display: grid;
       grid-template-columns:
-        minmax(4.5rem, max-content)
+        minmax(4rem, max-content)
         4.5rem
-        4.5rem
-        5.5rem
-        5.5rem
-        6.5rem
-        6.5rem
-        minmax(10rem, 1fr);
+        minmax(14rem, 1fr)
+        8rem
+        7rem
+        7rem
+        6rem;
       align-items: center;
-      min-width: 62rem;
+      min-width: 52rem;
     }
 
     .head {
@@ -241,7 +326,7 @@ export class AnthProcessTree extends LitElement {
     }
 
     .row {
-      line-height: 1.25;
+      line-height: 1.3;
       border-bottom: 1px solid
         color-mix(in srgb, var(--process-border, #263241) 55%, transparent);
       outline: none;
@@ -264,10 +349,15 @@ export class AnthProcessTree extends LitElement {
 
     .cell {
       min-width: 0;
-      padding: 0.22rem 0.6rem;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      padding: 0.2rem 0.5rem;
       white-space: nowrap;
+    }
+
+    .tree-cell {
+      display: flex;
+      gap: 0.15rem;
+      align-items: center;
+      padding-right: 0.15rem;
     }
 
     .tree-prefix {
@@ -276,20 +366,49 @@ export class AnthProcessTree extends LitElement {
       white-space: pre;
     }
 
+    .toggle {
+      display: inline-grid;
+      flex: 0 0 auto;
+      place-items: center;
+      width: 1.15rem;
+      height: 1.15rem;
+      padding: 0;
+      color: var(--process-accent, #7dd3fc);
+      font: inherit;
+      font-size: 0.9em;
+      line-height: 1;
+      background: transparent;
+      border: 0;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+
+    .toggle:hover {
+      background: rgba(125, 211, 252, 0.14);
+    }
+
+    .toggle:focus-visible {
+      outline: 2px solid var(--process-accent, #7dd3fc);
+      outline-offset: 1px;
+    }
+
+    .toggle-spacer {
+      flex: 0 0 auto;
+      width: 1.15rem;
+    }
+
+    .command {
+      overflow: visible;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+
     .number {
       text-align: right;
     }
 
     .mono {
       font-variant-numeric: tabular-nums;
-    }
-
-    .muted {
-      color: var(--process-muted, #7f90a3);
-    }
-
-    .command {
-      max-width: 44rem;
     }
 
     .state {
