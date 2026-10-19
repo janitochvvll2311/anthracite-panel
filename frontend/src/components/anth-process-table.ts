@@ -1,4 +1,5 @@
 import { LitElement, css, html, nothing } from 'lit'
+import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import './anth-process-flat-table'
 import './anth-process-tree'
@@ -52,6 +53,17 @@ export class AnthProcessTable extends LitElement {
 
   @state()
   private sortDirection: ProcessSortDirection = 'desc'
+
+  protected override updated(changed: PropertyValues<this>): void {
+    if (
+      changed.has('view') &&
+      this.view === 'tree' &&
+      (this.sortKey === 'pid' || this.sortKey === 'command')
+    ) {
+      this.sortKey = 'cpu'
+      this.sortDirection = 'desc'
+    }
+  }
 
   override render() {
     return html`

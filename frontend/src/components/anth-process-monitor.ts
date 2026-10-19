@@ -573,16 +573,20 @@ export class AnthProcessMonitor extends LitElement {
     }
 
     .actions {
-      justify-content: space-between;
+      justify-content: flex-end;
+      align-items: center;
       min-height: 2.3rem;
     }
 
     .selection {
       display: flex;
+      flex: 1 1 auto;
       flex-wrap: wrap;
       align-items: center;
+      justify-content: flex-end;
       gap: 0.5rem;
       min-width: 0;
+      text-align: right;
     }
 
     .pid {
@@ -597,6 +601,7 @@ export class AnthProcessMonitor extends LitElement {
     .command {
       max-width: none;
       overflow: visible;
+      text-align: right;
       text-overflow: clip;
       white-space: pre-wrap;
       overflow-wrap: anywhere;

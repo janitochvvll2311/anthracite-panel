@@ -2,6 +2,7 @@ import type { ProcessRow } from './process-client'
 
 export type ProcessSortKey =
   | 'pid'
+  | 'threads'
   | 'user'
   | 'cpu'
   | 'memory'
@@ -21,6 +22,7 @@ export interface ProcessColumn {
 export const PROCESS_COLUMNS: ProcessColumn[] = [
   { key: 'pid', label: 'PID', numeric: true },
   { key: 'command', label: 'COMMAND', numeric: false },
+  { key: 'threads', label: 'THREADS', numeric: true },
   { key: 'user', label: 'USER', numeric: false },
   { key: 'state', label: 'STATE', numeric: false },
   { key: 'memory', label: 'MEM', numeric: true },
@@ -89,6 +91,8 @@ export function sortValue(
       return process.rss_kib
     case 'pid':
       return process.pid
+    case 'threads':
+      return process.threads
     case 'user':
       return process.user
     case 'state':

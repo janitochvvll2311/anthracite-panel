@@ -49,7 +49,7 @@ export class AnthProcessFlatTable extends LitElement {
             ${this.rows.length === 0
               ? html`
                   <tr>
-                    <td class="empty" colspan="6">${this.emptyMessage}</td>
+                    <td class="empty" colspan="7">${this.emptyMessage}</td>
                   </tr>
                 `
               : this.rows.map((process) => this.renderRow(process))}
@@ -103,6 +103,7 @@ export class AnthProcessFlatTable extends LitElement {
       >
         <td class="mono">${process.pid}</td>
         <td class="command" title=${process.command}>${process.command}</td>
+        <td class="number mono">${process.threads}</td>
         <td>${process.user}</td>
         <td>
           <span class="state" data-state=${process.state}>

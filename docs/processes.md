@@ -97,10 +97,11 @@ The browser components live in `frontend/src/components/`:
 
 - `<anth-process-table>` owns sort state and switches between two renderers:
   `anth-process-flat-table` for the compact flat table and `anth-process-tree`
-  for the free-form tree with connector prefixes and expand/collapse controls.
-  Both show PID, COMMAND, USER, STATE, MEM and CPU, in that order; PPID is used
-  for nesting but is not displayed. Both sort by clicking a column header; tree
-  mode sorts siblings and indents children under their parent.
+  for the free-form tree with CSS hierarchy guides and expand/collapse chevrons.
+  Both show PID, COMMAND, THREADS, USER, STATE, MEM and CPU, in that order; PPID
+  is used for nesting but is not displayed. The tree does not sort by PID or
+  COMMAND. Its command stays on one line; the selection preview keeps the full
+  command.
 - `<anth-process-monitor>` fetches snapshots, follows the SSE stream, computes
   CPU percentages and sends signals through an injected `ProcessClient`. It
   owns the flat/tree toggle and filtering.
