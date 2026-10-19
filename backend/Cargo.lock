@@ -68,6 +68,8 @@ dependencies = [
  "anth-proto",
  "axum",
  "clap",
+ "futures",
+ "http-body-util",
  "mime_guess",
  "rust-embed",
  "serde",

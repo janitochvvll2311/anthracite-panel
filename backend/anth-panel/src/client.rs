@@ -11,7 +11,7 @@ pub fn request_for(command: &Command) -> Option<Request> {
         Command::Echo { message } => Some(Request::Echo {
             message: message.clone(),
         }),
-        Command::HostInfo => Some(Request::HostInfo),
+        Command::HostInfo(_) => Some(Request::HostInfo),
         Command::Daemon | Command::Api(_) | Command::Run(_) => None,
     }
 }

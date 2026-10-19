@@ -6,11 +6,17 @@ Repository-specific knowledge for agents working on Anthracite Panel.
 
 Two sibling projects: a Rust backend and a Vite/Lit frontend. The backend ships a
 single binary, `anth-panel`, that serves the Unix-socket daemon, the CLI client and
-the HTTP panel with an embedded web UI. License is Apache-2.0. No README exists yet.
+the HTTP panel with an embedded web UI. License is Apache-2.0. User-facing docs
+live in `docs/` and are indexed from `README.md`.
 
 ## Layout
 
 ```
+README.md                   # project overview, indexes docs/
+docs/
+  cli.md                    # commands, flags, exit codes
+  api-endpoints.md          # HTTP routes, bodies, SSE frames, error shape
+  socket-protocol.md        # anth-proto wire format
 backend/
   Cargo.toml                # workspace root, resolver = "2"
   Cargo.lock
@@ -28,10 +34,14 @@ backend/
       app.rs                #   AppState shared by the routes
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
       render.rs             #   bordered table renderer for the CLI
+      stream.rs             #   repeat a request: interval parsing + frame output
+      poll.rs               #   repeat an async read on a period (shared timing)
+      sse.rs                #   SSE framing: named events, ids, keep-alive
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
-    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs
+    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs,
+                            #   stream.rs, sse.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
-  vite.config.ts            # proxies /healthz and /command to the backend in dev
+  vite.config.ts            # proxies /healthz and /api to the backend in dev
   src/  public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
 Dockerfile                  # bun frontend stage, musl backend stage, alpine runtime
@@ -88,7 +98,15 @@ cargo run -p anth-panel -- daemon         # daemon only, reads /etc/anth/config.
 cargo run -p anth-panel -- api            # HTTP API only; needs a daemon
 cargo run -p anth-panel -- echo "hola"    # CLI client; needs a running daemon
 cargo run -p anth-panel -- host-info      # host snapshot as a table; needs a daemon
+cargo run -p anth-panel -- host-info --watch          # same, refreshed every 2s
+cargo run -p anth-panel -- host-info --watch 500ms    # same, every 500ms
 ```
+
+`host-info --watch [INTERVAL]` repeats the read until Ctrl-C. The interval takes an
+`ms`/`s`/`m`/`h` suffix, defaults to `2s` when the flag is bare, and is rejected below
+`10ms` so a typo cannot turn into a busy loop. On a terminal each frame overwrites the
+previous one; when redirected, frames are separated by a blank line. One connection is
+kept open for the whole stream. Ctrl-C exits `0`; a dropped daemon exits `1`.
 
 `host-info` prints the operating system and resources of the host the daemon runs on
 (hostname, distro, kernel, architecture, CPU, cores, uptime, load average, memory and
@@ -109,6 +127,19 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   static musl build trivial. `collect_from` takes a filesystem root so tests can exercise
   the parsing against fixture files; the `parse_*` helpers are pure functions over file
   contents. Unreadable fields degrade to `unknown`/zero rather than failing the request.
+- **Streaming**: `anth_panel::poll::stream` owns *when* a read repeats — one Tokio
+  interval per stream, `MissedTickBehavior::Delay`, and a wait that is cancelled when
+  the stream is dropped. It knows nothing about transport or formatting, so the CLI
+  and the SSE endpoint share it. `sse::SseStream` owns *how* values become SSE frames
+  (event name, ids, retry hint, keep-alive, error event) and takes any
+  `Stream<Item = Result<T, E>>`; a new endpoint reuses it by naming its event.
+  `anth_panel::stream::follow` is request-agnostic — it takes the socket
+  path, a `Request`, an `Option<Duration>` period and a `FnMut(&Response) -> String`
+  renderer, so a new streaming subcommand only has to answer `Some(period)` in
+  `watch_interval`. The wait is a Tokio interval with `MissedTickBehavior::Delay`, which
+  yields the thread instead of spinning and avoids a catch-up burst after a slow read.
+  `Frames` owns the redraw-vs-blank-line decision and is generic over `Write`, which is
+  how the frame layout is tested without a TTY.
 - **Table rendering**: `anth_panel::render::Table` draws a bordered box (top, bottom, a
   rule under the header and optional separators between groups) and pads columns by
   character count so multi-byte text stays aligned. `render_host_info` maps a `HostInfo`
@@ -119,8 +150,14 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `Config::load_or_create`, which writes a default file when the path cannot be read,
   so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes.
-- **Panel routes**: `GET /healthz`, `POST /command` (proxies a JSON `Request` to the
-  daemon over the socket), and a fallback static handler that serves the embedded SPA
+- **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
+  `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE) and
+  `POST /api/echo`. The route names the command, so bodies carry the command's
+  arguments at the top level (`{"message":"hi"}`) with no `type`/`data` envelope;
+  the envelope stays a `anth-proto` concern for socket clients only. See
+  `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via `api::ApiError`,
+  including bodies axum rejects before the handler runs. A fallback
+  static handler that serves the embedded SPA
   and falls back to `index.html`. Table tests exercise the router through
   `tower::ServiceExt::oneshot`.
 - **Subcommands**: `daemon`, `api` and `run` share `--addr`, which falls back to
@@ -129,6 +166,20 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `--config` is `global = true`, so it is accepted before or after the subcommand.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
+
+## Documentation
+
+User-facing docs live in `docs/` and are indexed from `README.md`. Keep them in
+sync with behaviour; they are the contract for people writing clients:
+
+- `docs/cli.md` — every subcommand and flag. Update when a flag is added.
+- `docs/api-endpoints.md` — routes, request/response bodies, SSE fields, error
+  shape, status codes. Update when a route is added or its payload changes.
+- `docs/socket-protocol.md` — the `anth-proto` wire format. Update when either
+  enum changes; an alternative client depends on this being accurate.
+
+`AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
+duplicate route tables here — point at the doc.
 
 ## Code style
 
