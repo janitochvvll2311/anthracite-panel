@@ -391,7 +391,7 @@ export class AnthFileExplorer extends LitElement {
           <nav class="crumbs" aria-label="Breadcrumb">
             ${breadcrumbs(current).map(
               (crumb, index) => html`
-                ${index > 0 ? html`<span class="sep">/</span>` : nothing}
+                ${index > 1 ? html`<span class="sep">/</span>` : nothing}
                 <button
                   type="button"
                   class="crumb"

@@ -121,6 +121,9 @@ describe('AnthFileExplorer', () => {
     expect(element.path).toBe('/docs')
     expect(client.list).toHaveBeenLastCalledWith('/docs')
     expect(element.shadowRoot?.querySelectorAll('.crumb')).toHaveLength(2)
+    expect(
+      element.shadowRoot?.querySelector('.crumbs')?.textContent?.replace(/\s/g, ''),
+    ).toBe('/docs')
     expect(element.shadowRoot?.textContent).toContain('readme.md')
 
     button(element, 'Up').click()
