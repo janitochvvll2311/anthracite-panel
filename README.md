@@ -84,6 +84,10 @@ cd backend
 cargo test --workspace --target x86_64-unknown-linux-gnu
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu
+
+cd ../frontend
+npm test
+npm run build
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture notes and repository conventions.

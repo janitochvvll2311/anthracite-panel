@@ -106,4 +106,6 @@ The browser components live in `frontend/src/components/`:
   CPU percentages and sends signals through an injected `ProcessClient`. It
   owns the flat/tree toggle and filtering.
 
-`frontend/anth-process.test.html` is the dev-only harness.
+`frontend/anth-process.test.html` is the dev-only harness. The same behaviour is
+covered by the Vitest tests under `frontend/src/components/` and
+`frontend/src/lib/processes/`.

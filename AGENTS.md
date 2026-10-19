@@ -54,7 +54,7 @@ frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   anth-terminal.test.html   # dev-only xterm/API harness, never built
   anth-process.test.html    # dev-only process monitor harness, never built
   src/
-    components/             # terminal, process table/tree/monitor and their Vitest tests
+    components/             # terminal and process components and their Vitest tests
     lib/ws/                 # generic JSON WebSocket transport and tests
     lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
     lib/processes/          # process client, wire types, sort/display helpers and tests
@@ -101,7 +101,8 @@ has a `bun.lock`, but `npm` works fine and `bun` is not required.
 
 Vitest tests live next to the source as `frontend/src/**/*.test.ts`.
 `frontend/vitest.config.ts` uses `happy-dom`; the component tests mock xterm so they
-do not need a real canvas. Run them from `frontend/`:
+do not need a real canvas, and the process tests use an injected fake client rather
+than a daemon. Run them from `frontend/`:
 
 ```bash
 npm test          # vitest run
@@ -208,7 +209,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   selected-process preview shows the full command, left-aligned and vertically
   centered in the footer. `anth-process-monitor` owns filtering, the flat/tree
   toggle, SSE lifecycle and confirmed signals, and only depends on the injected
-  `ProcessClient`. Both are exercised by `anth-process.test.html`.
+  `ProcessClient`. Both are exercised by Vitest component tests and the
+  `anth-process.test.html` dev harness.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
