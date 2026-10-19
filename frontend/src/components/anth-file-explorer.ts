@@ -530,7 +530,10 @@ export class AnthFileExplorer extends LitElement {
     .explorer {
       display: flex;
       flex-direction: column;
-      min-height: 420px;
+      /* The list scrolls inside this height so the preview stays visible.
+         Override --anth-file-height on the element to change the budget. */
+      height: var(--anth-file-height, clamp(360px, 72vh, 760px));
+      min-height: 0;
       border: 1px solid var(--panel-border, #223041);
       border-radius: 10px;
       background: var(--panel, #101721);
@@ -653,11 +656,14 @@ export class AnthFileExplorer extends LitElement {
     .panes {
       display: grid;
       grid-template-columns: minmax(0, 1.35fr) minmax(220px, 1fr);
-      min-height: 340px;
+      grid-template-rows: minmax(0, 1fr);
+      flex: 1;
+      min-height: 0;
     }
 
     .list {
       min-width: 0;
+      min-height: 0;
       overflow: auto;
       border-right: 1px solid var(--panel-border, #223041);
     }
@@ -735,6 +741,7 @@ export class AnthFileExplorer extends LitElement {
 
     .preview {
       min-width: 0;
+      min-height: 0;
       padding: 12px;
       overflow: auto;
     }
@@ -784,12 +791,12 @@ export class AnthFileExplorer extends LitElement {
     @media (max-width: 800px) {
       .panes {
         grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1.1fr) minmax(0, 1fr);
       }
 
       .list {
         border-right: 0;
         border-bottom: 1px solid var(--panel-border, #223041);
-        max-height: 48vh;
       }
     }
   `

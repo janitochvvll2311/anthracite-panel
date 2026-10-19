@@ -124,6 +124,16 @@ hidden-file filtering, previews, uploads and the write controls. It depends on
 the injected `FileClient`; `frontend/src/lib/files/file-client.ts` implements the
 HTTP version.
 
+The explorer has a bounded height by default, so the file list scrolls inside the
+component and the preview stays visible. Override it with the
+`--anth-file-height` CSS property when embedding it:
+
+```css
+anth-file-explorer {
+  --anth-file-height: 620px;
+}
+```
+
 The dev harness is `frontend/anth-file.test.html`. It is not part of the Vite
 production build. Run it with:
 
