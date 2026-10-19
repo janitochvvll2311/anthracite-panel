@@ -85,12 +85,43 @@ pub struct ProcessConfig {
     pub control: bool,
 }
 
+/// Filesystem explorer settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FilesConfig {
+    /// Host directory exposed as `/`. Must be absolute and exist when the
+    /// daemon starts.
+    pub root: String,
+    /// Whether the daemon accepts mkdir, rename, delete and upload requests.
+    /// Off by default: the panel has no authentication yet.
+    pub write: bool,
+    /// Maximum number of entries returned by one listing.
+    pub max_entries: usize,
+    /// Maximum bytes returned by the inline content endpoint.
+    pub max_preview_bytes: u64,
+    /// Maximum size of one upload.
+    pub max_upload_bytes: u64,
+}
+
+impl Default for FilesConfig {
+    fn default() -> Self {
+        Self {
+            root: "/".to_string(),
+            write: false,
+            max_entries: 5000,
+            max_preview_bytes: 1024 * 1024,
+            max_upload_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub socket_path: String,
     pub terminal: TerminalConfig,
     pub process: ProcessConfig,
+    pub files: FilesConfig,
 }
 
 impl Default for Config {
@@ -99,6 +130,29 @@ impl Default for Config {
             socket_path: DEFAULT_SOCKET_PATH.to_string(),
             terminal: TerminalConfig::default(),
             process: ProcessConfig::default(),
+            files: FilesConfig::default(),
+        }
+    }
+}
+
+impl Config {
+    /// Defaults that make a debug build convenient for local development.
+    ///
+    /// Production defaults stay safe: process control and file writes are off
+    /// unless an existing config file explicitly enables them.
+    pub fn dev_default() -> Self {
+        let mut config = Self::default();
+        config.process.control = true;
+        config.files.write = true;
+        config
+    }
+
+    /// Defaults used when a server subcommand has to create a missing config.
+    pub fn server_default() -> Self {
+        if cfg!(debug_assertions) {
+            Self::dev_default()
+        } else {
+            Self::default()
         }
     }
 }
@@ -149,8 +203,9 @@ impl Config {
 
     /// Loads the configuration at `path`, or writes a default one first when it
     /// cannot be read, so a first server run bootstraps the configuration file.
-    /// A failure to persist the default is reported but not fatal: the freshly
-    /// built defaults are still usable for this run.
+    /// Debug builds bootstrap with process control and file writes enabled;
+    /// release builds keep both off. A failure to persist the default is
+    /// reported but not fatal: the freshly built defaults are still usable.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
         match Self::load(&path) {
             Ok(config) => config,
@@ -158,7 +213,12 @@ impl Config {
                 eprintln!("Failed to load config: {e}");
                 eprintln!("Using default config.");
 
-                let config = Self::default();
+                let config = Self::server_default();
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "Debug build: process control and file writes are enabled in the generated config."
+                    );
+                }
                 if let Err(e) = config.save(&path) {
                     eprintln!("Failed to save default config: {e}");
                 }
@@ -196,6 +256,37 @@ mod tests {
     #[test]
     fn default_shell_uses_auto() {
         assert_eq!(TerminalConfig::default().shell, "auto");
+    }
+
+    #[test]
+    fn file_defaults_are_safe() {
+        let files = FilesConfig::default();
+        assert_eq!(files.root, "/");
+        assert!(!files.write);
+        assert_eq!(files.max_entries, 5000);
+        assert_eq!(files.max_preview_bytes, 1024 * 1024);
+        assert_eq!(files.max_upload_bytes, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn files_section_is_loaded_from_toml() {
+        let config = Config::from_toml(
+            r#"
+[files]
+root = "/srv"
+write = true
+max_entries = 10
+max_preview_bytes = 20
+max_upload_bytes = 30
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.files.root, "/srv");
+        assert!(config.files.write);
+        assert_eq!(config.files.max_entries, 10);
+        assert_eq!(config.files.max_preview_bytes, 20);
+        assert_eq!(config.files.max_upload_bytes, 30);
     }
 
     #[test]

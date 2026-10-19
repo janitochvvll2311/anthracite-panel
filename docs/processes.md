@@ -25,6 +25,10 @@ control = true
 
 Changing the file requires a daemon restart.
 
+Debug builds (`cargo run`) bootstrap a missing config with `control = true` so
+signals can be tested locally. Release builds still generate `false`, and an
+existing file is never rewritten.
+
 Even with control enabled, the daemon refuses to:
 
 - signal pid 1 or its own pid;
@@ -83,9 +87,11 @@ serialized size of the whole snapshot. If it is still too large, commands are
 shortened further (down to 8 characters) before the least busy rows are dropped.
 Processes are sorted by accumulated CPU, so the busiest ones stay visible.
 
-When rows or command lines were shortened, `warning` is a human-readable notice
-and `truncated` is `true`. The CLI prints the warning below the table; the web
-component shows it above the table.
+Dropping rows sets `warning` to a human-readable notice, and `truncated` is
+`true`. Shortening command lines also sets `truncated` but intentionally produces
+no warning: it is an implementation detail of fitting the protocol frame. The
+CLI prints the warning below the table; the web component shows it above the
+table.
 
 ## HTTP and browser
 
@@ -108,6 +114,6 @@ The browser components live in `frontend/src/components/`:
   CPU percentages and sends signals through an injected `ProcessClient`. It
   owns the flat/tree toggle and filtering.
 
-`frontend/anth-process.test.html` is the dev-only harness. The same behaviour is
-covered by the Vitest tests under `frontend/src/components/` and
-`frontend/src/lib/processes/`.
+`frontend/src/components/anth-process-monitor.test.html` is the dev-only
+harness. The same behaviour is covered by the Vitest tests under
+`frontend/src/components/` and `frontend/src/lib/processes/`.

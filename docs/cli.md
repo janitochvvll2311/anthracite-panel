@@ -13,6 +13,7 @@ Commands:
   echo       Send a request to the running daemon and print the response
   host-info  Print the operating system and resources of the daemon host as a table
   process    Inspect processes and send signals
+  file       Browse and manage files on the daemon host
   terminal   Open an interactive terminal on the daemon host
   help       Print this message or the help of the given subcommand(s)
 
@@ -46,13 +47,25 @@ socket_path = "/var/tmp/anth.sock"
 
 [process]
 control = false
+
+[files]
+root = "/"
+write = false
+max_entries = 5000
+max_preview_bytes = 1048576
+max_upload_bytes = 67108864
 ```
 
 Unknown keys are rejected rather than ignored, so a typo fails loudly. A
 relative or missing file is not fatal for serving subcommands: they write a
 default config when it cannot be loaded. Client subcommands (`echo`,
-`host-info`, `process`) never create the file — they use defaults if it is
-absent, so probing a machine does not leave files behind.
+`host-info`, `process`, `file`) never create the file — they use defaults if it
+is absent, so probing a machine does not leave files behind.
+
+Debug builds bootstrap a missing file with `[process] control = true` and
+`[files] write = true` so the whole UI is testable locally. Release builds keep
+both off. An existing file is never rewritten; remove it or edit it to change
+the generated defaults.
 
 ## Serving
 
@@ -210,6 +223,54 @@ Without `--yes`, the command asks for confirmation on a TTY and refuses to run
 when stdin is not a terminal. The daemon still enforces its own policy:
 `[process] control` must be `true`, the target must belong to the daemon user,
 and pid 1 or the daemon itself are rejected.
+
+### `file`
+
+Browses and, when `[files] write = true`, manages files below the configured
+root. Paths are virtual: `/` means `[files] root`, not necessarily the host's
+real root. See [files.md](files.md) for the containment and symlink policy.
+
+There are deliberately no aliases: the subcommands are `list`, `read`, `mkdir`,
+`upload`, `rename` and `delete`.
+
+#### `file list [PATH]`
+
+```bash
+anth-panel file list
+anth-panel file list /var/log
+```
+
+Prints TYPE, NAME, SIZE and MODIFIED. The default path is `/`. Hidden entries
+are included; the web component filters them with a toggle.
+
+#### `file read <PATH> [--output <FILE>]`
+
+```bash
+anth-panel file read /etc/hostname
+anth-panel file read /var/log/syslog --output ./syslog
+```
+
+Reads in protocol chunks and writes the bytes to stdout, or to `--output` when
+given. A directory is rejected.
+
+#### `file mkdir <PATH> [--parents]`
+
+Creates one directory. `--parents` creates missing intermediate directories.
+
+#### `file upload <LOCAL> <DEST> [--overwrite]`
+
+Uploads `LOCAL` in chunks. The destination must be inside the configured root.
+Without `--overwrite`, an existing destination is refused.
+
+#### `file rename <FROM> <TO>`
+
+Renames one entry without overwriting an existing destination.
+
+#### `file delete <PATH> [--recursive] [--yes]`
+
+Deletes one file, symlink or empty directory. A non-empty directory requires
+`--recursive`. Without `--yes`, the command asks for confirmation on a TTY and
+refuses to run when stdin is not a terminal.
 
 ### `terminal`
 

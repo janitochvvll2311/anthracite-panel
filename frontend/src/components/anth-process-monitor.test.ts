@@ -262,7 +262,17 @@ describe('AnthProcessMonitor', () => {
     expect(table(element).processes[0]?.cpu_percent).toBeNull()
   })
 
-  it('shows a truncation warning when the daemon does not provide one', async () => {
+  it('does not warn when only command lines were shortened', async () => {
+    const client = new FakeClient()
+    client.queue = [
+      snapshot([processInfo()], { total: 1, truncated: true }),
+    ]
+    const { element } = await mount(client)
+
+    expect(table(element).warning).toBe('')
+  })
+
+  it('shows a row truncation warning when the daemon does not provide one', async () => {
     const client = new FakeClient()
     client.queue = [
       snapshot([processInfo()], { total: 500, truncated: true }),

@@ -6,7 +6,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       // Only the app shell is a build entry. Dev harnesses such as
-      // `anth-terminal.test.html` and `anth-process.test.html` stay out of dist/.
+      // `src/components/anth-terminal.test.html`,
+      // `src/components/anth-process-monitor.test.html`,
+      // `src/components/anth-file-explorer.test.html` and
+      // `src/components/anth-host-info.test.html` stay out of dist/.
       input: 'index.html',
     },
   },

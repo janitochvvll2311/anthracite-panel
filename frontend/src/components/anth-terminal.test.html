@@ -1,0 +1,212 @@
+<!doctype html>
+<!--
+  Dev-only harness for src/components/anth-terminal.ts and the
+  WebSocket terminal transport.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-terminal.test.html. Vite's build input is
+  only index.html (see vite.config.ts), so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel web terminal."
+    />
+    <title>anth-terminal · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-terminal" width="1280px">
+      <p slot="description">
+        A reusable xterm.js terminal window. The component only depends on the
+        <code>TerminalTransport</code> interface; this page injects the
+        WebSocket implementation and talks to <code>GET /api/terminal</code>.
+        Start the backend with <code>anth-panel run</code> before connecting.
+      </p>
+
+      <div slot="actions">
+        <div class="harness-controls">
+          <input
+            id="endpoint"
+            type="text"
+            spellcheck="false"
+            aria-label="Terminal WebSocket endpoint"
+          />
+          <button type="button" id="connect">Connect</button>
+        </div>
+
+        <div class="harness-toolbar" aria-label="Terminal controls">
+          <label class="harness-inline-field">
+            Keyboard
+            <select id="keyboard-mode" aria-label="Keyboard mode">
+              <option value="auto">auto</option>
+              <option value="shell">shell</option>
+              <option value="local">local</option>
+            </select>
+          </label>
+          <button type="button" id="disconnect">Disconnect</button>
+          <button type="button" id="fit">Fit</button>
+          <button type="button" id="clear">Clear</button>
+          <button type="button" id="reset">Reset</button>
+          <button type="button" id="focus">Focus</button>
+        </div>
+
+        <div class="harness-status-line" aria-live="polite">
+          <span id="status-pill" class="harness-status-pill" data-status="idle">
+            idle
+          </span>
+          <span id="session">no session</span>
+        </div>
+      </div>
+
+      <anth-terminal
+        id="terminal"
+        title="anth-panel — web terminal"
+        auto-focus
+        max-lines="5000"
+        style="--terminal-height: min(48rem, 76vh)"
+      ></anth-terminal>
+
+      <section class="harness-notes" aria-label="What this harness exercises">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Click <strong>Connect</strong>, then type in the terminal.</li>
+            <li>
+              Run <code>btop</code>, <code>htop</code> or <code>vim</code>; the
+              window is sized for a full-screen TUI.
+            </li>
+            <li>
+              Run a few commands, then use <code>↑</code>/<code>↓</code> to walk
+              the local command history.
+            </li>
+            <li>
+              Type a prefix of a previous command and press <code>Tab</code> to
+              complete it; press <code>Tab</code> again to cycle matches.
+            </li>
+            <li>
+              <code>auto</code> delegates to the shell when it has line editing
+              (bash, ash); with <code>dash</code> it falls back to local
+              history.
+            </li>
+            <li>Resize the browser window; the PTY receives a resize.</li>
+            <li>Use <code>exit</code> to see the exit event and final code.</li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Transport-agnostic</h2>
+          <ul>
+            <li>The component never imports the WebSocket transport.</li>
+            <li>
+              <code>WebSocketTerminalTransport</code> implements the same
+              interface a mock or native bridge would.
+            </li>
+            <li>
+              The generic <code>JsonWebSocketTransport</code> can be reused by
+              other endpoints.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <h2 class="harness-section-title">Local output, no transport</h2>
+      <anth-terminal
+        id="local"
+        title="local output"
+        read-only
+        style="--terminal-height: 9rem; --terminal-accent: #fbbf24"
+      ></anth-terminal>
+
+      <div class="harness-toolbar" aria-label="Local terminal controls">
+        <button type="button" id="append-local">Append local line</button>
+      </div>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-terminal.ts'
+      import { WebSocketTerminalTransport } from '/src/lib/terminal/websocket-transport.ts'
+
+      const terminal = document.querySelector('#terminal')
+      const local = document.querySelector('#local')
+      const endpointInput = document.querySelector('#endpoint')
+      const keyboardModeSelect = document.querySelector('#keyboard-mode')
+      const statusPill = document.querySelector('#status-pill')
+      const sessionLabel = document.querySelector('#session')
+
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      endpointInput.value = `${wsProtocol}//${location.host}/api/terminal`
+
+      local.writeln('This instance has no transport and is read-only.')
+      local.writeln('Calls to write() and writeln() render locally.')
+
+      let transport
+
+      function setStatus(status, detail = '') {
+        statusPill.dataset.status = status
+        statusPill.textContent = status
+        if (detail !== '') sessionLabel.textContent = detail
+      }
+
+      function connect() {
+        const endpoint = endpointInput.value.trim()
+        if (endpoint === '') return
+
+        transport?.close()
+        transport = new WebSocketTerminalTransport({
+          url: (size) => {
+            const url = new URL(endpoint)
+            url.searchParams.set('cols', String(size.cols))
+            url.searchParams.set('rows', String(size.rows))
+            return url.toString()
+          },
+        })
+
+        terminal.transport = transport
+        sessionLabel.textContent = 'connecting to ' + endpoint
+      }
+
+      terminal.addEventListener('anth-terminal-status', (event) => {
+        setStatus(event.detail.status)
+      })
+
+      terminal.addEventListener('anth-terminal-ready', (event) => {
+        const { program, size } = event.detail
+        sessionLabel.textContent = `${program} · ${size.cols}x${size.rows} · ${terminal.effectiveKeyboardMode} keys`
+      })
+
+      terminal.addEventListener('anth-terminal-exit', (event) => {
+        sessionLabel.textContent = `process exited with code ${event.detail.code}`
+      })
+
+      terminal.addEventListener('anth-terminal-error', (event) => {
+        sessionLabel.textContent = event.detail.message
+      })
+
+      document.querySelector('#connect').addEventListener('click', connect)
+      keyboardModeSelect.addEventListener('change', () => {
+        terminal.keyboardMode = keyboardModeSelect.value
+        sessionLabel.textContent = `keyboard: ${terminal.effectiveKeyboardMode}`
+      })
+      document
+        .querySelector('#disconnect')
+        .addEventListener('click', () => terminal.disconnect())
+      document.querySelector('#fit').addEventListener('click', () => terminal.fit())
+      document.querySelector('#clear').addEventListener('click', () => terminal.clear())
+      document.querySelector('#reset').addEventListener('click', () => terminal.reset())
+      document.querySelector('#focus').addEventListener('click', () => terminal.focus())
+      document
+        .querySelector('#append-local')
+        .addEventListener('click', () => {
+          local.writeln(
+            `[${new Date().toLocaleTimeString()}] local line ${Math.floor(Math.random() * 1000)}`,
+          )
+        })
+
+      connect()
+    </script>
+  </body>
+</html>

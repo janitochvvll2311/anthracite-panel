@@ -214,3 +214,54 @@ async fn serve_binds_the_socket_and_answers_host_info() {
     server.abort();
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn handle_request_with_files_lists_the_configured_root() {
+    use anth_panel::config::FilesConfig;
+    use anth_panel::files::FileService;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("anth-daemon-files-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("hello.txt"), b"hello").unwrap();
+
+    let files = FileService::new(&FilesConfig {
+        root: root.to_string_lossy().into_owned(),
+        write: false,
+        max_entries: 100,
+        max_preview_bytes: 1024,
+        max_upload_bytes: 1024,
+    })
+    .unwrap();
+
+    match anth_panel::daemon::handle_request_with(
+        Request::FileList {
+            path: "/".to_string(),
+        },
+        false,
+        &files,
+    ) {
+        Response::FileListing(listing) => {
+            assert_eq!(listing.entries[0].name, "hello.txt");
+            assert!(!listing.write_enabled);
+        }
+        other => panic!("expected FileListing, got {other:?}"),
+    }
+
+    match anth_panel::daemon::handle_request_with(
+        Request::FileWriteStart {
+            path: "/x".to_string(),
+            overwrite: false,
+        },
+        false,
+        &files,
+    ) {
+        Response::Error { detail } => assert!(detail.contains("open connection")),
+        other => panic!("expected Error, got {other:?}"),
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}

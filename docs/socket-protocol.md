@@ -20,10 +20,9 @@ The reference implementation is the `anth-proto` crate.
 A line is a complete message. A message must not contain a raw newline; JSON
 encoding never produces one, so `\n` is always a frame boundary.
 
-Binary data — terminal input and output — travels as a **base64 string**, never
-as raw bytes. Those are the only members for which that applies, and the encoding
-is stated per member below. A raw byte in a frame would either break UTF-8 or,
-for `0x0a`, be read as a frame boundary.
+Binary data — terminal input/output and file chunks — travels as a **base64
+string**, never as raw bytes. The encoding is stated per member below. A raw byte
+in a frame would either break UTF-8 or, for `0x0a`, be read as a frame boundary.
 
 ## Request and response shape
 
@@ -109,6 +108,99 @@ to the daemon user, and the pid is not protected. See
 
 Reply: `ProcessSignalled`.
 
+### Filesystem requests
+
+Paths are virtual: `/` is the daemon's `[files] root`. `..` components are
+invalid, and reads follow symlinks only after checking the canonical target
+stays inside the root. Writes require `[files] write = true`.
+
+### `FileList`
+
+```json
+{"type":"FileList","data":{"path":"/var/log"}}
+
+```
+
+Reply: `FileListing`.
+
+### `FileRead`
+
+Reads one stateless chunk. Advance `offset` until `eof` is `true`.
+
+```json
+{"type":"FileRead","data":{"path":"/etc/hostname","offset":0,"len":262144}}
+
+```
+
+`len` is clamped to 512 KiB. Reply: `FileChunk`.
+
+### `FileMkdir`
+
+```json
+{"type":"FileMkdir","data":{"path":"/var/tmp/example","recursive":false}}
+
+```
+
+Reply: `FileCreated`.
+
+### `FileRename`
+
+```json
+{"type":"FileRename","data":{"from":"/var/tmp/a","to":"/var/tmp/b"}}
+
+```
+
+Reply: `FileRenamed`. The daemon refuses an existing destination.
+
+### `FileDelete`
+
+```json
+{"type":"FileDelete","data":{"path":"/var/tmp/example","recursive":true}}
+
+```
+
+Reply: `FileDeleted`. A non-empty directory requires `recursive`.
+
+### `FileWriteStart`
+
+Opens an atomic upload and replies with an id.
+
+```json
+{"type":"FileWriteStart","data":{"path":"/var/tmp/a.bin","overwrite":false}}
+
+```
+
+Reply: `FileWriteStarted`.
+
+### `FileWriteChunk`
+
+```json
+{"type":"FileWriteChunk","data":{"id":1,"bytes":"AAEC/w=="}}
+
+```
+
+`bytes` is base64. One chunk is capped at 512 KiB; clients normally send 256 KiB.
+Reply: `FileWriteAccepted` with the running byte count.
+
+### `FileWriteFinish`
+
+```json
+{"type":"FileWriteFinish","data":{"id":1}}
+
+```
+
+Flushes, closes and renames the temporary file. Reply: `FileWritten`.
+
+### `FileWriteAbort`
+
+```json
+{"type":"FileWriteAbort","data":{"id":1}}
+
+```
+
+Discards the upload and removes its temporary file. Reply: `FileWriteAborted`.
+Dropping the connection has the same effect.
+
 ## Responses
 
 ### `Ok`
@@ -178,9 +270,10 @@ Reply to `ProcessList`.
 The daemon returns at most 2000 processes, sorted by accumulated CPU. To keep
 every snapshot within the 1 MiB line cap, command lines are shortened (first to
 256 characters, then further if needed) and, as a last resort, the least busy
-rows are dropped. When any of those happens `truncated` is `true`, `total`
-reports the untruncated count, and `warning` carries a human-readable notice.
-Clients must not treat the list as complete without checking those fields.
+rows are dropped. Command shortening sets `truncated` without a warning;
+dropping rows also adds a human-readable `warning`. `total` reports the
+untruncated count. Clients must not treat the list as complete without checking
+those fields.
 
 ### `ProcessSignalled`
 
@@ -192,6 +285,67 @@ Successful reply to `ProcessSignal`.
 ```
 
 A refused signal arrives as an `Error` response instead.
+
+### File responses
+
+`FileListing`, `FileChunk`, `FileWritten`, `FileCreated`, `FileDeleted`,
+`FileRenamed`, `FileWriteStarted`, `FileWriteAccepted` and `FileWriteAborted`
+mirror the requests above. `FileListing` is:
+
+```json
+{
+  "type": "FileListing",
+  "data": {
+    "path": "/",
+    "parent": null,
+    "entries": [
+      {
+        "name": "a.txt",
+        "path": "/a.txt",
+        "kind": "file",
+        "size": 3,
+        "modified_ms": 1700000000000,
+        "hidden": false
+      }
+    ],
+    "total": 1,
+    "truncated": false,
+    "write_enabled": false
+  }
+}
+```
+
+`kind` is `file`, `directory`, `symlink` or `other`; symlinks also carry
+`target`. `FileChunk` is:
+
+```json
+{
+  "type": "FileChunk",
+  "data": {
+    "path": "/etc/hostname",
+    "offset": 0,
+    "size": 12,
+    "eof": true,
+    "bytes": "Ym94Cg=="
+  }
+}
+```
+
+Filesystem failures use a typed response so HTTP clients can map status codes:
+
+```json
+{
+  "type": "FileError",
+  "data": {
+    "kind": "not_found",
+    "detail": "`/missing`: No such file or directory (os error 2)"
+  }
+}
+```
+
+`kind` is one of `not_found`, `permission_denied`, `not_a_directory`,
+`is_a_directory`, `invalid_path`, `already_exists`, `directory_not_empty`,
+`too_large`, `disabled` or `io`.
 
 ### `HostInfo` (reply)
 
@@ -271,6 +425,7 @@ socket open.
 | Unknown `type` | `Error` with a parse message, then the connection closes |
 | `data` missing for a variant that needs it | `Error` with a parse message, then the connection closes |
 | Malformed JSON line | `Error` with a parse message, then the connection closes |
+| Filesystem operation failed | `FileError` with `kind` and `detail`; the connection stays open |
 | Daemon goes away | The connection closes with no message; a write fails with `Broken pipe` |
 
 Dropping the connection is the daemon's only way to end a conversation, so a

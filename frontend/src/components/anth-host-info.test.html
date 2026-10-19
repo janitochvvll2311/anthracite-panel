@@ -1,0 +1,66 @@
+<!doctype html>
+<!--
+  Dev-only harness for the host info component.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-host-info.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel host info component."
+    />
+    <title>anth-host-info · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-host-info" width="1100px">
+      <p slot="description">
+        Host overview backed by <code>GET /api/host-info</code> and its
+        <code>/watch</code> SSE endpoint. It shows the operating system, kernel,
+        architecture, CPU, load average, memory and swap. Pause the stream to
+        keep the last snapshot visible while the daemon is stopped.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Change the interval to restart the SSE stream.</li>
+            <li>Pause and resume the live feed.</li>
+            <li>Refresh once without restarting the stream.</li>
+            <li>Stop the backend to see the stream error state.</li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open <code>/src/components/anth-host-info.test.html</code> on the
+              Vite port.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <anth-host-info id="host-info"></anth-host-info>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-host-info.ts'
+      import { HttpHostInfoClient } from '/src/lib/hostinfo/host-info-client.ts'
+
+      document.querySelector('#host-info').client = new HttpHostInfoClient()
+    </script>
+  </body>
+</html>

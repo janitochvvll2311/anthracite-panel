@@ -7,9 +7,14 @@ use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite, LinesCodec};
 
 pub mod b64;
+pub mod files;
 pub mod process;
 pub mod terminal;
 
+pub use files::{
+    FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten,
+    DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
+};
 pub use process::{ProcessInfo, ProcessSignal, ProcessSnapshot};
 pub use terminal::{
     TerminalOpenArgs, TerminalOpened, TerminalSize, DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK,
@@ -37,6 +42,50 @@ pub enum Request {
     ProcessSignal {
         pid: u32,
         signal: ProcessSignal,
+    },
+    /// List one directory below the configured filesystem root.
+    FileList {
+        path: String,
+    },
+    /// Read one chunk. Stateless: clients advance `offset` until `eof`.
+    FileRead {
+        path: String,
+        offset: u64,
+        len: u32,
+    },
+    /// Create a directory. `recursive` maps to `create_dir_all`.
+    FileMkdir {
+        path: String,
+        recursive: bool,
+    },
+    /// Rename a file or directory inside the configured root.
+    FileRename {
+        from: String,
+        to: String,
+    },
+    /// Delete one entry. Directories require `recursive` unless empty.
+    FileDelete {
+        path: String,
+        recursive: bool,
+    },
+    /// Begin an atomic upload. The reply is `FileWriteStarted`.
+    FileWriteStart {
+        path: String,
+        overwrite: bool,
+    },
+    /// Append one chunk to an open upload.
+    FileWriteChunk {
+        id: u32,
+        #[serde(with = "b64")]
+        bytes: Vec<u8>,
+    },
+    /// Commit an upload after its last chunk.
+    FileWriteFinish {
+        id: u32,
+    },
+    /// Discard an upload and remove its temporary file.
+    FileWriteAbort {
+        id: u32,
     },
     /// Start a terminal session. The reply is `Response::TerminalOpened`,
     /// after which output arrives unsolicited as `Response::TerminalOutput`.
@@ -99,6 +148,38 @@ pub enum Response {
         pid: u32,
         signal: ProcessSignal,
     },
+    /// One directory listing.
+    FileListing(FileListing),
+    /// One chunk of a file.
+    FileChunk(FileChunk),
+    /// An upload was committed.
+    FileWritten(FileWritten),
+    /// A directory was created.
+    FileCreated {
+        path: String,
+    },
+    FileDeleted {
+        path: String,
+    },
+    FileRenamed {
+        from: String,
+        to: String,
+    },
+    /// An upload is open. Chunks are accepted until finish or abort.
+    FileWriteStarted {
+        id: u32,
+    },
+    /// One upload chunk was appended.
+    FileWriteAccepted {
+        id: u32,
+        received: u64,
+    },
+    /// An upload was discarded.
+    FileWriteAborted {
+        id: u32,
+    },
+    /// A filesystem operation failed with a machine-readable reason.
+    FileError(FileError),
     /// A session exists. Sent once per `Request::TerminalOpen`.
     TerminalOpened(TerminalOpened),
     /// Terminal output. Unsolicited: the daemon sends these as the session

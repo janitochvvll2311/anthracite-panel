@@ -1,0 +1,80 @@
+<!doctype html>
+<!--
+  Dev-only harness for the process monitor components.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-process-monitor.test.html. Vite's build input is only
+  index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel process monitor components."
+    />
+    <title>anth-process-monitor · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-process-monitor" width="1400px">
+      <p slot="description">
+        Live process table backed by <code>GET /api/processes/watch</code>.
+        CPU percentages are computed in the browser from consecutive tick
+        snapshots. Debug builds generate <code>[process] control = true</code>;
+        release builds keep signals off unless the config enables them.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Filter by pid, user, process name or command line.</li>
+            <li>Click a flat header to sort; click again to reverse.</li>
+            <li>Switch between the compact flat table and the process tree.</li>
+            <li>Expand or collapse branching nodes with the chevron control.</li>
+            <li>Pause and resume the SSE stream.</li>
+            <li>Select a process and send a signal after confirming.</li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Control</h2>
+          <ul>
+            <li>
+              Debug builds generate <code>[process] control = true</code> so
+              signals can be tested locally.
+            </li>
+            <li>
+              Release builds keep it off; enable it explicitly and restart to
+              test signals.
+            </li>
+            <li>
+              Only same-user processes, not pid 1, and not the daemon itself.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <anth-process-monitor id="monitor"></anth-process-monitor>
+      <p id="event-log" class="harness-event-log" aria-live="polite">
+        no signal sent yet
+      </p>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-process-monitor.ts'
+      import { HttpProcessClient } from '/src/lib/processes/process-client.ts'
+
+      const monitor = document.querySelector('#monitor')
+      const log = document.querySelector('#event-log')
+
+      monitor.client = new HttpProcessClient({ baseUrl: '/api/processes' })
+      monitor.addEventListener('anth-process-signal', (event) => {
+        const { pid, signal } = event.detail
+        log.textContent = `sent ${signal.toUpperCase()} to PID ${pid}`
+      })
+    </script>
+  </body>
+</html>
