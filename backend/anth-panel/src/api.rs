@@ -15,7 +15,9 @@ use crate::app::AppState;
 use crate::poll;
 use crate::sse::SseStream;
 use crate::stream;
-use anth_proto::{AnthClient, Request, Response as CommandResponse, TerminalSize};
+use anth_proto::{
+    AnthClient, DEFAULT_TERMINAL_SIZE, Request, Response as CommandResponse, TerminalSize,
+};
 
 pub fn router(app: AppState) -> Router {
     Router::new()
@@ -86,16 +88,14 @@ pub struct WatchQuery {
 /// Query for `GET /api/terminal`. Both members are optional together; the
 /// browser normally sends both from the fitted xterm size.
 #[derive(Debug, Deserialize)]
-pub struct TerminalQuery {
+struct TerminalQuery {
     cols: Option<u16>,
     rows: Option<u16>,
 }
 
-const DEFAULT_WS_TERMINAL_SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
-
 fn requested_terminal_size(query: TerminalQuery) -> Result<TerminalSize, String> {
     let size = match (query.cols, query.rows) {
-        (None, None) => DEFAULT_WS_TERMINAL_SIZE,
+        (None, None) => DEFAULT_TERMINAL_SIZE,
         (Some(cols), Some(rows)) => TerminalSize { cols, rows },
         _ => return Err("cols and rows must be provided together".to_string()),
     };
@@ -116,7 +116,7 @@ fn requested_terminal_size(query: TerminalQuery) -> Result<TerminalSize, String>
 }
 
 /// `GET /api/terminal` — one interactive PTY per WebSocket.
-pub async fn ws_terminal(
+async fn ws_terminal(
     query: Result<Query<TerminalQuery>, QueryRejection>,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,

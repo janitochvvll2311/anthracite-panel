@@ -20,18 +20,11 @@ impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             shell: "/bin/sh".to_string(),
-            // Disabled by default: a terminal is remote code execution, so it
-            // must be turned on deliberately rather than inherited by accident.
+            // Reserved for the authentication layer. A terminal is remote code
+            // execution, so the token stays empty until that layer exists.
             token: String::new(),
             max_sessions: 4,
         }
-    }
-}
-
-impl TerminalConfig {
-    /// Whether a token is configured. Authentication is not enforced yet.
-    pub fn enabled(&self) -> bool {
-        !self.token.is_empty()
     }
 }
 

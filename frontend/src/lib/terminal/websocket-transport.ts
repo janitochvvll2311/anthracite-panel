@@ -1,7 +1,4 @@
-import {
-  JsonWebSocketTransport,
-  type JsonWebSocketState,
-} from '../ws/json-websocket'
+import { JsonWebSocketTransport } from '../ws/json-websocket'
 import {
   decodeBase64,
   encodeBase64,
@@ -20,7 +17,6 @@ import type {
 export interface WebSocketTerminalTransportOptions {
   /** Endpoint URL, or a function that receives the requested initial size. */
   url: string | ((size: TerminalSize) => string)
-  protocols?: string | string[]
   /** Application-level ping cadence. `0` disables it. */
   heartbeatIntervalMs?: number
 }
@@ -33,10 +29,8 @@ export interface WebSocketTerminalTransportOptions {
  * output. The component never sees any of that.
  */
 export class WebSocketTerminalTransport implements TerminalTransport {
-  private readonly options: Required<
-    Pick<WebSocketTerminalTransportOptions, 'heartbeatIntervalMs'>
-  > &
-    WebSocketTerminalTransportOptions
+  private readonly url: WebSocketTerminalTransportOptions['url']
+  private readonly heartbeatIntervalMs: number
   private socket?: JsonWebSocketTransport<
     TerminalClientMessage,
     TerminalServerMessage
@@ -51,10 +45,8 @@ export class WebSocketTerminalTransport implements TerminalTransport {
   private lastStatus?: TerminalStatus
 
   constructor(options: WebSocketTerminalTransportOptions) {
-    this.options = {
-      heartbeatIntervalMs: 20_000,
-      ...options,
-    }
+    this.url = options.url
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 20_000
   }
 
   async open(
@@ -67,9 +59,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     this.setStatus('connecting')
 
     const url =
-      typeof this.options.url === 'function'
-        ? this.options.url(size)
-        : this.options.url
+      typeof this.url === 'function' ? this.url(size) : this.url
 
     const ready = new Promise<TerminalSessionInfo>((resolve, reject) => {
       this.pendingOpen = { resolve, reject }
@@ -83,7 +73,6 @@ export class WebSocketTerminalTransport implements TerminalTransport {
       TerminalServerMessage
     >({
       url,
-      protocols: this.options.protocols,
       deserialize: (text) =>
         parseTerminalServerMessage(JSON.parse(text) as unknown),
       onMessage: (message) => this.handleMessage(socket, message),
@@ -140,10 +129,6 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     if (wasActive) {
       this.setStatus('closed')
     }
-  }
-
-  get state(): JsonWebSocketState {
-    return this.socket?.state ?? 'closed'
   }
 
   private send(message: TerminalClientMessage): void {
@@ -237,7 +222,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
 
   private startHeartbeat(): void {
     this.stopHeartbeat()
-    const interval = this.options.heartbeatIntervalMs
+    const interval = this.heartbeatIntervalMs
     if (interval <= 0) return
 
     this.heartbeat = setInterval(() => {
@@ -255,21 +240,5 @@ export class WebSocketTerminalTransport implements TerminalTransport {
       clearInterval(this.heartbeat)
       this.heartbeat = undefined
     }
-  }
-}
-
-/** Convenience status mapper for consumers that only care about a badge. */
-export function terminalStatusLabel(status: TerminalStatus): string {
-  switch (status) {
-    case 'idle':
-      return 'idle'
-    case 'connecting':
-      return 'connecting'
-    case 'open':
-      return 'connected'
-    case 'closed':
-      return 'closed'
-    case 'error':
-      return 'error'
   }
 }

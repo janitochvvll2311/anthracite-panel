@@ -16,12 +16,12 @@ use crate::ws::JsonWebSocket;
 
 /// Websocket frame cap. A 64 KiB input becomes ~87 KiB of base64 plus JSON
 /// overhead; 128 KiB leaves room for the envelope and future fields.
-pub const MAX_WEB_MESSAGE: usize = 128 * 1024;
+pub(crate) const MAX_WEB_MESSAGE: usize = 128 * 1024;
 
 /// Message sent by the browser.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum ClientMessage {
+enum ClientMessage {
     /// Bytes typed into the terminal, base64 encoded.
     Input { data: String },
     /// New window size in character cells.
@@ -33,7 +33,7 @@ pub enum ClientMessage {
 /// Message sent to the browser.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum ServerMessage {
+enum ServerMessage {
     /// Sent once, before any output.
     Ready { shell: String, cols: u16, rows: u16 },
     /// Terminal bytes, base64 encoded.
@@ -47,7 +47,7 @@ pub enum ServerMessage {
 }
 
 /// Runs one terminal session over an upgraded WebSocket.
-pub async fn serve_socket(socket: WebSocket, state: AppState, size: TerminalSize) {
+pub(crate) async fn serve_socket(socket: WebSocket, state: AppState, size: TerminalSize) {
     let mut ws = JsonWebSocket::new(socket, MAX_WEB_MESSAGE);
     if let Err(detail) = bridge(&mut ws, &state, size).await {
         let _ = ws.send(&ServerMessage::Error { detail }).await;

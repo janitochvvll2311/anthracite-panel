@@ -6,6 +6,11 @@ WebSocket to one daemon connection, and the frontend uses an xterm-backed Lit
 component. Authentication, idle timeouts and automatic reconnect are still
 pending.
 
+The implemented shape is **B**, not the branch recommendation below: the daemon
+owns the PTY and the panel only upgrades the browser socket and translates
+frames. The existing line protocol already carries base64 bytes, so no
+`anth-proto` framing change was required.
+
 ## The problem this has to solve before the rest
 
 A web terminal is remote code execution behind an HTTP route. `anth-panel` today
@@ -67,24 +72,27 @@ does not touch the route, the protocol, or the frontend.
 ## Architecture
 
 ```
-frontend/                     backend/anth-panel/src/
-  src/terminal/                 terminal/
-    terminal-view.ts   <--WS-->   mod.rs        route + upgrade
-    ws-client.ts                  session.rs    Session trait, PtySession
-    xterm-adapter.ts              protocol.rs   client<->server JSON messages
-                                  auth.rs       token gate
+frontend/                              backend/anth-panel/src/
+  src/components/anth-terminal.ts        api.rs          route + WebSocketUpgrade
+  src/lib/terminal/transport.ts          ws.rs           generic JSON/WebSocket
+  src/lib/terminal/protocol.ts           terminal/web.rs browser frames <-> daemon
+  src/lib/terminal/websocket-transport.ts terminal/session.rs PTY spawn/read/write
+  src/lib/ws/json-websocket.ts           terminal/registry.rs lifecycle + cap
+                                         terminal/auth.rs token helper (not wired)
 ```
 
 ### Layers and who owns what
 
 | Layer | Owns | Does not know about |
 | --- | --- | --- |
-| `terminal/mod.rs` | route, `WebSocketUpgrade`, per-connection task | PTY details, xterm |
+| `api.rs` | route, `WebSocketUpgrade`, query validation | PTY details, JSON frames |
+| `ws.rs` | text-frame JSON, size cap, control frames | terminal semantics |
+| `terminal/web.rs` | message mapping, daemon connection, close/exit | HTTP upgrade |
 | `terminal/session.rs` | spawn, read, write, resize, kill | HTTP, JSON framing |
-| `terminal/protocol.rs` | message enum, parsing, size limits | how bytes get to a shell |
-| `terminal/auth.rs` | token extraction and comparison | sessions |
-| `frontend/.../ws-client.ts` | reconnect, backoff, message decode | rendering |
-| `frontend/.../xterm-adapter.ts` | bytes to xterm, key events to bytes | WebSocket lifecycle |
+| `terminal/registry.rs` | lifecycle, session cap, output channels | transports |
+| `frontend/.../json-websocket.ts` | WebSocket state, JSON encode/decode | terminal semantics |
+| `frontend/.../websocket-transport.ts` | base64 frames, heartbeat, close/exit | xterm |
+| `frontend/.../anth-terminal.ts` | xterm rendering, keys, resize, local history | route or wire format |
 
 This mirrors what is already there: `poll.rs` owns *when*, `sse.rs` owns
 *framing*, `stream.rs` owns *repetition*. Same idea applied to a duplex channel.
@@ -94,7 +102,8 @@ This mirrors what is already there: `poll.rs` owns *when*, `sse.rs` owns
 Text frames carrying JSON, with terminal bytes base64-encoded. Not binary frames:
 one code path for control and data keeps the client simple, and the size is
 irrelevant next to the round trip. The encoding is stated once, in
-`protocol.rs`, and the frontend has a single decoder.
+`terminal/web.rs`, and the frontend has a single decoder in
+`lib/terminal/protocol.ts`.
 
 ```jsonc
 // client -> server
@@ -124,6 +133,10 @@ Decisions worth arguing about:
 
 ### Auth
 
+> Not implemented yet. The current route ignores `terminal.token` and accepts
+> any browser that can reach the port. The rest of this section is the intended
+> design.
+
 `terminal.token` in the config file. Empty or absent means the route is
 **disabled** and answers `404`, not `403`: a disabled feature should not
 advertise itself. When set, the token arrives as a query parameter on the
@@ -143,22 +156,27 @@ token, private network" and I would say so in the docs rather than imply more.
 
 - One PTY per WebSocket. Closing the socket kills the process group; a client
   that vanishes must not leave a shell running.
-- **A global cap** (config `terminal.max_sessions`, default 4). This is the
+- A global cap (config `terminal.max_sessions`, default 4). This is the
   lesson from the SSE review, applied before it bites: unbounded per-client
   resources are a bug waiting for a retry loop.
-- Idle timeout (default 30 min, configurable) closes an abandoned session.
-- Env is scrubbed: the shell inherits a minimal environment, not the panel's.
-- `SIGWINCH` on resize, so `vim`/`htop` behave.
+- An idle timeout is still pending.
+- Env is scrubbed: the shell inherits a minimal environment (`TERM`, `PATH`,
+  `HOME`, `LANG`, `LC_ALL`) rather than the panel's.
+- `SIGWINCH` on resize, so `vim`/`htop`/`btop` behave.
 - Child exit is observed, not polled: `exit` carries the real code.
 
 ### Frontend
 
 - `@xterm/xterm` 6.0.0 plus `@xterm/addon-fit`. Both are small and are the
   standard; a hand-rolled emulator is not worth writing.
-- `terminal-view.ts` is a Lit element like the rest; it owns the `<div>` xterm
-  mounts into and nothing else.
-- Reconnect with exponential backoff **only for network drops**, not after
-  `exit`. Replaying a dead session is not a feature.
+- `src/components/anth-terminal.ts` is a Lit element like the rest; it owns the
+  xterm instance, the window chrome, resize handling and a local Up/Down
+  command history on the normal buffer. Full-screen programs keep their arrows.
+- `src/lib/terminal/websocket-transport.ts` implements the transport interface
+  the component consumes; `src/lib/ws/json-websocket.ts` is the generic,
+  terminal-agnostic JSON WebSocket layer.
+- Reconnect with exponential backoff is **not implemented yet**. When it lands,
+  it should apply only to network drops, not after `exit`.
 - xterm is loaded lazily (`import()`), so the panel's initial bundle does not pay
   for it.
 
@@ -168,16 +186,14 @@ token, private network" and I would say so in the docs rather than imply more.
 socket_path = "/var/tmp/anth.sock"
 
 [terminal]
-enabled = false          # explicit opt-in; route 404s while false
-token = ""               # required when enabled
 shell = "/bin/sh"
+token = ""               # reserved for the auth layer; not enforced yet
 max_sessions = 4
-idle_timeout = "30m"
 ```
 
 `Config` uses `#[serde(default, deny_unknown_fields)]`, so a new optional table
-keeps every existing config valid. `enabled = false` by default means this
-feature cannot turn itself on.
+keeps every existing config valid. An `enabled` flag and idle timeout remain
+proposals; only `shell`, `token` and `max_sessions` exist today.
 
 ## Testing
 
@@ -187,26 +203,25 @@ The project's convention is real code paths, no mocks. For a PTY that means:
   write `echo hi\n`, read until `hi` appears. Guard with `#[cfg(unix)]`.
 - Real HTTP upgrade against a bound listener, then a real WebSocket client
   (`tokio-tungstenite`, already in the tree via `axum/ws`) — not a fake socket.
-- Cases that must fail loudly: disabled route, wrong token, session cap reached,
-  oversized frame, resize with absurd dimensions. Each asserts a specific
-  status or message, not just "an error".
+- Cases that must fail loudly: invalid query, daemon unavailable, session cap
+  reached, oversized frame, malformed message, resize with absurd dimensions.
+  Each asserts a specific status or message, not just "an error". Auth rejection
+  tests land with the auth layer.
 - One test that closes the socket and then checks the child is gone, because
   leaking shells across a reconnect is the failure this design exists to avoid.
 
-## What I would build, in order
+## Implementation order used
 
-1. `terminal/protocol.rs` + tests. No I/O, no PTY: just messages, limits,
-   parsing. Cheapest to review and it pins the contract.
+1. `anth-proto` terminal variants and base64 helpers, with wire tests.
 2. `terminal/session.rs` behind the `Session` trait, tested against a real
    `/bin/sh`.
-3. `terminal/auth.rs` and the route, with `enabled = false` by default and the
-   rejection tests.
-4. The WebSocket pump: input, output, resize, exit, cap, idle timeout.
-5. Frontend: `ws-client.ts`, `xterm-adapter.ts`, `terminal-view.ts`, lazy load.
-6. Docs: `docs/web-terminal.md`, `docs/api-endpoints.md` pointer, README threat
-   note, `AGENTS.md` layout update.
+3. `ws.rs` generic JSON/WebSocket wrapper and `terminal/web.rs` message mapping.
+4. The WebSocket bridge: open, input, output, resize, exit, error and cleanup.
+5. Frontend: `json-websocket.ts`, `protocol.ts`, `websocket-transport.ts`,
+   `anth-terminal.ts` and lazy xterm loading.
+6. Docs: `docs/terminal.md`, `docs/api-endpoints.md`, README and `AGENTS.md`.
 
-Each step compiles and its tests pass before the next one starts.
+Authentication, idle timeout and automatic reconnect are follow-ups.
 
 ## Open questions for you
 

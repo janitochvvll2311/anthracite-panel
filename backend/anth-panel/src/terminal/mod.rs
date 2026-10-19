@@ -7,7 +7,7 @@
 pub mod auth;
 pub mod registry;
 pub mod session;
-pub mod web;
+pub(crate) mod web;
 
 pub use auth::{Verdict, check, constant_time_eq};
 pub use registry::{OpenError, Output, Sessions};

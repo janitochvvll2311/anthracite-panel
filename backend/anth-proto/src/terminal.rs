@@ -45,6 +45,12 @@ impl TerminalSize {
     }
 }
 
+/// Size used when a client does not state one.
+///
+/// Shared by the daemon, the CLI and the browser route so their defaults cannot
+/// drift apart.
+pub const DEFAULT_TERMINAL_SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
+
 /// Arguments for opening a session. Kept in a struct so the variant stays one
 /// line in the tagged envelope and can grow without changing the wire shape.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]

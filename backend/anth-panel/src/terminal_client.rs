@@ -10,19 +10,18 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anth_proto::{AnthReader, AnthWriter, Request, Response, TerminalOpenArgs, TerminalSize};
+use anth_proto::{
+    AnthReader, AnthWriter, DEFAULT_TERMINAL_SIZE, Request, Response, TerminalOpenArgs,
+    TerminalSize,
+};
 use tokio::io::AsyncReadExt;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
 use crate::cli::TerminalArgs;
 
-/// Size used when the local terminal reports none.
-const DEFAULT_COLS: u16 = 80;
-const DEFAULT_ROWS: u16 = 24;
-
 /// The size a session should start with: explicit flags first, then the local
-/// terminal's size, then the default.
+/// terminal's size, then the shared default.
 pub fn resolve_size(args: &TerminalArgs) -> Result<TerminalSize, String> {
     resolve_size_from(args, terminal_size())
 }
@@ -35,11 +34,11 @@ pub fn resolve_size_from(
     let cols = args
         .cols
         .or(detected.map(|(c, _)| c))
-        .unwrap_or(DEFAULT_COLS);
+        .unwrap_or(DEFAULT_TERMINAL_SIZE.cols);
     let rows = args
         .rows
         .or(detected.map(|(_, r)| r))
-        .unwrap_or(DEFAULT_ROWS);
+        .unwrap_or(DEFAULT_TERMINAL_SIZE.rows);
     let size = TerminalSize { cols, rows };
     if !size.is_sane() {
         return Err(format!(

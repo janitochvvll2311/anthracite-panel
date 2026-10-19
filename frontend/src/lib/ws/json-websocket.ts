@@ -13,22 +13,17 @@ export type JsonWebSocketState =
   | 'closing'
   | 'closed'
 
-export interface JsonWebSocketOptions<Tx, Rx> {
+export interface JsonWebSocketOptions<Rx> {
   /** Absolute URL, or a function evaluated on every connect. */
   url: string | (() => string)
-  protocols?: string | string[]
-  serialize?: (message: Tx) => string
   deserialize?: (data: string) => Rx
-  onOpen?: () => void
   onMessage?: (message: Rx) => void
   onClose?: (event: CloseEvent) => void
-  onSocketError?: (event: Event) => void
   onMessageError?: (error: Error) => void
-  onStateChange?: (state: JsonWebSocketState) => void
 }
 
 export class JsonWebSocketTransport<Tx, Rx = unknown> {
-  private readonly options: JsonWebSocketOptions<Tx, Rx>
+  private readonly options: JsonWebSocketOptions<Rx>
   private socket?: WebSocket
   private currentState: JsonWebSocketState = 'idle'
   private connectPromise?: Promise<void>
@@ -37,7 +32,7 @@ export class JsonWebSocketTransport<Tx, Rx = unknown> {
     reject: (error: Error) => void
   }
 
-  constructor(options: JsonWebSocketOptions<Tx, Rx>) {
+  constructor(options: JsonWebSocketOptions<Rx>) {
     this.options = options
   }
 
@@ -65,7 +60,7 @@ export class JsonWebSocketTransport<Tx, Rx = unknown> {
 
       let socket: WebSocket
       try {
-        socket = new WebSocket(url, this.options.protocols)
+        socket = new WebSocket(url)
       } catch (error) {
         this.failConnect(error instanceof Error ? error : new Error(String(error)))
         return
@@ -77,7 +72,6 @@ export class JsonWebSocketTransport<Tx, Rx = unknown> {
         if (this.socket !== socket) return
         this.pendingConnect = undefined
         this.setState('open')
-        this.options.onOpen?.()
         resolve()
       }
 
@@ -102,11 +96,6 @@ export class JsonWebSocketTransport<Tx, Rx = unknown> {
         }
       }
 
-      socket.onerror = (event) => {
-        if (this.socket !== socket) return
-        this.options.onSocketError?.(event)
-      }
-
       socket.onclose = (event) => {
         if (this.socket !== socket) return
         this.socket = undefined
@@ -125,9 +114,7 @@ export class JsonWebSocketTransport<Tx, Rx = unknown> {
       throw new Error('WebSocket is not open')
     }
 
-    const data = this.options.serialize
-      ? this.options.serialize(message)
-      : JSON.stringify(message)
+    const data = JSON.stringify(message)
     this.socket.send(data)
   }
 
@@ -152,6 +139,5 @@ export class JsonWebSocketTransport<Tx, Rx = unknown> {
   private setState(state: JsonWebSocketState): void {
     if (this.currentState === state) return
     this.currentState = state
-    this.options.onStateChange?.(state)
   }
 }

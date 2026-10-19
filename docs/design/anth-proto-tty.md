@@ -1,6 +1,8 @@
 # Making `anth-proto` carry a TTY
 
-Status: proposal, not implemented. Branch `feat/web-terminal`.
+Status: implemented on `feat/web-terminal`, using **Option 1** (base64 inside the
+existing line protocol), not the Option 4 recommendation recorded below. The
+recommendation is left as the design history that led to the final choice.
 
 This document answers one question: what has to change in `anth-proto` for a
 terminal to travel over the Unix socket. Everything below was measured against

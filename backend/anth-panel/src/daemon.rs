@@ -13,7 +13,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anth_proto::{AnthReader, AnthWriter, Request, Response, TerminalSize};
+use anth_proto::{AnthReader, AnthWriter, DEFAULT_TERMINAL_SIZE, Request, Response};
 use futures::{Stream, StreamExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
@@ -22,9 +22,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::config::Config;
 use crate::hostinfo;
 use crate::terminal::{OpenError, Output, Sessions};
-
-/// Size used when a client opens a terminal without stating one.
-const DEFAULT_TERMINAL_SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
 
 /// One session's output as a stream tagged with its id.
 type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;

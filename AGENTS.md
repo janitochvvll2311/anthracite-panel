@@ -75,8 +75,6 @@ cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu
 ```
 
 There is no CI configuration, no `rustfmt.toml` and no `clippy.toml` — defaults apply.
-`cargo clippy` reports two `needless_borrows_for_generic_args` warnings in
-`anth_panel::daemon::serve`; they predate the current layout and are unrelated to it.
 
 ### The backend compiles without a frontend build
 

@@ -10,7 +10,8 @@ pub mod b64;
 pub mod terminal;
 
 pub use terminal::{
-    TerminalOpenArgs, TerminalOpened, TerminalSize, MAX_TERMINAL_CHUNK, MAX_TERMINAL_INPUT,
+    TerminalOpenArgs, TerminalOpened, TerminalSize, DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK,
+    MAX_TERMINAL_INPUT,
 };
 
 /// Largest line accepted from a peer, in bytes.

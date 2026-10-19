@@ -189,6 +189,26 @@ async fn a_websocket_runs_a_shell_and_resizes_it() {
 }
 
 #[tokio::test]
+async fn the_default_size_is_80x24() {
+    let path = unique_socket("default-size");
+    let config = config_at(&path);
+    let daemon = start_daemon(config.clone(), &path).await;
+    let (address, api) = start_api(config).await;
+
+    let mut socket = connect(address, "").await;
+    let ready = next_message(&mut socket).await;
+
+    assert_eq!(ready["type"], "ready");
+    assert_eq!(ready["cols"], 80);
+    assert_eq!(ready["rows"], 24);
+
+    let _ = socket.close(None).await;
+    api.abort();
+    daemon.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
 async fn a_daemon_that_is_not_listening_produces_an_error_frame() {
     let path = unique_socket("missing");
     let _ = std::fs::remove_file(&path);

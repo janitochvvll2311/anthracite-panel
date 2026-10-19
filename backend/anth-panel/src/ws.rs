@@ -11,10 +11,10 @@ use axum::extract::ws::{Message, WebSocket};
 use futures::SinkExt;
 use serde::{Serialize, de::DeserializeOwned};
 
-pub type WsResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+pub(crate) type WsResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 /// A WebSocket that sends and receives JSON text frames.
-pub struct JsonWebSocket {
+pub(crate) struct JsonWebSocket {
     socket: WebSocket,
     max_message_size: usize,
 }

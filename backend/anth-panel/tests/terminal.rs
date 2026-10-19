@@ -71,6 +71,22 @@ fn a_real_shell_runs_and_reports_the_pty_size() {
 }
 
 #[test]
+fn the_shell_gets_a_utf8_locale() {
+    let (mut session, mut reader) = PtySession::spawn("/bin/sh", size(80, 24)).unwrap();
+
+    // `btop` and friends refuse to start without a UTF-8 locale. The echo of
+    // this command contains the literal variables, so match on the value.
+    session
+        .write(b"printf '%s:%s\\n' \"$LANG\" \"$LC_ALL\"\n")
+        .unwrap();
+    let out = read_until(reader.as_mut(), "C.UTF-8:C.UTF-8", Duration::from_secs(10));
+    assert!(
+        out.contains("C.UTF-8:C.UTF-8"),
+        "expected a UTF-8 locale, got: {out:?}"
+    );
+}
+
+#[test]
 fn terminal_output_carries_bytes_that_are_not_utf8() {
     let (mut session, mut reader) = PtySession::spawn("/bin/sh", size(80, 24)).unwrap();
 
