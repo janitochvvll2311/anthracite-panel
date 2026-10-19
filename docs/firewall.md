@@ -56,6 +56,9 @@ control = true
 The daemon runs `nft` directly. Grant the nft binary `CAP_NET_ADMIN`, run the
 daemon as root, or use the container capability described below.
 
+Older configs that still contain `sudo` or `sudo_password` keep loading: both
+keys are accepted for compatibility, ignored at runtime and never written back.
+
 Changing the file requires a daemon restart.
 
 Debug builds (`cargo run`) bootstrap a missing config with `control = true` so

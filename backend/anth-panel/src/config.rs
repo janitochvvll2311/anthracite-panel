@@ -102,6 +102,14 @@ pub struct FirewallConfig {
     /// Whether the daemon accepts rule changes. Off by default: the panel has
     /// no authentication yet and firewall changes can disconnect the host.
     pub control: bool,
+
+    /// Legacy key from the removed sudo support. Accepted so old configs keep
+    /// loading, ignored at runtime and never written back.
+    #[serde(default, skip_serializing, rename = "sudo")]
+    _legacy_sudo: bool,
+    /// Legacy key from the removed sudo support, handled like `_legacy_sudo`.
+    #[serde(default, skip_serializing, rename = "sudo_password")]
+    _legacy_sudo_password: Option<String>,
 }
 
 /// Filesystem explorer settings.
@@ -290,6 +298,23 @@ mod tests {
         if cfg!(debug_assertions) {
             assert!(Config::dev_default().firewall.control);
         }
+    }
+
+    #[test]
+    fn legacy_sudo_keys_are_accepted_and_never_written_back() {
+        let config = Config::from_toml(
+            r#"
+[firewall]
+control = true
+sudo = true
+sudo_password = "secret"
+"#,
+        )
+        .unwrap();
+
+        assert!(config.firewall.control);
+        let text = config.to_toml().unwrap();
+        assert!(!text.contains("sudo"), "{text}");
     }
 
     #[test]

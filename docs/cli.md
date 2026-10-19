@@ -64,7 +64,10 @@ max_preview_bytes = 1048576
 max_upload_bytes = 67108864
 ```
 
-Unknown keys are rejected rather than ignored, so a typo fails loudly. A
+Unknown keys are rejected rather than ignored, so a typo fails loudly. The
+removed `firewall.sudo` and `firewall.sudo_password` keys are the exception:
+they are accepted for compatibility, ignored and omitted when the config is
+written. A
 relative or missing file is not fatal for serving subcommands: they write a
 default config when it cannot be loaded. Client subcommands (`echo`,
 `host-info`, `process`, `network`, `firewall`, `file`) never create the file — they use

@@ -194,6 +194,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`,
   `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
   `process.control = false`, `network.control = false`, `firewall.control = false`,
+  legacy `firewall.sudo`/`sudo_password` keys are accepted and ignored,
   `files.root = "/"`, `files.write = false`, `max_entries = 5000`,
   `max_preview_bytes = 1 MiB` and
   `max_upload_bytes = 64 MiB`. `auto` resolves `$SHELL`, then the account's
