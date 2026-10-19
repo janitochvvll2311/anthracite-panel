@@ -4,6 +4,7 @@ import type {
   NetworkRow,
   NetworkSnapshot,
 } from './network-client'
+import { formatBytes } from '../format'
 
 export type NetworkSortKey =
   | 'name'
@@ -16,20 +17,7 @@ export type NetworkSortKey =
 
 export type NetworkSortDirection = 'asc' | 'desc'
 
-const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
-
-/** Formats a byte count with binary units. */
-export function formatBytes(bytes: number): string {
-  let value = Math.max(0, Number.isFinite(bytes) ? bytes : 0)
-  let unit = 0
-  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
-    value /= 1024
-    unit += 1
-  }
-
-  if (unit === 0) return `${Math.round(value)} B`
-  return `${value.toFixed(1)} ${BYTE_UNITS[unit]}`
-}
+export { formatBytes } from '../format'
 
 /** Formats a per-second rate; `null` means there is no prior sample yet. */
 export function formatRate(bytesPerSecond: number | null): string {

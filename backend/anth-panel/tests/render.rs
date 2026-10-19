@@ -1,10 +1,11 @@
 use anth_panel::render::{
     format_kib, format_uptime, render_file_listing, render_host_info, render_network_snapshot,
-    render_process_snapshot,
+    render_process_snapshot, render_response,
 };
 use anth_proto::{
-    HostInfo, LoadAverage, MemoryInfo, NetworkAddress, NetworkAddressFamily, NetworkInterface,
-    NetworkSnapshot, OsInfo, ProcessInfo, ProcessSnapshot,
+    HostInfo, LoadAverage, MemoryInfo, NetworkAddress, NetworkAddressFamily, NetworkError,
+    NetworkErrorKind, NetworkInterface, NetworkSnapshot, OsInfo, ProcessInfo, ProcessSnapshot,
+    Response,
 };
 
 fn sample() -> HostInfo {
@@ -372,4 +373,28 @@ fn render_network_snapshot_shows_addresses_speed_and_traffic() {
     ] {
         assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
     }
+}
+
+#[test]
+fn render_response_uses_the_shared_cli_prefixes() {
+    assert_eq!(
+        render_response(&Response::Ok {
+            message: "done".to_string(),
+        }),
+        "[OK] done"
+    );
+    assert_eq!(
+        render_response(&Response::NetworkStateChanged {
+            name: "eth0".to_string(),
+            up: false,
+        }),
+        "[OK] brought eth0 down"
+    );
+    assert_eq!(
+        render_response(&Response::NetworkError(NetworkError::new(
+            NetworkErrorKind::Protected,
+            "loopback is protected",
+        ))),
+        "[ERROR] loopback is protected"
+    );
 }

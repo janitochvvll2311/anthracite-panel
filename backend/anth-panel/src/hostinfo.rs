@@ -6,6 +6,8 @@ use std::path::Path;
 
 use anth_proto::{HostInfo, LoadAverage, MemoryInfo, OsInfo};
 
+use crate::text::read_trimmed;
+
 const HOSTNAME: &str = "/proc/sys/kernel/hostname";
 const OS_RELEASE: &str = "/etc/os-release";
 const OS_RELEASE_FALLBACK: &str = "/usr/lib/os-release";
@@ -17,15 +19,8 @@ const MEMINFO: &str = "/proc/meminfo";
 
 const UNKNOWN: &str = "unknown";
 
-fn read_trimmed(path: &str) -> Option<String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty())
-}
-
 fn read_first(paths: &[&str]) -> Option<String> {
-    paths.iter().find_map(|path| read_trimmed(path))
+    paths.iter().find_map(|path| read_trimmed(*path))
 }
 
 /// Strips the optional surrounding quotes of an `os-release` value and resolves
@@ -221,7 +216,7 @@ pub fn collect() -> HostInfo {
 /// exercise the parsing paths against fixture files.
 pub fn collect_from(root: impl AsRef<Path>) -> HostInfo {
     let root = root.as_ref();
-    let read = |relative: &str| read_trimmed(&root.join(relative).to_string_lossy());
+    let read = |relative: &str| read_trimmed(root.join(relative));
 
     let (os_name, os_version) = read("etc/os-release")
         .map(|text| parse_os_release(&text))

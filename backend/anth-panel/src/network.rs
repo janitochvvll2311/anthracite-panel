@@ -22,6 +22,8 @@ use anth_proto::{
     NetworkSnapshot,
 };
 
+use crate::text::read_trimmed;
+
 const SYS_CLASS_NET: &str = "sys/class/net";
 const PROC_NET_DEV: &str = "proc/net/dev";
 
@@ -95,7 +97,7 @@ fn check_state_change(
         ));
     }
 
-    let flags = read_text(&root.join(SYS_CLASS_NET).join(name).join("flags"))
+    let flags = read_trimmed(root.join(SYS_CLASS_NET).join(name).join("flags"))
         .and_then(|text| parse_flags(&text))
         .unwrap_or(0);
     if !up && flags & (libc::IFF_LOOPBACK as u32) != 0 {
@@ -151,29 +153,29 @@ fn read_interfaces(
         }
 
         let base = entry.path();
-        let flags = read_text(&base.join("flags"))
+        let flags = read_trimmed(base.join("flags"))
             .and_then(|text| parse_flags(&text))
             .unwrap_or(0);
         let traffic = counters.get(&name).copied().unwrap_or_default();
 
         interfaces.push(NetworkInterface {
             name,
-            index: read_text(&base.join("ifindex"))
+            index: read_trimmed(base.join("ifindex"))
                 .and_then(|text| text.parse().ok())
                 .unwrap_or(0),
-            state: read_text(&base.join("operstate")).unwrap_or_else(|| "unknown".to_string()),
+            state: read_trimmed(base.join("operstate")).unwrap_or_else(|| "unknown".to_string()),
             up: flags & (libc::IFF_UP as u32) != 0,
             running: flags & (libc::IFF_RUNNING as u32) != 0,
             loopback: flags & (libc::IFF_LOOPBACK as u32) != 0,
-            mac: read_text(&base.join("address")).unwrap_or_default(),
-            mtu: read_text(&base.join("mtu"))
+            mac: read_trimmed(base.join("address")).unwrap_or_default(),
+            mtu: read_trimmed(base.join("mtu"))
                 .and_then(|text| text.parse().ok())
                 .unwrap_or(0),
-            speed_mbps: read_text(&base.join("speed"))
+            speed_mbps: read_trimmed(base.join("speed"))
                 .and_then(|text| text.parse::<i64>().ok())
                 .filter(|speed| *speed > 0)
                 .map(|speed| speed as u64),
-            duplex: read_text(&base.join("duplex"))
+            duplex: read_trimmed(base.join("duplex"))
                 .filter(|duplex| duplex != "unknown" && !duplex.is_empty()),
             addresses: Vec::new(),
             rx_bytes: traffic.rx_bytes,
@@ -188,13 +190,6 @@ fn read_interfaces(
     }
 
     interfaces
-}
-
-fn read_text(path: &Path) -> Option<String> {
-    fs::read_to_string(path)
-        .ok()
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty())
 }
 
 fn parse_flags(text: &str) -> Option<u32> {

@@ -5,6 +5,9 @@
  * and alternative backends can inject their own implementation.
  */
 
+import { responseError } from '../http'
+import type { HttpClientOptions } from '../http'
+
 export type FileKind = 'file' | 'directory' | 'symlink' | 'other'
 
 export interface FileEntry {
@@ -53,10 +56,7 @@ export interface FileClient {
   ) => Promise<FileWriteResult>
 }
 
-export interface HttpFileClientOptions {
-  baseUrl?: string
-  fetchImpl?: typeof fetch
-}
+export interface HttpFileClientOptions extends HttpClientOptions {}
 
 export class HttpFileClient implements FileClient {
   private readonly baseUrl: string
@@ -160,17 +160,4 @@ export class HttpFileClient implements FileClient {
     const params = new URLSearchParams({ path, ...extra })
     return `${this.baseUrl}${route}?${params.toString()}`
   }
-}
-
-async function responseError(response: Response): Promise<Error> {
-  let detail = `${response.status} ${response.statusText}`.trim()
-
-  try {
-    const body = (await response.json()) as { error?: unknown }
-    if (typeof body.error === 'string') detail = body.error
-  } catch {
-    // The body was not JSON; keep the status text.
-  }
-
-  return new Error(detail)
 }

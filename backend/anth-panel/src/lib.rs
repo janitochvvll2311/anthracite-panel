@@ -14,6 +14,7 @@ pub mod sse;
 pub mod stream;
 pub mod terminal;
 pub mod terminal_client;
+pub(crate) mod text;
 pub(crate) mod ws;
 
 pub use api::{ApiError, get_healthz, get_host_info, post_echo, router, watch_host_info};
@@ -25,5 +26,6 @@ pub use hostinfo::collect as collect_host_info;
 pub use network::collect as collect_network;
 pub use render::{
     render_file_listing, render_host_info, render_network_snapshot, render_process_snapshot,
+    render_response,
 };
 pub use stream::{DEFAULT_INTERVAL, Frames, parse_interval};

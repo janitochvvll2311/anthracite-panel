@@ -61,57 +61,6 @@ async fn serve_run(config: Config, args: &EndpointArgs) -> Result<ExitCode, Stri
     result.map(|_| ExitCode::SUCCESS)
 }
 
-/// How a response becomes one printed frame.
-fn render_frame(response: &Response) -> String {
-    match response {
-        Response::HostInfo(info) => anth_panel::render_host_info(info),
-        Response::ProcessSnapshot(snapshot) => anth_panel::render_process_snapshot(snapshot),
-        Response::ProcessSignalled { pid, signal } => {
-            format!("[OK] sent {signal} to process {pid}")
-        }
-        Response::NetworkSnapshot(snapshot) => anth_panel::render_network_snapshot(snapshot),
-        Response::NetworkStateChanged { name, up } => {
-            let state = if *up { "up" } else { "down" };
-            format!("[OK] brought {name} {state}")
-        }
-        Response::NetworkError(error) => format!("[ERROR] {}", error.detail),
-        Response::FileListing(listing) => anth_panel::render_file_listing(listing),
-        Response::FileChunk(chunk) => format!(
-            "[ERROR] unexpected file chunk for {} ({} bytes)",
-            chunk.path,
-            chunk.bytes.len()
-        ),
-        Response::FileWritten(written) => {
-            format!("[OK] wrote {} ({} bytes)", written.path, written.size)
-        }
-        Response::FileCreated { path } => format!("[OK] created {path}"),
-        Response::FileDeleted { path } => format!("[OK] deleted {path}"),
-        Response::FileRenamed { from, to } => format!("[OK] renamed {from} to {to}"),
-        Response::FileWriteStarted { id } => format!("[OK] upload {id} started"),
-        Response::FileWriteAccepted { id, received } => {
-            format!("[OK] upload {id} received {received} bytes")
-        }
-        Response::FileWriteAborted { id } => format!("[OK] upload {id} aborted"),
-        Response::FileError(error) => format!("[ERROR] {}", error.detail),
-        Response::Ok { message } => format!("[OK] {message}"),
-        Response::Error { detail } => format!("[ERROR] {detail}"),
-        // A CLI subcommand never opens a terminal, so these are only reachable
-        // if a daemon sends frames nobody asked for.
-        Response::TerminalOpened(opened) => {
-            format!("[ERROR] unexpected terminal session {}", opened.id)
-        }
-        Response::TerminalOutput { id, bytes } => {
-            format!(
-                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
-                bytes.len()
-            )
-        }
-        Response::TerminalExited { id, status } => {
-            format!("[ERROR] unexpected terminal exit for session {id} (status {status})")
-        }
-    }
-}
-
 /// How often a subcommand repeats, or `None` to read once. A subcommand opts
 /// into streaming by answering `Some` here; nothing else needs to change.
 fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
@@ -136,19 +85,23 @@ fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
     }
 }
 
-fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
+fn confirm_action(
+    yes: bool,
+    prompt: impl FnOnce() -> String,
+    refusal: &str,
+) -> Result<bool, String> {
     use std::io::{IsTerminal, Write};
 
-    if args.yes {
+    if yes {
         return Ok(true);
     }
 
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
-        return Err("refusing to signal without --yes when stdin is not a terminal".to_string());
+        return Err(refusal.to_string());
     }
 
-    print!("Send {} to process {}? [y/N] ", args.signal, args.pid);
+    print!("{}", prompt());
     let _ = std::io::stdout().flush();
 
     let mut answer = String::new();
@@ -160,70 +113,41 @@ fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
+}
+
+fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || format!("Send {} to process {}? [y/N] ", args.signal, args.pid),
+        "refusing to signal without --yes when stdin is not a terminal",
+    )
 }
 
 fn confirm_network_state(args: &NetworkStateArgs, up: bool) -> Result<bool, String> {
-    use std::io::{IsTerminal, Write};
-
-    if args.yes {
-        return Ok(true);
-    }
-
-    let stdin = std::io::stdin();
-    if !stdin.is_terminal() {
-        return Err(
-            "refusing to change a network interface without --yes when stdin is not a terminal"
-                .to_string(),
-        );
-    }
-
     let action = if up { "Bring up" } else { "Bring down" };
-    print!(
-        "{action} interface `{}`? This can disconnect the host. [y/N] ",
-        args.name
-    );
-    let _ = std::io::stdout().flush();
-
-    let mut answer = String::new();
-    stdin
-        .read_line(&mut answer)
-        .map_err(|error| format!("failed to read confirmation: {error}"))?;
-
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    confirm_action(
+        args.yes,
+        || {
+            format!(
+                "{action} interface `{}`? This can disconnect the host. [y/N] ",
+                args.name
+            )
+        },
+        "refusing to change a network interface without --yes when stdin is not a terminal",
+    )
 }
 
 fn confirm_delete(args: &FileDeleteArgs) -> Result<bool, String> {
-    use std::io::{IsTerminal, Write};
-
-    if args.yes {
-        return Ok(true);
-    }
-
-    let stdin = std::io::stdin();
-    if !stdin.is_terminal() {
-        return Err("refusing to delete without --yes when stdin is not a terminal".to_string());
-    }
-
     let verb = if args.recursive {
         "Recursively delete"
     } else {
         "Delete"
     };
-    print!("{verb} `{}`? [y/N] ", args.path);
-    let _ = std::io::stdout().flush();
-
-    let mut answer = String::new();
-    stdin
-        .read_line(&mut answer)
-        .map_err(|error| format!("failed to read confirmation: {error}"))?;
-
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
+    confirm_action(
+        args.yes,
+        || format!("{verb} `{}`? [y/N] ", args.path),
+        "refusing to delete without --yes when stdin is not a terminal",
+    )
 }
 
 fn client_config(config_path: &str) -> Config {
@@ -540,7 +464,7 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
             Path::new(&config.socket_path),
             &request,
             interval,
-            render_frame,
+            anth_panel::render_response,
         )
         .await,
     )

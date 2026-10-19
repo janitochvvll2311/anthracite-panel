@@ -157,8 +157,7 @@ async fn ws_terminal(
 pub async fn get_processes(
     State(state): State<AppState>,
 ) -> Result<Json<ProcessSnapshot>, ApiError> {
-    let response = exchange(&state, &Request::ProcessList).await?;
-    process_snapshot_json(response).map(Json)
+    get_snapshot(&state, Request::ProcessList, process_snapshot_json).await
 }
 
 /// `GET /api/processes/watch?interval=2s` — a process snapshot per interval as SSE.
@@ -166,31 +165,14 @@ pub async fn watch_processes(
     State(state): State<AppState>,
     query: Result<Query<WatchQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
-
-    let period = match query.interval.as_deref() {
-        None => stream::DEFAULT_INTERVAL,
-        Some(raw) => stream::parse_interval(raw).map_err(ApiError::bad_request)?,
-    };
-
-    let client = state
-        .create_client()
-        .await
-        .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "daemon unavailable"))?;
-
-    let client = Arc::new(tokio::sync::Mutex::new(client));
-    let items = poll::stream(period, move || {
-        let client = Arc::clone(&client);
-        async move {
-            let mut client = client.lock().await;
-            query_command(&mut client, &Request::ProcessList)
-                .await
-                .and_then(process_snapshot_json)
-                .map_err(error_detail)
-        }
-    });
-
-    Ok(SseStream::new("processes").stream(items))
+    watch_snapshots(
+        state,
+        query,
+        "processes",
+        Request::ProcessList,
+        process_snapshot_json,
+    )
+    .await
 }
 
 /// Body of `POST /api/processes/{pid}/signal`.
@@ -221,17 +203,13 @@ pub async fn post_process_signal(
             Ok(Json(serde_json::json!({ "pid": pid, "signal": signal })))
         }
         CommandResponse::Error { detail } => Err(ApiError::bad_request(detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        other => Err(unexpected_response(other)),
     }
 }
 
 /// `GET /api/network` — one network-interface snapshot.
 pub async fn get_network(State(state): State<AppState>) -> Result<Json<NetworkSnapshot>, ApiError> {
-    let response = exchange(&state, &Request::NetworkList).await?;
-    network_snapshot_json(response).map(Json)
+    get_snapshot(&state, Request::NetworkList, network_snapshot_json).await
 }
 
 /// `GET /api/network/watch?interval=2s` — interface snapshots as SSE.
@@ -239,31 +217,14 @@ pub async fn watch_network(
     State(state): State<AppState>,
     query: Result<Query<WatchQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
-
-    let period = match query.interval.as_deref() {
-        None => stream::DEFAULT_INTERVAL,
-        Some(raw) => stream::parse_interval(raw).map_err(ApiError::bad_request)?,
-    };
-
-    let client = state
-        .create_client()
-        .await
-        .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "daemon unavailable"))?;
-
-    let client = Arc::new(tokio::sync::Mutex::new(client));
-    let items = poll::stream(period, move || {
-        let client = Arc::clone(&client);
-        async move {
-            let mut client = client.lock().await;
-            query_command(&mut client, &Request::NetworkList)
-                .await
-                .and_then(network_snapshot_json)
-                .map_err(error_detail)
-        }
-    });
-
-    Ok(SseStream::new("network").stream(items))
+    watch_snapshots(
+        state,
+        query,
+        "network",
+        Request::NetworkList,
+        network_snapshot_json,
+    )
+    .await
 }
 
 /// Body of `POST /api/network/{name}/state`.
@@ -295,11 +256,8 @@ pub async fn post_network_state(
             Ok(Json(serde_json::json!({ "name": name, "up": up })))
         }
         CommandResponse::NetworkError(error) => Err(network_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -325,15 +283,23 @@ fn network_api_error(error: NetworkError) -> ApiError {
     ApiError::new(status, error.detail)
 }
 
+fn gateway(detail: impl Into<String>) -> ApiError {
+    ApiError::new(StatusCode::BAD_GATEWAY, detail)
+}
+
+fn unexpected_response(response: CommandResponse) -> ApiError {
+    ApiError::new(
+        StatusCode::BAD_GATEWAY,
+        format!("unexpected daemon response: {response:?}"),
+    )
+}
+
 fn network_snapshot_json(response: CommandResponse) -> Result<NetworkSnapshot, ApiError> {
     match response {
         CommandResponse::NetworkSnapshot(snapshot) => Ok(snapshot),
         CommandResponse::NetworkError(error) => Err(network_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -382,11 +348,8 @@ pub async fn get_files(
     match exchange(&state, &Request::FileList { path }).await? {
         CommandResponse::FileListing(listing) => Ok(Json(listing)),
         CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -479,11 +442,8 @@ pub async fn post_file_mkdir(
     {
         CommandResponse::FileCreated { path } => Ok(Json(serde_json::json!({ "path": path }))),
         CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -508,11 +468,8 @@ pub async fn post_file_rename(
             Ok(Json(serde_json::json!({ "from": from, "to": to })))
         }
         CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -535,11 +492,8 @@ pub async fn post_file_delete(
     {
         CommandResponse::FileDeleted { path } => Ok(Json(serde_json::json!({ "path": path }))),
         CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -628,11 +582,8 @@ async fn query_file_chunk(
     {
         CommandResponse::FileChunk(chunk) => Ok(chunk),
         CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -659,13 +610,10 @@ async fn upload_stream(
         CommandResponse::FileWriteStarted { id } => id,
         CommandResponse::FileError(error) => return Err(file_api_error(error)),
         CommandResponse::Error { detail } => {
-            return Err(ApiError::new(StatusCode::BAD_GATEWAY, detail));
+            return Err(gateway(detail));
         }
         other => {
-            return Err(ApiError::new(
-                StatusCode::BAD_GATEWAY,
-                format!("unexpected daemon response: {other:?}"),
-            ));
+            return Err(unexpected_response(other));
         }
     };
 
@@ -710,11 +658,8 @@ async fn forward_upload(
     match query_command(client, &Request::FileWriteFinish { id }).await? {
         CommandResponse::FileWritten(written) => Ok(written),
         CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -730,11 +675,8 @@ async fn send_upload_chunk(client: &mut AnthClient, id: u32, bytes: &[u8]) -> Re
     {
         CommandResponse::FileWriteAccepted { .. } => Ok(()),
         CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -821,8 +763,7 @@ fn file_api_error(error: FileError) -> ApiError {
 
 /// `GET /api/host-info` — one snapshot.
 pub async fn get_host_info(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let response = exchange(&state, &Request::HostInfo).await?;
-    host_info_json(response).map(Json)
+    get_snapshot(&state, Request::HostInfo, host_info_json).await
 }
 
 /// `GET /api/echo` — one echo.
@@ -837,10 +778,7 @@ pub async fn post_echo(
     };
     match exchange(&state, &request).await? {
         CommandResponse::Ok { message } => Ok(Json(serde_json::json!({ "message": message }))),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        other => Err(unexpected_response(other)),
     }
 }
 
@@ -849,8 +787,31 @@ pub async fn watch_host_info(
     State(state): State<AppState>,
     query: Result<Query<WatchQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    watch_snapshots(state, query, "host-info", Request::HostInfo, host_info_json).await
+}
 
+/// Reads one snapshot and applies the endpoint's response mapper.
+async fn get_snapshot<T, F>(state: &AppState, request: Request, map: F) -> Result<Json<T>, ApiError>
+where
+    T: serde::Serialize,
+    F: FnOnce(CommandResponse) -> Result<T, ApiError>,
+{
+    map(exchange(state, &request).await?).map(Json)
+}
+
+/// Builds the common SSE response used by every snapshot endpoint.
+async fn watch_snapshots<T, F>(
+    state: AppState,
+    query: Result<Query<WatchQuery>, QueryRejection>,
+    event: &'static str,
+    request: Request,
+    map: F,
+) -> Result<impl IntoResponse, ApiError>
+where
+    T: serde::Serialize + Send + 'static,
+    F: Fn(CommandResponse) -> Result<T, ApiError> + Clone + Send + 'static,
+{
+    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
     let period = match query.interval.as_deref() {
         None => stream::DEFAULT_INTERVAL,
         Some(raw) => stream::parse_interval(raw).map_err(ApiError::bad_request)?,
@@ -863,18 +824,21 @@ pub async fn watch_host_info(
 
     // One socket for the whole stream, shared by successive reads.
     let client = Arc::new(tokio::sync::Mutex::new(client));
+    let request = Arc::new(request);
     let items = poll::stream(period, move || {
         let client = Arc::clone(&client);
+        let request = Arc::clone(&request);
+        let map = map.clone();
         async move {
             let mut client = client.lock().await;
-            query_command(&mut client, &Request::HostInfo)
+            query_command(&mut client, &request)
                 .await
-                .and_then(host_info_json)
+                .and_then(map)
                 .map_err(error_detail)
         }
     });
 
-    Ok(SseStream::new("host-info").stream(items))
+    Ok(SseStream::new(event).stream(items))
 }
 
 /// Sends one request and returns the daemon response, mapping failures to
@@ -894,37 +858,28 @@ async fn query_command(
     client
         .send_request(request)
         .await
-        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("send failed: {e}")))?;
+        .map_err(|e| gateway(format!("send failed: {e}")))?;
 
     match client.receive_response().await {
         Some(Ok(response)) => Ok(response),
         Some(Err(e)) => Err(ApiError::bad_request(format!("malformed response: {e}"))),
-        None => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            "daemon closed the connection",
-        )),
+        None => Err(gateway("daemon closed the connection")),
     }
 }
 
 fn host_info_json(response: CommandResponse) -> Result<Value, ApiError> {
     match response {
         CommandResponse::HostInfo(info) => Ok(Value::from(info.as_ref())),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response on a host-info route: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 
 fn process_snapshot_json(response: CommandResponse) -> Result<ProcessSnapshot, ApiError> {
     match response {
         CommandResponse::ProcessSnapshot(snapshot) => Ok(snapshot),
-        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
-        other => Err(ApiError::new(
-            StatusCode::BAD_GATEWAY,
-            format!("unexpected daemon response: {other:?}"),
-        )),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
     }
 }
 

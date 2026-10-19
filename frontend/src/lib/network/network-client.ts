@@ -5,6 +5,11 @@
  * different backend can implement the same interface.
  */
 
+import { responseError } from '../http'
+import { watchJson } from '../stream'
+import type { HttpStreamClientOptions } from '../http'
+import type { StreamConnectionStatus, StreamHandlers } from '../stream'
+
 export type NetworkAddressFamily = 'ipv4' | 'ipv6'
 
 export interface NetworkAddress {
@@ -47,18 +52,10 @@ export interface NetworkRow extends NetworkInterface {
   tx_rate: number | null
 }
 
-export type NetworkConnectionStatus =
-  | 'idle'
-  | 'connecting'
-  | 'live'
-  | 'error'
-  | 'closed'
+export type NetworkConnectionStatus = StreamConnectionStatus
 
-export interface NetworkHandlers {
-  onSnapshot: (snapshot: NetworkSnapshot) => void
-  onError?: (error: Error) => void
-  onStatus?: (status: NetworkConnectionStatus) => void
-}
+export interface NetworkHandlers
+  extends StreamHandlers<NetworkSnapshot> {}
 
 export interface NetworkClient {
   list: () => Promise<NetworkSnapshot>
@@ -66,11 +63,7 @@ export interface NetworkClient {
   setState: (name: string, up: boolean) => Promise<void>
 }
 
-export interface HttpNetworkClientOptions {
-  baseUrl?: string
-  fetchImpl?: typeof fetch
-  EventSourceImpl?: typeof EventSource
-}
+export interface HttpNetworkClientOptions extends HttpStreamClientOptions {}
 
 export class HttpNetworkClient implements NetworkClient {
   private readonly baseUrl: string
@@ -92,33 +85,14 @@ export class HttpNetworkClient implements NetworkClient {
   }
 
   watch(intervalMs: number, handlers: NetworkHandlers): () => void {
-    const interval = Math.max(10, Math.round(intervalMs))
-    const source = new this.EventSourceImpl(
-      `${this.baseUrl}/watch?interval=${interval}ms`,
-    )
-
-    handlers.onStatus?.('connecting')
-    source.onopen = () => handlers.onStatus?.('live')
-    source.addEventListener('network', (event) => {
-      try {
-        handlers.onSnapshot(
-          JSON.parse((event as MessageEvent<string>).data) as NetworkSnapshot,
-        )
-      } catch (error) {
-        handlers.onError?.(
-          error instanceof Error ? error : new Error(String(error)),
-        )
-      }
+    return watchJson({
+      baseUrl: this.baseUrl,
+      event: 'network',
+      intervalMs,
+      disconnectedMessage: 'network stream disconnected',
+      handlers,
+      EventSourceImpl: this.EventSourceImpl,
     })
-    source.onerror = () => {
-      handlers.onError?.(new Error('network stream disconnected'))
-      handlers.onStatus?.('error')
-    }
-
-    return () => {
-      source.close()
-      handlers.onStatus?.('closed')
-    }
   }
 
   async setState(name: string, up: boolean): Promise<void> {
@@ -136,17 +110,4 @@ export class HttpNetworkClient implements NetworkClient {
 
     if (!response.ok) throw await responseError(response)
   }
-}
-
-async function responseError(response: Response): Promise<Error> {
-  let detail = `${response.status} ${response.statusText}`.trim()
-
-  try {
-    const body = (await response.json()) as { error?: unknown }
-    if (typeof body.error === 'string') detail = body.error
-  } catch {
-    // The body was not JSON; keep the status text.
-  }
-
-  return new Error(detail)
 }

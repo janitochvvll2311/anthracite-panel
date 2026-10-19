@@ -1,6 +1,6 @@
 //! Rendering of host information as a bordered text table.
 
-use anth_proto::{FileKind, FileListing, HostInfo, NetworkSnapshot, ProcessSnapshot};
+use anth_proto::{FileKind, FileListing, HostInfo, NetworkSnapshot, ProcessSnapshot, Response};
 
 const TOP_LEFT: char = '┌';
 const TOP_RIGHT: char = '┐';
@@ -335,6 +335,61 @@ pub fn render_network_snapshot(snapshot: &NetworkSnapshot) -> String {
     }
 
     table.render()
+}
+
+/// Formats one daemon response as the text the CLI prints. Errors carry the
+/// same `[ERROR]` prefix as successful commands carry `[OK]`.
+pub fn render_response(response: &Response) -> String {
+    match response {
+        Response::Ok { message } => format!("[OK] {message}"),
+        Response::Error { detail } => format!("[ERROR] {detail}"),
+        Response::HostInfo(info) => render_host_info(info),
+        Response::ProcessSnapshot(snapshot) => render_process_snapshot(snapshot),
+        Response::ProcessSignalled { pid, signal } => {
+            format!("[OK] sent {signal} to process {pid}")
+        }
+        Response::NetworkSnapshot(snapshot) => render_network_snapshot(snapshot),
+        Response::NetworkStateChanged { name, up } => {
+            let state = if *up { "up" } else { "down" };
+            format!("[OK] brought {name} {state}")
+        }
+        Response::NetworkError(error) => format!("[ERROR] {}", error.detail),
+        Response::FileListing(listing) => render_file_listing(listing),
+        Response::FileChunk(chunk) => format!(
+            "[ERROR] unexpected file chunk for {} ({} bytes)",
+            chunk.path,
+            chunk.bytes.len()
+        ),
+        Response::FileWritten(written) => {
+            format!("[OK] wrote {} ({} bytes)", written.path, written.size)
+        }
+        Response::FileCreated { path } => format!("[OK] created {path}"),
+        Response::FileDeleted { path } => format!("[OK] deleted {path}"),
+        Response::FileRenamed { from, to } => format!("[OK] renamed {from} to {to}"),
+        Response::FileWriteStarted { id } => format!("[OK] upload {id} started"),
+        Response::FileWriteAccepted { id, received } => {
+            format!("[OK] upload {id} received {received} bytes")
+        }
+        Response::FileWriteAborted { id } => format!("[OK] upload {id} aborted"),
+        Response::FileError(error) => format!("[ERROR] {}", error.detail),
+        // A CLI subcommand never opens a terminal, so these are only reachable
+        // if a daemon volunteers frames nobody asked for.
+        Response::TerminalOpened(opened) => {
+            format!(
+                "[ERROR] unexpected terminal session {} from the daemon",
+                opened.id
+            )
+        }
+        Response::TerminalOutput { id, bytes } => {
+            format!(
+                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
+                bytes.len()
+            )
+        }
+        Response::TerminalExited { id, status } => {
+            format!("[ERROR] unexpected terminal exit for session {id} (status {status})")
+        }
+    }
 }
 
 /// Renders one directory listing as a table, followed by a warning when the

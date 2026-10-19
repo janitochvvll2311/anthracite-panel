@@ -45,6 +45,7 @@ backend/
       render.rs             #   bordered table renderer for the CLI
       stream.rs             #   repeat a request: interval parsing + frame output
       poll.rs               #   repeat an async read on a period (shared timing)
+      text.rs               #   shared trimmed-file read for the inspectors
       sse.rs                #   SSE framing: named events, ids, keep-alive
       terminal/             #   PTY session, registry, shell detection, token helper, browser bridge
       terminal_client.rs    #   interactive terminal for the CLI
@@ -263,6 +264,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   pause/resume, refresh and interval controls. `lib/hostinfo/display.ts` owns
   the pure formatting helpers; tests live beside both modules and the harness is
   `src/components/anth-host-info.test.html`.
+- **Shared web helpers**: `lib/http.ts` owns `responseError` and the common
+  fetch/EventSource option types, `lib/stream.ts` owns the `EventSource`
+  lifecycle and JSON event parsing, and `lib/format.ts` owns `formatBytes` and
+  `formatKib`. Clients and components import these instead of copying the same
+  transport or formatting code.
 - **Dev harnesses**: `src/harness/anth-harness.ts` provides the shared page shell
   (eyebrow, heading, `description`/`actions`/default slots), while
   `src/harness/harness.css` owns the common light-DOM controls, notes and page

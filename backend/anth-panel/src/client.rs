@@ -53,82 +53,11 @@ pub fn request_for(command: &Command) -> Option<Request> {
 }
 
 pub fn handle_response(response: &Response) {
+    let frame = render::render_response(response);
     match response {
-        Response::Ok { message } => {
-            println!("[OK] {}", message);
+        Response::Error { .. } | Response::FileError(_) | Response::NetworkError(_) => {
+            eprintln!("{frame}");
         }
-        Response::Error { detail } => {
-            eprintln!("[ERROR] {}", detail);
-        }
-        Response::HostInfo(info) => {
-            println!("{}", render::render_host_info(info));
-        }
-        Response::ProcessSnapshot(snapshot) => {
-            println!("{}", render::render_process_snapshot(snapshot));
-        }
-        Response::ProcessSignalled { pid, signal } => {
-            println!("[OK] sent {signal} to process {pid}");
-        }
-        Response::NetworkSnapshot(snapshot) => {
-            println!("{}", render::render_network_snapshot(snapshot));
-        }
-        Response::NetworkStateChanged { name, up } => {
-            let state = if *up { "up" } else { "down" };
-            println!("[OK] brought {name} {state}");
-        }
-        Response::NetworkError(error) => {
-            eprintln!("[ERROR] {}", error.detail);
-        }
-        Response::FileListing(listing) => {
-            println!("{}", render::render_file_listing(listing));
-        }
-        Response::FileChunk(chunk) => {
-            eprintln!(
-                "[ERROR] unexpected file chunk for {} ({} bytes)",
-                chunk.path,
-                chunk.bytes.len()
-            );
-        }
-        Response::FileWritten(written) => {
-            println!("[OK] wrote {} ({} bytes)", written.path, written.size);
-        }
-        Response::FileCreated { path } => {
-            println!("[OK] created {path}");
-        }
-        Response::FileDeleted { path } => {
-            println!("[OK] deleted {path}");
-        }
-        Response::FileRenamed { from, to } => {
-            println!("[OK] renamed {from} to {to}");
-        }
-        Response::FileWriteStarted { id } => {
-            println!("[OK] upload {id} started");
-        }
-        Response::FileWriteAccepted { id, received } => {
-            println!("[OK] upload {id} received {received} bytes");
-        }
-        Response::FileWriteAborted { id } => {
-            println!("[OK] upload {id} aborted");
-        }
-        Response::FileError(error) => {
-            eprintln!("[ERROR] {}", error.detail);
-        }
-        // The CLI has no terminal subcommand; these only reach it if a daemon
-        // volunteers frames nobody asked for.
-        Response::TerminalOpened(opened) => {
-            eprintln!(
-                "[ERROR] unexpected terminal session {} from the daemon",
-                opened.id
-            );
-        }
-        Response::TerminalOutput { id, bytes } => {
-            eprintln!(
-                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
-                bytes.len()
-            );
-        }
-        Response::TerminalExited { id, status } => {
-            eprintln!("[ERROR] unexpected terminal exit for session {id} (status {status})");
-        }
+        _ => println!("{frame}"),
     }
 }

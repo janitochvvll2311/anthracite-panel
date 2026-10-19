@@ -51,16 +51,7 @@ export function fileKindLabel(kind: FileKind): string {
   }
 }
 
-export function formatBytes(bytes: number): string {
-  const kib = 1024
-  const mib = kib * 1024
-  const gib = mib * 1024
-
-  if (bytes >= gib) return `${(bytes / gib).toFixed(1)} GiB`
-  if (bytes >= mib) return `${(bytes / mib).toFixed(1)} MiB`
-  if (bytes >= kib) return `${(bytes / kib).toFixed(1)} KiB`
-  return `${bytes} B`
-}
+export { formatBytes } from '../format'
 
 export function formatModified(modified: number | null): string {
   if (modified === null) return '—'
