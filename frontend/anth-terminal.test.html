@@ -1,17 +1,17 @@
 <!doctype html>
 <!--
-  Dev-only harness for src/components/anth-terminal-window.ts and the
+  Dev-only harness for src/components/anth-terminal.ts and the
   WebSocket terminal transport.
 
   Run `npm run dev` and open
-  http://localhost:5173/anth-terminal-window.test.html. Vite's build input is
+  http://localhost:5173/anth-terminal.test.html. Vite's build input is
   only index.html (see vite.config.ts), so this file never reaches dist/.
 -->
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>anth-terminal-window · test harness</title>
+    <title>anth-terminal · test harness</title>
     <style>
       :root {
         color-scheme: dark;
@@ -238,7 +238,7 @@
     <main>
       <header>
         <span class="eyebrow">dev harness · not in the production build</span>
-        <h1>anth-terminal-window</h1>
+        <h1>anth-terminal</h1>
         <p>
           A reusable xterm.js terminal window. The component only depends on the
           <code>TerminalTransport</code> interface; this page injects the
@@ -272,13 +272,13 @@
         <span id="session">no session</span>
       </div>
 
-      <anth-terminal-window
+      <anth-terminal
         id="terminal"
         title="anth-panel — web terminal"
         auto-focus
         max-lines="5000"
         style="--terminal-height: min(48rem, 76vh)"
-      ></anth-terminal-window>
+      ></anth-terminal>
 
       <section class="notes" aria-label="What this harness exercises">
         <article class="note">
@@ -302,12 +302,12 @@
       </section>
 
       <h2 class="section-title">Local output, no transport</h2>
-      <anth-terminal-window
+      <anth-terminal
         id="local"
         title="local output"
         read-only
         style="--terminal-height: 9rem; --terminal-accent: #fbbf24"
-      ></anth-terminal-window>
+      ></anth-terminal>
 
       <div class="toolbar" aria-label="Local terminal controls">
         <button type="button" id="append-local">Append local line</button>
@@ -315,7 +315,7 @@
     </main>
 
     <script type="module">
-      import '/src/components/anth-terminal-window.ts'
+      import '/src/components/anth-terminal.ts'
       import { WebSocketTerminalTransport } from '/src/lib/terminal/websocket-transport.ts'
 
       const terminal = document.querySelector('#terminal')

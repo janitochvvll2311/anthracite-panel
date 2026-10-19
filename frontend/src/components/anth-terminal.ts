@@ -100,6 +100,7 @@ function statusLabel(status: TerminalStatus): string {
  *
  * @csspart window - The outer window frame.
  * @csspart titlebar - The title bar.
+ * @csspart glyph - The `>_` prompt mark.
  * @csspart title - The title text container.
  * @csspart actions - The title bar action container.
  * @csspart screen - The terminal screen.
@@ -117,8 +118,8 @@ function statusLabel(status: TerminalStatus): string {
  * @cssprop --terminal-radius - Window corner radius.
  * @cssprop --terminal-font - Chrome font family.
  */
-@customElement('anth-terminal-window')
-export class AnthTerminalWindow extends LitElement {
+@customElement('anth-terminal')
+export class AnthTerminal extends LitElement {
   /** Text shown in the title bar when no `title` slot is provided. */
   @property({ type: String })
   title = 'Terminal'
@@ -372,11 +373,7 @@ export class AnthTerminalWindow extends LitElement {
     return html`
       <section class="window" part="window">
         <header class="titlebar" part="titlebar">
-          <span class="dots" aria-hidden="true">
-            <span class="dot dot-close"></span>
-            <span class="dot dot-minimize"></span>
-            <span class="dot dot-maximize"></span>
-          </span>
+          <span class="glyph" part="glyph" aria-hidden="true">&gt;_</span>
           <span class="title" part="title">
             <slot name="title">${this.title}</slot>
           </span>
@@ -469,29 +466,14 @@ export class AnthTerminalWindow extends LitElement {
         user-select: none;
       }
 
-      .dots {
-        display: flex;
+      .glyph {
         flex: 0 0 auto;
-        gap: 0.4rem;
-      }
-
-      .dot {
-        display: block;
-        width: 0.7rem;
-        height: 0.7rem;
-        border-radius: 50%;
-      }
-
-      .dot-close {
-        background: #ff5f57;
-      }
-
-      .dot-minimize {
-        background: #febc2e;
-      }
-
-      .dot-maximize {
-        background: #28c840;
+        color: var(--terminal-prompt);
+        font-size: 0.95em;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        line-height: 1;
+        white-space: pre;
       }
 
       .title {
@@ -891,7 +873,7 @@ export class AnthTerminalWindow extends LitElement {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'anth-terminal-window': AnthTerminalWindow
+    'anth-terminal': AnthTerminal
   }
 
   interface HTMLElementEventMap {

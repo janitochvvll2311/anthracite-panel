@@ -48,9 +48,9 @@ backend/
                             #   terminal_web.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
-  anth-terminal-window.test.html # dev-only xterm/API harness, never built
+  anth-terminal.test.html   # dev-only xterm/API harness, never built
   src/
-    components/             # anth-terminal-window.ts
+    components/             # anth-terminal.ts
     lib/ws/                 # generic JSON WebSocket transport
     lib/terminal/           # terminal interface, protocol, WebSocket adapter
   public/  index.html
@@ -176,7 +176,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
   daemon connection and one session; dropping either side kills the process group.
   Authentication is deliberately unimplemented: `terminal.token` is not checked yet.
-- **Frontend terminal**: `anth-terminal-window` is an xterm-backed Lit element. It only
+- **Frontend terminal**: `anth-terminal` is an xterm-backed Lit element. It only
   depends on the `TerminalTransport` interface in `lib/terminal/transport.ts`;
   `lib/terminal/websocket-transport.ts` implements it for `/api/terminal`, and
   `lib/ws/json-websocket.ts` is the generic transport any future endpoint can reuse.
@@ -184,7 +184,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   The component keeps its own Up/Down command history on the normal buffer; the
   alternate buffer (btop, vim, htop) keeps the program's arrow keys. The default
   height is sized for full-screen TUIs.
-  `anth-terminal-window.test.html` is the dev harness and is not a Vite build entry.
+  `anth-terminal.test.html` is the dev harness and is not a Vite build entry.
 - **Subcommands**: `daemon`, `api` and `run` share `--addr`, which falls back to
   `ANTH_PANEL_ADDR` and then `0.0.0.0:8080`. `run` binds the HTTP port before starting
   the daemon and aborts it when the API stops, which is what the container uses.
