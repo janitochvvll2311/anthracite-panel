@@ -144,6 +144,29 @@
         outline-offset: 2px;
       }
 
+      .mode-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0 0.2rem;
+        color: var(--muted);
+        font: 12px/1.2 var(--mono);
+      }
+
+      .mode-control select {
+        padding: 0.4rem 0.55rem;
+        color: var(--text);
+        font: 500 13px/1.2 var(--mono);
+        border: 1px solid var(--panel-border);
+        border-radius: 7px;
+        background: var(--panel);
+      }
+
+      .mode-control select:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
       .status-line {
         display: flex;
         flex-wrap: wrap;
@@ -258,6 +281,14 @@
       </div>
 
       <div class="toolbar" aria-label="Terminal controls">
+        <label class="mode-control">
+          Keyboard
+          <select id="keyboard-mode" aria-label="Keyboard mode">
+            <option value="auto">auto</option>
+            <option value="shell">shell</option>
+            <option value="local">local</option>
+          </select>
+        </label>
         <button type="button" id="disconnect">Disconnect</button>
         <button type="button" id="fit">Fit</button>
         <button type="button" id="clear">Clear</button>
@@ -288,6 +319,7 @@
             <li>Run <code>btop</code>, <code>htop</code> or <code>vim</code>; the window is sized for a full-screen TUI.</li>
             <li>Run a few commands, then use <code>↑</code>/<code>↓</code> to walk the local command history.</li>
             <li>Type a prefix of a previous command and press <code>Tab</code> to complete it; press <code>Tab</code> again to cycle matches.</li>
+            <li><code>auto</code> delegates to the shell when it has line editing (bash, ash); with <code>dash</code> it falls back to local history.</li>
             <li>Resize the browser window; the PTY receives a resize.</li>
             <li>Use <code>exit</code> to see the exit event and the final code.</li>
           </ul>
@@ -322,6 +354,7 @@
       const terminal = document.querySelector('#terminal')
       const local = document.querySelector('#local')
       const endpointInput = document.querySelector('#endpoint')
+      const keyboardModeSelect = document.querySelector('#keyboard-mode')
       const statusPill = document.querySelector('#status-pill')
       const sessionLabel = document.querySelector('#session')
 
@@ -363,7 +396,7 @@
 
       terminal.addEventListener('anth-terminal-ready', (event) => {
         const { program, size } = event.detail
-        sessionLabel.textContent = `${program} · ${size.cols}x${size.rows}`
+        sessionLabel.textContent = `${program} · ${size.cols}x${size.rows} · ${terminal.effectiveKeyboardMode} keys`
       })
 
       terminal.addEventListener('anth-terminal-exit', (event) => {
@@ -375,6 +408,10 @@
       })
 
       document.querySelector('#connect').addEventListener('click', connect)
+      keyboardModeSelect.addEventListener('change', () => {
+        terminal.keyboardMode = keyboardModeSelect.value
+        sessionLabel.textContent = `keyboard: ${terminal.effectiveKeyboardMode}`
+      })
       document
         .querySelector('#disconnect')
         .addEventListener('click', () => terminal.disconnect())

@@ -269,7 +269,7 @@ larger frames get an `error` frame and the connection closes.
 ### Panel → browser
 
 ```json
-{"type":"ready","shell":"/bin/sh","cols":120,"rows":40}
+{"type":"ready","shell":"/bin/sh","cols":120,"rows":40,"line_editing":false}
 {"type":"output","data":"aGVsbG8K"}
 {"type":"exit","code":0}
 {"type":"error","detail":"too many terminal sessions"}
@@ -278,7 +278,7 @@ larger frames get an `error` frame and the connection closes.
 
 | Frame | Meaning |
 | --- | --- |
-| `ready` | Always the first frame. Shell program and actual size. |
+| `ready` | Always the first frame. Shell program, actual size, and whether the shell has native line editing/Tab completion. |
 | `output` | Terminal bytes, base64 encoded. |
 | `exit` | The program ended. Sent immediately before the socket closes. |
 | `error` | The session failed. Sent before the socket closes. |

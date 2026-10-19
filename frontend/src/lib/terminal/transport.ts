@@ -8,6 +8,8 @@ export interface TerminalSize {
 export interface TerminalSessionInfo {
   program: string
   size: TerminalSize
+  /** Whether the shell has native line editing and Tab completion. */
+  lineEditing: boolean
 }
 
 export type TerminalStatus =

@@ -278,12 +278,14 @@ fn terminal_open_and_opened_roundtrip() {
         id: 3,
         size: anth_proto::TerminalSize { cols: 80, rows: 24 },
         program: "/bin/sh".to_string(),
+        line_editing: false,
     });
     match Response::from_json(&opened.to_json().unwrap()).unwrap() {
         Response::TerminalOpened(o) => {
             assert_eq!(o.id, 3);
             assert_eq!(o.program, "/bin/sh");
             assert_eq!(o.size.rows, 24);
+            assert!(!o.line_editing);
         }
         other => panic!("expected TerminalOpened, got {other:?}"),
     }

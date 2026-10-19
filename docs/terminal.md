@@ -57,12 +57,14 @@ WebSocket and bridges it to the daemon. The CLI reaches them through
 - **Input, resize and close are silent on success.** Only failures produce a
   frame, so a client cannot correlate acknowledgements with requests. See
   [socket-protocol.md](socket-protocol.md#silent-commands).
-- **The browser terminal keeps a local command history.** Up/Down walk the
-  commands typed in the component while the normal screen buffer is active.
-  Tab completes the current line from that history and cycles through matches.
-  Full-screen programs such as `btop`, `vim` and `htop` use the alternate
-  buffer, where arrow keys and Tab pass through to the program. The shell
-  environment forces `C.UTF-8`, which those tools need to start.
+- **The browser terminal chooses between shell-native and local keys.** With
+  `keyboard-mode = "auto"` (the default), a shell with line editing (`bash`,
+  `ash`, `zsh`, etc.) handles Up/Down and Tab natively; a shell without it
+  (`dash`, `/bin/sh` on Debian) falls back to the component's local history and
+  prefix completion. Set `shell = "/bin/bash"` for file/argument completion in
+  deployments where `/bin/sh` is `dash`. Full-screen programs such as `btop`,
+  `vim` and `htop` always keep their arrows and Tab. The shell environment
+  forces `C.UTF-8`, which those tools need to start.
 
 ## What is not implemented yet
 

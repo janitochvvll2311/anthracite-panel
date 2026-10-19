@@ -35,7 +35,12 @@ enum ClientMessage {
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ServerMessage {
     /// Sent once, before any output.
-    Ready { shell: String, cols: u16, rows: u16 },
+    Ready {
+        shell: String,
+        cols: u16,
+        rows: u16,
+        line_editing: bool,
+    },
     /// Terminal bytes, base64 encoded.
     Output { data: String },
     /// The program ended. Sent immediately before the socket closes.
@@ -91,6 +96,7 @@ async fn bridge(
         shell: opened.program,
         cols: opened.size.cols,
         rows: opened.size.rows,
+        line_editing: opened.line_editing,
     })
     .await
     .map_err(|e| format!("failed to send ready: {e}"))?;

@@ -7,8 +7,10 @@
 pub mod auth;
 pub mod registry;
 pub mod session;
+mod shell;
 pub(crate) mod web;
 
 pub use auth::{Verdict, check, constant_time_eq};
 pub use registry::{OpenError, Output, Sessions};
 pub use session::{PtySession, Session, SessionResult};
+pub use shell::supports_line_editing;

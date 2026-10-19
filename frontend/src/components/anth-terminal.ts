@@ -20,9 +20,12 @@ export const ANTH_TERMINAL_ERROR_EVENT = 'anth-terminal-error'
 /** Event fired on every connection state transition. */
 export const ANTH_TERMINAL_STATUS_EVENT = 'anth-terminal-status'
 
+export type AnthTerminalKeyboardMode = 'auto' | 'shell' | 'local'
+
 export interface AnthTerminalReadyDetail {
   program: string
   size: TerminalSize
+  lineEditing: boolean
 }
 
 export interface AnthTerminalExitDetail {
@@ -151,6 +154,16 @@ export class AnthTerminal extends LitElement {
   autoFocus = false
 
   /**
+   * Where arrow/Tab handling comes from.
+   *
+   * - `auto`: use the shell when it has line editing, otherwise local history.
+   * - `shell`: always send arrows and Tab to the PTY.
+   * - `local`: always use the component's in-memory history and completion.
+   */
+  @property({ type: String, attribute: 'keyboard-mode' })
+  keyboardMode: AnthTerminalKeyboardMode = 'auto'
+
+  /**
    * Enable Up/Down command history on the normal screen buffer. Full-screen
    * programs (btop, vim, htop) use the alternate buffer and keep their arrows.
    */
@@ -227,6 +240,14 @@ export class AnthTerminal extends LitElement {
     return this.sessionInfo
   }
 
+  /** Resolved keyboard source after applying `auto`. */
+  get effectiveKeyboardMode(): 'shell' | 'local' {
+    if (this.keyboardMode === 'shell' || this.keyboardMode === 'local') {
+      return this.keyboardMode
+    }
+    return this.sessionInfo?.lineEditing ? 'shell' : 'local'
+  }
+
   /** Commands remembered for Up/Down, oldest first. */
   get commandHistory(): readonly string[] {
     return this.history
@@ -271,6 +292,10 @@ export class AnthTerminal extends LitElement {
   }
 
   protected override updated(changed: PropertyValues<this>): void {
+    if (changed.has('keyboardMode')) {
+      this.resetHistoryNavigation()
+    }
+
     if (
       changed.has('readOnly') ||
       changed.has('fontSize') ||
@@ -356,13 +381,18 @@ export class AnthTerminal extends LitElement {
         onStatus: (status) => this.setStatus(status),
       })
       this.sessionInfo = info
+      this.resetHistoryNavigation()
       this.setStatus('open')
       this.fit()
       // The container may have changed size while the handshake was in flight.
       this.connectedTransport?.resize(this.currentSize())
       this.dispatchEvent(
         new CustomEvent<AnthTerminalReadyDetail>(ANTH_TERMINAL_READY_EVENT, {
-          detail: { program: info.program, size: info.size },
+          detail: {
+            program: info.program,
+            size: info.size,
+            lineEditing: info.lineEditing,
+          },
           bubbles: true,
           composed: true,
         }),
@@ -710,7 +740,10 @@ export class AnthTerminal extends LitElement {
 
   private handleInput(data: string): void {
     if (this.readOnly || this.connectionStatus !== 'open') return
-    if (this.commandHistoryEnabled) {
+    if (
+      this.commandHistoryEnabled &&
+      this.effectiveKeyboardMode === 'local'
+    ) {
       this.trackCommandLine(data)
     }
     this.connectedTransport?.sendInput(new TextEncoder().encode(data))
@@ -718,6 +751,7 @@ export class AnthTerminal extends LitElement {
 
   private handleKeyEvent(event: KeyboardEvent): boolean {
     if (event.type !== 'keydown') return true
+    if (this.effectiveKeyboardMode === 'shell') return true
     if (event.key === 'Tab') return this.handleTabCompletion(event)
     if (!this.commandHistoryEnabled || this.historyLimit <= 0) return true
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return true

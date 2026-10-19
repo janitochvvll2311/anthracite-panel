@@ -6,7 +6,13 @@ export type TerminalClientMessage =
 
 /** Messages the terminal endpoint sends to the browser. */
 export type TerminalServerMessage =
-  | { type: 'ready'; shell: string; cols: number; rows: number }
+  | {
+      type: 'ready'
+      shell: string
+      cols: number
+      rows: number
+      line_editing: boolean
+    }
   | { type: 'output'; data: string }
   | { type: 'exit'; code: number }
   | { type: 'error'; detail: string }
@@ -49,7 +55,9 @@ export function parseTerminalServerMessage(
       if (
         typeof message.shell !== 'string' ||
         typeof message.cols !== 'number' ||
-        typeof message.rows !== 'number'
+        typeof message.rows !== 'number' ||
+        (message.line_editing !== undefined &&
+          typeof message.line_editing !== 'boolean')
       ) {
         throw new Error('invalid ready message')
       }
@@ -58,6 +66,7 @@ export function parseTerminalServerMessage(
         shell: message.shell,
         cols: message.cols,
         rows: message.rows,
+        line_editing: message.line_editing === true,
       }
     case 'output':
       if (typeof message.data !== 'string') {

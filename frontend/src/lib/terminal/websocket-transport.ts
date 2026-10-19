@@ -153,6 +153,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
         this.pendingOpen?.resolve({
           program: message.shell,
           size: { cols: message.cols, rows: message.rows },
+          lineEditing: message.line_editing,
         })
         this.pendingOpen = undefined
         break

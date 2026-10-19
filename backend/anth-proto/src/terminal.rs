@@ -70,4 +70,8 @@ pub struct TerminalOpened {
     /// Program that was spawned, for the client to display and to explain an
     /// unexpected shell in a deployment that configured another one.
     pub program: String,
+    /// Whether the spawned shell is known to provide interactive line editing
+    /// and Tab completion. Old daemons omit it, so it defaults to `false`.
+    #[serde(default)]
+    pub line_editing: bool,
 }

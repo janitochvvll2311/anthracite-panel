@@ -78,6 +78,7 @@ frontend/                              backend/anth-panel/src/
   src/lib/terminal/protocol.ts           terminal/web.rs browser frames <-> daemon
   src/lib/terminal/websocket-transport.ts terminal/session.rs PTY spawn/read/write
   src/lib/ws/json-websocket.ts           terminal/registry.rs lifecycle + cap
+                                         terminal/shell.rs line-editing detection
                                          terminal/auth.rs token helper (not wired)
 ```
 
@@ -112,7 +113,7 @@ irrelevant next to the round trip. The encoding is stated once, in
 { "type": "ping" }
 
 // server -> client
-{ "type": "ready",  "shell": "/bin/sh", "cols": 80, "rows": 24 }
+{ "type": "ready",  "shell": "/bin/sh", "cols": 80, "rows": 24, "line_editing": false }
 { "type": "output", "data": "<base64>" }
 { "type": "exit",   "code": 0 }
 { "type": "error",  "detail": "pty unavailable" }
@@ -171,7 +172,9 @@ token, private network" and I would say so in the docs rather than imply more.
   standard; a hand-rolled emulator is not worth writing.
 - `src/components/anth-terminal.ts` is a Lit element like the rest; it owns the
   xterm instance, the window chrome, resize handling, a local Up/Down command
-  history and Tab completion. Full-screen programs keep their arrows and Tab.
+  history and Tab completion. Its `keyboard-mode="auto"` delegates to shells
+  with line editing and falls back to local behavior for `dash`; full-screen
+  programs keep their arrows and Tab.
 - `src/lib/terminal/websocket-transport.ts` implements the transport interface
   the component consumes; `src/lib/ws/json-websocket.ts` is the generic,
   terminal-agnostic JSON WebSocket layer.

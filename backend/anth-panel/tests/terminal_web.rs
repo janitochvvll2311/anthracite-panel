@@ -142,6 +142,7 @@ async fn a_websocket_runs_a_shell_and_resizes_it() {
     assert_eq!(ready["shell"], "/bin/sh");
     assert_eq!(ready["cols"], 100);
     assert_eq!(ready["rows"], 30);
+    assert!(ready["line_editing"].is_boolean());
 
     send_json(
         &mut socket,
@@ -201,6 +202,7 @@ async fn the_default_size_is_80x24() {
     assert_eq!(ready["type"], "ready");
     assert_eq!(ready["cols"], 80);
     assert_eq!(ready["rows"], 24);
+    assert!(ready["line_editing"].is_boolean());
 
     let _ = socket.close(None).await;
     api.abort();

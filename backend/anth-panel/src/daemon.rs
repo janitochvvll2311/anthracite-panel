@@ -21,7 +21,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::config::Config;
 use crate::hostinfo;
-use crate::terminal::{OpenError, Output, Sessions};
+use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
 
 /// One session's output as a stream tagged with its id.
 type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
@@ -124,7 +124,12 @@ async fn pump(
                         if let Some(receiver) = sessions.take_output(id).await {
                             output.push(session_stream(id, receiver));
                         }
-                        Response::TerminalOpened(anth_proto::TerminalOpened { id, size, program })
+                        Response::TerminalOpened(anth_proto::TerminalOpened {
+                            id,
+                            size,
+                            line_editing: supports_line_editing(&program),
+                            program,
+                        })
                     }
                     Err(OpenError::Spawn(detail)) => Response::Error { detail },
                     Err(e) => Response::Error { detail: e.detail() },

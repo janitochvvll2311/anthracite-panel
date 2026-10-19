@@ -217,12 +217,15 @@ untouched.
 Reply: `TerminalOpened`.
 
 ```json
-{"type":"TerminalOpened","data":{"id":1,"size":{"cols":80,"rows":24},"program":"/bin/sh"}}
+{"type":"TerminalOpened","data":{"id":1,"size":{"cols":80,"rows":24},"program":"/bin/sh","line_editing":false}}
 
 ```
 
 `size` is the size the session actually started with, and `program` the program
-that was spawned. A size outside 1..1000 is refused rather than clamped.
+that was spawned. `line_editing` reports whether the shell is known to provide
+interactive line editing and Tab completion; old daemons omit it and clients
+must default it to `false`. A size outside 1..1000 is refused rather than
+clamped.
 
 ### `TerminalInput`
 
