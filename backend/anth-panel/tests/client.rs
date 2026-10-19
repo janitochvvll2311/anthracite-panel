@@ -1,6 +1,6 @@
-use anth_panel::cli::{Cli, Command, WatchArgs};
+use anth_panel::cli::{Cli, Command, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs};
 use anth_panel::{handle_response, request_for};
-use anth_proto::{Request, Response};
+use anth_proto::{ProcessSignal, Request, Response};
 use clap::Parser;
 
 #[test]
@@ -163,4 +163,73 @@ fn cli_terminal_accepts_explicit_size_flags() {
         }
         other => panic!("expected Terminal, got {other:?}"),
     }
+}
+
+#[test]
+fn request_for_process_list_and_signal() {
+    let list = Command::Process(ProcessArgs {
+        command: ProcessCommand::List(WatchArgs::default()),
+    });
+    assert!(matches!(request_for(&list), Some(Request::ProcessList)));
+
+    let signal = Command::Process(ProcessArgs {
+        command: ProcessCommand::Signal(ProcessSignalArgs {
+            pid: 42,
+            signal: ProcessSignal::Term,
+            yes: true,
+        }),
+    });
+    match request_for(&signal) {
+        Some(Request::ProcessSignal { pid, signal }) => {
+            assert_eq!(pid, 42);
+            assert_eq!(signal, ProcessSignal::Term);
+        }
+        other => panic!("expected ProcessSignal, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_parses_process_list_and_its_ls_alias() {
+    for name in ["list", "ls"] {
+        let cli = Cli::try_parse_from(["anth-panel", "process", name]).unwrap();
+        match cli.command {
+            Command::Process(ProcessArgs {
+                command: ProcessCommand::List(args),
+            }) => assert_eq!(args.watch, None),
+            other => panic!("expected process list, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn cli_process_list_accepts_watch() {
+    let cli = Cli::try_parse_from(["anth-panel", "process", "list", "--watch", "500ms"]).unwrap();
+    match cli.command {
+        Command::Process(ProcessArgs {
+            command: ProcessCommand::List(args),
+        }) => assert_eq!(args.watch.as_deref(), Some("500ms")),
+        other => panic!("expected process list, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_parses_process_signal() {
+    let cli =
+        Cli::try_parse_from(["anth-panel", "process", "signal", "42", "TERM", "--yes"]).unwrap();
+
+    match cli.command {
+        Command::Process(ProcessArgs {
+            command: ProcessCommand::Signal(args),
+        }) => {
+            assert_eq!(args.pid, 42);
+            assert_eq!(args.signal, ProcessSignal::Term);
+            assert!(args.yes);
+        }
+        other => panic!("expected process signal, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_rejects_an_unknown_process_signal() {
+    assert!(Cli::try_parse_from(["anth-panel", "process", "signal", "42", "nope"]).is_err());
 }

@@ -14,6 +14,7 @@ in the HTTP server.
 | [docs/api-endpoints.md](docs/api-endpoints.md) | HTTP/WebSocket routes, request and response bodies, SSE streaming |
 | [docs/socket-protocol.md](docs/socket-protocol.md) | Wire format between clients and the daemon |
 | [docs/terminal.md](docs/terminal.md) | Interactive terminals, the browser route and current risks |
+| [docs/processes.md](docs/processes.md) | Process monitoring, signals, limits and controls |
 
 ## Layout
 

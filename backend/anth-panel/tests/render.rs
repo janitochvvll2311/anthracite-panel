@@ -1,5 +1,5 @@
-use anth_panel::render::{format_kib, format_uptime, render_host_info};
-use anth_proto::{HostInfo, LoadAverage, MemoryInfo, OsInfo};
+use anth_panel::render::{format_kib, format_uptime, render_host_info, render_process_snapshot};
+use anth_proto::{HostInfo, LoadAverage, MemoryInfo, OsInfo, ProcessInfo, ProcessSnapshot};
 
 fn sample() -> HostInfo {
     HostInfo {
@@ -231,4 +231,35 @@ fn format_uptime_omits_zero_components() {
     assert_eq!(format_uptime(3661), "1h 1m 1s");
     assert_eq!(format_uptime(86_400), "1d");
     assert_eq!(format_uptime(90_061), "1d 1h 1m 1s");
+}
+
+#[test]
+fn renders_process_rows_and_a_truncation_warning() {
+    let snapshot = ProcessSnapshot {
+        processes: vec![ProcessInfo {
+            pid: 42,
+            ppid: 1,
+            uid: 1000,
+            user: "alice".to_string(),
+            name: "sleep".to_string(),
+            command: "sleep 30".to_string(),
+            state: "S".to_string(),
+            cpu_ticks: 250,
+            rss_kib: 2048,
+            threads: 1,
+            start_ticks: 12345,
+        }],
+        clock_ticks: 100,
+        timestamp_ms: 1_700_000_000_000,
+        control_enabled: false,
+        total: 2500,
+        truncated: true,
+        warning: Some("showing 2000 of 2500 processes".to_string()),
+    };
+
+    let out = render_process_snapshot(&snapshot);
+    for expected in ["PID", "alice", "sleep 30", "2.5s", "2.0 MiB"] {
+        assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
+    }
+    assert!(out.contains("Warning: showing 2000 of 2500 processes"));
 }

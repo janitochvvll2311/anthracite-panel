@@ -35,7 +35,8 @@ Both messages are JSON objects with two members:
 ```
 
 `type` names the operation and `data` carries its arguments. The `data` member
-is omitted entirely for variants that take no arguments (`HostInfo`).
+is omitted entirely for variants that take no arguments (`HostInfo`,
+`ProcessList`).
 
 The pair is request/response: the client writes one request and reads one
 response on the same connection. A connection may carry several request/response
@@ -78,6 +79,36 @@ Returns a snapshot of the host the daemon runs on. Takes no arguments, so the
 
 The snapshot never inspects individual processes.
 
+### `ProcessList`
+
+Returns one snapshot of the process table. Takes no arguments, so the `data`
+member is absent.
+
+```json
+{"type":"ProcessList"}
+
+```
+
+### `ProcessSignal`
+
+Delivers an allowlisted signal to one process.
+
+```json
+{"type":"ProcessSignal","data":{"pid":1234,"signal":"term"}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `pid` | integer | yes | Target process id; `1` and the daemon's own pid are refused |
+| `signal` | string | yes | `term`, `kill`, `hup`, `int`, `quit`, `stop` or `cont` |
+
+The daemon refuses signals unless `[process] control = true`, the target belongs
+to the daemon user, and the pid is not protected. See
+[processes.md](processes.md) for the policy.
+
+Reply: `ProcessSignalled`.
+
 ## Responses
 
 ### `Ok`
@@ -107,6 +138,59 @@ parse.
 | Field | Type | Description |
 | --- | --- | --- |
 | `detail` | string | Human-readable reason |
+
+### `ProcessSnapshot`
+
+Reply to `ProcessList`.
+
+```json
+{
+  "type": "ProcessSnapshot",
+  "data": {
+    "processes": [
+      {
+        "pid": 1234,
+        "ppid": 1,
+        "uid": 1000,
+        "user": "alice",
+        "name": "sleep",
+        "command": "sleep 30",
+        "state": "S",
+        "cpu_ticks": 12,
+        "rss_kib": 2048,
+        "threads": 1,
+        "start_ticks": 12345
+      }
+    ],
+    "clock_ticks": 100,
+    "timestamp_ms": 1700000000000,
+    "control_enabled": false,
+    "total": 1,
+    "truncated": false
+  }
+}
+```
+
+`cpu_ticks` is `utime + stime`. `clock_ticks` (`sysconf(_SC_CLK_TCK)`) and
+`timestamp_ms` let a client compute CPU percent between two snapshots. Use
+`pid` + `start_ticks` as the process identity because pids can be reused.
+
+The daemon returns at most 2000 processes, sorted by accumulated CPU, and
+truncates command lines to 256 characters. When either happens `truncated` is
+`true`, `total` reports the untruncated count, and `warning` carries a
+human-readable notice. Clients must not treat the list as complete without
+checking those fields.
+
+### `ProcessSignalled`
+
+Successful reply to `ProcessSignal`.
+
+```json
+{"type":"ProcessSignalled","data":{"pid":1234,"signal":"term"}}
+
+```
+
+A refused signal arrives as an `Error` response instead.
 
 ### `HostInfo` (reply)
 

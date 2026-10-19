@@ -76,11 +76,21 @@ fn shell_from_passwd(text: &str, uid: u32) -> Option<String> {
     })
 }
 
+/// Process monitoring and control settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProcessConfig {
+    /// Whether the daemon accepts signal requests. Off by default: killing a
+    /// process is destructive and the panel has no authentication yet.
+    pub control: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub socket_path: String,
     pub terminal: TerminalConfig,
+    pub process: ProcessConfig,
 }
 
 impl Default for Config {
@@ -88,6 +98,7 @@ impl Default for Config {
         Self {
             socket_path: DEFAULT_SOCKET_PATH.to_string(),
             terminal: TerminalConfig::default(),
+            process: ProcessConfig::default(),
         }
     }
 }

@@ -1,3 +1,4 @@
+use anth_proto::ProcessSignal;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -39,8 +40,46 @@ pub enum Command {
     },
     /// Print the operating system and resources of the daemon host as a table.
     HostInfo(WatchArgs),
+    /// Inspect processes on the daemon host and optionally signal one.
+    Process(ProcessArgs),
     /// Open an interactive terminal on the daemon host.
     Terminal(TerminalArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ProcessArgs {
+    #[command(subcommand)]
+    pub command: ProcessCommand,
+}
+
+/// `process` subcommands. `list` keeps the short `ls` alias.
+#[derive(Subcommand, Debug)]
+pub enum ProcessCommand {
+    /// List processes as a table.
+    #[command(alias = "ls")]
+    List(WatchArgs),
+    /// Send an allowlisted signal to one process.
+    Signal(ProcessSignalArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ProcessSignalArgs {
+    #[arg(value_name = "PID", help = "Process id to signal")]
+    pub pid: u32,
+
+    #[arg(
+        value_name = "SIGNAL",
+        value_parser = parse_signal,
+        help = "Signal name: term, kill, hup, int, quit, stop, cont"
+    )]
+    pub signal: ProcessSignal,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+fn parse_signal(value: &str) -> Result<ProcessSignal, String> {
+    value.parse()
 }
 
 /// `--watch` takes an optional interval: bare, it repeats every 2s.

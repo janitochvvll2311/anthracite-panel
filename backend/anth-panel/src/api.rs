@@ -1,6 +1,6 @@
-use axum::extract::rejection::{JsonRejection, QueryRejection};
+use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -9,6 +9,7 @@ use rust_embed::RustEmbed;
 use serde::Deserialize;
 use serde_json::Value;
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::app::AppState;
@@ -16,7 +17,8 @@ use crate::poll;
 use crate::sse::SseStream;
 use crate::stream;
 use anth_proto::{
-    AnthClient, DEFAULT_TERMINAL_SIZE, Request, Response as CommandResponse, TerminalSize,
+    AnthClient, DEFAULT_TERMINAL_SIZE, ProcessSignal, ProcessSnapshot, Request,
+    Response as CommandResponse, TerminalSize,
 };
 
 pub fn router(app: AppState) -> Router {
@@ -26,6 +28,9 @@ pub fn router(app: AppState) -> Router {
         .route("/api/host-info/watch", get(watch_host_info))
         .route("/api/echo", post(post_echo))
         .route("/api/terminal", get(ws_terminal))
+        .route("/api/processes", get(get_processes))
+        .route("/api/processes/watch", get(watch_processes))
+        .route("/api/processes/{pid}/signal", post(post_process_signal))
         .fallback(static_handler)
         .with_state(app)
 }
@@ -130,6 +135,81 @@ async fn ws_terminal(
         .on_upgrade(move |socket| crate::terminal::web::serve_socket(socket, state, size)))
 }
 
+/// `GET /api/processes` — one process-table snapshot.
+pub async fn get_processes(
+    State(state): State<AppState>,
+) -> Result<Json<ProcessSnapshot>, ApiError> {
+    let response = exchange(&state, &Request::ProcessList).await?;
+    process_snapshot_json(response).map(Json)
+}
+
+/// `GET /api/processes/watch?interval=2s` — a process snapshot per interval as SSE.
+pub async fn watch_processes(
+    State(state): State<AppState>,
+    query: Result<Query<WatchQuery>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
+
+    let period = match query.interval.as_deref() {
+        None => stream::DEFAULT_INTERVAL,
+        Some(raw) => stream::parse_interval(raw).map_err(ApiError::bad_request)?,
+    };
+
+    let client = state
+        .create_client()
+        .await
+        .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "daemon unavailable"))?;
+
+    let client = Arc::new(tokio::sync::Mutex::new(client));
+    let items = poll::stream(period, move || {
+        let client = Arc::clone(&client);
+        async move {
+            let mut client = client.lock().await;
+            query_command(&mut client, &Request::ProcessList)
+                .await
+                .and_then(process_snapshot_json)
+                .map_err(error_detail)
+        }
+    });
+
+    Ok(SseStream::new("processes").stream(items))
+}
+
+/// Body of `POST /api/processes/{pid}/signal`.
+#[derive(Debug, Deserialize)]
+pub struct SignalArgs {
+    pub signal: String,
+}
+
+/// `POST /api/processes/{pid}/signal` — deliver an allowlisted signal.
+pub async fn post_process_signal(
+    State(state): State<AppState>,
+    path: Result<Path<u32>, PathRejection>,
+    payload: Result<Json<SignalArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Path(pid) = path.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    let signal = ProcessSignal::from_str(&args.signal).map_err(ApiError::bad_request)?;
+
+    if !state.config.process.control {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "process control is disabled",
+        ));
+    }
+
+    match exchange(&state, &Request::ProcessSignal { pid, signal }).await? {
+        CommandResponse::ProcessSignalled { pid, signal } => {
+            Ok(Json(serde_json::json!({ "pid": pid, "signal": signal })))
+        }
+        CommandResponse::Error { detail } => Err(ApiError::bad_request(detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
+    }
+}
+
 /// `GET /api/host-info` — one snapshot.
 pub async fn get_host_info(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let response = exchange(&state, &Request::HostInfo).await?;
@@ -225,6 +305,12 @@ fn host_info_json(response: CommandResponse) -> Result<Value, ApiError> {
             StatusCode::BAD_GATEWAY,
             format!("unexpected daemon response: {message}"),
         )),
+        CommandResponse::ProcessSnapshot(_) | CommandResponse::ProcessSignalled { .. } => {
+            Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "unexpected process response on a host-info route",
+            ))
+        }
         // No REST route opens a terminal yet; a one-shot route could not carry
         // the stream anyway.
         CommandResponse::TerminalOpened(opened) => Err(ApiError::new(
@@ -241,6 +327,17 @@ fn host_info_json(response: CommandResponse) -> Result<Value, ApiError> {
         CommandResponse::TerminalExited { id, status } => Err(ApiError::new(
             StatusCode::BAD_GATEWAY,
             format!("unexpected terminal exit for session {id} (status {status})"),
+        )),
+    }
+}
+
+fn process_snapshot_json(response: CommandResponse) -> Result<ProcessSnapshot, ApiError> {
+    match response {
+        CommandResponse::ProcessSnapshot(snapshot) => Ok(snapshot),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
         )),
     }
 }

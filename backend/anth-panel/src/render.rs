@@ -1,6 +1,6 @@
 //! Rendering of host information as a bordered text table.
 
-use anth_proto::HostInfo;
+use anth_proto::{HostInfo, ProcessSnapshot};
 
 const TOP_LEFT: char = '┌';
 const TOP_RIGHT: char = '┐';
@@ -251,4 +251,57 @@ pub fn render_host_info(info: &HostInfo) -> String {
     }
 
     table.render()
+}
+
+/// Renders a process snapshot as a table. CPU is accumulated CPU time, not a
+/// live percentage; the web component computes percentages from tick deltas.
+pub fn render_process_snapshot(snapshot: &ProcessSnapshot) -> String {
+    let mut table = Table::new(vec![
+        "PID".to_string(),
+        "PPID".to_string(),
+        "USER".to_string(),
+        "CPU".to_string(),
+        "MEM".to_string(),
+        "STATE".to_string(),
+        "COMMAND".to_string(),
+    ]);
+
+    for process in &snapshot.processes {
+        let cpu = if snapshot.clock_ticks == 0 {
+            "?".to_string()
+        } else {
+            format!(
+                "{:.1}s",
+                process.cpu_ticks as f64 / snapshot.clock_ticks as f64
+            )
+        };
+
+        table.push(vec![
+            process.pid.to_string(),
+            process.ppid.to_string(),
+            process.user.clone(),
+            cpu,
+            format_kib(process.rss_kib),
+            process.state.clone(),
+            elide(&process.command, 80),
+        ]);
+    }
+
+    let mut output = table.render();
+    if let Some(warning) = &snapshot.warning {
+        output.push('\n');
+        output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
+}
+
+fn elide(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+
+    let mut shortened: String = text.chars().take(limit.saturating_sub(1)).collect();
+    shortened.push('…');
+    shortened
 }

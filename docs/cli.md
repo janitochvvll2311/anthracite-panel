@@ -12,6 +12,7 @@ Commands:
   run        Serve the daemon and the HTTP API from a single process
   echo       Send a request to the running daemon and print the response
   host-info  Print the operating system and resources of the daemon host as a table
+  process    Inspect processes and send signals
   terminal   Open an interactive terminal on the daemon host
   help       Print this message or the help of the given subcommand(s)
 
@@ -42,13 +43,16 @@ Both forms are equivalent.
 
 ```toml
 socket_path = "/var/tmp/anth.sock"
+
+[process]
+control = false
 ```
 
 Unknown keys are rejected rather than ignored, so a typo fails loudly. A
 relative or missing file is not fatal for serving subcommands: they write a
 default config when it cannot be loaded. Client subcommands (`echo`,
-`host-info`) never create the file — they use defaults if it is absent, so
-probing a machine does not leave files behind.
+`host-info`, `process`) never create the file — they use defaults if it is
+absent, so probing a machine does not leave files behind.
 
 ## Serving
 
@@ -168,6 +172,45 @@ anth-panel host-info --watch 1s | tee -a host.log
 
 Redirected output keeps every frame, which is what you want for a log.
 
+### `process`
+
+Inspects the process table and, when `[process] control = true`, sends a signal
+to one process. See [processes.md](processes.md) for the policy and safety
+guards.
+
+#### `process list [--watch]`
+
+```bash
+anth-panel process list
+anth-panel process ls
+anth-panel process list --watch 2s
+```
+
+Prints PID, PPID, USER, CPU, MEM, STATE and COMMAND. `ls` is an alias for
+`list`. `--watch` takes the same interval rules as `host-info --watch`.
+
+CPU in this table is accumulated CPU time, not a live percentage. The web
+monitor computes percentages between snapshots.
+
+If the daemon truncated the snapshot, the table is followed by a `Warning:`
+line explaining how many processes were shown and whether command lines were
+shortened.
+
+#### `process signal <PID> <SIGNAL>`
+
+```bash
+anth-panel process signal 1234 term
+anth-panel process signal 1234 kill --yes
+```
+
+Allowed signals: `term`, `kill`, `hup`, `int`, `quit`, `stop`, `cont`. Names
+are case-insensitive.
+
+Without `--yes`, the command asks for confirmation on a TTY and refuses to run
+when stdin is not a terminal. The daemon still enforces its own policy:
+`[process] control` must be `true`, the target must belong to the daemon user,
+and pid 1 or the daemon itself are rejected.
+
 ### `terminal`
 
 Opens an interactive terminal on the host the daemon runs on, over the socket
@@ -184,8 +227,8 @@ anth-panel terminal --cols 120 --rows 40
 | `--cols <COLS>` | Initial width in columns. Defaults to the local terminal width. |
 | `--rows <ROWS>` | Initial height in rows. Defaults to the local terminal height. |
 
-The command needs the daemon's terminal to be enabled with a token; otherwise
-the daemon refuses the session and the command exits `1`.
+The token is reserved for the pending authentication layer and is not enforced
+yet; the daemon currently accepts terminal sessions regardless of it.
 
 ```bash
 # In a terminal: Ctrl-C reaches the remote shell, not this command.

@@ -383,3 +383,82 @@ fn base64_helpers_roundtrip_arbitrary_bytes() {
     assert_eq!(anth_proto::b64::decode(&encoded).unwrap(), bytes);
     assert!(anth_proto::b64::decode("not base64!").is_err());
 }
+
+#[test]
+fn process_requests_use_the_shared_tagged_envelope() {
+    assert_eq!(
+        Request::ProcessList.to_json().unwrap(),
+        r#"{"type":"ProcessList"}"#
+    );
+
+    let signal = Request::ProcessSignal {
+        pid: 42,
+        signal: anth_proto::ProcessSignal::Term,
+    };
+    assert_eq!(
+        signal.to_json().unwrap(),
+        r#"{"type":"ProcessSignal","data":{"pid":42,"signal":"term"}}"#
+    );
+}
+
+#[test]
+fn process_snapshot_and_signal_responses_roundtrip() {
+    let snapshot = anth_proto::ProcessSnapshot {
+        processes: vec![anth_proto::ProcessInfo {
+            pid: 42,
+            ppid: 1,
+            uid: 1000,
+            user: "alice".to_string(),
+            name: "sleep".to_string(),
+            command: "sleep 30".to_string(),
+            state: "S".to_string(),
+            cpu_ticks: 12,
+            rss_kib: 2048,
+            threads: 1,
+            start_ticks: 12345,
+        }],
+        clock_ticks: 100,
+        timestamp_ms: 1_700_000_000_000,
+        control_enabled: false,
+        total: 1,
+        truncated: false,
+        warning: None,
+    };
+    let response = Response::ProcessSnapshot(snapshot.clone());
+    match Response::from_json(&response.to_json().unwrap()).unwrap() {
+        Response::ProcessSnapshot(decoded) => assert_eq!(decoded, snapshot),
+        other => panic!("expected ProcessSnapshot, got {other:?}"),
+    }
+
+    let signalled = Response::ProcessSignalled {
+        pid: 42,
+        signal: anth_proto::ProcessSignal::Kill,
+    };
+    match Response::from_json(&signalled.to_json().unwrap()).unwrap() {
+        Response::ProcessSignalled { pid, signal } => {
+            assert_eq!(pid, 42);
+            assert_eq!(signal, anth_proto::ProcessSignal::Kill);
+        }
+        other => panic!("expected ProcessSignalled, got {other:?}"),
+    }
+}
+
+#[test]
+fn process_signal_names_are_case_insensitive() {
+    use anth_proto::ProcessSignal;
+    use std::str::FromStr;
+
+    assert_eq!(
+        ProcessSignal::from_str("TERM").unwrap(),
+        ProcessSignal::Term
+    );
+    assert_eq!(
+        ProcessSignal::from_str("Kill").unwrap(),
+        ProcessSignal::Kill
+    );
+    assert_eq!(
+        ProcessSignal::from_str("cont").unwrap(),
+        ProcessSignal::Cont
+    );
+    assert!(ProcessSignal::from_str("nope").is_err());
+}

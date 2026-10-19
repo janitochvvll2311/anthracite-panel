@@ -7,8 +7,10 @@ use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite, LinesCodec};
 
 pub mod b64;
+pub mod process;
 pub mod terminal;
 
+pub use process::{ProcessInfo, ProcessSignal, ProcessSnapshot};
 pub use terminal::{
     TerminalOpenArgs, TerminalOpened, TerminalSize, DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK,
     MAX_TERMINAL_INPUT,
@@ -29,6 +31,13 @@ pub enum Request {
     },
     /// Ask the daemon for a snapshot of the host it runs on.
     HostInfo,
+    /// Ask the daemon for one snapshot of the process table.
+    ProcessList,
+    /// Deliver an allowlisted signal to a process.
+    ProcessSignal {
+        pid: u32,
+        signal: ProcessSignal,
+    },
     /// Start a terminal session. The reply is `Response::TerminalOpened`,
     /// after which output arrives unsolicited as `Response::TerminalOutput`.
     TerminalOpen(TerminalOpenArgs),
@@ -83,6 +92,13 @@ pub enum Response {
     },
     /// Boxed to keep the enum small; the payload is much larger than the others.
     HostInfo(Box<HostInfo>),
+    /// One process-table snapshot.
+    ProcessSnapshot(ProcessSnapshot),
+    /// A signal was delivered successfully.
+    ProcessSignalled {
+        pid: u32,
+        signal: ProcessSignal,
+    },
     /// A session exists. Sent once per `Request::TerminalOpen`.
     TerminalOpened(TerminalOpened),
     /// Terminal output. Unsolicited: the daemon sends these as the session
