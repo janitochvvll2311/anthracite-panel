@@ -42,7 +42,10 @@ RUN addgroup -S anth \
     && adduser -S -G anth -h /home/anth anth \
     && mkdir -p /etc/anth \
     && chown -R anth:anth /etc/anth \
-    && apk add --no-cache curl
+    && apk add --no-cache curl nftables libcap \
+    && setcap cap_net_admin+ep /usr/sbin/nft
+# nftables still needs CAP_NET_ADMIN in the container bounding set:
+#   docker run --cap-add NET_ADMIN ...   or compose.yaml
 
 # Daemon, CLI and HTTP API are a single binary.
 COPY --from=builder /src/backend/target/x86_64-unknown-linux-musl/release/anth-panel /usr/local/bin/anth-panel

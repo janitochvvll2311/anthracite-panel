@@ -20,7 +20,8 @@ use crate::sse::SseStream;
 use crate::stream;
 use anth_proto::{
     AnthClient, DEFAULT_FILE_CHUNK, DEFAULT_TERMINAL_SIZE, FileChunk, FileError, FileErrorKind,
-    FileListing, FileWritten, NetworkError, NetworkErrorKind, NetworkSnapshot, ProcessSignal,
+    FileListing, FileWritten, FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol,
+    FirewallSnapshot, NetworkError, NetworkErrorKind, NetworkSnapshot, ProcessSignal,
     ProcessSnapshot, Request, Response as CommandResponse, TerminalSize,
 };
 
@@ -41,6 +42,13 @@ pub fn router(app: AppState) -> Router {
         .route("/api/network", get(get_network))
         .route("/api/network/watch", get(watch_network))
         .route("/api/network/{name}/state", post(post_network_state))
+        .route("/api/firewall", get(get_firewall))
+        .route("/api/firewall/rules", post(post_firewall_rule))
+        .route(
+            "/api/firewall/rules/{handle}/delete",
+            post(post_firewall_delete),
+        )
+        .route("/api/firewall/flush", post(post_firewall_flush))
         .route("/api/files", get(get_files))
         .route("/api/files/content", get(get_file_content))
         .route("/api/files/download", get(download_file))
@@ -300,6 +308,126 @@ fn network_snapshot_json(response: CommandResponse) -> Result<NetworkSnapshot, A
         CommandResponse::NetworkError(error) => Err(network_api_error(error)),
         CommandResponse::Error { detail } => Err(gateway(detail)),
         other => Err(unexpected_response(other)),
+    }
+}
+
+/// `GET /api/firewall` — one snapshot of the managed nftables table.
+pub async fn get_firewall(
+    State(state): State<AppState>,
+) -> Result<Json<FirewallSnapshot>, ApiError> {
+    let response = exchange(&state, &Request::FirewallStatus).await?;
+    firewall_snapshot_json(response).map(Json)
+}
+
+/// Body of `POST /api/firewall/rules`.
+#[derive(Debug, Deserialize)]
+pub struct FirewallRuleArgs {
+    pub action: FirewallAction,
+    pub port: u16,
+    pub protocol: Option<FirewallProtocol>,
+    pub comment: Option<String>,
+}
+
+/// `POST /api/firewall/rules` — add an allow/deny rule.
+pub async fn post_firewall_rule(
+    State(state): State<AppState>,
+    payload: Result<Json<FirewallRuleArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_firewall_control(&state)?;
+
+    match exchange(
+        &state,
+        &Request::FirewallAddRule {
+            action: args.action,
+            port: args.port,
+            protocol: args.protocol.unwrap_or(FirewallProtocol::Tcp),
+            comment: args.comment,
+        },
+    )
+    .await?
+    {
+        CommandResponse::FirewallChanged { message } => {
+            Ok(Json(serde_json::json!({ "message": message })))
+        }
+        CommandResponse::FirewallError(error) => Err(firewall_api_error(error)),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
+    }
+}
+
+/// `POST /api/firewall/rules/{handle}/delete` — delete one rule by handle.
+pub async fn post_firewall_delete(
+    State(state): State<AppState>,
+    path: Result<Path<u64>, PathRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Path(handle) = path.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_firewall_control(&state)?;
+
+    match exchange(&state, &Request::FirewallDeleteRule { handle }).await? {
+        CommandResponse::FirewallChanged { message } => {
+            Ok(Json(serde_json::json!({ "message": message })))
+        }
+        CommandResponse::FirewallError(error) => Err(firewall_api_error(error)),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
+    }
+}
+
+/// `POST /api/firewall/flush` — remove every managed rule.
+pub async fn post_firewall_flush(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    require_firewall_control(&state)?;
+
+    match exchange(&state, &Request::FirewallFlush).await? {
+        CommandResponse::FirewallChanged { message } => {
+            Ok(Json(serde_json::json!({ "message": message })))
+        }
+        CommandResponse::FirewallError(error) => Err(firewall_api_error(error)),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
+    }
+}
+
+fn require_firewall_control(state: &AppState) -> Result<(), ApiError> {
+    if state.config.firewall.control {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "firewall control is disabled",
+        ))
+    }
+}
+
+fn firewall_api_error(error: FirewallError) -> ApiError {
+    let status = match error.kind {
+        FirewallErrorKind::Disabled | FirewallErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
+        FirewallErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        FirewallErrorKind::Invalid => StatusCode::BAD_REQUEST,
+        FirewallErrorKind::NotFound => StatusCode::NOT_FOUND,
+        FirewallErrorKind::Failed => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    ApiError::new(status, error.detail)
+}
+
+fn firewall_snapshot_json(response: CommandResponse) -> Result<FirewallSnapshot, ApiError> {
+    match response {
+        CommandResponse::FirewallSnapshot(snapshot) => Ok(snapshot),
+        CommandResponse::FirewallError(error) => Err(firewall_api_error(error)),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
     }
 }
 

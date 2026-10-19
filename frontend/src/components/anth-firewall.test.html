@@ -1,0 +1,75 @@
+<!doctype html>
+<!--
+  Dev-only harness for the firewall component.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-firewall.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel firewall component."
+    />
+    <title>anth-firewall · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-firewall" width="1200px">
+      <p slot="description">
+        Managed nftables firewall backed by <code>GET /api/firewall</code>. It
+        reads the dedicated <code>inet anthracite</code> table, adds deny rules,
+        removes managed denies with allow, deletes rules by handle and flushes
+        the chain. Changes are disabled unless <code>[firewall] control</code> is
+        enabled.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Add an allow or deny rule for a port.</li>
+            <li>Delete a rule by its handle after confirming.</li>
+            <li>Flush the managed chain.</li>
+            <li>Expand the nft ruleset to inspect the raw output.</li>
+            <li>
+              Disable <code>[firewall] control</code> to see the read-only
+              state.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open <code>/src/components/anth-firewall.test.html</code> on the
+              Vite port.
+            </li>
+            <li>
+              The daemon needs <code>nft</code> and <code>CAP_NET_ADMIN</code>.
+              Debug builds enable <code>[firewall] control</code>.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <anth-firewall id="firewall"></anth-firewall>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-firewall.ts'
+      import { HttpFirewallClient } from '/src/lib/firewall/firewall-client.ts'
+
+      document.querySelector('#firewall').client = new HttpFirewallClient()
+    </script>
+  </body>
+</html>

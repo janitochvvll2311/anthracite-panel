@@ -1,10 +1,13 @@
 use anth_panel::cli::{
     Cli, Command, FileArgs, FileCommand, FileDeleteArgs, FileListArgs, FileMkdirArgs, FileReadArgs,
-    FileRenameArgs, FileUploadArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs,
-    ProcessCommand, ProcessSignalArgs, WatchArgs,
+    FileRenameArgs, FileUploadArgs, FirewallArgs, FirewallCommand, NetworkArgs, NetworkCommand,
+    NetworkStateArgs, PortSpec, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs,
 };
 use anth_panel::{handle_response, request_for};
-use anth_proto::{ProcessSignal, Request, Response};
+use anth_proto::{
+    FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, ProcessSignal, Request,
+    Response,
+};
 use clap::Parser;
 
 #[test]
@@ -427,4 +430,110 @@ fn file_commands_parse_their_flags() {
         }
         other => panic!("expected file delete, got {other:?}"),
     }
+}
+
+#[test]
+fn firewall_port_specs_default_to_tcp_and_validate_values() {
+    let default = "8080".parse::<PortSpec>().unwrap();
+    assert_eq!(default.port, 8080);
+    assert_eq!(default.protocol, FirewallProtocol::Tcp);
+
+    let udp = "53/udp".parse::<PortSpec>().unwrap();
+    assert_eq!(udp.protocol, FirewallProtocol::Udp);
+
+    assert!("0".parse::<PortSpec>().is_err());
+    assert!("70000".parse::<PortSpec>().is_err());
+    assert!("53/sctp".parse::<PortSpec>().is_err());
+}
+
+#[test]
+fn request_for_firewall_builds_status_and_mutation_requests() {
+    match request_for(&Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Status,
+    })) {
+        Some(Request::FirewallStatus) => {}
+        other => panic!("expected FirewallStatus, got {other:?}"),
+    }
+
+    match request_for(&Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Allow(anth_panel::cli::FirewallAddArgs {
+            spec: "22/tcp".parse().unwrap(),
+            comment: Some("ssh".to_string()),
+            yes: true,
+        }),
+    })) {
+        Some(Request::FirewallAddRule {
+            action,
+            port,
+            protocol,
+            comment,
+        }) => {
+            assert_eq!(action, FirewallAction::Allow);
+            assert_eq!(port, 22);
+            assert_eq!(protocol, FirewallProtocol::Tcp);
+            assert_eq!(comment.as_deref(), Some("ssh"));
+        }
+        other => panic!("expected FirewallAddRule, got {other:?}"),
+    }
+
+    match request_for(&Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Delete(anth_panel::cli::FirewallDeleteArgs {
+            handle: 7,
+            yes: true,
+        }),
+    })) {
+        Some(Request::FirewallDeleteRule { handle }) => assert_eq!(handle, 7),
+        other => panic!("expected FirewallDeleteRule, got {other:?}"),
+    }
+
+    match request_for(&Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Flush(anth_panel::cli::FirewallFlushArgs { yes: true }),
+    })) {
+        Some(Request::FirewallFlush) => {}
+        other => panic!("expected FirewallFlush, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_parses_firewall_subcommands() {
+    let cli = Cli::try_parse_from([
+        "anth-panel",
+        "firewall",
+        "allow",
+        "8080",
+        "--comment",
+        "web",
+        "--yes",
+    ])
+    .unwrap();
+    match cli.command {
+        Command::Firewall(FirewallArgs {
+            command: FirewallCommand::Allow(args),
+        }) => {
+            assert_eq!(args.spec.port, 8080);
+            assert_eq!(args.spec.protocol, FirewallProtocol::Tcp);
+            assert_eq!(args.comment.as_deref(), Some("web"));
+            assert!(args.yes);
+        }
+        other => panic!("expected firewall allow, got {other:?}"),
+    }
+
+    let cli = Cli::try_parse_from(["anth-panel", "firewall", "list"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Command::Firewall(FirewallArgs {
+            command: FirewallCommand::Status
+        })
+    ));
+}
+
+#[test]
+fn handle_response_accepts_firewall_frames_without_panicking() {
+    handle_response(&Response::FirewallChanged {
+        message: "allowed tcp/22".to_string(),
+    });
+    handle_response(&Response::FirewallError(FirewallError::new(
+        FirewallErrorKind::Disabled,
+        "firewall control is disabled",
+    )));
 }

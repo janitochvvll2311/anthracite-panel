@@ -95,6 +95,15 @@ pub struct NetworkConfig {
     pub control: bool,
 }
 
+/// Firewall management settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct FirewallConfig {
+    /// Whether the daemon accepts rule changes. Off by default: the panel has
+    /// no authentication yet and firewall changes can disconnect the host.
+    pub control: bool,
+}
+
 /// Filesystem explorer settings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -132,6 +141,7 @@ pub struct Config {
     pub terminal: TerminalConfig,
     pub process: ProcessConfig,
     pub network: NetworkConfig,
+    pub firewall: FirewallConfig,
     pub files: FilesConfig,
 }
 
@@ -142,6 +152,7 @@ impl Default for Config {
             terminal: TerminalConfig::default(),
             process: ProcessConfig::default(),
             network: NetworkConfig::default(),
+            firewall: FirewallConfig::default(),
             files: FilesConfig::default(),
         }
     }
@@ -150,12 +161,14 @@ impl Default for Config {
 impl Config {
     /// Defaults that make a debug build convenient for local development.
     ///
-    /// Production defaults stay safe: process control, network control and file
-    /// writes are off unless an existing config file explicitly enables them.
+    /// Production defaults stay safe: process control, network control, firewall
+    /// control and file writes are off unless an existing config file explicitly
+    /// enables them.
     pub fn dev_default() -> Self {
         let mut config = Self::default();
         config.process.control = true;
         config.network.control = true;
+        config.firewall.control = true;
         config.files.write = true;
         config
     }
@@ -216,8 +229,8 @@ impl Config {
 
     /// Loads the configuration at `path`, or writes a default one first when it
     /// cannot be read, so a first server run bootstraps the configuration file.
-    /// Debug builds bootstrap with process control and file writes enabled;
-    /// release builds keep both off. A failure to persist the default is
+    /// Debug builds bootstrap with process control, network control, firewall
+    /// control and file writes enabled; release builds keep all four off. A failure to persist the default is
     /// reported but not fatal: the freshly built defaults are still usable.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
         match Self::load(&path) {
@@ -229,7 +242,7 @@ impl Config {
                 let config = Self::server_default();
                 if cfg!(debug_assertions) {
                     eprintln!(
-                        "Debug build: process control, network control and file writes are enabled in the generated config."
+                        "Debug build: process control, network control, firewall control and file writes are enabled in the generated config."
                     );
                 }
                 if let Err(e) = config.save(&path) {
@@ -269,6 +282,27 @@ mod tests {
     #[test]
     fn default_shell_uses_auto() {
         assert_eq!(TerminalConfig::default().shell, "auto");
+    }
+
+    #[test]
+    fn firewall_control_is_off_by_default_and_on_in_debug_defaults() {
+        assert!(!FirewallConfig::default().control);
+        if cfg!(debug_assertions) {
+            assert!(Config::dev_default().firewall.control);
+        }
+    }
+
+    #[test]
+    fn firewall_section_is_loaded_from_toml() {
+        let config = Config::from_toml(
+            r#"
+[firewall]
+control = true
+"#,
+        )
+        .unwrap();
+
+        assert!(config.firewall.control);
     }
 
     #[test]

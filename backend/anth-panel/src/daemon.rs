@@ -22,6 +22,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::config::{Config, FilesConfig};
 use crate::files::{FileService, PendingUpload};
+use crate::firewall;
 use crate::hostinfo;
 use crate::network;
 use crate::process;
@@ -30,44 +31,76 @@ use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
 /// One session's output as a stream tagged with its id.
 type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
 
+/// Deployment policy for the operations exposed by the socket.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Policy {
+    pub process_control: bool,
+    pub network_control: bool,
+    pub firewall_control: bool,
+}
+
 pub fn handle_request(request: Request) -> Response {
     let files = FileService::new(&FilesConfig::default())
         .expect("the default filesystem root must be usable");
-    handle_request_with(request, false, false, &files)
+    handle_request_with(request, &Policy::default(), &files)
 }
 
 /// Handles a request with the daemon policy that is not part of the wire type.
 ///
-/// Process control, network control and file writes are deployment policy: the
-/// socket protocol itself does not know whether the host allows them. This
-/// synchronous path is used by the line helper and unit tests. The async
-/// connection loop special-cases blocking reads so they run on a blocking
-/// worker instead of a Tokio task.
-pub fn handle_request_with(
-    request: Request,
-    process_control: bool,
-    network_control: bool,
-    files: &FileService,
-) -> Response {
+/// Process control, network control, firewall control and file writes are
+/// deployment policy: the socket protocol itself does not know whether the host
+/// allows them. This synchronous path is used by the line helper and unit tests.
+/// The async connection loop special-cases blocking reads so they run on a
+/// blocking worker instead of a Tokio task.
+pub fn handle_request_with(request: Request, policy: &Policy, files: &FileService) -> Response {
     match request {
         Request::Echo { message } => Response::Ok { message },
         Request::HostInfo => Response::HostInfo(Box::new(hostinfo::collect())),
-        Request::ProcessList => Response::ProcessSnapshot(process::collect(process_control)),
+        Request::ProcessList => Response::ProcessSnapshot(process::collect(policy.process_control)),
         Request::ProcessSignal { pid, signal } => {
-            match process::send_signal(pid, signal, process_control) {
+            match process::send_signal(pid, signal, policy.process_control) {
                 Ok(()) => Response::ProcessSignalled { pid, signal },
                 Err(error) => Response::Error {
                     detail: error.detail(),
                 },
             }
         }
-        Request::NetworkList => Response::NetworkSnapshot(network::collect(network_control)),
+        Request::NetworkList => Response::NetworkSnapshot(network::collect(policy.network_control)),
         Request::NetworkSetState { name, up } => {
-            match network::set_state(network_control, &name, up) {
+            match network::set_state(policy.network_control, &name, up) {
                 Ok(()) => Response::NetworkStateChanged { name, up },
                 Err(error) => Response::NetworkError(error),
             }
         }
+        Request::FirewallStatus => match firewall::status(policy.firewall_control) {
+            Ok(snapshot) => Response::FirewallSnapshot(snapshot),
+            Err(error) => Response::FirewallError(error),
+        },
+        Request::FirewallAddRule {
+            action,
+            port,
+            protocol,
+            comment,
+        } => match firewall::add_rule(
+            policy.firewall_control,
+            action,
+            port,
+            protocol,
+            comment.as_deref(),
+        ) {
+            Ok(message) => Response::FirewallChanged { message },
+            Err(error) => Response::FirewallError(error),
+        },
+        Request::FirewallDeleteRule { handle } => {
+            match firewall::delete_rule(policy.firewall_control, handle) {
+                Ok(message) => Response::FirewallChanged { message },
+                Err(error) => Response::FirewallError(error),
+            }
+        }
+        Request::FirewallFlush => match firewall::flush(policy.firewall_control) {
+            Ok(message) => Response::FirewallChanged { message },
+            Err(error) => Response::FirewallError(error),
+        },
         Request::FileList { path } => match files.list(&path) {
             Ok(listing) => Response::FileListing(listing),
             Err(error) => Response::FileError(error),
@@ -125,7 +158,7 @@ pub async fn serve_connection(
         FileService::new(&FilesConfig::default())
             .expect("the default filesystem root must be usable"),
     );
-    serve_connection_with(socket, sessions, program, false, false, files).await
+    serve_connection_with(socket, sessions, program, Policy::default(), files).await
 }
 
 /// Serves one connection with the process, network and file policies applied to
@@ -134,8 +167,7 @@ pub async fn serve_connection_with(
     socket: UnixStream,
     sessions: Arc<Sessions>,
     program: Arc<str>,
-    process_control: bool,
-    network_control: bool,
+    policy: Policy,
     files: Arc<FileService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut owned: Vec<u32> = Vec::new();
@@ -147,8 +179,7 @@ pub async fn serve_connection_with(
         socket,
         Arc::clone(&sessions),
         program,
-        process_control,
-        network_control,
+        policy,
         files,
         &mut owned,
     )
@@ -173,14 +204,17 @@ async fn pump(
     socket: UnixStream,
     sessions: Arc<Sessions>,
     program: Arc<str>,
-    process_control: bool,
-    network_control: bool,
+    policy: Policy,
     files: Arc<FileService>,
     owned: &mut Vec<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (read_half, write_half) = socket.into_split();
     let mut reader = AnthReader::from_read_half(read_half);
     let mut writer = AnthWriter::from_write_half(write_half);
+
+    let process_control = policy.process_control;
+    let network_control = policy.network_control;
+    let firewall_control = policy.firewall_control;
 
     let mut output = futures::stream::select_all(Vec::<OutputStream>::new());
     let mut uploads: HashMap<u32, PendingUpload> = HashMap::new();
@@ -261,6 +295,60 @@ async fn pump(
                     Err(error) => Response::NetworkError(anth_proto::NetworkError::new(
                         anth_proto::NetworkErrorKind::Failed,
                         format!("failed to change the interface state: {error}"),
+                    )),
+                }
+            }
+            Request::FirewallStatus => {
+                match tokio::task::spawn_blocking(move || firewall::status(firewall_control)).await
+                {
+                    Ok(Ok(snapshot)) => Response::FirewallSnapshot(snapshot),
+                    Ok(Err(error)) => Response::FirewallError(error),
+                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
+                        anth_proto::FirewallErrorKind::Failed,
+                        format!("failed to read the firewall: {error}"),
+                    )),
+                }
+            }
+            Request::FirewallAddRule {
+                action,
+                port,
+                protocol,
+                comment,
+            } => {
+                match tokio::task::spawn_blocking(move || {
+                    firewall::add_rule(firewall_control, action, port, protocol, comment.as_deref())
+                })
+                .await
+                {
+                    Ok(Ok(message)) => Response::FirewallChanged { message },
+                    Ok(Err(error)) => Response::FirewallError(error),
+                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
+                        anth_proto::FirewallErrorKind::Failed,
+                        format!("failed to change the firewall: {error}"),
+                    )),
+                }
+            }
+            Request::FirewallDeleteRule { handle } => {
+                match tokio::task::spawn_blocking(move || {
+                    firewall::delete_rule(firewall_control, handle)
+                })
+                .await
+                {
+                    Ok(Ok(message)) => Response::FirewallChanged { message },
+                    Ok(Err(error)) => Response::FirewallError(error),
+                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
+                        anth_proto::FirewallErrorKind::Failed,
+                        format!("failed to change the firewall: {error}"),
+                    )),
+                }
+            }
+            Request::FirewallFlush => {
+                match tokio::task::spawn_blocking(move || firewall::flush(firewall_control)).await {
+                    Ok(Ok(message)) => Response::FirewallChanged { message },
+                    Ok(Err(error)) => Response::FirewallError(error),
+                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
+                        anth_proto::FirewallErrorKind::Failed,
+                        format!("failed to change the firewall: {error}"),
                     )),
                 }
             }
@@ -365,7 +453,7 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
-            other => handle_request_with(other, process_control, network_control, &files),
+            other => handle_request_with(other, &policy, &files),
         };
 
         writer.send_response(&response).await?;
@@ -443,8 +531,11 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         supports_line_editing(&shell)
     );
     let program: Arc<str> = Arc::from(shell);
-    let process_control = config.process.control;
-    let network_control = config.network.control;
+    let policy = Policy {
+        process_control: config.process.control,
+        network_control: config.network.control,
+        firewall_control: config.firewall.control,
+    };
     let files = Arc::new(
         FileService::new(&config.files).map_err(|e| format!("invalid files configuration: {e}"))?,
     );
@@ -455,16 +546,7 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         let program = Arc::clone(&program);
         let files = Arc::clone(&files);
         tokio::spawn(async move {
-            if let Err(e) = serve_connection_with(
-                socket,
-                sessions,
-                program,
-                process_control,
-                network_control,
-                files,
-            )
-            .await
-            {
+            if let Err(e) = serve_connection_with(socket, sessions, program, policy, files).await {
                 eprintln!("Error handling connection: {e}");
             }
         });

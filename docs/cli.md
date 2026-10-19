@@ -14,6 +14,7 @@ Commands:
   host-info  Print the operating system and resources of the daemon host as a table
   process    Inspect processes and send signals
   network    Inspect network interfaces and change their state
+  firewall   Inspect and configure the managed nftables firewall
   file       Browse and manage files on the daemon host
   terminal   Open an interactive terminal on the daemon host
   help       Print this message or the help of the given subcommand(s)
@@ -52,6 +53,9 @@ control = false
 [network]
 control = false
 
+[firewall]
+control = false
+
 [files]
 root = "/"
 write = false
@@ -63,12 +67,12 @@ max_upload_bytes = 67108864
 Unknown keys are rejected rather than ignored, so a typo fails loudly. A
 relative or missing file is not fatal for serving subcommands: they write a
 default config when it cannot be loaded. Client subcommands (`echo`,
-`host-info`, `process`, `network`, `file`) never create the file — they use
+`host-info`, `process`, `network`, `firewall`, `file`) never create the file — they use
 defaults if it is absent, so probing a machine does not leave files behind.
 
 Debug builds bootstrap a missing file with `[process] control = true`,
-`[network] control = true` and `[files] write = true` so the whole UI is
-testable locally. Release builds keep all three off. An existing file is never
+`[network] control = true`, `[firewall] control = true` and `[files] write = true`
+so the whole UI is testable locally. Release builds keep all four off. An existing file is never
 rewritten; remove it or edit it to change the generated defaults.
 
 ## Serving
@@ -261,6 +265,51 @@ when stdin is not a terminal. The daemon refuses changes when
 `[network] control = false`, rejects invalid or unknown interface names, and
 will not bring a loopback interface down. The daemon user needs `CAP_NET_ADMIN` for the kernel
 operation to succeed.
+
+### `firewall`
+
+Inspects and, when `[firewall] control = true`, changes the dedicated
+`inet anthracite` nftables table. See [firewall.md](firewall.md) for the table
+layout, requirements and permissions.
+
+#### `firewall status`
+
+```bash
+anth-panel firewall status
+anth-panel firewall list
+```
+
+Prints the managed rules as HANDLE, ACTION, PROTO, PORT and COMMENT. Reading
+does not require control, but it does require permission to run `nft`.
+`list` is an alias for `status`.
+
+#### `firewall allow <PORT[/PROTOCOL]>` and `firewall deny ...`
+
+```bash
+anth-panel firewall allow 22/tcp
+anth-panel firewall allow 53/udp
+anth-panel firewall allow 8080          # tcp by default
+anth-panel firewall deny 23/tcp
+```
+
+`deny` adds a drop rule to the managed blocklist. `allow` removes a matching
+managed drop rule; it cannot override a different firewall table. If no matching
+deny exists, the command reports that traffic is already allowed.
+
+Without `--yes`, the command asks for confirmation on a TTY and refuses to run
+when stdin is not a terminal. The daemon must have `[firewall] control = true`
+and enough privilege to run `nft` directly (`CAP_NET_ADMIN`, root, or the
+container file capability).
+
+#### `firewall delete <HANDLE>` and `firewall flush`
+
+```bash
+anth-panel firewall delete 17
+anth-panel firewall flush
+```
+
+`delete` removes one rule by the handle shown in `status`. `flush` removes every
+rule from the managed chain. Both ask for confirmation unless `--yes` is given.
 
 ### `file`
 

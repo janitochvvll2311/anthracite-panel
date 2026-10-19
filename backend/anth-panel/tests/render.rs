@@ -1,11 +1,11 @@
 use anth_panel::render::{
-    format_kib, format_uptime, render_file_listing, render_host_info, render_network_snapshot,
-    render_process_snapshot, render_response,
+    format_kib, format_uptime, render_file_listing, render_firewall_snapshot, render_host_info,
+    render_network_snapshot, render_process_snapshot, render_response,
 };
 use anth_proto::{
-    HostInfo, LoadAverage, MemoryInfo, NetworkAddress, NetworkAddressFamily, NetworkError,
-    NetworkErrorKind, NetworkInterface, NetworkSnapshot, OsInfo, ProcessInfo, ProcessSnapshot,
-    Response,
+    FirewallProtocol, FirewallRule, FirewallSnapshot, HostInfo, LoadAverage, MemoryInfo,
+    NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind, NetworkInterface,
+    NetworkSnapshot, OsInfo, ProcessInfo, ProcessSnapshot, Response,
 };
 
 fn sample() -> HostInfo {
@@ -401,4 +401,44 @@ fn render_response_uses_the_shared_cli_prefixes() {
         ))),
         "[ERROR] loopback is protected"
     );
+}
+
+#[test]
+fn render_firewall_snapshot_shows_managed_rules() {
+    let snapshot = FirewallSnapshot {
+        initialized: true,
+        control_enabled: true,
+        rules: vec![
+            FirewallRule {
+                handle: 3,
+                chain: "input".to_string(),
+                action: "allow".to_string(),
+                protocol: Some(FirewallProtocol::Tcp),
+                port: Some(22),
+                comment: None,
+            },
+            FirewallRule {
+                handle: 4,
+                chain: "input".to_string(),
+                action: "deny".to_string(),
+                protocol: Some(FirewallProtocol::Udp),
+                port: Some(53),
+                comment: Some("dns".to_string()),
+            },
+        ],
+        ruleset: String::new(),
+    };
+
+    let out = render_firewall_snapshot(&snapshot);
+    for expected in [
+        "HANDLE", "ACTION", "PROTO", "PORT", "3", "ALLOW", "tcp", "22", "DENY", "dns",
+    ] {
+        assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
+    }
+}
+
+#[test]
+fn render_firewall_snapshot_reports_an_uninitialized_table() {
+    let out = render_firewall_snapshot(&FirewallSnapshot::default());
+    assert_eq!(out, "Firewall table is not initialized.");
 }

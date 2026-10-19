@@ -653,3 +653,85 @@ fn file_response_roundtrip_and_wire_format() {
     });
     assert!(chunk.to_json().unwrap().contains(r#""bytes":"YWJj""#));
 }
+
+#[test]
+fn firewall_requests_use_the_shared_tagged_envelope() {
+    assert_eq!(
+        Request::FirewallStatus.to_json().unwrap(),
+        r#"{"type":"FirewallStatus"}"#
+    );
+
+    let add = Request::FirewallAddRule {
+        action: anth_proto::FirewallAction::Allow,
+        port: 8080,
+        protocol: anth_proto::FirewallProtocol::Tcp,
+        comment: Some("web".to_string()),
+    };
+    assert_eq!(
+        add.to_json().unwrap(),
+        r#"{"type":"FirewallAddRule","data":{"action":"allow","port":8080,"protocol":"tcp","comment":"web"}}"#
+    );
+
+    let delete = Request::FirewallDeleteRule { handle: 3 };
+    assert_eq!(
+        delete.to_json().unwrap(),
+        r#"{"type":"FirewallDeleteRule","data":{"handle":3}}"#
+    );
+}
+
+#[test]
+fn firewall_snapshot_and_error_responses_roundtrip() {
+    let snapshot = anth_proto::FirewallSnapshot {
+        initialized: true,
+        control_enabled: true,
+        rules: vec![anth_proto::FirewallRule {
+            handle: 3,
+            chain: "input".to_string(),
+            action: "allow".to_string(),
+            protocol: Some(anth_proto::FirewallProtocol::Tcp),
+            port: Some(22),
+            comment: Some("ssh".to_string()),
+        }],
+        ruleset: "table inet anthracite".to_string(),
+    };
+    let response = Response::FirewallSnapshot(snapshot.clone());
+    match Response::from_json(&response.to_json().unwrap()).unwrap() {
+        Response::FirewallSnapshot(decoded) => assert_eq!(decoded, snapshot),
+        other => panic!("expected FirewallSnapshot, got {other:?}"),
+    }
+
+    let changed = Response::FirewallChanged {
+        message: "allowed tcp/22".to_string(),
+    };
+    match Response::from_json(&changed.to_json().unwrap()).unwrap() {
+        Response::FirewallChanged { message } => assert_eq!(message, "allowed tcp/22"),
+        other => panic!("expected FirewallChanged, got {other:?}"),
+    }
+
+    let error = Response::FirewallError(anth_proto::FirewallError::new(
+        anth_proto::FirewallErrorKind::Unavailable,
+        "nft is not installed",
+    ));
+    match Response::from_json(&error.to_json().unwrap()).unwrap() {
+        Response::FirewallError(decoded) => {
+            assert_eq!(decoded.kind, anth_proto::FirewallErrorKind::Unavailable);
+        }
+        other => panic!("expected FirewallError, got {other:?}"),
+    }
+}
+
+#[test]
+fn firewall_names_are_case_insensitive() {
+    use std::str::FromStr;
+
+    assert_eq!(
+        anth_proto::FirewallAction::from_str("ALLOW").unwrap(),
+        anth_proto::FirewallAction::Allow
+    );
+    assert_eq!(
+        anth_proto::FirewallProtocol::from_str("UDP").unwrap(),
+        anth_proto::FirewallProtocol::Udp
+    );
+    assert!(anth_proto::FirewallAction::from_str("nope").is_err());
+    assert!(anth_proto::FirewallProtocol::from_str("sctp").is_err());
+}

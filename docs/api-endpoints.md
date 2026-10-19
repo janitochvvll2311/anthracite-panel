@@ -33,6 +33,10 @@ it into a stream becomes `/watch`.
 | `anth-panel network list` | `GET /api/network` |
 | `anth-panel network list --watch 2s` | `GET /api/network/watch?interval=2s` |
 | `anth-panel network down eth0` | `POST /api/network/eth0/state` with `{"up":false}` |
+| `anth-panel firewall status` | `GET /api/firewall` |
+| `anth-panel firewall allow 22/tcp` | `POST /api/firewall/rules` with `{"action":"allow","port":22}` |
+| `anth-panel firewall delete 3` | `POST /api/firewall/rules/3/delete` |
+| `anth-panel firewall flush` | `POST /api/firewall/flush` |
 | `anth-panel file list /tmp` | `GET /api/files?path=/tmp` |
 | `anth-panel file read /tmp/a` | `GET /api/files/content?path=/tmp/a` |
 | `anth-panel file mkdir /tmp/a` | `POST /api/files/mkdir` with `{"path":"/tmp/a"}` |
@@ -65,6 +69,10 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/network` | One network-interface snapshot |
 | `GET` | `/api/network/watch` | Network snapshots as SSE |
 | `POST` | `/api/network/{name}/state` | Bring an interface up or down |
+| `GET` | `/api/firewall` | One managed firewall snapshot |
+| `POST` | `/api/firewall/rules` | Add a deny or remove a managed deny |
+| `POST` | `/api/firewall/rules/{handle}/delete` | Delete a rule by handle |
+| `POST` | `/api/firewall/flush` | Flush the managed chain |
 | `GET` | `/api/files` | One directory listing |
 | `GET` | `/api/files/content` | Inline file preview |
 | `GET` | `/api/files/download` | File download |
@@ -441,6 +449,101 @@ require a daemon user with `CAP_NET_ADMIN`; a permission failure is `403`.
 | `404` | The interface does not exist |
 | `500` | The kernel operation failed |
 | `503` | No daemon is listening on the socket |
+
+## `GET /api/firewall`
+
+One snapshot of the dedicated `inet anthracite` nftables table.
+
+```bash
+curl -s localhost:8080/api/firewall
+```
+
+```json
+{
+  "initialized": true,
+  "control_enabled": false,
+  "rules": [
+    {
+      "handle": 3,
+      "chain": "input",
+      "action": "allow",
+      "protocol": "tcp",
+      "port": 22,
+      "comment": "ssh"
+    }
+  ],
+  "ruleset": "table inet anthracite { ... }"
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `initialized` | Whether the managed table exists |
+| `control_enabled` | Whether `[firewall] control` allows changes |
+| `rules` | Rules in the managed table |
+| `ruleset` | Textual `nft list table inet anthracite` output |
+
+| Status | When |
+| --- | --- |
+| `200` | Snapshot returned |
+| `403` | The daemon lacks permission to run `nft` |
+| `503` | `nft` is unavailable or no daemon is listening |
+
+## `POST /api/firewall/rules`
+
+Adds a deny rule, or removes a matching managed deny for `allow`. `protocol`
+defaults to `tcp`. The managed chain is a blocklist with an accept policy, so
+`allow` cannot override another firewall table.
+
+```bash
+curl -s -X POST localhost:8080/api/firewall/rules \
+  -H 'content-type: application/json' \
+  -d '{"action":"deny","port":8080,"protocol":"tcp","comment":"web"}'
+```
+
+```json
+{"message":"denied tcp/8080"}
+```
+
+The route returns `403` when `[firewall] control = false`. Comments are limited
+to 32 characters from `A-Z`, `a-z`, `0-9`, `.`, `_` and `-`.
+
+| Status | When |
+| --- | --- |
+| `200` | Rule added |
+| `400` | Invalid body, port, protocol or comment |
+| `403` | Firewall control is disabled or permission was denied |
+| `503` | `nft` is unavailable or no daemon is listening |
+| `500` | The `nft` command failed |
+
+## `POST /api/firewall/rules/{handle}/delete`
+
+Deletes one managed rule by the handle returned by `GET /api/firewall`.
+
+```bash
+curl -s -X POST localhost:8080/api/firewall/rules/3/delete
+```
+
+```json
+{"message":"deleted firewall rule 3"}
+```
+
+A handle that does not exist is `404`.
+
+## `POST /api/firewall/flush`
+
+Removes every rule from `inet anthracite input`.
+
+```bash
+curl -s -X POST localhost:8080/api/firewall/flush
+```
+
+```json
+{"message":"flushed 1 firewall rule"}
+```
+
+See [firewall.md](firewall.md) for the table layout, container capabilities and
+security notes.
 
 ## Files
 

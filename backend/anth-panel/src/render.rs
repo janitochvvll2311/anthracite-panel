@@ -1,6 +1,8 @@
 //! Rendering of host information as a bordered text table.
 
-use anth_proto::{FileKind, FileListing, HostInfo, NetworkSnapshot, ProcessSnapshot, Response};
+use anth_proto::{
+    FileKind, FileListing, FirewallSnapshot, HostInfo, NetworkSnapshot, ProcessSnapshot, Response,
+};
 
 const TOP_LEFT: char = '┌';
 const TOP_RIGHT: char = '┐';
@@ -360,6 +362,9 @@ pub fn render_response(response: &Response) -> String {
             format!("[OK] brought {name} {state}")
         }
         Response::NetworkError(error) => format!("[ERROR] {}", error.detail),
+        Response::FirewallSnapshot(snapshot) => render_firewall_snapshot(snapshot),
+        Response::FirewallChanged { message } => format!("[OK] {message}"),
+        Response::FirewallError(error) => format!("[ERROR] {}", error.detail),
         Response::FileListing(listing) => render_file_listing(listing),
         Response::FileChunk(chunk) => format!(
             "[ERROR] unexpected file chunk for {} ({} bytes)",
@@ -396,6 +401,38 @@ pub fn render_response(response: &Response) -> String {
             format!("[ERROR] unexpected terminal exit for session {id} (status {status})")
         }
     }
+}
+
+/// Renders the managed firewall rules. A missing table is a normal state, not
+/// an error: the daemon has simply never created it.
+pub fn render_firewall_snapshot(snapshot: &FirewallSnapshot) -> String {
+    if !snapshot.initialized {
+        return "Firewall table is not initialized.".to_string();
+    }
+
+    let mut table = Table::new(vec![
+        "HANDLE".to_string(),
+        "ACTION".to_string(),
+        "PROTO".to_string(),
+        "PORT".to_string(),
+        "COMMENT".to_string(),
+    ]);
+
+    for rule in &snapshot.rules {
+        table.push(vec![
+            rule.handle.to_string(),
+            rule.action.to_uppercase(),
+            rule.protocol
+                .map(|protocol| protocol.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            rule.port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            rule.comment.clone().unwrap_or_else(|| "-".to_string()),
+        ]);
+    }
+
+    table.render()
 }
 
 /// Renders one directory listing as a table, followed by a warning when the

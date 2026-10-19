@@ -8,6 +8,7 @@ use tokio_util::codec::{Framed, FramedRead, FramedWrite, LinesCodec};
 
 pub mod b64;
 pub mod files;
+pub mod firewall;
 pub mod network;
 pub mod process;
 pub mod terminal;
@@ -15,6 +16,10 @@ pub mod terminal;
 pub use files::{
     FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten,
     DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
+};
+pub use firewall::{
+    FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallRule,
+    FirewallSnapshot,
 };
 pub use network::{
     NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind, NetworkInterface,
@@ -55,6 +60,21 @@ pub enum Request {
         name: String,
         up: bool,
     },
+    /// Ask the daemon for the managed nftables table.
+    FirewallStatus,
+    /// Add one allow/deny rule to the managed nftables chain.
+    FirewallAddRule {
+        action: FirewallAction,
+        port: u16,
+        protocol: FirewallProtocol,
+        comment: Option<String>,
+    },
+    /// Delete one rule from the managed nftables chain by handle.
+    FirewallDeleteRule {
+        handle: u64,
+    },
+    /// Flush every rule from the managed nftables chain.
+    FirewallFlush,
     /// List one directory below the configured filesystem root.
     FileList {
         path: String,
@@ -169,6 +189,14 @@ pub enum Response {
     },
     /// A network operation failed with a machine-readable reason.
     NetworkError(NetworkError),
+    /// One firewall snapshot.
+    FirewallSnapshot(FirewallSnapshot),
+    /// A firewall change succeeded. The message is ready for the CLI.
+    FirewallChanged {
+        message: String,
+    },
+    /// A firewall operation failed with a machine-readable reason.
+    FirewallError(FirewallError),
     /// One directory listing.
     FileListing(FileListing),
     /// One chunk of a file.
