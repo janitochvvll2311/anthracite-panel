@@ -57,20 +57,14 @@ pub struct Sessions {
     inner: Mutex<HashMap<u32, Entry>>,
     next_id: AtomicU32,
     max: usize,
-    user: String,
 }
 
 impl Sessions {
     pub fn new(max: usize) -> Arc<Self> {
-        Self::with_user(max, "auto")
-    }
-
-    pub fn with_user(max: usize, user: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(HashMap::new()),
             next_id: AtomicU32::new(1),
             max: max.max(1),
-            user: user.into(),
         })
     }
 
@@ -90,8 +84,8 @@ impl Sessions {
             return Err(OpenError::AtCapacity);
         }
 
-        let (session, reader) = PtySession::spawn_as(program, size, &self.user)
-            .map_err(|e| OpenError::Spawn(e.to_string()))?;
+        let (session, reader) =
+            PtySession::spawn(program, size).map_err(|e| OpenError::Spawn(e.to_string()))?;
         let program = session.program().to_string();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 

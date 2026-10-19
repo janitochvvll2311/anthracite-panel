@@ -524,7 +524,7 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
     let listener = UnixListener::bind(socket_path)?;
     println!("Listening on {}", socket_path.display());
 
-    let sessions = Sessions::with_user(config.terminal.max_sessions, config.terminal.user.clone());
+    let sessions = Sessions::new(config.terminal.max_sessions);
     let shell = config.terminal.resolved_shell();
     eprintln!(
         "Terminal shell: {shell} (line editing: {})",

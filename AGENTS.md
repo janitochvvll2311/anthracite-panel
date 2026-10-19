@@ -192,9 +192,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `[network]`, `[firewall]` and `[files]`) is TOML with
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at
   `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`,
-  `terminal.shell = "auto"`, `terminal.user = "anth"`, empty token,
-  `max_sessions = 4`, `process.control = false`, `network.control = false`,
-  `firewall.control = false`,
+  `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
+  `process.control = false`, `network.control = false`, `firewall.control = false`,
   legacy `firewall.sudo`/`sudo_password` keys are accepted and ignored,
   `files.root = "/"`, `files.write = false`, `max_entries = 5000`,
   `max_preview_bytes = 1 MiB` and
@@ -203,10 +202,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes. `Config::server_default` returns
-  `Config::dev_default` in debug builds, which sets `terminal.user = "auto"`,
-  `process.control = true`, `network.control = true`, `firewall.control = true`
-  and `files.write = true`; release builds keep the controls off and leave the
-  terminal user as `"anth"`.
+  `Config::dev_default` in debug builds, which sets `process.control = true`,
+  `network.control = true`, `firewall.control = true` and `files.write = true`;
+  release builds keep all four off.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
   `POST /api/echo`, `GET /api/terminal` (WebSocket),
@@ -306,9 +304,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   specific markup and wiring; none of this is a Vite build entry.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
-  `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. `terminal/user.rs` resolves
-  `[terminal] user` (default `anth`, or `auto` for the daemon user); switching to a
-  different account needs root plus `setpriv` from util-linux. One browser WebSocket owns one
+  `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
   daemon connection and one session; dropping either side kills the process group.
   An exited session is removed from the connection's `owned` list so the daemon returns
   to the socket-only path instead of polling an exhausted output stream;

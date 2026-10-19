@@ -42,7 +42,7 @@ RUN addgroup -S anth \
     && adduser -S -G anth -h /home/anth anth \
     && mkdir -p /etc/anth \
     && chown -R anth:anth /etc/anth \
-    && apk add --no-cache curl nftables libcap util-linux \
+    && apk add --no-cache curl nftables libcap \
     && setcap cap_net_admin+ep /usr/sbin/nft
 # nftables still needs CAP_NET_ADMIN in the container bounding set:
 #   docker run --cap-add NET_ADMIN ...   or compose.yaml
