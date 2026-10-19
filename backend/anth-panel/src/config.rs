@@ -11,6 +11,9 @@ pub struct TerminalConfig {
     /// Program to spawn for each session. `"auto"` uses `$SHELL` when it points
     /// at an existing file, then falls back to `/bin/sh`.
     pub shell: String,
+    /// Account the shell runs as. `"auto"` uses the daemon's effective user.
+    /// The release default is `"anth"`.
+    pub user: String,
     /// Shared token reserved for the authentication layer. Not enforced yet.
     pub token: String,
     /// Maximum number of concurrent sessions across the daemon.
@@ -21,6 +24,7 @@ impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             shell: "auto".to_string(),
+            user: "anth".to_string(),
             // Reserved for the authentication layer. A terminal is remote code
             // execution, so the token stays empty until that layer exists.
             token: String::new(),
@@ -177,6 +181,7 @@ impl Config {
         config.process.control = true;
         config.network.control = true;
         config.firewall.control = true;
+        config.terminal.user = "auto".to_string();
         config.files.write = true;
         config
     }
@@ -289,7 +294,16 @@ mod tests {
 
     #[test]
     fn default_shell_uses_auto() {
-        assert_eq!(TerminalConfig::default().shell, "auto");
+        let terminal = TerminalConfig::default();
+        assert_eq!(terminal.shell, "auto");
+        assert_eq!(terminal.user, "anth");
+    }
+
+    #[test]
+    fn debug_defaults_use_the_daemon_user_for_the_terminal() {
+        if cfg!(debug_assertions) {
+            assert_eq!(Config::dev_default().terminal.user, "auto");
+        }
     }
 
     #[test]

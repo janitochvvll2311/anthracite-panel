@@ -129,6 +129,14 @@ fn resizing_changes_the_size_the_shell_sees() {
 }
 
 #[test]
+fn an_unknown_terminal_user_is_rejected() {
+    let error = PtySession::spawn_as("/bin/sh", size(80, 24), "definitely-not-a-real-user")
+        .err()
+        .expect("unknown user should fail");
+    assert!(error.contains("does not exist"), "{error}");
+}
+
+#[test]
 fn an_absurd_size_is_rejected_before_spawning() {
     assert!(PtySession::spawn("/bin/sh", size(0, 0)).is_err());
     assert!(PtySession::spawn("/bin/sh", size(5000, 24)).is_err());
@@ -236,6 +244,7 @@ async fn a_terminal_session_runs_over_the_socket() {
     let config = Config {
         socket_path: path.to_string_lossy().into_owned(),
         terminal: TerminalConfig {
+            user: "auto".to_string(),
             shell: "/bin/sh".to_string(),
             token: "secret".to_string(),
             max_sessions: 2,
@@ -333,6 +342,7 @@ async fn a_client_that_disappears_does_not_leave_a_shell_running() {
     let config = Config {
         socket_path: path.to_string_lossy().into_owned(),
         terminal: TerminalConfig {
+            user: "auto".to_string(),
             shell: "/bin/sh".to_string(),
             token: "secret".to_string(),
             max_sessions: 2,

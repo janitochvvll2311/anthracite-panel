@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use anth_proto::{MAX_TERMINAL_CHUNK, TerminalSize};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use crate::terminal::user::resolve;
+
 pub type SessionResult<T> = Result<T, String>;
 
 /// The control surface of a running terminal.
@@ -49,6 +51,15 @@ impl PtySession {
     /// Returns the control half and the read half. The read half blocks, so it
     /// belongs on a dedicated thread.
     pub fn spawn(program: &str, size: TerminalSize) -> SessionResult<(Self, Box<dyn Read + Send>)> {
+        Self::spawn_as(program, size, "auto")
+    }
+
+    /// Spawns `program` on a new PTY as the configured account.
+    pub fn spawn_as(
+        program: &str,
+        size: TerminalSize,
+        configured_user: &str,
+    ) -> SessionResult<(Self, Box<dyn Read + Send>)> {
         if !size.is_sane() {
             return Err(format!(
                 "terminal size {}x{} is outside {}x{}..{}x{}",
@@ -61,6 +72,10 @@ impl PtySession {
             ));
         }
 
+        let user = resolve(configured_user)?;
+        let current_uid = unsafe { libc::geteuid() };
+        let uses_setpriv = user.uid != current_uid;
+
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: size.rows,
@@ -70,24 +85,49 @@ impl PtySession {
             })
             .map_err(|e| format!("failed to open a pty: {e}"))?;
 
-        let mut command = CommandBuilder::new(program);
+        let mut command = if !uses_setpriv {
+            CommandBuilder::new(program)
+        } else {
+            if current_uid != 0 {
+                return Err(format!(
+                    "terminal user `{}` requires the daemon to run as root",
+                    user
+                ));
+            }
+            let mut command = CommandBuilder::new("setpriv");
+            command.arg("--reuid");
+            command.arg(user.uid.to_string());
+            command.arg("--regid");
+            command.arg(user.gid.to_string());
+            command.arg("--init-groups");
+            command.arg("--");
+            command.arg(program);
+            command
+        };
         command.env_clear();
         command.env("TERM", "xterm-256color");
         // Without a UTF-8 locale, full-screen tools such as btop refuse to
         // start. Keep the environment minimal but make the character set sane.
         command.env("LANG", "C.UTF-8");
         command.env("LC_ALL", "C.UTF-8");
+        command.env("HOME", &user.home);
+        command.env("USER", &user.name);
+        command.env("LOGNAME", &user.name);
+        command.env("SHELL", program);
         if let Ok(path) = std::env::var("PATH") {
             command.env("PATH", path);
         }
-        if let Ok(home) = std::env::var("HOME") {
-            command.env("HOME", home);
-        }
 
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|e| format!("failed to spawn {program}: {e}"))?;
+        let child = pair.slave.spawn_command(command).map_err(|e| {
+            if uses_setpriv {
+                format!(
+                    "failed to spawn {program} as {} (setpriv is required to switch users): {e}",
+                    user
+                )
+            } else {
+                format!("failed to spawn {program}: {e}")
+            }
+        })?;
         drop(pair.slave);
 
         let reader = pair

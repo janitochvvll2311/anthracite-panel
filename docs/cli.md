@@ -47,6 +47,12 @@ Both forms are equivalent.
 ```toml
 socket_path = "/var/tmp/anth.sock"
 
+[terminal]
+shell = "auto"
+user = "anth"
+token = ""
+max_sessions = 4
+
 [process]
 control = false
 
@@ -73,10 +79,12 @@ default config when it cannot be loaded. Client subcommands (`echo`,
 `host-info`, `process`, `network`, `firewall`, `file`) never create the file — they use
 defaults if it is absent, so probing a machine does not leave files behind.
 
-Debug builds bootstrap a missing file with `[process] control = true`,
-`[network] control = true`, `[firewall] control = true` and `[files] write = true`
-so the whole UI is testable locally. Release builds keep all four off. An existing file is never
-rewritten; remove it or edit it to change the generated defaults.
+Debug builds bootstrap a missing file with `[terminal] user = "auto"`,
+`[process] control = true`, `[network] control = true`,
+`[firewall] control = true` and `[files] write = true` so the whole UI is
+testable locally. Release builds keep the controls off, leave the terminal user
+as `"anth"` and omit the legacy sudo keys. An existing file is never rewritten;
+remove it or edit it to change the generated defaults.
 
 ## Serving
 
