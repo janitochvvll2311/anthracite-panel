@@ -10,6 +10,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel file explorer component."
+    />
     <title>anth-file-explorer · test harness</title>
     <style>
       :root {
@@ -57,6 +61,41 @@
       p {
         margin: 0;
         color: var(--muted);
+      }
+
+      .eyebrow {
+        display: inline-block;
+        margin-bottom: 8px;
+        color: var(--accent);
+        font: 11px/1.4 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .notes {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+        margin: 20px 0 0;
+      }
+
+      .note {
+        padding: 12px 14px;
+        border: 1px solid var(--panel-border);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--panel) 72%, transparent);
+      }
+
+      .note h2 {
+        margin: 0 0 6px;
+        font-size: 14px;
+      }
+
+      .note ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        font-size: 13px;
       }
 
       .toolbar {
@@ -113,11 +152,38 @@
   </head>
   <body>
     <main>
-      <h1>anth-file-explorer</h1>
-      <p>
-        Dev harness. Start <code>anth-panel run</code> with
-        <code>[files] write = true</code> to exercise the write controls.
-      </p>
+      <header>
+        <span class="eyebrow">dev harness · not in the production build</span>
+        <h1>anth-file-explorer</h1>
+        <p>
+          Filesystem explorer backed by <code>GET /api/files</code>. It shows
+          breadcrumbs, sorting, hidden files, text/image previews and the write
+          controls. The listing scrolls inside a bounded height so the preview
+          stays visible. Debug builds generate <code>[files] write = true</code>;
+          in release, enable it explicitly before testing uploads, renaming or
+          deletion.
+        </p>
+      </header>
+
+      <section class="notes" aria-label="Harness notes">
+        <article class="note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Navigate with the breadcrumbs or by double-clicking a folder.</li>
+            <li>Click a header to sort; directories stay first.</li>
+            <li>Toggle hidden files and preview text, images or binaries.</li>
+            <li>With writes enabled, create, upload, rename and delete.</li>
+          </ul>
+        </article>
+        <article class="note">
+          <h2>Run it</h2>
+          <ul>
+            <li><code>cargo run -p anth-panel -- run</code> from <code>backend/</code>.</li>
+            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li>Open <code>/anth-file.test.html</code> on the Vite port.</li>
+          </ul>
+        </article>
+      </section>
 
       <div class="toolbar">
         <label>
