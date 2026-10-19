@@ -59,6 +59,7 @@ frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   anth-file.test.html       # dev-only file explorer harness, never built
   src/
     components/             # terminal, process and file components and their Vitest tests
+    harness/                # anth-harness page shell + shared harness.css for dev pages
     lib/ws/                 # generic JSON WebSocket transport and tests
     lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
     lib/processes/          # process client, wire types, sort/display helpers and tests
@@ -242,6 +243,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `/api/files` and `lib/files/display.ts` owns path, size and sort helpers. The
   read-only state comes from the listing's `write_enabled`. Tests live under
   `src/components/` and `src/lib/files/`; `anth-file.test.html` is the dev harness.
+- **Dev harnesses**: `src/harness/anth-harness.ts` provides the shared page shell
+  (eyebrow, heading, `description`/`actions`/default slots), while
+  `src/harness/harness.css` owns the common light-DOM controls, notes and page
+  background. The `anth-*.test.html` files keep only their specific markup and
+  wiring; none of this is a Vite build entry.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
