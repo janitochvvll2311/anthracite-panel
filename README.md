@@ -31,8 +31,9 @@ client or daemon can implement against, so it must stay free of panel internals.
 
 ## Quick start
 
-The binary embeds the built frontend with `rust-embed`, so `backend/anth-panel/www/`
-must be populated before `anth-panel` compiles. Build the frontend first:
+The binary embeds the built frontend with `rust-embed` from
+`backend/anth-panel/www/`. Populate it to get the web UI; the backend itself
+compiles without it. Build the frontend first:
 
 ```bash
 cd frontend
@@ -54,9 +55,9 @@ anth-panel host-info
 anth-panel host-info --watch 2s
 ```
 
-`www/` is gitignored apart from a placeholder. Without a frontend build the
-binary still compiles and the API works, but `GET /` answers `404` because there
-is no UI to serve. Build the frontend once to get the panel.
+`www/` is gitignored apart from a placeholder. Without the build the binary
+still compiles and the API works, but `GET /` answers `404`: there is no UI to
+serve. Build the frontend once to get the panel.
 
 The workspace pins the `x86_64-unknown-linux-musl` target. If that target is not
 installed, pass `--target x86_64-unknown-linux-gnu` to `cargo`.
