@@ -358,8 +358,9 @@ Reply to `NetworkList`.
 ```
 
 `loopback` marks an `IFF_LOOPBACK` interface; the daemon refuses to bring one
-down. The daemon returns at most 2000 interfaces; `total` reports the
-untruncated count and a shortened list adds a human-readable `warning`.
+down. The daemon returns at most 2000 interfaces and shrinks the list further to
+fit the 1 MiB line cap; `total` reports the untruncated count and a shortened
+list adds a human-readable `warning`.
 Traffic counters are cumulative. `timestamp_ms` lets a client compute
 RX/TX rates between consecutive snapshots; the daemon does not keep a sampler.
 

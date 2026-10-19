@@ -255,7 +255,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   the loopback-down guard before calling `SIOCSIFFLAGS`. The guard runs on the
   flags returned by `SIOCGIFFLAGS`, so an unreadable sysfs `flags` file cannot
   fail open. Snapshots cap the list at 2000 interfaces and report `total` and
-  `warning` when shortened. Up/down runs on a blocking worker.
+  `warning` when shortened; the fit loop also enforces the 1 MiB serialized
+  line cap for address-heavy rows. Up/down runs on a blocking worker.
   `anth-network-monitor` follows the SSE stream through an injected
   `NetworkClient`, computes RX/TX rates from cumulative counters and only shows
   controls when the snapshot says `control_enabled`. The dev harness is

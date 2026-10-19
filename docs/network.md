@@ -104,10 +104,11 @@ delta produces no rate rather than a bogus value.
 ## Truncation
 
 One protocol line is capped at 1 MiB. A snapshot returns at most 2000
-interfaces, sorted by name. When the host has more, `truncated` is `true`,
-`total` reports the number found, and `warning` contains a human-readable
-notice. The CLI prints the warning below the table and the web component shows
-it above the table.
+interfaces, sorted by name, and is shrunk further when address-heavy rows still
+exceed the line cap. When any rows are dropped, `truncated` is `true`, `total`
+reports the number found, and `warning` contains a human-readable notice. The
+CLI prints the warning below the table and the web component shows it above the
+table.
 
 ## HTTP and browser
 

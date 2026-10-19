@@ -390,7 +390,8 @@ curl -s localhost:8080/api/network
 
 RX/TX counters are cumulative. Clients compute rates from two snapshots with
 `timestamp_ms`; the server never keeps a sampler. A snapshot returns at most
-2000 interfaces; beyond that it sets `truncated` and includes a `warning`.
+2000 interfaces and is shrunk further to fit the 1 MiB line cap; either case
+sets `truncated` and includes a `warning`.
 
 | Status | When |
 | --- | --- |

@@ -18,8 +18,8 @@ use std::path::{Component, Path};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_proto::{
-    NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind, NetworkInterface,
-    NetworkSnapshot,
+    MAX_LINE_LEN, NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind,
+    NetworkInterface, NetworkSnapshot, Response,
 };
 
 use crate::text::read_trimmed;
@@ -27,9 +27,9 @@ use crate::text::read_trimmed;
 const SYS_CLASS_NET: &str = "sys/class/net";
 const PROC_NET_DEV: &str = "proc/net/dev";
 
-/// Maximum interfaces returned in one snapshot. The protocol is newline
-/// delimited and one line is capped at 1 MiB; at roughly 400 bytes per
-/// interface this leaves ample headroom.
+/// Upper bound on interfaces returned in one snapshot. The serialized snapshot
+/// is shrunk further when addresses make rows large, so the 1 MiB protocol line
+/// cap holds for any address mix.
 pub const MAX_INTERFACES: usize = 2000;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +53,7 @@ pub fn collect(control_enabled: bool) -> NetworkSnapshot {
         interface.addresses = addresses.remove(&interface.name).unwrap_or_default();
     }
 
-    snapshot
+    fit_snapshot(snapshot)
 }
 
 /// Reads a snapshot from an alternative filesystem root. Addresses are not
@@ -68,14 +68,14 @@ pub fn collect_from(root: impl AsRef<Path>, control_enabled: bool) -> NetworkSna
     interfaces.sort_by(|left, right| left.name.cmp(&right.name));
     let (total, truncated, warning) = cap_interfaces(&mut interfaces);
 
-    NetworkSnapshot {
+    fit_snapshot(NetworkSnapshot {
         interfaces,
         timestamp_ms: timestamp_ms(),
         control_enabled,
         total,
         truncated,
         warning,
-    }
+    })
 }
 
 fn cap_interfaces(interfaces: &mut Vec<NetworkInterface>) -> (usize, bool, Option<String>) {
@@ -84,9 +84,58 @@ fn cap_interfaces(interfaces: &mut Vec<NetworkInterface>) -> (usize, bool, Optio
     if truncated {
         interfaces.truncate(MAX_INTERFACES);
     }
-    let warning = truncated.then(|| format!("showing {MAX_INTERFACES} of {total} interfaces"));
+    let warning = truncated.then(|| interface_warning(MAX_INTERFACES, total));
 
     (total, truncated, warning)
+}
+
+/// Shrinks a snapshot until its serialized response fits the protocol line cap.
+///
+/// The row cap alone is not enough: address-heavy rows can still push 2000
+/// interfaces over 1 MiB. The binary search keeps the largest prefix that fits.
+fn fit_snapshot(mut snapshot: NetworkSnapshot) -> NetworkSnapshot {
+    if snapshot_json_len(&snapshot) <= MAX_LINE_LEN {
+        return snapshot;
+    }
+
+    let total = snapshot.total;
+    let mut high = snapshot.interfaces.len();
+    let mut low = 0usize;
+    let mut best = 0usize;
+
+    while low <= high {
+        let mid = low + (high - low) / 2;
+        let mut candidate = snapshot.clone();
+        candidate.interfaces.truncate(mid);
+        candidate.truncated = true;
+        candidate.warning = Some(interface_warning(mid, total));
+        let len = snapshot_json_len(&candidate);
+
+        if len <= MAX_LINE_LEN {
+            best = mid;
+            low = mid + 1;
+        } else if mid == 0 {
+            break;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    snapshot.interfaces.truncate(best);
+    snapshot.truncated = true;
+    snapshot.warning = Some(interface_warning(best, total));
+    snapshot
+}
+
+fn interface_warning(shown: usize, total: usize) -> String {
+    format!("showing {shown} of {total} interfaces")
+}
+
+fn snapshot_json_len(snapshot: &NetworkSnapshot) -> usize {
+    Response::NetworkSnapshot(snapshot.clone())
+        .to_json()
+        .map(|json| json.len())
+        .unwrap_or(usize::MAX)
 }
 
 /// Brings one interface up or down.
@@ -564,6 +613,70 @@ mod tests {
             MAX_INTERFACES + 5
         );
         assert_eq!(warning.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn size_cap_keeps_address_heavy_snapshots_under_the_line_limit() {
+        let addresses = vec![
+            NetworkAddress {
+                family: NetworkAddressFamily::Ipv4,
+                address: "192.0.2.10".to_string(),
+                prefix_len: 24,
+            },
+            NetworkAddress {
+                family: NetworkAddressFamily::Ipv6,
+                address: "2001:db8::10".to_string(),
+                prefix_len: 64,
+            },
+            NetworkAddress {
+                family: NetworkAddressFamily::Ipv6,
+                address: "2001:db8:1::10".to_string(),
+                prefix_len: 64,
+            },
+            NetworkAddress {
+                family: NetworkAddressFamily::Ipv6,
+                address: "2001:db8:2::10".to_string(),
+                prefix_len: 64,
+            },
+            NetworkAddress {
+                family: NetworkAddressFamily::Ipv6,
+                address: "2001:db8:3::10".to_string(),
+                prefix_len: 64,
+            },
+            NetworkAddress {
+                family: NetworkAddressFamily::Ipv6,
+                address: "fe80::10".to_string(),
+                prefix_len: 64,
+            },
+        ];
+        let interfaces = (0..MAX_INTERFACES)
+            .map(|index| NetworkInterface {
+                name: format!("veth{index:010}"),
+                addresses: addresses.clone(),
+                ..NetworkInterface::default()
+            })
+            .collect::<Vec<_>>();
+        let total = interfaces.len();
+        let snapshot = NetworkSnapshot {
+            interfaces,
+            timestamp_ms: 1_700_000_000_000,
+            control_enabled: true,
+            total,
+            truncated: false,
+            warning: None,
+        };
+
+        assert!(
+            snapshot_json_len(&snapshot) > MAX_LINE_LEN,
+            "the fixture should exceed the line cap before fitting"
+        );
+
+        let fitted = fit_snapshot(snapshot);
+
+        assert!(fitted.interfaces.len() < total);
+        assert!(fitted.truncated);
+        assert!(fitted.warning.is_some());
+        assert!(snapshot_json_len(&fitted) <= MAX_LINE_LEN);
     }
 
     #[test]
