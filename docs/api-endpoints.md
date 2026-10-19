@@ -383,10 +383,16 @@ curl -s -D- "localhost:8080/api/files/content?path=/etc/hostname"
 
 | Header | Meaning |
 | --- | --- |
-| `content-type` | MIME type guessed from the extension |
+| `content-type` | `text/plain; charset=utf-8` for ordinary files; safe raster image types keep their MIME |
+| `x-content-type-options` | Always `nosniff` |
 | `content-disposition` | `inline; filename="..."` |
 | `x-anth-size` | Full file size in bytes |
 | `x-anth-truncated` | `true` when the preview stopped at the limit |
+
+Inline previews are deliberately inert. HTML, SVG and every non-image type are
+served as `text/plain`, and only raster images (`png`, `jpeg`, `gif`, `webp`,
+`avif`, `bmp` and icons) keep an image MIME. This prevents a file in the browsed
+tree from running script on the panel's origin.
 
 ### `GET /api/files/download`
 
@@ -439,10 +445,11 @@ curl -s -X POST \
 {"path":"/var/tmp/a.bin","size":1234}
 ```
 
-The API reads the body up to `[files] max_upload_bytes`, then forwards it to the
-daemon in 256 KiB chunks. The daemon writes a temporary file in the destination
-directory and renames it only after the last chunk, so an interrupted upload
-does not replace the destination.
+The API forwards each request-body frame to the daemon as it arrives, splitting
+frames into 256 KiB chunks and enforcing `[files] max_upload_bytes` on the way.
+The daemon writes a temporary file in the destination directory and renames it
+only after the last chunk, so an interrupted upload does not replace the
+destination.
 
 | Status | When |
 | --- | --- |

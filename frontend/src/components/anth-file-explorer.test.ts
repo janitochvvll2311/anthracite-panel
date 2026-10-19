@@ -206,6 +206,33 @@ describe('AnthFileExplorer', () => {
     ).toContain('/api/files/download?path=%2Fnote.txt')
   })
 
+  it('never renders SVG previews as active images', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        entries: [fileEntry({ name: 'icon.svg', path: '/icon.svg' })],
+      }),
+    )
+    client.readResults.set('/icon.svg', {
+      blob: new Blob(['<svg><script>alert(1)</script></svg>'], {
+        type: 'text/plain',
+      }),
+      size: 39,
+      truncated: false,
+      mime: 'image/svg+xml',
+    })
+
+    const element = await mount(client)
+    selectFile(element, 'icon.svg')
+    await flush(element)
+
+    expect(element.shadowRoot?.querySelector('.image-preview')).toBeNull()
+    expect(element.shadowRoot?.querySelector('.text-preview')?.textContent).toContain(
+      '<svg>',
+    )
+  })
+
   it('shows a binary message and a truncation warning', async () => {
     const client = new FakeFileClient()
     client.listings.set(

@@ -158,3 +158,8 @@ Authentication is still unimplemented, as with the terminal and process routes.
 HTTP API can browse that tree. Keep `write = false` unless the panel is on a
 trusted network, and prefer a narrow `root` such as `/srv` or a user's home over
 `/`.
+
+Inline previews never execute active content on the panel origin: HTML, SVG and
+other non-image files are served as `text/plain` with
+`x-content-type-options: nosniff`; only safe raster image types keep an image
+MIME. Downloads keep their guessed MIME but are served as attachments.

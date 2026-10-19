@@ -234,8 +234,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   and performs atomic uploads through a per-connection temporary file. Writes are
   gated by `[files] write`, which defaults to `false`. `FileError` carries a
   machine-readable kind so the HTTP layer can map `404`/`403`/`409`/`413`.
-  `render_file_listing` is the CLI table; the API streams downloads and previews
-  through the chunked `FileRead` flow instead of buffering a whole file in one frame.
+  `render_file_listing` is the CLI table; the API streams uploads and downloads
+  through the chunked flow instead of buffering a whole file, and inline previews
+  force `text/plain` plus `nosniff` except for a safe raster-image allowlist.
 - **Frontend file explorer**: `anth-file-explorer` owns breadcrumbs, navigation,
   sorting, hidden-file filtering, previews, uploads and confirmed writes. It only
   depends on the injected `FileClient`; `lib/files/file-client.ts` implements

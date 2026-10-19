@@ -1,5 +1,5 @@
 use axum::body::{Body, Bytes};
-use axum::extract::rejection::{BytesRejection, JsonRejection, PathRejection, QueryRejection};
+use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{Response, StatusCode, Uri};
@@ -431,22 +431,16 @@ pub async fn post_file_delete(
     }
 }
 
-/// `POST /api/files/upload?path=/...` — raw request body, chunked to the daemon.
+/// `POST /api/files/upload?path=/...` — raw request body, streamed to the daemon.
 pub async fn post_file_upload(
     State(state): State<AppState>,
     query: Result<Query<FileUploadQuery>, QueryRejection>,
-    body: Result<Bytes, BytesRejection>,
+    body: Body,
 ) -> Result<Json<Value>, ApiError> {
     let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    let body = body.map_err(|e| {
-        ApiError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            format!("upload body rejected: {}", e.body_text()),
-        )
-    })?;
     require_file_write(&state)?;
 
-    let written = upload_file(&state, &query.path, query.overwrite, &body).await?;
+    let written = upload_stream(&state, &query.path, query.overwrite, body).await?;
     Ok(Json(
         serde_json::json!({ "path": written.path, "size": written.size }),
     ))
@@ -530,11 +524,11 @@ async fn query_file_chunk(
     }
 }
 
-async fn upload_file(
+async fn upload_stream(
     state: &AppState,
     path: &str,
     overwrite: bool,
-    bytes: &[u8],
+    body: Body,
 ) -> Result<FileWritten, ApiError> {
     let mut client = state
         .create_client()
@@ -563,44 +557,66 @@ async fn upload_file(
         }
     };
 
-    let result = upload_chunks(&mut client, id, bytes).await;
+    let result = forward_upload(&mut client, id, body, state.config.files.max_upload_bytes).await;
     if result.is_err() {
         let _ = query_command(&mut client, &Request::FileWriteAbort { id }).await;
     }
     result
 }
 
-async fn upload_chunks(
+async fn forward_upload(
     client: &mut AnthClient,
     id: u32,
-    bytes: &[u8],
+    body: Body,
+    max_bytes: u64,
 ) -> Result<FileWritten, ApiError> {
-    for chunk in bytes.chunks(DEFAULT_FILE_CHUNK as usize) {
-        match query_command(
-            client,
-            &Request::FileWriteChunk {
-                id,
-                bytes: chunk.to_vec(),
-            },
-        )
-        .await?
-        {
-            CommandResponse::FileWriteAccepted { .. } => {}
-            CommandResponse::FileError(error) => return Err(file_api_error(error)),
-            CommandResponse::Error { detail } => {
-                return Err(ApiError::new(StatusCode::BAD_GATEWAY, detail));
-            }
-            other => {
-                return Err(ApiError::new(
-                    StatusCode::BAD_GATEWAY,
-                    format!("unexpected daemon response: {other:?}"),
-                ));
-            }
+    let mut stream = body.into_data_stream();
+    let mut received = 0u64;
+
+    while let Some(frame) = stream.next().await {
+        let bytes = frame.map_err(|error| {
+            ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("upload body rejected: {error}"),
+            )
+        })?;
+        received = received
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "upload size overflow"))?;
+        if received > max_bytes {
+            return Err(ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!("upload exceeds files.max_upload_bytes ({max_bytes})"),
+            ));
+        }
+
+        for chunk in bytes.chunks(DEFAULT_FILE_CHUNK as usize) {
+            send_upload_chunk(client, id, chunk).await?;
         }
     }
 
     match query_command(client, &Request::FileWriteFinish { id }).await? {
         CommandResponse::FileWritten(written) => Ok(written),
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
+    }
+}
+
+async fn send_upload_chunk(client: &mut AnthClient, id: u32, bytes: &[u8]) -> Result<(), ApiError> {
+    match query_command(
+        client,
+        &Request::FileWriteChunk {
+            id,
+            bytes: bytes.to_vec(),
+        },
+    )
+    .await?
+    {
+        CommandResponse::FileWriteAccepted { .. } => Ok(()),
         CommandResponse::FileError(error) => Err(file_api_error(error)),
         CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
         other => Err(ApiError::new(
@@ -618,9 +634,16 @@ fn file_body(
     disposition: &str,
     cache: Option<&str>,
 ) -> Result<Response<Body>, ApiError> {
-    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    let guessed = mime_guess::from_path(path).first_or_octet_stream();
+    let content_type = if disposition == "inline" && !is_safe_preview_image(guessed.as_ref()) {
+        "text/plain; charset=utf-8"
+    } else {
+        guessed.as_ref()
+    };
+
     let mut builder = Response::builder()
-        .header("content-type", mime.as_ref())
+        .header("content-type", content_type)
+        .header("x-content-type-options", "nosniff")
         .header(
             "content-disposition",
             content_disposition(disposition, path),
@@ -634,6 +657,23 @@ fn file_body(
     builder
         .body(body)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// Images that browsers can render safely in an `<img>` without executing
+/// active content. SVG is deliberately excluded.
+fn is_safe_preview_image(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/png"
+            | "image/apng"
+            | "image/jpeg"
+            | "image/gif"
+            | "image/webp"
+            | "image/avif"
+            | "image/bmp"
+            | "image/x-icon"
+            | "image/vnd.microsoft.icon"
+    )
 }
 
 fn content_disposition(kind: &str, path: &str) -> String {

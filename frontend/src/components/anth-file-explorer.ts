@@ -192,12 +192,9 @@ export class AnthFileExplorer extends LitElement {
       let text: string | undefined
       let url: string | undefined
 
-      if (mime.startsWith('image/')) {
+      if (isSafeImageMime(mime)) {
         kind = 'image'
         url = URL.createObjectURL(result.blob)
-      } else if (isTextMime(mime)) {
-        kind = 'text'
-        text = await result.blob.text()
       } else {
         const sample = new Uint8Array(
           await result.blob.slice(0, 512).arrayBuffer(),
@@ -824,17 +821,19 @@ export class AnthFileExplorer extends LitElement {
   `
 }
 
-function isTextMime(mime: string): boolean {
-  const normalized = mime.toLowerCase()
-  return (
-    normalized.startsWith('text/') ||
-    normalized === 'application/json' ||
-    normalized === 'application/javascript' ||
-    normalized === 'application/xml' ||
-    normalized === 'application/x-sh' ||
-    normalized.endsWith('+json') ||
-    normalized.endsWith('+xml')
-  )
+function isSafeImageMime(mime: string): boolean {
+  const normalized = mime.split(';', 1)[0].trim().toLowerCase()
+  return [
+    'image/png',
+    'image/apng',
+    'image/jpeg',
+    'image/gif',
+    'image/webp',
+    'image/avif',
+    'image/bmp',
+    'image/x-icon',
+    'image/vnd.microsoft.icon',
+  ].includes(normalized)
 }
 
 function messageOf(error: unknown): string {

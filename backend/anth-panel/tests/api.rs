@@ -7,7 +7,7 @@ use anth_panel::app::AppState;
 use anth_panel::config::{Config, FilesConfig};
 use anth_panel::files::{FileService, PendingUpload};
 use anth_proto::{AnthServer, FileError, FileErrorKind, Request, Response};
-use axum::body::{Body, to_bytes};
+use axum::body::{Body, Bytes, to_bytes};
 use axum::http::{Request as HttpRequest, StatusCode};
 use tower::ServiceExt;
 
@@ -746,9 +746,73 @@ async fn content_route_truncates_at_max_preview_bytes() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-anth-size"], "6");
     assert_eq!(response.headers()["x-anth-truncated"], "true");
-    assert_eq!(response.headers()["content-type"], "text/plain");
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain")
+    );
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[..], b"abcd");
+}
+
+#[tokio::test]
+async fn content_route_downgrades_active_documents_to_text() {
+    let fixture = file_fixture("content-active", false, 1024);
+    fs::write(
+        fixture.root.join("evil.html"),
+        b"<script>alert('origin')</script>",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("evil.svg"),
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>",
+    )
+    .unwrap();
+
+    for path in ["/evil.html", "/evil.svg"] {
+        let response = file_app(&fixture)
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/files/content?path={path}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            response.headers()["content-disposition"],
+            format!("inline; filename=\"{}\"", &path[1..])
+        );
+    }
+}
+
+#[tokio::test]
+async fn content_route_keeps_safe_images_inline() {
+    let fixture = file_fixture("content-image", false, 1024);
+    fs::write(fixture.root.join("pixel.png"), b"not-a-real-png").unwrap();
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/content?path=/pixel.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
 }
 
 #[tokio::test]
@@ -910,6 +974,33 @@ async fn path_traversal_is_rejected_by_the_daemon() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn upload_route_forwards_multiple_body_frames() {
+    let fixture = file_fixture("upload-stream-route", true, 1024);
+    let body = Body::from_stream(futures::stream::iter(vec![
+        Ok::<_, std::io::Error>(Bytes::from_static(b"hello ")),
+        Ok::<_, std::io::Error>(Bytes::from_static(b"world")),
+    ]));
+
+    let response = file_app(&fixture)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/upload?path=/streamed.txt")
+                .header("content-type", "application/octet-stream")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        fs::read(fixture.root.join("streamed.txt")).unwrap(),
+        b"hello world"
+    );
 }
 
 #[tokio::test]
