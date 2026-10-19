@@ -54,7 +54,7 @@ export class AnthProcessTable extends LitElement {
   @state()
   private sortDirection: ProcessSortDirection = 'desc'
 
-  protected override updated(changed: PropertyValues<this>): void {
+  protected override willUpdate(changed: PropertyValues<this>): void {
     if (
       changed.has('view') &&
       this.view === 'tree' &&

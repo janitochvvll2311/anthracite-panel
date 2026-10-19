@@ -90,7 +90,7 @@ export class AnthProcessMonitor extends LitElement {
     this.stop()
   }
 
-  protected override updated(changed: PropertyValues<this>): void {
+  protected override willUpdate(changed: PropertyValues<this>): void {
     if (
       (changed.has('client') ||
         changed.has('refreshInterval') ||
