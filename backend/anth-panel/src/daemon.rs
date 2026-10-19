@@ -226,7 +226,12 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
     println!("Listening on {}", socket_path.display());
 
     let sessions = Sessions::new(config.terminal.max_sessions);
-    let program: Arc<str> = Arc::from(config.terminal.shell.as_str());
+    let shell = config.terminal.resolved_shell();
+    eprintln!(
+        "Terminal shell: {shell} (line editing: {})",
+        supports_line_editing(&shell)
+    );
+    let program: Arc<str> = Arc::from(shell);
 
     loop {
         let (socket, _) = listener.accept().await?;

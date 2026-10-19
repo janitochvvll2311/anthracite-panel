@@ -156,7 +156,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   onto it. It is a local renderer, not a dependency.
 - **Config**: `anth_panel::config::Config` (`socket_path` plus the `[terminal]`
   table) is TOML with `#[serde(default, deny_unknown_fields)]`. Defaults: config at
-  `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`. The server subcommands load
+  `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, `shell = "auto"`,
+  empty token and `max_sessions = 4`. `auto` resolves `$SHELL`, then the account's
+  login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes.

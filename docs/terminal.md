@@ -25,16 +25,20 @@ The `[terminal]` table selects the program and the session cap:
 socket_path = "/var/tmp/anth.sock"
 
 [terminal]
-shell = "/bin/sh"        # program to spawn per session
+shell = "auto"           # $SHELL / login shell, then /bin/sh
 token = "a-long-random"  # reserved; not enforced yet
 max_sessions = 4         # concurrent sessions across the daemon
 ```
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `shell` | `/bin/sh` | Program spawned for each session. |
+| `shell` | `"auto"` | Program spawned for each session. `"auto"` uses `$SHELL`, then the account's login shell from `/etc/passwd`, then `/bin/sh`. |
 | `token` | `""` | Reserved for the authentication layer; currently ignored. |
 | `max_sessions` | `4` | Concurrent sessions; further opens are refused, not queued. |
+
+An existing config that explicitly says `shell = "/bin/sh"` keeps that choice;
+change it to `"auto"` or `/bin/bash` if that deployment should get shell-native
+completion.
 
 The browser reaches the same sessions through
 [`GET /api/terminal`](api-endpoints.md#get-apiterminal), which upgrades to a
@@ -61,8 +65,9 @@ WebSocket and bridges it to the daemon. The CLI reaches them through
   `keyboard-mode = "auto"` (the default), a shell with line editing (`bash`,
   `ash`, `zsh`, etc.) handles Up/Down and Tab natively; a shell without it
   (`dash`, `/bin/sh` on Debian) falls back to the component's local history and
-  prefix completion. Set `shell = "/bin/bash"` for file/argument completion in
-  deployments where `/bin/sh` is `dash`. Full-screen programs such as `btop`,
+  prefix completion. The default `shell = "auto"` resolves `$SHELL`, then the
+  account's login shell from `/etc/passwd`, then `/bin/sh`; set
+  `shell = "/bin/bash"` to force bash. Full-screen programs such as `btop`,
   `vim` and `htop` always keep their arrows and Tab. The shell environment
   forces `C.UTF-8`, which those tools need to start.
 

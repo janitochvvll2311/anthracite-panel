@@ -189,10 +189,13 @@ token, private network" and I would say so in the docs rather than imply more.
 socket_path = "/var/tmp/anth.sock"
 
 [terminal]
-shell = "/bin/sh"
+shell = "auto"
 token = ""               # reserved for the auth layer; not enforced yet
 max_sessions = 4
 ```
+
+`shell = "auto"` resolves `$SHELL`, then the account's login shell from
+`/etc/passwd`, then `/bin/sh`.
 
 `Config` uses `#[serde(default, deny_unknown_fields)]`, so a new optional table
 keeps every existing config valid. An `enabled` flag and idle timeout remain
