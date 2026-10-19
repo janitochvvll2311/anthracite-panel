@@ -38,7 +38,20 @@ pub enum Command {
         message: String,
     },
     /// Print the operating system and resources of the daemon host as a table.
-    HostInfo,
+    HostInfo(WatchArgs),
+}
+
+/// `--watch` takes an optional interval: bare, it repeats every 2s.
+#[derive(Args, Debug, Default)]
+pub struct WatchArgs {
+    #[arg(
+        long,
+        value_name = "INTERVAL",
+        num_args = 0..=1,
+        default_missing_value = "2s",
+        help = "Keep reading every INTERVAL (500ms, 2s, 1m) instead of printing once"
+    )]
+    pub watch: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]

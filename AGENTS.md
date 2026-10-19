@@ -28,8 +28,9 @@ backend/
       app.rs                #   AppState shared by the routes
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
       render.rs             #   bordered table renderer for the CLI
+      stream.rs             #   repeat a request: interval parsing + frame output
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
-    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs
+    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs, stream.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /command to the backend in dev
   src/  public/  index.html
@@ -88,7 +89,15 @@ cargo run -p anth-panel -- daemon         # daemon only, reads /etc/anth/config.
 cargo run -p anth-panel -- api            # HTTP API only; needs a daemon
 cargo run -p anth-panel -- echo "hola"    # CLI client; needs a running daemon
 cargo run -p anth-panel -- host-info      # host snapshot as a table; needs a daemon
+cargo run -p anth-panel -- host-info --watch          # same, refreshed every 2s
+cargo run -p anth-panel -- host-info --watch 500ms    # same, every 500ms
 ```
+
+`host-info --watch [INTERVAL]` repeats the read until Ctrl-C. The interval takes an
+`ms`/`s`/`m`/`h` suffix, defaults to `2s` when the flag is bare, and is rejected below
+`10ms` so a typo cannot turn into a busy loop. On a terminal each frame overwrites the
+previous one; when redirected, frames are separated by a blank line. One connection is
+kept open for the whole stream. Ctrl-C exits `0`; a dropped daemon exits `1`.
 
 `host-info` prints the operating system and resources of the host the daemon runs on
 (hostname, distro, kernel, architecture, CPU, cores, uptime, load average, memory and
@@ -109,6 +118,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   static musl build trivial. `collect_from` takes a filesystem root so tests can exercise
   the parsing against fixture files; the `parse_*` helpers are pure functions over file
   contents. Unreadable fields degrade to `unknown`/zero rather than failing the request.
+- **Streaming**: `anth_panel::stream::follow` is request-agnostic — it takes the socket
+  path, a `Request`, an `Option<Duration>` period and a `FnMut(&Response) -> String`
+  renderer, so a new streaming subcommand only has to answer `Some(period)` in
+  `watch_interval`. The wait is a Tokio interval with `MissedTickBehavior::Delay`, which
+  yields the thread instead of spinning and avoids a catch-up burst after a slow read.
+  `Frames` owns the redraw-vs-blank-line decision and is generic over `Write`, which is
+  how the frame layout is tested without a TTY.
 - **Table rendering**: `anth_panel::render::Table` draws a bordered box (top, bottom, a
   rule under the header and optional separators between groups) and pads columns by
   character count so multi-byte text stays aligned. `render_host_info` maps a `HostInfo`

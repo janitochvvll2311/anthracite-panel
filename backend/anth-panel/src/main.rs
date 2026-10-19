@@ -1,11 +1,13 @@
-use std::process::ExitCode;
-
-use anth_panel::cli::{Cli, Command, EndpointArgs};
-use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
-use anth_panel::{AppState, handle_response, request_for, router};
-use anth_proto::AnthClient;
 use std::path::Path;
-use tokio::net::{TcpListener, UnixStream};
+use std::process::ExitCode;
+use std::time::Duration;
+
+use anth_panel::cli::{Cli, Command, EndpointArgs, WatchArgs};
+use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
+use anth_panel::stream;
+use anth_panel::{AppState, request_for, router};
+use anth_proto::{Request, Response};
+use tokio::net::TcpListener;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
 
@@ -54,47 +56,50 @@ async fn serve_run(config: Config, args: &EndpointArgs) -> Result<ExitCode, Stri
     result.map(|_| ExitCode::SUCCESS)
 }
 
-async fn send(config: &Config, request: &anth_proto::Request) -> ExitCode {
-    let socket_path = Path::new(&config.socket_path);
-    let socket = match UnixStream::connect(socket_path).await {
-        Ok(stream) => stream,
-        Err(e) => {
-            eprintln!("Failed to connect to socket: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let mut client = AnthClient::new(socket);
-    if let Err(e) = client.send_request(request).await {
-        eprintln!("Failed to send request: {e}");
-        return ExitCode::FAILURE;
+/// How a response becomes one printed frame.
+fn render_frame(response: &Response) -> String {
+    match response {
+        Response::HostInfo(info) => anth_panel::render_host_info(info),
+        Response::Ok { message } => format!("[OK] {message}"),
+        Response::Error { detail } => format!("[ERROR] {detail}"),
     }
+}
 
-    match client.receive_response().await {
-        Some(Ok(response)) => {
-            handle_response(&response);
-            match response {
-                anth_proto::Response::Error { .. } => ExitCode::FAILURE,
-                _ => ExitCode::SUCCESS,
-            }
-        }
-        Some(Err(e)) => {
-            eprintln!("Failed to receive response: {e}");
-            ExitCode::FAILURE
-        }
-        None => {
-            eprintln!("Stream closed while waiting for response");
-            ExitCode::FAILURE
-        }
+/// How often a subcommand repeats, or `None` to read once. A subcommand opts
+/// into streaming by answering `Some` here; nothing else needs to change.
+fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
+    match command {
+        Command::HostInfo(WatchArgs { watch }) => match watch.as_deref() {
+            None => Ok(None),
+            Some(raw) => stream::parse_interval(raw).map(Some),
+        },
+        _ => Ok(None),
     }
 }
 
 /// Runs a client-only subcommand against the daemon. Subcommands that serve
 /// locally return `None` so `main` can handle them itself.
 async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> {
-    let request = request_for(command)?;
+    let request: Request = request_for(command)?;
+    let interval = match watch_interval(command) {
+        Ok(interval) => interval,
+        Err(e) => {
+            eprintln!("[ERROR] {e}");
+            return Some(ExitCode::FAILURE);
+        }
+    };
+
+    // Client-only subcommands never bootstrap the config file.
     let config = Config::load_or_default(config_path);
-    Some(send(&config, &request).await)
+    Some(
+        stream::follow(
+            Path::new(&config.socket_path),
+            &request,
+            interval,
+            render_frame,
+        )
+        .await,
+    )
 }
 
 #[tokio::main]
@@ -113,7 +118,7 @@ async fn main() -> ExitCode {
             .map_err(|e| e.to_string()),
         Command::Api(args) => serve_api(Config::load_or_create(config_path), args).await,
         Command::Run(args) => serve_run(Config::load_or_create(config_path), args).await,
-        Command::Echo { .. } | Command::HostInfo => unreachable!("handled by send_command"),
+        Command::Echo { .. } | Command::HostInfo(_) => unreachable!("handled by send_command"),
     };
 
     match result {
