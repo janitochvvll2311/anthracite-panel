@@ -55,13 +55,14 @@ frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
   vitest.config.ts          # frontend unit tests, happy-dom environment
   src/
-    components/             # terminal, process and file components, tests and dev harnesses
+    components/             # terminal, process, file and host-info components, tests and harnesses
     harness/                # anth-harness page shell + shared harness.css for dev pages
     lib/ws/                 # generic JSON WebSocket transport and tests
     lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
     lib/processes/          # process client, wire types, sort/display helpers and tests
     lib/files/              # file client, wire types, path/display helpers and tests
-    test/                   # setup and the fake WebSocket, EventSource, process and file clients
+    lib/hostinfo/           # host-info client, wire types and display helpers with tests
+    test/                   # setup and the fake WebSocket, EventSource, process, file and host-info clients
   public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
 Dockerfile                  # bun frontend stage, musl backend stage, alpine runtime
@@ -241,6 +242,12 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   read-only state comes from the listing's `write_enabled`. Tests live under
   `src/components/` and `src/lib/files/`; the
   `src/components/anth-file-explorer.test.html` file is the dev harness.
+- **Frontend host info**: `anth-host-info` renders the `GET /api/host-info`
+  snapshot and follows `/api/host-info/watch` through the injected
+  `HostInfoClient`. It formats uptime, load, memory and swap, and exposes
+  pause/resume, refresh and interval controls. `lib/hostinfo/display.ts` owns
+  the pure formatting helpers; tests live beside both modules and the harness is
+  `src/components/anth-host-info.test.html`.
 - **Dev harnesses**: `src/harness/anth-harness.ts` provides the shared page shell
   (eyebrow, heading, `description`/`actions`/default slots), while
   `src/harness/harness.css` owns the common light-DOM controls, notes and page
