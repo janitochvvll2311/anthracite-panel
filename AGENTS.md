@@ -15,8 +15,10 @@ live in `docs/` and are indexed from `README.md`.
 README.md                   # project overview, indexes docs/
 docs/
   cli.md                    # commands, flags, exit codes
-  api-endpoints.md          # HTTP routes, bodies, SSE frames, error shape
+  api-endpoints.md          # HTTP/WebSocket routes, bodies, SSE frames, error shape
   socket-protocol.md        # anth-proto wire format
+  terminal.md               # PTY sessions, browser route and its current risks
+  design/                   # design notes for the TTY protocol and web terminal
 backend/
   Cargo.toml                # workspace root, resolver = "2"
   Cargo.lock
@@ -30,19 +32,28 @@ backend/
       config.rs             #   Config struct, TOML load/save, default paths
       daemon.rs             #   Unix socket listener and request dispatch
       client.rs             #   CLI client: builds a Request, prints the Response
-      api.rs                #   axum HTTP API + rust-embed static SPA
+      api.rs                #   axum HTTP API + WebSocket upgrade + rust-embed SPA
       app.rs                #   AppState shared by the routes
+      ws.rs                 #   generic JSON-over-WebSocket wrapper
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
       render.rs             #   bordered table renderer for the CLI
       stream.rs             #   repeat a request: interval parsing + frame output
       poll.rs               #   repeat an async read on a period (shared timing)
       sse.rs                #   SSE framing: named events, ids, keep-alive
+      terminal/             #   PTY session, registry, token helper, browser bridge
+      terminal_client.rs    #   interactive terminal for the CLI
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
     tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs,
-                            #   stream.rs, sse.rs
+                            #   stream.rs, sse.rs, terminal.rs, terminal_client.rs,
+                            #   terminal_web.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
-  vite.config.ts            # proxies /healthz and /api to the backend in dev
-  src/  public/  index.html
+  vite.config.ts            # proxies /healthz and /api (including WebSocket)
+  anth-terminal-window.test.html # dev-only xterm/API harness, never built
+  src/
+    components/             # anth-terminal-window.ts
+    lib/ws/                 # generic JSON WebSocket transport
+    lib/terminal/           # terminal interface, protocol, WebSocket adapter
+  public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
 Dockerfile                  # bun frontend stage, musl backend stage, alpine runtime
 ```
@@ -117,10 +128,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
 - **Transport**: newline-delimited JSON over a Unix socket (`tokio_util` `LinesCodec`
   wrapped in `Framed`), exposed as `AnthServer`/`AnthClient` in `anth-proto`.
 - **Protocol**: `Request` and `Response` are serde-tagged enums using
-  `#[serde(tag = "type", content = "data")]`. Requests are `Request::Echo { message }`
-  and the payload-less `Request::HostInfo`; responses are `Response::Ok { message }`,
-  `Response::Error { detail }` or the boxed `Response::HostInfo`. Add a new operation by
-  extending both enums plus the `match` arms in `anth_panel::daemon::handle_request` and
+  `#[serde(tag = "type", content = "data")]`. The request/response commands are
+  `Echo`, `HostInfo` and the terminal variants (`TerminalOpen`, `TerminalInput`,
+  `TerminalResize`, `TerminalClose`); terminal output arrives unsolicited as
+  `Response::TerminalOutput` and ends with `TerminalExited`. Add a new operation by
+  extending both enums plus the `match` arms in `anth_panel::daemon` and
   `anth_panel::client::request_for`, and a subcommand in `cli.rs`.
 - **Host inspection**: `anth_panel::hostinfo` reads `/proc` and `/etc/os-release` with the
   standard library only — no `sysinfo`-style dependency and no `unsafe`, which keeps the
@@ -144,22 +156,35 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   rule under the header and optional separators between groups) and pads columns by
   character count so multi-byte text stays aligned. `render_host_info` maps a `HostInfo`
   onto it. It is a local renderer, not a dependency.
-- **Config**: `anth_panel::config::Config` (currently just `socket_path`) is TOML with
-  `#[serde(default, deny_unknown_fields)]`. Defaults: config at `/etc/anth/config.toml`,
-  socket at `/var/tmp/anth.sock`. The server subcommands load it through
-  `Config::load_or_create`, which writes a default file when the path cannot be read,
-  so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
+- **Config**: `anth_panel::config::Config` (`socket_path` plus the `[terminal]`
+  table) is TOML with `#[serde(default, deny_unknown_fields)]`. Defaults: config at
+  `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`. The server subcommands load
+  it through `Config::load_or_create`, which writes a default file when the path cannot
+  be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
-  `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE) and
-  `POST /api/echo`. The route names the command, so bodies carry the command's
-  arguments at the top level (`{"message":"hi"}`) with no `type`/`data` envelope;
-  the envelope stays a `anth-proto` concern for socket clients only. See
-  `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via `api::ApiError`,
-  including bodies axum rejects before the handler runs. A fallback
-  static handler that serves the embedded SPA
-  and falls back to `index.html`. Table tests exercise the router through
-  `tower::ServiceExt::oneshot`.
+  `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
+  `POST /api/echo` and `GET /api/terminal` (WebSocket). The route names the command, so
+  bodies carry the command's arguments at the top level (`{"message":"hi"}`) with no
+  `type`/`data` envelope; the envelope stays a `anth-proto` concern for socket clients
+  only. See `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via
+  `api::ApiError`, including bodies axum rejects before the handler runs. A fallback
+  static handler serves the embedded SPA and falls back to `index.html`. Table tests
+  exercise the router through `tower::ServiceExt::oneshot`.
+- **Terminal transport**: the daemon owns each PTY and the line protocol carries its
+  bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
+  `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
+  daemon connection and one session; dropping either side kills the process group.
+  Authentication is deliberately unimplemented: `terminal.token` is not checked yet.
+- **Frontend terminal**: `anth-terminal-window` is an xterm-backed Lit element. It only
+  depends on the `TerminalTransport` interface in `lib/terminal/transport.ts`;
+  `lib/terminal/websocket-transport.ts` implements it for `/api/terminal`, and
+  `lib/ws/json-websocket.ts` is the generic transport any future endpoint can reuse.
+  xterm is loaded with dynamic `import()` so the initial bundle does not pay for it.
+  The component keeps its own Up/Down command history on the normal buffer; the
+  alternate buffer (btop, vim, htop) keeps the program's arrow keys. The default
+  height is sized for full-screen TUIs.
+  `anth-terminal-window.test.html` is the dev harness and is not a Vite build entry.
 - **Subcommands**: `daemon`, `api` and `run` share `--addr`, which falls back to
   `ANTH_PANEL_ADDR` and then `0.0.0.0:8080`. `run` binds the HTTP port before starting
   the daemon and aborts it when the API stops, which is what the container uses.

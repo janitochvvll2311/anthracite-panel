@@ -9,11 +9,21 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Deserializer, Serializer};
 
+/// Encodes terminal bytes for a JSON member.
+pub fn encode(bytes: &[u8]) -> String {
+    STANDARD.encode(bytes)
+}
+
+/// Decodes terminal bytes from a JSON member.
+pub fn decode(text: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    STANDARD.decode(text)
+}
+
 pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&STANDARD.encode(bytes))
+    serializer.serialize_str(&encode(bytes))
 }
 
 pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
     let text = String::deserialize(deserializer)?;
-    STANDARD.decode(text).map_err(serde::de::Error::custom)
+    decode(&text).map_err(serde::de::Error::custom)
 }

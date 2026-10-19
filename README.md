@@ -11,8 +11,9 @@ in the HTTP server.
 | Document | Contents |
 | --- | --- |
 | [docs/cli.md](docs/cli.md) | Every command, flag, exit code and example |
-| [docs/api-endpoints.md](docs/api-endpoints.md) | HTTP routes, request and response bodies, SSE streaming |
+| [docs/api-endpoints.md](docs/api-endpoints.md) | HTTP/WebSocket routes, request and response bodies, SSE streaming |
 | [docs/socket-protocol.md](docs/socket-protocol.md) | Wire format between clients and the daemon |
+| [docs/terminal.md](docs/terminal.md) | Interactive terminals, the browser route and current risks |
 
 ## Layout
 

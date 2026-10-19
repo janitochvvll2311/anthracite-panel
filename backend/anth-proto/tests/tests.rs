@@ -373,3 +373,11 @@ async fn split_reader_and_writer_carry_the_client_direction() {
     server.await.unwrap();
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn base64_helpers_roundtrip_arbitrary_bytes() {
+    let bytes = [0x00, 0x0a, 0x0d, 0xff, 0xfe];
+    let encoded = anth_proto::b64::encode(&bytes);
+    assert_eq!(anth_proto::b64::decode(&encoded).unwrap(), bytes);
+    assert!(anth_proto::b64::decode("not base64!").is_err());
+}

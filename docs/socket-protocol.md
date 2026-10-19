@@ -49,6 +49,7 @@ acknowledgements of its own requests.
 
 > Note: this envelope is specific to the socket transport. The HTTP API omits it
 > and names the command in the route instead — see [api-endpoints.md](api-endpoints.md).
+> The browser terminal route has its own JSON frames, also documented there.
 
 ## Requests
 

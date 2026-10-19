@@ -126,16 +126,20 @@ async fn closing_a_session_kills_the_shell_process() {
     let mut receiver = sessions.take_output(id).await.unwrap();
 
     // The shell reports its own pid, so the assertion is about the real process
-    // and not about bookkeeping inside the registry.
+    // and not about bookkeeping inside the registry. Accumulate across chunks:
+    // the echo and its digits can arrive in separate reads under load.
     let _ = sessions.write(id, b"echo PID=$$\n").await.unwrap();
-    let pid = loop {
+    let mut output = String::new();
+    let pid = 'read: loop {
         match tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await {
             Ok(Some(Output::Data(bytes))) => {
-                let text = String::from_utf8_lossy(&bytes);
-                if let Some(rest) = text.split("PID=").nth(1) {
+                output.push_str(&String::from_utf8_lossy(&bytes));
+                // The echoed command contains a literal `PID=$$`; only matches
+                // followed by digits are the answer.
+                for rest in output.split("PID=").skip(1) {
                     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
                     if !digits.is_empty() {
-                        break digits;
+                        break 'read digits;
                     }
                 }
             }

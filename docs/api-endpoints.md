@@ -28,12 +28,15 @@ it into a stream becomes `/watch`.
 | `anth-panel host-info --watch 2s` | `GET /api/host-info/watch?interval=2s` |
 | `anth-panel echo hola` | `POST /api/echo` with `{"message":"hola"}` |
 
-**Errors are always JSON.** Every failure, including a malformed body rejected
-before the handler runs, has this shape:
+**HTTP errors are always JSON.** Every HTTP response that fails, including a
+malformed body rejected before the handler runs, has this shape:
 
 ```json
 {"error": "invalid interval `abc`: add a unit suffix (ms, s, m or h), e.g. 500ms, 2s, 1m"}
 ```
+
+After a WebSocket upgrade there is no HTTP status left to change; terminal
+failures are `error` frames instead. See `GET /api/terminal` below.
 
 ## Routes
 
@@ -43,6 +46,7 @@ before the handler runs, has this shape:
 | `GET` | `/api/host-info` | One host snapshot |
 | `GET` | `/api/host-info/watch` | Host snapshots as SSE |
 | `POST` | `/api/echo` | Round-trip a message |
+| `GET` | `/api/terminal` | Interactive PTY over WebSocket |
 
 Anything else falls through to the embedded web UI, which serves static files
 and returns `index.html` for unknown paths so the SPA can route.
@@ -211,6 +215,81 @@ curl -s -X POST localhost:8080/api/echo \
 
 Note that `{"type":"Echo","data":{"message":"hola"}}` is **rejected**: the route
 already names the command, so the envelope is not part of the HTTP contract.
+
+## `GET /api/terminal`
+
+Interactive terminal over a WebSocket. The handshake upgrades to a WebSocket and
+the panel opens one PTY session per connection through the daemon. Closing the
+WebSocket closes the session and kills its process group.
+
+> Before this route is exposed beyond a trusted network, it needs authentication.
+> The terminal token in the config is reserved for that follow-up; it is **not
+> enforced** by this route yet. Keep `anth-panel api`/`run` on loopback or behind
+> a reverse proxy that authenticates users.
+
+### Query parameters
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `cols` | `80` | Initial terminal width in character cells |
+| `rows` | `24` | Initial terminal height in character cells |
+
+Provide both or neither. Sizes outside `1x1..1000x1000` are rejected with `400`
+before the upgrade; only one of the pair is also a `400`.
+
+### Handshake
+
+```
+GET /api/terminal?cols=120&rows=40 HTTP/1.1
+Upgrade: websocket
+Connection: Upgrade
+...
+```
+
+A successful upgrade is `101 Switching Protocols`. Every message is a JSON text
+frame; binary frames are rejected. Terminal bytes are base64 encoded.
+
+### Browser → panel
+
+```json
+{"type":"input","data":"bHMK"}
+{"type":"resize","cols":120,"rows":40}
+{"type":"ping"}
+```
+
+| Frame | Meaning |
+| --- | --- |
+| `input` | Bytes typed into the terminal. `data` is base64. |
+| `resize` | New window size. The daemon signals `SIGWINCH`. |
+| `ping` | Application-level keep-alive. Answered with `pong`. |
+
+A successful input or resize is silent. A 64 KiB decoded input limit applies;
+larger frames get an `error` frame and the connection closes.
+
+### Panel → browser
+
+```json
+{"type":"ready","shell":"/bin/sh","cols":120,"rows":40}
+{"type":"output","data":"aGVsbG8K"}
+{"type":"exit","code":0}
+{"type":"error","detail":"too many terminal sessions"}
+{"type":"pong"}
+```
+
+| Frame | Meaning |
+| --- | --- |
+| `ready` | Always the first frame. Shell program and actual size. |
+| `output` | Terminal bytes, base64 encoded. |
+| `exit` | The program ended. Sent immediately before the socket closes. |
+| `error` | The session failed. Sent before the socket closes. |
+| `pong` | Reply to an application-level `ping`. |
+
+`exit` and `error` are terminal: no more frames follow. A daemon that is down
+still lets the WebSocket upgrade; the browser receives an `error` frame instead
+of an unobservable close code.
+
+The same socket protocol and `TerminalSize` limits are documented in
+[socket-protocol.md](socket-protocol.md#terminal).
 
 ## Adding a route
 

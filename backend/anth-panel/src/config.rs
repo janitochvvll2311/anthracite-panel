@@ -4,13 +4,13 @@ use std::{error::Error, path::Path};
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/anth/config.toml";
 pub const DEFAULT_SOCKET_PATH: &str = "/var/tmp/anth.sock";
 
-/// Web terminal settings. Off unless a token is configured.
+/// Web terminal settings. The token is reserved for the pending auth layer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct TerminalConfig {
     /// Program to spawn for each session.
     pub shell: String,
-    /// Token required to open a session. Empty means the terminal is disabled.
+    /// Shared token reserved for the authentication layer. Not enforced yet.
     pub token: String,
     /// Maximum number of concurrent sessions across the daemon.
     pub max_sessions: usize,
@@ -29,6 +29,7 @@ impl Default for TerminalConfig {
 }
 
 impl TerminalConfig {
+    /// Whether a token is configured. Authentication is not enforced yet.
     pub fn enabled(&self) -> bool {
         !self.token.is_empty()
     }

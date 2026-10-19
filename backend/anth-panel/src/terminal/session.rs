@@ -73,6 +73,10 @@ impl PtySession {
         let mut command = CommandBuilder::new(program);
         command.env_clear();
         command.env("TERM", "xterm-256color");
+        // Without a UTF-8 locale, full-screen tools such as btop refuse to
+        // start. Keep the environment minimal but make the character set sane.
+        command.env("LANG", "C.UTF-8");
+        command.env("LC_ALL", "C.UTF-8");
         if let Ok(path) = std::env::var("PATH") {
             command.env("PATH", path);
         }

@@ -1,6 +1,10 @@
 # Web terminal: design proposal
 
-Status: proposal, not implemented. Branch `feat/web-terminal`.
+Status: partially implemented on `feat/web-terminal`. The daemon already owns the
+PTY and carries it over the line protocol; `GET /api/terminal` bridges a browser
+WebSocket to one daemon connection, and the frontend uses an xterm-backed Lit
+component. Authentication, idle timeouts and automatic reconnect are still
+pending.
 
 ## The problem this has to solve before the rest
 
