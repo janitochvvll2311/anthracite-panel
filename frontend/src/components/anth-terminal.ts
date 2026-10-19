@@ -79,6 +79,16 @@ function statusLabel(status: TerminalStatus): string {
   }
 }
 
+function commonPrefix(values: string[]): string {
+  let prefix = values[0] ?? ''
+  for (const value of values.slice(1)) {
+    while (prefix !== '' && !value.startsWith(prefix)) {
+      prefix = prefix.slice(0, -1)
+    }
+  }
+  return prefix
+}
+
 /**
  * A reusable terminal window backed by xterm.js.
  *
@@ -151,6 +161,10 @@ export class AnthTerminal extends LitElement {
   @property({ type: Number, attribute: 'history-limit' })
   historyLimit = 100
 
+  /** Complete the current command from local history with Tab. */
+  @property({ type: Boolean, attribute: 'tab-completion' })
+  tabCompletionEnabled = true
+
   /** Scrollback in lines. `0` keeps only the visible screen. */
   @property({ type: Number, attribute: 'max-lines' })
   maxLines = 5000
@@ -198,6 +212,10 @@ export class AnthTerminal extends LitElement {
   private historyIndex = -1
   private historyDraft = ''
   private currentLine = ''
+  private completion?: {
+    matches: string[]
+    index: number
+  }
 
   /** Current connection status. */
   get status(): TerminalStatus {
@@ -220,6 +238,7 @@ export class AnthTerminal extends LitElement {
     this.historyIndex = -1
     this.historyDraft = ''
     this.currentLine = ''
+    this.completion = undefined
   }
 
   override connectedCallback(): void {
@@ -361,6 +380,7 @@ export class AnthTerminal extends LitElement {
     const transport = this.connectedTransport
     this.connectedTransport = undefined
     this.sessionInfo = undefined
+    this.completion = undefined
     if (transport) {
       transport.close()
     }
@@ -698,6 +718,7 @@ export class AnthTerminal extends LitElement {
 
   private handleKeyEvent(event: KeyboardEvent): boolean {
     if (event.type !== 'keydown') return true
+    if (event.key === 'Tab') return this.handleTabCompletion(event)
     if (!this.commandHistoryEnabled || this.historyLimit <= 0) return true
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return true
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
@@ -712,6 +733,62 @@ export class AnthTerminal extends LitElement {
     return false
   }
 
+  private handleTabCompletion(event: KeyboardEvent): boolean {
+    if (!this.tabCompletionEnabled) return true
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+      return true
+    }
+    if (this.readOnly || this.connectionStatus !== 'open') return true
+    if (!this.normalBufferActive()) return true
+    if (this.terminal?.modes.applicationCursorKeysMode) return true
+
+    if (this.completion) {
+      const matches = this.completion.matches
+      this.completion.index = (this.completion.index + 1) % matches.length
+      this.replaceCurrentLine(matches[this.completion.index] ?? '')
+      event.preventDefault()
+      return false
+    }
+
+    const prefix = this.currentLine
+    if (prefix.trim() === '') return true
+
+    const matches = this.historyMatches(prefix)
+    if (matches.length === 0) return true
+
+    if (matches.length === 1) {
+      this.replaceCurrentLine(matches[0] ?? '')
+      this.completion = { matches, index: 0 }
+    } else {
+      const common = commonPrefix(matches)
+      if (common.length > prefix.length) {
+        this.replaceCurrentLine(common)
+        this.completion = { matches, index: -1 }
+      } else {
+        this.replaceCurrentLine(matches[0] ?? '')
+        this.completion = { matches, index: 0 }
+      }
+    }
+
+    event.preventDefault()
+    return false
+  }
+
+  private historyMatches(prefix: string): string[] {
+    const seen = new Set<string>()
+    const matches: string[] = []
+
+    // Newest first, so repeated Tab cycles through the most useful entries.
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const command = this.history[i]
+      if (!command.startsWith(prefix) || seen.has(command)) continue
+      seen.add(command)
+      matches.push(command)
+    }
+
+    return matches
+  }
+
   /** Tracks the line the user is typing without touching the shell. */
   private trackCommandLine(data: string): void {
     if (
@@ -720,6 +797,8 @@ export class AnthTerminal extends LitElement {
     ) {
       return
     }
+
+    this.completion = undefined
 
     // Left/right/home/end arrive as ANSI sequences. They do not change the
     // command text we remember; stripping them keeps the history from
@@ -755,6 +834,8 @@ export class AnthTerminal extends LitElement {
   }
 
   private navigateHistory(direction: -1 | 1): boolean {
+    this.completion = undefined
+
     if (direction === -1) {
       if (this.historyIndex === -1) {
         this.historyDraft = this.currentLine
@@ -795,6 +876,7 @@ export class AnthTerminal extends LitElement {
     this.historyIndex = -1
     this.historyDraft = ''
     this.currentLine = ''
+    this.completion = undefined
   }
 
   private normalBufferActive(): boolean {

@@ -179,9 +179,10 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `lib/terminal/websocket-transport.ts` implements it for `/api/terminal`, and
   `lib/ws/json-websocket.ts` is the generic transport any future endpoint can reuse.
   xterm is loaded with dynamic `import()` so the initial bundle does not pay for it.
-  The component keeps its own Up/Down command history on the normal buffer; the
-  alternate buffer (btop, vim, htop) keeps the program's arrow keys. The default
-  height is sized for full-screen TUIs.
+  The component keeps its own Up/Down command history and Tab completion
+  (cycling through history matches) on the normal buffer; the alternate buffer
+  (btop, vim, htop) keeps the program's arrows and Tab. The default height is
+  sized for full-screen TUIs.
   `anth-terminal.test.html` is the dev harness and is not a Vite build entry.
 - **Subcommands**: `daemon`, `api` and `run` share `--addr`, which falls back to
   `ANTH_PANEL_ADDR` and then `0.0.0.0:8080`. `run` binds the HTTP port before starting

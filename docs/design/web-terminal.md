@@ -170,8 +170,8 @@ token, private network" and I would say so in the docs rather than imply more.
 - `@xterm/xterm` 6.0.0 plus `@xterm/addon-fit`. Both are small and are the
   standard; a hand-rolled emulator is not worth writing.
 - `src/components/anth-terminal.ts` is a Lit element like the rest; it owns the
-  xterm instance, the window chrome, resize handling and a local Up/Down
-  command history on the normal buffer. Full-screen programs keep their arrows.
+  xterm instance, the window chrome, resize handling, a local Up/Down command
+  history and Tab completion. Full-screen programs keep their arrows and Tab.
 - `src/lib/terminal/websocket-transport.ts` implements the transport interface
   the component consumes; `src/lib/ws/json-websocket.ts` is the generic,
   terminal-agnostic JSON WebSocket layer.
