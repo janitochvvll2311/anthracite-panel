@@ -71,6 +71,14 @@ pub async fn serve_connection(
     outcome
 }
 
+/// One output event's effect on the connection.
+struct OutputReply {
+    /// Frame to send to the client, if any.
+    response: Option<Response>,
+    /// Whether the session is now finished and should leave `owned`.
+    ended: bool,
+}
+
 async fn pump(
     socket: UnixStream,
     sessions: Arc<Sessions>,
@@ -92,10 +100,24 @@ async fn pump(
             tokio::select! {
                 request = reader.receive_request() => request,
                 event = output.next() => {
-                    if let Some((id, event)) = event
-                        && let Some(response) = exit_response(&sessions, id, event).await
-                    {
-                        writer.send_response(&response).await?;
+                    if let Some((id, event)) = event {
+                        let reply = exit_response(&sessions, id, event).await;
+                        if reply.ended {
+                            // A finished session must leave `owned`, otherwise
+                            // the empty-SelectAll branch below becomes a busy
+                            // loop until the client disconnects.
+                            owned.retain(|&open| open != id);
+                        }
+                        if let Some(response) = reply.response {
+                            writer.send_response(&response).await?;
+                        }
+                    } else {
+                        // SelectAll only ends when every output stream has
+                        // ended. Close anything still tracked and return to
+                        // the socket-only path.
+                        for id in owned.drain(..) {
+                            sessions.close(id).await;
+                        }
                     }
                     continue;
                 }
@@ -189,15 +211,21 @@ fn session_stream(id: u32, receiver: mpsc::Receiver<Output>) -> OutputStream {
     Box::pin(ReceiverStream::new(receiver).map(move |event| (id, event)))
 }
 
-/// Turns one output event into the frame to send, if any.
+/// Turns one output event into the frame to send and whether the session ended.
 ///
 /// Data becomes `TerminalOutput`. An exit closes the session and reports the
 /// real status once, so the client can tell a finished shell from a dropped
 /// connection.
-async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> Option<Response> {
+async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> OutputReply {
     match event {
-        Output::Data(bytes) if !bytes.is_empty() => Some(Response::TerminalOutput { id, bytes }),
-        Output::Data(_) => None,
+        Output::Data(bytes) if !bytes.is_empty() => OutputReply {
+            response: Some(Response::TerminalOutput { id, bytes }),
+            ended: false,
+        },
+        Output::Data(_) => OutputReply {
+            response: None,
+            ended: false,
+        },
         Output::Exited(_) | Output::Failed => {
             let status = match sessions.with(id, |session| session.try_exit()).await {
                 Some(Ok(Some(code))) => code,
@@ -205,7 +233,10 @@ async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> Opti
                 _ => -1,
             };
             sessions.close(id).await;
-            Some(Response::TerminalExited { id, status })
+            OutputReply {
+                response: Some(Response::TerminalExited { id, status }),
+                ended: true,
+            }
         }
     }
 }

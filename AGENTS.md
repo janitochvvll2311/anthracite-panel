@@ -45,14 +45,16 @@ backend/
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
     tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs,
                             #   stream.rs, sse.rs, terminal.rs, terminal_client.rs,
-                            #   terminal_web.rs
+                            #   terminal_exit.rs, terminal_web.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
+  vitest.config.ts          # frontend unit tests, happy-dom environment
   anth-terminal.test.html   # dev-only xterm/API harness, never built
   src/
-    components/             # anth-terminal.ts
-    lib/ws/                 # generic JSON WebSocket transport
+    components/             # anth-terminal.ts and its Vitest tests
+    lib/ws/                 # generic JSON WebSocket transport and tests
     lib/terminal/           # terminal interface, protocol, WebSocket adapter
+    test/                   # setup and the fake WebSocket used by tests
   public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
 Dockerfile                  # bun frontend stage, musl backend stage, alpine runtime
@@ -90,6 +92,17 @@ cd frontend && npm install && npm run build && cp -r dist/. ../backend/anth-pane
 Generated files under `www/` are gitignored except the placeholder. A missing folder
 surfaces as `no associated function named 'get' found for struct 'Asset'`. The frontend
 has a `bun.lock`, but `npm` works fine and `bun` is not required.
+
+### Frontend unit tests
+
+Vitest tests live next to the source as `frontend/src/**/*.test.ts`.
+`frontend/vitest.config.ts` uses `happy-dom`; the component tests mock xterm so they
+do not need a real canvas. Run them from `frontend/`:
+
+```bash
+npm test          # vitest run
+npm run test:watch
+```
 
 ## Running locally
 
@@ -175,6 +188,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
   daemon connection and one session; dropping either side kills the process group.
+  An exited session is removed from the connection's `owned` list so the daemon returns
+  to the socket-only path instead of polling an exhausted output stream;
+  `tests/terminal_exit.rs` guards that CPU regression.
   Authentication is deliberately unimplemented: `terminal.token` is not checked yet.
 - **Frontend terminal**: `anth-terminal` is an xterm-backed Lit element. It only
   depends on the `TerminalTransport` interface in `lib/terminal/transport.ts`;
