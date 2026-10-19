@@ -205,7 +205,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   expand/collapse chevrons). Both show PID, COMMAND, THREADS, USER, STATE, MEM
   and CPU; PPID is used only for nesting. Flat headers are all sortable; the tree
   omits PID and COMMAND sorting. A tree command stays on one line while the
-  selected-process preview shows the full command, right-aligned and vertically
+  selected-process preview shows the full command, left-aligned and vertically
   centered in the footer. `anth-process-monitor` owns filtering, the flat/tree
   toggle, SSE lifecycle and confirmed signals, and only depends on the injected
   `ProcessClient`. Both are exercised by `anth-process.test.html`.

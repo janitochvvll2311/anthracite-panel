@@ -135,6 +135,9 @@ export class AnthProcessTree extends LitElement {
               ? nothing
               : html`<span class=${`tree-elbow ${isLast ? 'last' : ''}`}></span>`}
           </span>
+          ${depth === 0
+            ? html`<span class="tree-root-spacer" aria-hidden="true"></span>`
+            : nothing}
           ${hasChildren
             ? html`
                 <button
@@ -458,6 +461,11 @@ export class AnthProcessTree extends LitElement {
       flex: 0 0 auto;
       align-self: center;
       width: 1.15rem;
+    }
+
+    .tree-root-spacer {
+      flex: 0 0 auto;
+      width: 6px;
     }
 
     .command {

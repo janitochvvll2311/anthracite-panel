@@ -101,7 +101,7 @@ The browser components live in `frontend/src/components/`:
   Both show PID, COMMAND, THREADS, USER, STATE, MEM and CPU, in that order; PPID
   is used for nesting but is not displayed. The tree does not sort by PID or
   COMMAND. Its command stays on one line; the selection preview keeps the full
-  command.
+  command, left-aligned and vertically centered.
 - `<anth-process-monitor>` fetches snapshots, follows the SSE stream, computes
   CPU percentages and sends signals through an injected `ProcessClient`. It
   owns the flat/tree toggle and filtering.
