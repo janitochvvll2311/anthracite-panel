@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import './anth-process-table'
-import type { AnthProcessSelectDetail } from './anth-process-table'
+import type { AnthProcessSelectDetail, ProcessView } from './anth-process-table'
 import type {
   ProcessClient,
   ProcessConnectionStatus,
@@ -17,9 +17,6 @@ export interface AnthProcessSignalDetail {
   pid: number
   signal: ProcessSignal
 }
-
-type SortKey = 'cpu' | 'pid' | 'user' | 'name' | 'memory' | 'state'
-type SortDirection = 'asc' | 'desc'
 
 const SIGNALS: ProcessSignal[] = [
   'term',
@@ -70,10 +67,7 @@ export class AnthProcessMonitor extends LitElement {
   private filter = ''
 
   @state()
-  private sortKey: SortKey = 'cpu'
-
-  @state()
-  private sortDirection: SortDirection = 'desc'
+  private view: ProcessView = 'flat'
 
   @state()
   private selectedPid?: number
@@ -225,35 +219,19 @@ export class AnthProcessMonitor extends LitElement {
     return this.rows.find((process) => process.pid === this.selectedPid)
   }
 
-  private get visibleRows(): ProcessRow[] {
+  private get filteredRows(): ProcessRow[] {
     const needle = this.filter.trim().toLowerCase()
-    const rows = needle === ''
-      ? [...this.rows]
-      : this.rows.filter((process) =>
-          [
-            String(process.pid),
-            process.user,
-            process.name,
-            process.command,
-            process.state,
-          ].some((value) => value.toLowerCase().includes(needle)),
-        )
+    if (needle === '') return this.rows
 
-    const direction = this.sortDirection === 'asc' ? 1 : -1
-    rows.sort((left, right) => {
-      const a = sortValue(left, this.sortKey)
-      const b = sortValue(right, this.sortKey)
-
-      if (a === null && b === null) return left.pid - right.pid
-      if (a === null) return 1
-      if (b === null) return -1
-      if (typeof a === 'string' && typeof b === 'string') {
-        return a.localeCompare(b) * direction
-      }
-      return (Number(a) - Number(b)) * direction
-    })
-
-    return rows
+    return this.rows.filter((process) =>
+      [
+        String(process.pid),
+        process.user,
+        process.name,
+        process.command,
+        process.state,
+      ].some((value) => value.toLowerCase().includes(needle)),
+    )
   }
 
   private statusLabel(): string {
@@ -273,14 +251,6 @@ export class AnthProcessMonitor extends LitElement {
 
   private onFilterInput(event: Event): void {
     this.filter = (event.target as HTMLInputElement).value
-  }
-
-  private onSortChange(event: Event): void {
-    this.sortKey = (event.target as HTMLSelectElement).value as SortKey
-  }
-
-  private toggleDirection(): void {
-    this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc'
   }
 
   private onSelect(event: CustomEvent<AnthProcessSelectDetail>): void {
@@ -336,9 +306,25 @@ export class AnthProcessMonitor extends LitElement {
             ${this.statusLabel()}
           </span>
           <span class="count">
-            ${this.visibleRows.length} / ${this.total} processes
+            ${this.filteredRows.length} / ${this.total} processes
           </span>
           <span class="spacer"></span>
+          <div class="view-switch" role="group" aria-label="Process view">
+            <button
+              type="button"
+              class=${this.view === 'flat' ? 'active' : ''}
+              @click=${() => (this.view = 'flat')}
+            >
+              Flat
+            </button>
+            <button
+              type="button"
+              class=${this.view === 'tree' ? 'active' : ''}
+              @click=${() => (this.view = 'tree')}
+            >
+              Tree
+            </button>
+          </div>
           <button type="button" @click=${this.refresh} ?disabled=${!this.client}>
             Refresh
           </button>
@@ -369,26 +355,13 @@ export class AnthProcessMonitor extends LitElement {
             aria-label="Filter processes"
             @input=${this.onFilterInput}
           />
-          <label>
-            Sort
-            <select .value=${this.sortKey} @change=${this.onSortChange}>
-              <option value="cpu">CPU</option>
-              <option value="memory">Memory</option>
-              <option value="pid">PID</option>
-              <option value="user">User</option>
-              <option value="name">Name</option>
-              <option value="state">State</option>
-            </select>
-          </label>
-          <button type="button" @click=${this.toggleDirection}>
-            ${this.sortDirection === 'asc' ? '↑' : '↓'}
-          </button>
         </div>
 
         <anth-process-table
-          .processes=${this.visibleRows}
+          .processes=${this.filteredRows}
           .selectedPid=${this.selectedPid}
           .warning=${this.warning}
+          .view=${this.view}
           .emptyMessage=${this.client
             ? 'No processes match the current filter.'
             : 'No process client configured.'}
@@ -568,12 +541,26 @@ export class AnthProcessMonitor extends LitElement {
       background: rgba(248, 113, 113, 0.1);
     }
 
-    .filters label {
+    .view-switch {
       display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      color: var(--process-muted);
-      font-size: 0.85em;
+      overflow: hidden;
+      border: 1px solid var(--process-border);
+      border-radius: 7px;
+    }
+
+    .view-switch button {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .view-switch button + button {
+      border-left: 1px solid var(--process-border);
+    }
+
+    .view-switch button.active {
+      color: var(--process-bg);
+      background: var(--process-accent);
     }
 
     .error {
@@ -628,26 +615,6 @@ export class AnthProcessMonitor extends LitElement {
 
 function processKey(pid: number, startTicks: number): string {
   return `${pid}:${startTicks}`
-}
-
-function sortValue(
-  process: ProcessRow,
-  key: SortKey,
-): number | string | null {
-  switch (key) {
-    case 'cpu':
-      return process.cpu_percent
-    case 'memory':
-      return process.rss_kib
-    case 'pid':
-      return process.pid
-    case 'user':
-      return process.user
-    case 'name':
-      return process.name
-    case 'state':
-      return process.state
-  }
 }
 
 declare global {

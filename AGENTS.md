@@ -199,6 +199,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   truncate commands to 256 characters and return a human-readable warning when they do.
   CPU percentages are computed by the client from `cpu_ticks`, `clock_ticks` and
   `timestamp_ms`; the daemon never keeps a sampler.
+- **Frontend process monitor**: `anth-process-table` sorts locally when a column
+  header is clicked and renders either a flat list or a ppid tree; siblings are
+  sorted in both views. `anth-process-monitor` owns filtering, the flat/tree
+  toggle, SSE lifecycle and confirmed signals, and only depends on the injected
+  `ProcessClient`. Both are exercised by `anth-process.test.html`.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one

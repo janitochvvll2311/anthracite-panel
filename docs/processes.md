@@ -95,8 +95,10 @@ The endpoints are documented in [api-endpoints.md](api-endpoints.md):
 
 The browser components live in `frontend/src/components/`:
 
-- `<anth-process-table>` displays rows and emits the selected pid.
+- `<anth-process-table>` displays rows, sorts by clicking a column header and
+  can render a flat table or a ppid tree. It emits the selected pid.
 - `<anth-process-monitor>` fetches snapshots, follows the SSE stream, computes
-  CPU percentages and sends signals through an injected `ProcessClient`.
+  CPU percentages and sends signals through an injected `ProcessClient`. It
+  owns the flat/tree toggle and filtering.
 
 `frontend/anth-process.test.html` is the dev-only harness.
