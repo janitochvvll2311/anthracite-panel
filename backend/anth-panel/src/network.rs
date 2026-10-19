@@ -27,6 +27,11 @@ use crate::text::read_trimmed;
 const SYS_CLASS_NET: &str = "sys/class/net";
 const PROC_NET_DEV: &str = "proc/net/dev";
 
+/// Maximum interfaces returned in one snapshot. The protocol is newline
+/// delimited and one line is capped at 1 MiB; at roughly 400 bytes per
+/// interface this leaves ample headroom.
+pub const MAX_INTERFACES: usize = 2000;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Counters {
     rx_bytes: u64,
@@ -61,26 +66,36 @@ pub fn collect_from(root: impl AsRef<Path>, control_enabled: bool) -> NetworkSna
 
     let mut interfaces = read_interfaces(&root.join(SYS_CLASS_NET), &counters);
     interfaces.sort_by(|left, right| left.name.cmp(&right.name));
+    let (total, truncated, warning) = cap_interfaces(&mut interfaces);
 
     NetworkSnapshot {
         interfaces,
         timestamp_ms: timestamp_ms(),
         control_enabled,
+        total,
+        truncated,
+        warning,
     }
+}
+
+fn cap_interfaces(interfaces: &mut Vec<NetworkInterface>) -> (usize, bool, Option<String>) {
+    let total = interfaces.len();
+    let truncated = total > MAX_INTERFACES;
+    if truncated {
+        interfaces.truncate(MAX_INTERFACES);
+    }
+    let warning = truncated.then(|| format!("showing {MAX_INTERFACES} of {total} interfaces"));
+
+    (total, truncated, warning)
 }
 
 /// Brings one interface up or down.
 pub fn set_state(control_enabled: bool, name: &str, up: bool) -> Result<(), NetworkError> {
-    check_state_change(Path::new("/"), control_enabled, name, up)?;
+    check_state_change(Path::new("/"), control_enabled, name)?;
     apply_link_state(name, up)
 }
 
-fn check_state_change(
-    root: &Path,
-    control_enabled: bool,
-    name: &str,
-    up: bool,
-) -> Result<(), NetworkError> {
+fn check_state_change(root: &Path, control_enabled: bool, name: &str) -> Result<(), NetworkError> {
     if !control_enabled {
         return Err(NetworkError::new(
             NetworkErrorKind::Disabled,
@@ -97,9 +112,15 @@ fn check_state_change(
         ));
     }
 
-    let flags = read_trimmed(root.join(SYS_CLASS_NET).join(name).join("flags"))
-        .and_then(|text| parse_flags(&text))
-        .unwrap_or(0);
+    Ok(())
+}
+
+/// Refuses a destructive change that would clear `IFF_UP` on a loopback.
+///
+/// This runs on the authoritative flags returned by `SIOCGIFFLAGS`, not on the
+/// best-effort sysfs read used by the snapshot path. A missing sysfs `flags`
+/// file therefore cannot turn the guard off.
+fn check_link_flags(flags: u32, up: bool) -> Result<(), NetworkError> {
     if !up && flags & (libc::IFF_LOOPBACK as u32) != 0 {
         return Err(NetworkError::new(
             NetworkErrorKind::Protected,
@@ -357,6 +378,7 @@ fn apply_link_state(name: &str, up: bool) -> Result<(), NetworkError> {
     }
 
     let mut flags = unsafe { request.ifr_ifru.ifru_flags } as u32;
+    check_link_flags(flags, up)?;
     if up {
         flags |= libc::IFF_UP as u32;
     } else {
@@ -524,6 +546,27 @@ mod tests {
     }
 
     #[test]
+    fn interface_lists_are_capped() {
+        let mut interfaces = (0..MAX_INTERFACES + 5)
+            .map(|index| NetworkInterface {
+                name: format!("eth{index}"),
+                ..NetworkInterface::default()
+            })
+            .collect::<Vec<_>>();
+
+        let (total, truncated, warning) = cap_interfaces(&mut interfaces);
+
+        assert_eq!(interfaces.len(), MAX_INTERFACES);
+        assert_eq!(total, MAX_INTERFACES + 5);
+        assert!(truncated);
+        let expected = format!(
+            "showing {MAX_INTERFACES} of {} interfaces",
+            MAX_INTERFACES + 5
+        );
+        assert_eq!(warning.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
     fn collect_reads_the_live_interface_list() {
         let snapshot = collect(false);
         assert!(snapshot.timestamp_ms > 0);
@@ -541,25 +584,27 @@ mod tests {
         let root = fixture();
 
         assert_eq!(
-            check_state_change(&root, false, "eth0", true)
-                .unwrap_err()
-                .kind,
+            check_state_change(&root, false, "eth0").unwrap_err().kind,
             NetworkErrorKind::Disabled
         );
         assert_eq!(
-            check_state_change(&root, true, "missing", true)
-                .unwrap_err()
-                .kind,
+            check_state_change(&root, true, "missing").unwrap_err().kind,
             NetworkErrorKind::NotFound
         );
+        assert!(check_state_change(&root, true, "eth0").is_ok());
+        assert!(check_state_change(&root, true, "lo").is_ok());
+    }
+
+    #[test]
+    fn loopback_flags_protect_only_the_down_direction() {
         assert_eq!(
-            check_state_change(&root, true, "lo", false)
+            check_link_flags(libc::IFF_LOOPBACK as u32 | libc::IFF_UP as u32, false)
                 .unwrap_err()
                 .kind,
             NetworkErrorKind::Protected
         );
-        assert!(check_state_change(&root, true, "eth0", false).is_ok());
-        assert!(check_state_change(&root, true, "lo", true).is_ok());
+        assert!(check_link_flags(libc::IFF_LOOPBACK as u32 | libc::IFF_UP as u32, true).is_ok());
+        assert!(check_link_flags(libc::IFF_UP as u32, false).is_ok());
     }
 
     #[test]

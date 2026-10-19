@@ -367,7 +367,9 @@ curl -s localhost:8080/api/network
     }
   ],
   "timestamp_ms": 1700000000000,
-  "control_enabled": false
+  "control_enabled": false,
+  "total": 1,
+  "truncated": false
 }
 ```
 
@@ -382,9 +384,13 @@ curl -s localhost:8080/api/network
 | `addresses` | IPv4/IPv6 addresses with a prefix length |
 | `timestamp_ms` | Wall-clock time of the snapshot |
 | `control_enabled` | Whether `[network] control` allows up/down requests |
+| `total` | Interfaces found before the row cap |
+| `truncated` | Whether the interface list was shortened |
+| `warning` | Present only when the list was shortened |
 
 RX/TX counters are cumulative. Clients compute rates from two snapshots with
-`timestamp_ms`; the server never keeps a sampler.
+`timestamp_ms`; the server never keeps a sampler. A snapshot returns at most
+2000 interfaces; beyond that it sets `truncated` and includes a `warning`.
 
 | Status | When |
 | --- | --- |

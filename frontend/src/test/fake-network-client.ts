@@ -44,6 +44,8 @@ export function networkSnapshot(
     interfaces,
     timestamp_ms: 1_700_000_000_000,
     control_enabled: true,
+    total: interfaces.length,
+    truncated: false,
     ...overrides,
   }
 }

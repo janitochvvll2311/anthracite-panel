@@ -64,7 +64,14 @@ export class AnthNetworkMonitor extends LitElement {
   private controlEnabled = false
 
   @state()
+  private warning = ''
+
+  @state()
   private errorMessage = ''
+
+  /** A failed up/down action. It survives subsequent snapshots. */
+  @state()
+  private actionError = ''
 
   @state()
   private filter = ''
@@ -113,6 +120,7 @@ export class AnthNetworkMonitor extends LitElement {
     const generation = ++this.generation
     this.previous = undefined
     this.errorMessage = ''
+    this.actionError = ''
     this.status = 'connecting'
 
     this.unsubscribe = this.client.watch(this.refreshInterval, {
@@ -166,6 +174,11 @@ export class AnthNetworkMonitor extends LitElement {
     this.rows = computeNetworkRows(snapshot, this.previous)
     this.previous = snapshot
     this.controlEnabled = snapshot.control_enabled
+    this.warning =
+      snapshot.warning ??
+      (snapshot.interfaces.length < snapshot.total
+        ? `showing ${snapshot.interfaces.length} of ${snapshot.total} interfaces`
+        : '')
     this.errorMessage = ''
 
     if (
@@ -245,7 +258,7 @@ export class AnthNetworkMonitor extends LitElement {
     if (!window.confirm(`${action} ${iface.name}? ${effect}`)) return
 
     this.busy = true
-    this.errorMessage = ''
+    this.actionError = ''
     try {
       await this.client.setState(iface.name, up)
       this.dispatchEvent(
@@ -257,7 +270,7 @@ export class AnthNetworkMonitor extends LitElement {
       )
       this.refresh()
     } catch (error) {
-      this.errorMessage =
+      this.actionError =
         error instanceof Error ? error.message : String(error)
     } finally {
       this.busy = false
@@ -407,11 +420,21 @@ export class AnthNetworkMonitor extends LitElement {
           </button>
         </header>
 
+        ${this.actionError === ''
+          ? nothing
+          : html`
+              <p class="error" part="action-error" role="alert">
+                ${this.actionError}
+              </p>
+            `}
         ${this.errorMessage === ''
           ? nothing
           : html`
               <p class="error" part="error" role="alert">${this.errorMessage}</p>
             `}
+        ${this.warning === ''
+          ? nothing
+          : html`<p class="warning" part="warning">${this.warning}</p>`}
 
         <div class="filters" part="filters">
           <input
@@ -641,6 +664,15 @@ export class AnthNetworkMonitor extends LitElement {
       border-radius: 6px;
       background: rgba(248, 113, 113, 0.12);
       color: #fecaca;
+    }
+
+    .warning {
+      margin: 0;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: rgba(251, 191, 36, 0.1);
+      color: #fcd34d;
+      font: 12px/1.4 var(--mono, monospace);
     }
 
     .table-wrap {

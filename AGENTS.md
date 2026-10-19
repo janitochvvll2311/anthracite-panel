@@ -252,11 +252,14 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `src/components/anth-file-explorer.test.html` file is the dev harness.
 - **Network monitor**: `network.rs` reads `/sys/class/net` and `/proc/net/dev`,
   resolves IPv4/IPv6 with `getifaddrs(3)` and enforces `[network] control` plus
-  the loopback-down guard before calling `SIOCSIFFLAGS`. Up/down runs on a
-  blocking worker. `anth-network-monitor` follows the SSE stream through an
-  injected `NetworkClient`, computes RX/TX rates from cumulative counters and
-  only shows controls when the snapshot says `control_enabled`. The dev harness
-  is `src/components/anth-network-monitor.test.html`; tests live beside the
+  the loopback-down guard before calling `SIOCSIFFLAGS`. The guard runs on the
+  flags returned by `SIOCGIFFLAGS`, so an unreadable sysfs `flags` file cannot
+  fail open. Snapshots cap the list at 2000 interfaces and report `total` and
+  `warning` when shortened. Up/down runs on a blocking worker.
+  `anth-network-monitor` follows the SSE stream through an injected
+  `NetworkClient`, computes RX/TX rates from cumulative counters and only shows
+  controls when the snapshot says `control_enabled`. The dev harness is
+  `src/components/anth-network-monitor.test.html`; tests live beside the
   component and `lib/network/`.
 - **Frontend host info**: `anth-host-info` renders the `GET /api/host-info`
   snapshot and follows `/api/host-info/watch` through the injected

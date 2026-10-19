@@ -80,6 +80,20 @@ describe('AnthNetworkMonitor', () => {
     )
   })
 
+  it('shows a truncation warning from the daemon', async () => {
+    const client = new FakeNetworkClient()
+    client.current = networkSnapshot([networkInterface()], {
+      total: 3,
+      truncated: true,
+      warning: 'showing 1 of 3 interfaces',
+    })
+    const element = await mount(client)
+
+    expect(
+      element.shadowRoot?.querySelector('.warning')?.textContent,
+    ).toContain('showing 1 of 3 interfaces')
+  })
+
   it('computes rates from consecutive snapshots', async () => {
     const client = new FakeNetworkClient()
     const first = networkSnapshot()
@@ -240,6 +254,12 @@ describe('AnthNetworkMonitor', () => {
     button(element, 'Down').click()
     await flush(element)
 
+    expect(element.shadowRoot?.querySelector('.error')?.textContent).toContain(
+      'permission denied',
+    )
+
+    client.emit(networkSnapshot())
+    await element.updateComplete
     expect(element.shadowRoot?.querySelector('.error')?.textContent).toContain(
       'permission denied',
     )

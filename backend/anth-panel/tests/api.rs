@@ -424,6 +424,9 @@ fn network_snapshot() -> NetworkSnapshot {
         }],
         timestamp_ms: 1_700_000_000_000,
         control_enabled: true,
+        total: 1,
+        truncated: false,
+        warning: None,
     }
 }
 
@@ -671,6 +674,8 @@ async fn network_route_returns_the_bare_snapshot() {
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(value["timestamp_ms"], 1_700_000_000_000u64);
     assert_eq!(value["control_enabled"], true);
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["truncated"], false);
     assert_eq!(value["interfaces"][0]["name"], "eth0");
     assert_eq!(value["interfaces"][0]["addresses"][0]["family"], "ipv4");
     assert!(value.get("type").is_none(), "no tag envelope: {value}");

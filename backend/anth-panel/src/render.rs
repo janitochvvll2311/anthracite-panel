@@ -334,7 +334,13 @@ pub fn render_network_snapshot(snapshot: &NetworkSnapshot) -> String {
         ]);
     }
 
-    table.render()
+    let mut output = table.render();
+    if let Some(warning) = &snapshot.warning {
+        output.push('\n');
+        output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
 }
 
 /// Formats one daemon response as the text the CLI prints. Errors carry the

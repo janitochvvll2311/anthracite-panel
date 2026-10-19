@@ -70,7 +70,8 @@ the host.
 
 ## Data model
 
-Each snapshot contains `interfaces`, `timestamp_ms` and `control_enabled`.
+Each snapshot contains `interfaces`, `timestamp_ms`, `control_enabled`, `total`,
+`truncated` and an optional `warning`.
 
 | Field | Meaning |
 | --- | --- |
@@ -99,6 +100,14 @@ tx/s = (tx_bytes_now - tx_bytes_before) / seconds_between_snapshots
 
 A counter that goes backwards, a missing previous sample or a non-positive time
 delta produces no rate rather than a bogus value.
+
+## Truncation
+
+One protocol line is capped at 1 MiB. A snapshot returns at most 2000
+interfaces, sorted by name. When the host has more, `truncated` is `true`,
+`total` reports the number found, and `warning` contains a human-readable
+notice. The CLI prints the warning below the table and the web component shows
+it above the table.
 
 ## HTTP and browser
 

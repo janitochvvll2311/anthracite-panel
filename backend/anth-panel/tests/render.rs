@@ -357,6 +357,9 @@ fn render_network_snapshot_shows_addresses_speed_and_traffic() {
         ],
         timestamp_ms: 1_700_000_000_000,
         control_enabled: true,
+        total: 3,
+        truncated: true,
+        warning: Some("showing 2 of 3 interfaces".to_string()),
     };
 
     let out = render_network_snapshot(&snapshot);
@@ -373,6 +376,7 @@ fn render_network_snapshot_shows_addresses_speed_and_traffic() {
     ] {
         assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
     }
+    assert!(out.contains("Warning: showing 2 of 3 interfaces"));
 }
 
 #[test]

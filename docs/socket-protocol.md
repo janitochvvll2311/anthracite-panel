@@ -350,13 +350,17 @@ Reply to `NetworkList`.
       }
     ],
     "timestamp_ms": 1700000000000,
-    "control_enabled": false
+    "control_enabled": false,
+    "total": 1,
+    "truncated": false
   }
 }
 ```
 
 `loopback` marks an `IFF_LOOPBACK` interface; the daemon refuses to bring one
-down. Traffic counters are cumulative. `timestamp_ms` lets a client compute
+down. The daemon returns at most 2000 interfaces; `total` reports the
+untruncated count and a shortened list adds a human-readable `warning`.
+Traffic counters are cumulative. `timestamp_ms` lets a client compute
 RX/TX rates between consecutive snapshots; the daemon does not keep a sampler.
 
 ### `NetworkStateChanged`

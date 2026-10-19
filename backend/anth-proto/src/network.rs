@@ -59,6 +59,13 @@ pub struct NetworkSnapshot {
     pub timestamp_ms: u64,
     /// Whether the daemon accepts up/down requests.
     pub control_enabled: bool,
+    /// Number of interfaces found before the row cap.
+    pub total: usize,
+    /// Whether `interfaces` was cut at the daemon's row cap.
+    pub truncated: bool,
+    /// Human-readable notice when the list was shortened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

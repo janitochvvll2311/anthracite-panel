@@ -490,6 +490,9 @@ fn network_snapshot_and_state_responses_roundtrip() {
         }],
         timestamp_ms: 1_700_000_000_000,
         control_enabled: true,
+        total: 1,
+        truncated: false,
+        warning: None,
     };
     let response = Response::NetworkSnapshot(snapshot.clone());
     match Response::from_json(&response.to_json().unwrap()).unwrap() {

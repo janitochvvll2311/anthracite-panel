@@ -44,6 +44,9 @@ export interface NetworkSnapshot {
   interfaces: NetworkInterface[]
   timestamp_ms: number
   control_enabled: boolean
+  total: number
+  truncated: boolean
+  warning?: string
 }
 
 /** An interface plus the rates computed from the previous snapshot. */
