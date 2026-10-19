@@ -191,7 +191,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
-  `Config::load_or_default`, which never writes.
+  `Config::load_or_default`, which never writes. `Config::server_default` returns
+  `Config::dev_default` in debug builds, which sets `process.control = true` and
+  `files.write = true`; release builds keep both off.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
   `POST /api/echo`, `GET /api/terminal` (WebSocket),

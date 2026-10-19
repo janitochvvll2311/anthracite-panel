@@ -25,6 +25,10 @@ control = true
 
 Changing the file requires a daemon restart.
 
+Debug builds (`cargo run`) bootstrap a missing config with `control = true` so
+signals can be tested locally. Release builds still generate `false`, and an
+existing file is never rewritten.
+
 Even with control enabled, the daemon refuses to:
 
 - signal pid 1 or its own pid;

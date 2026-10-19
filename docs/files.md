@@ -25,6 +25,10 @@ max_upload_bytes = 67108864
 All limits must be greater than zero. A bad `root` or a zero limit stops the
 daemon with a configuration error.
 
+Debug builds bootstrap a missing config with `write = true` so the write
+controls are testable locally. Release builds still generate `write = false`,
+and an existing file is never rewritten.
+
 ## Virtual paths
 
 Paths on the wire are virtual:

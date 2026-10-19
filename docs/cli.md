@@ -62,6 +62,11 @@ default config when it cannot be loaded. Client subcommands (`echo`,
 `host-info`, `process`, `file`) never create the file — they use defaults if it
 is absent, so probing a machine does not leave files behind.
 
+Debug builds bootstrap a missing file with `[process] control = true` and
+`[files] write = true` so the whole UI is testable locally. Release builds keep
+both off. An existing file is never rewritten; remove it or edit it to change
+the generated defaults.
+
 ## Serving
 
 ### `daemon`

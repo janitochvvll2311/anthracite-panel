@@ -136,6 +136,28 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Defaults that make a debug build convenient for local development.
+    ///
+    /// Production defaults stay safe: process control and file writes are off
+    /// unless an existing config file explicitly enables them.
+    pub fn dev_default() -> Self {
+        let mut config = Self::default();
+        config.process.control = true;
+        config.files.write = true;
+        config
+    }
+
+    /// Defaults used when a server subcommand has to create a missing config.
+    pub fn server_default() -> Self {
+        if cfg!(debug_assertions) {
+            Self::dev_default()
+        } else {
+            Self::default()
+        }
+    }
+}
+
+impl Config {
     pub fn from_toml(text: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         match toml::from_str(text) {
             Ok(config) => Ok(config),
@@ -181,8 +203,9 @@ impl Config {
 
     /// Loads the configuration at `path`, or writes a default one first when it
     /// cannot be read, so a first server run bootstraps the configuration file.
-    /// A failure to persist the default is reported but not fatal: the freshly
-    /// built defaults are still usable for this run.
+    /// Debug builds bootstrap with process control and file writes enabled;
+    /// release builds keep both off. A failure to persist the default is
+    /// reported but not fatal: the freshly built defaults are still usable.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
         match Self::load(&path) {
             Ok(config) => config,
@@ -190,7 +213,12 @@ impl Config {
                 eprintln!("Failed to load config: {e}");
                 eprintln!("Using default config.");
 
-                let config = Self::default();
+                let config = Self::server_default();
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "Debug build: process control and file writes are enabled in the generated config."
+                    );
+                }
                 if let Err(e) = config.save(&path) {
                     eprintln!("Failed to save default config: {e}");
                 }

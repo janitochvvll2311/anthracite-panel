@@ -126,9 +126,9 @@ fn load_or_create_writes_the_default_when_the_file_is_missing() {
 
     let config = Config::load_or_create(&path);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(config, Config::server_default());
     assert!(path.exists(), "a default config should have been written");
-    assert_eq!(Config::load(&path).unwrap(), Config::default());
+    assert_eq!(Config::load(&path).unwrap(), Config::server_default());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -140,7 +140,7 @@ fn load_or_create_creates_missing_parent_directories() {
 
     let config = Config::load_or_create(&path);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(config, Config::server_default());
     assert!(path.exists());
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -177,10 +177,10 @@ fn load_or_create_replaces_a_malformed_file_with_defaults() {
 
     let config = Config::load_or_create(&path);
 
-    assert_eq!(config, Config::default());
+    assert_eq!(config, Config::server_default());
     assert_eq!(
         Config::load(&path).unwrap(),
-        Config::default(),
+        Config::server_default(),
         "the malformed file should have been replaced by a valid default"
     );
 
@@ -224,4 +224,24 @@ fn file_writes_are_off_by_default_and_can_be_enabled() {
 #[test]
 fn unknown_files_keys_are_rejected() {
     assert!(Config::from_toml("[files]\nroot = \"/\"\nwrit = true\n").is_err());
+}
+
+#[test]
+fn dev_defaults_enable_process_control_and_file_writes() {
+    let config = Config::dev_default();
+    assert!(config.process.control);
+    assert!(config.files.write);
+
+    let toml = config.to_toml().unwrap();
+    assert!(toml.contains("control = true"), "{toml}");
+    assert!(toml.contains("write = true"), "{toml}");
+}
+
+#[test]
+fn server_defaults_follow_the_build_profile() {
+    if cfg!(debug_assertions) {
+        assert_eq!(Config::server_default(), Config::dev_default());
+    } else {
+        assert_eq!(Config::server_default(), Config::default());
+    }
 }

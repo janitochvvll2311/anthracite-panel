@@ -92,6 +92,8 @@ npm run build
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture notes and repository conventions.
+Debug builds generate a missing config with process control and file writes
+enabled so the full UI is testable; release builds keep both disabled.
 
 ## License
 
