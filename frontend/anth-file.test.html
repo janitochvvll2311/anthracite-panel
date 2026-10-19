@@ -1,0 +1,161 @@
+<!doctype html>
+<!--
+  Dev-only harness for the file explorer components.
+
+  Run `npm run dev` and open
+  http://localhost:5173/anth-file.test.html. Vite's build input is only
+  index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>anth-file-explorer · test harness</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --page-bg: #070a0f;
+        --panel: #101721;
+        --panel-border: #223041;
+        --text: #dbe6f2;
+        --muted: #8b9bad;
+        --accent: #7dd3fc;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-width: 320px;
+        min-height: 100svh;
+        margin: 0;
+        color: var(--text);
+        font: 15px/1.6 system-ui, 'Segoe UI', Roboto, sans-serif;
+        background:
+          radial-gradient(
+            70% 45% at 50% 0%,
+            rgba(125, 211, 252, 0.08),
+            transparent 65%
+          ),
+          var(--page-bg);
+      }
+
+      main {
+        width: min(1180px, 100%);
+        margin: 0 auto;
+        padding: 32px 20px 64px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: clamp(28px, 4vw, 44px);
+        letter-spacing: -0.04em;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: end;
+        gap: 10px;
+        margin: 24px 0 14px;
+      }
+
+      label {
+        display: grid;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      input[type='text'] {
+        min-width: 280px;
+        padding: 7px 10px;
+        border: 1px solid var(--panel-border);
+        border-radius: 7px;
+        background: #0c131c;
+        color: var(--text);
+        font: 13px var(--mono);
+      }
+
+      button {
+        padding: 7px 12px;
+        border: 1px solid var(--panel-border);
+        border-radius: 7px;
+        background: #172231;
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+      }
+
+      anth-file-explorer {
+        --panel: var(--panel);
+        --panel-border: var(--panel-border);
+        --text: var(--text);
+        --muted: var(--muted);
+        --accent: var(--accent);
+        --mono: var(--mono);
+        --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>anth-file-explorer</h1>
+      <p>
+        Dev harness. Start <code>anth-panel run</code> with
+        <code>[files] write = true</code> to exercise the write controls.
+      </p>
+
+      <div class="toolbar">
+        <label>
+          Path
+          <input id="path" type="text" value="/" />
+        </label>
+        <button id="go" type="button">Go</button>
+        <label>
+          <span><input id="hidden" type="checkbox" /> Show hidden</span>
+        </label>
+      </div>
+
+      <anth-file-explorer id="explorer" show-hidden></anth-file-explorer>
+    </main>
+
+    <script type="module">
+      import '/src/components/anth-file-explorer.ts'
+      import { HttpFileClient } from '/src/lib/files/file-client.ts'
+
+      const explorer = document.getElementById('explorer')
+      const path = document.getElementById('path')
+      const hidden = document.getElementById('hidden')
+
+      explorer.client = new HttpFileClient()
+      hidden.checked = explorer.showHidden
+
+      document.getElementById('go').addEventListener('click', () => {
+        explorer.navigate(path.value || '/')
+        path.value = explorer.path
+      })
+
+      hidden.addEventListener('change', () => {
+        explorer.showHidden = hidden.checked
+      })
+
+      explorer.addEventListener('click', () => {
+        path.value = explorer.path
+      })
+    </script>
+  </body>
+</html>
