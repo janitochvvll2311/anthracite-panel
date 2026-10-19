@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anth_panel::config::Config;
+use anth_panel::terminal::Sessions;
 use anth_proto::{AnthClient, Request, Response};
 use clap::Parser;
 use tokio::net::{UnixListener, UnixStream};
@@ -118,7 +119,10 @@ async fn serve_connection_answers_an_echo_request() {
     let listener = UnixListener::bind(&path).unwrap();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
-        anth_panel::daemon::serve_connection(socket).await.unwrap();
+        let sessions = Sessions::new(4);
+        anth_panel::daemon::serve_connection(socket, sessions, "/bin/sh".into())
+            .await
+            .unwrap();
     });
 
     let stream = UnixStream::connect(&path).await.unwrap();
@@ -147,6 +151,7 @@ async fn serve_binds_the_configured_socket_and_echoes() {
 
     let config = Config {
         socket_path: path.to_string_lossy().into_owned(),
+        ..Config::default()
     };
     let server = tokio::spawn(async move { anth_panel::daemon::serve(&config).await });
 
@@ -183,6 +188,7 @@ async fn serve_binds_the_socket_and_answers_host_info() {
 
     let config = Config {
         socket_path: path.to_string_lossy().into_owned(),
+        ..Config::default()
     };
     let server = tokio::spawn(async move { anth_panel::daemon::serve(&config).await });
 

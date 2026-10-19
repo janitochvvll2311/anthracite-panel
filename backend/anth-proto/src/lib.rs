@@ -2,8 +2,24 @@ use std::error::Error;
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
-use tokio_util::codec::{Framed, LinesCodec};
+use tokio_util::codec::{Framed, FramedRead, FramedWrite, LinesCodec};
+
+pub mod b64;
+pub mod terminal;
+
+pub use terminal::{
+    TerminalOpenArgs, TerminalOpened, TerminalSize, DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK,
+    MAX_TERMINAL_INPUT,
+};
+
+/// Largest line accepted from a peer, in bytes.
+///
+/// `LinesCodec::new()` uses `usize::MAX`, so a client that opens the socket and
+/// never sends `\n` makes the daemon buffer without bound. Host info and echo
+/// are far below this; a terminal frame is capped separately.
+pub const MAX_LINE_LEN: usize = 1024 * 1024;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "data")]
@@ -13,6 +29,25 @@ pub enum Request {
     },
     /// Ask the daemon for a snapshot of the host it runs on.
     HostInfo,
+    /// Start a terminal session. The reply is `Response::TerminalOpened`,
+    /// after which output arrives unsolicited as `Response::TerminalOutput`.
+    TerminalOpen(TerminalOpenArgs),
+    /// Bytes typed into the terminal. Opaque: the daemon does not interpret
+    /// them, so control sequences pass through untouched.
+    TerminalInput {
+        id: u32,
+        #[serde(with = "b64")]
+        bytes: Vec<u8>,
+    },
+    /// Tell the process group its window changed size.
+    TerminalResize {
+        id: u32,
+        size: TerminalSize,
+    },
+    /// Close the session and kill its process group.
+    TerminalClose {
+        id: u32,
+    },
 }
 
 impl Request {
@@ -48,6 +83,20 @@ pub enum Response {
     },
     /// Boxed to keep the enum small; the payload is much larger than the others.
     HostInfo(Box<HostInfo>),
+    /// A session exists. Sent once per `Request::TerminalOpen`.
+    TerminalOpened(TerminalOpened),
+    /// Terminal output. Unsolicited: the daemon sends these as the session
+    /// produces bytes, which is why the connection needs independent halves.
+    TerminalOutput {
+        id: u32,
+        #[serde(with = "b64")]
+        bytes: Vec<u8>,
+    },
+    /// The session's process exited. Terminal; no more output follows.
+    TerminalExited {
+        id: u32,
+        status: i32,
+    },
 }
 
 /// Operating system identity reported by the daemon host.
@@ -140,6 +189,92 @@ impl Response {
     }
 }
 
+/// Decoder and encoder for the line protocol, with a bound on line length.
+///
+/// Exposed so a server can drive the two directions independently: terminal
+/// output must be written while input is still being read.
+pub fn codec() -> LinesCodec {
+    LinesCodec::new_with_max_length(MAX_LINE_LEN)
+}
+
+/// Receiving half of a connection.
+pub struct AnthReader {
+    framed: FramedRead<OwnedReadHalf, LinesCodec>,
+}
+
+impl AnthReader {
+    pub fn new(stream: UnixStream) -> Self {
+        let (read, _) = stream.into_split();
+        Self::from_read_half(read)
+    }
+
+    pub fn from_read_half(read: OwnedReadHalf) -> Self {
+        Self {
+            framed: FramedRead::new(read, codec()),
+        }
+    }
+
+    /// Next request, or `None` once the peer disconnects.
+    pub async fn receive_request(
+        &mut self,
+    ) -> Option<Result<Request, Box<dyn Error + Send + Sync>>> {
+        match self.framed.next().await {
+            Some(Ok(json)) => Some(Request::from_json(&json)),
+            Some(Err(e)) => Some(Err(Box::new(e))),
+            None => None,
+        }
+    }
+
+    /// Next response, or `None` once the peer disconnects. Client direction:
+    /// pairs with [`AnthWriter::send_request`].
+    pub async fn receive_response(
+        &mut self,
+    ) -> Option<Result<Response, Box<dyn Error + Send + Sync>>> {
+        match self.framed.next().await {
+            Some(Ok(json)) => Some(Response::from_json(&json)),
+            Some(Err(e)) => Some(Err(Box::new(e))),
+            None => None,
+        }
+    }
+}
+
+/// Sending half of a connection. Cloning is not needed: hand the one writer to
+/// the task that owns outgoing frames.
+pub struct AnthWriter {
+    framed: FramedWrite<OwnedWriteHalf, LinesCodec>,
+}
+
+impl AnthWriter {
+    pub fn new(stream: UnixStream) -> Self {
+        let (_, write) = stream.into_split();
+        Self::from_write_half(write)
+    }
+
+    pub fn from_write_half(write: OwnedWriteHalf) -> Self {
+        Self {
+            framed: FramedWrite::new(write, codec()),
+        }
+    }
+
+    pub async fn send_response(
+        &mut self,
+        response: &Response,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let json = response.to_json()?;
+        self.framed.send(json).await.map_err(|e| Box::new(e) as _)
+    }
+
+    /// Sends a request. Client direction: pairs with
+    /// [`AnthReader::receive_response`].
+    pub async fn send_request(
+        &mut self,
+        request: &Request,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let json = request.to_json()?;
+        self.framed.send(json).await.map_err(|e| Box::new(e) as _)
+    }
+}
+
 pub struct AnthServer {
     framed: Framed<UnixStream, LinesCodec>,
 }
@@ -147,7 +282,7 @@ pub struct AnthServer {
 impl AnthServer {
     pub fn new(stream: UnixStream) -> Self {
         Self {
-            framed: Framed::new(stream, LinesCodec::new()),
+            framed: Framed::new(stream, codec()),
         }
     }
 
@@ -188,7 +323,7 @@ pub struct AnthClient {
 impl AnthClient {
     pub fn new(stream: UnixStream) -> Self {
         Self {
-            framed: Framed::new(stream, LinesCodec::new()),
+            framed: Framed::new(stream, codec()),
         }
     }
 

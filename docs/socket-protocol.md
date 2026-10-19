@@ -15,9 +15,15 @@ The reference implementation is the `anth-proto` crate.
 | Framing | Newline-delimited JSON: one JSON object per line, `\n` terminated |
 | Encoding | UTF-8 |
 | Direction | Full duplex on one connection |
+| Max line | 1 MiB (`MAX_LINE_LEN`); a longer line is a protocol error |
 
 A line is a complete message. A message must not contain a raw newline; JSON
 encoding never produces one, so `\n` is always a frame boundary.
+
+Binary data — terminal input and output — travels as a **base64 string**, never
+as raw bytes. Those are the only members for which that applies, and the encoding
+is stated per member below. A raw byte in a frame would either break UTF-8 or,
+for `0x0a`, be read as a frame boundary.
 
 ## Request and response shape
 
@@ -25,6 +31,7 @@ Both messages are JSON objects with two members:
 
 ```json
 { "type": "<Variant>", "data": <payload> }
+
 ```
 
 `type` names the operation and `data` carries its arguments. The `data` member
@@ -34,8 +41,15 @@ The pair is request/response: the client writes one request and reads one
 response on the same connection. A connection may carry several request/response
 pairs in sequence; the daemon serves them in order.
 
+The terminal is the one exception. `TerminalOpen` is answered once with
+`TerminalOpened`, but `TerminalOutput` frames then arrive **unsolicited**, as the
+program produces bytes. A client must therefore read continuously rather than
+assuming one response per request, and must tolerate output interleaving with the
+acknowledgements of its own requests.
+
 > Note: this envelope is specific to the socket transport. The HTTP API omits it
 > and names the command in the route instead — see [api-endpoints.md](api-endpoints.md).
+> The browser terminal route has its own JSON frames, also documented there.
 
 ## Requests
 
@@ -45,6 +59,7 @@ Returns the message unchanged. Useful as a liveness check.
 
 ```json
 {"type":"Echo","data":{"message":"hola"}}
+
 ```
 
 | Field | Type | Required | Description |
@@ -58,6 +73,7 @@ Returns a snapshot of the host the daemon runs on. Takes no arguments, so the
 
 ```json
 {"type":"HostInfo"}
+
 ```
 
 The snapshot never inspects individual processes.
@@ -70,6 +86,7 @@ Success result for a request that produces a scalar value.
 
 ```json
 {"type":"Ok","data":{"message":"hola"}}
+
 ```
 
 | Field | Type | Description |
@@ -84,6 +101,7 @@ parse.
 
 ```json
 {"type":"Error","data":{"detail":"Error parsing request: expected value at line 1 column 1"}}
+
 ```
 
 | Field | Type | Description |
@@ -117,6 +135,7 @@ Reply to a `HostInfo` request.
     }
   }
 }
+
 ```
 
 | Field | Type | Unit | Notes |
@@ -152,6 +171,7 @@ client                              daemon
   |<---------------------------------|
   |  {"type":"HostInfo"}\n            |    same connection may continue
   |--------------------------------->|
+
 ```
 
 Because the protocol is one response per request, a client can request the same
@@ -170,3 +190,115 @@ socket open.
 
 Dropping the connection is the daemon's only way to end a conversation, so a
 client should treat EOF as an error rather than an empty response.
+
+## Terminal
+
+A terminal session is a program running on a pseudo-terminal. Sessions are named
+by an `id` that the daemon assigns, and are owned by the connection that opened
+them: when that connection ends, its sessions are killed. A session opened on one
+connection cannot be used from another.
+
+Byte-carrying members (`bytes`) are base64. All of them are opaque: the daemon
+does not interpret them, so ANSI sequences and control characters pass through
+untouched.
+
+### `TerminalOpen`
+
+```json
+{"type":"TerminalOpen","data":{"size":{"cols":80,"rows":24}}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `size.cols` | number | no | Columns, 1..1000. Omitted means 80. |
+| `size.rows` | number | no | Rows, 1..1000. Omitted means 24. |
+
+Reply: `TerminalOpened`.
+
+```json
+{"type":"TerminalOpened","data":{"id":1,"size":{"cols":80,"rows":24},"program":"/bin/sh","line_editing":false}}
+
+```
+
+`size` is the size the session actually started with, and `program` the program
+that was spawned. `line_editing` reports whether the shell is known to provide
+interactive line editing and Tab completion; old daemons omit it and clients
+must default it to `false`. A size outside 1..1000 is refused rather than
+clamped.
+
+### `TerminalInput`
+
+```json
+{"type":"TerminalInput","data":{"id":1,"bytes":"bHMK"}}
+
+```
+
+Bytes typed by the user, base64. **No reply on success** — see
+[Silent commands](#silent-commands). A failure answers `Error`.
+
+### `TerminalResize`
+
+```json
+{"type":"TerminalResize","data":{"id":1,"size":{"cols":120,"rows":40}}}
+
+```
+
+Signals the process group, so applications that ask the kernel for the window
+size (`vim`, `htop`) redraw. **No reply on success.** A failure answers `Error`.
+
+### `TerminalClose`
+
+```json
+{"type":"TerminalClose","data":{"id":1}}
+
+```
+
+Kills the session's process group and frees its slot. **No reply on success.**
+Sending input for a closed session answers `Error`.
+
+Output that was already in flight may still arrive after this. A client should
+ignore `TerminalOutput` for an id it has closed, and must not assume that closing
+silences the session instantly.
+
+### `TerminalOutput` (unsolicited)
+
+```json
+{"type":"TerminalOutput","data":{"id":1,"bytes":"G1sxOzMybWhpDQo="}}
+
+```
+
+Output from the program, base64. Not a reply to anything.
+
+### `TerminalExited`
+
+```json
+{"type":"TerminalExited","data":{"id":1,"status":0}}
+
+```
+
+The program ended and no further output follows. `status` is its exit code, or
+`-1` when no status could be collected. The daemon also sends this when the
+terminal fails. After it, the session id is no longer valid.
+
+### Silent commands
+
+`TerminalInput`, `TerminalResize` and `TerminalClose` do **not** reply when they
+succeed. Only failures produce a frame.
+
+This is deliberate. Responses carry no request id, and terminal output is
+unsolicited, so an unconditional acknowledgement could not be matched to its
+request: a client reading frames in order would mistake an `Ok` for an answer it
+was waiting for, or vice versa. Silence also avoids doubling the traffic of a
+typing session with a 40-byte frame per keystroke.
+
+The consequence for a client is that it cannot wait for an acknowledgement. It
+writes and continues, and treats an `Error` as a signal that something went
+wrong. `TerminalOpen` is the only terminal request with a required reply, because
+the client needs the session `id`.
+
+### Errors
+
+Requests for a session that is not open on this connection answer `Error` with a
+`detail` naming the reason. A daemon may cap the number of concurrent sessions;
+when the cap is reached, `TerminalOpen` answers `Error` rather than queueing.

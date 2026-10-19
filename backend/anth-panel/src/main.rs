@@ -62,6 +62,20 @@ fn render_frame(response: &Response) -> String {
         Response::HostInfo(info) => anth_panel::render_host_info(info),
         Response::Ok { message } => format!("[OK] {message}"),
         Response::Error { detail } => format!("[ERROR] {detail}"),
+        // A CLI subcommand never opens a terminal, so these are only reachable
+        // if a daemon sends frames nobody asked for.
+        Response::TerminalOpened(opened) => {
+            format!("[ERROR] unexpected terminal session {}", opened.id)
+        }
+        Response::TerminalOutput { id, bytes } => {
+            format!(
+                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
+                bytes.len()
+            )
+        }
+        Response::TerminalExited { id, status } => {
+            format!("[ERROR] unexpected terminal exit for session {id} (status {status})")
+        }
     }
 }
 
@@ -118,6 +132,10 @@ async fn main() -> ExitCode {
             .map_err(|e| e.to_string()),
         Command::Api(args) => serve_api(Config::load_or_create(config_path), args).await,
         Command::Run(args) => serve_run(Config::load_or_create(config_path), args).await,
+        Command::Terminal(args) => {
+            let config = Config::load_or_default(config_path);
+            Ok(anth_panel::terminal_client::run(Path::new(&config.socket_path), args).await)
+        }
         Command::Echo { .. } | Command::HostInfo(_) => unreachable!("handled by send_command"),
     };
 

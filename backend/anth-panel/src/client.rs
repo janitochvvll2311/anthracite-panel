@@ -12,7 +12,7 @@ pub fn request_for(command: &Command) -> Option<Request> {
             message: message.clone(),
         }),
         Command::HostInfo(_) => Some(Request::HostInfo),
-        Command::Daemon | Command::Api(_) | Command::Run(_) => None,
+        Command::Terminal(_) | Command::Daemon | Command::Api(_) | Command::Run(_) => None,
     }
 }
 
@@ -26,6 +26,23 @@ pub fn handle_response(response: &Response) {
         }
         Response::HostInfo(info) => {
             println!("{}", render::render_host_info(info));
+        }
+        // The CLI has no terminal subcommand; these only reach it if a daemon
+        // volunteers frames nobody asked for.
+        Response::TerminalOpened(opened) => {
+            eprintln!(
+                "[ERROR] unexpected terminal session {} from the daemon",
+                opened.id
+            );
+        }
+        Response::TerminalOutput { id, bytes } => {
+            eprintln!(
+                "[ERROR] unexpected terminal output for session {id} ({} bytes)",
+                bytes.len()
+            );
+        }
+        Response::TerminalExited { id, status } => {
+            eprintln!("[ERROR] unexpected terminal exit for session {id} (status {status})");
         }
     }
 }

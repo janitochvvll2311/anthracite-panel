@@ -4,16 +4,90 @@ use std::{error::Error, path::Path};
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/anth/config.toml";
 pub const DEFAULT_SOCKET_PATH: &str = "/var/tmp/anth.sock";
 
+/// Web terminal settings. The token is reserved for the pending auth layer.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalConfig {
+    /// Program to spawn for each session. `"auto"` uses `$SHELL` when it points
+    /// at an existing file, then falls back to `/bin/sh`.
+    pub shell: String,
+    /// Shared token reserved for the authentication layer. Not enforced yet.
+    pub token: String,
+    /// Maximum number of concurrent sessions across the daemon.
+    pub max_sessions: usize,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            shell: "auto".to_string(),
+            // Reserved for the authentication layer. A terminal is remote code
+            // execution, so the token stays empty until that layer exists.
+            token: String::new(),
+            max_sessions: 4,
+        }
+    }
+}
+
+impl TerminalConfig {
+    /// Resolves the configured shell, following `$SHELL` (then the account's
+    /// login shell) for `"auto"`.
+    pub fn resolved_shell(&self) -> String {
+        let login = login_shell();
+        resolve_shell(
+            &self.shell,
+            std::env::var("SHELL").ok().as_deref(),
+            login.as_deref(),
+        )
+    }
+}
+
+fn resolve_shell(configured: &str, environment: Option<&str>, login: Option<&str>) -> String {
+    if configured != "auto" && !configured.is_empty() {
+        return configured.to_string();
+    }
+
+    environment
+        .filter(|shell| !shell.is_empty() && Path::new(shell).is_file())
+        .or_else(|| login.filter(|shell| !shell.is_empty() && Path::new(shell).is_file()))
+        .unwrap_or("/bin/sh")
+        .to_string()
+}
+
+/// The current account's login shell from `/etc/passwd`, if it is usable.
+fn login_shell() -> Option<String> {
+    let uid = unsafe { libc::getuid() };
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    shell_from_passwd(&passwd, uid)
+}
+
+fn shell_from_passwd(text: &str, uid: u32) -> Option<String> {
+    text.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() < 7 || fields[2].parse::<u32>().ok() != Some(uid) {
+            return None;
+        }
+
+        let shell = fields[6];
+        if shell.is_empty() || !Path::new(shell).is_file() {
+            return None;
+        }
+        Some(shell.to_string())
+    })
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub socket_path: String,
+    pub terminal: TerminalConfig,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             socket_path: DEFAULT_SOCKET_PATH.to_string(),
+            terminal: TerminalConfig::default(),
         }
     }
 }
@@ -101,5 +175,59 @@ impl Config {
             })?,
         )
         .map_err(|source| format!("Error writing config at {}: {source}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_shell_uses_auto() {
+        assert_eq!(TerminalConfig::default().shell, "auto");
+    }
+
+    #[test]
+    fn an_explicit_shell_wins_over_the_environment() {
+        assert_eq!(
+            resolve_shell("/bin/bash", Some("/bin/zsh"), Some("/bin/sh")),
+            "/bin/bash".to_string()
+        );
+    }
+
+    #[test]
+    fn auto_uses_an_existing_environment_shell() {
+        assert_eq!(
+            resolve_shell("auto", Some("/bin/sh"), Some("/bin/dash")),
+            "/bin/sh".to_string()
+        );
+    }
+
+    #[test]
+    fn auto_falls_back_to_the_login_shell_then_bin_sh() {
+        assert_eq!(
+            resolve_shell("auto", Some("/nonexistent/shell"), Some("/bin/sh")),
+            "/bin/sh".to_string()
+        );
+        assert_eq!(
+            resolve_shell("auto", None, Some("/bin/sh")),
+            "/bin/sh".to_string()
+        );
+        assert_eq!(resolve_shell("auto", None, None), "/bin/sh".to_string());
+        assert_eq!(resolve_shell("", Some(""), None), "/bin/sh".to_string());
+    }
+
+    #[test]
+    fn passwd_entries_are_matched_by_uid() {
+        let passwd = concat!(
+            "root:x:0:0:root:/root:/bin/sh\n",
+            "alice:x:1000:1000:Alice:/home/alice:/bin/sh\n",
+            "broken:x:1001:1001:Broken:/home/broken:\n",
+        );
+
+        assert_eq!(shell_from_passwd(passwd, 0), Some("/bin/sh".to_string()));
+        assert_eq!(shell_from_passwd(passwd, 1000), Some("/bin/sh".to_string()));
+        assert_eq!(shell_from_passwd(passwd, 1001), None);
+        assert_eq!(shell_from_passwd(passwd, 9999), None);
     }
 }
