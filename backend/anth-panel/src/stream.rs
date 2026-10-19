@@ -8,11 +8,15 @@
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anth_proto::{AnthClient, Request, Response};
+use futures::StreamExt;
 use tokio::net::UnixStream;
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::sync::Mutex;
+
+use crate::poll;
 
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(2);
 pub const MIN_INTERVAL: Duration = Duration::from_millis(10);
@@ -103,9 +107,6 @@ impl<W: Write> Frames<W> {
 }
 
 /// Reads once when `period` is `None`, or repeatedly until interrupted.
-///
-/// The wait between reads yields to the runtime instead of spinning, and a read
-/// that overruns the interval does not trigger a catch-up burst.
 pub async fn follow<F>(
     socket_path: &Path,
     request: &Request,
@@ -123,44 +124,32 @@ where
         }
     };
 
-    let mut client = AnthClient::new(socket);
+    // One connection for the whole stream, shared by successive reads.
+    let client = Arc::new(Mutex::new(AnthClient::new(socket)));
+    let request = Arc::new(request.clone());
+    let mut items = Box::pin(poll::maybe_stream(period, move || {
+        let client = Arc::clone(&client);
+        let request = Arc::clone(&request);
+        async move {
+            let mut client = client.lock().await;
+            read_once(&mut client, &request).await
+        }
+    }));
+
     let mut frames = Frames::new(io::stdout(), io::stdout().is_terminal());
 
-    let mut ticker = period.map(|period| {
-        let mut ticker = interval(period);
-        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        ticker
-    });
-    if let Some(ticker) = ticker.as_mut() {
-        // A Tokio interval fires its first tick immediately; consuming it makes
-        // the first wait a full period after the first read.
-        ticker.tick().await;
-    }
-
     loop {
-        if let Err(e) = client.send_request(request).await {
-            eprintln!("Failed to send request: {e}");
-            return ExitCode::FAILURE;
-        }
-
-        let response = match client.receive_response().await {
-            Some(Ok(response)) => response,
-            Some(Err(e)) => {
-                eprintln!("Failed to receive response: {e}");
-                return ExitCode::FAILURE;
-            }
-            None => {
-                eprintln!("Stream closed while waiting for response");
-                return ExitCode::FAILURE;
-            }
+        let item = tokio::select! {
+            _ = tokio::signal::ctrl_c() => return ExitCode::SUCCESS,
+            item = items.next() => item,
         };
 
-        match &response {
-            Response::Error { detail } => {
+        match item {
+            Some(Ok(Response::Error { detail })) => {
                 eprintln!("[ERROR] {detail}");
                 return ExitCode::FAILURE;
             }
-            other => match frames.write_frame(&render(other)) {
+            Some(Ok(response)) => match frames.write_frame(&render(&response)) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::BrokenPipe => return ExitCode::SUCCESS,
                 Err(e) => {
@@ -168,15 +157,24 @@ where
                     return ExitCode::FAILURE;
                 }
             },
+            Some(Err(e)) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+            None => return ExitCode::SUCCESS,
         }
+    }
+}
 
-        let Some(ticker) = ticker.as_mut() else {
-            return ExitCode::SUCCESS;
-        };
+async fn read_once(client: &mut AnthClient, request: &Request) -> Result<Response, String> {
+    client
+        .send_request(request)
+        .await
+        .map_err(|e| format!("Failed to send request: {e}"))?;
 
-        tokio::select! {
-            _ = ticker.tick() => {}
-            _ = tokio::signal::ctrl_c() => return ExitCode::SUCCESS,
-        }
+    match client.receive_response().await {
+        Some(Ok(response)) => Ok(response),
+        Some(Err(e)) => Err(format!("Failed to receive response: {e}")),
+        None => Err("Stream closed while waiting for response".to_string()),
     }
 }

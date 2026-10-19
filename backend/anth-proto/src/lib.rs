@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, LinesCodec};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "data")]
 pub enum Request {
     Echo {
@@ -86,6 +86,36 @@ pub struct HostInfo {
     pub logical_cores: usize,
     pub load: LoadAverage,
     pub memory: MemoryInfo,
+}
+
+impl From<&HostInfo> for serde_json::Value {
+    /// The bare snapshot, without the `Response` tag envelope. The REST API
+    /// uses this so a route names the command instead of the payload doing it.
+    fn from(info: &HostInfo) -> Self {
+        serde_json::json!({
+            "hostname": info.hostname,
+            "os": {
+                "name": info.os.name,
+                "version": info.os.version,
+                "kernel": info.os.kernel,
+                "arch": info.os.arch,
+            },
+            "uptime_seconds": info.uptime_seconds,
+            "cpu_model": info.cpu_model,
+            "logical_cores": info.logical_cores,
+            "load": {
+                "one": info.load.one,
+                "five": info.load.five,
+                "fifteen": info.load.fifteen,
+            },
+            "memory": {
+                "total_kib": info.memory.total_kib,
+                "available_kib": info.memory.available_kib,
+                "swap_total_kib": info.memory.swap_total_kib,
+                "swap_free_kib": info.memory.swap_free_kib,
+            },
+        })
+    }
 }
 
 impl Response {

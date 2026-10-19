@@ -5,10 +5,12 @@ pub mod client;
 pub mod config;
 pub mod daemon;
 pub mod hostinfo;
+pub mod poll;
 pub mod render;
+pub mod sse;
 pub mod stream;
 
-pub use api::{get_healthz, post_command, router};
+pub use api::{get_healthz, get_host_info, post_echo, router, watch_host_info};
 pub use app::AppState;
 pub use cli::Cli;
 pub use client::{handle_response, request_for};

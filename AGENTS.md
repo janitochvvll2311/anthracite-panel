@@ -29,8 +29,11 @@ backend/
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
       render.rs             #   bordered table renderer for the CLI
       stream.rs             #   repeat a request: interval parsing + frame output
+      poll.rs               #   repeat an async read on a period (shared timing)
+      sse.rs                #   SSE framing: named events, ids, keep-alive
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
-    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs, stream.rs
+    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs,
+                            #   stream.rs, sse.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /command to the backend in dev
   src/  public/  index.html
@@ -118,7 +121,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   static musl build trivial. `collect_from` takes a filesystem root so tests can exercise
   the parsing against fixture files; the `parse_*` helpers are pure functions over file
   contents. Unreadable fields degrade to `unknown`/zero rather than failing the request.
-- **Streaming**: `anth_panel::stream::follow` is request-agnostic — it takes the socket
+- **Streaming**: `anth_panel::poll::stream` owns *when* a read repeats — one Tokio
+  interval per stream, `MissedTickBehavior::Delay`, and a wait that is cancelled when
+  the stream is dropped. It knows nothing about transport or formatting, so the CLI
+  and the SSE endpoint share it. `sse::SseStream` owns *how* values become SSE frames
+  (event name, ids, retry hint, keep-alive, error event) and takes any
+  `Stream<Item = Result<T, E>>`; a new endpoint reuses it by naming its event.
+  `anth_panel::stream::follow` is request-agnostic — it takes the socket
   path, a `Request`, an `Option<Duration>` period and a `FnMut(&Response) -> String`
   renderer, so a new streaming subcommand only has to answer `Some(period)` in
   `watch_interval`. The wait is a Tokio interval with `MissedTickBehavior::Delay`, which
@@ -135,8 +144,12 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `Config::load_or_create`, which writes a default file when the path cannot be read,
   so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes.
-- **Panel routes**: `GET /healthz`, `POST /command` (proxies a JSON `Request` to the
-  daemon over the socket), and a fallback static handler that serves the embedded SPA
+- **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
+  `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE) and
+  `POST /api/echo`. The route names the command, so bodies carry the command's
+  arguments at the top level (`{"message":"hi"}`) with no `type`/`data` envelope;
+  the envelope stays a `anth-proto` concern for socket clients only. A fallback
+  static handler that serves the embedded SPA
   and falls back to `index.html`. Table tests exercise the router through
   `tower::ServiceExt::oneshot`.
 - **Subcommands**: `daemon`, `api` and `run` share `--addr`, which falls back to
