@@ -1,6 +1,6 @@
 //! Rendering of host information as a bordered text table.
 
-use anth_proto::{FileKind, FileListing, HostInfo, ProcessSnapshot};
+use anth_proto::{FileKind, FileListing, HostInfo, NetworkSnapshot, ProcessSnapshot};
 
 const TOP_LEFT: char = '┌';
 const TOP_RIGHT: char = '┐';
@@ -294,6 +294,47 @@ pub fn render_process_snapshot(snapshot: &ProcessSnapshot) -> String {
         output.push_str(warning);
     }
     output
+}
+
+/// Renders a network snapshot as a table. Traffic counters are cumulative;
+/// clients that need a live rate compute it from consecutive snapshots.
+pub fn render_network_snapshot(snapshot: &NetworkSnapshot) -> String {
+    let mut table = Table::new(vec![
+        "IFACE".to_string(),
+        "STATE".to_string(),
+        "ADDRESS".to_string(),
+        "SPEED".to_string(),
+        "RX".to_string(),
+        "TX".to_string(),
+    ]);
+
+    for interface in &snapshot.interfaces {
+        let addresses = if interface.addresses.is_empty() {
+            interface.mac.clone()
+        } else {
+            interface
+                .addresses
+                .iter()
+                .map(|address| format!("{}/{}", address.address, address.prefix_len))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let speed = interface
+            .speed_mbps
+            .map(|speed| format!("{speed} Mb/s"))
+            .unwrap_or_else(|| "-".to_string());
+
+        table.push(vec![
+            interface.name.clone(),
+            interface.state.to_uppercase(),
+            elide(&addresses, 48),
+            speed,
+            format_bytes(interface.rx_bytes),
+            format_bytes(interface.tx_bytes),
+        ]);
+    }
+
+    table.render()
 }
 
 /// Renders one directory listing as a table, followed by a warning when the

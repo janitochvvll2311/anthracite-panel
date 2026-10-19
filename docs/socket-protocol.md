@@ -35,7 +35,7 @@ Both messages are JSON objects with two members:
 
 `type` names the operation and `data` carries its arguments. The `data` member
 is omitted entirely for variants that take no arguments (`HostInfo`,
-`ProcessList`).
+`ProcessList`, `NetworkList`).
 
 The pair is request/response: the client writes one request and reads one
 response on the same connection. A connection may carry several request/response
@@ -107,6 +107,36 @@ to the daemon user, and the pid is not protected. See
 [processes.md](processes.md) for the policy.
 
 Reply: `ProcessSignalled`.
+
+### `NetworkList`
+
+Returns one snapshot of every network interface. Takes no arguments, so the
+`data` member is absent.
+
+```json
+{"type":"NetworkList"}
+
+```
+
+### `NetworkSetState`
+
+Brings one interface up or down.
+
+```json
+{"type":"NetworkSetState","data":{"name":"eth0","up":false}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | Interface name from the snapshot |
+| `up` | boolean | yes | `true` to bring it up, `false` to bring it down |
+
+The daemon refuses the change unless `[network] control = true`. Invalid names,
+unknown interfaces and bringing `lo` down are rejected. See
+[network.md](network.md) for the policy.
+
+Reply: `NetworkStateChanged`, or `NetworkError`.
 
 ### Filesystem requests
 
@@ -286,6 +316,61 @@ Successful reply to `ProcessSignal`.
 
 A refused signal arrives as an `Error` response instead.
 
+### `NetworkSnapshot`
+
+Reply to `NetworkList`.
+
+```json
+{
+  "type": "NetworkSnapshot",
+  "data": {
+    "interfaces": [
+      {
+        "name": "eth0",
+        "index": 2,
+        "state": "up",
+        "up": true,
+        "running": true,
+        "loopback": false,
+        "mac": "aa:bb:cc:dd:ee:ff",
+        "mtu": 1500,
+        "speed_mbps": 1000,
+        "duplex": "full",
+        "addresses": [
+          { "family": "ipv4", "address": "192.0.2.10", "prefix_len": 24 }
+        ],
+        "rx_bytes": 12345,
+        "tx_bytes": 67890,
+        "rx_packets": 10,
+        "tx_packets": 20,
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0
+      }
+    ],
+    "timestamp_ms": 1700000000000,
+    "control_enabled": false
+  }
+}
+```
+
+`loopback` marks an `IFF_LOOPBACK` interface; the daemon refuses to bring one
+down. Traffic counters are cumulative. `timestamp_ms` lets a client compute
+RX/TX rates between consecutive snapshots; the daemon does not keep a sampler.
+
+### `NetworkStateChanged`
+
+Successful reply to `NetworkSetState`.
+
+```json
+{"type":"NetworkStateChanged","data":{"name":"eth0","up":false}}
+
+```
+
+A refused change arrives as `NetworkError` with `kind` (`disabled`, `protected`,
+`not_found`, `permission_denied`, `invalid` or `failed`) and `detail`.
+
 ### File responses
 
 `FileListing`, `FileChunk`, `FileWritten`, `FileCreated`, `FileDeleted`,
@@ -426,6 +511,7 @@ socket open.
 | `data` missing for a variant that needs it | `Error` with a parse message, then the connection closes |
 | Malformed JSON line | `Error` with a parse message, then the connection closes |
 | Filesystem operation failed | `FileError` with `kind` and `detail`; the connection stays open |
+| Network change failed | `NetworkError` with `kind` and `detail`; the connection stays open |
 | Daemon goes away | The connection closes with no message; a write fails with `Broken pipe` |
 
 Dropping the connection is the daemon's only way to end a conversation, so a

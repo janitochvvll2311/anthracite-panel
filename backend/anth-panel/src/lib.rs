@@ -6,6 +6,7 @@ pub mod config;
 pub mod daemon;
 pub mod files;
 pub mod hostinfo;
+pub mod network;
 pub mod poll;
 pub mod process;
 pub mod render;
@@ -21,5 +22,8 @@ pub use cli::Cli;
 pub use client::{handle_response, request_for};
 pub use config::{Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH};
 pub use hostinfo::collect as collect_host_info;
-pub use render::{render_file_listing, render_host_info, render_process_snapshot};
+pub use network::collect as collect_network;
+pub use render::{
+    render_file_listing, render_host_info, render_network_snapshot, render_process_snapshot,
+};
 pub use stream::{DEFAULT_INTERVAL, Frames, parse_interval};

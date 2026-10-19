@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use anth_panel::cli::{
     Cli, Command, EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs,
-    FileUploadArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs,
+    FileUploadArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
+    ProcessSignalArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::stream;
@@ -68,6 +69,12 @@ fn render_frame(response: &Response) -> String {
         Response::ProcessSignalled { pid, signal } => {
             format!("[OK] sent {signal} to process {pid}")
         }
+        Response::NetworkSnapshot(snapshot) => anth_panel::render_network_snapshot(snapshot),
+        Response::NetworkStateChanged { name, up } => {
+            let state = if *up { "up" } else { "down" };
+            format!("[OK] brought {name} {state}")
+        }
+        Response::NetworkError(error) => format!("[ERROR] {}", error.detail),
         Response::FileListing(listing) => anth_panel::render_file_listing(listing),
         Response::FileChunk(chunk) => format!(
             "[ERROR] unexpected file chunk for {} ({} bytes)",
@@ -119,6 +126,12 @@ fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
             None => Ok(None),
             Some(raw) => stream::parse_interval(raw).map(Some),
         },
+        Command::Network(NetworkArgs {
+            command: NetworkCommand::List(WatchArgs { watch }),
+        }) => match watch.as_deref() {
+            None => Ok(None),
+            Some(raw) => stream::parse_interval(raw).map(Some),
+        },
         _ => Ok(None),
     }
 }
@@ -136,6 +149,39 @@ fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
     }
 
     print!("Send {} to process {}? [y/N] ", args.signal, args.pid);
+    let _ = std::io::stdout().flush();
+
+    let mut answer = String::new();
+    stdin
+        .read_line(&mut answer)
+        .map_err(|error| format!("failed to read confirmation: {error}"))?;
+
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+fn confirm_network_state(args: &NetworkStateArgs, up: bool) -> Result<bool, String> {
+    use std::io::{IsTerminal, Write};
+
+    if args.yes {
+        return Ok(true);
+    }
+
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        return Err(
+            "refusing to change a network interface without --yes when stdin is not a terminal"
+                .to_string(),
+        );
+    }
+
+    let action = if up { "Bring up" } else { "Bring down" };
+    print!(
+        "{action} interface `{}`? This can disconnect the host. [y/N] ",
+        args.name
+    );
     let _ = std::io::stdout().flush();
 
     let mut answer = String::new();
@@ -427,6 +473,40 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    if let Command::Network(NetworkArgs {
+        command: NetworkCommand::Up(args),
+    }) = command
+    {
+        match confirm_network_state(args, true) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
+    if let Command::Network(NetworkArgs {
+        command: NetworkCommand::Down(args),
+    }) = command
+    {
+        match confirm_network_state(args, false) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
     if let Command::File(FileArgs {
         command: FileCommand::Delete(args),
     }) = command
@@ -486,7 +566,11 @@ async fn main() -> ExitCode {
             let config = Config::load_or_default(config_path);
             Ok(anth_panel::terminal_client::run(Path::new(&config.socket_path), args).await)
         }
-        Command::Echo { .. } | Command::HostInfo(_) | Command::Process(_) | Command::File(_) => {
+        Command::Echo { .. }
+        | Command::HostInfo(_)
+        | Command::Process(_)
+        | Command::Network(_)
+        | Command::File(_) => {
             unreachable!("handled by send_command")
         }
     };

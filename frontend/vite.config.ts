@@ -8,8 +8,9 @@ export default defineConfig({
       // Only the app shell is a build entry. Dev harnesses such as
       // `src/components/anth-terminal.test.html`,
       // `src/components/anth-process-monitor.test.html`,
-      // `src/components/anth-file-explorer.test.html` and
-      // `src/components/anth-host-info.test.html` stay out of dist/.
+      // `src/components/anth-file-explorer.test.html`,
+      // `src/components/anth-host-info.test.html` and
+      // `src/components/anth-network-monitor.test.html` stay out of dist/.
       input: 'index.html',
     },
   },

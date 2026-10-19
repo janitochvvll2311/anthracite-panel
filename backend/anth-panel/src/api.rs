@@ -20,8 +20,8 @@ use crate::sse::SseStream;
 use crate::stream;
 use anth_proto::{
     AnthClient, DEFAULT_FILE_CHUNK, DEFAULT_TERMINAL_SIZE, FileChunk, FileError, FileErrorKind,
-    FileListing, FileWritten, ProcessSignal, ProcessSnapshot, Request, Response as CommandResponse,
-    TerminalSize,
+    FileListing, FileWritten, NetworkError, NetworkErrorKind, NetworkSnapshot, ProcessSignal,
+    ProcessSnapshot, Request, Response as CommandResponse, TerminalSize,
 };
 
 pub fn router(app: AppState) -> Router {
@@ -38,6 +38,9 @@ pub fn router(app: AppState) -> Router {
         .route("/api/processes", get(get_processes))
         .route("/api/processes/watch", get(watch_processes))
         .route("/api/processes/{pid}/signal", post(post_process_signal))
+        .route("/api/network", get(get_network))
+        .route("/api/network/watch", get(watch_network))
+        .route("/api/network/{name}/state", post(post_network_state))
         .route("/api/files", get(get_files))
         .route("/api/files/content", get(get_file_content))
         .route("/api/files/download", get(download_file))
@@ -218,6 +221,115 @@ pub async fn post_process_signal(
             Ok(Json(serde_json::json!({ "pid": pid, "signal": signal })))
         }
         CommandResponse::Error { detail } => Err(ApiError::bad_request(detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
+    }
+}
+
+/// `GET /api/network` — one network-interface snapshot.
+pub async fn get_network(State(state): State<AppState>) -> Result<Json<NetworkSnapshot>, ApiError> {
+    let response = exchange(&state, &Request::NetworkList).await?;
+    network_snapshot_json(response).map(Json)
+}
+
+/// `GET /api/network/watch?interval=2s` — interface snapshots as SSE.
+pub async fn watch_network(
+    State(state): State<AppState>,
+    query: Result<Query<WatchQuery>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
+
+    let period = match query.interval.as_deref() {
+        None => stream::DEFAULT_INTERVAL,
+        Some(raw) => stream::parse_interval(raw).map_err(ApiError::bad_request)?,
+    };
+
+    let client = state
+        .create_client()
+        .await
+        .map_err(|_| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "daemon unavailable"))?;
+
+    let client = Arc::new(tokio::sync::Mutex::new(client));
+    let items = poll::stream(period, move || {
+        let client = Arc::clone(&client);
+        async move {
+            let mut client = client.lock().await;
+            query_command(&mut client, &Request::NetworkList)
+                .await
+                .and_then(network_snapshot_json)
+                .map_err(error_detail)
+        }
+    });
+
+    Ok(SseStream::new("network").stream(items))
+}
+
+/// Body of `POST /api/network/{name}/state`.
+#[derive(Debug, Deserialize)]
+pub struct NetworkStateArgs {
+    pub up: bool,
+}
+
+/// `POST /api/network/{name}/state` — bring one interface up or down.
+pub async fn post_network_state(
+    State(state): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+    payload: Result<Json<NetworkStateArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Path(name) = path.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_network_control(&state)?;
+
+    match exchange(
+        &state,
+        &Request::NetworkSetState {
+            name: name.clone(),
+            up: args.up,
+        },
+    )
+    .await?
+    {
+        CommandResponse::NetworkStateChanged { name, up } => {
+            Ok(Json(serde_json::json!({ "name": name, "up": up })))
+        }
+        CommandResponse::NetworkError(error) => Err(network_api_error(error)),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
+        other => Err(ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("unexpected daemon response: {other:?}"),
+        )),
+    }
+}
+
+fn require_network_control(state: &AppState) -> Result<(), ApiError> {
+    if state.config.network.control {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "network control is disabled",
+        ))
+    }
+}
+
+fn network_api_error(error: NetworkError) -> ApiError {
+    let status = match error.kind {
+        NetworkErrorKind::Disabled | NetworkErrorKind::PermissionDenied => StatusCode::FORBIDDEN,
+        NetworkErrorKind::Protected => StatusCode::FORBIDDEN,
+        NetworkErrorKind::NotFound => StatusCode::NOT_FOUND,
+        NetworkErrorKind::Invalid => StatusCode::BAD_REQUEST,
+        NetworkErrorKind::Failed => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    ApiError::new(status, error.detail)
+}
+
+fn network_snapshot_json(response: CommandResponse) -> Result<NetworkSnapshot, ApiError> {
+    match response {
+        CommandResponse::NetworkSnapshot(snapshot) => Ok(snapshot),
+        CommandResponse::NetworkError(error) => Err(network_api_error(error)),
+        CommandResponse::Error { detail } => Err(ApiError::new(StatusCode::BAD_GATEWAY, detail)),
         other => Err(ApiError::new(
             StatusCode::BAD_GATEWAY,
             format!("unexpected daemon response: {other:?}"),

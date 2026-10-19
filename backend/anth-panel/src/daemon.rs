@@ -23,6 +23,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::config::{Config, FilesConfig};
 use crate::files::{FileService, PendingUpload};
 use crate::hostinfo;
+use crate::network;
 use crate::process;
 use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
 
@@ -32,19 +33,20 @@ type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
 pub fn handle_request(request: Request) -> Response {
     let files = FileService::new(&FilesConfig::default())
         .expect("the default filesystem root must be usable");
-    handle_request_with(request, false, &files)
+    handle_request_with(request, false, false, &files)
 }
 
 /// Handles a request with the daemon policy that is not part of the wire type.
 ///
-/// Process control and file writes are deployment policy: the socket protocol
-/// itself does not know whether the host allows them. This synchronous path is
-/// used by the line helper and unit tests. The async connection loop
-/// special-cases `ProcessList` so the blocking `/proc` walk runs on a blocking
+/// Process control, network control and file writes are deployment policy: the
+/// socket protocol itself does not know whether the host allows them. This
+/// synchronous path is used by the line helper and unit tests. The async
+/// connection loop special-cases blocking reads so they run on a blocking
 /// worker instead of a Tokio task.
 pub fn handle_request_with(
     request: Request,
     process_control: bool,
+    network_control: bool,
     files: &FileService,
 ) -> Response {
     match request {
@@ -57,6 +59,13 @@ pub fn handle_request_with(
                 Err(error) => Response::Error {
                     detail: error.detail(),
                 },
+            }
+        }
+        Request::NetworkList => Response::NetworkSnapshot(network::collect(network_control)),
+        Request::NetworkSetState { name, up } => {
+            match network::set_state(network_control, &name, up) {
+                Ok(()) => Response::NetworkStateChanged { name, up },
+                Err(error) => Response::NetworkError(error),
             }
         }
         Request::FileList { path } => match files.list(&path) {
@@ -116,15 +125,17 @@ pub async fn serve_connection(
         FileService::new(&FilesConfig::default())
             .expect("the default filesystem root must be usable"),
     );
-    serve_connection_with(socket, sessions, program, false, files).await
+    serve_connection_with(socket, sessions, program, false, false, files).await
 }
 
-/// Serves one connection with the process and file policies applied to requests.
+/// Serves one connection with the process, network and file policies applied to
+/// requests.
 pub async fn serve_connection_with(
     socket: UnixStream,
     sessions: Arc<Sessions>,
     program: Arc<str>,
     process_control: bool,
+    network_control: bool,
     files: Arc<FileService>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut owned: Vec<u32> = Vec::new();
@@ -137,6 +148,7 @@ pub async fn serve_connection_with(
         Arc::clone(&sessions),
         program,
         process_control,
+        network_control,
         files,
         &mut owned,
     )
@@ -162,6 +174,7 @@ async fn pump(
     sessions: Arc<Sessions>,
     program: Arc<str>,
     process_control: bool,
+    network_control: bool,
     files: Arc<FileService>,
     owned: &mut Vec<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -226,6 +239,29 @@ async fn pump(
                     Err(error) => Response::Error {
                         detail: format!("failed to read the process table: {error}"),
                     },
+                }
+            }
+            Request::NetworkList => {
+                match tokio::task::spawn_blocking(move || network::collect(network_control)).await {
+                    Ok(snapshot) => Response::NetworkSnapshot(snapshot),
+                    Err(error) => Response::Error {
+                        detail: format!("failed to read the network interfaces: {error}"),
+                    },
+                }
+            }
+            Request::NetworkSetState { name, up } => {
+                let interface = name.clone();
+                match tokio::task::spawn_blocking(move || {
+                    network::set_state(network_control, &interface, up)
+                })
+                .await
+                {
+                    Ok(Ok(())) => Response::NetworkStateChanged { name, up },
+                    Ok(Err(error)) => Response::NetworkError(error),
+                    Err(error) => Response::NetworkError(anth_proto::NetworkError::new(
+                        anth_proto::NetworkErrorKind::Failed,
+                        format!("failed to change the interface state: {error}"),
+                    )),
                 }
             }
             Request::FileWriteStart { path, overwrite } => {
@@ -329,7 +365,7 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
-            other => handle_request_with(other, process_control, &files),
+            other => handle_request_with(other, process_control, network_control, &files),
         };
 
         writer.send_response(&response).await?;
@@ -408,6 +444,7 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
     );
     let program: Arc<str> = Arc::from(shell);
     let process_control = config.process.control;
+    let network_control = config.network.control;
     let files = Arc::new(
         FileService::new(&config.files).map_err(|e| format!("invalid files configuration: {e}"))?,
     );
@@ -418,8 +455,15 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         let program = Arc::clone(&program);
         let files = Arc::clone(&files);
         tokio::spawn(async move {
-            if let Err(e) =
-                serve_connection_with(socket, sessions, program, process_control, files).await
+            if let Err(e) = serve_connection_with(
+                socket,
+                sessions,
+                program,
+                process_control,
+                network_control,
+                files,
+            )
+            .await
             {
                 eprintln!("Error handling connection: {e}");
             }

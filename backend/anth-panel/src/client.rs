@@ -1,6 +1,6 @@
 use anth_proto::{Request, Response};
 
-use crate::cli::{Command, FileCommand, ProcessCommand};
+use crate::cli::{Command, FileCommand, NetworkCommand, ProcessCommand};
 use crate::render;
 
 /// Maps a client-only subcommand to the request it sends over the socket.
@@ -17,6 +17,17 @@ pub fn request_for(command: &Command) -> Option<Request> {
             ProcessCommand::Signal(signal) => Some(Request::ProcessSignal {
                 pid: signal.pid,
                 signal: signal.signal,
+            }),
+        },
+        Command::Network(args) => match &args.command {
+            NetworkCommand::List(_) => Some(Request::NetworkList),
+            NetworkCommand::Up(args) => Some(Request::NetworkSetState {
+                name: args.name.clone(),
+                up: true,
+            }),
+            NetworkCommand::Down(args) => Some(Request::NetworkSetState {
+                name: args.name.clone(),
+                up: false,
             }),
         },
         Command::File(args) => match &args.command {
@@ -57,6 +68,16 @@ pub fn handle_response(response: &Response) {
         }
         Response::ProcessSignalled { pid, signal } => {
             println!("[OK] sent {signal} to process {pid}");
+        }
+        Response::NetworkSnapshot(snapshot) => {
+            println!("{}", render::render_network_snapshot(snapshot));
+        }
+        Response::NetworkStateChanged { name, up } => {
+            let state = if *up { "up" } else { "down" };
+            println!("[OK] brought {name} {state}");
+        }
+        Response::NetworkError(error) => {
+            eprintln!("[ERROR] {}", error.detail);
         }
         Response::FileListing(listing) => {
             println!("{}", render::render_file_listing(listing));
