@@ -13,11 +13,13 @@ live in `docs/` and are indexed from `README.md`.
 
 ```
 README.md                   # project overview, indexes docs/
+.vscode/settings.json       # nests *.test.ts under its matching *.ts
 docs/
   cli.md                    # commands, flags, exit codes
   api-endpoints.md          # HTTP/WebSocket routes, bodies, SSE frames, error shape
   socket-protocol.md        # anth-proto wire format
   terminal.md               # PTY sessions, browser route and its current risks
+  processes.md              # process monitoring, signals, limits and controls
   design/                   # design notes for the TTY protocol and web terminal
 backend/
   Cargo.toml                # workspace root, resolver = "2"
@@ -36,6 +38,7 @@ backend/
       app.rs                #   AppState shared by the routes
       ws.rs                 #   generic JSON-over-WebSocket wrapper
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
+      process.rs            #   process table from /proc and signal policy
       render.rs             #   bordered table renderer for the CLI
       stream.rs             #   repeat a request: interval parsing + frame output
       poll.rs               #   repeat an async read on a period (shared timing)
@@ -50,10 +53,12 @@ frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
   vitest.config.ts          # frontend unit tests, happy-dom environment
   anth-terminal.test.html   # dev-only xterm/API harness, never built
+  anth-process.test.html    # dev-only process monitor harness, never built
   src/
-    components/             # anth-terminal.ts and its Vitest tests
+    components/             # terminal and process components and their Vitest tests
     lib/ws/                 # generic JSON WebSocket transport and tests
-    lib/terminal/           # terminal interface, protocol, WebSocket adapter
+    lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
+    lib/processes/          # process client, wire types, sort/display helpers and tests
     test/                   # setup and the fake WebSocket used by tests
   public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
@@ -97,7 +102,8 @@ has a `bun.lock`, but `npm` works fine and `bun` is not required.
 
 Vitest tests live next to the source as `frontend/src/**/*.test.ts`.
 `frontend/vitest.config.ts` uses `happy-dom`; the component tests mock xterm so they
-do not need a real canvas. Run them from `frontend/`:
+do not need a real canvas, and the process tests use an injected fake client rather
+than a daemon. Run them from `frontend/`:
 
 ```bash
 npm test          # vitest run
@@ -140,8 +146,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   wrapped in `Framed`), exposed as `AnthServer`/`AnthClient` in `anth-proto`.
 - **Protocol**: `Request` and `Response` are serde-tagged enums using
   `#[serde(tag = "type", content = "data")]`. The request/response commands are
-  `Echo`, `HostInfo` and the terminal variants (`TerminalOpen`, `TerminalInput`,
-  `TerminalResize`, `TerminalClose`); terminal output arrives unsolicited as
+  `Echo`, `HostInfo`, the process variants (`ProcessList`, `ProcessSignal`) and the
+  terminal variants (`TerminalOpen`, `TerminalInput`, `TerminalResize`,
+  `TerminalClose`); terminal output arrives unsolicited as
   `Response::TerminalOutput` and ends with `TerminalExited`. Add a new operation by
   extending both enums plus the `match` arms in `anth_panel::daemon` and
   `anth_panel::client::request_for`, and a subcommand in `cli.rs`.
@@ -167,23 +174,47 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   rule under the header and optional separators between groups) and pads columns by
   character count so multi-byte text stays aligned. `render_host_info` maps a `HostInfo`
   onto it. It is a local renderer, not a dependency.
-- **Config**: `anth_panel::config::Config` (`socket_path` plus the `[terminal]`
-  table) is TOML with `#[serde(default, deny_unknown_fields)]`. Defaults: config at
-  `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, `shell = "auto"`,
-  empty token and `max_sessions = 4`. `auto` resolves `$SHELL`, then the account's
+- **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]` and
+  `[process]`) is TOML with `#[serde(default, deny_unknown_fields)]`. Defaults:
+  config at `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`,
+  `terminal.shell = "auto"`, empty token, `max_sessions = 4` and
+  `process.control = false`. `auto` resolves `$SHELL`, then the account's
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
-  `POST /api/echo` and `GET /api/terminal` (WebSocket). The route names the command, so
+  `POST /api/echo`, `GET /api/terminal` (WebSocket),
+  `GET /api/processes`, `GET /api/processes/watch?interval=2s` (SSE) and
+  `POST /api/processes/{pid}/signal`. The route names the command, so
   bodies carry the command's arguments at the top level (`{"message":"hi"}`) with no
   `type`/`data` envelope; the envelope stays a `anth-proto` concern for socket clients
   only. See `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via
   `api::ApiError`, including bodies axum rejects before the handler runs. A fallback
   static handler serves the embedded SPA and falls back to `index.html`. Table tests
   exercise the router through `tower::ServiceExt::oneshot`.
+- **Process monitor**: `process.rs` reads `/proc`, resolves users from `/etc/passwd`
+  and enforces the signal allowlist and ownership policy. `[process] control` defaults
+  to `false`; the daemon refuses pid 1, its own pid, other users' processes and
+  anything outside `term/kill/hup/int/quit/stop/cont`. Snapshots cap rows at 2000,
+  truncate commands to 256 characters and then fit the serialized snapshot to the
+  1 MiB line cap by shortening commands further and dropping the least busy rows.
+  Every shortening sets `truncated` and adds a human-readable warning. The `/proc`
+  walk runs on a blocking worker so it cannot stall the async connection loop.
+  CPU percentages are computed by the client from `cpu_ticks`, `clock_ticks` and
+  `timestamp_ms`; the daemon never keeps a sampler.
+- **Frontend process monitor**: `anth-process-table` is a controller that owns
+  sort state and renders one of two renderers: `anth-process-flat-table` (compact
+  table) or `anth-process-tree` (free-form tree with CSS guides and SVG
+  expand/collapse chevrons). Both show PID, COMMAND, THREADS, USER, STATE, MEM
+  and CPU; PPID is used only for nesting. Flat headers are all sortable; the tree
+  omits PID and COMMAND sorting. A tree command stays on one line while the
+  selected-process preview shows the full command, left-aligned and vertically
+  centered in the footer. `anth-process-monitor` owns filtering, the flat/tree
+  toggle, SSE lifecycle and confirmed signals, and only depends on the injected
+  `ProcessClient`. Both are exercised by Vitest component tests and the
+  `anth-process.test.html` dev harness.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
@@ -220,6 +251,8 @@ sync with behaviour; they are the contract for people writing clients:
   shape, status codes. Update when a route is added or its payload changes.
 - `docs/socket-protocol.md` — the `anth-proto` wire format. Update when either
   enum changes; an alternative client depends on this being accurate.
+- `docs/terminal.md` — PTY sessions, browser route, current risks.
+- `docs/processes.md` — process model, signal policy, truncation and controls.
 
 `AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
 duplicate route tables here — point at the doc.

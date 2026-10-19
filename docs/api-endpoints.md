@@ -27,6 +27,9 @@ it into a stream becomes `/watch`.
 | `anth-panel host-info` | `GET /api/host-info` |
 | `anth-panel host-info --watch 2s` | `GET /api/host-info/watch?interval=2s` |
 | `anth-panel echo hola` | `POST /api/echo` with `{"message":"hola"}` |
+| `anth-panel process list` | `GET /api/processes` |
+| `anth-panel process list --watch 2s` | `GET /api/processes/watch?interval=2s` |
+| `anth-panel process signal 123 term` | `POST /api/processes/123/signal` with `{"signal":"term"}` |
 
 **HTTP errors are always JSON.** Every HTTP response that fails, including a
 malformed body rejected before the handler runs, has this shape:
@@ -47,6 +50,9 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/host-info/watch` | Host snapshots as SSE |
 | `POST` | `/api/echo` | Round-trip a message |
 | `GET` | `/api/terminal` | Interactive PTY over WebSocket |
+| `GET` | `/api/processes` | One process-table snapshot |
+| `GET` | `/api/processes/watch` | Process snapshots as SSE |
+| `POST` | `/api/processes/{pid}/signal` | Send an allowlisted signal |
 
 Anything else falls through to the embedded web UI, which serves static files
 and returns `index.html` for unknown paths so the SPA can route.
@@ -190,6 +196,120 @@ source.addEventListener("error", () => {
   // reconnects on its own after the retry hint.
 });
 ```
+
+## `GET /api/processes`
+
+One snapshot of the process table on the daemon host. The daemon reads `/proc`
+and resolves uid names from `/etc/passwd`.
+
+```bash
+curl -s localhost:8080/api/processes
+```
+
+```json
+{
+  "processes": [
+    {
+      "pid": 1234,
+      "ppid": 1,
+      "uid": 1000,
+      "user": "alice",
+      "name": "sleep",
+      "command": "sleep 30",
+      "state": "S",
+      "cpu_ticks": 12,
+      "rss_kib": 2048,
+      "threads": 1,
+      "start_ticks": 12345
+    }
+  ],
+  "clock_ticks": 100,
+  "timestamp_ms": 1700000000000,
+  "control_enabled": false,
+  "total": 1,
+  "truncated": false
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `clock_ticks` | `sysconf(_SC_CLK_TCK)`, for converting tick deltas to CPU percent |
+| `timestamp_ms` | Wall-clock time of the snapshot |
+| `control_enabled` | Whether `[process] control` allows signals |
+| `total` | Processes found before truncation |
+| `truncated` | Whether rows or command lines were shortened |
+| `warning` | Present only when rows or command lines were shortened |
+
+A snapshot returns at most 2000 processes and truncates each command line to
+256 characters. Processes are sorted by accumulated CPU before truncation. The
+serialized snapshot is then fitted to the 1 MiB protocol line cap by shortening
+commands further and, if necessary, dropping the least busy rows. When any of
+that happens, `truncated` is `true` and `warning` contains a human-readable
+message such as:
+
+```json
+{"warning":"showing 2000 of 4312 processes, highest CPU first; command lines are limited to 256 characters"}
+```
+
+CPU percent is **not** computed by the server. Clients calculate it from two
+snapshots with `cpu_ticks`, `clock_ticks` and `timestamp_ms`.
+
+| Status | When |
+| --- | --- |
+| `200` | Snapshot returned |
+| `502` | The daemon answered with an error |
+| `503` | No daemon is listening on the socket |
+
+See [processes.md](processes.md) for the signal policy and truncation rules.
+
+## `GET /api/processes/watch`
+
+A process snapshot per interval, streamed with Server-Sent Events. The event
+name is `processes`; each `data` line is the same object `GET /api/processes`
+returns.
+
+```bash
+curl -N "localhost:8080/api/processes/watch?interval=2s"
+```
+
+| Parameter | Default | Description |
+| --- | --- | --- |
+| `interval` | `2s` | Time between snapshots |
+
+The interval uses the same parser as `host-info/watch`, including the `10ms`
+minimum and `24h` maximum. Errors before the stream starts are `400`/`503` with
+the usual JSON shape; a failure mid-stream becomes an `error` event and ends the
+stream.
+
+## `POST /api/processes/{pid}/signal`
+
+Sends one allowlisted signal to a process.
+
+```bash
+curl -s -X POST localhost:8080/api/processes/1234/signal \
+  -H 'content-type: application/json' \
+  -d '{"signal":"term"}'
+```
+
+```json
+{"pid":1234,"signal":"term"}
+```
+
+Allowed signals: `term`, `kill`, `hup`, `int`, `quit`, `stop`, `cont`.
+Names are case-insensitive.
+
+The route returns `403` when `[process] control = false`. Even when enabled, the
+daemon refuses pid 1, its own pid, processes owned by another user, and signals
+outside the allowlist. A rejected signal is a `400` with the daemon's error
+detail.
+
+| Status | When |
+| --- | --- |
+| `200` | Signal delivered |
+| `400` | Invalid body/signal, or the daemon rejected the target |
+| `403` | Process control is disabled |
+| `502` | The daemon answered with an unexpected error |
+| `503` | No daemon is listening on the socket |
 
 ## `POST /api/echo`
 

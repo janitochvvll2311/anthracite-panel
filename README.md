@@ -14,6 +14,7 @@ in the HTTP server.
 | [docs/api-endpoints.md](docs/api-endpoints.md) | HTTP/WebSocket routes, request and response bodies, SSE streaming |
 | [docs/socket-protocol.md](docs/socket-protocol.md) | Wire format between clients and the daemon |
 | [docs/terminal.md](docs/terminal.md) | Interactive terminals, the browser route and current risks |
+| [docs/processes.md](docs/processes.md) | Process monitoring, signals, limits and controls |
 
 ## Layout
 
@@ -83,6 +84,10 @@ cd backend
 cargo test --workspace --target x86_64-unknown-linux-gnu
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu
+
+cd ../frontend
+npm test
+npm run build
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture notes and repository conventions.

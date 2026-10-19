@@ -2,7 +2,9 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use anth_panel::cli::{Cli, Command, EndpointArgs, WatchArgs};
+use anth_panel::cli::{
+    Cli, Command, EndpointArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs,
+};
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::stream;
 use anth_panel::{AppState, request_for, router};
@@ -60,6 +62,10 @@ async fn serve_run(config: Config, args: &EndpointArgs) -> Result<ExitCode, Stri
 fn render_frame(response: &Response) -> String {
     match response {
         Response::HostInfo(info) => anth_panel::render_host_info(info),
+        Response::ProcessSnapshot(snapshot) => anth_panel::render_process_snapshot(snapshot),
+        Response::ProcessSignalled { pid, signal } => {
+            format!("[OK] sent {signal} to process {pid}")
+        }
         Response::Ok { message } => format!("[OK] {message}"),
         Response::Error { detail } => format!("[ERROR] {detail}"),
         // A CLI subcommand never opens a terminal, so these are only reachable
@@ -87,13 +93,62 @@ fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
             None => Ok(None),
             Some(raw) => stream::parse_interval(raw).map(Some),
         },
+        Command::Process(ProcessArgs {
+            command: ProcessCommand::List(WatchArgs { watch }),
+        }) => match watch.as_deref() {
+            None => Ok(None),
+            Some(raw) => stream::parse_interval(raw).map(Some),
+        },
         _ => Ok(None),
     }
+}
+
+fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
+    use std::io::{IsTerminal, Write};
+
+    if args.yes {
+        return Ok(true);
+    }
+
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        return Err("refusing to signal without --yes when stdin is not a terminal".to_string());
+    }
+
+    print!("Send {} to process {}? [y/N] ", args.signal, args.pid);
+    let _ = std::io::stdout().flush();
+
+    let mut answer = String::new();
+    stdin
+        .read_line(&mut answer)
+        .map_err(|error| format!("failed to read confirmation: {error}"))?;
+
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Runs a client-only subcommand against the daemon. Subcommands that serve
 /// locally return `None` so `main` can handle them itself.
 async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> {
+    if let Command::Process(ProcessArgs {
+        command: ProcessCommand::Signal(args),
+    }) = command
+    {
+        match confirm_signal(args) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
     let request: Request = request_for(command)?;
     let interval = match watch_interval(command) {
         Ok(interval) => interval,
@@ -136,7 +191,9 @@ async fn main() -> ExitCode {
             let config = Config::load_or_default(config_path);
             Ok(anth_panel::terminal_client::run(Path::new(&config.socket_path), args).await)
         }
-        Command::Echo { .. } | Command::HostInfo(_) => unreachable!("handled by send_command"),
+        Command::Echo { .. } | Command::HostInfo(_) | Command::Process(_) => {
+            unreachable!("handled by send_command")
+        }
     };
 
     match result {

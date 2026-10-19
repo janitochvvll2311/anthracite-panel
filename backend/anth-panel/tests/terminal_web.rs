@@ -34,6 +34,7 @@ fn config_at(path: &Path) -> Config {
             token: String::new(),
             max_sessions: 2,
         },
+        ..Config::default()
     }
 }
 

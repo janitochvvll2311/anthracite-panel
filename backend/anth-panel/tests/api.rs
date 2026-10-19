@@ -382,3 +382,199 @@ async fn a_rejected_query_uses_the_unified_error_shape() {
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(value["error"].is_string(), "{value}");
 }
+
+fn config_with_process_control(path: &std::path::Path, control: bool) -> Config {
+    let mut config = config_at(path);
+    config.process.control = control;
+    config
+}
+
+fn process_snapshot() -> anth_proto::ProcessSnapshot {
+    anth_proto::ProcessSnapshot {
+        processes: vec![anth_proto::ProcessInfo {
+            pid: 42,
+            ppid: 1,
+            uid: 1000,
+            user: "alice".to_string(),
+            name: "sleep".to_string(),
+            command: "sleep 30".to_string(),
+            state: "S".to_string(),
+            cpu_ticks: 10,
+            rss_kib: 2048,
+            threads: 1,
+            start_ticks: 12345,
+        }],
+        clock_ticks: 100,
+        timestamp_ms: 1_700_000_000_000,
+        control_enabled: true,
+        total: 1,
+        truncated: false,
+        warning: None,
+    }
+}
+
+fn spawn_process_server(
+    path: &std::path::Path,
+    snapshot: anth_proto::ProcessSnapshot,
+) -> tokio::task::JoinHandle<()> {
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(request)) = server.receive_request().await {
+                let response = match request {
+                    Request::ProcessList => Response::ProcessSnapshot(snapshot.clone()),
+                    Request::ProcessSignal { pid, signal } => {
+                        Response::ProcessSignalled { pid, signal }
+                    }
+                    other => Response::Error {
+                        detail: format!("unexpected request: {other:?}"),
+                    },
+                };
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    })
+}
+
+#[tokio::test]
+async fn process_route_returns_the_bare_snapshot() {
+    let path = unique_socket("process-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_process_server(&path, process_snapshot());
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/processes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["processes"][0]["pid"], 42);
+    assert_eq!(value["processes"][0]["user"], "alice");
+    assert!(value.get("type").is_none(), "no tag envelope: {value}");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn process_route_returns_service_unavailable_without_a_daemon() {
+    let path = unique_socket("process-down");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/processes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn process_signal_requires_control_to_be_enabled() {
+    let path = unique_socket("process-control-off");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/processes/42/signal")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"signal":"term"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn process_signal_route_maps_the_signal() {
+    let path = unique_socket("process-signal-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_process_server(&path, process_snapshot());
+
+    let app = anth_panel::router(AppState::new(config_with_process_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/processes/42/signal")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"signal":"KILL"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value, serde_json::json!({"pid": 42, "signal": "kill"}));
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn process_signal_route_rejects_an_unknown_signal() {
+    let path = unique_socket("process-bad-signal");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_process_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/processes/42/signal")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"signal":"nope"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn process_signal_rejects_a_non_numeric_pid_as_json() {
+    let app = anth_panel::router(AppState::new(Config::default()));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/processes/nope/signal")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"signal":"term"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["content-type"], "application/json");
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["error"].is_string(), "{value}");
+}

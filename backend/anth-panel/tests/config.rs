@@ -186,3 +186,20 @@ fn load_or_create_replaces_a_malformed_file_with_defaults() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn process_control_is_off_by_default() {
+    assert!(!Config::default().process.control);
+    assert!(!Config::from_toml("").unwrap().process.control);
+}
+
+#[test]
+fn process_control_can_be_enabled_from_toml() {
+    let config = Config::from_toml("[process]\ncontrol = true\n").unwrap();
+    assert!(config.process.control);
+}
+
+#[test]
+fn unknown_process_keys_are_rejected() {
+    assert!(Config::from_toml("[process]\ncontroll = true\n").is_err());
+}

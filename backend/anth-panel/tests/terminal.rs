@@ -240,6 +240,7 @@ async fn a_terminal_session_runs_over_the_socket() {
             token: "secret".to_string(),
             max_sessions: 2,
         },
+        ..Config::default()
     };
     start_daemon(config, &path).await;
 
@@ -302,6 +303,7 @@ async fn input_for_an_unknown_session_is_refused() {
     let config = Config {
         socket_path: path.to_string_lossy().into_owned(),
         terminal: TerminalConfig::default(),
+        ..Config::default()
     };
     start_daemon(config, &path).await;
 
@@ -335,6 +337,7 @@ async fn a_client_that_disappears_does_not_leave_a_shell_running() {
             token: "secret".to_string(),
             max_sessions: 2,
         },
+        ..Config::default()
     };
     start_daemon(config, &path).await;
 

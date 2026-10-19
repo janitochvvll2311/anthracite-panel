@@ -21,15 +21,36 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::config::Config;
 use crate::hostinfo;
+use crate::process;
 use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
 
 /// One session's output as a stream tagged with its id.
 type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
 
 pub fn handle_request(request: Request) -> Response {
+    handle_request_with(request, false)
+}
+
+/// Handles a request with the daemon policy that is not part of the wire type.
+///
+/// Process control is the only policy today: the socket protocol itself does
+/// not know whether the deployment allows signals. This synchronous path is
+/// used by the line helper and unit tests. The async connection loop
+/// special-cases `ProcessList` so the blocking `/proc` walk runs on a blocking
+/// worker instead of a Tokio task.
+pub fn handle_request_with(request: Request, process_control: bool) -> Response {
     match request {
         Request::Echo { message } => Response::Ok { message },
         Request::HostInfo => Response::HostInfo(Box::new(hostinfo::collect())),
+        Request::ProcessList => Response::ProcessSnapshot(process::collect(process_control)),
+        Request::ProcessSignal { pid, signal } => {
+            match process::send_signal(pid, signal, process_control) {
+                Ok(()) => Response::ProcessSignalled { pid, signal },
+                Err(error) => Response::Error {
+                    detail: error.detail(),
+                },
+            }
+        }
         // Terminal operations need a registry and a live socket; they are
         // served by `serve_connection`, which owns both.
         other => Response::Error {
@@ -57,12 +78,29 @@ pub async fn serve_connection(
     sessions: Arc<Sessions>,
     program: Arc<str>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    serve_connection_with(socket, sessions, program, false).await
+}
+
+/// Serves one connection with the process-control policy applied to requests.
+pub async fn serve_connection_with(
+    socket: UnixStream,
+    sessions: Arc<Sessions>,
+    program: Arc<str>,
+    process_control: bool,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut owned: Vec<u32> = Vec::new();
 
     // The pump can exit early on a write error, which is exactly what happens
     // when a client disappears. Cleanup lives outside it so a dropped socket
     // cannot skip it: that would leave a shell running with no owner.
-    let outcome = pump(socket, Arc::clone(&sessions), program, &mut owned).await;
+    let outcome = pump(
+        socket,
+        Arc::clone(&sessions),
+        program,
+        process_control,
+        &mut owned,
+    )
+    .await;
 
     for id in owned {
         sessions.close(id).await;
@@ -83,6 +121,7 @@ async fn pump(
     socket: UnixStream,
     sessions: Arc<Sessions>,
     program: Arc<str>,
+    process_control: bool,
     owned: &mut Vec<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let (read_half, write_half) = socket.into_split();
@@ -138,6 +177,14 @@ async fn pump(
         };
 
         let response = match request {
+            Request::ProcessList => {
+                match tokio::task::spawn_blocking(move || process::collect(process_control)).await {
+                    Ok(snapshot) => Response::ProcessSnapshot(snapshot),
+                    Err(error) => Response::Error {
+                        detail: format!("failed to read the process table: {error}"),
+                    },
+                }
+            }
             Request::TerminalOpen(args) => {
                 let size = args.size.unwrap_or(DEFAULT_TERMINAL_SIZE);
                 match sessions.open(&program, size).await {
@@ -198,7 +245,7 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
-            other => handle_request(other),
+            other => handle_request_with(other, process_control),
         };
 
         writer.send_response(&response).await?;
@@ -263,13 +310,15 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         supports_line_editing(&shell)
     );
     let program: Arc<str> = Arc::from(shell);
+    let process_control = config.process.control;
 
     loop {
         let (socket, _) = listener.accept().await?;
         let sessions = Arc::clone(&sessions);
         let program = Arc::clone(&program);
         tokio::spawn(async move {
-            if let Err(e) = serve_connection(socket, sessions, program).await {
+            if let Err(e) = serve_connection_with(socket, sessions, program, process_control).await
+            {
                 eprintln!("Error handling connection: {e}");
             }
         });
