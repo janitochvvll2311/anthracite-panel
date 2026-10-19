@@ -87,9 +87,11 @@ serialized size of the whole snapshot. If it is still too large, commands are
 shortened further (down to 8 characters) before the least busy rows are dropped.
 Processes are sorted by accumulated CPU, so the busiest ones stay visible.
 
-When rows or command lines were shortened, `warning` is a human-readable notice
-and `truncated` is `true`. The CLI prints the warning below the table; the web
-component shows it above the table.
+Dropping rows sets `warning` to a human-readable notice, and `truncated` is
+`true`. Shortening command lines also sets `truncated` but intentionally produces
+no warning: it is an implementation detail of fitting the protocol frame. The
+CLI prints the warning below the table; the web component shows it above the
+table.
 
 ## HTTP and browser
 

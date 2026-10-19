@@ -142,13 +142,7 @@ fn fit_snapshot(mut snapshot: ProcessSnapshot, command_truncated: bool) -> Proce
     let rows_truncated = snapshot.processes.len() < total;
 
     snapshot.truncated = rows_truncated || command_truncated;
-    snapshot.warning = warning(
-        snapshot.processes.len(),
-        total,
-        rows_truncated,
-        command_truncated,
-        command_limit,
-    );
+    snapshot.warning = warning(snapshot.processes.len(), total, rows_truncated);
     let mut encoded_len = snapshot_json_len(&snapshot);
 
     // Commands are the bulk of a snapshot. Shorten them first so the useful
@@ -162,13 +156,7 @@ fn fit_snapshot(mut snapshot: ProcessSnapshot, command_truncated: bool) -> Proce
         }
 
         snapshot.truncated = rows_truncated || command_truncated;
-        snapshot.warning = warning(
-            snapshot.processes.len(),
-            total,
-            rows_truncated,
-            command_truncated,
-            command_limit,
-        );
+        snapshot.warning = warning(snapshot.processes.len(), total, rows_truncated);
         encoded_len = snapshot_json_len(&snapshot);
     }
 
@@ -184,7 +172,7 @@ fn fit_snapshot(mut snapshot: ProcessSnapshot, command_truncated: bool) -> Proce
             let mut candidate = snapshot.clone();
             candidate.processes.truncate(mid);
             candidate.truncated = true;
-            candidate.warning = warning(mid, total, true, command_truncated, command_limit);
+            candidate.warning = warning(mid, total, true);
 
             if snapshot_json_len(&candidate) <= MAX_LINE_LEN {
                 low = mid;
@@ -195,7 +183,7 @@ fn fit_snapshot(mut snapshot: ProcessSnapshot, command_truncated: bool) -> Proce
 
         snapshot.processes.truncate(low);
         snapshot.truncated = true;
-        snapshot.warning = warning(low, total, true, command_truncated, command_limit);
+        snapshot.warning = warning(low, total, true);
     }
 
     snapshot
@@ -208,30 +196,8 @@ fn snapshot_json_len(snapshot: &ProcessSnapshot) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-fn warning(
-    shown: usize,
-    total: usize,
-    rows_truncated: bool,
-    command_truncated: bool,
-    command_limit: usize,
-) -> Option<String> {
-    let mut notes = Vec::new();
-    if rows_truncated {
-        notes.push(format!(
-            "showing {shown} of {total} processes, highest CPU first"
-        ));
-    }
-    if command_truncated {
-        notes.push(format!(
-            "command lines are limited to {command_limit} characters"
-        ));
-    }
-
-    if notes.is_empty() {
-        None
-    } else {
-        Some(notes.join("; "))
-    }
+fn warning(shown: usize, total: usize, rows_truncated: bool) -> Option<String> {
+    rows_truncated.then(|| format!("showing {shown} of {total} processes, highest CPU first"))
 }
 
 fn timestamp_ms() -> u64 {
@@ -440,24 +406,12 @@ mod tests {
 
     #[test]
     fn warnings_explain_truncation() {
-        assert_eq!(warning(10, 10, false, false, MAX_COMMAND_CHARS), None);
+        assert_eq!(warning(10, 10, false), None);
         assert_eq!(
-            warning(
-                MAX_PROCESSES,
-                MAX_PROCESSES + 1,
-                true,
-                false,
-                MAX_COMMAND_CHARS
-            ),
+            warning(MAX_PROCESSES, MAX_PROCESSES + 1, true),
             Some(format!(
                 "showing {MAX_PROCESSES} of {} processes, highest CPU first",
                 MAX_PROCESSES + 1
-            ))
-        );
-        assert_eq!(
-            warning(10, 10, false, true, MAX_COMMAND_CHARS),
-            Some(format!(
-                "command lines are limited to {MAX_COMMAND_CHARS} characters"
             ))
         );
     }
@@ -502,7 +456,9 @@ mod tests {
             );
             if before > MAX_LINE_LEN {
                 assert!(fitted.truncated, "{name} should be marked truncated");
-                assert!(fitted.warning.is_some(), "{name} should have a warning");
+                if fitted.processes.len() < fitted.total {
+                    assert!(fitted.warning.is_some(), "{name} should have a row warning");
+                }
             }
             assert!(!fitted.processes.is_empty());
         }
@@ -525,10 +481,7 @@ mod tests {
         let fitted = fit_snapshot(snapshot, true);
 
         assert!(fitted.truncated);
-        assert_eq!(
-            fitted.warning.as_deref(),
-            Some("command lines are limited to 256 characters")
-        );
+        assert!(fitted.warning.is_none());
     }
 
     #[test]

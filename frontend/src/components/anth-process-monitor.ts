@@ -203,7 +203,7 @@ export class AnthProcessMonitor extends LitElement {
     this.controlEnabled = snapshot.control_enabled
     this.warning =
       snapshot.warning ??
-      (snapshot.truncated
+      (snapshot.processes.length < snapshot.total
         ? `showing ${snapshot.processes.length} of ${snapshot.total} processes`
         : '')
 

@@ -251,17 +251,17 @@ curl -s localhost:8080/api/processes
 | `control_enabled` | Whether `[process] control` allows signals |
 | `total` | Processes found before truncation |
 | `truncated` | Whether rows or command lines were shortened |
-| `warning` | Present only when rows or command lines were shortened |
+| `warning` | Present only when rows were dropped |
 
 A snapshot returns at most 2000 processes and truncates each command line to
 256 characters. Processes are sorted by accumulated CPU before truncation. The
 serialized snapshot is then fitted to the 1 MiB protocol line cap by shortening
-commands further and, if necessary, dropping the least busy rows. When any of
-that happens, `truncated` is `true` and `warning` contains a human-readable
-message such as:
+commands further and, if necessary, dropping the least busy rows. Command
+shortening sets `truncated` without a warning. When rows are dropped,
+`truncated` is `true` and `warning` contains a human-readable message such as:
 
 ```json
-{"warning":"showing 2000 of 4312 processes, highest CPU first; command lines are limited to 256 characters"}
+{"warning":"showing 2000 of 4312 processes, highest CPU first"}
 ```
 
 CPU percent is **not** computed by the server. Clients calculate it from two

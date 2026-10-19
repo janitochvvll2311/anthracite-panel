@@ -270,9 +270,10 @@ Reply to `ProcessList`.
 The daemon returns at most 2000 processes, sorted by accumulated CPU. To keep
 every snapshot within the 1 MiB line cap, command lines are shortened (first to
 256 characters, then further if needed) and, as a last resort, the least busy
-rows are dropped. When any of those happens `truncated` is `true`, `total`
-reports the untruncated count, and `warning` carries a human-readable notice.
-Clients must not treat the list as complete without checking those fields.
+rows are dropped. Command shortening sets `truncated` without a warning;
+dropping rows also adds a human-readable `warning`. `total` reports the
+untruncated count. Clients must not treat the list as complete without checking
+those fields.
 
 ### `ProcessSignalled`
 

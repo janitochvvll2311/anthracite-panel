@@ -213,8 +213,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   anything outside `term/kill/hup/int/quit/stop/cont`. Snapshots cap rows at 2000,
   truncate commands to 256 characters and then fit the serialized snapshot to the
   1 MiB line cap by shortening commands further and dropping the least busy rows.
-  Every shortening sets `truncated` and adds a human-readable warning. The `/proc`
-  walk runs on a blocking worker so it cannot stall the async connection loop.
+  Command shortening sets `truncated`; dropping rows also adds a human-readable
+  warning. The `/proc` walk runs on a blocking worker so it cannot stall the
+  async connection loop.
   CPU percentages are computed by the client from `cpu_ticks`, `clock_ticks` and
   `timestamp_ms`; the daemon never keeps a sampler.
 - **Frontend process monitor**: `anth-process-table` is a controller that owns
