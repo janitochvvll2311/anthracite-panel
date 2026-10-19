@@ -670,9 +670,12 @@ export class AnthFileExplorer extends LitElement {
 
     table {
       width: 100%;
+      min-width: 40rem;
+      table-layout: fixed;
       border-collapse: collapse;
       font-family: var(--mono, monospace);
       font-size: 13px;
+      white-space: nowrap;
     }
 
     th {
@@ -689,6 +692,26 @@ export class AnthFileExplorer extends LitElement {
     td {
       padding: 5px 9px;
       border-bottom: 1px solid rgba(34, 48, 65, 0.55);
+    }
+
+    td {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    th:nth-child(2),
+    td:nth-child(2) {
+      width: 5.5rem;
+    }
+
+    th:nth-child(3),
+    td:nth-child(3) {
+      width: 6.5rem;
+    }
+
+    th:nth-child(4),
+    td:nth-child(4) {
+      width: 11.5rem;
     }
 
     th .sort {
@@ -716,7 +739,6 @@ export class AnthFileExplorer extends LitElement {
     }
 
     td.name {
-      max-width: 34vw;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
