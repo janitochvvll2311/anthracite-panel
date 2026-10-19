@@ -10,6 +10,7 @@ pub mod render;
 pub mod sse;
 pub mod stream;
 pub mod terminal;
+pub mod terminal_client;
 
 pub use api::{ApiError, get_healthz, get_host_info, post_echo, router, watch_host_info};
 pub use app::AppState;

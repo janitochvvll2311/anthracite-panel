@@ -223,6 +223,18 @@ impl AnthReader {
             None => None,
         }
     }
+
+    /// Next response, or `None` once the peer disconnects. Client direction:
+    /// pairs with [`AnthWriter::send_request`].
+    pub async fn receive_response(
+        &mut self,
+    ) -> Option<Result<Response, Box<dyn Error + Send + Sync>>> {
+        match self.framed.next().await {
+            Some(Ok(json)) => Some(Response::from_json(&json)),
+            Some(Err(e)) => Some(Err(Box::new(e))),
+            None => None,
+        }
+    }
 }
 
 /// Sending half of a connection. Cloning is not needed: hand the one writer to
@@ -248,6 +260,16 @@ impl AnthWriter {
         response: &Response,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let json = response.to_json()?;
+        self.framed.send(json).await.map_err(|e| Box::new(e) as _)
+    }
+
+    /// Sends a request. Client direction: pairs with
+    /// [`AnthReader::receive_response`].
+    pub async fn send_request(
+        &mut self,
+        request: &Request,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let json = request.to_json()?;
         self.framed.send(json).await.map_err(|e| Box::new(e) as _)
     }
 }

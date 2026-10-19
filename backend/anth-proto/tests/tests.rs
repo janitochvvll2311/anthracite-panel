@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_proto::{AnthClient, AnthServer, HostInfo, Request, Response};
+use anth_proto::{AnthClient, AnthReader, AnthServer, AnthWriter, HostInfo, Request, Response};
 use tokio::net::{UnixListener, UnixStream};
 
 fn unique_socket(name: &str) -> std::path::PathBuf {
@@ -330,4 +330,46 @@ async fn a_line_longer_than_the_cap_is_an_error_not_an_allocation() {
         result.is_err(),
         "a line over the cap must be rejected, got {result:?}"
     );
+}
+
+#[tokio::test]
+async fn split_reader_and_writer_carry_the_client_direction() {
+    let path = unique_socket("split-client");
+    let _ = std::fs::remove_file(&path);
+
+    let listener = UnixListener::bind(&path).unwrap();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut server = AnthServer::new(socket);
+
+        if let Some(Ok(request)) = server.receive_request().await {
+            let response = match request {
+                Request::Echo { message } => Response::Ok { message },
+                other => Response::Error {
+                    detail: format!("unexpected request: {other:?}"),
+                },
+            };
+            server.send_response(&response).await.unwrap();
+        }
+    });
+
+    let stream = UnixStream::connect(&path).await.unwrap();
+    let (read_half, write_half) = stream.into_split();
+    let mut reader = AnthReader::from_read_half(read_half);
+    let mut writer = AnthWriter::from_write_half(write_half);
+
+    writer
+        .send_request(&Request::Echo {
+            message: "split".to_string(),
+        })
+        .await
+        .unwrap();
+
+    match reader.receive_response().await.unwrap().unwrap() {
+        Response::Ok { message } => assert_eq!(message, "split"),
+        other => panic!("expected Ok, got {other:?}"),
+    }
+
+    server.await.unwrap();
+    let _ = std::fs::remove_file(&path);
 }

@@ -12,7 +12,7 @@ pub fn request_for(command: &Command) -> Option<Request> {
             message: message.clone(),
         }),
         Command::HostInfo(_) => Some(Request::HostInfo),
-        Command::Daemon | Command::Api(_) | Command::Run(_) => None,
+        Command::Terminal(_) | Command::Daemon | Command::Api(_) | Command::Run(_) => None,
     }
 }
 

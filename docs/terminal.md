@@ -66,7 +66,14 @@ Generate a token with `head -c 32 /dev/urandom | base64`.
 
 ## Testing it by hand
 
-With a daemon running and a token set, a client is one socket and two frames:
+With a daemon running and a token set, the shortest client is the built-in CLI
+command:
+
+```bash
+anth-panel terminal
+```
+
+For the raw wire shape, a client is one socket and two frames:
 
 ```bash
 printf '%s\n' \

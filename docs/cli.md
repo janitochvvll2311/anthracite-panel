@@ -12,6 +12,7 @@ Commands:
   run        Serve the daemon and the HTTP API from a single process
   echo       Send a request to the running daemon and print the response
   host-info  Print the operating system and resources of the daemon host as a table
+  terminal   Open an interactive terminal on the daemon host
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -167,6 +168,40 @@ anth-panel host-info --watch 1s | tee -a host.log
 
 Redirected output keeps every frame, which is what you want for a log.
 
+### `terminal`
+
+Opens an interactive terminal on the host the daemon runs on, over the socket
+protocol documented in [terminal.md](terminal.md). stdin bytes are forwarded to
+the remote shell and its output is written to stdout.
+
+```bash
+anth-panel terminal
+anth-panel terminal --cols 120 --rows 40
+```
+
+| Option | Description |
+| --- | --- |
+| `--cols <COLS>` | Initial width in columns. Defaults to the local terminal width. |
+| `--rows <ROWS>` | Initial height in rows. Defaults to the local terminal height. |
+
+The command needs the daemon's terminal to be enabled with a token; otherwise
+the daemon refuses the session and the command exits `1`.
+
+```bash
+# In a terminal: Ctrl-C reaches the remote shell, not this command.
+anth-panel terminal
+
+# With piped input, end with `exit` so the shell ends and the command returns.
+printf 'hostname\nexit\n' | anth-panel terminal
+```
+
+| Property | Behaviour |
+| --- | --- |
+| Initial size | `--cols`/`--rows`, else the local terminal, else 80x24 |
+| Resize | A `SIGWINCH` on the local terminal resizes the remote PTY |
+| Raw mode | Enabled on stdin, so keys and Ctrl-C pass through uninterpreted |
+| Exit code | The remote shell's exit status (`0` on clean exit, `1` on a refused session or connection failure) |
+
 ## Exit codes
 
 | Code | Meaning |
@@ -188,4 +223,7 @@ timeout 60 anth-panel host-info --watch 2s > memory.log
 
 # Wake the daemon with a round trip
 anth-panel echo ping
+
+# Open a shell on the daemon host
+anth-panel terminal
 ```

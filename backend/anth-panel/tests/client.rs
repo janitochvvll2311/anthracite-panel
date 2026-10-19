@@ -35,6 +35,7 @@ fn request_for_is_none_for_locally_served_commands() {
     assert!(request_for(&Command::Daemon).is_none());
     assert!(request_for(&Command::Api(Default::default())).is_none());
     assert!(request_for(&Command::Run(Default::default())).is_none());
+    assert!(request_for(&Command::Terminal(Default::default())).is_none());
 }
 
 #[test]
@@ -134,4 +135,32 @@ fn cli_watch_flag_keeps_a_following_token_as_its_value() {
 fn cli_other_subcommands_do_not_accept_watch() {
     assert!(Cli::try_parse_from(["anth-panel", "echo", "hi", "--watch"]).is_err());
     assert!(Cli::try_parse_from(["anth-panel", "daemon", "--watch"]).is_err());
+}
+
+#[test]
+fn cli_parses_a_terminal_subcommand() {
+    let cli = Cli::try_parse_from(["anth-panel", "terminal"]).unwrap();
+    assert_eq!(cli.config_path, None);
+
+    match cli.command {
+        Command::Terminal(args) => {
+            assert_eq!(args.cols, None);
+            assert_eq!(args.rows, None);
+        }
+        other => panic!("expected Terminal, got {other:?}"),
+    }
+}
+
+#[test]
+fn cli_terminal_accepts_explicit_size_flags() {
+    let cli =
+        Cli::try_parse_from(["anth-panel", "terminal", "--cols", "120", "--rows", "40"]).unwrap();
+
+    match cli.command {
+        Command::Terminal(args) => {
+            assert_eq!(args.cols, Some(120));
+            assert_eq!(args.rows, Some(40));
+        }
+        other => panic!("expected Terminal, got {other:?}"),
+    }
 }

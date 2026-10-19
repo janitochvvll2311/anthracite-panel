@@ -39,6 +39,8 @@ pub enum Command {
     },
     /// Print the operating system and resources of the daemon host as a table.
     HostInfo(WatchArgs),
+    /// Open an interactive terminal on the daemon host.
+    Terminal(TerminalArgs),
 }
 
 /// `--watch` takes an optional interval: bare, it repeats every 2s.
@@ -52,6 +54,25 @@ pub struct WatchArgs {
         help = "Keep reading every INTERVAL (500ms, 2s, 1m) instead of printing once"
     )]
     pub watch: Option<String>,
+}
+
+/// Initial size for `terminal`: the session starts at the local terminal's
+/// size, or at the explicit values when either flag is given.
+#[derive(Args, Debug, Default)]
+pub struct TerminalArgs {
+    #[arg(
+        long,
+        value_name = "COLS",
+        help = "Initial terminal width in columns; defaults to the local terminal width"
+    )]
+    pub cols: Option<u16>,
+
+    #[arg(
+        long,
+        value_name = "ROWS",
+        help = "Initial terminal height in rows; defaults to the local terminal height"
+    )]
+    pub rows: Option<u16>,
 }
 
 #[derive(Args, Debug, Default)]

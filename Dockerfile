@@ -3,7 +3,7 @@
 # --- Frontend ----------------------------------------------------------------
 # Vite/Lit sources are built with bun; the output feeds the backend's embedded
 # www/ folder in the builder stage.
-FROM oven/bun:1-alpine AS frontend
+FROM docker.io/oven/bun:1-alpine AS frontend
 
 WORKDIR /src
 
@@ -16,7 +16,7 @@ RUN bun run build
 # --- Builder -----------------------------------------------------------------
 # Alpine ships the musl toolchain, matching the workspace's default target
 # (x86_64-unknown-linux-musl in backend/.cargo/config.toml), so the binary is static.
-FROM rust:1.99-alpine AS builder
+FROM docker.io/library/rust:1.99-alpine AS builder
 
 RUN apk add --no-cache musl-dev gcc
 RUN rustup target add x86_64-unknown-linux-musl
@@ -35,7 +35,7 @@ COPY --from=frontend /src/dist ./anth-panel/www
 RUN cargo build --release --workspace
 
 # --- Runtime -----------------------------------------------------------------
-FROM alpine:3.20
+FROM docker.io/library/alpine:3.20
 
 # Unprivileged user that owns the configuration directory.
 RUN addgroup -S anth \
