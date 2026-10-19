@@ -20,6 +20,7 @@ docs/
   socket-protocol.md        # anth-proto wire format
   terminal.md               # PTY sessions, browser route and its current risks
   processes.md              # process monitoring, signals, limits and controls
+  files.md                  # filesystem root, chunked transfers, write policy
   design/                   # design notes for the TTY protocol and web terminal
 backend/
   Cargo.toml                # workspace root, resolver = "2"
@@ -39,6 +40,7 @@ backend/
       ws.rs                 #   generic JSON-over-WebSocket wrapper
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
       process.rs            #   process table from /proc and signal policy
+      files.rs              #   virtual paths, listings, chunked reads and atomic uploads
       render.rs             #   bordered table renderer for the CLI
       stream.rs             #   repeat a request: interval parsing + frame output
       poll.rs               #   repeat an async read on a period (shared timing)
@@ -46,20 +48,22 @@ backend/
       terminal/             #   PTY session, registry, shell detection, token helper, browser bridge
       terminal_client.rs    #   interactive terminal for the CLI
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
-    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, hostinfo.rs, render.rs,
-                            #   stream.rs, sse.rs, terminal.rs, terminal_client.rs,
+    tests/                  #   api.rs, client.rs, config.rs, daemon.rs, files.rs, hostinfo.rs,
+                            #   render.rs, stream.rs, sse.rs, terminal.rs, terminal_client.rs,
                             #   terminal_exit.rs, terminal_web.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
   vitest.config.ts          # frontend unit tests, happy-dom environment
   anth-terminal.test.html   # dev-only xterm/API harness, never built
   anth-process.test.html    # dev-only process monitor harness, never built
+  anth-file.test.html       # dev-only file explorer harness, never built
   src/
-    components/             # terminal and process components and their Vitest tests
+    components/             # terminal, process and file components and their Vitest tests
     lib/ws/                 # generic JSON WebSocket transport and tests
     lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
     lib/processes/          # process client, wire types, sort/display helpers and tests
-    test/                   # setup and the fake WebSocket used by tests
+    lib/files/              # file client, wire types, path/display helpers and tests
+    test/                   # setup and the fake WebSocket, EventSource, process and file clients
   public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
 Dockerfile                  # bun frontend stage, musl backend stage, alpine runtime
@@ -146,7 +150,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   wrapped in `Framed`), exposed as `AnthServer`/`AnthClient` in `anth-proto`.
 - **Protocol**: `Request` and `Response` are serde-tagged enums using
   `#[serde(tag = "type", content = "data")]`. The request/response commands are
-  `Echo`, `HostInfo`, the process variants (`ProcessList`, `ProcessSignal`) and the
+  `Echo`, `HostInfo`, the process variants (`ProcessList`, `ProcessSignal`), the
+  filesystem variants (`FileList`, `FileRead`, `FileMkdir`, `FileRename`,
+  `FileDelete` and the chunked `FileWrite*` upload flow) and the
   terminal variants (`TerminalOpen`, `TerminalInput`, `TerminalResize`,
   `TerminalClose`); terminal output arrives unsolicited as
   `Response::TerminalOutput` and ends with `TerminalExited`. Add a new operation by
@@ -172,13 +178,16 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   how the frame layout is tested without a TTY.
 - **Table rendering**: `anth_panel::render::Table` draws a bordered box (top, bottom, a
   rule under the header and optional separators between groups) and pads columns by
-  character count so multi-byte text stays aligned. `render_host_info` maps a `HostInfo`
-  onto it. It is a local renderer, not a dependency.
-- **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]` and
-  `[process]`) is TOML with `#[serde(default, deny_unknown_fields)]`. Defaults:
+  character count so multi-byte text stays aligned. `render_host_info`,
+  `render_process_snapshot` and `render_file_listing` map snapshots onto it. It is a
+  local renderer, not a dependency.
+- **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]`, `[process]` and
+  `[files]`) is TOML with `#[serde(default, deny_unknown_fields)]`. Defaults:
   config at `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`,
-  `terminal.shell = "auto"`, empty token, `max_sessions = 4` and
-  `process.control = false`. `auto` resolves `$SHELL`, then the account's
+  `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
+  `process.control = false`, `files.root = "/"`, `files.write = false`,
+  `max_entries = 5000`, `max_preview_bytes = 1 MiB` and
+  `max_upload_bytes = 64 MiB`. `auto` resolves `$SHELL`, then the account's
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
@@ -187,7 +196,10 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
   `POST /api/echo`, `GET /api/terminal` (WebSocket),
   `GET /api/processes`, `GET /api/processes/watch?interval=2s` (SSE) and
-  `POST /api/processes/{pid}/signal`. The route names the command, so
+  `POST /api/processes/{pid}/signal`; the filesystem routes are
+  `GET /api/files`, `GET /api/files/content`, `GET /api/files/download`,
+  `POST /api/files/mkdir`, `POST /api/files/rename`, `POST /api/files/delete` and
+  `POST /api/files/upload`. The route names the command, so
   bodies carry the command's arguments at the top level (`{"message":"hi"}`) with no
   `type`/`data` envelope; the envelope stays a `anth-proto` concern for socket clients
   only. See `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via
@@ -215,6 +227,19 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   toggle, SSE lifecycle and confirmed signals, and only depends on the injected
   `ProcessClient`. Both are exercised by Vitest component tests and the
   `anth-process.test.html` dev harness.
+- **Filesystem explorer**: `files.rs` validates `[files] root`, normalizes virtual
+  paths, rejects `..` and symlink escapes, lists directories, reads stateless chunks
+  and performs atomic uploads through a per-connection temporary file. Writes are
+  gated by `[files] write`, which defaults to `false`. `FileError` carries a
+  machine-readable kind so the HTTP layer can map `404`/`403`/`409`/`413`.
+  `render_file_listing` is the CLI table; the API streams downloads and previews
+  through the chunked `FileRead` flow instead of buffering a whole file in one frame.
+- **Frontend file explorer**: `anth-file-explorer` owns breadcrumbs, navigation,
+  sorting, hidden-file filtering, previews, uploads and confirmed writes. It only
+  depends on the injected `FileClient`; `lib/files/file-client.ts` implements
+  `/api/files` and `lib/files/display.ts` owns path, size and sort helpers. The
+  read-only state comes from the listing's `write_enabled`. Tests live under
+  `src/components/` and `src/lib/files/`; `anth-file.test.html` is the dev harness.
 - **Terminal transport**: the daemon owns each PTY and the line protocol carries its
   bytes; `terminal/web.rs` maps the browser JSON frames to `Request`/`Response`, and
   `ws.rs` is the terminal-agnostic JSON/WebSocket wrapper. One browser WebSocket owns one
@@ -238,6 +263,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `ANTH_PANEL_ADDR` and then `0.0.0.0:8080`. `run` binds the HTTP port before starting
   the daemon and aborts it when the API stops, which is what the container uses.
   `--config` is `global = true`, so it is accepted before or after the subcommand.
+  Most client subcommands use `request_for` + `stream::follow`; `file read` and
+  `file upload` own their socket loop because they move raw bytes in chunks.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
 

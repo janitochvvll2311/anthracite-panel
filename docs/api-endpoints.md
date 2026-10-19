@@ -30,6 +30,12 @@ it into a stream becomes `/watch`.
 | `anth-panel process list` | `GET /api/processes` |
 | `anth-panel process list --watch 2s` | `GET /api/processes/watch?interval=2s` |
 | `anth-panel process signal 123 term` | `POST /api/processes/123/signal` with `{"signal":"term"}` |
+| `anth-panel file list /tmp` | `GET /api/files?path=/tmp` |
+| `anth-panel file read /tmp/a` | `GET /api/files/content?path=/tmp/a` |
+| `anth-panel file mkdir /tmp/a` | `POST /api/files/mkdir` with `{"path":"/tmp/a"}` |
+| `anth-panel file rename /a /b` | `POST /api/files/rename` with `{"from":"/a","to":"/b"}` |
+| `anth-panel file delete /a` | `POST /api/files/delete` with `{"path":"/a"}` |
+| `anth-panel file upload ./a /b` | `POST /api/files/upload?path=/b` with a raw body |
 
 **HTTP errors are always JSON.** Every HTTP response that fails, including a
 malformed body rejected before the handler runs, has this shape:
@@ -53,6 +59,13 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/processes` | One process-table snapshot |
 | `GET` | `/api/processes/watch` | Process snapshots as SSE |
 | `POST` | `/api/processes/{pid}/signal` | Send an allowlisted signal |
+| `GET` | `/api/files` | One directory listing |
+| `GET` | `/api/files/content` | Inline file preview |
+| `GET` | `/api/files/download` | File download |
+| `POST` | `/api/files/mkdir` | Create a directory |
+| `POST` | `/api/files/rename` | Rename an entry |
+| `POST` | `/api/files/delete` | Delete an entry |
+| `POST` | `/api/files/upload` | Upload a raw body |
 
 Anything else falls through to the embedded web UI, which serves static files
 and returns `index.html` for unknown paths so the SPA can route.
@@ -310,6 +323,136 @@ detail.
 | `403` | Process control is disabled |
 | `502` | The daemon answered with an unexpected error |
 | `503` | No daemon is listening on the socket |
+
+## Files
+
+Filesystem paths are virtual: `/` is `[files] root` from the daemon config.
+Every route rejects paths containing `..` and symlinks that escape the root.
+Writes additionally require `[files] write = true`; otherwise they return `403`
+before reaching the daemon. See [files.md](files.md) for the full policy.
+
+### `GET /api/files`
+
+Lists one directory. `path` is optional and defaults to `/`.
+
+```bash
+curl -s "localhost:8080/api/files?path=/var/log"
+```
+
+```json
+{
+  "path": "/var/log",
+  "parent": "/var",
+  "entries": [
+    {
+      "name": "syslog",
+      "path": "/var/log/syslog",
+      "kind": "file",
+      "size": 1024,
+      "modified_ms": 1700000000000,
+      "hidden": false
+    }
+  ],
+  "total": 1,
+  "truncated": false,
+  "write_enabled": false
+}
+```
+
+`kind` is `file`, `directory`, `symlink` or `other`. Symlinks additionally carry
+`target`. `total` is the count before `max_entries` was applied; `truncated` and
+`warning` explain a shortened listing.
+
+| Status | When |
+| --- | --- |
+| `200` | Listing returned |
+| `400` | Invalid path or the target is not a directory |
+| `403` | The target cannot be read |
+| `404` | The directory does not exist |
+| `502` | Daemon error |
+| `503` | No daemon is listening |
+
+### `GET /api/files/content`
+
+Returns an inline preview as raw bytes. The route reads until
+`[files] max_preview_bytes` and then stops.
+
+```bash
+curl -s -D- "localhost:8080/api/files/content?path=/etc/hostname"
+```
+
+| Header | Meaning |
+| --- | --- |
+| `content-type` | MIME type guessed from the extension |
+| `content-disposition` | `inline; filename="..."` |
+| `x-anth-size` | Full file size in bytes |
+| `x-anth-truncated` | `true` when the preview stopped at the limit |
+
+### `GET /api/files/download`
+
+Streams the whole file as an attachment. It uses the same chunked daemon
+protocol, so files are not buffered in one socket frame.
+
+```bash
+curl -s -OJ "localhost:8080/api/files/download?path=/var/log/syslog"
+```
+
+The response carries `content-disposition: attachment` and `x-anth-size`.
+
+### `POST /api/files/mkdir`
+
+```json
+{"path":"/var/tmp/example","recursive":false}
+```
+
+`recursive` defaults to `false`. Returns `{"path":"/var/tmp/example"}`.
+
+### `POST /api/files/rename`
+
+```json
+{"from":"/var/tmp/a.txt","to":"/var/tmp/b.txt"}
+```
+
+Returns `{"from":"...","to":"..."}`. The route refuses to overwrite an existing
+destination.
+
+### `POST /api/files/delete`
+
+```json
+{"path":"/var/tmp/example","recursive":true}
+```
+
+`recursive` defaults to `false`. A non-empty directory without it is `409`.
+
+### `POST /api/files/upload`
+
+Uploads a raw request body. It is not multipart.
+
+```bash
+curl -s -X POST \
+  "localhost:8080/api/files/upload?path=/var/tmp/a.bin&overwrite=false" \
+  -H 'content-type: application/octet-stream' \
+  --data-binary @a.bin
+```
+
+```json
+{"path":"/var/tmp/a.bin","size":1234}
+```
+
+The API reads the body up to `[files] max_upload_bytes`, then forwards it to the
+daemon in 256 KiB chunks. The daemon writes a temporary file in the destination
+directory and renames it only after the last chunk, so an interrupted upload
+does not replace the destination.
+
+| Status | When |
+| --- | --- |
+| `200` | Entry created or replaced |
+| `400` | Invalid path or body |
+| `403` | File writes are disabled, or the daemon cannot write |
+| `404` | Parent directory does not exist |
+| `409` | Destination exists and `overwrite=false` |
+| `413` | Body or upload exceeds `max_upload_bytes` |
+| `502` | Daemon error |
 
 ## `POST /api/echo`
 

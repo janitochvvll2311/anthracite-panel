@@ -15,6 +15,7 @@ in the HTTP server.
 | [docs/socket-protocol.md](docs/socket-protocol.md) | Wire format between clients and the daemon |
 | [docs/terminal.md](docs/terminal.md) | Interactive terminals, the browser route and current risks |
 | [docs/processes.md](docs/processes.md) | Process monitoring, signals, limits and controls |
+| [docs/files.md](docs/files.md) | Filesystem root, chunked transfers, write policy and web explorer |
 
 ## Layout
 
