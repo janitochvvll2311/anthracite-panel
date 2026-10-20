@@ -101,7 +101,7 @@ fn execute_with_input(
     args: &[&str],
     input: Option<&str>,
 ) -> Result<CommandOutput, CommandError> {
-    let mut child = command(program, use_sudo, args)
+    let child = command(program, use_sudo, args)
         .env("LC_ALL", "C")
         .stdin(if input.is_some() {
             Stdio::piped()
@@ -141,10 +141,12 @@ fn execute_with_input(
         let _ = stdin.write_all(input.as_bytes());
     }
 
-    let output = child.wait_with_output().map_err(|error| CommandError::Failed {
-        program: program.to_string(),
-        detail: error.to_string(),
-    })?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| CommandError::Failed {
+            program: program.to_string(),
+            detail: error.to_string(),
+        })?;
 
     Ok(CommandOutput {
         ok: output.status.success(),
@@ -293,8 +295,8 @@ mod tests {
 
     #[test]
     fn the_stdin_path_reports_a_missing_program() {
-        let error =
-            execute_with_input("anth-definitely-not-a-real-binary", false, &[], Some("x")).unwrap_err();
+        let error = execute_with_input("anth-definitely-not-a-real-binary", false, &[], Some("x"))
+            .unwrap_err();
         assert_eq!(
             error,
             CommandError::Unavailable {

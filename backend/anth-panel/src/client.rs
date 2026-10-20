@@ -1,7 +1,8 @@
 use anth_proto::{Request, Response};
 
 use crate::cli::{
-    Command, FileCommand, FirewallCommand, NetworkCommand, ProcessCommand, VolumeCommand,
+    AccountCommand, AccountGroupCommand, AccountUserCommand, Command, FileCommand, FirewallCommand,
+    NetworkCommand, ProcessCommand, VolumeCommand,
 };
 use crate::render;
 
@@ -63,6 +64,57 @@ pub fn request_for(command: &Command) -> Option<Request> {
             VolumeCommand::Unmount(args) => Some(Request::VolumeUnmount {
                 target: args.target.clone(),
             }),
+        },
+        Command::Account(args) => match &args.command {
+            AccountCommand::List => Some(Request::AccountList),
+            AccountCommand::User(args) => match &args.command {
+                AccountUserCommand::Create(args) => Some(Request::AccountCreate {
+                    name: args.name.clone(),
+                    uid: args.uid,
+                    gid: args.gid,
+                    gecos: args.gecos.clone(),
+                    home: args.home.clone(),
+                    shell: args.shell.clone(),
+                    system: args.system,
+                }),
+                AccountUserCommand::Modify(args) => {
+                    let locked = match (args.lock, args.unlock) {
+                        (true, _) => Some(true),
+                        (_, true) => Some(false),
+                        _ => None,
+                    };
+                    Some(Request::AccountModify {
+                        name: args.name.clone(),
+                        gecos: args.gecos.clone(),
+                        shell: args.shell.clone(),
+                        home: args.home.clone(),
+                        primary_gid: args.gid,
+                        locked,
+                    })
+                }
+                AccountUserCommand::Delete(args) => Some(Request::AccountDelete {
+                    name: args.name.clone(),
+                    remove_home: args.remove_home,
+                }),
+                // The password is read before this point and handed over by
+                // `send_account_password`, never assembled here.
+                AccountUserCommand::Password(_) => None,
+            },
+            AccountCommand::Group(args) => match &args.command {
+                AccountGroupCommand::Create(args) => Some(Request::AccountGroupCreate {
+                    name: args.name.clone(),
+                    gid: args.gid,
+                    system: args.system,
+                }),
+                AccountGroupCommand::Modify(args) => Some(Request::AccountGroupModify {
+                    name: args.name.clone(),
+                    gid: args.gid,
+                    members: args.members.clone(),
+                }),
+                AccountGroupCommand::Delete(args) => Some(Request::AccountGroupDelete {
+                    name: args.name.clone(),
+                }),
+            },
         },
         Command::File(args) => match &args.command {
             FileCommand::List(list) => Some(Request::FileList {

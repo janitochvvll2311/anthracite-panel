@@ -1,8 +1,8 @@
 //! Rendering of host information as a bordered text table.
 
 use anth_proto::{
-    FileKind, FileListing, FirewallSnapshot, HostInfo, NetworkSnapshot, ProcessSnapshot, Response,
-    VolumeDevice, VolumeSnapshot,
+    AccountSnapshot, FileKind, FileListing, FirewallSnapshot, HostInfo, NetworkSnapshot,
+    ProcessSnapshot, Response, VolumeDevice, VolumeSnapshot,
 };
 
 const TOP_LEFT: char = '┌';
@@ -432,6 +432,81 @@ pub fn render_volume_snapshot(snapshot: &VolumeSnapshot) -> String {
     output
 }
 
+/// Two tables: users, then groups. `NSS` marks an entry the panel cannot write,
+/// and `?` marks a lock state it could not read; both are facts, not gaps.
+pub fn render_account_snapshot(snapshot: &AccountSnapshot) -> String {
+    let mut users = Table::new(vec![
+        "USER".to_string(),
+        "UID".to_string(),
+        "GID".to_string(),
+        "GROUP".to_string(),
+        "STATE".to_string(),
+        "SHELL".to_string(),
+        "SOURCE".to_string(),
+    ]);
+
+    for user in &snapshot.users {
+        let state = match user.locked {
+            Some(true) => "locked",
+            Some(false) => "unlocked",
+            None => "?",
+        };
+        users.push(vec![
+            user.name.clone(),
+            user.uid.to_string(),
+            user.gid.to_string(),
+            elide(&user.group, 20),
+            state.to_string(),
+            elide(&user.shell, 24),
+            user.source.to_string(),
+        ]);
+    }
+
+    let mut output = if snapshot.users.is_empty() {
+        "No users found.".to_string()
+    } else {
+        users.render()
+    };
+
+    if snapshot.groups.is_empty() {
+        output.push_str("\n\nNo groups found.");
+    } else {
+        output.push_str("\n\n");
+        let mut groups = Table::new(vec![
+            "GROUP".to_string(),
+            "GID".to_string(),
+            "MEMBERS".to_string(),
+            "SOURCE".to_string(),
+        ]);
+        for group in &snapshot.groups {
+            groups.push(vec![
+                group.name.clone(),
+                group.gid.to_string(),
+                elide(&group.members.join(", "), 48),
+                group.source.to_string(),
+            ]);
+        }
+        output.push_str(&groups.render());
+    }
+
+    if snapshot.truncated {
+        output.push_str(&format!(
+            "\n\nShowing {} of {} users and {} of {} groups.",
+            snapshot.users.len(),
+            snapshot.total_users,
+            snapshot.groups.len(),
+            snapshot.total_groups
+        ));
+    }
+
+    if let Some(warning) = &snapshot.warning {
+        output.push('\n');
+        output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
+}
+
 /// Nesting depth from the parent links, so the CLI draws the same tree the
 /// protocol carries flat. Cycles are impossible in `lsblk` output, but the walk
 /// is still bounded by the list length.
@@ -476,6 +551,9 @@ pub fn render_response(response: &Response) -> String {
             format!("[OK] brought {name} {state}")
         }
         Response::NetworkError(error) => format!("[ERROR] {}", error.detail),
+        Response::AccountSnapshot(snapshot) => render_account_snapshot(snapshot),
+        Response::AccountChanged { message } => format!("[OK] {message}"),
+        Response::AccountError(error) => format!("[ERROR] {}", error.detail),
         Response::VolumeSnapshot(snapshot) => render_volume_snapshot(snapshot),
         Response::VolumeChanged { message } => format!("[OK] {message}"),
         Response::VolumeError(error) => format!("[ERROR] {}", error.detail),

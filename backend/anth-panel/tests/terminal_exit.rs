@@ -36,6 +36,7 @@ fn config_at(path: &Path) -> Config {
         network: anth_panel::config::NetworkConfig::default(),
         firewall: anth_panel::config::FirewallConfig::default(),
         volumes: anth_panel::config::VolumesConfig::default(),
+        accounts: anth_panel::config::AccountsConfig::default(),
         files: FilesConfig::default(),
     }
 }
