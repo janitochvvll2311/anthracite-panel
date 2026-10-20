@@ -16,6 +16,10 @@ import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
+import '../components/anth-login'
+
+import { AuthClient } from '../lib/auth/auth-client'
+import type { SessionInfo } from '../lib/auth/auth-client'
 import { changeLocale, currentLocale, setupLocalization } from './i18n'
 import type { PanelDefinition } from './panels'
 import { PANELS, findPanel } from './panels'
@@ -174,6 +178,28 @@ export class AnthApp extends LitElement {
       background: rgba(248, 113, 113, 0.08);
     }
 
+    .loading {
+      padding: 2rem;
+      color: var(--muted, #8b9bad);
+      font: 13px/1.5 var(--mono, monospace);
+    }
+
+    .signout {
+      padding: 0.25rem 0.6rem;
+      color: inherit;
+      font: 600 11px/1.4 var(--mono, monospace);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .signout:hover {
+      border-color: rgba(125, 211, 252, 0.55);
+    }
+
     select {
       padding: 0.3rem 0.5rem;
       color: inherit;
@@ -191,11 +217,33 @@ export class AnthApp extends LitElement {
   @property({ attribute: false })
   clientFactory?: (panel: PanelDefinition) => unknown
 
+  /**
+   * Injectable auth client. The shell reads the session on connect, so tests
+   * supply a stub instead of reaching a server that is not there.
+   */
+  @property({ attribute: false })
+  authClient?: AuthClient
+
   @state()
   private route: Route = parseRoute(globalThis.location?.hash ?? '')
 
   @state()
   private locale: PanelLocale = currentLocale()
+
+  /**
+   * The login gate. `unknown` until the first session read finishes, so the
+   * shell shows neither the login nor the panels and cannot flash protected
+   * content before redirecting.
+   */
+  @state()
+  private session: SessionInfo | null | 'unknown' = 'unknown'
+
+  private auth = new AuthClient()
+
+  /** Swaps in the injected client before the first session read. */
+  private adoptAuthClient(): void {
+    if (this.authClient) this.auth = this.authClient
+  }
 
   /** Panel id currently mounted in the host, so a route change remounts once. */
   private mountedPanel?: string
@@ -207,14 +255,64 @@ export class AnthApp extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback()
     globalThis.addEventListener?.('hashchange', this.onHashChange)
+    this.adoptAuthClient()
+    this.auth.onExpired(this.onSessionExpired)
+    void this.loadSession()
   }
 
   override disconnectedCallback(): void {
     globalThis.removeEventListener?.('hashchange', this.onHashChange)
+    this.auth.cancelRefresh()
     super.disconnectedCallback()
   }
 
+  /**
+   * Reads the session once at start.
+   *
+   * The refresh token may outlive the access token across a page reload, so a
+   * failure here is not final: the client tries one rotation before deciding the
+   * operator has to sign in again.
+   */
+  private async loadSession(): Promise<void> {
+    try {
+      let session = await this.auth.session()
+      if (session.enabled && !session.authenticated) {
+        const refreshable = session.refresh_expires_in > 0
+        if (refreshable) session = await this.auth.refresh()
+      }
+      this.session = session
+      this.auth.scheduleRefresh(session)
+    } catch {
+      this.session = null
+    }
+  }
+
+  private readonly onSessionExpired = (): void => {
+    this.session = null
+  }
+
+  private async onAuthenticated(session: SessionInfo): Promise<void> {
+    this.session = session
+    this.mountedPanel = undefined
+  }
+
+  private async onLogout(): Promise<void> {
+    await this.auth.logout()
+    this.session = null
+    this.mountedPanel = undefined
+  }
+
   override render() {
+    if (this.session === 'unknown') {
+      return html`<p class="loading">${msg('Loading…')}</p>`
+    }
+    if (this.session === null || !this.session.authenticated) {
+      return html`<anth-login
+        .client=${this.auth}
+        .onAuthenticated=${(session: SessionInfo) => this.onAuthenticated(session)}
+      ></anth-login>`
+    }
+
     return html`
       <header>
         <p class="brand">
@@ -222,6 +320,12 @@ export class AnthApp extends LitElement {
           <span class="tagline">${msg('host control')}</span>
         </p>
         <div class="header-actions">
+          ${this.session.enabled
+            ? html`<span class="tagline">${this.session.username}</span>
+                <button class="signout" type="button" @click=${this.onLogout}>
+                  ${msg('Sign out')}
+                </button>`
+            : null}
           <label>
             <span class="tagline">${msg('Language')}</span>
             <select

@@ -57,6 +57,15 @@ control = false
 [firewall]
 control = false
 
+[auth]
+enabled = true
+username = "admin"
+password_hash = "pbkdf2-sha256$..."
+jwt_secret = "..."
+access_token_secs = 900
+refresh_token_secs = 43200
+cookie_secure = false
+
 [files]
 root = "/"
 write = false
@@ -73,6 +82,11 @@ serving subcommands: they write a default config when it cannot be loaded.
 Client subcommands (`echo`, `host-info`, `process`, `network`, `firewall`,
 `file`) never create the file — they use defaults if it is absent, so probing a
 machine does not leave files behind.
+
+The first run of a serving subcommand with `[auth]` enabled but no password
+generates one: it prints the account name and the password to the terminal
+once, stores only the PBKDF2 digest and a generated signing key, and never
+shows the password again. Set a new one with `anth-panel auth set-password`.
 
 Debug builds bootstrap a missing file with global `sudo = true`,
 `[process] control = true`, `[network] control = true`,
@@ -366,6 +380,37 @@ anth-panel volume umount /mnt/data
 daemon's socket, config, served root or executable are refused. A busy
 filesystem reports an error; there is no lazy or forced unmount. The command
 asks for confirmation unless `--yes` is given.
+
+### `auth`
+
+These edit the config file directly; they do not need a running daemon.
+
+| Command | Description |
+| --- | --- |
+| `auth status` | Report whether auth is on and whether a password is set. |
+| `auth enable` | Turn the password requirement on. |
+| `auth enable --disable` | Turn it off. |
+| `auth set-password` | Read a password (prompt, or stdin with `--stdin`) and store its digest. |
+
+`auth set-password` prompts twice on a terminal, with echo off, and reads one
+line from stdin with `--stdin`. The password never appears in the process list
+because it is never an argument. Changing it restarts the panel's sessions:
+they live in memory, so a restart signs everyone out anyway.
+
+### `config`
+
+| Command | Description |
+| --- | --- |
+| `config get` | Print the effective configuration as TOML. |
+| `config set <KEY> <VALUE>` | Change one key and save the file. |
+
+`config set` validates the value before writing, so a bad path or a
+non-numeric limit fails with an error and leaves the file untouched. It accepts
+the same dotted keys the file uses, such as `files.write` or
+`volumes.mount_root`.
+
+The panel's settings page edits the same fields through `PATCH /api/config`
+while the process runs; the CLI is for a host with no browser.
 
 ### `account`
 

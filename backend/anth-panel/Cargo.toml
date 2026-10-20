@@ -19,6 +19,10 @@ tokio-stream = "0.1"
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+hmac = "0.13.0"
+sha2 = "0.11.1"
+base64 = "0.23.1"
+rand = "0.10.3"
 
 [dev-dependencies]
 http-body-util = "0.1"

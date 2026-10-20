@@ -38,6 +38,7 @@ fn config_at(path: &Path) -> Config {
         volumes: anth_panel::config::VolumesConfig::default(),
         accounts: anth_panel::config::AccountsConfig::default(),
         files: FilesConfig::default(),
+        auth: anth_panel::config::AuthConfig::default(),
     }
 }
 

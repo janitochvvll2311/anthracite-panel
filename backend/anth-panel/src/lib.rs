@@ -2,19 +2,23 @@ pub mod accounts;
 pub mod accounts_admin;
 pub mod api;
 pub mod app;
+pub mod auth;
 pub mod cli;
 pub mod client;
 pub mod command;
 pub mod config;
+pub mod config_api;
 pub mod daemon;
 pub mod files;
 pub mod firewall;
 pub mod handler;
 pub mod hostinfo;
 pub mod network;
+pub mod password_prompt;
 pub mod poll;
 pub mod process;
 pub mod render;
+pub mod settings;
 pub mod sse;
 pub mod stream;
 pub mod terminal;
@@ -31,6 +35,7 @@ pub use client::{handle_response, request_for};
 pub use config::{Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH};
 pub use hostinfo::collect as collect_host_info;
 pub use network::collect as collect_network;
+pub use password_prompt::read_password;
 pub use render::{
     render_account_snapshot, render_file_listing, render_firewall_snapshot, render_host_info,
     render_network_snapshot, render_process_snapshot, render_response,

@@ -210,9 +210,11 @@ That is another reason `control` defaults to off.
 
 ## Risks
 
-- **No authentication.** Anyone who can reach the HTTP port can use these routes
-  when `control` is on. The terminal route has the same gap. Run the panel on a
-  trusted network, or wait for auth before enabling control.
+- **The panel session is one password.** Anyone who can reach the HTTP port and
+  sign in can use these routes when `control` is on. There are no per-account
+  roles: the panel account is not a host account and has no relation to the uid
+  the daemon runs as. Run the panel on a trusted network, and leave `control`
+  off unless account management is the reason the panel exists.
 - **`manage_passwords` sends a plaintext password** over the socket and, on the
   HTTP path, over the network. TLS terminates in front of the panel or not at
   all; there is no transport security of its own.

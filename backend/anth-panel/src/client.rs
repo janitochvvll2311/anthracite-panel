@@ -134,7 +134,12 @@ pub fn request_for(command: &Command) -> Option<Request> {
                 recursive: args.recursive,
             }),
         },
-        Command::Terminal(_) | Command::Daemon | Command::Api(_) | Command::Run(_) => None,
+        Command::Terminal(_)
+        | Command::Auth(_)
+        | Command::Config(_)
+        | Command::Daemon
+        | Command::Api(_)
+        | Command::Run(_) => None,
     }
 }
 

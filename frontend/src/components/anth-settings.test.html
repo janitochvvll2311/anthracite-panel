@@ -1,0 +1,133 @@
+<!doctype html>
+<!--
+  Dev-only harness for the settings form.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-settings.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel settings form."
+    />
+    <title>anth-settings · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+    <style>
+      .harness-note code {
+        color: var(--accent, #7dd3fc);
+      }
+    </style>
+  </head>
+  <body>
+    <anth-harness heading="anth-settings" width="1100px">
+      <p slot="description">
+        The panel configuration, read from <code>GET /api/config</code> and
+        written through <code>PATCH /api/config</code>. This harness runs against
+        an in-memory copy, so nothing here touches the real config file.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Toggle a control and press Save: the patch panel shows the diff.</li>
+            <li>
+              Press Save again with no change: the form answers "Nothing
+              changed." and sends nothing.
+            </li>
+            <li>
+              Set the files root to a relative path and press Save: the fake
+              server rejects it and the error is shown, with the draft intact.
+            </li>
+            <li>
+              The password has no field: it changes through
+              <code>anth-panel auth set-password</code> or
+              <code>POST /api/auth/password</code>, which checks the current one.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Why a patch, not a full save</h2>
+          <p>
+            A full replacement would overwrite a field another tab changed while
+            this form was open. The component diffs the draft against the loaded
+            view and sends only the sections that differ.
+          </p>
+        </article>
+      </section>
+
+      <div slot="actions" class="harness-controls">
+        <span id="patch" class="harness-note">no patch yet</span>
+      </div>
+
+      <anth-settings id="settings"></anth-settings>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-settings.ts'
+
+      const view = {
+        socket_path: '/var/tmp/anth.sock',
+        sudo: false,
+        terminal: { shell: 'auto', max_sessions: 4, token_set: false },
+        process: { control: true },
+        network: { control: true },
+        firewall: { control: false },
+        volumes: { control: false, mount_root: '/mnt' },
+        accounts: {
+          control: true,
+          manage_passwords: false,
+          allow_system: false,
+          allow_privileged_groups: false,
+          home_root: '/home',
+          default_shell: '/bin/sh',
+        },
+        files: {
+          root: '/',
+          write: true,
+          max_entries: 5000,
+          max_preview_bytes: 1048576,
+          max_upload_bytes: 67108864,
+        },
+        auth: {
+          enabled: true,
+          username: 'admin',
+          password_set: true,
+          access_token_secs: 900,
+          refresh_token_secs: 43200,
+          cookie_secure: false,
+        },
+      }
+
+      const patchLog = document.querySelector('#patch')
+      const settings = document.querySelector('#settings')
+
+      // A fake server: it applies the patch and reports it, and rejects a
+      // relative files root the way the real handler does.
+      settings.client = {
+        async read() {
+          return structuredClone(view)
+        },
+        async patch(patch) {
+          if (patch.files?.root && !patch.files.root.startsWith('/')) {
+            throw new Error('files.root must be an absolute path')
+          }
+          patchLog.textContent = JSON.stringify(patch)
+          for (const [section, value] of Object.entries(patch)) {
+            if (typeof value === 'object' && value !== null && view[section]) {
+              Object.assign(view[section], value)
+            } else {
+              view[section] = value
+            }
+          }
+          return structuredClone(view)
+        },
+      }
+    </script>
+  </body>
+</html>

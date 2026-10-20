@@ -11,11 +11,18 @@ For the wire format, see [socket-protocol.md](socket-protocol.md#terminal).
 A terminal is remote code execution. Anyone who can open a session gets a shell
 as the user the daemon runs as.
 
-The panel and the daemon have **no authentication**. The terminal configuration
-has a `token` setting, but in the current development build it is **not
-enforced** by either the daemon or the WebSocket route. Do not expose the socket
-or the HTTP port to a network you do not control. The token is reserved for the
-authentication layer that will be added at the browser boundary.
+The **daemon socket has no authentication**. Anyone who can open it gets a
+shell. The HTTP panel sits behind the session layer described in
+[api-endpoints.md](api-endpoints.md#authentication): with `[auth] enabled` the
+WebSocket upgrade needs the `anth_access` cookie, so a browser that has not
+signed in cannot reach a PTY. That covers the browser boundary only, not the
+socket.
+
+Do not expose the socket to a network you do not control, and do not enable the
+panel over plain HTTP on an untrusted network: the session cookie travels on
+every request. Set `[auth] cookie_secure = true` once TLS terminates in front of
+the panel. `terminal.token` is still not enforced; it is reserved for a
+per-session capability, which the panel session does not replace.
 
 ## Enabling it
 
