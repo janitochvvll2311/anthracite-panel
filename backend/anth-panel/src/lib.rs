@@ -1,8 +1,8 @@
 pub mod api;
 pub mod app;
 pub mod cli;
-pub mod command;
 pub mod client;
+pub mod command;
 pub mod config;
 pub mod daemon;
 pub mod files;
@@ -17,6 +17,7 @@ pub mod stream;
 pub mod terminal;
 pub mod terminal_client;
 pub(crate) mod text;
+pub mod volumes;
 pub(crate) mod ws;
 
 pub use api::{ApiError, get_healthz, get_host_info, post_echo, router, watch_host_info};
@@ -31,3 +32,4 @@ pub use render::{
     render_process_snapshot, render_response,
 };
 pub use stream::{DEFAULT_INTERVAL, Frames, parse_interval};
+pub use volumes::collect as collect_volumes;

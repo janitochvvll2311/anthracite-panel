@@ -35,7 +35,7 @@ Both messages are JSON objects with two members:
 
 `type` names the operation and `data` carries its arguments. The `data` member
 is omitted entirely for variants that take no arguments (`HostInfo`,
-`ProcessList`, `NetworkList`, `FirewallStatus`, `FirewallFlush`).
+`ProcessList`, `NetworkList`, `VolumeList`, `FirewallStatus`, `FirewallFlush`).
 
 The pair is request/response: the client writes one request and reads one
 response on the same connection. A connection may carry several request/response
@@ -187,6 +187,52 @@ Removes every rule from the managed input chain. Takes no arguments.
 ```
 
 Reply: `FirewallChanged`, or `FirewallError`.
+
+### Volume requests
+
+The daemon answers from `lsblk` and `/proc/self/mountinfo`; see
+[volumes.md](volumes.md) for the policy. A `mount` or `unmount` request needs
+`[volumes] control = true`.
+
+### `VolumeList`
+
+Returns every block device and every mount in the daemon's mount namespace.
+Takes no arguments.
+
+```json
+{"type":"VolumeList"}
+
+```
+
+Reply: `VolumeSnapshot`, carrying `devices`, `mounts`, `control_enabled`,
+`timestamp_ms`, `total`, `truncated` and an optional `warning`. Devices are
+flattened and keep their `parent` name, so a client can rebuild the tree.
+`mounts[].virtual_fs` marks kernel filesystems such as `proc` or `tmpfs`.
+
+### `VolumeMount`
+
+```json
+{"type":"VolumeMount","data":{"device":"/dev/sdb1","target":"/mnt/data","fs_type":"ext4","read_only":false,"allow_removable":false}}
+
+```
+
+`device` accepts a full path or a kernel name. `target` must be an existing,
+absolute directory. `fs_type` is optional: the daemon uses the detected
+filesystem when it is absent. `read_only` defaults to `false` and mounts with
+`-o ro`. `allow_removable` defaults to `false`; removable media is refused
+without it.
+
+Reply: `VolumeChanged { message }`, or `VolumeError`.
+
+### `VolumeUnmount`
+
+```json
+{"type":"VolumeUnmount","data":{"target":"/mnt/data"}}
+
+```
+
+Reply: `VolumeChanged { message }`, or `VolumeError`. A busy filesystem reports
+`busy`; there is no lazy or forced unmount.
 
 ### Filesystem requests
 
@@ -480,6 +526,80 @@ A refused firewall mutation. `kind` is one of `disabled`, `unavailable`,
 
 ```
 
+### `VolumeSnapshot`
+
+Reply to `VolumeList`.
+
+```json
+{
+  "type": "VolumeSnapshot",
+  "data": {
+    "devices": [
+      {
+        "name": "sdb1",
+        "path": "/dev/sdb1",
+        "kind": "part",
+        "parent": "sdb",
+        "size_bytes": 16000000000,
+        "fstype": "ext4",
+        "label": "data",
+        "uuid": "1111-2222",
+        "mountpoints": [],
+        "read_only": false,
+        "removable": false,
+        "model": "USB DISK",
+        "transport": "usb"
+      }
+    ],
+    "mounts": [
+      {
+        "mountpoint": "/",
+        "source": "overlay",
+        "fstype": "overlay",
+        "options": "rw,relatime",
+        "read_only": false,
+        "virtual_fs": true,
+        "usage": {
+          "total_bytes": 80000000000,
+          "used_bytes": 20000000000,
+          "available_bytes": 55000000000
+        }
+      }
+    ],
+    "control_enabled": true,
+    "timestamp_ms": 1700000000000,
+    "total": 1,
+    "truncated": false
+  }
+}
+```
+
+`kind` is `disk`, `part`, `crypt`, `lvm`, `raid`, `loop`, `rom` or `other`.
+`parent` and every optional string field are absent when the kernel does not
+report them. `mountpoints` is empty for an unmounted device. `usage` is absent
+when `statvfs` fails. When a snapshot would exceed the 1 MiB line cap the daemon
+drops the diagnostic fields first, then the device tail and finally the mount
+tail, sets `truncated` and adds a `warning`.
+
+### `VolumeChanged`
+
+Successful reply to `VolumeMount` or `VolumeUnmount`.
+
+```json
+{"type":"VolumeChanged","data":{"message":"mounted /dev/sdb1 on /mnt/data as ext4"}}
+
+```
+
+### `VolumeError`
+
+A refused or failed volume operation. `kind` is one of `disabled`, `protected`,
+`permission_denied`, `not_found`, `busy`, `invalid` or `failed`.
+
+```json
+{"type":"VolumeError","data":{"kind":"busy","detail":"umount: /mnt/data: target is busy."}}
+
+```
+
 ### File responses
 
 `FileListing`, `FileChunk`, `FileWritten`, `FileCreated`, `FileDeleted`,
@@ -621,6 +741,7 @@ socket open.
 | Malformed JSON line | `Error` with a parse message, then the connection closes |
 | Filesystem operation failed | `FileError` with `kind` and `detail`; the connection stays open |
 | Firewall operation failed | `FirewallError` with `kind` and `detail`; the connection stays open |
+| Volume operation failed | `VolumeError` with `kind` and `detail`; the connection stays open |
 | Network change failed | `NetworkError` with `kind` and `detail`; the connection stays open |
 | Daemon goes away | The connection closes with no message; a write fails with `Broken pipe` |
 

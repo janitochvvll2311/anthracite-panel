@@ -37,6 +37,9 @@ it into a stream becomes `/watch`.
 | `anth-panel firewall allow 22/tcp` | `POST /api/firewall/rules` with `{"action":"allow","port":22}` |
 | `anth-panel firewall delete 3` | `POST /api/firewall/rules/3/delete` |
 | `anth-panel firewall flush` | `POST /api/firewall/flush` |
+| `anth-panel volume list` | `GET /api/volumes` |
+| `anth-panel volume mount /dev/sdb1 /mnt/data` | `POST /api/volumes/mount` with `{"device":"/dev/sdb1","target":"/mnt/data"}` |
+| `anth-panel volume unmount /mnt/data` | `POST /api/volumes/unmount` with `{"target":"/mnt/data"}` |
 | `anth-panel file list /tmp` | `GET /api/files?path=/tmp` |
 | `anth-panel file read /tmp/a` | `GET /api/files/content?path=/tmp/a` |
 | `anth-panel file mkdir /tmp/a` | `POST /api/files/mkdir` with `{"path":"/tmp/a"}` |
@@ -73,6 +76,9 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `POST` | `/api/firewall/rules` | Add a deny or remove a managed deny |
 | `POST` | `/api/firewall/rules/{handle}/delete` | Delete a rule by handle |
 | `POST` | `/api/firewall/flush` | Flush the managed chain |
+| `GET` | `/api/volumes` | One storage-inventory snapshot |
+| `POST` | `/api/volumes/mount` | Mount a device on a directory |
+| `POST` | `/api/volumes/unmount` | Unmount a mounted directory |
 | `GET` | `/api/files` | One directory listing |
 | `GET` | `/api/files/content` | Inline file preview |
 | `GET` | `/api/files/download` | File download |
@@ -553,6 +559,138 @@ curl -s -X POST localhost:8080/api/firewall/flush
 
 See [firewall.md](firewall.md) for the table layout, container capabilities and
 security notes.
+
+## Volumes
+
+See [volumes.md](volumes.md) for the data sources, the mount and unmount
+policy and the error kinds.
+
+### `GET /api/volumes`
+
+One snapshot of block devices and every mount in the daemon's mount namespace.
+
+```bash
+curl -s localhost:8080/api/volumes
+```
+
+```json
+{
+  "devices": [
+    {
+      "name": "sdb1",
+      "path": "/dev/sdb1",
+      "kind": "part",
+      "parent": "sdb",
+      "size_bytes": 16000000000,
+      "fstype": "ext4",
+      "label": "data",
+      "uuid": "1111-2222",
+      "mountpoints": [],
+      "read_only": false,
+      "removable": false,
+      "model": "USB DISK",
+      "transport": "usb"
+    }
+  ],
+  "mounts": [
+    {
+      "mountpoint": "/",
+      "source": "overlay",
+      "fstype": "overlay",
+      "options": "rw,relatime",
+      "read_only": false,
+      "virtual_fs": true,
+      "usage": {
+        "total_bytes": 80000000000,
+        "used_bytes": 20000000000,
+        "available_bytes": 55000000000
+      }
+    }
+  ],
+  "control_enabled": true,
+  "timestamp_ms": 1700000000000,
+  "total": 1,
+  "truncated": false
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `devices` | Block devices from `lsblk`, flattened, tree order |
+| `devices[].parent` | Kernel name of the parent device, absent at the root |
+| `devices[].mountpoints` | Every path the device is mounted on, empty when unmounted |
+| `devices[].removable` | Whether the device reports itself as removable media |
+| `mounts` | Every entry in `/proc/self/mountinfo` |
+| `mounts[].virtual_fs` | `true` for `proc`, `sysfs`, `tmpfs`, `cgroup2`, overlays … |
+| `mounts[].usage` | `statvfs` figures; absent when the filesystem cannot be read |
+| `control_enabled` | Whether `[volumes] control` allows mount and unmount |
+| `total` | Number of devices before any truncation |
+| `truncated` | Whether the device or mount list was shortened |
+| `warning` | Present only when the snapshot was shortened |
+
+A snapshot too large for the 1 MiB protocol line cap drops the longest
+diagnostic fields first, then the device tail and finally the mount tail, and
+adds a `warning` such as `showing 4000 of 20000 devices; the snapshot was
+shortened to fit the protocol line cap`.
+
+| Status | When |
+| --- | --- |
+| `200` | Snapshot returned |
+| `503` | No daemon is listening |
+
+`GET /api/volumes` has **no watch variant**. Mounts change when an operator
+changes them, so the web component refreshes on demand.
+
+### `POST /api/volumes/mount`
+
+```bash
+curl -s -X POST localhost:8080/api/volumes/mount \
+  -H 'content-type: application/json' \
+  -d '{"device":"/dev/sdb1","target":"/mnt/data","read_only":true}'
+```
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `device` | yes | Full path or kernel name of an unmounted block device |
+| `target` | yes | Existing absolute directory, inside `volumes.mount_root` |
+| `fs_type` | no | Filesystem type; detected from the device when omitted |
+| `read_only` | no | Mount with `-o ro`, defaults to `false` |
+| `allow_removable` | no | Permit removable media, defaults to `false` |
+
+```json
+{"message":"mounted /dev/sdb1 on /mnt/data as ext4"}
+```
+
+| Status | When |
+| --- | --- |
+| `200` | Mounted |
+| `400` | Bad path, bad type, relative target or the device is already mounted |
+| `403` | Control is off, the target is outside `mount_root`, or removable media without `allow_removable` |
+| `403` | The command could not elevate |
+| `404` | The device or target does not exist |
+| `500` | `mount` failed for any other reason |
+
+### `POST /api/volumes/unmount`
+
+```bash
+curl -s -X POST localhost:8080/api/volumes/unmount \
+  -H 'content-type: application/json' \
+  -d '{"target":"/mnt/data"}'
+```
+
+```json
+{"message":"unmounted /mnt/data"}
+```
+
+| Status | When |
+| --- | --- |
+| `200` | Unmounted |
+| `400` | The target is relative |
+| `403` | Control is off, the target is `/`, a virtual filesystem, or an ancestor of a path the panel needs |
+| `403` | The command could not elevate |
+| `404` | The target is not a mountpoint |
+| `409` | The filesystem is busy |
+| `500` | `umount` failed for any other reason |
 
 ## Files
 

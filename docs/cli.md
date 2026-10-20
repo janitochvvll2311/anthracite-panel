@@ -318,6 +318,55 @@ anth-panel firewall flush
 `delete` removes one rule by the handle shown in `status`. `flush` removes every
 rule from the managed chain. Both ask for confirmation unless `--yes` is given.
 
+### `volume`
+
+Inspects the storage inventory and, when `[volumes] control = true`, mounts and
+unmounts filesystems. See [volumes.md](volumes.md) for the data sources, the
+mount and unmount policy and the error kinds.
+
+#### `volume list`
+
+```bash
+anth-panel volume list
+anth-panel volume ls
+```
+
+Prints two tables. The first lists block devices as DEVICE, SIZE, TYPE, FSTYPE,
+LABEL and MOUNT, indented by their position in the tree. The second lists every
+mount as MOUNTPOINT, SOURCE, FSTYPE, USED, AVAILABLE and MODE, where MODE is
+`rw`, `ro`, `virtual` or `ro, virtual`. `ls` is an alias. A snapshot shortened to
+fit the protocol line cap is followed by a `Warning:` line.
+
+#### `volume mount <DEVICE> <TARGET>`
+
+```bash
+anth-panel volume mount /dev/sdb1 /mnt/data
+anth-panel volume mount sdb1 /mnt/data --type ext4
+anth-panel volume mount /dev/sdb1 /mnt/backup --read-only
+anth-panel volume mount /dev/sdc1 /mnt/usb --allow-removable
+```
+
+`DEVICE` is a full path or a kernel name. `TARGET` must already exist and resolve
+inside `volumes.mount_root`. `--type` overrides the detected filesystem.
+`--read-only` mounts with `-o ro`. `--allow-removable` is required for removable
+media, which is refused otherwise.
+
+Without `--yes`, the command asks for confirmation on a TTY and refuses to run
+when stdin is not a terminal. The daemon must have `[volumes] control = true`
+and enough privilege to run `mount`.
+
+#### `volume unmount <TARGET>`
+
+```bash
+anth-panel volume unmount /mnt/data
+anth-panel volume umount /mnt/data
+```
+
+`umount` is an alias. `/`, virtual filesystems and any mount that contains the
+daemon's socket, config, served root or executable are refused. A busy
+filesystem reports an error; there is no lazy or forced unmount. The command
+asks for confirmation unless `--yes` is given.
+
 ### `file`
 
 Browses and, when `[files] write = true`, manages files below the configured

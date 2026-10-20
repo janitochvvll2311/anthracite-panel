@@ -964,5 +964,4 @@ mod tests {
         let error = status_with(&MissingNft, true).unwrap_err();
         assert_eq!(error.kind, FirewallErrorKind::Unavailable);
     }
-
 }

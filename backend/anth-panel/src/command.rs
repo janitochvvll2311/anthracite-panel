@@ -59,9 +59,7 @@ pub fn execute(
     use_sudo: bool,
     args: &[&str],
 ) -> Result<CommandOutput, CommandError> {
-    let output = command(program, use_sudo, args)
-        .env("LC_ALL", "C")
-        .output();
+    let output = command(program, use_sudo, args).env("LC_ALL", "C").output();
 
     match output {
         Ok(output) => Ok(CommandOutput {

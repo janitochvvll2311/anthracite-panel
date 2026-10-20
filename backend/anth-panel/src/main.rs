@@ -7,7 +7,7 @@ use anth_panel::cli::{
     Cli, Command, EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs,
     FileUploadArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
     FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
-    ProcessSignalArgs, WatchArgs,
+    ProcessSignalArgs, VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::stream;
@@ -182,6 +182,28 @@ fn confirm_delete(args: &FileDeleteArgs) -> Result<bool, String> {
         args.yes,
         || format!("{verb} `{}`? [y/N] ", args.path),
         "refusing to delete without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_volume_mount(args: &VolumeMountArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || {
+            let mode = if args.read_only { " read-only" } else { "" };
+            format!(
+                "Mount `{}` on `{}`{}? [y/N] ",
+                args.device, args.target, mode
+            )
+        },
+        "refusing to mount without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_volume_unmount(args: &VolumeUnmountArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || format!("Unmount `{}`? [y/N] ", args.target),
+        "refusing to unmount without --yes when stdin is not a terminal",
     )
 }
 
@@ -466,6 +488,40 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    if let Command::Volume(VolumeArgs {
+        command: VolumeCommand::Mount(args),
+    }) = command
+    {
+        match confirm_volume_mount(args) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
+    if let Command::Volume(VolumeArgs {
+        command: VolumeCommand::Unmount(args),
+    }) = command
+    {
+        match confirm_volume_unmount(args) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
     if let Command::Firewall(FirewallArgs {
         command: FirewallCommand::Allow(args),
     }) = command
@@ -598,6 +654,7 @@ async fn main() -> ExitCode {
         | Command::Process(_)
         | Command::Network(_)
         | Command::Firewall(_)
+        | Command::Volume(_)
         | Command::File(_) => {
             unreachable!("handled by send_command")
         }

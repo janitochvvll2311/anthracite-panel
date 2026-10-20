@@ -12,6 +12,7 @@ pub mod firewall;
 pub mod network;
 pub mod process;
 pub mod terminal;
+pub mod volumes;
 
 pub use files::{
     FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten,
@@ -29,6 +30,10 @@ pub use process::{ProcessInfo, ProcessSignal, ProcessSnapshot};
 pub use terminal::{
     TerminalOpenArgs, TerminalOpened, TerminalSize, DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK,
     MAX_TERMINAL_INPUT,
+};
+pub use volumes::{
+    VolumeDevice, VolumeError, VolumeErrorKind, VolumeKind, VolumeMount, VolumeSnapshot,
+    VolumeUsage,
 };
 
 /// Largest line accepted from a peer, in bytes.
@@ -119,6 +124,25 @@ pub enum Request {
     FileWriteAbort {
         id: u32,
     },
+    /// Ask the daemon for one snapshot of the attached storage.
+    VolumeList,
+    /// Mount a device on a target directory. Requires `[volumes] control`.
+    VolumeMount {
+        device: String,
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fs_type: Option<String>,
+        #[serde(default)]
+        read_only: bool,
+        /// Permit mounting removable media. Off by default: an unplugged USB
+        /// device mid-write is a failure the panel should not invite.
+        #[serde(default)]
+        allow_removable: bool,
+    },
+    /// Unmount one mounted path. Requires `[volumes] control`.
+    VolumeUnmount {
+        target: String,
+    },
     /// Start a terminal session. The reply is `Response::TerminalOpened`,
     /// after which output arrives unsolicited as `Response::TerminalOutput`.
     TerminalOpen(TerminalOpenArgs),
@@ -197,6 +221,14 @@ pub enum Response {
     },
     /// A firewall operation failed with a machine-readable reason.
     FirewallError(FirewallError),
+    /// One storage snapshot.
+    VolumeSnapshot(VolumeSnapshot),
+    /// A mount or unmount succeeded. The message is ready for the CLI.
+    VolumeChanged {
+        message: String,
+    },
+    /// A volume operation failed with a machine-readable reason.
+    VolumeError(VolumeError),
     /// One directory listing.
     FileListing(FileListing),
     /// One chunk of a file.

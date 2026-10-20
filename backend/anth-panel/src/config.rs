@@ -147,6 +147,27 @@ impl Default for FilesConfig {
     }
 }
 
+/// Storage volume management settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct VolumesConfig {
+    /// Whether the daemon accepts mount and unmount requests. Off by default:
+    /// both change what the host exposes, and the panel has no authentication.
+    pub control: bool,
+    /// Mount targets must resolve inside this directory. Empty disables the
+    /// check and is the documented escape hatch.
+    pub mount_root: String,
+}
+
+impl Default for VolumesConfig {
+    fn default() -> Self {
+        Self {
+            control: false,
+            mount_root: "/mnt".to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -159,6 +180,7 @@ pub struct Config {
     pub process: ProcessConfig,
     pub network: NetworkConfig,
     pub firewall: FirewallConfig,
+    pub volumes: VolumesConfig,
     pub files: FilesConfig,
 }
 
@@ -171,6 +193,7 @@ impl Default for Config {
             process: ProcessConfig::default(),
             network: NetworkConfig::default(),
             firewall: FirewallConfig::default(),
+            volumes: VolumesConfig::default(),
             files: FilesConfig::default(),
         }
     }
@@ -180,8 +203,8 @@ impl Config {
     /// Defaults that make a debug build convenient for local development.
     ///
     /// Production defaults stay safe: process control, network control, firewall
-    /// control and file writes are off unless an existing config file explicitly
-    /// enables them. Development also sets the global `sudo` flag so `ip link
+    /// control, volume control and file writes are off unless an existing config
+    /// file explicitly enables them. Development also sets the global `sudo` flag so `ip link
     /// set` and `nft` work when the daemon runs unprivileged.
     pub fn dev_default() -> Self {
         let mut config = Self {
@@ -191,6 +214,7 @@ impl Config {
         config.process.control = true;
         config.network.control = true;
         config.firewall.control = true;
+        config.volumes.control = true;
         config.files.write = true;
         config
     }
@@ -252,8 +276,8 @@ impl Config {
     /// Loads the configuration at `path`, or writes a default one first when it
     /// cannot be read, so a first server run bootstraps the configuration file.
     /// Debug builds bootstrap with global sudo, process control, network
-    /// control, firewall control and file writes enabled; release builds keep
-    /// them off. A failure to persist the default is reported but not fatal:
+    /// control, firewall control, volume control and file writes enabled;
+    /// release builds keep them off. A failure to persist the default is reported but not fatal:
     /// the freshly built defaults are still usable.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
         match Self::load(&path) {
@@ -265,7 +289,7 @@ impl Config {
                 let config = Self::server_default();
                 if cfg!(debug_assertions) {
                     eprintln!(
-                        "Debug build: global sudo, process control, network control, firewall control and file writes are enabled in the generated config."
+                        "Debug build: global sudo, process control, network control, firewall control, volume control and file writes are enabled in the generated config."
                     );
                 }
                 if let Err(e) = config.save(&path) {

@@ -2,6 +2,7 @@
 
 use anth_proto::{
     FileKind, FileListing, FirewallSnapshot, HostInfo, NetworkSnapshot, ProcessSnapshot, Response,
+    VolumeDevice, VolumeSnapshot,
 };
 
 const TOP_LEFT: char = '┌';
@@ -345,6 +346,119 @@ pub fn render_network_snapshot(snapshot: &NetworkSnapshot) -> String {
     output
 }
 
+/// Renders the storage inventory. Block devices come first as a flat list with
+/// tree indentation, then the mounts as a second table.
+pub fn render_volume_snapshot(snapshot: &VolumeSnapshot) -> String {
+    let mut devices = Table::new(vec![
+        "DEVICE".to_string(),
+        "SIZE".to_string(),
+        "TYPE".to_string(),
+        "FSTYPE".to_string(),
+        "LABEL".to_string(),
+        "MOUNT".to_string(),
+    ]);
+
+    for device in &snapshot.devices {
+        let depth = device_depth(&snapshot.devices, device);
+        let indent = "  ".repeat(depth);
+        let mount = if device.mountpoints.is_empty() {
+            "-".to_string()
+        } else {
+            device.mountpoints.join(", ")
+        };
+        devices.push(vec![
+            format!("{indent}{}", device.name),
+            format_bytes(device.size_bytes),
+            device.kind.to_string(),
+            device.fstype.clone().unwrap_or_else(|| "-".to_string()),
+            device.label.clone().unwrap_or_else(|| "-".to_string()),
+            elide(&mount, 40),
+        ]);
+    }
+
+    let mut output = if snapshot.devices.is_empty() {
+        "No block devices found.".to_string()
+    } else {
+        devices.render()
+    };
+
+    if snapshot.mounts.is_empty() {
+        output.push_str("\n\nNo mounts found.");
+    } else {
+        output.push_str("\n\n");
+        let mut mounts = Table::new(vec![
+            "MOUNTPOINT".to_string(),
+            "SOURCE".to_string(),
+            "FSTYPE".to_string(),
+            "USED".to_string(),
+            "AVAILABLE".to_string(),
+            "MODE".to_string(),
+        ]);
+        for mount in &snapshot.mounts {
+            let (used, available) = match mount.usage {
+                Some(usage) => (
+                    format!(
+                        "{} ({:.0}%)",
+                        format_bytes(usage.used_bytes),
+                        percent(usage.used_bytes, usage.total_bytes)
+                    ),
+                    format_bytes(usage.available_bytes),
+                ),
+                None => ("-".to_string(), "-".to_string()),
+            };
+            let mode = match (mount.read_only, mount.virtual_fs) {
+                (true, true) => "ro, virtual",
+                (true, false) => "ro",
+                (false, true) => "virtual",
+                (false, false) => "rw",
+            };
+            mounts.push(vec![
+                mount.mountpoint.clone(),
+                elide(&mount.source, 40),
+                mount.fstype.clone(),
+                used,
+                available,
+                mode.to_string(),
+            ]);
+        }
+        output.push_str(&mounts.render());
+    }
+
+    if let Some(warning) = &snapshot.warning {
+        output.push('\n');
+        output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
+}
+
+/// Nesting depth from the parent links, so the CLI draws the same tree the
+/// protocol carries flat. Cycles are impossible in `lsblk` output, but the walk
+/// is still bounded by the list length.
+fn device_depth(devices: &[VolumeDevice], device: &VolumeDevice) -> usize {
+    let mut depth = 0;
+    let mut current = device;
+    while let Some(parent) = &current.parent {
+        depth += 1;
+        if depth >= devices.len() {
+            break;
+        }
+        match devices.iter().find(|candidate| &candidate.name == parent) {
+            Some(found) => current = found,
+            None => break,
+        }
+    }
+    depth
+}
+
+fn percent(part: u64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        part as f64 * 100.0 / total as f64
+    }
+}
+
 /// Formats one daemon response as the text the CLI prints. Errors carry the
 /// same `[ERROR]` prefix as successful commands carry `[OK]`.
 pub fn render_response(response: &Response) -> String {
@@ -362,6 +476,9 @@ pub fn render_response(response: &Response) -> String {
             format!("[OK] brought {name} {state}")
         }
         Response::NetworkError(error) => format!("[ERROR] {}", error.detail),
+        Response::VolumeSnapshot(snapshot) => render_volume_snapshot(snapshot),
+        Response::VolumeChanged { message } => format!("[OK] {message}"),
+        Response::VolumeError(error) => format!("[ERROR] {}", error.detail),
         Response::FirewallSnapshot(snapshot) => render_firewall_snapshot(snapshot),
         Response::FirewallChanged { message } => format!("[OK] {message}"),
         Response::FirewallError(error) => format!("[ERROR] {}", error.detail),

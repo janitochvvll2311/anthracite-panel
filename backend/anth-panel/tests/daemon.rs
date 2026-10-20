@@ -311,3 +311,48 @@ fn handle_request_with_files_lists_the_configured_root() {
     }
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn handle_request_returns_a_volume_snapshot() {
+    let response = anth_panel::daemon::handle_request(Request::VolumeList);
+    match response {
+        Response::VolumeSnapshot(snapshot) => {
+            assert!(snapshot.timestamp_ms > 0);
+            assert!(!snapshot.control_enabled, "control is off by default");
+        }
+        other => panic!("expected VolumeSnapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn volume_mutations_are_refused_by_the_default_policy() {
+    let response = anth_panel::daemon::handle_request(Request::VolumeMount {
+        device: "/dev/sdz1".to_string(),
+        target: "/mnt/data".to_string(),
+        fs_type: Some("ext4".to_string()),
+        read_only: false,
+        allow_removable: false,
+    });
+    match response {
+        Response::VolumeError(error) => {
+            assert_eq!(error.kind, anth_proto::VolumeErrorKind::Disabled)
+        }
+        other => panic!("expected VolumeError, got {other:?}"),
+    }
+
+    let response = anth_panel::daemon::handle_request(Request::VolumeUnmount {
+        target: "/mnt/data".to_string(),
+    });
+    match response {
+        Response::VolumeError(error) => {
+            assert_eq!(error.kind, anth_proto::VolumeErrorKind::Disabled)
+        }
+        other => panic!("expected VolumeError, got {other:?}"),
+    }
+}
+
+#[test]
+fn volume_requests_survive_the_line_protocol() {
+    let response = anth_panel::daemon::handle_line(r#"{"type":"VolumeList"}"#);
+    assert!(matches!(response, Response::VolumeSnapshot(_)));
+}

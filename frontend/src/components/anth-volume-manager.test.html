@@ -1,0 +1,78 @@
+<!doctype html>
+<!--
+  Dev-only harness for the volume manager component.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-volume-manager.test.html. Vite's
+  build input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel volume manager component."
+    />
+    <title>anth-volume-manager · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-volume-manager" width="1300px">
+      <p slot="description">
+        Storage inventory backed by <code>GET /api/volumes</code>. It lists block
+        devices as a tree and every mount as a table, mounts an unmounted device
+        on an existing directory and unmounts a real mount. Refresh is manual:
+        there is no watch stream. Writes are disabled unless
+        <code>[volumes] control</code> is enabled.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Filter by device, label, filesystem or mountpoint.</li>
+            <li>Sort the device and mount tables by clicking a header.</li>
+            <li>
+              Mount an unmounted partition on a directory below
+              <code>volumes.mount_root</code>.
+            </li>
+            <li>Unmount a non-virtual mount after confirming.</li>
+            <li>
+              Try a target outside the mount root, or a virtual filesystem, to
+              see the daemon's refusal.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open <code>/src/components/anth-volume-manager.test.html</code> on
+              the Vite port.
+            </li>
+            <li>
+              Debug builds enable <code>[volumes] control</code> with
+              <code>mount_root = "/mnt"</code>.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <anth-volume-manager id="volumes"></anth-volume-manager>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-volume-manager.ts'
+      import { HttpVolumeClient } from '/src/lib/volumes/volume-client.ts'
+
+      document.querySelector('#volumes').client = new HttpVolumeClient()
+    </script>
+  </body>
+</html>

@@ -1516,3 +1516,206 @@ async fn download_route_streams_multiple_chunks() {
     assert_eq!(bytes.len(), content.len());
     assert!(bytes.iter().all(|byte| *byte == 7));
 }
+
+fn volume_snapshot() -> anth_proto::VolumeSnapshot {
+    anth_proto::VolumeSnapshot {
+        devices: vec![anth_proto::VolumeDevice {
+            name: "sdb1".to_string(),
+            path: "/dev/sdb1".to_string(),
+            kind: anth_proto::VolumeKind::Part,
+            parent: Some("sdb".to_string()),
+            size_bytes: 16_000_000_000,
+            fstype: Some("ext4".to_string()),
+            label: Some("data".to_string()),
+            uuid: None,
+            mountpoints: Vec::new(),
+            read_only: false,
+            removable: false,
+            model: None,
+            transport: Some("usb".to_string()),
+        }],
+        mounts: vec![anth_proto::VolumeMount {
+            mountpoint: "/".to_string(),
+            source: "overlay".to_string(),
+            fstype: "overlay".to_string(),
+            options: "rw".to_string(),
+            read_only: false,
+            virtual_fs: true,
+            usage: None,
+        }],
+        control_enabled: true,
+        timestamp_ms: 1_700_000_000_000,
+        total: 1,
+        truncated: false,
+        warning: None,
+    }
+}
+
+fn config_with_volume_control(path: &std::path::Path, control: bool) -> Config {
+    let mut config = config_at(path);
+    config.volumes.control = control;
+    config
+}
+
+fn spawn_volume_server(path: &std::path::Path) -> tokio::task::JoinHandle<()> {
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(request)) = server.receive_request().await {
+                let response = match request {
+                    Request::VolumeList => Response::VolumeSnapshot(volume_snapshot()),
+                    Request::VolumeMount { device, target, .. } => Response::VolumeChanged {
+                        message: format!("mounted {device} on {target}"),
+                    },
+                    Request::VolumeUnmount { target } => {
+                        Response::VolumeError(anth_proto::VolumeError::new(
+                            anth_proto::VolumeErrorKind::Busy,
+                            format!("{target} is busy"),
+                        ))
+                    }
+                    other => Response::Error {
+                        detail: format!("unexpected request: {other:?}"),
+                    },
+                };
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    })
+}
+
+#[tokio::test]
+async fn volume_route_returns_the_bare_snapshot() {
+    let path = unique_socket("volume-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_volume_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/volumes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["devices"][0]["name"], "sdb1");
+    assert_eq!(value["devices"][0]["kind"], "part");
+    assert_eq!(value["mounts"][0]["fstype"], "overlay");
+    assert_eq!(value["mounts"][0]["virtual_fs"], true);
+    assert!(value.get("type").is_none(), "no tag envelope: {value}");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn volume_mount_requires_control_to_be_enabled() {
+    let path = unique_socket("volume-disabled");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_volume_control(&path, false)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/mount")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"device":"/dev/sdb1","target":"/mnt/data"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "volume control is disabled");
+}
+
+#[tokio::test]
+async fn volume_mount_returns_the_daemon_message() {
+    let path = unique_socket("volume-mount");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_volume_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_volume_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/mount")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"device":"/dev/sdb1","target":"/mnt/data","read_only":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["message"], "mounted /dev/sdb1 on /mnt/data");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn volume_unmount_maps_busy_to_conflict() {
+    let path = unique_socket("volume-busy");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_volume_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_volume_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/unmount")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"target":"/mnt/data"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "/mnt/data is busy");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn volume_mount_rejects_a_malformed_body() {
+    let path = unique_socket("volume-body");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_volume_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/mount")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"target":"/mnt/data"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
