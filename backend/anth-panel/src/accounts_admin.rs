@@ -20,6 +20,7 @@ use anth_proto::{
     AccountError, AccountErrorKind, AccountGroup, AccountSnapshot, AccountUser, SecretString,
 };
 
+use crate::accounts::IdRanges;
 use crate::command::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 use crate::config::AccountsConfig;
 
@@ -114,6 +115,10 @@ pub struct Guard<'a> {
     pub snapshot: &'a AccountSnapshot,
     pub config: &'a AccountsConfig,
     pub daemon_user: String,
+    /// `UID_MIN`/`GID_MIN` from the host's `login.defs`. Held here so a plan can
+    /// tell whether an explicitly requested id lands in system space; the
+    /// snapshot classifies existing entries but carries no ranges.
+    pub id_ranges: IdRanges,
 }
 
 impl<'a> Guard<'a> {
@@ -126,7 +131,15 @@ impl<'a> Guard<'a> {
             snapshot,
             config,
             daemon_user: daemon_user.into(),
+            id_ranges: IdRanges::default(),
         }
+    }
+
+    /// Supplies the ranges read from `login.defs`. Defaults match shadow's
+    /// built-in `UID_MIN`/`GID_MIN`, so a host without the file is still guarded.
+    pub fn with_id_ranges(mut self, ranges: IdRanges) -> Self {
+        self.id_ranges = ranges;
+        self
     }
 
     fn user(&self, name: &str) -> Result<&'a AccountUser, AccountError> {
@@ -166,6 +179,32 @@ impl<'a> Guard<'a> {
             )));
         }
         Ok(user)
+    }
+
+    /// Shared preamble for every mutation on an existing group.
+    ///
+    /// It mirrors `writable_user` on purpose. Without the system check the
+    /// `allow_system` switch only guarded users, so a group below `GID_MIN`
+    /// that is *not* on the privileged list (`shadow`, `disk`, `kmem`) could be
+    /// renamed or deleted with the switch off.
+    fn writable_group(&self, name: &str) -> Result<&'a AccountGroup, AccountError> {
+        validate_name(name)?;
+        let group = self.group(name)?;
+        if !group.source.is_writable() {
+            return Err(unsupported(format!(
+                "`{name}` comes from a directory service and cannot be changed from the panel"
+            )));
+        }
+        if group.gid == 0 {
+            return Err(protected("gid 0 is never modified through the panel"));
+        }
+        if group.system && !self.config.allow_system {
+            return Err(protected(format!(
+                "`{name}` is a system group (gid {}); set accounts.allow_system to change it",
+                group.gid
+            )));
+        }
+        Ok(group)
     }
 
     /// Refuses to delete, lock or demote the account the daemon itself runs as.
@@ -351,6 +390,24 @@ fn validate_new_id(id: u32, taken_by: Option<&str>, kind: &str) -> Result<(), Ac
     Ok(())
 }
 
+/// Refuses an explicitly requested id that lands in the system range.
+///
+/// The range comes from the host's `login.defs`, so this agrees with how the
+/// snapshot already classifies existing entries. Reusing an id that is already
+/// occupied is a `Conflict` and is checked before this.
+fn require_system_allowed(guard: &Guard<'_>, id: u32, kind: &str) -> Result<(), AccountError> {
+    let minimum = match kind {
+        "uid" => guard.id_ranges.uid_min,
+        _ => guard.id_ranges.gid_min,
+    };
+    if id >= minimum || guard.config.allow_system {
+        return Ok(());
+    }
+    Err(protected(format!(
+        "{kind} {id} is below {minimum}; set accounts.allow_system to use a system id"
+    )))
+}
+
 fn user_with_uid(snapshot: &AccountSnapshot, uid: u32) -> Option<&str> {
     snapshot
         .users
@@ -411,6 +468,10 @@ pub fn plan_create(guard: &Guard<'_>, args: &CreateArgs<'_>) -> Result<PlannedCa
 
     if let Some(uid) = args.uid {
         validate_new_id(uid, user_with_uid(guard.snapshot, uid), "uid")?;
+        // `--system` is not the only way into the system range: an explicit id
+        // does it just as well, and without this the allow_system switch had a
+        // documented hole big enough to walk a service account through.
+        require_system_allowed(guard, uid, "uid")?;
     }
     if let Some(gid) = args.gid {
         // An explicit primary gid must name a group that already exists: the
@@ -422,7 +483,11 @@ pub fn plan_create(guard: &Guard<'_>, args: &CreateArgs<'_>) -> Result<PlannedCa
             .find(|group| group.gid == gid)
             .ok_or_else(|| not_found(format!("no such gid `{gid}`")))?
             .clone();
+        // The privileged check runs first: a group like `sudo` is both below
+        // GID_MIN and root-equivalent, and the root warning is the one an
+        // operator needs to read.
         guard.require_privileged_group_allowed(&group.name)?;
+        require_system_allowed(guard, gid, "gid")?;
     }
     if let Some(gecos) = args.gecos {
         validate_gecos(gecos)?;
@@ -509,7 +574,9 @@ pub fn plan_modify(guard: &Guard<'_>, args: &ModifyArgs<'_>) -> Result<PlannedCa
             .extend(["--home".to_string(), home.to_string_lossy().into_owned()]);
     }
     if let Some(gid) = args.primary_gid {
-        validate_new_id(gid, None, "gid")?;
+        // The id only has to name one group; two groups on it is the ambiguity
+        // `--gid` cannot express.
+        validate_new_id(gid, group_with_gid(guard.snapshot, gid), "gid")?;
         let group = guard
             .snapshot
             .groups
@@ -654,6 +721,7 @@ pub fn plan_group_create(
     }
     if let Some(gid) = gid {
         validate_new_id(gid, group_with_gid(guard.snapshot, gid), "gid")?;
+        require_system_allowed(guard, gid, "gid")?;
     }
 
     let mut call = PlannedCall::new("groupadd", Vec::new());
@@ -676,16 +744,7 @@ pub fn plan_group_modify(
     gid: Option<u32>,
     members: Option<&[String]>,
 ) -> Result<Vec<PlannedCall>, AccountError> {
-    validate_name(name)?;
-    let group = guard.group(name)?;
-    if !group.source.is_writable() {
-        return Err(unsupported(format!(
-            "`{name}` comes from a directory service and cannot be changed from the panel"
-        )));
-    }
-    if group.gid == 0 {
-        return Err(protected("gid 0 is never modified through the panel"));
-    }
+    let group = guard.writable_group(name)?;
     guard.require_privileged_group_allowed(name)?;
 
     if gid.is_none() && members.is_none() {
@@ -694,7 +753,11 @@ pub fn plan_group_modify(
 
     let mut calls = Vec::new();
     if let Some(gid) = gid {
-        validate_new_id(gid, None, "gid")?;
+        // `groupmod --gid` accepts a gid another group already owns, which
+        // leaves two groups on one gid: ambiguous ownership, and the state the
+        // create path already refuses. Re-sending the group's own gid is fine.
+        let taken_by = group_with_gid(guard.snapshot, gid).filter(|owner| *owner != name);
+        validate_new_id(gid, taken_by, "gid")?;
         calls.push(PlannedCall::new(
             "groupmod",
             vec!["--gid".to_string(), gid.to_string(), name.to_string()],
@@ -730,15 +793,12 @@ pub fn plan_group_modify(
 
 pub fn plan_group_delete(guard: &Guard<'_>, name: &str) -> Result<PlannedCall, AccountError> {
     validate_name(name)?;
-    let group = guard.group(name)?;
-    if !group.source.is_writable() {
-        return Err(unsupported(format!(
-            "`{name}` comes from a directory service and cannot be changed from the panel"
-        )));
-    }
-    if group.gid == 0 {
+    // `writable_group` refuses gid 0 with the modify wording; a delete deserves
+    // its own, so the check runs first to word it correctly.
+    if guard.group(name)?.gid == 0 {
         return Err(protected("gid 0 is never deleted through the panel"));
     }
+    let group = guard.writable_group(name)?;
     guard.require_privileged_group_allowed(name)?;
 
     // A group that is somebody's primary group cannot be removed: those users
@@ -820,12 +880,20 @@ pub fn system_runner(sudo: bool) -> SystemRunner {
 }
 
 /// The name of the account the daemon runs as, for the self-protection guard.
+///
+/// The real uid wins. `$USER` and `$LOGNAME` are inherited environment, so a
+/// service unit or `docker exec` can hand the daemon a stale name; trusting it
+/// first would protect an account that is not the one running the panel and
+/// leave the daemon's own account deletable.
 pub fn daemon_user() -> String {
-    std::env::var("USER")
-        .ok()
-        .or_else(|| std::env::var("LOGNAME").ok())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| current_uid_name().unwrap_or_else(|| "root".to_string()))
+    current_uid_name()
+        .or_else(|| {
+            std::env::var("USER")
+                .ok()
+                .or_else(|| std::env::var("LOGNAME").ok())
+                .filter(|name| !name.is_empty())
+        })
+        .unwrap_or_else(|| "root".to_string())
 }
 
 fn current_uid_name() -> Option<String> {

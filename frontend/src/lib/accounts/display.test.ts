@@ -107,6 +107,24 @@ describe('groupBlockReason', () => {
     ).toBeNull()
   })
 
+  it('reports the root warning first when a group trips both switches', () => {
+    // `sudo` is below GID_MIN *and* root-equivalent. Naming allow_system first
+    // would send the operator to the wrong switch.
+    const reason = groupBlockReason(accountGroup({ name: 'sudo', gid: 27, system: true }), {
+      allowSystem: false,
+      allowPrivileged: false,
+    })
+    expect(reason).toContain('allow_privileged_groups')
+  })
+
+  it('falls through to the system warning once the privileged switch is on', () => {
+    const reason = groupBlockReason(accountGroup({ name: 'sudo', gid: 27, system: true }), {
+      allowSystem: false,
+      allowPrivileged: true,
+    })
+    expect(reason).toContain('allow_system')
+  })
+
   it('refuses gid 0 regardless of the policy', () => {
     const reason = groupBlockReason(accountGroup({ name: 'root', gid: 0 }), {
       allowSystem: true,

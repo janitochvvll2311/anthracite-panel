@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::accounts;
+use crate::accounts::HostProbe;
 use crate::accounts_admin;
 use crate::config::{Config, FilesConfig};
 use crate::files::{FileService, PendingUpload};
@@ -746,9 +747,11 @@ fn handle_account(
         ));
     }
 
-    let snapshot = accounts::collect_unfitted(&policy.accounts, &accounts::SystemProbe::new()).0;
+    let probe = accounts::SystemProbe::new();
+    let snapshot = accounts::collect_unfitted(&policy.accounts, &probe).0;
     let guard =
-        accounts_admin::Guard::new(&snapshot, &policy.accounts, policy.daemon_user.as_str());
+        accounts_admin::Guard::new(&snapshot, &policy.accounts, policy.daemon_user.as_str())
+            .with_id_ranges(probe.ranges());
 
     let calls = match plan(&guard) {
         Ok(calls) => calls,

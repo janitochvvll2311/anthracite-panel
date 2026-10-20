@@ -68,6 +68,12 @@ fn snapshot() -> AccountSnapshot {
             group("alice", 1001, &[]),
             group("bob", 1002, &[]),
             group("shared", 1003, &["alice", "bob"]),
+            // A system group that is not on the privileged list: the class the
+            // allow_system switch exists to protect.
+            AccountGroup {
+                system: true,
+                ..group("shadow", 42, &[])
+            },
         ],
         control_enabled: true,
         password_enabled: true,
@@ -75,7 +81,7 @@ fn snapshot() -> AccountSnapshot {
         allow_privileged_groups: false,
         timestamp_ms: 0,
         total_users: 5,
-        total_groups: 6,
+        total_groups: 7,
         truncated: false,
         warning: None,
     }
@@ -113,6 +119,185 @@ impl Fixture {
 
 fn kind_of<T: std::fmt::Debug>(result: Result<T, anth_proto::AccountError>) -> AccountErrorKind {
     result.expect_err("expected a refusal").kind
+}
+
+#[test]
+fn a_system_group_is_refused_until_allow_system_is_set() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    // `shadow` is below GID_MIN and is not on the privileged list, so only the
+    // allow_system switch stands between it and a rename or a delete.
+    assert_eq!(
+        kind_of(plan_group_modify(&guard, "shadow", Some(1500), None)),
+        AccountErrorKind::Protected
+    );
+    assert_eq!(
+        kind_of(plan_group_delete(&guard, "shadow")),
+        AccountErrorKind::Protected
+    );
+}
+
+#[test]
+fn allow_system_unlocks_a_system_group() {
+    let mut fixture = Fixture::new();
+    fixture.config.allow_system = true;
+    let guard = fixture.guard();
+
+    let call =
+        plan_group_delete(&guard, "shadow").expect("a system group is deletable once allowed");
+    assert_eq!(call.args, vec!["shadow"]);
+}
+
+#[test]
+fn a_privileged_group_needs_its_own_switch_even_with_allow_system() {
+    // The two opt-ins are independent: system membership must not be a way to
+    // reach a group that grants root.
+    let mut fixture = Fixture::new();
+    fixture.config.allow_system = true;
+    let guard = fixture.guard();
+
+    assert_eq!(
+        kind_of(plan_group_modify(
+            &guard,
+            "sudo",
+            None,
+            Some(&["alice".to_string()])
+        )),
+        AccountErrorKind::Protected
+    );
+}
+
+#[test]
+fn an_explicit_system_uid_needs_allow_system() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    // Passing `--system` is not the only way to land below UID_MIN: an explicit
+    // uid does it silently, and it is the documented switch that must stop it.
+    let args = CreateArgs {
+        name: "svc",
+        uid: Some(500),
+        gid: Some(1001),
+        gecos: None,
+        home: Some("/tmp/svc"),
+        shell: None,
+        system: false,
+    };
+
+    assert_eq!(
+        kind_of(plan_create(&guard, &args)),
+        AccountErrorKind::Protected
+    );
+}
+
+#[test]
+fn an_explicit_system_gid_needs_allow_system() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    let args = CreateArgs {
+        name: "svc",
+        uid: Some(1500),
+        gid: Some(42),
+        gecos: None,
+        home: None,
+        shell: None,
+        system: false,
+    };
+
+    assert_eq!(
+        kind_of(plan_create(&guard, &args)),
+        AccountErrorKind::Protected
+    );
+}
+
+#[test]
+fn allow_system_accepts_an_explicit_system_uid() {
+    let mut fixture = Fixture::new();
+    fixture.config.allow_system = true;
+    let guard = fixture.guard();
+
+    let args = CreateArgs {
+        name: "svc",
+        uid: Some(500),
+        gid: Some(1001),
+        gecos: None,
+        home: Some("/tmp/svc"),
+        shell: None,
+        system: false,
+    };
+
+    let call = plan_create(&guard, &args).expect("an allowed system uid is planned");
+    assert!(call.args.windows(2).any(|pair| pair == ["--uid", "500"]));
+}
+
+#[test]
+fn a_gid_already_in_use_is_refused_on_modify() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    // `bob` already holds 1002. `groupmod` does not reject a duplicate gid, so
+    // the panel has to: two groups with one gid is the ambiguous ownership the
+    // create path already refuses.
+    assert_eq!(
+        kind_of(plan_group_modify(&guard, "shared", Some(1002), None)),
+        AccountErrorKind::Conflict
+    );
+}
+
+#[test]
+fn reusing_a_groups_own_gid_is_not_a_conflict() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    // Re-sending the current gid alongside a member change must not trip the
+    // duplicate check.
+    let calls = plan_group_modify(&guard, "shared", Some(1003), Some(&["alice".to_string()]))
+        .expect("the group's own gid is not a duplicate");
+    assert_eq!(calls.len(), 2);
+}
+
+#[test]
+fn a_primary_gid_in_use_is_refused_on_modify() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    let args = ModifyArgs {
+        name: "alice",
+        gecos: None,
+        shell: None,
+        home: None,
+        primary_gid: Some(1003),
+        locked: None,
+    };
+
+    assert_eq!(
+        kind_of(plan_modify(&guard, &args)),
+        AccountErrorKind::Conflict
+    );
+}
+
+#[test]
+fn a_group_both_system_and_privileged_reports_the_root_warning() {
+    // `sudo` is gid 27, so it trips both switches. The message must name the
+    // root-equivalence, not merely the id range: it is the one that explains
+    // why the action is dangerous rather than where the id sits.
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    let args = CreateArgs {
+        name: "svc",
+        uid: Some(1500),
+        gid: Some(27),
+        gecos: None,
+        home: Some("/tmp/svc"),
+        shell: None,
+        system: false,
+    };
+
+    let error = plan_create(&guard, &args).expect_err("both switches are off");
+    assert!(error.detail.contains("sudo"), "{}", error.detail);
 }
 
 #[test]

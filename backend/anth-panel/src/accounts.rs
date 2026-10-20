@@ -83,6 +83,16 @@ pub struct LocalFiles {
 
 pub trait HostProbe {
     fn read(&self) -> LocalFiles;
+
+    /// The id ranges from the same read, so callers that need both do not read
+    /// `/etc/login.defs` twice and cannot disagree about it.
+    fn ranges(&self) -> IdRanges {
+        self.read()
+            .login_defs
+            .as_deref()
+            .map(read_login_defs)
+            .unwrap_or_default()
+    }
 }
 
 pub struct SystemProbe {

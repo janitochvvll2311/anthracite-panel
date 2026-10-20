@@ -101,11 +101,14 @@ export function groupBlockReason(
 ): string | null {
   if (!isWritable(group)) return 'Directory service group; read-only'
   if (group.gid === 0) return 'gid 0 is never changed through the panel'
-  if (group.system && !options.allowSystem) {
-    return 'System group; set accounts.allow_system to change it'
-  }
+  // Same order as the daemon: `sudo` is both below GID_MIN and root-equivalent,
+  // so the root warning has to win, or enabling allow_system would only reveal
+  // a second refusal.
   if (isPrivilegedGroup(group.name) && !options.allowPrivileged) {
     return 'Privileged group; set accounts.allow_privileged_groups to change it'
+  }
+  if (group.system && !options.allowSystem) {
+    return 'System group; set accounts.allow_system to change it'
   }
   return null
 }

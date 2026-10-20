@@ -99,9 +99,9 @@ create, so a new user cannot log in until a password is set separately.
 | --- | --- | --- |
 | `control` | `false` | Enables every mutation below the read path. |
 | `manage_passwords` | `false` | Enables `chpasswd`. Separate from `control`. |
-| `allow_system` | `false` | Allows touching accounts below `UID_MIN`. |
+| `allow_system` | `false` | Allows touching users and groups below `UID_MIN`/`GID_MIN`. |
 | `allow_privileged_groups` | `false` | Allows touching root-equivalent groups. |
-| `home_root` | `/` | Home directories must resolve inside this. |
+| `home_root` | `/home` | Home directories must resolve inside this. |
 | `shells` | `[]` | Login shell allowlist. Empty means `/etc/shells`, then a small built-in set. |
 | `default_shell` | `/bin/sh` | Shell for a user created without `--shell`. |
 
@@ -110,8 +110,16 @@ off in release builds. Debug builds turn `control` on for local development, and
 deliberately leave `manage_passwords` and both `allow_*` flags off, so a debug
 build cannot change a password or escalate an account by accident.
 
-`home_root` defaults to `/`, which makes the guard a `..` and symlink check
-rather than a real boundary. Set it to `/home` on a production host.
+`home_root` defaults to `/home`, so a create or an edit cannot place a home
+outside `/home`. Loosening it to `/` turns the guard into a `..` and symlink
+check rather than a boundary, which is worth doing only on a host whose homes
+genuinely live elsewhere.
+
+`allow_system` covers both account classes: a user below `UID_MIN` and a group
+below `GID_MIN`. An explicit `--uid`/`--gid` into that range is refused the same
+way `--system` is, because both land in system space. A group that is *also*
+root-equivalent (`sudo`, `wheel`) reports the privileged warning first: it is
+the one that explains the danger.
 
 ## Running the container
 
@@ -199,4 +207,6 @@ That is another reason `control` defaults to off.
   all; there is no transport security of its own.
 - **A password reset is not audited.** Nothing records who changed what. The
   daemon logs the failure, not the success.
-- **`home_root = "/"`** is the default and is a weak boundary. Set it.
+- **`home_root` is a path check, not a sandbox.** The default `/home` is a real
+  boundary for a conventional host. Setting it to `/` keeps only the `..` and
+  symlink check.
