@@ -583,7 +583,11 @@ pub fn plan_modify(guard: &Guard<'_>, args: &ModifyArgs<'_>) -> Result<PlannedCa
             .iter()
             .find(|group| group.gid == gid)
             .ok_or_else(|| not_found(format!("no such gid `{gid}`")))?;
+        // Same order as `plan_create`: the root warning must win, then the
+        // system-range switch. Without the second check this path could move a
+        // user into `disk` or `shadow` with `allow_system = false`.
         guard.require_privileged_group_allowed(&group.name)?;
+        require_system_allowed(guard, gid, "gid")?;
         call.args.extend(["--gid".to_string(), gid.to_string()]);
     }
     if let Some(locked) = args.locked {

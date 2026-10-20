@@ -891,7 +891,8 @@ new account is locked.
 
 Omitted fields are unchanged. An empty object is `400 invalid`. A
 `primary_gid` must name an existing group; a gid no group carries is
-`404 not_found`.
+`404 not_found`. A gid below the host's `GID_MIN` is refused with
+`403 protected` unless `accounts.allow_system` is enabled.
 
 ### `POST /api/accounts/users/{name}/delete`
 

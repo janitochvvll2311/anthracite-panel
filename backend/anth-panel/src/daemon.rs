@@ -659,10 +659,11 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
-            // Account mutations read `/etc`, run `getent` and shell out, so they
-            // go to a blocking worker: a slow `nsswitch` lookup or a hung
-            // `useradd` would otherwise stall this loop for every client.
-            other if is_account_mutation(&other) => {
+            // Account requests read `/etc` and run `getent`; mutations also
+            // shell out to the account tools. All of them go to a blocking
+            // worker: a slow `nsswitch` lookup or a hung `useradd` would
+            // otherwise stall this loop for every client.
+            other if is_account_request(&other) => {
                 let policy = policy.clone();
                 let files = Arc::clone(&files);
                 match tokio::task::spawn_blocking(move || {
@@ -732,13 +733,14 @@ async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> Outp
     }
 }
 
-/// Whether a request mutates accounts and therefore belongs on a blocking
-/// worker. The read (`AccountList`) shares the collection path but is cheaper
-/// and stays on the sync helper.
-fn is_account_mutation(request: &Request) -> bool {
+/// Whether a request reads or mutates accounts and therefore belongs on a
+/// blocking worker. `AccountList` is included: the collection path still runs
+/// two blocking `getent` calls, so it is not a cheap synchronous read.
+fn is_account_request(request: &Request) -> bool {
     matches!(
         request,
-        Request::AccountCreate { .. }
+        Request::AccountList
+            | Request::AccountCreate { .. }
             | Request::AccountModify { .. }
             | Request::AccountDelete { .. }
             | Request::AccountSetPassword { .. }
@@ -851,5 +853,24 @@ pub async fn serve(
                 eprintln!("Error handling connection: {e}");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_list_uses_the_blocking_account_path() {
+        // The list also runs `getent`, so it must not fall through to the
+        // synchronous helper. Mutations are included for the same reason.
+        assert!(is_account_request(&Request::AccountList));
+        assert!(is_account_request(&Request::AccountDelete {
+            name: "alice".to_string(),
+            remove_home: false,
+        }));
+        assert!(!is_account_request(&Request::Echo {
+            message: "hello".to_string(),
+        }));
     }
 }

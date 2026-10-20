@@ -328,6 +328,51 @@ fn a_primary_gid_that_names_no_group_is_refused() {
 }
 
 #[test]
+fn a_primary_gid_below_the_minimum_needs_allow_system() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    // A primary gid names an existing group, so the system-range guard cannot
+    // live in `validate_new_id`. `shadow` is below GID_MIN and not privileged:
+    // only `allow_system` stands between alice and a system group.
+    let error = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "alice",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: Some(42),
+            locked: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, AccountErrorKind::Protected);
+    assert!(error.detail.contains("below 1000"), "{error:?}");
+}
+
+#[test]
+fn allow_system_accepts_a_primary_gid_below_the_minimum() {
+    let mut fixture = Fixture::new();
+    fixture.config.allow_system = true;
+    let guard = fixture.guard();
+
+    let call = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "alice",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: Some(42),
+            locked: None,
+        },
+    )
+    .expect("the opt-in permits a system primary gid");
+    assert!(call.args.windows(2).any(|pair| pair == ["--gid", "42"]));
+}
+
+#[test]
 fn group_mutations_report_the_root_warning_before_the_system_one() {
     let fixture = Fixture::new();
     let guard = fixture.guard();
