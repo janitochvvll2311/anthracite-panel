@@ -193,8 +193,11 @@ not a switch, it is a footgun.
    groups. Demoting itself would take the panel offline mid-request; the
    volume manager has the same rule for its own executable.
 3. **Removing the last administrator.** If a mutation would leave `sudo`,
-   `wheel` or `admin` with zero members, it is refused. This is the loopback
-   guard of this subsystem: the operator must not be able to lock the host.
+   `wheel` or `admin` with zero members, it is refused. Primary-group
+   membership counts the same as a supplementary entry: a user whose `gid` is
+   one of those groups is an administrator even when `/etc/group`'s member
+   field is empty. This is the loopback guard of this subsystem: the operator
+   must not be able to lock the host.
 4. **`Nss` entries**, as described in §4.
 5. **Anything the backend reports as unsupported.**
 

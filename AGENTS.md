@@ -317,9 +317,10 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   the exact argv vector, and that no password ever reaches argv because
   `chpasswd` takes it on stdin. `PlannedCall`'s `Debug` redacts the stdin field,
   which is the only reason it is safe to log. Guards live in `Guard`: uid/gid 0,
-  the daemon's own account, the last member of `sudo`/`wheel`/`admin`, `nss`
-  entries, and system accounts or privileged groups without their opt-in. Root
-  is deliberately not an escape hatch for the administrator guard. Snapshots
+  the daemon's own account, the last member of `sudo`/`wheel`/`admin` (counting
+  a user whose primary group it is, not only `/etc/group`'s member field),
+  `nss` entries, and system accounts or privileged groups without their opt-in.
+  Root is deliberately not an escape hatch for the administrator guard. Snapshots
   are read unfitted for validation so a truncated list never looks like a
   missing account. `collect_detailed` returns the snapshot and the
   `login.defs` ranges from one probe read, so a mutation does not run `getent`

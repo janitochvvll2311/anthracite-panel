@@ -232,21 +232,73 @@ impl<'a> Guard<'a> {
         if !next.is_empty() || group.members.is_empty() {
             return Ok(());
         }
+        // A primary-group member is still an administrator even though
+        // `/etc/group`'s member field does not list them. If this group keeps
+        // such a user, emptying the supplementary list changes nothing.
+        if self.snapshot.users.iter().any(|user| user.gid == group.gid) {
+            return Ok(());
+        }
         // Emptying one administrative group is only fatal if no other
-        // administrative group still has a member.
+        // administrative group still has an administrator, either
+        // supplementary or primary.
         let others: Vec<&AccountGroup> = self
             .snapshot
             .groups
             .iter()
             .filter(|other| other.name != group.name && ADMIN_GROUPS.contains(&other.name.as_str()))
             .collect();
-        if others.iter().any(|other| !other.members.is_empty()) {
+        let other_gids: HashSet<u32> = others.iter().map(|other| other.gid).collect();
+        let other_primary = self
+            .snapshot
+            .users
+            .iter()
+            .any(|user| other_gids.contains(&user.gid));
+        if other_primary || others.iter().any(|other| !other.members.is_empty()) {
             return Ok(());
         }
         Err(protected(format!(
             "refusing to empty `{}`: no other administrative group would keep a member",
             group.name
         )))
+    }
+
+    /// Every account that is an administrator by either provisioning style:
+    /// a supplementary member of an administrative group, or an account whose
+    /// primary gid is one of those groups.
+    fn administrator_names(&self) -> HashSet<&str> {
+        let mut names = HashSet::new();
+        for group in self
+            .snapshot
+            .groups
+            .iter()
+            .filter(|group| ADMIN_GROUPS.contains(&group.name.as_str()))
+        {
+            names.extend(group.members.iter().map(String::as_str));
+            names.extend(
+                self.snapshot
+                    .users
+                    .iter()
+                    .filter(|user| user.gid == group.gid)
+                    .map(|user| user.name.as_str()),
+            );
+        }
+        names
+    }
+
+    /// Whether `gid` is the primary gid of an administrative group.
+    fn is_administrator_gid(&self, gid: u32) -> bool {
+        self.snapshot
+            .groups
+            .iter()
+            .any(|group| ADMIN_GROUPS.contains(&group.name.as_str()) && group.gid == gid)
+    }
+
+    /// Whether the account is listed in an administrative group's member field.
+    fn is_supplementary_administrator(&self, name: &str) -> bool {
+        self.snapshot.groups.iter().any(|group| {
+            ADMIN_GROUPS.contains(&group.name.as_str())
+                && group.members.iter().any(|member| member == name)
+        })
     }
 
     fn require_privileged_group_allowed(&self, group: &str) -> Result<(), AccountError> {
@@ -588,6 +640,16 @@ pub fn plan_modify(guard: &Guard<'_>, args: &ModifyArgs<'_>) -> Result<PlannedCa
         // user into `disk` or `shadow` with `allow_system = false`.
         guard.require_privileged_group_allowed(&group.name)?;
         require_system_allowed(guard, gid, "gid")?;
+        // Moving the last primary-group administrator out of `sudo`/`wheel`/
+        // `admin` is another way to leave the host with no administrator. It
+        // only matters when this user is not also a supplementary member.
+        let leaves_admin = user.gid != gid
+            && guard.is_administrator_gid(user.gid)
+            && !guard.is_administrator_gid(gid)
+            && !guard.is_supplementary_administrator(&user.name);
+        if leaves_admin {
+            guard.not_last_administrator(&user.name)?;
+        }
         call.args.extend(["--gid".to_string(), gid.to_string()]);
     }
     if let Some(locked) = args.locked {
@@ -612,26 +674,16 @@ impl Guard<'_> {
     /// Refuses a lock or delete that would leave `sudo`/`wheel`/`admin` with no
     /// other member.
     pub fn not_last_administrator(&self, name: &str) -> Result<(), AccountError> {
-        let is_admin = self.snapshot.groups.iter().any(|group| {
-            ADMIN_GROUPS.contains(&group.name.as_str())
-                && group.members.iter().any(|member| member == name)
-        });
-        if !is_admin {
+        let administrators = self.administrator_names();
+        if !administrators.contains(name) {
             return Ok(());
         }
-        let remaining: usize = self
-            .snapshot
-            .groups
+        // Count distinct accounts, not group entries: one user can be an
+        // administrator through both a primary group and a supplementary one.
+        let remaining = administrators
             .iter()
-            .filter(|group| ADMIN_GROUPS.contains(&group.name.as_str()))
-            .map(|group| {
-                group
-                    .members
-                    .iter()
-                    .filter(|member| member.as_str() != name)
-                    .count()
-            })
-            .sum();
+            .filter(|administrator| **administrator != name)
+            .count();
         // uid 0 is deliberately not an escape hatch: on many hosts root is
         // locked and has no password, which is exactly the state that would
         // make this guard fail open.

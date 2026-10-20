@@ -373,6 +373,110 @@ fn allow_system_accepts_a_primary_gid_below_the_minimum() {
 }
 
 #[test]
+fn moving_the_last_primary_group_administrator_out_of_the_group_is_refused() {
+    let mut fixture = Fixture::new();
+    fixture.snapshot.users.push(AccountUser {
+        gid: 27,
+        group: "sudo".to_string(),
+        ..user("ops", 2000)
+    });
+    fixture.snapshot.groups = vec![
+        group("sudo", 27, &[]),
+        group("wheel", 10, &[]),
+        group("alice", 1001, &[]),
+    ];
+    let snapshot = fixture.snapshot.clone();
+    let config = fixture.config.clone();
+    let guard = Guard::new(&snapshot, &config, "anth");
+
+    let error = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "ops",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: Some(1001),
+            locked: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, AccountErrorKind::Protected);
+    assert!(
+        error.detail.contains("administrative group"),
+        "{}",
+        error.detail
+    );
+}
+
+#[test]
+fn a_primary_group_administrator_can_move_when_another_remains() {
+    let mut fixture = Fixture::new();
+    fixture.snapshot.users.push(AccountUser {
+        gid: 27,
+        group: "sudo".to_string(),
+        ..user("ops", 2000)
+    });
+    fixture.snapshot.groups = vec![
+        group("sudo", 27, &[]),
+        group("wheel", 10, &["bob"]),
+        group("alice", 1001, &[]),
+        group("bob", 1002, &[]),
+    ];
+    let snapshot = fixture.snapshot.clone();
+    let config = fixture.config.clone();
+    let guard = Guard::new(&snapshot, &config, "anth");
+
+    let call = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "ops",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: Some(1001),
+            locked: None,
+        },
+    )
+    .expect("bob still has wheel");
+    assert!(call.args.windows(2).any(|pair| pair == ["--gid", "1001"]));
+}
+
+#[test]
+fn a_primary_group_administrator_who_is_also_supplementary_can_move() {
+    let mut fixture = Fixture::new();
+    fixture.snapshot.users.push(AccountUser {
+        gid: 27,
+        group: "sudo".to_string(),
+        ..user("ops", 2000)
+    });
+    fixture.snapshot.groups = vec![
+        group("sudo", 27, &["ops"]),
+        group("wheel", 10, &[]),
+        group("alice", 1001, &[]),
+    ];
+    let snapshot = fixture.snapshot.clone();
+    let config = fixture.config.clone();
+    let guard = Guard::new(&snapshot, &config, "anth");
+
+    // The supplementary entry keeps `ops` in sudo, so moving the primary group
+    // does not remove the last administrator.
+    let call = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "ops",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: Some(1001),
+            locked: None,
+        },
+    )
+    .expect("the supplementary membership remains");
+    assert!(call.args.windows(2).any(|pair| pair == ["--gid", "1001"]));
+}
+
+#[test]
 fn group_mutations_report_the_root_warning_before_the_system_one() {
     let fixture = Fixture::new();
     let guard = fixture.guard();
@@ -789,6 +893,66 @@ fn the_last_administrator_cannot_be_deleted() {
 }
 
 #[test]
+fn the_last_administrator_cannot_be_deleted_when_the_group_is_primary() {
+    let mut fixture = Fixture::new();
+    // `ops` has sudo as its primary group, so `/etc/group`'s member field is
+    // empty. That is still root-equivalent membership through `%sudo`.
+    fixture.snapshot.users.push(AccountUser {
+        gid: 27,
+        group: "sudo".to_string(),
+        ..user("ops", 2000)
+    });
+    fixture.snapshot.groups = vec![group("sudo", 27, &[]), group("wheel", 10, &[])];
+    let snapshot = fixture.snapshot.clone();
+    let config = fixture.config.clone();
+    let guard = Guard::new(&snapshot, &config, "anth");
+
+    let error = plan_delete(&guard, "ops", false).unwrap_err();
+    assert_eq!(error.kind, AccountErrorKind::Protected);
+    assert!(
+        error.detail.contains("administrative group"),
+        "{}",
+        error.detail
+    );
+
+    let lock = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "ops",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: None,
+            locked: Some(true),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(lock.kind, AccountErrorKind::Protected);
+}
+
+#[test]
+fn a_primary_group_administrator_can_be_deleted_when_another_remains() {
+    let mut fixture = Fixture::new();
+    fixture.snapshot.users.push(AccountUser {
+        gid: 27,
+        group: "sudo".to_string(),
+        ..user("ops", 2000)
+    });
+    fixture.snapshot.groups = vec![
+        group("sudo", 27, &[]),
+        group("wheel", 10, &["bob"]),
+        group("bob", 1002, &[]),
+        group("ops", 2000, &[]),
+    ];
+    let snapshot = fixture.snapshot.clone();
+    let config = fixture.config.clone();
+    let guard = Guard::new(&snapshot, &config, "anth");
+
+    let call = plan_delete(&guard, "ops", false).expect("bob still has wheel");
+    assert_eq!(call.args, vec!["ops"]);
+}
+
+#[test]
 fn an_administrator_can_be_deleted_when_another_remains() {
     let mut fixture = Fixture::new();
     fixture.snapshot.groups = vec![
@@ -925,6 +1089,9 @@ fn group_modify_refuses_a_duplicate_member() {
 #[test]
 fn emptying_the_only_administrative_group_is_refused() {
     let mut fixture = Fixture::new();
+    // Get past the privileged-group opt-in so this test exercises the
+    // last-administrator guard rather than failing on the first gate.
+    fixture.config.allow_privileged_groups = true;
     fixture.snapshot.groups = vec![
         group("sudo", 27, &["alice"]),
         group("wheel", 10, &[]),
@@ -936,6 +1103,35 @@ fn emptying_the_only_administrative_group_is_refused() {
 
     let error = plan_group_modify(&guard, "sudo", None, Some(&[])).unwrap_err();
     assert_eq!(error.kind, AccountErrorKind::Protected);
+}
+
+#[test]
+fn emptying_an_admin_group_is_allowed_when_another_has_a_primary_member() {
+    let mut fixture = Fixture::new();
+    fixture.config.allow_privileged_groups = true;
+    fixture.snapshot.users.push(AccountUser {
+        gid: 10,
+        group: "wheel".to_string(),
+        ..user("ops", 2000)
+    });
+    fixture.snapshot.groups = vec![
+        group("sudo", 27, &["alice"]),
+        group("wheel", 10, &[]),
+        group("alice", 1001, &[]),
+        group("ops", 2000, &[]),
+    ];
+    let snapshot = fixture.snapshot.clone();
+    let config = fixture.config.clone();
+    let guard = Guard::new(&snapshot, &config, "anth");
+
+    // `wheel` has no supplementary members, but `ops` is still an
+    // administrator through its primary group. Emptying `sudo` is safe.
+    let calls = plan_group_modify(&guard, "sudo", None, Some(&[]))
+        .expect("wheel keeps a primary-group administrator");
+    assert!(calls.iter().any(|call| call.program == "gpasswd"));
+
+    let deleted = plan_group_delete(&guard, "sudo").expect("wheel still keeps an administrator");
+    assert_eq!(deleted.args, vec!["sudo"]);
 }
 
 #[test]

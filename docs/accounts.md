@@ -65,8 +65,11 @@ These apply to every request and are not configurable.
 - The daemon's own account cannot be deleted or locked. Demoting itself would
   take the panel offline mid-request.
 - The last member of `sudo`, `wheel` or `admin` cannot be removed, and such an
-  account cannot be deleted or locked. Root does not count as a fallback: on
-  many hosts root is locked, and counting it would make the guard fail open.
+  account cannot be deleted, locked or moved to another primary group. A user
+  whose primary group is one of those groups counts as a member even when
+  `/etc/group` does not list them in its member field. Root does not count as a
+  fallback: on many hosts root is locked, and counting it would make the guard
+  fail open.
 - `nss` entries are read-only.
 - A group that is somebody's primary group cannot be deleted.
 
