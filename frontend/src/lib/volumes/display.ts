@@ -39,8 +39,18 @@ export function kindLabel(kind: VolumeKind): string {
   return KIND_LABELS[kind] ?? 'other'
 }
 
+/**
+ * The daemon always sends `mountpoints`, but an older daemon omitted the key
+ * for an unmounted device. Defaulting here keeps one payload from breaking the
+ * whole table.
+ */
+export function mountpointsOf(device: VolumeDevice): string[] {
+  return device.mountpoints ?? []
+}
+
 export function mountLabel(device: VolumeDevice): string {
-  return device.mountpoints.length === 0 ? '—' : device.mountpoints.join(', ')
+  const points = mountpointsOf(device)
+  return points.length === 0 ? '—' : points.join(', ')
 }
 
 /**
@@ -152,7 +162,7 @@ export function mountMode(mount: VolumeMountpoint): string {
 export function mountableDevices(devices: VolumeDevice[]): VolumeDevice[] {
   return devices.filter(
     (device) =>
-      device.mountpoints.length === 0 &&
+      mountpointsOf(device).length === 0 &&
       device.fstype !== undefined &&
       device.kind !== 'disk',
   )
@@ -195,7 +205,7 @@ export function compareDeviceRows(
       case 'label':
         return row.label ?? null
       case 'mount':
-        return row.mountpoints.length === 0 ? null : row.mountLabel
+        return mountpointsOf(row).length === 0 ? null : row.mountLabel
     }
   }
   return compare(value(left), value(right), direction, left.name, right.name)

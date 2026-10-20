@@ -19,6 +19,31 @@ fn unique_socket(name: &str) -> PathBuf {
 }
 
 #[test]
+fn the_served_config_file_is_a_protected_path() {
+    let config = Config {
+        socket_path: "/var/tmp/anth.sock".to_string(),
+        files: anth_panel::config::FilesConfig {
+            root: "/srv".to_string(),
+            ..Default::default()
+        },
+        ..Config::default()
+    };
+    // No ANTH_CONFIG is involved: the daemon is started with `--config`, which
+    // is how the shipped container runs, so this path has to come from the flag.
+    let policy =
+        anth_panel::daemon::policy_for(&config, std::path::Path::new("/etc/anth/custom.toml"));
+
+    assert!(
+        policy
+            .protected_paths
+            .iter()
+            .any(|path| path == std::path::Path::new("/etc/anth/custom.toml")),
+        "the loaded config must be protected: {:?}",
+        policy.protected_paths
+    );
+}
+
+#[test]
 fn handle_request_echoes_the_message() {
     let response = anth_panel::daemon::handle_request(Request::Echo {
         message: "hello".to_string(),
@@ -199,7 +224,9 @@ async fn serve_binds_the_configured_socket_and_echoes() {
         socket_path: path.to_string_lossy().into_owned(),
         ..Config::default()
     };
-    let server = tokio::spawn(async move { anth_panel::daemon::serve(&config).await });
+    let config_path = path.with_extension("config.toml");
+    let server =
+        tokio::spawn(async move { anth_panel::daemon::serve(&config, &config_path).await });
 
     // Wait briefly for the listener to bind before connecting.
     for _ in 0..50 {
@@ -236,7 +263,9 @@ async fn serve_binds_the_socket_and_answers_host_info() {
         socket_path: path.to_string_lossy().into_owned(),
         ..Config::default()
     };
-    let server = tokio::spawn(async move { anth_panel::daemon::serve(&config).await });
+    let config_path = path.with_extension("config.toml");
+    let server =
+        tokio::spawn(async move { anth_panel::daemon::serve(&config, &config_path).await });
 
     for _ in 0..50 {
         if path.exists() {

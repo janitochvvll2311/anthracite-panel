@@ -640,7 +640,33 @@ pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
     }
 }
 
-pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> {
+/// Builds the deployment policy from the loaded config plus the path it was
+/// loaded from. Kept separate from `serve` so tests can assert the config file
+/// ends up in `protected_paths`.
+pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
+    Policy {
+        process_control: config.process.control,
+        network_control: config.network.control,
+        firewall_control: config.firewall.control,
+        volume_control: config.volumes.control,
+        mount_root: mount_root(&config.volumes.mount_root),
+        protected_paths: volumes::protected_paths(
+            Some(config_path),
+            Path::new(&config.files.root),
+            Path::new(&config.socket_path),
+        ),
+        sudo: config.sudo,
+    }
+}
+
+/// `config_path` is the file the daemon actually loaded, which `main` resolves
+/// from `--config`. It cannot be re-derived from `ANTH_CONFIG` here: the shipped
+/// entrypoint always passes `--config` and only sets the variable when the
+/// operator did.
+pub async fn serve(
+    config: &Config,
+    config_path: &Path,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let socket_path = Path::new(&config.socket_path);
     clear_socket_path(socket_path)?;
 
@@ -654,19 +680,7 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         supports_line_editing(&shell)
     );
     let program: Arc<str> = Arc::from(shell);
-    let policy = Policy {
-        process_control: config.process.control,
-        network_control: config.network.control,
-        firewall_control: config.firewall.control,
-        volume_control: config.volumes.control,
-        mount_root: mount_root(&config.volumes.mount_root),
-        protected_paths: volumes::protected_paths(
-            std::env::var("ANTH_CONFIG").ok().as_deref().map(Path::new),
-            Path::new(&config.files.root),
-            Path::new(&config.socket_path),
-        ),
-        sudo: config.sudo,
-    };
+    let policy = policy_for(config, config_path);
     let files = Arc::new(
         FileService::new(&config.files).map_err(|e| format!("invalid files configuration: {e}"))?,
     );

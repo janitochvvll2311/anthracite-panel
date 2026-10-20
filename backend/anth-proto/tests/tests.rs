@@ -857,6 +857,26 @@ fn volume_snapshot_and_error_responses_roundtrip() {
 }
 
 #[test]
+fn volume_devices_always_serialize_mountpoints() {
+    let device = anth_proto::VolumeDevice {
+        name: "sdb1".to_string(),
+        path: "/dev/sdb1".to_string(),
+        kind: anth_proto::VolumeKind::Part,
+        ..Default::default()
+    };
+    assert!(device.mountpoints.is_empty());
+
+    let json = serde_json::to_string(&device).unwrap();
+    assert!(
+        json.contains(r#""mountpoints":[]"#),
+        "an unmounted device must still carry the key: {json}"
+    );
+
+    let decoded: anth_proto::VolumeDevice = serde_json::from_str(&json).unwrap();
+    assert!(decoded.mountpoints.is_empty());
+}
+
+#[test]
 fn volume_kinds_match_lsblk_names() {
     use std::str::FromStr;
 

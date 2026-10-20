@@ -576,10 +576,12 @@ Reply to `VolumeList`.
 
 `kind` is `disk`, `part`, `crypt`, `lvm`, `raid`, `loop`, `rom` or `other`.
 `parent` and every optional string field are absent when the kernel does not
-report them. `mountpoints` is empty for an unmounted device. `usage` is absent
-when `statvfs` fails. When a snapshot would exceed the 1 MiB line cap the daemon
+report them. `mountpoints` is always present and is `[]` for an unmounted
+device. `usage` is absent when `statvfs` fails. When a snapshot would exceed the 1 MiB line cap the daemon
 drops the diagnostic fields first, then the device tail and finally the mount
-tail, sets `truncated` and adds a `warning`.
+tail, sets `truncated` and adds a `warning`. The cap applies to the encoded
+response, envelope included. Mutations validate against the full inventory, so
+truncation never hides a device or mountpoint from a guard.
 
 ### `VolumeChanged`
 

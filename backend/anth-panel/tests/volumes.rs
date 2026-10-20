@@ -196,6 +196,32 @@ fn parse_mountinfo_unescapes_and_flags_virtual_filesystems() {
 }
 
 #[test]
+fn parse_mountinfo_preserves_non_ascii_paths() {
+    // The escaped form is the multi-byte UTF-8 sequence written byte by byte,
+    // which is what the kernel emits for a mountpoint outside ASCII.
+    let escaped = "1 0 8:1 / /mnt/D\\303\\244tos rw - ext4 /dev/sda1 rw\n";
+    let mounts = parse_mountinfo(escaped);
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].mountpoint, "/mnt/Dätos");
+
+    // An unescaped non-ASCII path arrives as UTF-8 bytes and must survive too.
+    let raw = "1 0 8:1 / /mnt/Dätos rw - ext4 /dev/sda1 rw\n";
+    assert_eq!(parse_mountinfo(raw)[0].mountpoint, "/mnt/Dätos");
+}
+
+#[test]
+fn a_non_ascii_mountpoint_passes_validation() {
+    let mountinfo = "1 0 8:1 / /mnt/D\\303\\244tos rw - ext4 /dev/sda1 rw\n";
+    let snapshot = snapshot_from(LSBLK_MODERN, mountinfo);
+    assert_eq!(snapshot.mounts[0].mountpoint, "/mnt/Dätos");
+
+    // The same path the kernel reported must match byte for byte here,
+    // otherwise a real non-ASCII mount can never be unmounted.
+    let resolved = validate_unmount(&snapshot, "/mnt/Dätos", &[]).unwrap();
+    assert_eq!(resolved, Path::new("/mnt/Dätos"));
+}
+
+#[test]
 fn parse_mountinfo_skips_malformed_lines() {
     let text = "garbage\n\n1 2 3 4 5 6 7\n";
     assert!(parse_mountinfo(text).is_empty());
@@ -699,9 +725,85 @@ fn a_large_snapshot_is_shortened_under_the_line_cap() {
     assert!(fitted.truncated);
     assert!(fitted.devices.len() < 20_000);
     assert_eq!(fitted.total, 20_000);
-    let json = serde_json::to_string(&fitted).unwrap();
-    assert!(json.len() <= anth_proto::MAX_LINE_LEN);
+    let json = anth_proto::Response::VolumeSnapshot(fitted.clone())
+        .to_json()
+        .unwrap();
+    assert!(
+        json.len() <= anth_proto::MAX_LINE_LEN,
+        "the framed response is what has to fit: {} bytes",
+        json.len()
+    );
     assert!(fitted.warning.unwrap().contains("showing"));
+}
+
+#[test]
+fn mutations_see_devices_that_truncation_would_drop() {
+    // One device would fit; the guard must not depend on the line cap, so the
+    // last device is still reachable after the snapshot is shortened.
+    let mut devices = Vec::new();
+    for index in 0..20_000 {
+        devices.push(anth_proto::VolumeDevice {
+            name: format!("loop{index}"),
+            path: format!("/dev/loop{index}"),
+            kind: VolumeKind::Loop,
+            fstype: Some("ext4".to_string()),
+            model: Some("A rather long model string that costs line budget".repeat(4)),
+            ..Default::default()
+        });
+    }
+    let probe = FakeProbe::new(
+        &serde_json::to_string(&serde_json::json!({
+            "blockdevices": devices.iter().map(|device| serde_json::json!({
+                "name": device.name,
+                "path": device.path,
+                "type": "loop",
+                "size": 1024,
+                "fstype": "ext4",
+                "mountpoints": [],
+                "ro": false,
+                "rm": false,
+                "model": device.model,
+            })).collect::<Vec<_>>()
+        }))
+        .unwrap(),
+        "",
+    );
+
+    let snapshot = collect_with(true, &probe);
+    assert!(snapshot.truncated, "the fixture must exceed the line cap");
+    assert!(snapshot.devices.len() < devices.len());
+    assert!(
+        !snapshot
+            .devices
+            .iter()
+            .any(|device| device.name == "loop19999"),
+        "the fixture must drop the device under test from the fitted snapshot"
+    );
+
+    let root = scratch_dir("unfitted");
+    let target = root.join("last");
+    std::fs::create_dir_all(&target).unwrap();
+    let runner = RecordingRunner::ok();
+
+    // `loop19999` is past the truncation point. Validating against the fitted
+    // snapshot would refuse it as unknown.
+    anth_panel::volumes::mount_with(
+        true,
+        &probe,
+        &runner,
+        Some(&root),
+        &MountArgs {
+            device: "/dev/loop19999",
+            target: target.to_str().unwrap(),
+            fs_type: None,
+            read_only: false,
+            allow_removable: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(runner.calls()[0].0, "mount");
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

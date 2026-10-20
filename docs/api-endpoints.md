@@ -618,7 +618,7 @@ curl -s localhost:8080/api/volumes
 | --- | --- |
 | `devices` | Block devices from `lsblk`, flattened, tree order |
 | `devices[].parent` | Kernel name of the parent device, absent at the root |
-| `devices[].mountpoints` | Every path the device is mounted on, empty when unmounted |
+| `devices[].mountpoints` | Every path the device is mounted on; always present, `[]` when unmounted |
 | `devices[].removable` | Whether the device reports itself as removable media |
 | `mounts` | Every entry in `/proc/self/mountinfo` |
 | `mounts[].virtual_fs` | `true` for `proc`, `sysfs`, `tmpfs`, `cgroup2`, overlays … |

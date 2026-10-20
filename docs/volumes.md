@@ -32,7 +32,13 @@ Both lists are bounded by the protocol line cap. When a snapshot does not fit,
 the daemon first drops the longest diagnostic fields, then shortens the device
 list and finally the mount list. `total` keeps the real count and `warning`
 explains what was dropped, so a shortened snapshot never reads as a complete
-one. Clients label the count as `shown of total` when `truncated` is true.
+one. Clients label the count as `shown of total` when `truncated` is true. The
+budget is measured on the framed response, `{"type":…,"data":…}` included, which
+is the string that actually has to fit a line.
+
+Truncation is a display concern only. Mount and unmount validate against the
+full inventory, so a device or mountpoint past the cutoff is still reachable;
+the guards never depend on how much of the snapshot survived.
 
 The snapshot also reports `control_enabled`, which tells a client whether the
 control buttons should be offered. It is derived from the daemon's config, not
@@ -110,7 +116,9 @@ An unmount request is validated against a fresh snapshot too:
 4. The mount must not be an ancestor of a path the panel needs: its Unix
    socket, its config file, the directory served by the file explorer and the
    running executable. Unmounting `/projects` would take the panel's own
-   binary offline, so it is refused with the offending path in the message.
+   binary offline, so it is refused with the offending path in the message. The
+   config path is the file the daemon loaded from `--config`, which is what the
+   shipped container passes, not `ANTH_CONFIG`.
 
 The validated request becomes `umount <target>`. There is no lazy or forced
 unmount: a busy filesystem returns an error rather than losing writes.

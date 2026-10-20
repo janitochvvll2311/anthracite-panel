@@ -154,6 +154,41 @@ describe('mountMode and labels', () => {
     expect(mountLabel(volumeDevice({ mountpoints: [] }))).toBe('—')
   })
 
+  it('survives a device with no mountpoints key at all', () => {
+    // Older daemons omitted the key for an unmounted device. One such row used
+    // to make every helper throw and take the whole table down with it.
+    const serialized = JSON.parse(
+      '{"name":"sdb1","path":"/dev/sdb1","kind":"part","size_bytes":1024,' +
+        '"fstype":"vfat","read_only":false,"removable":true}',
+    )
+    const device = serialized as Parameters<typeof mountLabel>[0]
+
+    expect(mountLabel(device)).toBe('—')
+    expect(toDeviceRows([device])[0].mountLabel).toBe('—')
+    expect(mountableDevices([device]).map((entry) => entry.name)).toEqual([
+      'sdb1',
+    ])
+    expect(
+      compareDeviceRows(
+        toDeviceRows([device])[0],
+        toDeviceRows([device])[0],
+        'mount',
+        'asc',
+      ),
+    ).toBe(0)
+  })
+
+  it('handles the daemon payload for an unmounted device', () => {
+    // The shape the daemon actually sends: `mountpoints` present and empty.
+    const device = JSON.parse(
+      '{"name":"sdb1","path":"/dev/sdb1","kind":"part","size_bytes":1024,' +
+        '"fstype":"vfat","mountpoints":[],"read_only":false,"removable":true}',
+    ) as Parameters<typeof mountLabel>[0]
+
+    expect(mountLabel(device)).toBe('—')
+    expect(mountableDevices([device])).toHaveLength(1)
+  })
+
   it('names the kind', () => {
     expect(kindLabel('part')).toBe('part')
     expect(kindLabel('raid')).toBe('raid')

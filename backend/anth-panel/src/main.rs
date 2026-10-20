@@ -39,15 +39,20 @@ async fn serve_api(config: Config, args: &EndpointArgs) -> Result<ExitCode, Stri
 
 /// Keeps the daemon task alive for as long as the API runs: binding the HTTP
 /// port first surfaces address-in-use errors before the socket is touched.
-async fn serve_run(config: Config, args: &EndpointArgs) -> Result<ExitCode, String> {
+async fn serve_run(
+    config: Config,
+    config_path: &str,
+    args: &EndpointArgs,
+) -> Result<ExitCode, String> {
     let address = resolve_addr(args);
     let listener = TcpListener::bind(&address)
         .await
         .map_err(|e| format!("Failed to bind to address {address}: {e}"))?;
 
     let daemon_config = config.clone();
+    let daemon_config_path = std::path::PathBuf::from(config_path);
     let daemon = tokio::spawn(async move {
-        if let Err(e) = anth_panel::daemon::serve(&daemon_config).await {
+        if let Err(e) = anth_panel::daemon::serve(&daemon_config, &daemon_config_path).await {
             eprintln!("Daemon stopped: {e}");
         }
     });
@@ -639,12 +644,17 @@ async fn main() -> ExitCode {
     }
 
     let result = match &cli.command {
-        Command::Daemon => anth_panel::daemon::serve(&Config::load_or_create(config_path))
-            .await
-            .map(|()| ExitCode::SUCCESS)
-            .map_err(|e| e.to_string()),
+        Command::Daemon => anth_panel::daemon::serve(
+            &Config::load_or_create(config_path),
+            std::path::Path::new(config_path),
+        )
+        .await
+        .map(|()| ExitCode::SUCCESS)
+        .map_err(|e| e.to_string()),
         Command::Api(args) => serve_api(Config::load_or_create(config_path), args).await,
-        Command::Run(args) => serve_run(Config::load_or_create(config_path), args).await,
+        Command::Run(args) => {
+            serve_run(Config::load_or_create(config_path), config_path, args).await
+        }
         Command::Terminal(args) => {
             let config = Config::load_or_default(config_path);
             Ok(anth_panel::terminal_client::run(Path::new(&config.socket_path), args).await)

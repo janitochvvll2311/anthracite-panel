@@ -87,8 +87,10 @@ pub struct VolumeDevice {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uuid: Option<String>,
-    /// Every mountpoint currently using this device, in kernel order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Every mountpoint currently using this device, in kernel order. Always
+    /// serialized, empty for an unmounted device: clients read it as a list
+    /// without checking for the key first.
+    #[serde(default)]
     pub mountpoints: Vec<String>,
     pub read_only: bool,
     pub removable: bool,

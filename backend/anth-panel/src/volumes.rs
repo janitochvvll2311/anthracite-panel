@@ -142,6 +142,26 @@ pub fn collect(control_enabled: bool) -> VolumeSnapshot {
 }
 
 pub fn collect_with(control_enabled: bool, probe: &dyn Probe) -> VolumeSnapshot {
+    let (mut snapshot, warnings) = collect_unfitted(control_enabled, probe);
+
+    snapshot = fit_snapshot(snapshot);
+    if !warnings.is_empty() {
+        let joined = warnings.join("; ");
+        snapshot.warning = Some(match snapshot.warning {
+            Some(existing) => format!("{existing}; {joined}"),
+            None => joined,
+        });
+    }
+    snapshot
+}
+
+/// The full inventory, before the line cap shortens anything.
+///
+/// Mutations validate against this: a guard that read the fitted snapshot would
+/// refuse a device or mount that truncation dropped, and the guards exist for
+/// exactly the busy hosts where truncation happens. The firewall's `read_table`
+/// follows the same rule.
+fn collect_unfitted(control_enabled: bool, probe: &dyn Probe) -> (VolumeSnapshot, Vec<String>) {
     let mut warnings = Vec::new();
 
     let devices = match probe.lsblk() {
@@ -172,7 +192,7 @@ pub fn collect_with(control_enabled: bool, probe: &dyn Probe) -> VolumeSnapshot 
         }
     };
 
-    let mut snapshot = VolumeSnapshot {
+    let snapshot = VolumeSnapshot {
         devices,
         mounts,
         control_enabled,
@@ -181,15 +201,7 @@ pub fn collect_with(control_enabled: bool, probe: &dyn Probe) -> VolumeSnapshot 
         truncated: false,
         warning: None,
     };
-    snapshot = fit_snapshot(snapshot);
-    if !warnings.is_empty() {
-        let joined = warnings.join("; ");
-        snapshot.warning = Some(match snapshot.warning {
-            Some(existing) => format!("{existing}; {joined}"),
-            None => joined,
-        });
-    }
-    snapshot
+    (snapshot, warnings)
 }
 
 fn now_ms() -> u64 {
@@ -379,23 +391,31 @@ fn has_option(options: &str, wanted: &str) -> bool {
 }
 
 /// `/proc/self/mountinfo` escapes space, tab, newline and backslash as octal.
+///
+/// The field is a byte string: decodes are collected as bytes and the result is
+/// decoded once, so a multi-byte UTF-8 path survives both escaped and raw.
 fn unescape_mountinfo(value: &str) -> String {
     let bytes = value.as_bytes();
-    let mut out = String::with_capacity(value.len());
+    let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'\\' && index + 3 < bytes.len() {
-            let octal = &value[index + 1..index + 4];
-            if let Ok(code) = u8::from_str_radix(octal, 8) {
-                out.push(code as char);
-                index += 4;
-                continue;
+            let digits = &bytes[index + 1..index + 4];
+            if digits.iter().all(|digit| (b'0'..=b'7').contains(digit)) {
+                let code = digits
+                    .iter()
+                    .fold(0u32, |acc, digit| acc * 8 + u32::from(digit - b'0'));
+                if let Ok(code) = u8::try_from(code) {
+                    out.push(code);
+                    index += 4;
+                    continue;
+                }
             }
         }
-        out.push(bytes[index] as char);
+        out.push(bytes[index]);
         index += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Free-space counters for one mountpoint. Unreadable or vanished mountpoints
@@ -417,10 +437,13 @@ pub fn usage_for(mountpoint: &str) -> Option<VolumeUsage> {
     })
 }
 
+/// Length of the framed response, not the bare snapshot: the tagged enum adds
+/// the `{"type":...,"data":...}` envelope, and that is what has to fit the line.
 fn snapshot_json_len(snapshot: &VolumeSnapshot) -> usize {
-    serde_json::to_string(snapshot)
+    anth_proto::Response::VolumeSnapshot(snapshot.clone())
+        .to_json()
         .map(|json| json.len())
-        .unwrap_or(MAX_LINE_LEN + 1)
+        .unwrap_or(usize::MAX)
 }
 
 /// Shortens the snapshot until one line fits `MAX_LINE_LEN`.
@@ -771,7 +794,7 @@ pub fn mount_with(
         ));
     }
 
-    let snapshot = collect_with(control_enabled, probe);
+    let (snapshot, _) = collect_unfitted(control_enabled, probe);
     let validated = validate_mount(
         &snapshot,
         args.device,
@@ -836,7 +859,7 @@ pub fn unmount_with(
         ));
     }
 
-    let snapshot = collect_with(control_enabled, probe);
+    let (snapshot, _) = collect_unfitted(control_enabled, probe);
     let resolved = validate_unmount(&snapshot, target, protected_paths)?;
     unmount_path(runner, &resolved)
 }
