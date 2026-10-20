@@ -18,6 +18,7 @@ in the HTTP server.
 | [docs/network.md](docs/network.md) | Network interfaces, traffic counters and up/down policy |
 | [docs/firewall.md](docs/firewall.md) | Managed nftables table, rules and container capabilities |
 | [docs/volumes.md](docs/volumes.md) | Storage inventory, mount and unmount policy, privileges |
+| [docs/accounts.md](docs/accounts.md) | Local users and groups, guard matrix, privileges and container limits |
 | [docs/files.md](docs/files.md) | Filesystem root, chunked transfers, write policy and web explorer |
 
 ## Layout

@@ -1719,3 +1719,199 @@ async fn volume_mount_rejects_a_malformed_body() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+/// Answers every account request with a fixed response, so the router's
+/// gating, body parsing and status mapping can be tested without a daemon.
+fn spawn_account_server(path: &std::path::Path, response: Response) -> tokio::task::JoinHandle<()> {
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(_)) = server.receive_request().await {
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    })
+}
+
+fn account_config(path: &std::path::Path, control: bool, manage_passwords: bool) -> Config {
+    let mut config = config_at(path);
+    config.accounts.control = control;
+    config.accounts.manage_passwords = manage_passwords;
+    config
+}
+
+async fn post(app: axum::Router, uri: &str, body: &str) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+#[tokio::test]
+async fn account_mutations_are_forbidden_while_control_is_off() {
+    let path = unique_socket("accounts-off");
+    let _ = std::fs::remove_file(&path);
+    let state = AppState::new(account_config(&path, false, false));
+
+    // No daemon is running: a 403 proves the gate answered before the socket.
+    let (status, body) = post(
+        anth_panel::router(state),
+        "/api/accounts/users",
+        r#"{"name":"alice"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["error"].as_str().unwrap().contains("disabled"));
+}
+
+#[tokio::test]
+async fn account_password_is_gated_by_its_own_switch() {
+    let path = unique_socket("accounts-passwd-off");
+    let _ = std::fs::remove_file(&path);
+    // Control on, passwords off.
+    let state = AppState::new(account_config(&path, true, false));
+
+    let (status, body) = post(
+        anth_panel::router(state),
+        "/api/accounts/users/alice/password",
+        r#"{"password":"correct-horse"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["error"].as_str().unwrap().contains("password"));
+}
+
+#[tokio::test]
+async fn account_create_returns_the_daemon_message() {
+    let path = unique_socket("accounts-create");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_account_server(
+        &path,
+        Response::AccountChanged {
+            message: "created user alice".to_string(),
+        },
+    );
+    let state = AppState::new(account_config(&path, true, false));
+
+    let (status, body) = post(
+        anth_panel::router(state),
+        "/api/accounts/users",
+        r#"{"name":"alice","gecos":"Alice","system":false}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["message"], "created user alice");
+    server.abort();
+}
+
+#[tokio::test]
+async fn account_errors_map_onto_status_codes() {
+    for (kind, expected) in [
+        (
+            anth_proto::AccountErrorKind::Invalid,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            anth_proto::AccountErrorKind::Protected,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::AccountErrorKind::Disabled,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::AccountErrorKind::PermissionDenied,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::AccountErrorKind::NotFound,
+            StatusCode::NOT_FOUND,
+        ),
+        (anth_proto::AccountErrorKind::Conflict, StatusCode::CONFLICT),
+        (
+            anth_proto::AccountErrorKind::Unsupported,
+            StatusCode::NOT_IMPLEMENTED,
+        ),
+        (
+            anth_proto::AccountErrorKind::Failed,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        let path = unique_socket("accounts-err");
+        let _ = std::fs::remove_file(&path);
+        let server = spawn_account_server(
+            &path,
+            Response::AccountError(anth_proto::AccountError::new(kind, "refused")),
+        );
+        let state = AppState::new(account_config(&path, true, true));
+
+        let (status, body) = post(
+            anth_panel::router(state),
+            "/api/accounts/groups",
+            r#"{"name":"developers"}"#,
+        )
+        .await;
+
+        assert_eq!(status, expected, "kind {kind:?}");
+        assert_eq!(body["error"], "refused");
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn account_delete_accepts_an_empty_body() {
+    let path = unique_socket("accounts-delete-empty");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_account_server(
+        &path,
+        Response::AccountChanged {
+            message: "deleted user alice".to_string(),
+        },
+    );
+    let state = AppState::new(account_config(&path, true, false));
+
+    // No content-type and no body: `userdel` is the common case and a client
+    // should not have to send `{}`.
+    let response = anth_panel::router(state)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/accounts/users/alice/delete")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_malformed_account_body_is_a_bad_request() {
+    let path = unique_socket("accounts-bad-body");
+    let _ = std::fs::remove_file(&path);
+    let state = AppState::new(account_config(&path, true, false));
+
+    let (status, _) = post(anth_panel::router(state), "/api/accounts/users", "not json").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

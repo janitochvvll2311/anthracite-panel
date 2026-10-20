@@ -47,6 +47,21 @@ RUN addgroup -S anth \
 # nftables still needs CAP_NET_ADMIN in the container bounding set:
 #   docker run --cap-add NET_ADMIN ...   or compose.yaml
 
+# Account management is opt-in at runtime, and the tools are installed
+# unconditionally so the feature is a config change rather than a rebuild.
+#
+# `shadow` is in `community`, not `main`. BusyBox has adduser/deluser, but no
+# usermod, groupmod, chpasswd or gpasswd, and its adduser cannot set a uid, a
+# gecos or a shell in one call, so the panel cannot use it. `shadow` pulls
+# `linux-pam` for `libpam`, which is also what supplies the `base-password`
+# chain that `/etc/pam.d/chpasswd` includes; Alpine's base image has no PAM
+# configuration of its own.
+#
+# The tools need root to write /etc/passwd, /etc/shadow and /etc/sudoers.d.
+# The container runs as `anth`, so account management answers PermissionDenied
+# unless it is started as root. That is deliberate: see docs/accounts.md.
+RUN apk add --no-cache shadow
+
 # Daemon, CLI and HTTP API are a single binary.
 COPY --from=builder /src/backend/target/x86_64-unknown-linux-musl/release/anth-panel /usr/local/bin/anth-panel
 COPY docker/entrypoint.sh /usr/local/bin/anth-entrypoint

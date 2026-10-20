@@ -220,7 +220,12 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `GET /api/network/watch?interval=2s` (SSE) and
   `POST /api/network/{name}/state`; the firewall routes are `GET /api/firewall`,
   `POST /api/firewall/rules`, `POST /api/firewall/rules/{handle}/delete` and
-  `POST /api/firewall/flush`; the filesystem routes are
+  `POST /api/firewall/flush`; the account routes are
+  `GET /api/accounts`, `POST /api/accounts/users`,
+  `POST /api/accounts/users/{name}`, `POST /api/accounts/users/{name}/delete`,
+  `POST /api/accounts/users/{name}/password`, `POST /api/accounts/groups`,
+  `POST /api/accounts/groups/{name}` and
+  `POST /api/accounts/groups/{name}/delete`; the filesystem routes are
   `GET /api/files`, `GET /api/files/content`, `GET /api/files/download`,
   `POST /api/files/mkdir`, `POST /api/files/rename`, `POST /api/files/delete` and
   `POST /api/files/upload`. The route names the command, so
@@ -302,6 +307,25 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `MAX_LINE_LEN`, setting `total`, `truncated` and `warning`. Mutations read
   through `read_table`, which is unfitted, so shortening never hides a rule from
   `allow` or `flush`.
+- **Accounts**: `accounts.rs` reads `/etc/passwd` and `/etc/group` for what the
+  panel can change, and `getent` for what the host actually resolves, tagging
+  every entry `local` or `nss`; an `nss` entry is read-only. Lock state comes
+  from one bit per line in `/etc/shadow`, and an unreadable shadow file yields
+  `null`, shown as `?`, rather than `false`. `accounts_admin.rs` never edits
+  those files: `plan_*` validates a request into a `PlannedCall` (program, argv,
+  optional stdin) and the daemon runs it. The split is what the tests assert —
+  the exact argv vector, and that no password ever reaches argv because
+  `chpasswd` takes it on stdin. `PlannedCall`'s `Debug` redacts the stdin field,
+  which is the only reason it is safe to log. Guards live in `Guard`: uid/gid 0,
+  the daemon's own account, the last member of `sudo`/`wheel`/`admin`, `nss`
+  entries, and system accounts or privileged groups without their opt-in. Root
+  is deliberately not an escape hatch for the administrator guard. Snapshots
+  are read unfitted for validation so a truncated list never looks like a
+  missing account. `[accounts]` has two separate switches: `control` and
+  `manage_passwords`, both off in release, and debug turns only `control` on.
+  The tools come from `shadow` (`community`), not BusyBox, which has no
+  `usermod`, `groupmod`, `chpasswd` or `gpasswd`; a missing tool answers
+  `Unsupported` rather than guessing with different flags.
 - **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
   `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
   deletes/flushes. It only renders controls when `control_enabled` is true and
@@ -399,6 +423,8 @@ sync with behaviour; they are the contract for people writing clients:
 - `docs/firewall.md` — managed nftables table, commands, API and container
   capabilities.
 - `docs/volumes.md` — storage inventory, mount and unmount policy, privileges.
+- `docs/accounts.md` — local user and group inventory, guard matrix, the
+  `shadow-utils` dependency and the container's root requirement.
 
 `AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
 duplicate route tables here — point at the doc.
