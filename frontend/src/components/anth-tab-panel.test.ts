@@ -271,6 +271,46 @@ describe('anth-tab-panel', () => {
     }).not.toThrow()
   })
 
+  it('signals a tab that comes back into the document', async () => {
+    const panel = await mount([
+      { id: 'a', label: 'A' },
+      { id: 'b', label: 'B' },
+    ])
+
+    const shown: string[] = []
+    // Tab b is parked, so only the registry can reach it.
+    for (const id of ['a', 'b']) {
+      panel.tab(id)!.addEventListener('anth-tab-show', () => shown.push(id))
+    }
+
+    tabButtons(panel)[1].click()
+    await panel.updateComplete
+    expect(shown).toEqual(['b'])
+
+    tabButtons(panel)[0].click()
+    await panel.updateComplete
+    expect(shown).toEqual(['b', 'a'])
+  })
+
+  it('keeps observing parked tabs after the panel is re-appended', async () => {
+    const panel = await mount([
+      { id: 'a', label: 'A' },
+      { id: 'b', label: 'B' },
+    ])
+
+    // What an outer tab panel or a shell re-render does.
+    const parent = panel.parentElement!
+    panel.remove()
+    parent.append(panel)
+    await panel.updateComplete
+
+    panel.tab('b')!.setAttribute('data-disabled', 'needs root')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await panel.updateComplete
+
+    expect(tabButtons(panel)[1].disabled).toBe(true)
+  })
+
   it('reaches a parked tab through tab()', async () => {
     const panel = await mount([
       { id: 'a', label: 'A' },

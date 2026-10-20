@@ -43,6 +43,23 @@ export interface PromptOptions extends ConfirmOptions {
 
 type Kind = 'confirm' | 'prompt' | 'alert'
 
+/**
+ * The element that actually holds focus, descending into shadow roots.
+ *
+ * `document.activeElement` stops at the outermost host, which for a panel
+ * inside the shell is the host element and not the button the operator
+ * pressed.
+ */
+function deepActiveElement(
+  root: Document | ShadowRoot = document,
+): Element | null {
+  let active = root.activeElement
+  while (active?.shadowRoot?.activeElement) {
+    active = active.shadowRoot.activeElement
+  }
+  return active
+}
+
 /** One dialog's data plus the way to answer it. */
 interface Dialog {
   kind: Kind
@@ -67,6 +84,17 @@ export class AnthDialogHost extends LitElement {
   private queue: Array<() => void> = []
 
   /**
+   * What had focus before the first dialog opened.
+   *
+   * The frame is removed from the document when the dialog is answered, and a
+   * `<dialog>` removed while open never runs the native close path, so the
+   * browser's own focus restoration does not happen. Restoring it here is what
+   * keeps a keyboard user from being dropped back to the top of the page after
+   * every confirm.
+   */
+  private opener?: HTMLElement
+
+  /**
    * Shows one dialog and resolves with its answer.
    *
    * `initial` is the text a prompt starts with; the caller's resolver receives
@@ -81,6 +109,9 @@ export class AnthDialogHost extends LitElement {
     const host = hostElement()
     return new Promise<T>((resolve) => {
       const start = (): void => {
+        // Only the first question of a burst captures the opener: the ones
+        // behind it start after the frame is gone, when nothing is focused.
+        if (!host.opener) host.rememberOpener()
         host.current = {
           kind,
           options,
@@ -100,6 +131,23 @@ export class AnthDialogHost extends LitElement {
       if (host.current) host.queue.push(start)
       else start()
     })
+  }
+
+  private rememberOpener(): void {
+    const active = deepActiveElement()
+    this.opener = active instanceof HTMLElement ? active : undefined
+  }
+
+  /**
+   * Returns focus to the opener once the dialog is gone.
+   *
+   * A queued request keeps `current` set, so this only runs when the last
+   * dialog of a burst has been answered.
+   */
+  private restoreFocus(): void {
+    const opener = this.opener
+    this.opener = undefined
+    if (opener?.isConnected) opener.focus()
   }
 
   private finish(accepted: boolean): void {
@@ -200,9 +248,16 @@ export class AnthDialogHost extends LitElement {
   }
 
   protected override updated(changed: PropertyValues): void {
+    if (!changed.has('current')) return
+
+    if (!this.current) {
+      this.restoreFocus()
+      return
+    }
+
     // A prompt opens with its text selected, so typing replaces the old name
     // instead of appending to it.
-    if (!changed.has('current') || this.current?.kind !== 'prompt') return
+    if (this.current.kind !== 'prompt') return
     const input = this.renderRoot.querySelector('input')
     input?.focus()
     input?.select()

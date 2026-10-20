@@ -2,6 +2,8 @@ import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 
+import { ANTH_TAB_SHOW_EVENT } from '../lib/ui/tab-visibility'
+
 /**
  * Tabs that keep a hidden tab's state without keeping its DOM.
  *
@@ -42,6 +44,8 @@ export interface TabDefinition {
 }
 
 export const ANTH_TAB_CHANGE_EVENT = 'anth-tab-change'
+
+export { ANTH_TAB_SHOW_EVENT }
 
 const STORAGE_PREFIX = 'anth.tabs.'
 
@@ -102,6 +106,11 @@ export class AnthTabPanel extends LitElement {
       this.syncTabs(metadata)
     })
     this.observer.observe(this, { childList: true })
+    // Re-observing is not `registerTabs`'s job: that method skips every id it
+    // already knows, so a panel that is moved or re-appended would otherwise
+    // end up with an observer that watches nothing. Watching every known tab
+    // here covers both the first connection and a reconnection.
+    for (const element of this.elements.values()) this.observeTab(element)
     this.syncTabs()
   }
 
@@ -134,16 +143,24 @@ export class AnthTabPanel extends LitElement {
       }
       this.elements.set(id, element)
       this.order.push(id)
-      // Each tab is observed directly. A parked tab is detached, and an
-      // observer on `this` only watches descendants, so it would never see the
-      // attribute change that re-enables or relabels a hidden tab.
-      this.observer?.observe(element, {
-        attributes: true,
-        attributeFilter: ['label', 'data-label', 'data-disabled'],
-      })
+      this.observeTab(element)
       added = true
     }
     return added
+  }
+
+  /**
+   * Watches one tab's metadata.
+   *
+   * A parked tab is detached, and an observer on `this` only watches
+   * descendants, so each element needs its own observer entry for the change
+   * that re-enables or relabels a hidden tab to arrive.
+   */
+  private observeTab(element: HTMLElement): void {
+    this.observer?.observe(element, {
+      attributes: true,
+      attributeFilter: ['label', 'data-label', 'data-disabled'],
+    })
   }
 
   /** The declared id. A tab without one is not addressable and is ignored. */
@@ -182,8 +199,17 @@ export class AnthTabPanel extends LitElement {
 
     for (const [id, element] of this.elements) {
       const visible = id === this.active
-      if (visible && !element.isConnected) this.append(element)
-      else if (!visible && element.isConnected) element.remove()
+      if (visible && !element.isConnected) {
+        this.append(element)
+        // Restoring changes no property, so a streaming child that only
+        // starts from `willUpdate` would stay closed. This is the re-show
+        // signal it listens for; see `lib/ui/tab-visibility`.
+        element.dispatchEvent(
+          new CustomEvent(ANTH_TAB_SHOW_EVENT, { bubbles: false }),
+        )
+      } else if (!visible && element.isConnected) {
+        element.remove()
+      }
     }
   }
 

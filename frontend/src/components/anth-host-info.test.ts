@@ -5,6 +5,7 @@ import {
   FakeHostInfoClient,
   hostInfo,
 } from '../test/fake-host-info-client'
+import { ANTH_TAB_SHOW_EVENT } from '../lib/ui/tab-visibility'
 
 async function flush(element: AnthHostInfo): Promise<void> {
   for (let i = 0; i < 4; i++) {
@@ -43,6 +44,19 @@ afterEach(() => {
 })
 
 describe('AnthHostInfo', () => {
+  it('restarts the stream when a tab panel shows it again', async () => {
+    const client = new FakeHostInfoClient()
+    const element = await mount(client)
+    expect(client.watchCalls).toHaveLength(1)
+
+    element.remove()
+    document.body.append(element)
+    element.dispatchEvent(new CustomEvent(ANTH_TAB_SHOW_EVENT))
+    await flush(element)
+
+    expect(client.watchCalls).toHaveLength(2)
+  })
+
   it('loads a snapshot and renders the host, CPU, load and memory', async () => {
     const client = new FakeHostInfoClient()
     const element = await mount(client)

@@ -10,6 +10,7 @@ import type {
   ProcessSnapshot,
 } from '../lib/processes/process-client'
 import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
+import { ANTH_TAB_SHOW_EVENT } from '../lib/ui/tab-visibility'
 
 function processInfo(overrides: Partial<ProcessInfo> = {}): ProcessInfo {
   return {
@@ -162,6 +163,50 @@ afterEach(() => {
 })
 
 describe('AnthProcessMonitor', () => {
+  it('restarts the stream when a tab panel shows it again', async () => {
+    const { element, client } = await mount()
+    expect(client.watchCalls).toHaveLength(1)
+
+    // What parking does: the panel removes the element from the document.
+    element.remove()
+    expect(client.unsubscribes).toBe(1)
+
+    // Restoring changes no property, so `willUpdate` never runs; the show
+    // event is the only signal a visible-again monitor gets.
+    document.body.append(element)
+    element.dispatchEvent(new CustomEvent(ANTH_TAB_SHOW_EVENT))
+    await flush(element)
+
+    expect(client.watchCalls).toHaveLength(2)
+  })
+
+  it('keeps a stream the operator paused while the tab was parked', async () => {
+    const { element, client } = await mount()
+    element.stop()
+    expect(client.unsubscribes).toBe(1)
+
+    element.remove()
+    document.body.append(element)
+    element.dispatchEvent(new CustomEvent(ANTH_TAB_SHOW_EVENT))
+    await flush(element)
+
+    expect(client.watchCalls).toHaveLength(1)
+  })
+
+  it('does not restart a paused monitor when it comes back', async () => {
+    const { element, client } = await mount(new FakeClient(), {
+      autoStart: false,
+    })
+    expect(client.watchCalls).toHaveLength(0)
+
+    element.remove()
+    document.body.append(element)
+    element.dispatchEvent(new CustomEvent(ANTH_TAB_SHOW_EVENT))
+    await flush(element)
+
+    expect(client.watchCalls).toHaveLength(0)
+  })
+
   it('starts the stream and initial fetch, then exposes the live status', async () => {
     const client = new FakeClient()
     client.queue = [

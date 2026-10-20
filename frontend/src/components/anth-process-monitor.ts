@@ -11,6 +11,7 @@ import type {
   ProcessSnapshot,
 } from '../lib/processes/process-client'
 import { confirmAction } from '../lib/ui/dialog'
+import { onTabShow } from '../lib/ui/tab-visibility'
 
 export const ANTH_PROCESS_SIGNAL_EVENT = 'anth-process-signal'
 
@@ -84,11 +85,29 @@ export class AnthProcessMonitor extends LitElement {
 
   private previous?: ProcessSnapshot
   private unsubscribe?: () => void
+  private offShow?: () => void
+  private resumeOnShow = false
   private generation = 0
 
   override disconnectedCallback(): void {
     super.disconnectedCallback()
+    // Parking must not resurrect a stream the operator paused on purpose, so
+    // the decision is taken before `stop()` clears it.
+    this.resumeOnShow = this.unsubscribe !== undefined
     this.stop()
+    this.offShow?.()
+    this.offShow = undefined
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback()
+    // A tab panel parks a hidden tab with `remove()`, which stops the stream
+    // here through `disconnectedCallback`. Coming back changes no property, so
+    // `willUpdate` never runs: this listener is the only signal a re-show
+    // gives, and without it the table would stay frozen after one switch.
+    this.offShow = onTabShow(this, () => {
+      if (this.resumeOnShow && this.client) this.start()
+    })
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {

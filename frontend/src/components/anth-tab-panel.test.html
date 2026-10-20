@@ -48,6 +48,15 @@
           </ul>
         </article>
         <article class="harness-note">
+          <h2>Streams and parking</h2>
+          <p>
+            A monitor inside a tab stops its SSE stream when the panel parks
+            it and starts it again on the <code>anth-tab-show</code> event the
+            panel dispatches when it puts the tab back. A paused monitor stays
+            paused.
+          </p>
+        </article>
+        <article class="harness-note">
           <h2>Markup</h2>
           <pre><code>&lt;anth-tab-panel active="users" storage-key="demo"&gt;
   &lt;section data-tab="users" label="Users"&gt;…&lt;/section&gt;

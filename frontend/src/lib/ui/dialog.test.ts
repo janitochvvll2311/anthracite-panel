@@ -8,8 +8,12 @@ function host(): Host | null {
   return document.querySelector<Host>('anth-dialog-host')
 }
 
-function frame(): HTMLElement {
-  return host()!.shadowRoot!.querySelector('anth-modal') as HTMLElement
+interface Updatable extends HTMLElement {
+  updateComplete: Promise<boolean>
+}
+
+function frame(): Updatable {
+  return host()!.shadowRoot!.querySelector('anth-modal') as Updatable
 }
 
 /**
@@ -202,6 +206,29 @@ describe('dialog', () => {
       .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
 
     await expect(answer).resolves.toBe('from-enter')
+  })
+
+  it('restores focus to the opener when the dialog closes', async () => {
+    const opener = document.createElement('button')
+    opener.textContent = 'Delete'
+    document.body.append(opener)
+    opener.focus()
+    expect(document.activeElement).toBe(opener)
+
+    const answer = confirmAction({ title: 'Delete the folder?' })
+    await host()!.updateComplete
+    await frame().updateComplete
+    // The frame takes focus while it is open.
+    expect(document.activeElement).not.toBe(opener)
+
+    button('confirm').click()
+    await answer
+    await host()!.updateComplete
+
+    // The frame is removed from the document, so the native restore does not
+    // happen; the host has to put focus back itself.
+    expect(document.activeElement).toBe(opener)
+    opener.remove()
   })
 
   it('focuses and selects the prompt text', async () => {

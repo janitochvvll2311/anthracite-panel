@@ -8,6 +8,7 @@ import {
   networkSnapshot,
 } from '../test/fake-network-client'
 import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
+import { ANTH_TAB_SHOW_EVENT } from '../lib/ui/tab-visibility'
 
 async function flush(element: AnthNetworkMonitor): Promise<void> {
   for (let i = 0; i < 4; i++) {
@@ -65,6 +66,19 @@ afterEach(() => {
 })
 
 describe('AnthNetworkMonitor', () => {
+  it('restarts the stream when a tab panel shows it again', async () => {
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+    expect(client.watchCalls).toHaveLength(1)
+
+    element.remove()
+    document.body.append(element)
+    element.dispatchEvent(new CustomEvent(ANTH_TAB_SHOW_EVENT))
+    await flush(element)
+
+    expect(client.watchCalls).toHaveLength(2)
+  })
+
   it('loads a snapshot and renders interfaces, addresses and totals', async () => {
     const client = new FakeNetworkClient()
     const element = await mount(client)
