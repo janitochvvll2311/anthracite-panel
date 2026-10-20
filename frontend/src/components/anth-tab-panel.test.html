@@ -1,0 +1,188 @@
+<!doctype html>
+<!--
+  Dev-only harness for the tab panel.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-tab-panel.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel tab panel."
+    />
+    <title>anth-tab-panel · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-tab-panel" width="1000px">
+      <p slot="description">
+        Tabs that keep a hidden tab's state without keeping its DOM. Each tab
+        below reports when it connects and disconnects: switch away and its
+        counter stops, which is the saving this component exists for. The
+        selection is remembered under <code>storage-key</code>.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>
+              Switch tabs: the counter of the tab you left freezes, because it
+              was detached. Come back and it resumes with a new connect.
+            </li>
+            <li>
+              Toggle the disabled tab: it becomes selectable, then blocked
+              again.
+            </li>
+            <li>Type in a field, leave the tab and come back: the value stays.</li>
+            <li>Use the arrow keys, Home and End on the strip.</li>
+            <li>Reload the page: the last tab is still selected.</li>
+            <li>
+              Add a tab with the button; the strip rebuilds without losing the
+              active one.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Streams and parking</h2>
+          <p>
+            A monitor inside a tab stops its SSE stream when the panel parks
+            it and starts it again on the <code>anth-tab-show</code> event the
+            panel dispatches when it puts the tab back. A paused monitor stays
+            paused.
+          </p>
+        </article>
+        <article class="harness-note">
+          <h2>Markup</h2>
+          <pre><code>&lt;anth-tab-panel active="users" storage-key="demo"&gt;
+  &lt;section data-tab="users" label="Users"&gt;…&lt;/section&gt;
+  &lt;section data-tab="groups" label="Groups"&gt;…&lt;/section&gt;
+&lt;/anth-tab-panel&gt;</code></pre>
+        </article>
+      </section>
+
+      <div slot="actions" class="harness-controls">
+        <button type="button" id="add">Add a tab</button>
+        <button type="button" id="toggle">Toggle disabled tab</button>
+        <span id="event" class="harness-note">no change yet</span>
+      </div>
+
+      <anth-tab-panel id="tabs" active="overview" storage-key="harness">
+        <section data-tab="overview" label="Overview">
+          <article class="harness-note">
+            <h2>Overview</h2>
+            <p>
+              This tab stays mounted while it is visible. Switch away and its
+              clock stops.
+            </p>
+            <p><harness-clock>connecting…</harness-clock></p>
+          </article>
+        </section>
+
+        <section data-tab="live" label="Live counter">
+          <article class="harness-note">
+            <h2>Live counter</h2>
+            <p>
+              A timer that runs only while this tab is in the document.
+            </p>
+            <p><harness-clock>connecting…</harness-clock></p>
+          </article>
+        </section>
+
+        <section data-tab="fields" label="Form state">
+          <article class="harness-note">
+            <h2>Form state</h2>
+            <label>
+              Type something, switch tabs, come back.
+              <input type="text" id="memo" placeholder="kept across tabs" />
+            </label>
+          </article>
+        </section>
+
+        <section data-tab="blocked" label="Blocked" data-disabled="needs root">
+          <article class="harness-note">
+            <h2>Blocked</h2>
+            <p>
+              Disabled by default. The toggle above reaches this parked tab
+              through the panel's <code>tab()</code> accessor, so the strip
+              follows an attribute change the DOM cannot see.
+            </p>
+          </article>
+        </section>
+      </anth-tab-panel>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-tab-panel.ts'
+
+      const panel = document.querySelector('#tabs')
+      const event = document.querySelector('#event')
+
+      panel.addEventListener('anth-tab-change', (change) => {
+        event.textContent = `active → ${change.detail.id}`
+      })
+
+      // A clock per tab, started on connect and stopped on disconnect. This is
+      // the behaviour a real panel relies on to drop its SSE stream.
+      // A real tab is a component that starts a timer on connect and clears it
+      // on disconnect. This is the behaviour the panel exists to give: the
+      // hidden tab's timer stops while it is parked.
+      customElements.define(
+        'harness-clock',
+        class extends HTMLElement {
+          timer = 0
+          started = 0
+          connects = 0
+          disconnects = 0
+          connectedCallback() {
+            this.started = Date.now()
+            this.connects += 1
+            this.timer = setInterval(() => {
+              this.textContent =
+                `${this.idLabel}: connect #${this.connects}, ` +
+                `${((Date.now() - this.started) / 1000).toFixed(2)}s live`
+            }, 100)
+          }
+          disconnectedCallback() {
+            clearInterval(this.timer)
+            this.disconnects += 1
+            this.textContent =
+              `${this.idLabel}: connect #${this.connects}, ` +
+              `disconnect #${this.disconnects}`
+          }
+          get idLabel() {
+            return this.closest('[data-tab]')?.dataset.tab ?? 'parked'
+          }
+        },
+      )
+
+      let added = 0
+      document.querySelector('#add').addEventListener('click', () => {
+        added += 1
+        const section = document.createElement('section')
+        section.dataset.tab = `extra-${added}`
+        section.setAttribute('label', `Extra ${added}`)
+        section.innerHTML = `<article class="harness-note"><h2>Extra ${added}</h2><p>Added at runtime.</p></article>`
+        panel.append(section)
+      })
+
+      // The blocked tab is parked, so `querySelector` cannot reach it; the
+      // panel's `tab()` accessor can.
+      document.querySelector('#toggle').addEventListener('click', () => {
+        const blocked = panel.tab('blocked')
+        if (blocked.hasAttribute('data-disabled')) {
+          blocked.removeAttribute('data-disabled')
+          event.textContent = 'Blocked is now selectable.'
+        } else {
+          blocked.setAttribute('data-disabled', 'needs root')
+          event.textContent = 'Blocked is disabled again.'
+        }
+      })
+    </script>
+  </body>
+</html>

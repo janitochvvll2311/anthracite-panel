@@ -28,6 +28,7 @@ import type {
   VolumeSortKey,
 } from '../lib/volumes/display'
 import { formatBytes } from '../lib/format'
+import { confirmAction } from '../lib/ui/dialog'
 
 /**
  * Storage volume manager.
@@ -229,7 +230,13 @@ export class AnthVolumeManager extends LitElement {
 
   private async unmount(mount: VolumeMountpoint): Promise<void> {
     if (!this.client || !this.canControl || this.busy) return
-    if (!window.confirm(`Unmount ${mount.mountpoint}?`)) return
+    const accepted = await confirmAction({
+      title: `Unmount ${mount.mountpoint}?`,
+      message: `${mount.source} stops being available at this path.`,
+      confirmLabel: 'Unmount',
+      danger: true,
+    })
+    if (!accepted) return
 
     this.busy = true
     this.errorMessage = ''

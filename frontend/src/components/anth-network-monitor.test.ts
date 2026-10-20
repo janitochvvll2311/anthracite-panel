@@ -7,6 +7,8 @@ import {
   networkInterface,
   networkSnapshot,
 } from '../test/fake-network-client'
+import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
+import { ANTH_TAB_SHOW_EVENT } from '../lib/ui/tab-visibility'
 
 async function flush(element: AnthNetworkMonitor): Promise<void> {
   for (let i = 0; i < 4; i++) {
@@ -57,12 +59,26 @@ function rows(element: AnthNetworkMonitor): HTMLTableRowElement[] {
 }
 
 afterEach(() => {
+  resetDialogs()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
 describe('AnthNetworkMonitor', () => {
+  it('restarts the stream when a tab panel shows it again', async () => {
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+    expect(client.watchCalls).toHaveLength(1)
+
+    element.remove()
+    document.body.append(element)
+    element.dispatchEvent(new CustomEvent(ANTH_TAB_SHOW_EVENT))
+    await flush(element)
+
+    expect(client.watchCalls).toHaveLength(2)
+  })
+
   it('loads a snapshot and renders interfaces, addresses and totals', async () => {
     const client = new FakeNetworkClient()
     const element = await mount(client)
@@ -190,15 +206,16 @@ describe('AnthNetworkMonitor', () => {
   it('brings an interface down after confirmation', async () => {
     const client = new FakeNetworkClient()
     const element = await mount(client)
-    const confirm = vi.fn(() => true)
-    vi.stubGlobal('confirm', confirm)
     const listener = vi.fn()
     element.addEventListener(ANTH_NETWORK_STATE_EVENT, listener)
 
     button(element, 'Down').click()
     await flush(element)
 
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('eth0'))
+    expect(dialogText()).toContain('Bring down eth0?')
+    await answerDialogs('confirm')
+    await flush(element)
+
     expect(client.stateCalls).toEqual([{ name: 'eth0', up: false }])
     expect(listener).toHaveBeenCalledWith(
       expect.objectContaining({ detail: { name: 'eth0', up: false } }),
@@ -208,7 +225,6 @@ describe('AnthNetworkMonitor', () => {
   it('does not apply stream snapshots while a state change is in flight', async () => {
     const client = new FakeNetworkClient()
     const element = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => true))
     let finish!: () => void
     client.setState = vi.fn(
       (_name: string, _up: boolean) =>
@@ -218,6 +234,8 @@ describe('AnthNetworkMonitor', () => {
     )
 
     button(element, 'Down').click()
+    await flush(element)
+    await answerDialogs('confirm')
     await flush(element)
 
     client.emit(
@@ -241,9 +259,9 @@ describe('AnthNetworkMonitor', () => {
   it('does not change an interface when confirmation is cancelled', async () => {
     const client = new FakeNetworkClient()
     const element = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => false))
-
     button(element, 'Down').click()
+    await flush(element)
+    await answerDialogs('cancel')
     await flush(element)
 
     expect(client.setState).not.toHaveBeenCalled()
@@ -282,9 +300,10 @@ describe('AnthNetworkMonitor', () => {
     const client = new FakeNetworkClient()
     client.stateError = new Error('permission denied')
     const element = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => true))
 
     button(element, 'Down').click()
+    await flush(element)
+    await answerDialogs('confirm')
     await flush(element)
 
     expect(element.shadowRoot?.querySelector('.error')?.textContent).toContain(

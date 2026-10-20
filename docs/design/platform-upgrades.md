@@ -20,12 +20,21 @@ repository.
 | 9 | `bun` only; `npm` and `npx` are uninstalled |
 | 10 | Renames drop the old custom element names, with no compatibility alias |
 | 11 | UI source language is English; Spanish ships through `lit-localize`; all code, comments and docs stay in English |
+| 12 | Passwords use PBKDF2-HMAC-SHA256 with a random salt, in-tree over `hmac` + `sha2` |
+| 13 | `cookie_secure` defaults to `false`, which is what a loopback bind needs; a deployment behind TLS sets it to `true` |
+| 14 | Process spawn is gated by a binary allowlist; an empty list denies every spawn |
+| 15 | Network interfaces support create, edit, rename and delete, rename only while the link is down |
+| 16 | Partitions support create, edit, resize and delete, plus `mkfs` behind its switch |
+| 17 | A plugin manifest requires a binary `sha256`; a signature is optional and its absence is warned about, not rejected |
 
 Additional decisions taken while planning:
 
 - Reviews: Copilot review plus a self review with the `code-review` skill. After
   two rounds that only raise minor findings, the remaining items are documented
   and the pull request is merged to keep moving.
+- Review waits: after opening a pull request the agent waits up to two hours in
+  fifteen-minute intervals. If no review arrives in that window, the next phase
+  starts on a branch stacked on the unreviewed one instead of waiting further.
 - Branches: `feat/<n>-<slug>` from `main`, one pull request per point, merged
   into `main` by the agent.
 - `terminal.token` is removed once the global JWT middleware lands; it stays as
@@ -44,13 +53,13 @@ Additional decisions taken while planning:
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Handler-forward dispatch, `/api` 404, app shell, i18n rig, bun toolchain | done |
-| 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | not started |
+| 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, in review |
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | not started |
 | 3 (point 6) | Floating windows, minimize, standalone window | not started |
 | 4 (point 1) | `anth-process-manager` and process spawning | not started |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
-| 7 (point 4) | Partition create/edit/delete and `mkfs` | not started |
+| 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
 | 8 (point 8) | Plugin system and the WireGuard plugin | not started |
 
 ## Phase 0 — foundation (done)

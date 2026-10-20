@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import './anth-volume-manager'
 import type { AnthVolumeManager } from './anth-volume-manager'
 import { FakeVolumeClient, volumeSnapshot } from '../test/fake-volume-client'
+import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 
 async function flush(element: AnthVolumeManager): Promise<void> {
   for (let i = 0; i < 4; i++) {
@@ -57,6 +58,7 @@ function setValue(element: HTMLInputElement | HTMLSelectElement, value: string) 
 }
 
 afterEach(() => {
+  resetDialogs()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -249,13 +251,12 @@ describe('AnthVolumeManager', () => {
   it('unmounts after confirmation and refreshes', async () => {
     const client = new FakeVolumeClient()
     const element = await mount(client)
-    const confirm = vi.fn(() => true)
-    vi.stubGlobal('confirm', confirm)
-
     button(element, 'Unmount').click()
     await flush(element)
+    expect(dialogText()).toContain('Unmount /?')
+    await answerDialogs('confirm')
+    await flush(element)
 
-    expect(confirm).toHaveBeenCalledWith('Unmount /?')
     expect(client.unmountCalls).toEqual(['/'])
     expect(client.get).toHaveBeenCalledTimes(2)
     expect(text(element)).toContain('unmounted /')
@@ -264,9 +265,9 @@ describe('AnthVolumeManager', () => {
   it('does not unmount when the confirmation is declined', async () => {
     const client = new FakeVolumeClient()
     const element = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => false))
-
     button(element, 'Unmount').click()
+    await flush(element)
+    await answerDialogs('cancel')
     await flush(element)
 
     expect(client.unmountCalls).toEqual([])

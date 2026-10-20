@@ -7,6 +7,7 @@ import {
   fileListing,
   textResult,
 } from '../test/fake-file-client'
+import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 
 async function flush(element: AnthFileExplorer): Promise<void> {
   for (let i = 0; i < 4; i++) {
@@ -57,6 +58,7 @@ function selectFile(element: AnthFileExplorer, name: string): void {
 }
 
 afterEach(() => {
+  resetDialogs()
   document.body.innerHTML = ''
 })
 
@@ -291,8 +293,6 @@ describe('AnthFileExplorer', () => {
   })
 
   it('creates, renames and deletes when writes are enabled', async () => {
-    vi.stubGlobal('prompt', vi.fn().mockReturnValue('renamed.txt'))
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const client = new FakeFileClient()
     client.listings.set(
       '/',
@@ -305,11 +305,15 @@ describe('AnthFileExplorer', () => {
     const element = await mount(client)
     button(element, 'New folder').click()
     await flush(element)
+    await answerDialogs('confirm', 'renamed.txt')
+    await flush(element)
     expect(client.mkdirCalls).toEqual([{ path: '/renamed.txt', recursive: false }])
 
     selectFile(element, 'file.txt')
     await flush(element)
     button(element, 'Rename').click()
+    await flush(element)
+    await answerDialogs('confirm', 'renamed.txt')
     await flush(element)
     expect(client.renameCalls).toEqual([
       { from: '/file.txt', to: '/renamed.txt' },
@@ -319,6 +323,8 @@ describe('AnthFileExplorer', () => {
     await flush(element)
     button(element, 'Delete').click()
     await flush(element)
+    await answerDialogs('confirm')
+    await flush(element)
     expect(client.deleteCalls).toEqual([{ path: '/file.txt', recursive: false }])
   })
 
@@ -326,7 +332,6 @@ describe('AnthFileExplorer', () => {
     const client = new FakeFileClient()
     client.listings.set('/', fileListing({ write_enabled: true }))
     const element = await mount(client)
-    vi.stubGlobal('prompt', vi.fn().mockReturnValue('new'))
     let finish!: () => void
     client.mkdir = vi.fn(
       () =>
@@ -336,6 +341,8 @@ describe('AnthFileExplorer', () => {
     )
 
     button(element, 'New folder').click()
+    await flush(element)
+    await answerDialogs('confirm', 'new')
     await flush(element)
 
     expect(client.list).toHaveBeenCalledTimes(1)
@@ -349,8 +356,6 @@ describe('AnthFileExplorer', () => {
   })
 
   it('uploads a selected file and asks before overwriting', async () => {
-    const confirm = vi.fn(() => true)
-    vi.stubGlobal('confirm', confirm)
     const client = new FakeFileClient()
     client.listings.set(
       '/',
@@ -372,15 +377,16 @@ describe('AnthFileExplorer', () => {
     })
     input.dispatchEvent(new Event('change', { bubbles: true }))
     await flush(element)
+    expect(dialogText()).toContain('Replace upload.txt?')
+    await answerDialogs('confirm')
+    await flush(element)
 
-    expect(confirm).toHaveBeenCalled()
     expect(client.uploadCalls).toHaveLength(1)
     expect(client.uploadCalls[0]?.path).toBe('/upload.txt')
     expect(client.uploadCalls[0]?.overwrite).toBe(true)
   })
 
   it('reports mutation failures', async () => {
-    vi.stubGlobal('prompt', vi.fn(() => 'new'))
     const client = new FakeFileClient()
     client.listings.set(
       '/',
@@ -390,6 +396,8 @@ describe('AnthFileExplorer', () => {
 
     const element = await mount(client)
     button(element, 'New folder').click()
+    await flush(element)
+    await answerDialogs('confirm', 'new')
     await flush(element)
 
     expect(

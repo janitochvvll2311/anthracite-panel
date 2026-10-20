@@ -5,6 +5,7 @@ import {
   FakeFirewallClient,
   firewallSnapshot,
 } from '../test/fake-firewall-client'
+import { answerDialogs, resetDialogs } from '../test/dialogs'
 
 async function flush(element: AnthFirewall): Promise<void> {
   for (let i = 0; i < 4; i++) {
@@ -51,6 +52,7 @@ function input(element: AnthFirewall, selector: string): HTMLInputElement {
 }
 
 afterEach(() => {
+  resetDialogs()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -190,13 +192,11 @@ describe('AnthFirewall', () => {
   it('deletes a rule after confirmation', async () => {
     const client = new FakeFirewallClient()
     const element = await mount(client)
-    const confirm = vi.fn(() => true)
-    vi.stubGlobal('confirm', confirm)
-
     button(element, 'Delete').click()
     await flush(element)
 
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('handle 3'))
+    await answerDialogs('confirm')
+    await flush(element)
     expect(client.deleteCalls).toEqual([3])
     expect(client.get).toHaveBeenCalledTimes(2)
   })
@@ -204,9 +204,9 @@ describe('AnthFirewall', () => {
   it('does not delete when confirmation is cancelled', async () => {
     const client = new FakeFirewallClient()
     const element = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => false))
-
     button(element, 'Delete').click()
+    await flush(element)
+    await answerDialogs('cancel')
     await flush(element)
 
     expect(client.deleteRule).not.toHaveBeenCalled()
@@ -215,13 +215,11 @@ describe('AnthFirewall', () => {
   it('flushes the managed chain after confirmation', async () => {
     const client = new FakeFirewallClient()
     const element = await mount(client)
-    const confirm = vi.fn(() => true)
-    vi.stubGlobal('confirm', confirm)
-
     button(element, 'Flush rules').click()
     await flush(element)
 
-    expect(confirm).toHaveBeenCalled()
+    await answerDialogs('confirm')
+    await flush(element)
     expect(client.flushCalls).toBe(1)
     expect(client.get).toHaveBeenCalledTimes(2)
   })

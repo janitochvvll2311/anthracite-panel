@@ -16,6 +16,7 @@ import {
   swapUsedKib,
   usagePercent,
 } from '../lib/hostinfo/display'
+import { onTabShow } from '../lib/ui/tab-visibility'
 
 const INTERVALS = [1000, 2000, 5000, 10000]
 
@@ -54,10 +55,27 @@ export class AnthHostInfo extends LitElement {
 
   private generation = 0
   private unsubscribe?: () => void
+  private offShow?: () => void
+  private resumeOnShow = false
 
   override disconnectedCallback(): void {
     super.disconnectedCallback()
+    // Parking must not resurrect a stream the operator paused on purpose, so
+    // the decision is taken before `stop()` clears it.
+    this.resumeOnShow = this.unsubscribe !== undefined
     this.stop()
+    this.offShow?.()
+    this.offShow = undefined
+  }
+
+  override connectedCallback(): void {
+    super.connectedCallback()
+    // A tab panel parks a hidden tab with `remove()`, which stops the stream
+    // here through `disconnectedCallback`. Coming back changes no property, so
+    // `willUpdate` never runs: this listener is the only re-show signal.
+    this.offShow = onTabShow(this, () => {
+      if (this.resumeOnShow && this.client) this.start()
+    })
   }
 
   protected override willUpdate(changed: PropertyValues<this>): void {

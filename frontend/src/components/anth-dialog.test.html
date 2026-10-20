@@ -1,0 +1,143 @@
+<!doctype html>
+<!--
+  Dev-only harness for the dialog utilities.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-dialog.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel modal and dialog components."
+    />
+    <title>anth-dialog · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-modal · anth-dialog-host" width="1000px">
+      <p slot="description">
+        The modal frame and the promise-based dialogs that replace
+        <code>window.confirm</code>, <code>window.prompt</code> and
+        <code>window.alert</code>. Open a question to see the queue: a second
+        request waits until the first is answered.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Confirm and cancel a question, then close with Escape.</li>
+            <li>Click the backdrop; it means cancel.</li>
+            <li>Submit an empty prompt to see validation hold it open.</li>
+            <li>Fire two questions at once to watch the queue.</li>
+            <li>
+              Press <kbd>Tab</kbd> inside a modal: focus stays within it.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>How a component uses it</h2>
+          <pre><code>if (!(await confirmAction({
+  title: 'Stop the daemon?',
+  danger: true,
+}))) return</code></pre>
+        </article>
+      </section>
+
+      <div slot="actions" class="harness-controls">
+        <button type="button" id="confirm">confirmAction()</button>
+        <button type="button" id="confirm-danger" class="danger">
+          confirmAction() · danger
+        </button>
+        <button type="button" id="prompt">promptText()</button>
+        <button type="button" id="prompt-validate">
+          promptText() · validation
+        </button>
+        <button type="button" id="alert">showAlert()</button>
+        <button type="button" id="queue">two at once</button>
+      </div>
+
+      <section class="harness-notes" aria-label="Last answer">
+        <article class="harness-note">
+          <h2>Last answer</h2>
+          <p id="log">No answer yet.</p>
+        </article>
+      </section>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import {
+        confirmAction,
+        promptText,
+        showAlert,
+      } from '/src/lib/ui/dialog.ts'
+
+      const log = document.querySelector('#log')
+      const record = (text) => {
+        log.textContent = `${new Date().toLocaleTimeString()} · ${text}`
+      }
+
+      document.querySelector('#confirm').addEventListener('click', async () => {
+        record(`confirmAction → ${await confirmAction({ title: 'Continue?' })}`)
+      })
+
+      document
+        .querySelector('#confirm-danger')
+        .addEventListener('click', async () => {
+          const accepted = await confirmAction({
+            title: 'Delete the volume?',
+            message: 'The mountpoint and its contents are removed.',
+            confirmLabel: 'Delete',
+            danger: true,
+          })
+          record(`danger confirmAction → ${accepted}`)
+        })
+
+      document.querySelector('#prompt').addEventListener('click', async () => {
+        const name = await promptText({
+          title: 'New folder',
+          label: 'Name',
+          value: 'untitled',
+          placeholder: 'logs',
+        })
+        record(`promptText → ${name === undefined ? 'undefined' : name}`)
+      })
+
+      document
+        .querySelector('#prompt-validate')
+        .addEventListener('click', async () => {
+          const name = await promptText({
+            title: 'New folder',
+            label: 'Name',
+            confirmLabel: 'Create',
+            validate: (value) => {
+              if (!value.trim()) return 'A name is required.'
+              if (value.includes('/')) return 'A name cannot contain `/`.'
+              return undefined
+            },
+          })
+          record(`validated promptText → ${name ?? 'undefined'}`)
+        })
+
+      document.querySelector('#alert').addEventListener('click', async () => {
+        await showAlert({
+          title: 'Session expired',
+          message: 'Sign in again to continue.',
+        })
+        record('showAlert acknowledged')
+      })
+
+      document.querySelector('#queue').addEventListener('click', async () => {
+        record('two questions queued')
+        const first = await confirmAction({ title: 'First question?' })
+        const second = await confirmAction({ title: 'Second question?' })
+        record(`first=${first} second=${second}`)
+      })
+    </script>
+  </body>
+</html>

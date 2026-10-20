@@ -7,6 +7,7 @@ import {
   accountSnapshot,
   accountUser,
 } from '../test/fake-account-client'
+import { answerDialogs, resetDialogs } from '../test/dialogs'
 
 async function flush(element: AnthAccountManager): Promise<void> {
   for (let i = 0; i < 4; i++) {
@@ -69,6 +70,7 @@ function setValue(element: HTMLInputElement, value: string): void {
 }
 
 afterEach(() => {
+  resetDialogs()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })
@@ -282,20 +284,20 @@ describe('editing a user', () => {
   })
 
   it('locks an account after confirmation', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const client = new FakeAccountClient()
     const element = await mount(client)
 
     rowButton(element, 'alice', 'Edit')?.click()
     await flush(element)
     button(element, 'Lock').click()
+    await flush(element)
+    await answerDialogs('confirm')
     await flush(element)
 
     expect(client.calls[0]).toEqual({ method: 'modifyUser', args: ['alice', { locked: true }] })
   })
 
   it('does nothing when the confirmation is declined', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => false))
     const client = new FakeAccountClient()
     const element = await mount(client)
 
@@ -303,12 +305,13 @@ describe('editing a user', () => {
     await flush(element)
     button(element, 'Lock').click()
     await flush(element)
+    await answerDialogs('cancel')
+    await flush(element)
 
     expect(client.calls).toEqual([])
   })
 
   it('deletes without touching the home directory by default', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const client = new FakeAccountClient()
     const element = await mount(client)
 
@@ -316,12 +319,13 @@ describe('editing a user', () => {
     await flush(element)
     button(element, 'Delete').click()
     await flush(element)
+    await answerDialogs('confirm')
+    await flush(element)
 
     expect(client.calls[0]).toEqual({ method: 'deleteUser', args: ['alice', false] })
   })
 
   it('passes remove_home when the box is ticked', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const client = new FakeAccountClient()
     const element = await mount(client)
 
@@ -334,6 +338,8 @@ describe('editing a user', () => {
     await element.updateComplete
 
     button(element, 'Delete').click()
+    await flush(element)
+    await answerDialogs('confirm')
     await flush(element)
 
     expect(client.calls[0]).toEqual({ method: 'deleteUser', args: ['alice', true] })
@@ -442,7 +448,6 @@ describe('groups', () => {
   })
 
   it('replaces the member list after confirmation', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const { client, element } = await mountGroups(
       accountSnapshot({
         groups: [accountGroup({ name: 'developers', gid: 2000, members: ['alice'] })],
@@ -456,6 +461,8 @@ describe('groups', () => {
     await element.updateComplete
     button(element, 'Save changes').click()
     await flush(element)
+    await answerDialogs('confirm')
+    await flush(element)
 
     expect(client.calls[0]).toEqual({
       method: 'modifyGroup',
@@ -464,7 +471,6 @@ describe('groups', () => {
   })
 
   it('sends an empty list to remove every member', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const { client, element } = await mountGroups(
       accountSnapshot({
         groups: [accountGroup({ name: 'developers', gid: 2000, members: ['alice'] })],
@@ -477,6 +483,8 @@ describe('groups', () => {
     await element.updateComplete
     button(element, 'Save changes').click()
     await flush(element)
+    await answerDialogs('confirm')
+    await flush(element)
 
     expect(client.calls[0]).toEqual({
       method: 'modifyGroup',
@@ -485,7 +493,6 @@ describe('groups', () => {
   })
 
   it('deletes a group after confirmation', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const { client, element } = await mountGroups(
       accountSnapshot({ groups: [accountGroup({ name: 'developers' })] }),
     )
@@ -493,6 +500,8 @@ describe('groups', () => {
     rowButton(element, 'developers', 'Edit')?.click()
     await flush(element)
     button(element, 'Delete').click()
+    await flush(element)
+    await answerDialogs('confirm')
     await flush(element)
 
     expect(client.calls[0]).toEqual({ method: 'deleteGroup', args: ['developers'] })
