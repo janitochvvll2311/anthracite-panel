@@ -121,6 +121,10 @@ fn kind_of<T: std::fmt::Debug>(result: Result<T, anth_proto::AccountError>) -> A
     result.expect_err("expected a refusal").kind
 }
 
+fn kind_error_detail<T: std::fmt::Debug>(result: Result<T, anth_proto::AccountError>) -> String {
+    result.expect_err("expected a refusal").detail
+}
+
 #[test]
 fn a_system_group_is_refused_until_allow_system_is_set() {
     let fixture = Fixture::new();
@@ -259,23 +263,83 @@ fn reusing_a_groups_own_gid_is_not_a_conflict() {
 }
 
 #[test]
-fn a_primary_gid_in_use_is_refused_on_modify() {
+fn a_primary_gid_may_name_an_occupied_group() {
     let fixture = Fixture::new();
     let guard = fixture.guard();
 
-    let args = ModifyArgs {
-        name: "alice",
-        gecos: None,
-        shell: None,
-        home: None,
-        primary_gid: Some(1003),
-        locked: None,
-    };
+    // A primary gid has to name a group that exists, so "occupied" is the only
+    // valid state. Treating it as a conflict made the switch-group feature
+    // unreachable on every surface.
+    let call = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "alice",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: Some(1003),
+            locked: None,
+        },
+    )
+    .expect("moving a user to an existing group is valid");
+    assert!(call.args.windows(2).any(|pair| pair == ["--gid", "1003"]));
+}
+
+#[test]
+fn a_primary_gid_may_re_name_the_users_own_group() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    // Re-sending the current gid is a no-op change, not a duplicate.
+    let call = plan_modify(
+        &guard,
+        &ModifyArgs {
+            name: "alice",
+            gecos: None,
+            shell: None,
+            home: None,
+            primary_gid: Some(1001),
+            locked: None,
+        },
+    )
+    .expect("alice's own gid is valid");
+    assert!(call.args.windows(2).any(|pair| pair == ["--gid", "1001"]));
+}
+
+#[test]
+fn a_primary_gid_that_names_no_group_is_refused() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
 
     assert_eq!(
-        kind_of(plan_modify(&guard, &args)),
-        AccountErrorKind::Conflict
+        kind_of(plan_modify(
+            &guard,
+            &ModifyArgs {
+                name: "alice",
+                gecos: None,
+                shell: None,
+                home: None,
+                primary_gid: Some(4242),
+                locked: None,
+            }
+        )),
+        AccountErrorKind::NotFound
     );
+}
+
+#[test]
+fn group_mutations_report_the_root_warning_before_the_system_one() {
+    let fixture = Fixture::new();
+    let guard = fixture.guard();
+
+    // `sudo` is gid 27 and root-equivalent. Both switches are off; the message
+    // must name the danger, and it must match what `groupBlockReason` says.
+    for detail in [
+        kind_error_detail(plan_group_modify(&guard, "sudo", Some(1500), None)),
+        kind_error_detail(plan_group_delete(&guard, "sudo")),
+    ] {
+        assert!(detail.contains("root-equivalent"), "{detail}");
+    }
 }
 
 #[test]

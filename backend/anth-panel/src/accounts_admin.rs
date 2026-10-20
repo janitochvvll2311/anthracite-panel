@@ -574,9 +574,9 @@ pub fn plan_modify(guard: &Guard<'_>, args: &ModifyArgs<'_>) -> Result<PlannedCa
             .extend(["--home".to_string(), home.to_string_lossy().into_owned()]);
     }
     if let Some(gid) = args.primary_gid {
-        // The id only has to name one group; two groups on it is the ambiguity
-        // `--gid` cannot express.
-        validate_new_id(gid, group_with_gid(guard.snapshot, gid), "gid")?;
+        // A primary gid *must* name an existing group: an occupied gid is the
+        // normal case here, not the duplicate the group-rename path refuses.
+        validate_new_id(gid, None, "gid")?;
         let group = guard
             .snapshot
             .groups
@@ -744,8 +744,11 @@ pub fn plan_group_modify(
     gid: Option<u32>,
     members: Option<&[String]>,
 ) -> Result<Vec<PlannedCall>, AccountError> {
-    let group = guard.writable_group(name)?;
+    // Privileged first: `sudo` is also below GID_MIN, and the root warning is
+    // the one that explains why the action is dangerous. Same order as
+    // `plan_create` and the component's `groupBlockReason`.
     guard.require_privileged_group_allowed(name)?;
+    let group = guard.writable_group(name)?;
 
     if gid.is_none() && members.is_none() {
         return Err(invalid("no change was requested"));
@@ -798,8 +801,8 @@ pub fn plan_group_delete(guard: &Guard<'_>, name: &str) -> Result<PlannedCall, A
     if guard.group(name)?.gid == 0 {
         return Err(protected("gid 0 is never deleted through the panel"));
     }
-    let group = guard.writable_group(name)?;
     guard.require_privileged_group_allowed(name)?;
+    let group = guard.writable_group(name)?;
 
     // A group that is somebody's primary group cannot be removed: those users
     // would be left with a gid that resolves to nothing.

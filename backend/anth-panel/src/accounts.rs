@@ -324,6 +324,20 @@ pub fn collect_unfitted(
     config: &AccountsConfig,
     probe: &dyn HostProbe,
 ) -> (AccountSnapshot, Vec<String>) {
+    let (snapshot, warnings, _) = collect_detailed(config, probe);
+    (snapshot, warnings)
+}
+
+/// `collect_unfitted` plus the id ranges from the very same read.
+///
+/// The daemon needs both for a mutation: the snapshot to validate against and
+/// the ranges to tell system ids from ordinary ones. Returning them together
+/// keeps it to one `HostProbe::read`, which on the real probe means two
+/// `getent` subprocesses rather than four.
+pub fn collect_detailed(
+    config: &AccountsConfig,
+    probe: &dyn HostProbe,
+) -> (AccountSnapshot, Vec<String>, IdRanges) {
     let files = probe.read();
     let mut warnings = Vec::new();
 
@@ -449,7 +463,7 @@ pub fn collect_unfitted(
         truncated: false,
         warning: None,
     };
-    (snapshot, warnings)
+    (snapshot, warnings, ranges)
 }
 
 fn skipped_warning(file: &str, skipped: usize) -> Option<String> {
@@ -694,6 +708,19 @@ alice:!::alice
         }
     }
 
+    /// Counts reads, to prove the mutation path loads `/etc` once.
+    struct CountingProbe {
+        files: LocalFiles,
+        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl HostProbe for CountingProbe {
+        fn read(&self) -> LocalFiles {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.files.clone()
+        }
+    }
+
     /// The policy the fixtures assume: control and passwords on, no opt-ins.
     fn policy() -> AccountsConfig {
         AccountsConfig {
@@ -701,6 +728,27 @@ alice:!::alice
             manage_passwords: true,
             ..AccountsConfig::default()
         }
+    }
+
+    #[test]
+    fn collect_detailed_reads_the_host_once_and_returns_the_ranges() {
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let files = LocalFiles {
+            login_defs: Some("UID_MIN 1500\nGID_MIN 2000\n".to_string()),
+            ..files()
+        };
+        let probe = CountingProbe {
+            files,
+            reads: std::sync::Arc::clone(&reads),
+        };
+
+        let (_snapshot, _warnings, ranges) = collect_detailed(&policy(), &probe);
+
+        // The guard needs the ranges and the snapshot together; a second read
+        // means a second pair of `getent` subprocesses on the real probe.
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(ranges.uid_min, 1500);
+        assert_eq!(ranges.gid_min, 2000);
     }
 
     fn snapshot_with(files: LocalFiles) -> AccountSnapshot {

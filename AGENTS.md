@@ -321,8 +321,12 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   entries, and system accounts or privileged groups without their opt-in. Root
   is deliberately not an escape hatch for the administrator guard. Snapshots
   are read unfitted for validation so a truncated list never looks like a
-  missing account. `[accounts]` has two separate switches: `control` and
-  `manage_passwords`, both off in release, and debug turns only `control` on.
+  missing account. `collect_detailed` returns the snapshot and the
+  `login.defs` ranges from one probe read, so a mutation does not run `getent`
+  twice; the connection loop sends account mutations to `spawn_blocking`,
+  because every step reads `/etc` or shells out. `[accounts]` has two separate
+  switches: `control` and `manage_passwords`, both off in release, and debug
+  turns only `control` on.
   The tools come from `shadow` (`community`), not BusyBox, which has no
   `usermod`, `groupmod`, `chpasswd` or `gpasswd`; a missing tool answers
   `Unsupported` rather than guessing with different flags.

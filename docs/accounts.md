@@ -119,7 +119,15 @@ genuinely live elsewhere.
 below `GID_MIN`. An explicit `--uid`/`--gid` into that range is refused the same
 way `--system` is, because both land in system space. A group that is *also*
 root-equivalent (`sudo`, `wheel`) reports the privileged warning first: it is
-the one that explains the danger.
+the one that explains the danger. `plan_create`, `plan_group_modify`,
+`plan_group_delete` and the component's `groupBlockReason` all use that order,
+so a row the UI greys out with one message is refused by the daemon with the
+same one.
+
+Changing a user's primary group (`--gid`) is a different operation: the gid
+must name a group that already exists, so an occupied gid is the normal case and
+not a conflict. Only renaming a group's own gid refuses a gid another group
+already holds.
 
 ## Running the container
 

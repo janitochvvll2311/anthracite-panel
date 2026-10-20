@@ -21,7 +21,6 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::accounts;
-use crate::accounts::HostProbe;
 use crate::accounts_admin;
 use crate::config::{Config, FilesConfig};
 use crate::files::{FileService, PendingUpload};
@@ -660,6 +659,23 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
+            // Account mutations read `/etc`, run `getent` and shell out, so they
+            // go to a blocking worker: a slow `nsswitch` lookup or a hung
+            // `useradd` would otherwise stall this loop for every client.
+            other if is_account_mutation(&other) => {
+                let policy = policy.clone();
+                let files = Arc::clone(&files);
+                match tokio::task::spawn_blocking(move || {
+                    handle_request_with(other, &policy, &files)
+                })
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error) => Response::Error {
+                        detail: format!("the account task did not finish: {error}"),
+                    },
+                }
+            }
             other => handle_request_with(other, &policy, &files),
         };
 
@@ -716,6 +732,22 @@ async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> Outp
     }
 }
 
+/// Whether a request mutates accounts and therefore belongs on a blocking
+/// worker. The read (`AccountList`) shares the collection path but is cheaper
+/// and stays on the sync helper.
+fn is_account_mutation(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::AccountCreate { .. }
+            | Request::AccountModify { .. }
+            | Request::AccountDelete { .. }
+            | Request::AccountSetPassword { .. }
+            | Request::AccountGroupCreate { .. }
+            | Request::AccountGroupModify { .. }
+            | Request::AccountGroupDelete { .. }
+    )
+}
+
 pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
     match std::fs::remove_file(path.as_ref()) {
         Ok(()) => Ok(()),
@@ -724,9 +756,6 @@ pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
     }
 }
 
-/// Builds the deployment policy from the loaded config plus the path it was
-/// loaded from. Kept separate from `serve` so tests can assert the config file
-/// ends up in `protected_paths`.
 /// Validates a mutation against the unfitted inventory, then runs it.
 ///
 /// The snapshot is read once per request, unfitted, so a guard never mistakes a
@@ -747,11 +776,11 @@ fn handle_account(
         ));
     }
 
-    let probe = accounts::SystemProbe::new();
-    let snapshot = accounts::collect_unfitted(&policy.accounts, &probe).0;
+    let (snapshot, _, ranges) =
+        accounts::collect_detailed(&policy.accounts, &accounts::SystemProbe::new());
     let guard =
         accounts_admin::Guard::new(&snapshot, &policy.accounts, policy.daemon_user.as_str())
-            .with_id_ranges(probe.ranges());
+            .with_id_ranges(ranges);
 
     let calls = match plan(&guard) {
         Ok(calls) => calls,
