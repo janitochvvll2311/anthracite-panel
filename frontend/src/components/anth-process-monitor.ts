@@ -10,6 +10,7 @@ import type {
   ProcessSignal,
   ProcessSnapshot,
 } from '../lib/processes/process-client'
+import { confirmAction } from '../lib/ui/dialog'
 
 export const ANTH_PROCESS_SIGNAL_EVENT = 'anth-process-signal'
 
@@ -271,13 +272,13 @@ export class AnthProcessMonitor extends LitElement {
     if (!this.client || !process || !this.controlEnabled || this.busy) return
 
     const label = process.command === '' ? process.name : process.command
-    if (
-      !window.confirm(
-        `Send ${this.pendingSignal.toUpperCase()} to PID ${process.pid} (${label})?`,
-      )
-    ) {
-      return
-    }
+    const accepted = await confirmAction({
+      title: `Send ${this.pendingSignal.toUpperCase()}?`,
+      message: `PID ${process.pid} · ${label}`,
+      confirmLabel: 'Send signal',
+      danger: true,
+    })
+    if (!accepted) return
 
     this.busy = true
     this.errorMessage = ''

@@ -14,6 +14,7 @@ import {
   type FileSortDirection,
   type FileSortKey,
 } from '../lib/files/display'
+import { confirmAction, promptText } from '../lib/ui/dialog'
 
 type PreviewKind = 'text' | 'image' | 'binary'
 
@@ -259,27 +260,29 @@ export class AnthFileExplorer extends LitElement {
     if (changed) await this.load()
   }
 
-  private newFolder(): void {
-    const name = window.prompt('New folder name')
-    if (name === null) return
-    const trimmed = name.trim()
-    if (!trimmed || trimmed.includes('/')) {
-      this.error = 'Folder names cannot be empty or contain `/`.'
-      return
-    }
-    void this.mutate(() => this.client!.mkdir(joinPath(this.path, trimmed)))
+  private async newFolder(): Promise<void> {
+    const name = await promptText({
+      title: 'New folder',
+      label: 'Name',
+      confirmLabel: 'Create',
+      validate: folderNameProblem,
+    })
+    if (name === undefined) return
+    void this.mutate(() => this.client!.mkdir(joinPath(this.path, name.trim())))
   }
 
-  private renameSelected(): void {
+  private async renameSelected(): Promise<void> {
     const selected = this.selected
     if (!selected || !this.client) return
-    const name = window.prompt('New name', selected.name)
-    if (name === null) return
+    const name = await promptText({
+      title: `Rename ${selected.name}`,
+      label: 'New name',
+      value: selected.name,
+      confirmLabel: 'Rename',
+      validate: folderNameProblem,
+    })
+    if (name === undefined) return
     const trimmed = name.trim()
-    if (!trimmed || trimmed.includes('/')) {
-      this.error = 'Names cannot be empty or contain `/`.'
-      return
-    }
     if (trimmed === selected.name) return
     const parent = parentPath(selected.path) ?? '/'
     void this.mutate(() =>
@@ -287,27 +290,40 @@ export class AnthFileExplorer extends LitElement {
     )
   }
 
-  private deleteSelected(): void {
+  private async deleteSelected(): Promise<void> {
     const selected = this.selected
     if (!selected || !this.client) return
-    const prompt =
-      selected.kind === 'directory'
-        ? `Delete ${selected.path} and all of its contents?`
-        : `Delete ${selected.path}?`
-    if (!window.confirm(prompt)) return
+    const accepted = await confirmAction({
+      title: `Delete ${selected.name}?`,
+      message:
+        selected.kind === 'directory'
+          ? `${selected.path} and everything inside it is removed.`
+          : selected.path,
+      confirmLabel: 'Delete',
+      danger: true,
+    })
+    if (!accepted) return
     void this.mutate(() =>
       this.client!.delete(selected.path, selected.kind === 'directory'),
     )
   }
 
-  private onUpload(event: Event): void {
+  private async onUpload(event: Event): Promise<void> {
     const input = event.currentTarget as HTMLInputElement
     const file = input.files?.[0]
     input.value = ''
     if (!file || !this.client) return
 
     const exists = this.listing?.entries.some((entry) => entry.name === file.name)
-    if (exists && !window.confirm(`${file.name} already exists. Replace it?`)) {
+    if (
+      exists &&
+      !(await confirmAction({
+        title: `Replace ${file.name}?`,
+        message: 'The existing file is overwritten.',
+        confirmLabel: 'Replace',
+        danger: true,
+      }))
+    ) {
       return
     }
 
@@ -853,4 +869,15 @@ declare global {
   interface HTMLElementTagNameMap {
     'anth-file-explorer': AnthFileExplorer
   }
+}
+
+/**
+ * Rejects an empty name and one containing `/`, for both a new folder and a
+ * rename. The dialog keeps the input open so the operator can fix it in place.
+ */
+function folderNameProblem(value: string): string | undefined {
+  const trimmed = value.trim()
+  if (!trimmed) return 'A name is required.'
+  if (trimmed.includes('/')) return 'A name cannot contain `/`.'
+  return undefined
 }

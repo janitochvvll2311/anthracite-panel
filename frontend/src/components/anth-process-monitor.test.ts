@@ -9,6 +9,7 @@ import type {
   ProcessSignal,
   ProcessSnapshot,
 } from '../lib/processes/process-client'
+import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 
 function processInfo(overrides: Partial<ProcessInfo> = {}): ProcessInfo {
   return {
@@ -156,6 +157,7 @@ function button(root: ShadowRoot, label: string): HTMLButtonElement {
 }
 
 afterEach(() => {
+  resetDialogs()
   document.body.innerHTML = ''
 })
 
@@ -374,7 +376,6 @@ describe('AnthProcessMonitor', () => {
     const root = element.shadowRoot
     const selected = vi.fn()
     element.addEventListener('anth-process-signal', selected)
-    vi.stubGlobal('confirm', vi.fn(() => true))
 
     flatRow(element)?.click()
     await flush(element)
@@ -396,6 +397,9 @@ describe('AnthProcessMonitor', () => {
 
     root?.querySelector<HTMLButtonElement>('.signal button')?.click()
     await flush(element)
+    expect(dialogText()).toContain('Send KILL?')
+    await answerDialogs('confirm')
+    await flush(element)
 
     expect(client.signals).toEqual([{ pid: 42, signal: 'kill' }])
     expect(selected).toHaveBeenCalledWith(
@@ -410,7 +414,6 @@ describe('AnthProcessMonitor', () => {
       snapshot([processInfo({ pid: 42 })], { control_enabled: true }),
     ]
     const { element } = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => true))
     let finish!: () => void
     client.signal = vi.fn(
       (_pid: number, _signal: ProcessSignal) =>
@@ -422,6 +425,8 @@ describe('AnthProcessMonitor', () => {
     flatRow(element)?.click()
     await flush(element)
     element.shadowRoot?.querySelector<HTMLButtonElement>('.signal button')?.click()
+    await flush(element)
+    await answerDialogs('confirm')
     await flush(element)
 
     client.emit(
@@ -447,11 +452,12 @@ describe('AnthProcessMonitor', () => {
       snapshot([processInfo({ pid: 42 })], { control_enabled: true }),
     ]
     const { element } = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => false))
 
     flatRow(element)?.click()
     await flush(element)
     element.shadowRoot?.querySelector<HTMLButtonElement>('.signal button')?.click()
+    await flush(element)
+    await answerDialogs('cancel')
     await flush(element)
 
     expect(client.signal).not.toHaveBeenCalled()
@@ -465,13 +471,14 @@ describe('AnthProcessMonitor', () => {
     ]
     client.signalError = new Error('pid 1 is protected')
     const { element } = await mount(client)
-    vi.stubGlobal('confirm', vi.fn(() => true))
     const selected = vi.fn()
     element.addEventListener('anth-process-signal', selected)
 
     flatRow(element)?.click()
     await flush(element)
     element.shadowRoot?.querySelector<HTMLButtonElement>('.signal button')?.click()
+    await flush(element)
+    await answerDialogs('confirm')
     await flush(element)
 
     expect(selected).not.toHaveBeenCalled()

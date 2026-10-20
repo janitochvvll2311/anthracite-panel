@@ -23,6 +23,7 @@ import type {
   NetworkSortDirection,
   NetworkSortKey,
 } from '../lib/network/display'
+import { confirmAction } from '../lib/ui/dialog'
 
 export const ANTH_NETWORK_STATE_EVENT = 'anth-network-state'
 
@@ -255,11 +256,15 @@ export class AnthNetworkMonitor extends LitElement {
     event.stopPropagation()
     if (!this.client || !this.canChange(iface) || this.busy) return
 
-    const action = up ? 'Bring up' : 'Bring down'
-    const effect = up
-      ? 'The interface will be enabled.'
-      : 'This can disconnect the host.'
-    if (!window.confirm(`${action} ${iface.name}? ${effect}`)) return
+    const accepted = await confirmAction({
+      title: up ? `Bring up ${iface.name}?` : `Bring down ${iface.name}?`,
+      message: up
+        ? 'The interface will be enabled.'
+        : 'This can disconnect the host.',
+      confirmLabel: up ? 'Bring up' : 'Bring down',
+      danger: !up,
+    })
+    if (!accepted) return
 
     this.busy = true
     this.actionError = ''

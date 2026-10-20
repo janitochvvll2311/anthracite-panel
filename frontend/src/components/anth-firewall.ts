@@ -15,6 +15,7 @@ import {
   ruleCountLabel,
   ruleTarget,
 } from '../lib/firewall/display'
+import { confirmAction } from '../lib/ui/dialog'
 
 /**
  * Firewall manager backed by the daemon's managed `inet anthracite` table.
@@ -145,13 +146,13 @@ export class AnthFirewall extends LitElement {
 
   private async deleteRule(rule: FirewallRule): Promise<void> {
     if (!this.client || !this.canControl || this.busy) return
-    if (
-      !window.confirm(
-        `Delete ${actionLabel(rule.action)} ${ruleTarget(rule)} (handle ${rule.handle})?`,
-      )
-    ) {
-      return
-    }
+    const accepted = await confirmAction({
+      title: `Delete this ${actionLabel(rule.action)} rule?`,
+      message: `${ruleTarget(rule)} · handle ${rule.handle}`,
+      confirmLabel: 'Delete rule',
+      danger: true,
+    })
+    if (!accepted) return
 
     this.busy = true
     this.errorMessage = ''
@@ -171,9 +172,13 @@ export class AnthFirewall extends LitElement {
 
   private async flush(): Promise<void> {
     if (!this.client || !this.canControl || this.busy) return
-    if (!window.confirm('Remove every rule from the managed firewall chain?')) {
-      return
-    }
+    const accepted = await confirmAction({
+      title: 'Flush the managed chain?',
+      message: 'Every rule in the managed chain is removed.',
+      confirmLabel: 'Flush',
+      danger: true,
+    })
+    if (!accepted) return
 
     this.busy = true
     this.errorMessage = ''

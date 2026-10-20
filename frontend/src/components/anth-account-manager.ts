@@ -27,6 +27,7 @@ import {
   wasShortened,
 } from '../lib/accounts/display'
 import type { GroupSortKey, SortDirection, UserSortKey } from '../lib/accounts/display'
+import { confirmAction } from '../lib/ui/dialog'
 
 type Pane = 'users' | 'groups'
 
@@ -381,14 +382,29 @@ export class AnthAccountManager extends LitElement {
     if (!this.client) return
     const lock = user.locked !== true
     const verb = lock ? 'Lock' : 'Unlock'
-    if (!window.confirm(`${verb} ${user.name}?`)) return
+    const accepted = await confirmAction({
+      title: `${verb} ${user.name}?`,
+      message: lock
+        ? 'A locked account cannot log in.'
+        : 'The account can log in again with its current password.',
+      confirmLabel: verb,
+      danger: lock,
+    })
+    if (!accepted) return
     await this.run(() => this.client!.modifyUser(user.name, { locked: lock }))
   }
 
   private async confirmDeleteUser(user: AccountUser): Promise<void> {
     if (!this.client) return
-    const suffix = this.removeHome ? ' and remove the home directory' : ''
-    if (!window.confirm(`Delete ${user.name}${suffix}?`)) return
+    const accepted = await confirmAction({
+      title: `Delete ${user.name}?`,
+      message: this.removeHome
+        ? 'The home directory is removed with the account.'
+        : undefined,
+      confirmLabel: 'Delete user',
+      danger: true,
+    })
+    if (!accepted) return
     await this.run(
       () => this.client!.deleteUser(user.name, this.removeHome),
       () => this.closeEditor(),
@@ -455,7 +471,17 @@ export class AnthAccountManager extends LitElement {
         return
       }
 
-      if (membersChanged && !window.confirm(`Replace the members of ${group.name}?`)) return
+      if (
+        membersChanged &&
+        !(await confirmAction({
+          title: `Replace the members of ${group.name}?`,
+          message: 'Every member not in the list is removed from the group.',
+          confirmLabel: 'Replace',
+          danger: true,
+        }))
+      ) {
+        return
+      }
 
       await this.run(
         () => this.client!.modifyGroup(group.name, request),
@@ -468,7 +494,13 @@ export class AnthAccountManager extends LitElement {
 
   private async confirmDeleteGroup(group: AccountGroup): Promise<void> {
     if (!this.client) return
-    if (!window.confirm(`Delete the group ${group.name}?`)) return
+    const accepted = await confirmAction({
+      title: `Delete the group ${group.name}?`,
+      message: 'The accounts in it are kept.',
+      confirmLabel: 'Delete group',
+      danger: true,
+    })
+    if (!accepted) return
     await this.run(() => this.client!.deleteGroup(group.name))
   }
 
