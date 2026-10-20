@@ -16,7 +16,7 @@ use std::process::Command;
 
 use anth_proto::{
     FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallRule,
-    FirewallSnapshot,
+    FirewallSnapshot, MAX_LINE_LEN, Response,
 };
 use serde_json::Value;
 
@@ -172,15 +172,33 @@ fn status_with<R: NftRunner>(
     runner: &R,
     control_enabled: bool,
 ) -> Result<FirewallSnapshot, FirewallError> {
+    let Some((rules, ruleset)) = read_table(runner)? else {
+        return Ok(FirewallSnapshot {
+            initialized: false,
+            control_enabled,
+            total: 0,
+            ..Default::default()
+        });
+    };
+
+    Ok(fit_snapshot(FirewallSnapshot {
+        initialized: true,
+        control_enabled,
+        rules,
+        ruleset,
+        ..Default::default()
+    }))
+}
+
+/// Reads every rule of the managed chain plus the textual ruleset, unfitted, so
+/// mutations see the whole chain even when a snapshot would be shortened.
+fn read_table<R: NftRunner>(
+    runner: &R,
+) -> Result<Option<(Vec<FirewallRule>, String)>, FirewallError> {
     let json = runner.run(&["-j", "list", "table", FAMILY, TABLE])?;
     if !json.ok {
         if is_missing(&json.stderr) {
-            return Ok(FirewallSnapshot {
-                initialized: false,
-                control_enabled,
-                rules: Vec::new(),
-                ruleset: String::new(),
-            });
+            return Ok(None);
         }
         return Err(nft_error(&json, "could not read the firewall table"));
     }
@@ -193,12 +211,65 @@ fn status_with<R: NftRunner>(
     let mut rules = parse_rules(&json.stdout)?;
     rules.sort_by_key(|rule| rule.handle);
 
-    Ok(FirewallSnapshot {
-        initialized: true,
-        control_enabled,
-        rules,
-        ruleset: text.stdout.trim_end().to_string(),
-    })
+    Ok(Some((rules, text.stdout.trim_end().to_string())))
+}
+
+/// Shrinks a snapshot until its serialized response fits the protocol line cap.
+///
+/// The ruleset is duplicated diagnostics, so it is dropped before any rule.
+fn fit_snapshot(mut snapshot: FirewallSnapshot) -> FirewallSnapshot {
+    let total = snapshot.rules.len();
+    snapshot.total = total;
+
+    if snapshot_json_len(&snapshot) <= MAX_LINE_LEN {
+        return snapshot;
+    }
+
+    snapshot.ruleset.clear();
+    snapshot.truncated = true;
+    if snapshot_json_len(&snapshot) <= MAX_LINE_LEN {
+        snapshot.warning = Some(rules_warning(total, total, true));
+        return snapshot;
+    }
+
+    // Rules are sorted by handle, so the surviving prefix is the oldest ones.
+    let mut low = 0usize;
+    let mut high = snapshot.rules.len();
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        let mut candidate = snapshot.clone();
+        candidate.rules.truncate(mid);
+        candidate.warning = Some(rules_warning(mid, total, true));
+
+        if snapshot_json_len(&candidate) <= MAX_LINE_LEN {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    snapshot.rules.truncate(low);
+    snapshot.warning = Some(rules_warning(low, total, true));
+    snapshot
+}
+
+fn rules_warning(shown: usize, total: usize, ruleset_omitted: bool) -> String {
+    let mut warning = if shown < total {
+        format!("showing {shown} of {total} firewall rules, lowest handle first")
+    } else {
+        format!("{total} firewall rules")
+    };
+    if ruleset_omitted {
+        warning.push_str("; nft ruleset omitted");
+    }
+    warning
+}
+
+fn snapshot_json_len(snapshot: &FirewallSnapshot) -> usize {
+    Response::FirewallSnapshot(snapshot.clone())
+        .to_json()
+        .map(|json| json.len())
+        .unwrap_or(usize::MAX)
 }
 
 fn add_rule_with<R: NftRunner>(
@@ -222,9 +293,12 @@ fn add_rule_with<R: NftRunner>(
     // matching managed drop instead of adding an accept verdict, which would only
     // end this chain and cannot override another firewall table.
     if action == FirewallAction::Allow {
-        let snapshot = status_with(runner, control_enabled)?;
-        let handles: Vec<u64> = snapshot
-            .rules
+        let Some((rules, _)) = read_table(runner)? else {
+            return Ok(format!(
+                "no managed deny rule for {protocol}/{port}; traffic is already allowed"
+            ));
+        };
+        let handles: Vec<u64> = rules
             .iter()
             .filter(|rule| {
                 rule.action == "deny" && rule.protocol == Some(protocol) && rule.port == Some(port)
@@ -300,17 +374,16 @@ fn delete_rule_with<R: NftRunner>(
 fn flush_with<R: NftRunner>(runner: &R, control_enabled: bool) -> Result<String, FirewallError> {
     require_control(control_enabled)?;
 
-    let snapshot = status_with(runner, control_enabled)?;
-    if !snapshot.initialized {
+    let Some((rules, _)) = read_table(runner)? else {
         return Ok("firewall table is not initialized".to_string());
-    }
+    };
 
     let args = vec!["flush", "chain", FAMILY, TABLE, CHAIN];
     run_ok(runner, &args, "could not flush the firewall chain")?;
     Ok(format!(
         "flushed {} firewall rule{}",
-        snapshot.rules.len(),
-        if snapshot.rules.len() == 1 { "" } else { "s" }
+        rules.len(),
+        if rules.len() == 1 { "" } else { "s" }
     ))
 }
 
@@ -420,6 +493,11 @@ fn parse_rules(json: &str) -> Result<Vec<FirewallRule>, FirewallError> {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        // Every mutation is scoped to `input`, so a rule from another chain is
+        // not managed by this panel and must not be advertised as deletable.
+        if chain != CHAIN {
+            continue;
+        }
         let raw_comment = rule.get("comment").and_then(Value::as_str);
         let (action, protocol, port, comment) = parse_comment(raw_comment);
 
@@ -608,6 +686,15 @@ mod tests {
                         "handle": 9,
                         "comment": "manual rule"
                     }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "anthracite",
+                        "chain": "output",
+                        "handle": 11,
+                        "comment": "anth:deny:tcp:25|smtp"
+                    }
                 }
             ]
         })
@@ -626,6 +713,9 @@ mod tests {
         assert!(snapshot.initialized);
         assert!(snapshot.control_enabled);
         assert_eq!(snapshot.rules.len(), 3);
+        assert_eq!(snapshot.total, 3);
+        assert!(!snapshot.truncated);
+        assert!(snapshot.warning.is_none());
         assert_eq!(snapshot.rules[0].handle, 3);
         assert_eq!(snapshot.rules[0].action, "allow");
         assert_eq!(snapshot.rules[0].protocol, Some(FirewallProtocol::Tcp));
@@ -813,6 +903,101 @@ mod tests {
                 .map(|arg| (*arg).to_string())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn only_rules_from_the_managed_chain_are_reported() {
+        let runner = FakeRunner::new(vec![ok(&snapshot_json()), ok("table inet anthracite {}")]);
+
+        let snapshot = status_with(&runner, true).unwrap();
+
+        assert_eq!(snapshot.rules.len(), 3);
+        assert!(
+            snapshot.rules.iter().all(|rule| rule.chain == "input"),
+            "{:?}",
+            snapshot.rules
+        );
+        assert!(!snapshot.rules.iter().any(|rule| rule.handle == 11));
+    }
+
+    fn many_rules_json(count: usize) -> String {
+        let mut items = vec![
+            serde_json::json!({"metainfo": {}}),
+            serde_json::json!({"table": {"family": "inet", "name": "anthracite"}}),
+            serde_json::json!({"chain": {"family": "inet", "table": "anthracite", "name": "input"}}),
+        ];
+        for handle in 1..=count {
+            items.push(serde_json::json!({
+                "rule": {
+                    "family": "inet",
+                    "table": "anthracite",
+                    "chain": "input",
+                    "handle": handle,
+                    "comment": format!(
+                        "anth:deny:tcp:{}|abcdefghijklmnopqrstuvwxyz012345",
+                        1024 + handle % 60000
+                    )
+                }
+            }));
+        }
+
+        serde_json::json!({ "nftables": items }).to_string()
+    }
+
+    #[test]
+    fn an_oversized_snapshot_drops_the_ruleset_before_any_rule() {
+        let ruleset = "rule inet anthracite input tcp dport 22 drop\n".repeat(40_000);
+        assert!(ruleset.len() > MAX_LINE_LEN);
+
+        let runner = FakeRunner::new(vec![ok(&snapshot_json()), ok(&ruleset)]);
+        let snapshot = status_with(&runner, true).unwrap();
+
+        assert!(snapshot.truncated);
+        assert!(snapshot.ruleset.is_empty());
+        assert_eq!(snapshot.rules.len(), 3);
+        assert_eq!(snapshot.total, 3);
+        assert!(
+            snapshot
+                .warning
+                .as_deref()
+                .unwrap()
+                .contains("ruleset omitted"),
+            "{:?}",
+            snapshot.warning
+        );
+        assert!(snapshot_json_len(&snapshot) <= MAX_LINE_LEN);
+    }
+
+    #[test]
+    fn a_snapshot_too_large_for_any_ruleset_still_fits_the_line_cap() {
+        let runner = FakeRunner::new(vec![
+            ok(&many_rules_json(20000)),
+            ok("table inet anthracite { ... }"),
+        ]);
+
+        let snapshot = status_with(&runner, true).unwrap();
+
+        assert!(snapshot.truncated);
+        assert!(snapshot.ruleset.is_empty());
+        assert_eq!(snapshot.total, 20000);
+        assert!(!snapshot.rules.is_empty(), "some rules should survive");
+        assert!(snapshot.rules.len() < 20000);
+        assert!(
+            snapshot.warning.as_deref().unwrap().starts_with("showing "),
+            "warning should explain the dropped rows"
+        );
+        assert!(snapshot_json_len(&snapshot) <= MAX_LINE_LEN);
+    }
+
+    #[test]
+    fn a_snapshot_that_already_fits_is_left_alone() {
+        let runner = FakeRunner::new(vec![ok(&snapshot_json()), ok("table inet anthracite {}")]);
+
+        let snapshot = status_with(&runner, true).unwrap();
+
+        assert!(!snapshot.truncated);
+        assert!(snapshot.warning.is_none());
+        assert_eq!(snapshot.total, snapshot.rules.len());
     }
 
     #[test]

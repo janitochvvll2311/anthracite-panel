@@ -12,6 +12,7 @@ import {
   actionLabel,
   parsePort,
   ruleComment,
+  ruleCountLabel,
   ruleTarget,
 } from '../lib/firewall/display'
 
@@ -316,9 +317,7 @@ export class AnthFirewall extends LitElement {
             </span>
             ${snapshot
               ? html`<span class="muted"
-                  >${snapshot.rules.length} ${snapshot.rules.length === 1
-                    ? 'rule'
-                    : 'rules'}</span
+                  >${ruleCountLabel(snapshot)}</span
                 >`
               : nothing}
           </div>
@@ -349,6 +348,11 @@ export class AnthFirewall extends LitElement {
           : nothing}
         ${this.notice
           ? html`<p class="notice" part="notice" role="status">${this.notice}</p>`
+          : nothing}
+        ${snapshot?.warning
+          ? html`<p class="warning" part="warning" role="status">
+              ${snapshot.warning}
+            </p>`
           : nothing}
 
         ${this.canControl
@@ -495,6 +499,7 @@ export class AnthFirewall extends LitElement {
 
     .error,
     .notice,
+    .warning,
     .control-off {
       margin: 0;
       padding: 8px 10px;
@@ -504,6 +509,11 @@ export class AnthFirewall extends LitElement {
     .error {
       background: rgba(248, 113, 113, 0.12);
       color: #fecaca;
+    }
+
+    .warning {
+      background: rgba(251, 191, 36, 0.12);
+      color: #fcd34d;
     }
 
     .notice {

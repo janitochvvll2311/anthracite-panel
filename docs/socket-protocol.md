@@ -446,13 +446,20 @@ Reply to `FirewallStatus`.
         "comment": "ssh"
       }
     ],
-    "ruleset": "table inet anthracite { ... }"
+    "ruleset": "table inet anthracite { ... }",
+    "total": 1,
+    "truncated": false
   }
 }
 ```
 
 `action` is `allow`, `deny`, or `custom` for a rule not created by the panel.
-`protocol` and `port` are `null` for custom rules.
+`protocol` and `port` are `null` for custom rules. Only the managed `input` chain
+is included, because every mutation is scoped to it. `total` counts the rules
+before truncation; when a snapshot would exceed the 1 MiB line cap the daemon
+drops `ruleset` first and then the rules with the highest handles, and sets
+`truncated` with a `warning` such as
+`showing 4000 of 6000 firewall rules, lowest handle first`.
 
 ### `FirewallChanged`
 

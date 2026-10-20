@@ -403,6 +403,9 @@ fn firewall_snapshot() -> FirewallSnapshot {
             comment: Some("ssh".to_string()),
         }],
         ruleset: "table inet anthracite { chain input { ... } }".to_string(),
+        total: 1,
+        truncated: false,
+        warning: None,
     }
 }
 

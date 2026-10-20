@@ -693,12 +693,24 @@ fn firewall_snapshot_and_error_responses_roundtrip() {
             comment: Some("ssh".to_string()),
         }],
         ruleset: "table inet anthracite".to_string(),
+        total: 1,
+        truncated: false,
+        warning: None,
     };
     let response = Response::FirewallSnapshot(snapshot.clone());
     match Response::from_json(&response.to_json().unwrap()).unwrap() {
         Response::FirewallSnapshot(decoded) => assert_eq!(decoded, snapshot),
         other => panic!("expected FirewallSnapshot, got {other:?}"),
     }
+
+    let truncated = anth_proto::FirewallSnapshot {
+        truncated: true,
+        warning: Some("showing 1 of 6000 firewall rules".to_string()),
+        ..snapshot
+    };
+    let json = Response::FirewallSnapshot(truncated).to_json().unwrap();
+    assert!(json.contains(r#""truncated":true"#), "{json}");
+    assert!(json.contains(r#""warning":"showing 1 of 6000"#), "{json}");
 
     let changed = Response::FirewallChanged {
         message: "allowed tcp/22".to_string(),

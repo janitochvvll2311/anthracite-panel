@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { actionLabel, parsePort, ruleComment, ruleTarget } from './display'
-import { firewallRule } from '../../test/fake-firewall-client'
+import {
+  actionLabel,
+  parsePort,
+  ruleComment,
+  ruleCountLabel,
+  ruleTarget,
+} from './display'
+import {
+  firewallRule,
+  firewallSnapshot,
+} from '../../test/fake-firewall-client'
 
 describe('firewall display helpers', () => {
   it('parses valid ports and rejects everything else', () => {
@@ -26,5 +35,17 @@ describe('firewall display helpers', () => {
     expect(ruleComment(firewallRule({ comment: null }))).toBe('—')
     expect(ruleComment(firewallRule({ comment: '' }))).toBe('—')
     expect(ruleComment(firewallRule({ comment: 'web' }))).toBe('web')
+  })
+
+  it('reports a shortened rule count against the daemon total', () => {
+    expect(ruleCountLabel(firewallSnapshot())).toBe('1 rule')
+    expect(
+      ruleCountLabel(firewallSnapshot({ rules: [], total: 2 })),
+    ).toBe('0 of 2 rules')
+    expect(
+      ruleCountLabel(
+        firewallSnapshot({ rules: [firewallRule()], total: 6000 }),
+      ),
+    ).toBe('1 of 6000 rules')
   })
 })

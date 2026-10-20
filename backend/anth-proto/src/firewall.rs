@@ -106,8 +106,16 @@ pub struct FirewallSnapshot {
     /// Whether the daemon accepts rule changes.
     pub control_enabled: bool,
     pub rules: Vec<FirewallRule>,
-    /// Textual `nft list table inet anthracite` output for diagnostics.
+    /// Textual `nft list table inet anthracite` output for diagnostics. It is
+    /// dropped first when the snapshot must be shortened.
     pub ruleset: String,
+    /// Number of managed rules found before any truncation.
+    pub total: usize,
+    /// Whether `rules` or `ruleset` was shortened to fit the protocol line cap.
+    pub truncated: bool,
+    /// Human-readable notice when the snapshot was shortened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

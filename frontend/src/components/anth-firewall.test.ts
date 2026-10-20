@@ -73,6 +73,26 @@ describe('AnthFirewall', () => {
     expect(root?.querySelector('form')).not.toBeNull()
   })
 
+  it('reports a shortened snapshot from the daemon', async () => {
+    const client = new FakeFirewallClient()
+    client.emit(
+      firewallSnapshot({
+        total: 6000,
+        truncated: true,
+        ruleset: '',
+        warning: 'showing 1 of 6000 firewall rules, lowest handle first',
+      }),
+    )
+    const element = await mount(client)
+    const root = element.shadowRoot
+
+    expect(root?.textContent).toContain('1 of 6000 rules')
+    expect(root?.querySelector('.warning')?.textContent?.trim()).toBe(
+      'showing 1 of 6000 firewall rules, lowest handle first',
+    )
+    expect(root?.querySelector('.ruleset')).toBeNull()
+  })
+
   it('adds a rule, clears the form and refreshes the snapshot', async () => {
     const client = new FakeFirewallClient()
     const element = await mount(client)

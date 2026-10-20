@@ -1,4 +1,4 @@
-import type { FirewallRule } from './firewall-client'
+import type { FirewallRule, FirewallSnapshot } from './firewall-client'
 
 /** Parses the port input used by the add-rule form. */
 export function parsePort(value: string): number | null {
@@ -28,4 +28,15 @@ export function ruleTarget(rule: FirewallRule): string {
 
 export function ruleComment(rule: FirewallRule): string {
   return rule.comment === null || rule.comment === '' ? '—' : rule.comment
+}
+
+/**
+ * Count label for the toolbar. A shortened snapshot reports the total the
+ * daemon found, so the panel never claims a partial table is complete.
+ */
+export function ruleCountLabel(snapshot: FirewallSnapshot): string {
+  const shown = snapshot.rules.length
+  const total = Math.max(snapshot.total ?? shown, shown)
+  const label = total === 1 ? 'rule' : 'rules'
+  return shown < total ? `${shown} of ${total} ${label}` : `${total} ${label}`
 }

@@ -290,11 +290,19 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   sudo cannot elevate. The daemon otherwise relies on `CAP_NET_ADMIN` or root.
   The Docker runtime installs `nftables` and sets `CAP_NET_ADMIN` on `nft`; the
   container needs `--cap-add NET_ADMIN`. Blocking nft calls run on a blocking
-  worker.
+  worker. `parse_rules` keeps only rules from the managed `input` chain, so the
+  snapshot can never advertise a rule that `delete`/`flush` would fail to reach.
+  `fit_snapshot` mirrors `process.rs`: it drops `ruleset` first and then the
+  rules with the highest handles until `Response::FirewallSnapshot` fits
+  `MAX_LINE_LEN`, setting `total`, `truncated` and `warning`. Mutations read
+  through `read_table`, which is unfitted, so shortening never hides a rule from
+  `allow` or `flush`.
 - **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
   `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
   deletes/flushes. It only renders controls when `control_enabled` is true and
-  suppresses refreshes while a mutation is in flight. The dev harness is
+  suppresses refreshes while a mutation is in flight. It shows the daemon's
+  `warning` above the table and labels the count as `shown of total` when the
+  snapshot was shortened. The dev harness is
   `src/components/anth-firewall.test.html`; tests live beside the component and
   `lib/firewall/`.
 - **Frontend host info**: `anth-host-info` renders the `GET /api/host-info`

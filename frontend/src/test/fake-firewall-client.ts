@@ -30,6 +30,8 @@ export function firewallSnapshot(
     control_enabled: true,
     rules: [firewallRule()],
     ruleset: 'table inet anthracite { chain input { ... } }',
+    total: 1,
+    truncated: false,
     ...overrides,
   }
 }

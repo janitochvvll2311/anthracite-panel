@@ -23,6 +23,12 @@ export interface FirewallSnapshot {
   control_enabled: boolean
   rules: FirewallRule[]
   ruleset: string
+  /** Number of managed rules before any truncation. */
+  total: number
+  /** Whether `rules` or `ruleset` was shortened by the daemon. */
+  truncated: boolean
+  /** Human-readable notice when the snapshot was shortened. */
+  warning?: string | null
 }
 
 export interface FirewallRuleInput {

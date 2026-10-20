@@ -472,7 +472,9 @@ curl -s localhost:8080/api/firewall
       "comment": "ssh"
     }
   ],
-  "ruleset": "table inet anthracite { ... }"
+  "ruleset": "table inet anthracite { ... }",
+  "total": 1,
+  "truncated": false
 }
 ```
 
@@ -480,8 +482,15 @@ curl -s localhost:8080/api/firewall
 | --- | --- |
 | `initialized` | Whether the managed table exists |
 | `control_enabled` | Whether `[firewall] control` allows changes |
-| `rules` | Rules in the managed table |
+| `rules` | Rules in the managed `input` chain |
 | `ruleset` | Textual `nft list table inet anthracite` output |
+| `total` | Number of managed rules before any truncation |
+| `truncated` | Whether `rules` or `ruleset` was shortened |
+| `warning` | Present only when the snapshot was shortened |
+
+A snapshot too large for the 1 MiB protocol line cap drops `ruleset` first and
+then the rules with the highest handles, and adds a `warning` such as
+`showing 4000 of 6000 firewall rules, lowest handle first`.
 
 | Status | When |
 | --- | --- |

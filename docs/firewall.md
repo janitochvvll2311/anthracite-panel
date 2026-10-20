@@ -114,19 +114,29 @@ Each snapshot contains:
 | --- | --- |
 | `initialized` | Whether the `inet anthracite` table exists |
 | `control_enabled` | Whether `[firewall] control` allows changes |
-| `rules` | Rules found in the managed table |
+| `rules` | Rules in the managed `input` chain |
 | `ruleset` | Textual `nft list table inet anthracite` output |
+| `total` | Number of managed rules before any truncation |
+| `truncated` | Whether `rules` or `ruleset` was shortened |
+| `warning` | Present only when the snapshot was shortened |
 
 Each rule has:
 
 | Field | Meaning |
 | --- | --- |
 | `handle` | nftables rule handle, used by `delete` |
-| `chain` | Chain containing the rule |
+| `chain` | Chain containing the rule; always `input` |
 | `action` | `allow`, `deny`, or `custom` for a rule not created by the panel |
 | `protocol` | `tcp`, `udp`, or `null` |
 | `port` | Port number, or `null` |
 | `comment` | Panel comment or the raw comment for custom rules |
+
+Only the managed `input` chain is reported, because `delete` and `flush` are
+scoped to it. When the snapshot would exceed the 1 MiB protocol line cap the
+daemon drops `ruleset` first and then the rules with the highest handles, and
+sets `truncated` plus a `warning` such as
+`showing 4000 of 6000 firewall rules, lowest handle first`. The CLI prints it as
+a `Warning:` line and the panel shows it above the table.
 
 ## HTTP and browser
 

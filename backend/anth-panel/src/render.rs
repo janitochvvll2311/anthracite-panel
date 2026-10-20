@@ -432,7 +432,13 @@ pub fn render_firewall_snapshot(snapshot: &FirewallSnapshot) -> String {
         ]);
     }
 
-    table.render()
+    let mut output = table.render();
+    if let Some(warning) = &snapshot.warning {
+        output.push('\n');
+        output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
 }
 
 /// Renders one directory listing as a table, followed by a warning when the

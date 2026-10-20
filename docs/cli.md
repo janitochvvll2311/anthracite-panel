@@ -286,7 +286,9 @@ anth-panel firewall list
 
 Prints the managed rules as HANDLE, ACTION, PROTO, PORT and COMMENT. Reading
 does not require control, but it does require permission to run `nft`.
-`list` is an alias for `status`.
+`list` is an alias for `status`. Only the managed `input` chain is shown, and a
+snapshot shortened to fit the protocol line cap is followed by a `Warning:` line
+that states how many rules were kept.
 
 #### `firewall allow <PORT[/PROTOCOL]>` and `firewall deny ...`
 

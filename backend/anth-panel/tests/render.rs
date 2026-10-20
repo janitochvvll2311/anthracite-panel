@@ -427,6 +427,9 @@ fn render_firewall_snapshot_shows_managed_rules() {
             },
         ],
         ruleset: String::new(),
+        total: 2,
+        truncated: false,
+        warning: None,
     };
 
     let out = render_firewall_snapshot(&snapshot);
@@ -435,6 +438,33 @@ fn render_firewall_snapshot_shows_managed_rules() {
     ] {
         assert!(out.contains(expected), "missing {expected:?} in:\n{out}");
     }
+    assert!(!out.contains("Warning:"), "{out}");
+}
+
+#[test]
+fn render_firewall_snapshot_reports_a_shortened_snapshot() {
+    let snapshot = FirewallSnapshot {
+        initialized: true,
+        control_enabled: false,
+        rules: vec![FirewallRule {
+            handle: 3,
+            chain: "input".to_string(),
+            action: "deny".to_string(),
+            protocol: Some(FirewallProtocol::Tcp),
+            port: Some(22),
+            comment: None,
+        }],
+        ruleset: String::new(),
+        total: 6000,
+        truncated: true,
+        warning: Some("showing 1 of 6000 firewall rules, lowest handle first".to_string()),
+    };
+
+    let out = render_firewall_snapshot(&snapshot);
+    assert!(
+        out.contains("Warning: showing 1 of 6000 firewall rules, lowest handle first"),
+        "{out}"
+    );
 }
 
 #[test]
