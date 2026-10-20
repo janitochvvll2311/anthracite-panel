@@ -161,6 +161,10 @@ where
                 eprintln!("[ERROR] {}", error.detail);
                 return ExitCode::FAILURE;
             }
+            Some(Ok(Response::VolumeError(error))) => {
+                eprintln!("[ERROR] {}", error.detail);
+                return ExitCode::FAILURE;
+            }
             Some(Ok(response)) => match frames.write_frame(&render(&response)) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::BrokenPipe => return ExitCode::SUCCESS,

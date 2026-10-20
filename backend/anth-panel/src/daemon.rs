@@ -27,17 +27,23 @@ use crate::hostinfo;
 use crate::network;
 use crate::process;
 use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
+use crate::volumes;
 
 /// One session's output as a stream tagged with its id.
 type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
 
 /// Deployment policy for the operations exposed by the socket.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Policy {
     pub process_control: bool,
     pub network_control: bool,
     pub firewall_control: bool,
-    /// Shared by network and firewall control commands.
+    pub volume_control: bool,
+    /// `None` disables the mount target ceiling.
+    pub mount_root: Option<std::path::PathBuf>,
+    /// Paths no unmount may cover: the socket, the config and the served root.
+    pub protected_paths: Vec<std::path::PathBuf>,
+    /// Shared by network, firewall and volume control commands.
     pub sudo: bool,
 }
 
@@ -49,9 +55,9 @@ pub fn handle_request(request: Request) -> Response {
 
 /// Handles a request with the daemon policy that is not part of the wire type.
 ///
-/// Process control, network control, firewall control and file writes are
-/// deployment policy: the socket protocol itself does not know whether the host
-/// allows them. This synchronous path is used by the line helper and unit tests.
+/// Process, network, firewall and volume control and file writes are deployment
+/// policy: the socket protocol itself does not know whether the host allows
+/// them. This synchronous path is used by the line helper and unit tests.
 /// The async connection loop special-cases blocking reads so they run on a
 /// blocking worker instead of a Tokio task.
 pub fn handle_request_with(request: Request, policy: &Policy, files: &FileService) -> Response {
@@ -104,6 +110,40 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
             Ok(message) => Response::FirewallChanged { message },
             Err(error) => Response::FirewallError(error),
         },
+        Request::VolumeList => Response::VolumeSnapshot(volumes::collect(policy.volume_control)),
+        Request::VolumeMount {
+            device,
+            target,
+            fs_type,
+            read_only,
+            allow_removable,
+        } => {
+            let args = volumes::MountArgs {
+                device: &device,
+                target: &target,
+                fs_type: fs_type.as_deref(),
+                read_only,
+                allow_removable,
+            };
+            match volumes::mount(
+                policy.volume_control,
+                policy.sudo,
+                policy.mount_root.as_deref(),
+                &args,
+            ) {
+                Ok(message) => Response::VolumeChanged { message },
+                Err(error) => Response::VolumeError(error),
+            }
+        }
+        Request::VolumeUnmount { target } => match volumes::unmount(
+            policy.volume_control,
+            policy.sudo,
+            &policy.protected_paths,
+            &target,
+        ) {
+            Ok(message) => Response::VolumeChanged { message },
+            Err(error) => Response::VolumeError(error),
+        },
         Request::FileList { path } => match files.list(&path) {
             Ok(listing) => Response::FileListing(listing),
             Err(error) => Response::FileError(error),
@@ -135,6 +175,17 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
         | Request::TerminalClose { .. } => Response::Error {
             detail: "this request requires an open connection".to_string(),
         },
+    }
+}
+
+/// An empty `mount_root` disables the target ceiling; anything else is the
+/// directory every mount target must resolve inside.
+fn mount_root(configured: &str) -> Option<std::path::PathBuf> {
+    let trimmed = configured.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(trimmed))
     }
 }
 
@@ -219,6 +270,9 @@ async fn pump(
     let network_control = policy.network_control;
     let firewall_control = policy.firewall_control;
     let sudo_enabled = policy.sudo;
+    let volume_control = policy.volume_control;
+    let mount_root = policy.mount_root.clone();
+    let protected_paths = policy.protected_paths.clone();
 
     let mut output = futures::stream::select_all(Vec::<OutputStream>::new());
     let mut uploads: HashMap<u32, PendingUpload> = HashMap::new();
@@ -285,6 +339,57 @@ async fn pump(
                     Err(error) => Response::Error {
                         detail: format!("failed to read the network interfaces: {error}"),
                     },
+                }
+            }
+            Request::VolumeList => {
+                match tokio::task::spawn_blocking(move || volumes::collect(volume_control)).await {
+                    Ok(snapshot) => Response::VolumeSnapshot(snapshot),
+                    Err(error) => Response::Error {
+                        detail: format!("failed to read the storage inventory: {error}"),
+                    },
+                }
+            }
+            Request::VolumeMount {
+                device,
+                target,
+                fs_type,
+                read_only,
+                allow_removable,
+            } => {
+                let mount_root = mount_root.clone();
+                match tokio::task::spawn_blocking(move || {
+                    let args = volumes::MountArgs {
+                        device: &device,
+                        target: &target,
+                        fs_type: fs_type.as_deref(),
+                        read_only,
+                        allow_removable,
+                    };
+                    volumes::mount(volume_control, sudo_enabled, mount_root.as_deref(), &args)
+                })
+                .await
+                {
+                    Ok(Ok(message)) => Response::VolumeChanged { message },
+                    Ok(Err(error)) => Response::VolumeError(error),
+                    Err(error) => Response::VolumeError(anth_proto::VolumeError::new(
+                        anth_proto::VolumeErrorKind::Failed,
+                        format!("the mount worker failed: {error}"),
+                    )),
+                }
+            }
+            Request::VolumeUnmount { target } => {
+                let protected_paths = protected_paths.clone();
+                match tokio::task::spawn_blocking(move || {
+                    volumes::unmount(volume_control, sudo_enabled, &protected_paths, &target)
+                })
+                .await
+                {
+                    Ok(Ok(message)) => Response::VolumeChanged { message },
+                    Ok(Err(error)) => Response::VolumeError(error),
+                    Err(error) => Response::VolumeError(anth_proto::VolumeError::new(
+                        anth_proto::VolumeErrorKind::Failed,
+                        format!("the unmount worker failed: {error}"),
+                    )),
                 }
             }
             Request::NetworkSetState { name, up } => {
@@ -535,7 +640,33 @@ pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
     }
 }
 
-pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> {
+/// Builds the deployment policy from the loaded config plus the path it was
+/// loaded from. Kept separate from `serve` so tests can assert the config file
+/// ends up in `protected_paths`.
+pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
+    Policy {
+        process_control: config.process.control,
+        network_control: config.network.control,
+        firewall_control: config.firewall.control,
+        volume_control: config.volumes.control,
+        mount_root: mount_root(&config.volumes.mount_root),
+        protected_paths: volumes::protected_paths(
+            Some(config_path),
+            Path::new(&config.files.root),
+            Path::new(&config.socket_path),
+        ),
+        sudo: config.sudo,
+    }
+}
+
+/// `config_path` is the file the daemon actually loaded, which `main` resolves
+/// from `--config`. It cannot be re-derived from `ANTH_CONFIG` here: the shipped
+/// entrypoint always passes `--config` and only sets the variable when the
+/// operator did.
+pub async fn serve(
+    config: &Config,
+    config_path: &Path,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let socket_path = Path::new(&config.socket_path);
     clear_socket_path(socket_path)?;
 
@@ -549,12 +680,7 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         supports_line_editing(&shell)
     );
     let program: Arc<str> = Arc::from(shell);
-    let policy = Policy {
-        process_control: config.process.control,
-        network_control: config.network.control,
-        firewall_control: config.firewall.control,
-        sudo: config.sudo,
-    };
+    let policy = policy_for(config, config_path);
     let files = Arc::new(
         FileService::new(&config.files).map_err(|e| format!("invalid files configuration: {e}"))?,
     );
@@ -564,6 +690,7 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         let sessions = Arc::clone(&sessions);
         let program = Arc::clone(&program);
         let files = Arc::clone(&files);
+        let policy = policy.clone();
         tokio::spawn(async move {
             if let Err(e) = serve_connection_with(socket, sessions, program, policy, files).await {
                 eprintln!("Error handling connection: {e}");

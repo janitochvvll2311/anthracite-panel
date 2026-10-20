@@ -1,11 +1,12 @@
 use anth_panel::render::{
     format_kib, format_uptime, render_file_listing, render_firewall_snapshot, render_host_info,
-    render_network_snapshot, render_process_snapshot, render_response,
+    render_network_snapshot, render_process_snapshot, render_response, render_volume_snapshot,
 };
 use anth_proto::{
     FirewallProtocol, FirewallRule, FirewallSnapshot, HostInfo, LoadAverage, MemoryInfo,
     NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind, NetworkInterface,
-    NetworkSnapshot, OsInfo, ProcessInfo, ProcessSnapshot, Response,
+    NetworkSnapshot, OsInfo, ProcessInfo, ProcessSnapshot, Response, VolumeDevice, VolumeError,
+    VolumeErrorKind, VolumeKind, VolumeMount, VolumeSnapshot, VolumeUsage,
 };
 
 fn sample() -> HostInfo {
@@ -471,4 +472,127 @@ fn render_firewall_snapshot_reports_a_shortened_snapshot() {
 fn render_firewall_snapshot_reports_an_uninitialized_table() {
     let out = render_firewall_snapshot(&FirewallSnapshot::default());
     assert_eq!(out, "Firewall table is not initialized.");
+}
+
+fn volume_snapshot() -> VolumeSnapshot {
+    VolumeSnapshot {
+        devices: vec![
+            VolumeDevice {
+                name: "sda".to_string(),
+                path: "/dev/sda".to_string(),
+                kind: VolumeKind::Disk,
+                size_bytes: 80_000_000_000,
+                ..Default::default()
+            },
+            VolumeDevice {
+                name: "sda1".to_string(),
+                path: "/dev/sda1".to_string(),
+                kind: VolumeKind::Part,
+                parent: Some("sda".to_string()),
+                size_bytes: 79_000_000_000,
+                fstype: Some("ext4".to_string()),
+                label: Some("raíz".to_string()),
+                mountpoints: vec!["/".to_string()],
+                ..Default::default()
+            },
+            VolumeDevice {
+                name: "sdb1".to_string(),
+                path: "/dev/sdb1".to_string(),
+                kind: VolumeKind::Part,
+                size_bytes: 16_000_000_000,
+                fstype: Some("vfat".to_string()),
+                removable: true,
+                ..Default::default()
+            },
+        ],
+        mounts: vec![
+            VolumeMount {
+                mountpoint: "/".to_string(),
+                source: "/dev/sda1".to_string(),
+                fstype: "ext4".to_string(),
+                options: "rw".to_string(),
+                read_only: false,
+                virtual_fs: false,
+                usage: Some(VolumeUsage {
+                    total_bytes: 79_000_000_000,
+                    used_bytes: 20_000_000_000,
+                    available_bytes: 55_000_000_000,
+                }),
+            },
+            VolumeMount {
+                mountpoint: "/proc".to_string(),
+                source: "proc".to_string(),
+                fstype: "proc".to_string(),
+                options: "rw".to_string(),
+                read_only: false,
+                virtual_fs: true,
+                usage: None,
+            },
+            VolumeMount {
+                mountpoint: "/run".to_string(),
+                source: "tmpfs".to_string(),
+                fstype: "tmpfs".to_string(),
+                options: "ro".to_string(),
+                read_only: true,
+                virtual_fs: true,
+                usage: None,
+            },
+        ],
+        control_enabled: true,
+        timestamp_ms: 1,
+        total: 3,
+        truncated: false,
+        warning: None,
+    }
+}
+
+#[test]
+fn render_volume_snapshot_indents_children_and_lists_mounts() {
+    let text = render_volume_snapshot(&volume_snapshot());
+
+    assert!(text.contains("DEVICE"), "{text}");
+    assert!(text.contains("MOUNTPOINT"), "{text}");
+    assert!(text.contains("sda1"), "{text}");
+    // A child is drawn under its disk, so its cell carries the indent.
+    assert!(text.contains("  sda1"), "{text}");
+    assert!(text.contains("ext4"), "{text}");
+    assert!(text.contains("raíz"), "{text}");
+    assert!(text.contains("virtual"), "{text}");
+    assert!(text.contains("ro, virtual"), "{text}");
+    assert!(text.contains("25%"), "{text}");
+}
+
+#[test]
+fn render_volume_snapshot_handles_an_empty_host() {
+    let text = render_volume_snapshot(&VolumeSnapshot::default());
+    assert!(text.contains("No block devices found."));
+    assert!(text.contains("No mounts found."));
+}
+
+#[test]
+fn render_volume_snapshot_appends_the_warning() {
+    let snapshot = VolumeSnapshot {
+        truncated: true,
+        warning: Some("showing 1 of 9000 devices".to_string()),
+        ..volume_snapshot()
+    };
+    let text = render_volume_snapshot(&snapshot);
+    assert!(
+        text.contains("Warning: showing 1 of 9000 devices"),
+        "{text}"
+    );
+}
+
+#[test]
+fn render_response_renders_volume_messages_and_errors() {
+    let changed = render_response(&Response::VolumeChanged {
+        message: "mounted /dev/sdb1 on /mnt/usb".to_string(),
+    });
+    assert_eq!(changed, "[OK] mounted /dev/sdb1 on /mnt/usb");
+
+    let failed = render_response(&Response::VolumeError(VolumeError::new(
+        VolumeErrorKind::Busy,
+        "target is busy",
+    )));
+    assert_eq!(failed, "[ERROR] target is busy");
 }

@@ -11,8 +11,7 @@
 //! argument vector, never through a shell, and every rule created by the panel
 //! carries an `anth:` comment so its handle and intent can be recovered.
 
-use std::io;
-use std::process::Command;
+use crate::command::{CommandError, CommandRunner, SystemRunner};
 
 use anth_proto::{
     FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallRule,
@@ -51,80 +50,23 @@ impl SystemNft {
 
 impl NftRunner for SystemNft {
     fn run(&self, args: &[&str]) -> Result<NftOutput, FirewallError> {
-        if !self.use_sudo {
-            return execute(false, args);
-        }
-
-        let output = execute(true, args);
-        if should_fallback_from_sudo(&output) {
-            execute(false, args)
-        } else {
-            output
-        }
-    }
-}
-
-fn execute(use_sudo: bool, args: &[&str]) -> Result<NftOutput, FirewallError> {
-    let output = nft_command(use_sudo, args).env("LC_ALL", "C").output();
-
-    match output {
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stderr = stderr
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .collect::<Vec<_>>()
-                .join("; ");
-            Ok(NftOutput {
-                ok: output.status.success(),
-                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-                stderr,
-            })
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let program = if use_sudo { "sudo" } else { "nft" };
-            Err(FirewallError::new(
+        let runner = SystemRunner::new(self.use_sudo);
+        match runner.run("nft", args) {
+            Ok(output) => Ok(NftOutput {
+                ok: output.ok,
+                stdout: output.stdout,
+                stderr: output.stderr,
+            }),
+            Err(CommandError::Unavailable { program }) => Err(FirewallError::new(
                 FirewallErrorKind::Unavailable,
                 format!("{program} is not installed or is not on PATH"),
-            ))
+            )),
+            Err(CommandError::Failed { detail, .. }) => Err(FirewallError::new(
+                FirewallErrorKind::Failed,
+                format!("could not run nft: {detail}"),
+            )),
         }
-        Err(error) => Err(FirewallError::new(
-            FirewallErrorKind::Failed,
-            format!("could not run nft: {error}"),
-        )),
     }
-}
-
-/// If sudo cannot elevate, retry nft directly so a file capability or a root
-/// daemon still works. Genuine nft errors do not trigger a second attempt.
-fn should_fallback_from_sudo(result: &Result<NftOutput, FirewallError>) -> bool {
-    match result {
-        Err(error) => error.kind == FirewallErrorKind::Unavailable,
-        Ok(output) if !output.ok => {
-            let lowercase = output.stderr.to_lowercase();
-            lowercase.contains("a password is required")
-                || lowercase.contains("a terminal is required")
-                || lowercase.contains("no tty present")
-                || lowercase.contains("not in the sudoers")
-                || lowercase.contains("not allowed to execute")
-                || lowercase.contains("command not found")
-                || lowercase.contains("askpass")
-        }
-        _ => false,
-    }
-}
-
-fn nft_command(use_sudo: bool, args: &[&str]) -> Command {
-    let mut command = if use_sudo {
-        let mut command = Command::new("sudo");
-        command.arg("-n").arg("nft");
-        command
-    } else {
-        Command::new("nft")
-    };
-    command.args(args);
-    command
 }
 
 /// Reads the managed table. A missing table is reported as uninitialized.
@@ -1021,38 +963,5 @@ mod tests {
 
         let error = status_with(&MissingNft, true).unwrap_err();
         assert_eq!(error.kind, FirewallErrorKind::Unavailable);
-    }
-
-    #[test]
-    fn sudo_prefix_is_added_before_nft() {
-        let direct = nft_command(false, &["list", "table"]);
-        assert_eq!(direct.get_program(), "nft");
-        assert_eq!(direct.get_args().collect::<Vec<_>>(), vec!["list", "table"]);
-
-        let elevated = nft_command(true, &["list", "table"]);
-        assert_eq!(elevated.get_program(), "sudo");
-        assert_eq!(
-            elevated.get_args().collect::<Vec<_>>(),
-            vec!["-n", "nft", "list", "table"]
-        );
-    }
-
-    #[test]
-    fn only_sudo_failures_fall_back_to_direct_nft() {
-        assert!(should_fallback_from_sudo(&fail(
-            "sudo: a password is required"
-        )));
-        assert!(should_fallback_from_sudo(&fail(
-            "sudo: no tty present and no askpass program specified"
-        )));
-        assert!(should_fallback_from_sudo(&fail(
-            "user is not in the sudoers file"
-        )));
-        assert!(should_fallback_from_sudo(&Err(FirewallError::new(
-            FirewallErrorKind::Unavailable,
-            "sudo is not installed or is not on PATH",
-        ))));
-        assert!(!should_fallback_from_sudo(&fail("syntax error")));
-        assert!(!should_fallback_from_sudo(&ok("")));
     }
 }

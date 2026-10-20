@@ -21,6 +21,7 @@ docs/
   terminal.md               # PTY sessions, browser route and its current risks
   processes.md              # process monitoring, signals, limits and controls
   files.md                  # filesystem root, chunked transfers, write policy
+  volumes.md                # storage inventory, mount/unmount policy
   design/                   # design notes for the TTY protocol and web terminal
 backend/
   Cargo.toml                # workspace root, resolver = "2"
@@ -41,7 +42,9 @@ backend/
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
       process.rs            #   process table from /proc and signal policy
       network.rs            #   interfaces from sysfs/proc, addresses and up/down ioctl
-      firewall.rs           #   managed nftables table, rules and command runner
+      command.rs            #   sudo-capable command runner shared by nft, mount and umount
+      firewall.rs           #   managed nftables table and rules
+      volumes.rs            #   lsblk/mountinfo parsers, mount and unmount policy
       files.rs              #   virtual paths, listings, chunked reads and atomic uploads
       render.rs             #   bordered table renderer for the CLI
       stream.rs             #   repeat a request: interval parsing + frame output
@@ -53,7 +56,7 @@ backend/
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
     tests/                  #   api.rs, client.rs, config.rs, daemon.rs, files.rs, hostinfo.rs,
                             #   render.rs, stream.rs, sse.rs, terminal.rs, terminal_client.rs,
-                            #   terminal_exit.rs, terminal_web.rs
+                            #   terminal_exit.rs, terminal_web.rs, volumes.rs
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
   vitest.config.ts          # frontend unit tests, happy-dom environment
@@ -158,7 +161,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `#[serde(tag = "type", content = "data")]`. The request/response commands are
   `Echo`, `HostInfo`, the process variants (`ProcessList`, `ProcessSignal`), the
   filesystem variants (`FileList`, `FileRead`, `FileMkdir`, `FileRename`,
-  `FileDelete` and the chunked `FileWrite*` upload flow) and the
+  `FileDelete` and the chunked `FileWrite*` upload flow), the volume variants
+  (`VolumeList`, `VolumeMount`, `VolumeUnmount`) and the
   terminal variants (`TerminalOpen`, `TerminalInput`, `TerminalResize`,
   `TerminalClose`); terminal output arrives unsolicited as
   `Response::TerminalOutput` and ends with `TerminalExited`. Add a new operation by
@@ -189,12 +193,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   and `render_file_listing` map snapshots onto it. It is a local renderer, not a
   dependency.
 - **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]`, `[process]`,
-  `[network]`, `[firewall]` and `[files]`) is TOML with
+  `[network]`, `[firewall]`, `[volumes]` and `[files]`) is TOML with
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at
   `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, global `sudo = false`,
   `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
   `process.control = false`, `network.control = false`,
-  `firewall.control = false`, legacy `network.sudo`/`firewall.sudo` and
+  `firewall.control = false`, `volumes.control = false` with
+  `volumes.mount_root = "/mnt"`, legacy `network.sudo`/`firewall.sudo` and
   `firewall.sudo_password` are accepted and ignored,
   `files.root = "/"`, `files.write = false`, `max_entries = 5000`,
   `max_preview_bytes = 1 MiB` and
@@ -305,6 +310,28 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   snapshot was shortened. The dev harness is
   `src/components/anth-firewall.test.html`; tests live beside the component and
   `lib/firewall/`.
+- **Volumes**: `volumes.rs` reads `lsblk --json --bytes` and
+  `/proc/self/mountinfo`, flattens the device tree with `parent` links and
+  reports **every** mount, virtual filesystems included. Mount and unmount are
+  validated against a fresh snapshot: the device must exist and be unmounted,
+  removable media needs `allow_removable`, the target must be an existing
+  absolute directory inside `volumes.mount_root`, and an unmount may not cover
+  `/`, a virtual filesystem, the socket, the config, `files.root` or the
+  executable. `mount`/`umount` run through `command::SystemRunner` with an
+  argument vector, never a shell; stderr text is classified into
+  `VolumeErrorKind`. `fit_snapshot` mirrors `process.rs`: it drops diagnostic
+  fields first, then device and mount tails, setting `total`, `truncated` and
+  `warning`. Partitioning and `mkfs` are out of scope. Both mutations run on a
+  blocking worker.
+- **Frontend volume manager**: `anth-volume-manager` renders the device tree and
+  the mount table through an injected `VolumeClient`
+  (`lib/volumes/volume-client.ts`), with `lib/volumes/display.ts` owning the
+  tree depth, filtering, sorting and usage helpers. Refresh is manual: there is
+  no SSE stream, so the component never holds a connection open. Controls only
+  appear when `control_enabled` is true, virtual filesystems never offer
+  unmount, and the removable checkbox only appears for removable media. Tests
+  live beside the component and `lib/volumes/`; the dev harness is
+  `src/components/anth-volume-manager.test.html`.
 - **Frontend host info**: `anth-host-info` renders the `GET /api/host-info`
   snapshot and follows `/api/host-info/watch` through the injected
   `HostInfoClient`. It formats uptime, load, memory and swap, and exposes
@@ -350,7 +377,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `file upload` own their socket loop because they move raw bytes in chunks.
   `network up` and `network down` ask for confirmation unless `--yes`.
   `firewall allow`, `deny`, `delete` and `flush` ask for confirmation unless
-  `--yes`.
+  `--yes`. `volume mount` and `volume unmount` do too.
+  `stream::follow` turns a `VolumeError` into exit code `1`, like the other
+  typed error responses.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
 
@@ -369,6 +398,7 @@ sync with behaviour; they are the contract for people writing clients:
 - `docs/network.md` — network data sources, traffic counters, up/down policy.
 - `docs/firewall.md` — managed nftables table, commands, API and container
   capabilities.
+- `docs/volumes.md` — storage inventory, mount and unmount policy, privileges.
 
 `AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
 duplicate route tables here — point at the doc.

@@ -35,6 +35,7 @@ fn config_at(path: &Path) -> Config {
         process: ProcessConfig::default(),
         network: anth_panel::config::NetworkConfig::default(),
         firewall: anth_panel::config::FirewallConfig::default(),
+        volumes: anth_panel::config::VolumesConfig::default(),
         files: FilesConfig::default(),
     }
 }
@@ -59,8 +60,9 @@ fn clock_ticks_per_second() -> u64 {
 
 async fn start_daemon(config: Config, path: &Path) -> tokio::task::JoinHandle<()> {
     let _ = std::fs::remove_file(path);
+    let config_path = path.with_extension("config.toml");
     let handle = tokio::spawn(async move {
-        let _ = anth_panel::daemon::serve(&config).await;
+        let _ = anth_panel::daemon::serve(&config, &config_path).await;
     });
 
     for _ in 0..200 {

@@ -17,6 +17,7 @@ in the HTTP server.
 | [docs/processes.md](docs/processes.md) | Process monitoring, signals, limits and controls |
 | [docs/network.md](docs/network.md) | Network interfaces, traffic counters and up/down policy |
 | [docs/firewall.md](docs/firewall.md) | Managed nftables table, rules and container capabilities |
+| [docs/volumes.md](docs/volumes.md) | Storage inventory, mount and unmount policy, privileges |
 | [docs/files.md](docs/files.md) | Filesystem root, chunked transfers, write policy and web explorer |
 
 ## Layout
@@ -99,9 +100,10 @@ npm run build
 
 See [AGENTS.md](AGENTS.md) for architecture notes and repository conventions.
 Debug builds generate a missing config with global sudo, process control,
-network control, firewall control and file writes enabled so the full UI is
-testable. Sudo runs `ip link set` and `nft` through `sudo -n`; both fall back to
-their direct path. Release builds keep the controls disabled.
+network control, firewall control, volume control and file writes enabled so the
+full UI is testable. Sudo runs `ip link set`, `nft`, `mount` and `umount`
+through `sudo -n`; each falls back to its direct path. Release builds keep the
+controls disabled.
 
 ## License
 

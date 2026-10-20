@@ -47,7 +47,8 @@ fn read_until(reader: &mut (dyn Read + Send), needle: &str, within: Duration) ->
 /// Starts the daemon on a fresh socket and waits for it to bind.
 async fn start_daemon(config: Config, path: &std::path::Path) {
     let _ = std::fs::remove_file(path);
-    tokio::spawn(async move { anth_panel::daemon::serve(&config).await });
+    let config_path = path.with_extension("config.toml");
+    tokio::spawn(async move { anth_panel::daemon::serve(&config, &config_path).await });
     for _ in 0..200 {
         if path.exists() {
             return;

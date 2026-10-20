@@ -747,3 +747,157 @@ fn firewall_names_are_case_insensitive() {
     assert!(anth_proto::FirewallAction::from_str("nope").is_err());
     assert!(anth_proto::FirewallProtocol::from_str("sctp").is_err());
 }
+
+#[test]
+fn volume_requests_use_the_shared_tagged_envelope() {
+    assert_eq!(
+        Request::VolumeList.to_json().unwrap(),
+        r#"{"type":"VolumeList"}"#
+    );
+
+    let mount = Request::VolumeMount {
+        device: "/dev/sdb1".to_string(),
+        target: "/mnt/data".to_string(),
+        fs_type: Some("ext4".to_string()),
+        read_only: true,
+        allow_removable: false,
+    };
+    assert_eq!(
+        mount.to_json().unwrap(),
+        r#"{"type":"VolumeMount","data":{"device":"/dev/sdb1","target":"/mnt/data","fs_type":"ext4","read_only":true,"allow_removable":false}}"#
+    );
+
+    let minimal = Request::VolumeMount {
+        device: "/dev/sdb1".to_string(),
+        target: "/mnt/data".to_string(),
+        fs_type: None,
+        read_only: false,
+        allow_removable: false,
+    };
+    assert_eq!(
+        minimal.to_json().unwrap(),
+        r#"{"type":"VolumeMount","data":{"device":"/dev/sdb1","target":"/mnt/data","read_only":false,"allow_removable":false}}"#
+    );
+
+    let unmount = Request::VolumeUnmount {
+        target: "/mnt/data".to_string(),
+    };
+    assert_eq!(
+        unmount.to_json().unwrap(),
+        r#"{"type":"VolumeUnmount","data":{"target":"/mnt/data"}}"#
+    );
+}
+
+#[test]
+fn volume_snapshot_and_error_responses_roundtrip() {
+    let snapshot = anth_proto::VolumeSnapshot {
+        devices: vec![anth_proto::VolumeDevice {
+            name: "sda1".to_string(),
+            path: "/dev/sda1".to_string(),
+            kind: anth_proto::VolumeKind::Part,
+            parent: Some("sda".to_string()),
+            size_bytes: 512_000_000,
+            fstype: Some("ext4".to_string()),
+            label: Some("root".to_string()),
+            uuid: Some("1111-2222".to_string()),
+            mountpoints: vec!["/".to_string()],
+            read_only: false,
+            removable: false,
+            model: None,
+            transport: Some("sata".to_string()),
+        }],
+        mounts: vec![anth_proto::VolumeMount {
+            mountpoint: "/".to_string(),
+            source: "/dev/sda1".to_string(),
+            fstype: "ext4".to_string(),
+            options: "rw,relatime".to_string(),
+            read_only: false,
+            virtual_fs: false,
+            usage: Some(anth_proto::VolumeUsage {
+                total_bytes: 1000,
+                used_bytes: 400,
+                available_bytes: 550,
+            }),
+        }],
+        control_enabled: true,
+        timestamp_ms: 1_700_000_000_000,
+        total: 1,
+        truncated: false,
+        warning: None,
+    };
+
+    let response = Response::VolumeSnapshot(snapshot.clone());
+    match Response::from_json(&response.to_json().unwrap()).unwrap() {
+        Response::VolumeSnapshot(decoded) => assert_eq!(decoded, snapshot),
+        other => panic!("expected VolumeSnapshot, got {other:?}"),
+    }
+
+    let changed = Response::VolumeChanged {
+        message: "mounted /dev/sdb1 on /mnt/data".to_string(),
+    };
+    match Response::from_json(&changed.to_json().unwrap()).unwrap() {
+        Response::VolumeChanged { message } => {
+            assert_eq!(message, "mounted /dev/sdb1 on /mnt/data")
+        }
+        other => panic!("expected VolumeChanged, got {other:?}"),
+    }
+
+    let error = Response::VolumeError(anth_proto::VolumeError::new(
+        anth_proto::VolumeErrorKind::Busy,
+        "target is busy",
+    ));
+    let json = error.to_json().unwrap();
+    assert!(json.contains(r#""kind":"busy""#), "{json}");
+    match Response::from_json(&json).unwrap() {
+        Response::VolumeError(error) => {
+            assert_eq!(error.kind, anth_proto::VolumeErrorKind::Busy)
+        }
+        other => panic!("expected VolumeError, got {other:?}"),
+    }
+}
+
+#[test]
+fn volume_devices_always_serialize_mountpoints() {
+    let device = anth_proto::VolumeDevice {
+        name: "sdb1".to_string(),
+        path: "/dev/sdb1".to_string(),
+        kind: anth_proto::VolumeKind::Part,
+        ..Default::default()
+    };
+    assert!(device.mountpoints.is_empty());
+
+    let json = serde_json::to_string(&device).unwrap();
+    assert!(
+        json.contains(r#""mountpoints":[]"#),
+        "an unmounted device must still carry the key: {json}"
+    );
+
+    let decoded: anth_proto::VolumeDevice = serde_json::from_str(&json).unwrap();
+    assert!(decoded.mountpoints.is_empty());
+}
+
+#[test]
+fn volume_kinds_match_lsblk_names() {
+    use std::str::FromStr;
+
+    for (name, kind) in [
+        ("disk", anth_proto::VolumeKind::Disk),
+        ("part", anth_proto::VolumeKind::Part),
+        ("crypt", anth_proto::VolumeKind::Crypt),
+        ("lvm", anth_proto::VolumeKind::Lvm),
+        ("raid1", anth_proto::VolumeKind::Raid),
+        ("loop", anth_proto::VolumeKind::Loop),
+        ("rom", anth_proto::VolumeKind::Rom),
+        ("whatever", anth_proto::VolumeKind::Other),
+    ] {
+        assert_eq!(
+            anth_proto::VolumeKind::from_str(name).unwrap(),
+            kind,
+            "{name}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(&anth_proto::VolumeKind::Part).unwrap(),
+        r#""part""#
+    );
+}

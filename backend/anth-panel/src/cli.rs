@@ -46,6 +46,8 @@ pub enum Command {
     Network(NetworkArgs),
     /// Inspect and configure the managed nftables firewall.
     Firewall(FirewallArgs),
+    /// Browse, mount and unmount storage volumes.
+    Volume(VolumeArgs),
     /// Browse and manage files on the daemon host.
     File(FileArgs),
     /// Open an interactive terminal on the daemon host.
@@ -191,6 +193,69 @@ pub struct FirewallDeleteArgs {
 
 #[derive(Args, Debug)]
 pub struct FirewallFlushArgs {
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct VolumeArgs {
+    #[command(subcommand)]
+    pub command: VolumeCommand,
+}
+
+/// `volume` subcommands. `unmount` keeps `umount` as an alias because that is
+/// the name of the binary most operators already type.
+#[derive(Subcommand, Debug)]
+pub enum VolumeCommand {
+    /// List block devices and mounts as tables.
+    #[command(alias = "ls")]
+    List,
+    /// Mount a device on a directory.
+    Mount(VolumeMountArgs),
+    /// Unmount a mounted directory.
+    #[command(alias = "umount")]
+    Unmount(VolumeUnmountArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct VolumeMountArgs {
+    #[arg(
+        value_name = "DEVICE",
+        help = "Device path or kernel name, e.g. /dev/sdb1"
+    )]
+    pub device: String,
+
+    #[arg(
+        value_name = "TARGET",
+        help = "Existing directory below volumes.mount_root"
+    )]
+    pub target: String,
+
+    #[arg(
+        long = "type",
+        value_name = "FSTYPE",
+        help = "Filesystem type; detected from the device when omitted"
+    )]
+    pub fs_type: Option<String>,
+
+    #[arg(long, help = "Mount read-only")]
+    pub read_only: bool,
+
+    #[arg(
+        long,
+        help = "Allow mounting removable media, which is refused by default"
+    )]
+    pub allow_removable: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct VolumeUnmountArgs {
+    #[arg(value_name = "TARGET", help = "Mountpoint to unmount")]
+    pub target: String,
+
     #[arg(long, help = "Do not ask for confirmation")]
     pub yes: bool,
 }

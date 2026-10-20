@@ -1,6 +1,8 @@
 use anth_proto::{Request, Response};
 
-use crate::cli::{Command, FileCommand, FirewallCommand, NetworkCommand, ProcessCommand};
+use crate::cli::{
+    Command, FileCommand, FirewallCommand, NetworkCommand, ProcessCommand, VolumeCommand,
+};
 use crate::render;
 
 /// Maps a client-only subcommand to the request it sends over the socket.
@@ -49,6 +51,19 @@ pub fn request_for(command: &Command) -> Option<Request> {
             }),
             FirewallCommand::Flush(_) => Some(Request::FirewallFlush),
         },
+        Command::Volume(args) => match &args.command {
+            VolumeCommand::List => Some(Request::VolumeList),
+            VolumeCommand::Mount(args) => Some(Request::VolumeMount {
+                device: args.device.clone(),
+                target: args.target.clone(),
+                fs_type: args.fs_type.clone(),
+                read_only: args.read_only,
+                allow_removable: args.allow_removable,
+            }),
+            VolumeCommand::Unmount(args) => Some(Request::VolumeUnmount {
+                target: args.target.clone(),
+            }),
+        },
         Command::File(args) => match &args.command {
             FileCommand::List(list) => Some(Request::FileList {
                 path: list.path.clone(),
@@ -77,6 +92,7 @@ pub fn handle_response(response: &Response) {
         Response::Error { .. }
         | Response::FileError(_)
         | Response::NetworkError(_)
+        | Response::VolumeError(_)
         | Response::FirewallError(_) => {
             eprintln!("{frame}");
         }

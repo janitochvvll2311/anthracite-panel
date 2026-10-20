@@ -167,3 +167,47 @@ async fn follow_returns_failure_for_a_file_error_response() {
     server.await.unwrap();
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn follow_returns_failure_for_a_volume_error_response() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "anth-stream-volume-error-{}-{nanos}.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut server = AnthServer::new(socket);
+        assert!(matches!(
+            server.receive_request().await,
+            Some(Ok(Request::VolumeUnmount { .. }))
+        ));
+        server
+            .send_response(&Response::VolumeError(anth_proto::VolumeError::new(
+                anth_proto::VolumeErrorKind::Busy,
+                "target is busy",
+            )))
+            .await
+            .unwrap();
+    });
+
+    let code = follow(
+        &path,
+        &Request::VolumeUnmount {
+            target: "/mnt/data".to_string(),
+        },
+        None,
+        |_| String::new(),
+    )
+    .await;
+
+    assert_eq!(code, ExitCode::FAILURE);
+    server.await.unwrap();
+    let _ = std::fs::remove_file(&path);
+}
