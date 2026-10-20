@@ -1,6 +1,7 @@
 pub mod api;
 pub mod app;
 pub mod cli;
+pub mod command;
 pub mod client;
 pub mod config;
 pub mod daemon;
