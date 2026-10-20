@@ -76,6 +76,28 @@ fn network_state_is_refused_when_control_is_disabled() {
 }
 
 #[test]
+fn firewall_changes_are_refused_when_control_is_disabled() {
+    match anth_panel::daemon::handle_request(Request::FirewallAddRule {
+        action: anth_proto::FirewallAction::Allow,
+        port: 22,
+        protocol: anth_proto::FirewallProtocol::Tcp,
+        comment: None,
+    }) {
+        Response::FirewallError(error) => {
+            assert_eq!(error.kind, anth_proto::FirewallErrorKind::Disabled);
+        }
+        other => panic!("expected FirewallError, got {other:?}"),
+    }
+
+    match anth_panel::daemon::handle_request(Request::FirewallFlush) {
+        Response::FirewallError(error) => {
+            assert_eq!(error.kind, anth_proto::FirewallErrorKind::Disabled);
+        }
+        other => panic!("expected FirewallError, got {other:?}"),
+    }
+}
+
+#[test]
 fn handle_line_decodes_and_replies() {
     let line = Request::Echo {
         message: "from-line".to_string(),
@@ -266,8 +288,7 @@ fn handle_request_with_files_lists_the_configured_root() {
         Request::FileList {
             path: "/".to_string(),
         },
-        false,
-        false,
+        &anth_panel::daemon::Policy::default(),
         &files,
     ) {
         Response::FileListing(listing) => {
@@ -282,8 +303,7 @@ fn handle_request_with_files_lists_the_configured_root() {
             path: "/x".to_string(),
             overwrite: false,
         },
-        false,
-        false,
+        &anth_panel::daemon::Policy::default(),
         &files,
     ) {
         Response::Error { detail } => assert!(detail.contains("open connection")),

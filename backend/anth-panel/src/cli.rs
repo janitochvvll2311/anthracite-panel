@@ -1,4 +1,4 @@
-use anth_proto::ProcessSignal;
+use anth_proto::{FirewallProtocol, ProcessSignal};
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -44,6 +44,8 @@ pub enum Command {
     Process(ProcessArgs),
     /// Inspect network interfaces and optionally bring one up or down.
     Network(NetworkArgs),
+    /// Inspect and configure the managed nftables firewall.
+    Firewall(FirewallArgs),
     /// Browse and manage files on the daemon host.
     File(FileArgs),
     /// Open an interactive terminal on the daemon host.
@@ -109,6 +111,86 @@ pub struct NetworkStateArgs {
     #[arg(value_name = "INTERFACE", help = "Network interface name, e.g. eth0")]
     pub name: String,
 
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FirewallArgs {
+    #[command(subcommand)]
+    pub command: FirewallCommand,
+}
+
+/// `firewall` subcommands. `status` keeps the short `list` alias.
+#[derive(Subcommand, Debug)]
+pub enum FirewallCommand {
+    /// Show the managed firewall table and its rules.
+    #[command(alias = "list")]
+    Status,
+    /// Allow traffic to a port.
+    Allow(FirewallAddArgs),
+    /// Deny traffic to a port.
+    Deny(FirewallAddArgs),
+    /// Delete one rule by its nftables handle.
+    Delete(FirewallDeleteArgs),
+    /// Remove every rule from the managed chain.
+    Flush(FirewallFlushArgs),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PortSpec {
+    pub port: u16,
+    pub protocol: FirewallProtocol,
+}
+
+impl std::str::FromStr for PortSpec {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (port, protocol) = match value.split_once('/') {
+            Some((port, protocol)) => (port, protocol.parse()?),
+            None => (value, FirewallProtocol::Tcp),
+        };
+        let port = port
+            .parse::<u16>()
+            .map_err(|_| format!("invalid port `{port}`; expected a number between 1 and 65535"))?;
+        if port == 0 {
+            return Err("port must be between 1 and 65535".to_string());
+        }
+        Ok(Self { port, protocol })
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct FirewallAddArgs {
+    #[arg(
+        value_name = "PORT[/PROTOCOL]",
+        help = "Port to allow or deny, optionally suffixed with /tcp or /udp"
+    )]
+    pub spec: PortSpec,
+
+    #[arg(
+        long,
+        value_name = "TEXT",
+        help = "Optional rule comment (letters, digits, dot, underscore and dash)"
+    )]
+    pub comment: Option<String>,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FirewallDeleteArgs {
+    #[arg(value_name = "HANDLE", help = "Rule handle shown by `firewall status`")]
+    pub handle: u64,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FirewallFlushArgs {
     #[arg(long, help = "Do not ask for confirmation")]
     pub yes: bool,
 }

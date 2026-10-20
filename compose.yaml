@@ -1,0 +1,10 @@
+services:
+  anth-panel:
+    build: .
+    image: anth-panel:local
+    ports:
+      - "8080:8080"
+    # nftables needs CAP_NET_ADMIN in the container's bounding set. The image
+    # already gives /usr/sbin/nft the matching file capability.
+    cap_add:
+      - NET_ADMIN

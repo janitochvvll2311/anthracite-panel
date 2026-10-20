@@ -35,7 +35,7 @@ Both messages are JSON objects with two members:
 
 `type` names the operation and `data` carries its arguments. The `data` member
 is omitted entirely for variants that take no arguments (`HostInfo`,
-`ProcessList`, `NetworkList`).
+`ProcessList`, `NetworkList`, `FirewallStatus`, `FirewallFlush`).
 
 The pair is request/response: the client writes one request and reads one
 response on the same connection. A connection may carry several request/response
@@ -137,6 +137,56 @@ unknown interfaces and bringing `lo` down are rejected. See
 [network.md](network.md) for the policy.
 
 Reply: `NetworkStateChanged`, or `NetworkError`.
+
+### `FirewallStatus`
+
+Returns the managed `inet anthracite` table. Takes no arguments.
+
+```json
+{"type":"FirewallStatus"}
+
+```
+
+### `FirewallAddRule`
+
+Adds a deny rule to the managed input chain. `allow` removes a matching managed
+deny rule; it cannot override another firewall table.
+
+```json
+{"type":"FirewallAddRule","data":{"action":"allow","port":22,"protocol":"tcp","comment":"ssh"}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `action` | string | yes | `allow` or `deny` (allow removes a managed deny) |
+| `port` | integer | yes | `1..65535` |
+| `protocol` | string | yes | `tcp` or `udp` |
+| `comment` | string | no | Up to 32 characters: letters, digits, `.`, `_`, `-` |
+
+Reply: `FirewallChanged`, or `FirewallError`.
+
+### `FirewallDeleteRule`
+
+Deletes one rule from the managed input chain.
+
+```json
+{"type":"FirewallDeleteRule","data":{"handle":3}}
+
+```
+
+Reply: `FirewallChanged`, or `FirewallError`.
+
+### `FirewallFlush`
+
+Removes every rule from the managed input chain. Takes no arguments.
+
+```json
+{"type":"FirewallFlush"}
+
+```
+
+Reply: `FirewallChanged`, or `FirewallError`.
 
 ### Filesystem requests
 
@@ -376,6 +426,60 @@ Successful reply to `NetworkSetState`.
 A refused change arrives as `NetworkError` with `kind` (`disabled`, `protected`,
 `not_found`, `permission_denied`, `invalid` or `failed`) and `detail`.
 
+### `FirewallSnapshot`
+
+Reply to `FirewallStatus`.
+
+```json
+{
+  "type": "FirewallSnapshot",
+  "data": {
+    "initialized": true,
+    "control_enabled": false,
+    "rules": [
+      {
+        "handle": 3,
+        "chain": "input",
+        "action": "allow",
+        "protocol": "tcp",
+        "port": 22,
+        "comment": "ssh"
+      }
+    ],
+    "ruleset": "table inet anthracite { ... }",
+    "total": 1,
+    "truncated": false
+  }
+}
+```
+
+`action` is `allow`, `deny`, or `custom` for a rule not created by the panel.
+`protocol` and `port` are `null` for custom rules. Only the managed `input` chain
+is included, because every mutation is scoped to it. `total` counts the rules
+before truncation; when a snapshot would exceed the 1 MiB line cap the daemon
+drops `ruleset` first and then the rules with the highest handles, and sets
+`truncated` with a `warning` such as
+`showing 4000 of 6000 firewall rules, lowest handle first`.
+
+### `FirewallChanged`
+
+Successful reply to a firewall mutation.
+
+```json
+{"type":"FirewallChanged","data":{"message":"allowed tcp/22"}}
+
+```
+
+### `FirewallError`
+
+A refused firewall mutation. `kind` is one of `disabled`, `unavailable`,
+`permission_denied`, `invalid`, `not_found` or `failed`.
+
+```json
+{"type":"FirewallError","data":{"kind":"disabled","detail":"firewall control is disabled"}}
+
+```
+
 ### File responses
 
 `FileListing`, `FileChunk`, `FileWritten`, `FileCreated`, `FileDeleted`,
@@ -516,6 +620,7 @@ socket open.
 | `data` missing for a variant that needs it | `Error` with a parse message, then the connection closes |
 | Malformed JSON line | `Error` with a parse message, then the connection closes |
 | Filesystem operation failed | `FileError` with `kind` and `detail`; the connection stays open |
+| Firewall operation failed | `FirewallError` with `kind` and `detail`; the connection stays open |
 | Network change failed | `NetworkError` with `kind` and `detail`; the connection stays open |
 | Daemon goes away | The connection closes with no message; a write fails with `Broken pipe` |
 

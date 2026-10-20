@@ -1,12 +1,13 @@
 //! Linux network-interface inspection and state changes.
 //!
 //! The read path uses `/sys/class/net` and `/proc/net/dev`; IPv4 and IPv6
-//! addresses come from `getifaddrs(3)`. State changes use `SIOCSIFFLAGS` on an
-//! `AF_INET` socket. `collect_from` and `check_state_change` take a filesystem
-//! root so tests can exercise the fixtures without touching the host.
+//! addresses come from `getifaddrs(3)`. State changes normally use
+//! `SIOCSIFFLAGS` on an `AF_INET` socket; when global `sudo` is enabled they
+//! try `sudo -n ip link set` first and fall back to the ioctl. `collect_from`
+//! and `check_state_change` take a filesystem root so tests can exercise the
+//! fixtures without touching the host.
 //!
-//! No external command such as `ip` is required, and the interface list is
-//! read-only unless `[network] control` is enabled.
+//! The interface list is read-only unless `[network] control` is enabled.
 
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -15,6 +16,7 @@ use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::raw::c_char;
 use std::path::{Component, Path};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_proto::{
@@ -139,9 +141,121 @@ fn snapshot_json_len(snapshot: &NetworkSnapshot) -> usize {
 }
 
 /// Brings one interface up or down.
-pub fn set_state(control_enabled: bool, name: &str, up: bool) -> Result<(), NetworkError> {
+pub fn set_state(
+    control_enabled: bool,
+    sudo_enabled: bool,
+    name: &str,
+    up: bool,
+) -> Result<(), NetworkError> {
     check_state_change(Path::new("/"), control_enabled, name)?;
-    apply_link_state(name, up)
+
+    if sudo_enabled {
+        match apply_link_state_with_sudo(name, up) {
+            Ok(()) => Ok(()),
+            Err((_, true)) => apply_link_state(name, up),
+            Err((error, false)) => Err(error),
+        }
+    } else {
+        apply_link_state(name, up)
+    }
+}
+
+/// Changes one link through `sudo -n ip link set`.
+///
+/// The loopback guard reads the current flags first, so a sudoers rule cannot
+/// bypass the protection. The boolean in an error says whether the ioctl path
+/// is worth trying: authentication failures, a missing sudo/ip or a permission
+/// error fall back, while a genuine ip error does not.
+fn apply_link_state_with_sudo(name: &str, up: bool) -> Result<(), (NetworkError, bool)> {
+    let flags = read_link_flags(name).map_err(|error| (error, false))?;
+    check_link_flags(flags, up).map_err(|error| (error, false))?;
+
+    let output = sudo_ip_command(name, up)
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound => (
+                NetworkError::new(
+                    NetworkErrorKind::Failed,
+                    "sudo is not installed or is not on PATH",
+                ),
+                true,
+            ),
+            _ => (
+                NetworkError::new(
+                    NetworkErrorKind::Failed,
+                    format!("could not run sudo ip: {error}"),
+                ),
+                false,
+            ),
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let (kind, fallback) = link_command_failure(&stderr);
+    let detail = if stderr.is_empty() {
+        format!("could not change the state of `{name}`")
+    } else {
+        format!("could not change the state of `{name}`: {stderr}")
+    };
+
+    Err((NetworkError::new(kind, detail), fallback))
+}
+
+fn sudo_ip_command(name: &str, up: bool) -> Command {
+    let mut command = Command::new("sudo");
+    command
+        .arg("-n")
+        .arg("ip")
+        .arg("link")
+        .arg("set")
+        .arg("dev");
+    command.arg(name);
+    command.arg(if up { "up" } else { "down" });
+    command
+}
+
+fn link_command_failure(stderr: &str) -> (NetworkErrorKind, bool) {
+    let lowercase = stderr.to_lowercase();
+    let fallback = lowercase.contains("a password is required")
+        || lowercase.contains("a terminal is required")
+        || lowercase.contains("no tty present")
+        || lowercase.contains("not in the sudoers")
+        || lowercase.contains("not allowed to execute")
+        || lowercase.contains("operation not permitted")
+        || lowercase.contains("permission denied")
+        || lowercase.contains("askpass")
+        || lowercase.contains("command not found");
+
+    let kind = if lowercase.contains("operation not permitted")
+        || lowercase.contains("permission denied")
+        || lowercase.contains("not permitted")
+        || lowercase.contains("must be root")
+        || lowercase.contains("a password is required")
+        || lowercase.contains("not in the sudoers")
+    {
+        NetworkErrorKind::PermissionDenied
+    } else if lowercase.contains("cannot find device")
+        || lowercase.contains("does not exist")
+        || lowercase.contains("no such device")
+    {
+        NetworkErrorKind::NotFound
+    } else if lowercase.contains("invalid") {
+        NetworkErrorKind::Invalid
+    } else {
+        NetworkErrorKind::Failed
+    };
+
+    (kind, fallback)
 }
 
 fn check_state_change(root: &Path, control_enabled: bool, name: &str) -> Result<(), NetworkError> {
@@ -410,6 +524,23 @@ fn ipv6_address(
         address: address_text,
         prefix_len,
     })
+}
+
+fn read_link_flags(name: &str) -> Result<u32, NetworkError> {
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+    if fd < 0 {
+        return Err(io_network_error("could not open a socket"));
+    }
+    let guard = Socket(fd);
+
+    let mut request: libc::ifreq = unsafe { std::mem::zeroed() };
+    copy_interface_name(&mut request.ifr_name, name)?;
+
+    if unsafe { libc::ioctl(guard.0, libc::SIOCGIFFLAGS as _, &mut request) } < 0 {
+        return Err(io_network_error("could not read the interface flags"));
+    }
+
+    Ok(unsafe { request.ifr_ifru.ifru_flags } as u32)
 }
 
 fn apply_link_state(name: &str, up: bool) -> Result<(), NetworkError> {
@@ -718,6 +849,46 @@ mod tests {
         );
         assert!(check_link_flags(libc::IFF_LOOPBACK as u32 | libc::IFF_UP as u32, true).is_ok());
         assert!(check_link_flags(libc::IFF_UP as u32, false).is_ok());
+    }
+
+    #[test]
+    fn sudo_ip_command_is_noninteractive_and_sets_the_link() {
+        let up = sudo_ip_command("eth0", true);
+        assert_eq!(up.get_program(), "sudo");
+        assert_eq!(
+            up.get_args().collect::<Vec<_>>(),
+            vec!["-n", "ip", "link", "set", "dev", "eth0", "up"]
+        );
+
+        let down = sudo_ip_command("eth0", false);
+        assert_eq!(
+            down.get_args().collect::<Vec<_>>(),
+            vec!["-n", "ip", "link", "set", "dev", "eth0", "down"]
+        );
+    }
+
+    #[test]
+    fn sudo_failures_only_fall_back_when_privilege_is_missing() {
+        assert_eq!(
+            link_command_failure("sudo: a password is required"),
+            (NetworkErrorKind::PermissionDenied, true)
+        );
+        assert_eq!(
+            link_command_failure("sudo: ip: command not found"),
+            (NetworkErrorKind::Failed, true)
+        );
+        assert_eq!(
+            link_command_failure("RTNETLINK answers: Operation not permitted"),
+            (NetworkErrorKind::PermissionDenied, true)
+        );
+        assert_eq!(
+            link_command_failure("Cannot find device \"eth9\""),
+            (NetworkErrorKind::NotFound, false)
+        );
+        assert_eq!(
+            link_command_failure("Error: invalid argument"),
+            (NetworkErrorKind::Invalid, false)
+        );
     }
 
     #[test]

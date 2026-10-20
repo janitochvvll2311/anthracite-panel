@@ -7,8 +7,9 @@ use anth_panel::app::AppState;
 use anth_panel::config::{Config, FilesConfig};
 use anth_panel::files::{FileService, PendingUpload};
 use anth_proto::{
-    AnthServer, FileError, FileErrorKind, NetworkAddress, NetworkAddressFamily, NetworkError,
-    NetworkErrorKind, NetworkInterface, NetworkSnapshot, Request, Response,
+    AnthServer, FileError, FileErrorKind, FirewallAction, FirewallError, FirewallErrorKind,
+    FirewallProtocol, FirewallRule, FirewallSnapshot, NetworkAddress, NetworkAddressFamily,
+    NetworkError, NetworkErrorKind, NetworkInterface, NetworkSnapshot, Request, Response,
 };
 use axum::body::{Body, Bytes, to_bytes};
 use axum::http::{Request as HttpRequest, StatusCode};
@@ -387,6 +388,81 @@ async fn a_rejected_query_uses_the_unified_error_shape() {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(value["error"].is_string(), "{value}");
+}
+
+fn firewall_snapshot() -> FirewallSnapshot {
+    FirewallSnapshot {
+        initialized: true,
+        control_enabled: true,
+        rules: vec![FirewallRule {
+            handle: 3,
+            chain: "input".to_string(),
+            action: "allow".to_string(),
+            protocol: Some(FirewallProtocol::Tcp),
+            port: Some(22),
+            comment: Some("ssh".to_string()),
+        }],
+        ruleset: "table inet anthracite { chain input { ... } }".to_string(),
+        total: 1,
+        truncated: false,
+        warning: None,
+    }
+}
+
+fn config_with_firewall_control(path: &std::path::Path, control: bool) -> Config {
+    let mut config = config_at(path);
+    config.firewall.control = control;
+    config
+}
+
+fn spawn_firewall_server(
+    path: &std::path::Path,
+    snapshot: FirewallSnapshot,
+) -> tokio::task::JoinHandle<()> {
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((socket, _)) = listener.accept().await else {
+                break;
+            };
+            let snapshot = snapshot.clone();
+            tokio::spawn(async move {
+                let mut server = AnthServer::new(socket);
+                while let Some(Ok(request)) = server.receive_request().await {
+                    let response = match request {
+                        Request::FirewallStatus => Response::FirewallSnapshot(snapshot.clone()),
+                        Request::FirewallAddRule {
+                            action,
+                            port,
+                            protocol,
+                            ..
+                        } => {
+                            let verb = if action == FirewallAction::Allow {
+                                "allowed"
+                            } else {
+                                "denied"
+                            };
+                            Response::FirewallChanged {
+                                message: format!("{verb} {protocol}/{port}"),
+                            }
+                        }
+                        Request::FirewallDeleteRule { handle } => Response::FirewallChanged {
+                            message: format!("deleted firewall rule {handle}"),
+                        },
+                        Request::FirewallFlush => Response::FirewallChanged {
+                            message: "flushed 1 firewall rule".to_string(),
+                        },
+                        other => Response::Error {
+                            detail: format!("unexpected request: {other:?}"),
+                        },
+                    };
+                    if server.send_response(&response).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    })
 }
 
 fn config_with_process_control(path: &std::path::Path, control: bool) -> Config {
@@ -810,6 +886,170 @@ async fn network_state_route_maps_daemon_errors() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[tokio::test]
+async fn firewall_route_returns_the_bare_snapshot() {
+    let path = unique_socket("firewall-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_firewall_server(&path, firewall_snapshot());
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/firewall")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["initialized"], true);
+    assert_eq!(value["control_enabled"], true);
+    assert_eq!(value["rules"][0]["handle"], 3);
+    assert_eq!(value["rules"][0]["protocol"], "tcp");
+    assert!(value.get("type").is_none(), "no tag envelope: {value}");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn firewall_routes_require_control_to_be_enabled() {
+    let path = unique_socket("firewall-control-off");
+    let _ = std::fs::remove_file(&path);
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+
+    for (uri, body) in [
+        ("/api/firewall/rules", r#"{"action":"allow","port":22}"#),
+        ("/api/firewall/rules/3/delete", ""),
+        ("/api/firewall/flush", ""),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn firewall_rule_route_maps_the_request() {
+    let path = unique_socket("firewall-rule-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_firewall_server(&path, firewall_snapshot());
+
+    let app = anth_panel::router(AppState::new(config_with_firewall_control(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/firewall/rules")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"action":"deny","port":53,"protocol":"udp","comment":"dns"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["message"], "denied udp/53");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn firewall_delete_and_flush_routes_map_the_request() {
+    let path = unique_socket("firewall-delete-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_firewall_server(&path, firewall_snapshot());
+    let app = anth_panel::router(AppState::new(config_with_firewall_control(&path, true)));
+
+    let response = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/firewall/rules/7/delete")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/firewall/flush")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn firewall_route_maps_daemon_errors() {
+    let path = unique_socket("firewall-error");
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let server = tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(_)) = server.receive_request().await {
+                let response = Response::FirewallError(FirewallError::new(
+                    FirewallErrorKind::Unavailable,
+                    "nft is not installed",
+                ));
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/firewall")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "nft is not installed");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
 fn unique_dir(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -915,9 +1155,11 @@ fn spawn_file_server(path: &Path, service: FileService) -> tokio::task::JoinHand
                             uploads.remove(&id);
                             Response::FileWriteAborted { id }
                         }
-                        other => {
-                            anth_panel::daemon::handle_request_with(other, false, false, &service)
-                        }
+                        other => anth_panel::daemon::handle_request_with(
+                            other,
+                            &anth_panel::daemon::Policy::default(),
+                            &service,
+                        ),
                     };
 
                     if server.send_response(&response).await.is_err() {

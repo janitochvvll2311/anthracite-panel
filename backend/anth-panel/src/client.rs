@@ -1,6 +1,6 @@
 use anth_proto::{Request, Response};
 
-use crate::cli::{Command, FileCommand, NetworkCommand, ProcessCommand};
+use crate::cli::{Command, FileCommand, FirewallCommand, NetworkCommand, ProcessCommand};
 use crate::render;
 
 /// Maps a client-only subcommand to the request it sends over the socket.
@@ -30,6 +30,25 @@ pub fn request_for(command: &Command) -> Option<Request> {
                 up: false,
             }),
         },
+        Command::Firewall(args) => match &args.command {
+            FirewallCommand::Status => Some(Request::FirewallStatus),
+            FirewallCommand::Allow(rule) => Some(Request::FirewallAddRule {
+                action: anth_proto::FirewallAction::Allow,
+                port: rule.spec.port,
+                protocol: rule.spec.protocol,
+                comment: rule.comment.clone(),
+            }),
+            FirewallCommand::Deny(rule) => Some(Request::FirewallAddRule {
+                action: anth_proto::FirewallAction::Deny,
+                port: rule.spec.port,
+                protocol: rule.spec.protocol,
+                comment: rule.comment.clone(),
+            }),
+            FirewallCommand::Delete(args) => Some(Request::FirewallDeleteRule {
+                handle: args.handle,
+            }),
+            FirewallCommand::Flush(_) => Some(Request::FirewallFlush),
+        },
         Command::File(args) => match &args.command {
             FileCommand::List(list) => Some(Request::FileList {
                 path: list.path.clone(),
@@ -55,7 +74,10 @@ pub fn request_for(command: &Command) -> Option<Request> {
 pub fn handle_response(response: &Response) {
     let frame = render::render_response(response);
     match response {
-        Response::Error { .. } | Response::FileError(_) | Response::NetworkError(_) => {
+        Response::Error { .. }
+        | Response::FileError(_)
+        | Response::NetworkError(_)
+        | Response::FirewallError(_) => {
             eprintln!("{frame}");
         }
         _ => println!("{frame}"),

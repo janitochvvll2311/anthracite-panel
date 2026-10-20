@@ -26,6 +26,7 @@ fn unique_socket(name: &str) -> PathBuf {
 fn config_at(path: &Path) -> Config {
     Config {
         socket_path: path.to_string_lossy().into_owned(),
+        sudo: false,
         terminal: TerminalConfig {
             shell: "/bin/sh".to_string(),
             token: String::new(),
@@ -33,6 +34,7 @@ fn config_at(path: &Path) -> Config {
         },
         process: ProcessConfig::default(),
         network: anth_panel::config::NetworkConfig::default(),
+        firewall: anth_panel::config::FirewallConfig::default(),
         files: FilesConfig::default(),
     }
 }

@@ -1,0 +1,128 @@
+<!doctype html>
+<!--
+  Dev-only index for the component harnesses.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/component-index.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Index of the Anthracite Panel component harnesses."
+    />
+    <title>component index · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+    <style>
+      .harness-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+      }
+
+      .harness-link {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 14px;
+        color: inherit;
+        text-decoration: none;
+        border: 1px solid var(--panel-border, #223041);
+        border-radius: 8px;
+        background: var(--panel, #101721);
+      }
+
+      .harness-link:hover {
+        border-color: var(--accent, #7dd3fc);
+      }
+
+      .harness-link strong {
+        color: var(--accent, #7dd3fc);
+        font: 600 15px/1.3 var(--mono, monospace);
+      }
+
+      .harness-link span {
+        color: var(--muted, #8b9bad);
+        font-size: 13px;
+      }
+
+      .harness-link code {
+        color: var(--text, #dbe6f2);
+        font: 11px/1.4 var(--mono, monospace);
+      }
+    </style>
+  </head>
+  <body>
+    <anth-harness heading="Component index" width="1100px">
+      <p slot="description">
+        Every dev-only component harness in one place. Open a page, exercise it
+        against a local daemon, and use the back button or this index to move
+        between components.
+      </p>
+
+      <section class="harness-notes" aria-label="How to run the harnesses">
+        <article class="harness-note">
+          <h2>Run the stack</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open this page at
+              <code>/src/components/component-index.test.html</code>.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Production</h2>
+          <p>
+            These pages are not build entries. Vite's only production input is
+            <code>index.html</code>, so nothing here is embedded in the panel.
+          </p>
+        </article>
+      </section>
+
+      <nav class="harness-grid" aria-label="Component harnesses">
+        <a class="harness-link" href="./anth-terminal.test.html">
+          <strong>anth-terminal</strong>
+          <span>Interactive PTY terminal over WebSocket.</span>
+          <code>anth-terminal.test.html</code>
+        </a>
+        <a class="harness-link" href="./anth-process-monitor.test.html">
+          <strong>anth-process-monitor</strong>
+          <span>Live process table with flat and tree views.</span>
+          <code>anth-process-monitor.test.html</code>
+        </a>
+        <a class="harness-link" href="./anth-file-explorer.test.html">
+          <strong>anth-file-explorer</strong>
+          <span>Directory browser, previews, uploads and writes.</span>
+          <code>anth-file-explorer.test.html</code>
+        </a>
+        <a class="harness-link" href="./anth-host-info.test.html">
+          <strong>anth-host-info</strong>
+          <span>Host, CPU, load, memory and swap overview.</span>
+          <code>anth-host-info.test.html</code>
+        </a>
+        <a class="harness-link" href="./anth-network-monitor.test.html">
+          <strong>anth-network-monitor</strong>
+          <span>Network interfaces, addresses, traffic rates and up/down controls.</span>
+          <code>anth-network-monitor.test.html</code>
+        </a>
+        <a class="harness-link" href="./anth-firewall.test.html">
+          <strong>anth-firewall</strong>
+          <span>Managed nftables rules, allow/deny and flush.</span>
+          <code>anth-firewall.test.html</code>
+        </a>
+      </nav>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+    </script>
+  </body>
+</html>

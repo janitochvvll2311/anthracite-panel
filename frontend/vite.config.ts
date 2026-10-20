@@ -9,8 +9,10 @@ export default defineConfig({
       // `src/components/anth-terminal.test.html`,
       // `src/components/anth-process-monitor.test.html`,
       // `src/components/anth-file-explorer.test.html`,
-      // `src/components/anth-host-info.test.html` and
-      // `src/components/anth-network-monitor.test.html` stay out of dist/.
+      // `src/components/anth-host-info.test.html`,
+      // `src/components/anth-network-monitor.test.html`,
+      // `src/components/anth-firewall.test.html` and
+      // `src/components/component-index.test.html` stay out of dist/.
       input: 'index.html',
     },
   },

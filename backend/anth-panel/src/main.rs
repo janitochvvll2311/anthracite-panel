@@ -5,13 +5,14 @@ use std::time::Duration;
 
 use anth_panel::cli::{
     Cli, Command, EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs,
-    FileUploadArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
+    FileUploadArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
+    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
     ProcessSignalArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::stream;
 use anth_panel::{AppState, request_for, router};
-use anth_proto::{AnthClient, DEFAULT_FILE_CHUNK, FileChunk, Request, Response};
+use anth_proto::{AnthClient, DEFAULT_FILE_CHUNK, FileChunk, FirewallAction, Request, Response};
 use tokio::net::TcpListener;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
@@ -134,6 +135,40 @@ fn confirm_network_state(args: &NetworkStateArgs, up: bool) -> Result<bool, Stri
             )
         },
         "refusing to change a network interface without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_firewall_add(args: &FirewallAddArgs, action: FirewallAction) -> Result<bool, String> {
+    let verb = if action == FirewallAction::Allow {
+        "Allow"
+    } else {
+        "Deny"
+    };
+    confirm_action(
+        args.yes,
+        || {
+            format!(
+                "{verb} {}/{} traffic? [y/N] ",
+                args.spec.protocol, args.spec.port
+            )
+        },
+        "refusing to change the firewall without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_firewall_delete(args: &FirewallDeleteArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || format!("Delete firewall rule {}? [y/N] ", args.handle),
+        "refusing to change the firewall without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_firewall_flush(args: &FirewallFlushArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || "Flush every rule from the managed firewall chain? [y/N] ".to_string(),
+        "refusing to change the firewall without --yes when stdin is not a terminal",
     )
 }
 
@@ -431,6 +466,74 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    if let Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Allow(args),
+    }) = command
+    {
+        match confirm_firewall_add(args, FirewallAction::Allow) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
+    if let Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Deny(args),
+    }) = command
+    {
+        match confirm_firewall_add(args, FirewallAction::Deny) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
+    if let Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Delete(args),
+    }) = command
+    {
+        match confirm_firewall_delete(args) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
+    if let Command::Firewall(FirewallArgs {
+        command: FirewallCommand::Flush(args),
+    }) = command
+    {
+        match confirm_firewall_flush(args) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
     if let Command::File(FileArgs {
         command: FileCommand::Delete(args),
     }) = command
@@ -494,6 +597,7 @@ async fn main() -> ExitCode {
         | Command::HostInfo(_)
         | Command::Process(_)
         | Command::Network(_)
+        | Command::Firewall(_)
         | Command::File(_) => {
             unreachable!("handled by send_command")
         }

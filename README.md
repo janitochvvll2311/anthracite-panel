@@ -16,6 +16,7 @@ in the HTTP server.
 | [docs/terminal.md](docs/terminal.md) | Interactive terminals, the browser route and current risks |
 | [docs/processes.md](docs/processes.md) | Process monitoring, signals, limits and controls |
 | [docs/network.md](docs/network.md) | Network interfaces, traffic counters and up/down policy |
+| [docs/firewall.md](docs/firewall.md) | Managed nftables table, rules and container capabilities |
 | [docs/files.md](docs/files.md) | Filesystem root, chunked transfers, write policy and web explorer |
 
 ## Layout
@@ -28,6 +29,7 @@ backend/
     www/              built frontend, embedded into the binary at compile time
 frontend/             Vite + Lit source, built into backend/anth-panel/www
 docs/                 the documentation above
+compose.yaml          local container with NET_ADMIN for nftables
 ```
 
 `anth-proto` is a separate crate on purpose: it is the contract an alternative
@@ -74,6 +76,7 @@ curl localhost:8080/api/host-info
 curl -N "localhost:8080/api/host-info/watch?interval=2s"
 curl localhost:8080/api/network
 curl -N "localhost:8080/api/network/watch?interval=2s"
+curl localhost:8080/api/firewall
 curl -X POST localhost:8080/api/echo -H 'content-type: application/json' \
   -d '{"message":"hola"}'
 ```
@@ -95,9 +98,10 @@ npm run build
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture notes and repository conventions.
-Debug builds generate a missing config with process control, network control and
-file writes enabled so the full UI is testable; release builds keep all three
-disabled.
+Debug builds generate a missing config with global sudo, process control,
+network control, firewall control and file writes enabled so the full UI is
+testable. Sudo runs `ip link set` and `nft` through `sudo -n`; both fall back to
+their direct path. Release builds keep the controls disabled.
 
 ## License
 

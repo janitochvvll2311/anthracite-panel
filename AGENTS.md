@@ -41,6 +41,7 @@ backend/
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
       process.rs            #   process table from /proc and signal policy
       network.rs            #   interfaces from sysfs/proc, addresses and up/down ioctl
+      firewall.rs           #   managed nftables table, rules and command runner
       files.rs              #   virtual paths, listings, chunked reads and atomic uploads
       render.rs             #   bordered table renderer for the CLI
       stream.rs             #   repeat a request: interval parsing + frame output
@@ -63,13 +64,15 @@ frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
     lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
     lib/processes/          # process client, wire types, sort/display helpers and tests
     lib/network/            # network client, wire types, rate/sort helpers and tests
+    lib/firewall/           # firewall client, wire types and display helpers with tests
     lib/files/              # file client, wire types, path/display helpers and tests
     lib/hostinfo/           # host-info client, wire types and display helpers with tests
     test/                   # setup and the fake WebSocket, EventSource, process, network,
-                            # file and host-info clients
+                            # firewall, file and host-info clients
   public/  index.html
 docker/entrypoint.sh        # starts `anth-panel run`
 Dockerfile                  # bun frontend stage, musl backend stage, alpine runtime
+compose.yaml                # container with NET_ADMIN for nftables
 ```
 
 `anth-proto` is deliberately separate so alternative or custom tooling can implement
@@ -182,28 +185,37 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
 - **Table rendering**: `anth_panel::render::Table` draws a bordered box (top, bottom, a
   rule under the header and optional separators between groups) and pads columns by
   character count so multi-byte text stays aligned. `render_host_info`,
-  `render_process_snapshot`, `render_network_snapshot` and `render_file_listing` map
-  snapshots onto it. It is a local renderer, not a dependency.
+  `render_process_snapshot`, `render_network_snapshot`, `render_firewall_snapshot`
+  and `render_file_listing` map snapshots onto it. It is a local renderer, not a
+  dependency.
 - **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]`, `[process]`,
-  `[network]` and `[files]`) is TOML with `#[serde(default, deny_unknown_fields)]`.
-  Defaults: config at `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`,
+  `[network]`, `[firewall]` and `[files]`) is TOML with
+  `#[serde(default, deny_unknown_fields)]`. Defaults: config at
+  `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, global `sudo = false`,
   `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
-  `process.control = false`, `network.control = false`, `files.root = "/"`,
-  `files.write = false`, `max_entries = 5000`, `max_preview_bytes = 1 MiB` and
+  `process.control = false`, `network.control = false`,
+  `firewall.control = false`, legacy `network.sudo`/`firewall.sudo` and
+  `firewall.sudo_password` are accepted and ignored,
+  `files.root = "/"`, `files.write = false`, `max_entries = 5000`,
+  `max_preview_bytes = 1 MiB` and
   `max_upload_bytes = 64 MiB`. `auto` resolves `$SHELL`, then the account's
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes. `Config::server_default` returns
-  `Config::dev_default` in debug builds, which sets `process.control = true` and
-  `files.write = true`; release builds keep both off.
+  `Config::dev_default` in debug builds, which sets global `sudo = true`,
+  `process.control = true`, `network.control = true`,
+  `firewall.control = true` and `files.write = true`; release builds keep the
+  controls off.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
   `POST /api/echo`, `GET /api/terminal` (WebSocket),
   `GET /api/processes`, `GET /api/processes/watch?interval=2s` (SSE) and
   `POST /api/processes/{pid}/signal`; the network routes are `GET /api/network`,
   `GET /api/network/watch?interval=2s` (SSE) and
-  `POST /api/network/{name}/state`; the filesystem routes are
+  `POST /api/network/{name}/state`; the firewall routes are `GET /api/firewall`,
+  `POST /api/firewall/rules`, `POST /api/firewall/rules/{handle}/delete` and
+  `POST /api/firewall/flush`; the filesystem routes are
   `GET /api/files`, `GET /api/files/content`, `GET /api/files/download`,
   `POST /api/files/mkdir`, `POST /api/files/rename`, `POST /api/files/delete` and
   `POST /api/files/upload`. The route names the command, so
@@ -233,8 +245,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   selected-process preview shows the full command, left-aligned and vertically
   centered in the footer. `anth-process-monitor` owns filtering, the flat/tree
   toggle, SSE lifecycle and confirmed signals, and only depends on the injected
-  `ProcessClient`. Both are exercised by Vitest component tests and the
-  `src/components/anth-process-monitor.test.html` dev harness.
+  `ProcessClient`. It ignores stream snapshots while a signal is in flight and
+  refreshes once it finishes. Both are exercised by Vitest component tests and
+  the `src/components/anth-process-monitor.test.html` dev harness.
 - **Filesystem explorer**: `files.rs` validates `[files] root`, normalizes virtual
   paths, rejects `..` and symlink escapes, lists directories, reads stateless chunks
   and performs atomic uploads through a per-connection temporary file. Writes are
@@ -252,16 +265,46 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `src/components/anth-file-explorer.test.html` file is the dev harness.
 - **Network monitor**: `network.rs` reads `/sys/class/net` and `/proc/net/dev`,
   resolves IPv4/IPv6 with `getifaddrs(3)` and enforces `[network] control` plus
-  the loopback-down guard before calling `SIOCSIFFLAGS`. The guard runs on the
-  flags returned by `SIOCGIFFLAGS`, so an unreadable sysfs `flags` file cannot
-  fail open. Snapshots cap the list at 2000 interfaces and report `total` and
+  the loopback-down guard before calling `SIOCSIFFLAGS`. Global `sudo` defaults
+  to `false` in release and `true` in the generated debug config; it tries
+  `sudo -n ip link set` first and falls back to the ioctl when sudo cannot
+  elevate. The guard reads the flags with `SIOCGIFFLAGS` before either path, so
+  an unreadable sysfs `flags` file cannot fail open. Snapshots cap the list at
+  2000 interfaces and report `total` and
   `warning` when shortened; the fit loop also enforces the 1 MiB serialized
   line cap for address-heavy rows. Up/down runs on a blocking worker.
   `anth-network-monitor` follows the SSE stream through an injected
   `NetworkClient`, computes RX/TX rates from cumulative counters and only shows
-  controls when the snapshot says `control_enabled`. The dev harness is
+  controls when the snapshot says `control_enabled`. It ignores stream snapshots
+  while an up/down action is in flight and refreshes once it finishes. The dev
+  harness is
   `src/components/anth-network-monitor.test.html`; tests live beside the
   component and `lib/network/`.
+- **Firewall**: `firewall.rs` shells out to `nft` with an argument vector and owns a
+  dedicated `inet anthracite input` table. `deny` initializes the table and chain
+  and adds a tagged drop rule; `allow` removes the matching managed drop, and
+  `delete`/`flush` only touch that chain.
+  `[firewall] control` defaults to `false`; status remains read-only. Global
+  `sudo` defaults to `false` in release and `true` in the generated debug
+  config, which runs `nft` through `sudo -n` and falls back to direct nft when
+  sudo cannot elevate. The daemon otherwise relies on `CAP_NET_ADMIN` or root.
+  The Docker runtime installs `nftables` and sets `CAP_NET_ADMIN` on `nft`; the
+  container needs `--cap-add NET_ADMIN`. Blocking nft calls run on a blocking
+  worker. `parse_rules` keeps only rules from the managed `input` chain, so the
+  snapshot can never advertise a rule that `delete`/`flush` would fail to reach.
+  `fit_snapshot` mirrors `process.rs`: it drops `ruleset` first and then the
+  rules with the highest handles until `Response::FirewallSnapshot` fits
+  `MAX_LINE_LEN`, setting `total`, `truncated` and `warning`. Mutations read
+  through `read_table`, which is unfitted, so shortening never hides a rule from
+  `allow` or `flush`.
+- **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
+  `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
+  deletes/flushes. It only renders controls when `control_enabled` is true and
+  suppresses refreshes while a mutation is in flight. It shows the daemon's
+  `warning` above the table and labels the count as `shown of total` when the
+  snapshot was shortened. The dev harness is
+  `src/components/anth-firewall.test.html`; tests live beside the component and
+  `lib/firewall/`.
 - **Frontend host info**: `anth-host-info` renders the `GET /api/host-info`
   snapshot and follows `/api/host-info/watch` through the injected
   `HostInfoClient`. It formats uptime, load, memory and swap, and exposes
@@ -273,7 +316,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   lifecycle and JSON event parsing, and `lib/format.ts` owns `formatBytes` and
   `formatKib`. Clients and components import these instead of copying the same
   transport or formatting code.
-- **Dev harnesses**: `src/harness/anth-harness.ts` provides the shared page shell
+- **Dev harnesses**: `src/components/component-index.test.html` links every
+  harness. `src/harness/anth-harness.ts` provides the shared page shell
   (eyebrow, heading, `description`/`actions`/default slots), while
   `src/harness/harness.css` owns the common light-DOM controls, notes and page
   background. The `src/components/anth-*.test.html` files keep only their
@@ -305,6 +349,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   Most client subcommands use `request_for` + `stream::follow`; `file read` and
   `file upload` own their socket loop because they move raw bytes in chunks.
   `network up` and `network down` ask for confirmation unless `--yes`.
+  `firewall allow`, `deny`, `delete` and `flush` ask for confirmation unless
+  `--yes`.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
 
@@ -321,6 +367,8 @@ sync with behaviour; they are the contract for people writing clients:
 - `docs/terminal.md` — PTY sessions, browser route, current risks.
 - `docs/processes.md` — process model, signal policy, truncation and controls.
 - `docs/network.md` — network data sources, traffic counters, up/down policy.
+- `docs/firewall.md` — managed nftables table, commands, API and container
+  capabilities.
 
 `AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
 duplicate route tables here — point at the doc.
