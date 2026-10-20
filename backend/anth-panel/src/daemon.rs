@@ -41,9 +41,8 @@ pub struct Policy {
     pub network_control: bool,
     pub firewall_control: bool,
     pub volume_control: bool,
-    pub account_control: bool,
-    pub account_password_control: bool,
-    /// The `[accounts]` policy the guards read.
+    /// The `[accounts]` policy the guards and the snapshot read. The control
+    /// switches live here too, so a snapshot can never disagree with the gate.
     pub accounts: crate::config::AccountsConfig,
     /// The account the daemon runs as, which it may not delete or lock.
     pub daemon_user: String,
@@ -143,10 +142,7 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
                 Err(error) => Response::VolumeError(error),
             }
         }
-        Request::AccountList => Response::AccountSnapshot(accounts::collect(
-            policy.account_control,
-            policy.account_password_control,
-        )),
+        Request::AccountList => Response::AccountSnapshot(accounts::collect(&policy.accounts)),
         Request::AccountCreate {
             name,
             uid,
@@ -200,7 +196,7 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
             handle_account(policy, format!("password updated for {name}"), |guard| {
                 accounts_admin::plan_set_password(
                     guard,
-                    policy.account_password_control,
+                    policy.accounts.manage_passwords,
                     &name,
                     password.expose(),
                 )
@@ -743,19 +739,14 @@ fn handle_account(
         &accounts_admin::Guard<'_>,
     ) -> Result<Vec<accounts_admin::PlannedCall>, anth_proto::AccountError>,
 ) -> Response {
-    if !policy.account_control {
+    if !policy.accounts.control {
         return Response::AccountError(anth_proto::AccountError::new(
             anth_proto::AccountErrorKind::Disabled,
             "account control is disabled",
         ));
     }
 
-    let snapshot = accounts::collect_unfitted(
-        true,
-        policy.account_password_control,
-        &accounts::SystemProbe::new(),
-    )
-    .0;
+    let snapshot = accounts::collect_unfitted(&policy.accounts, &accounts::SystemProbe::new()).0;
     let guard =
         accounts_admin::Guard::new(&snapshot, &policy.accounts, policy.daemon_user.as_str());
 
@@ -779,8 +770,6 @@ pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
         network_control: config.network.control,
         firewall_control: config.firewall.control,
         volume_control: config.volumes.control,
-        account_control: config.accounts.control,
-        account_password_control: config.accounts.manage_passwords,
         accounts: config.accounts.clone(),
         daemon_user: accounts_admin::daemon_user(),
         mount_root: mount_root(&config.volumes.mount_root),

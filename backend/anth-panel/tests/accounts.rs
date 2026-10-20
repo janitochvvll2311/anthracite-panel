@@ -71,6 +71,8 @@ fn snapshot() -> AccountSnapshot {
         ],
         control_enabled: true,
         password_enabled: true,
+        allow_system: false,
+        allow_privileged_groups: false,
         timestamp_ms: 0,
         total_users: 5,
         total_groups: 6,

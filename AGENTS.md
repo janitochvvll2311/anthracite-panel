@@ -326,6 +326,20 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   The tools come from `shadow` (`community`), not BusyBox, which has no
   `usermod`, `groupmod`, `chpasswd` or `gpasswd`; a missing tool answers
   `Unsupported` rather than guessing with different flags.
+- **Frontend accounts**: `anth-account-manager` owns two panes (users and
+  groups), sorting, filtering, the editors and confirmed mutations, and only
+  depends on the injected `AccountClient`. `lib/accounts/account-client.ts`
+  implements `/api/accounts` and `lib/accounts/display.ts` owns the pure
+  helpers: labels, filtering, sorting, form parsing and `userBlockReason` /
+  `groupBlockReason`. Those two mirror the daemon's guards so a row is disabled
+  instead of offering an action certain to fail; they are a hint, never the
+  policy. `locked: null` renders as `unknown`, never as `unlocked`, because the
+  daemon could not read the shadow entry. The editors send only the fields that
+  actually changed and refuse an empty modify with "Nothing changed". Native
+  `required` is deliberately absent: the component validates and reports, so
+  there is only one validation path. Tests live beside the component and
+  `lib/accounts/`; the harness is
+  `src/components/anth-account-manager.test.html`.
 - **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
   `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
   deletes/flushes. It only renders controls when `control_enabled` is true and

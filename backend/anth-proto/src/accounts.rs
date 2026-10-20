@@ -152,6 +152,13 @@ pub struct AccountSnapshot {
     /// `[accounts] manage_passwords`. Reported separately so the UI can hide the
     /// password action when only inventory is enabled.
     pub password_enabled: bool,
+    /// `[accounts] allow_system`. The UI greys out system entries instead of
+    /// offering an action the daemon will refuse.
+    #[serde(default)]
+    pub allow_system: bool,
+    /// `[accounts] allow_privileged_groups`, same reason for privileged groups.
+    #[serde(default)]
+    pub allow_privileged_groups: bool,
     pub timestamp_ms: u64,
     /// Users found before truncation.
     pub total_users: usize,

@@ -1,0 +1,83 @@
+<!doctype html>
+<!--
+  Dev-only harness for the account manager component.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-account-manager.test.html. Vite's
+  build input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel account manager component."
+    />
+    <title>anth-account-manager · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-account-manager" width="1300px">
+      <p slot="description">
+        Local users and groups backed by <code>GET /api/accounts</code>. It lists
+        users and groups in two tables, creates and edits them, locks an account
+        and sets a password. Refresh is manual: there is no watch stream.
+        Mutations are disabled unless <code>[accounts] control</code> is enabled,
+        and the password form needs <code>manage_passwords</code> as well.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Filter by name, id, comment or group member.</li>
+            <li>Switch between the Users and Groups tabs.</li>
+            <li>Sort either table by clicking a header.</li>
+            <li>
+              Look for a greyed row: <code>nss</code> accounts, <code>uid 0</code>,
+              system accounts and privileged groups explain why they are locked.
+            </li>
+            <li>
+              Try a name with a slash or a system account to see the daemon's
+              refusal.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open <code>/src/components/anth-account-manager.test.html</code> on
+              the Vite port.
+            </li>
+            <li>
+              Debug builds enable <code>[accounts] control</code> and leave
+              <code>manage_passwords</code> off, so the password action stays
+              hidden until you turn it on.
+            </li>
+            <li>
+              The daemon needs root, or a <code>NOPASSWD</code> sudoers rule, to
+              write the account files.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <anth-account-manager id="accounts"></anth-account-manager>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-account-manager.ts'
+      import { HttpAccountClient } from '/src/lib/accounts/account-client.ts'
+
+      document.querySelector('#accounts').client = new HttpAccountClient()
+    </script>
+  </body>
+</html>

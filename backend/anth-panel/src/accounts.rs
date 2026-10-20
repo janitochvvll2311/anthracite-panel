@@ -18,6 +18,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_proto::{AccountGroup, AccountSnapshot, AccountSource, AccountUser, MAX_LINE_LEN};
 
+use crate::config::AccountsConfig;
+
 use crate::command::{CommandRunner, SystemRunner};
 
 /// Fallback when `/etc/login.defs` is unreadable or silent. Matches the Debian,
@@ -284,16 +286,12 @@ pub fn read_login_defs(text: &str) -> IdRanges {
 }
 
 /// One point-in-time snapshot, with the line cap applied.
-pub fn collect(control_enabled: bool, password_enabled: bool) -> AccountSnapshot {
-    collect_with(control_enabled, password_enabled, &SystemProbe::new())
+pub fn collect(config: &AccountsConfig) -> AccountSnapshot {
+    collect_with(config, &SystemProbe::new())
 }
 
-pub fn collect_with(
-    control_enabled: bool,
-    password_enabled: bool,
-    probe: &dyn HostProbe,
-) -> AccountSnapshot {
-    let (mut snapshot, warnings) = collect_unfitted(control_enabled, password_enabled, probe);
+pub fn collect_with(config: &AccountsConfig, probe: &dyn HostProbe) -> AccountSnapshot {
+    let (mut snapshot, warnings) = collect_unfitted(config, probe);
 
     snapshot = fit_snapshot(snapshot);
     if !warnings.is_empty() {
@@ -313,8 +311,7 @@ pub fn collect_with(
 /// where the feature is needed. `volumes::collect_unfitted` follows the same
 /// rule.
 pub fn collect_unfitted(
-    control_enabled: bool,
-    password_enabled: bool,
+    config: &AccountsConfig,
     probe: &dyn HostProbe,
 ) -> (AccountSnapshot, Vec<String>) {
     let files = probe.read();
@@ -434,8 +431,10 @@ pub fn collect_unfitted(
         total_groups: groups.len(),
         users,
         groups,
-        control_enabled,
-        password_enabled,
+        control_enabled: config.control,
+        password_enabled: config.manage_passwords,
+        allow_system: config.allow_system,
+        allow_privileged_groups: config.allow_privileged_groups,
         timestamp_ms: now_ms(),
         truncated: false,
         warning: None,
@@ -685,8 +684,17 @@ alice:!::alice
         }
     }
 
+    /// The policy the fixtures assume: control and passwords on, no opt-ins.
+    fn policy() -> AccountsConfig {
+        AccountsConfig {
+            control: true,
+            manage_passwords: true,
+            ..AccountsConfig::default()
+        }
+    }
+
     fn snapshot_with(files: LocalFiles) -> AccountSnapshot {
-        let (snapshot, _) = collect_unfitted(true, true, &FakeProbe(files));
+        let (snapshot, _) = collect_unfitted(&policy(), &FakeProbe(files));
         snapshot
     }
 
@@ -828,7 +836,7 @@ alice:!::alice
     fn an_unreadable_shadow_degrades_to_unknown_with_a_warning() {
         let mut files = files();
         files.shadow = None;
-        let (snapshot, warnings) = collect_unfitted(true, true, &FakeProbe(files));
+        let (snapshot, warnings) = collect_unfitted(&policy(), &FakeProbe(files));
 
         assert_eq!(user(&snapshot, "alice").locked, None);
         assert!(
@@ -884,7 +892,7 @@ alice:!::alice
 
     #[test]
     fn a_missing_getent_warns_and_still_lists_local_accounts() {
-        let (snapshot, warnings) = collect_unfitted(true, true, &FakeProbe(files()));
+        let (snapshot, warnings) = collect_unfitted(&policy(), &FakeProbe(files()));
         assert!(!snapshot.users.is_empty());
         assert!(
             warnings.iter().any(|warning| warning.contains("getent")),
@@ -901,7 +909,13 @@ alice:!::alice
 
     #[test]
     fn control_and_password_flags_are_reported_separately() {
-        let (snapshot, _) = collect_unfitted(false, true, &FakeProbe(files()));
+        let (snapshot, _) = collect_unfitted(
+            &AccountsConfig {
+                control: false,
+                ..policy()
+            },
+            &FakeProbe(files()),
+        );
         assert!(!snapshot.control_enabled);
         assert!(snapshot.password_enabled);
     }
