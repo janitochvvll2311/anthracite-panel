@@ -322,6 +322,32 @@ describe('AnthFileExplorer', () => {
     expect(client.deleteCalls).toEqual([{ path: '/file.txt', recursive: false }])
   })
 
+  it('does not reload the listing while a mutation is in flight', async () => {
+    const client = new FakeFileClient()
+    client.listings.set('/', fileListing({ write_enabled: true }))
+    const element = await mount(client)
+    vi.stubGlobal('prompt', vi.fn().mockReturnValue('new'))
+    let finish!: () => void
+    client.mkdir = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+
+    button(element, 'New folder').click()
+    await flush(element)
+
+    expect(client.list).toHaveBeenCalledTimes(1)
+    await element.load()
+    expect(client.list).toHaveBeenCalledTimes(1)
+
+    finish()
+    await flush(element)
+
+    expect(client.list).toHaveBeenCalledTimes(2)
+  })
+
   it('uploads a selected file and asks before overwriting', async () => {
     const confirm = vi.fn(() => true)
     vi.stubGlobal('confirm', confirm)

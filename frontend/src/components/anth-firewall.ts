@@ -68,7 +68,8 @@ export class AnthFirewall extends LitElement {
 
   /** Fetches the current managed table without changing it. */
   async refresh(): Promise<void> {
-    if (!this.client || this.loading) return
+    // Do not race a mutation: the stale snapshot would make the table flicker.
+    if (!this.client || this.loading || this.busy) return
 
     this.loading = true
     this.errorMessage = ''
@@ -121,6 +122,7 @@ export class AnthFirewall extends LitElement {
     this.busy = true
     this.errorMessage = ''
     this.notice = ''
+    let changed = false
     try {
       this.notice = await this.client.addRule({
         action: this.action,
@@ -130,12 +132,14 @@ export class AnthFirewall extends LitElement {
       })
       this.port = ''
       this.comment = ''
-      await this.refresh()
+      changed = true
     } catch (error) {
       this.errorMessage = messageOf(error)
     } finally {
       this.busy = false
     }
+
+    if (changed) await this.refresh()
   }
 
   private async deleteRule(rule: FirewallRule): Promise<void> {
@@ -151,14 +155,17 @@ export class AnthFirewall extends LitElement {
     this.busy = true
     this.errorMessage = ''
     this.notice = ''
+    let changed = false
     try {
       this.notice = await this.client.deleteRule(rule.handle)
-      await this.refresh()
+      changed = true
     } catch (error) {
       this.errorMessage = messageOf(error)
     } finally {
       this.busy = false
     }
+
+    if (changed) await this.refresh()
   }
 
   private async flush(): Promise<void> {
@@ -170,14 +177,17 @@ export class AnthFirewall extends LitElement {
     this.busy = true
     this.errorMessage = ''
     this.notice = ''
+    let changed = false
     try {
       this.notice = await this.client.flush()
-      await this.refresh()
+      changed = true
     } catch (error) {
       this.errorMessage = messageOf(error)
     } finally {
       this.busy = false
     }
+
+    if (changed) await this.refresh()
   }
 
   private renderForm() {
@@ -313,7 +323,11 @@ export class AnthFirewall extends LitElement {
               : nothing}
           </div>
           <span class="spacer"></span>
-          <button type="button" @click=${this.refresh} ?disabled=${!this.client || this.loading}>
+          <button
+            type="button"
+            @click=${this.refresh}
+            ?disabled=${!this.client || this.loading || this.busy}
+          >
             ${this.loading ? 'Loading…' : 'Refresh'}
           </button>
           ${this.canControl

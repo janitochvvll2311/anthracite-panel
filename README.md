@@ -98,9 +98,10 @@ npm run build
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture notes and repository conventions.
-Debug builds generate a missing config with process control, network control,
-firewall control and file writes enabled so the full UI is testable; release
-builds keep all four disabled.
+Debug builds generate a missing config with global sudo, process control,
+network control, firewall control and file writes enabled so the full UI is
+testable. Sudo runs `ip link set` and `nft` through `sudo -n`; both fall back to
+their direct path. Release builds keep the controls disabled.
 
 ## License
 

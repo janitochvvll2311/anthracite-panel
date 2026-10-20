@@ -98,7 +98,9 @@ export class AnthFileExplorer extends LitElement {
 
   /** Fetches the current directory. */
   async load(): Promise<void> {
-    if (!this.client) return
+    // Do not refresh the listing while a mutation is still running; the
+    // post-mutation load picks up the final state.
+    if (!this.client || this.busy) return
 
     const generation = ++this.generation
     this.loading = true
@@ -240,18 +242,21 @@ export class AnthFileExplorer extends LitElement {
   }
 
   private async mutate(action: () => Promise<unknown>): Promise<void> {
-    if (!this.client) return
+    if (!this.client || this.busy) return
 
     this.busy = true
     this.error = ''
+    let changed = false
     try {
       await action()
-      await this.load()
+      changed = true
     } catch (error) {
       this.error = messageOf(error)
     } finally {
       this.busy = false
     }
+
+    if (changed) await this.load()
   }
 
   private newFolder(): void {
@@ -408,7 +413,11 @@ export class AnthFileExplorer extends LitElement {
             >
               Up
             </button>
-            <button type="button" ?disabled=${this.loading} @click=${this.reload}>
+            <button
+              type="button"
+              ?disabled=${this.loading || this.busy}
+              @click=${this.reload}
+            >
               Refresh
             </button>
             <label class="hidden-toggle">

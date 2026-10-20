@@ -37,6 +37,8 @@ pub struct Policy {
     pub process_control: bool,
     pub network_control: bool,
     pub firewall_control: bool,
+    /// Shared by network and firewall control commands.
+    pub sudo: bool,
 }
 
 pub fn handle_request(request: Request) -> Response {
@@ -67,12 +69,12 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
         }
         Request::NetworkList => Response::NetworkSnapshot(network::collect(policy.network_control)),
         Request::NetworkSetState { name, up } => {
-            match network::set_state(policy.network_control, &name, up) {
+            match network::set_state(policy.network_control, policy.sudo, &name, up) {
                 Ok(()) => Response::NetworkStateChanged { name, up },
                 Err(error) => Response::NetworkError(error),
             }
         }
-        Request::FirewallStatus => match firewall::status(policy.firewall_control) {
+        Request::FirewallStatus => match firewall::status(policy.firewall_control, policy.sudo) {
             Ok(snapshot) => Response::FirewallSnapshot(snapshot),
             Err(error) => Response::FirewallError(error),
         },
@@ -83,6 +85,7 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
             comment,
         } => match firewall::add_rule(
             policy.firewall_control,
+            policy.sudo,
             action,
             port,
             protocol,
@@ -92,12 +95,12 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
             Err(error) => Response::FirewallError(error),
         },
         Request::FirewallDeleteRule { handle } => {
-            match firewall::delete_rule(policy.firewall_control, handle) {
+            match firewall::delete_rule(policy.firewall_control, policy.sudo, handle) {
                 Ok(message) => Response::FirewallChanged { message },
                 Err(error) => Response::FirewallError(error),
             }
         }
-        Request::FirewallFlush => match firewall::flush(policy.firewall_control) {
+        Request::FirewallFlush => match firewall::flush(policy.firewall_control, policy.sudo) {
             Ok(message) => Response::FirewallChanged { message },
             Err(error) => Response::FirewallError(error),
         },
@@ -215,6 +218,7 @@ async fn pump(
     let process_control = policy.process_control;
     let network_control = policy.network_control;
     let firewall_control = policy.firewall_control;
+    let sudo_enabled = policy.sudo;
 
     let mut output = futures::stream::select_all(Vec::<OutputStream>::new());
     let mut uploads: HashMap<u32, PendingUpload> = HashMap::new();
@@ -286,7 +290,7 @@ async fn pump(
             Request::NetworkSetState { name, up } => {
                 let interface = name.clone();
                 match tokio::task::spawn_blocking(move || {
-                    network::set_state(network_control, &interface, up)
+                    network::set_state(network_control, sudo_enabled, &interface, up)
                 })
                 .await
                 {
@@ -299,7 +303,10 @@ async fn pump(
                 }
             }
             Request::FirewallStatus => {
-                match tokio::task::spawn_blocking(move || firewall::status(firewall_control)).await
+                match tokio::task::spawn_blocking(move || {
+                    firewall::status(firewall_control, sudo_enabled)
+                })
+                .await
                 {
                     Ok(Ok(snapshot)) => Response::FirewallSnapshot(snapshot),
                     Ok(Err(error)) => Response::FirewallError(error),
@@ -316,7 +323,14 @@ async fn pump(
                 comment,
             } => {
                 match tokio::task::spawn_blocking(move || {
-                    firewall::add_rule(firewall_control, action, port, protocol, comment.as_deref())
+                    firewall::add_rule(
+                        firewall_control,
+                        sudo_enabled,
+                        action,
+                        port,
+                        protocol,
+                        comment.as_deref(),
+                    )
                 })
                 .await
                 {
@@ -330,7 +344,7 @@ async fn pump(
             }
             Request::FirewallDeleteRule { handle } => {
                 match tokio::task::spawn_blocking(move || {
-                    firewall::delete_rule(firewall_control, handle)
+                    firewall::delete_rule(firewall_control, sudo_enabled, handle)
                 })
                 .await
                 {
@@ -343,7 +357,11 @@ async fn pump(
                 }
             }
             Request::FirewallFlush => {
-                match tokio::task::spawn_blocking(move || firewall::flush(firewall_control)).await {
+                match tokio::task::spawn_blocking(move || {
+                    firewall::flush(firewall_control, sudo_enabled)
+                })
+                .await
+                {
                     Ok(Ok(message)) => Response::FirewallChanged { message },
                     Ok(Err(error)) => Response::FirewallError(error),
                     Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
@@ -535,6 +553,7 @@ pub async fn serve(config: &Config) -> Result<(), Box<dyn Error + Send + Sync>> 
         process_control: config.process.control,
         network_control: config.network.control,
         firewall_control: config.firewall.control,
+        sudo: config.sudo,
     };
     let files = Arc::new(
         FileService::new(&config.files).map_err(|e| format!("invalid files configuration: {e}"))?,

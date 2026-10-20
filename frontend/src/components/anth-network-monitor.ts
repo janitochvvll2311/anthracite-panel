@@ -157,7 +157,7 @@ export class AnthNetworkMonitor extends LitElement {
   }
 
   private async refreshSnapshot(generation: number): Promise<void> {
-    if (!this.client) return
+    if (!this.client || this.busy) return
 
     try {
       const snapshot = await this.client.list()
@@ -171,6 +171,10 @@ export class AnthNetworkMonitor extends LitElement {
   }
 
   private applySnapshot(snapshot: NetworkSnapshot): void {
+    // A state change is in flight; applying an older snapshot now would make
+    // the row flip back and forth. The post-action refresh catches up.
+    if (this.busy) return
+
     this.rows = computeNetworkRows(snapshot, this.previous)
     this.previous = snapshot
     this.controlEnabled = snapshot.control_enabled
@@ -259,8 +263,10 @@ export class AnthNetworkMonitor extends LitElement {
 
     this.busy = true
     this.actionError = ''
+    let changed = false
     try {
       await this.client.setState(iface.name, up)
+      changed = true
       this.dispatchEvent(
         new CustomEvent<AnthNetworkStateDetail>(ANTH_NETWORK_STATE_EVENT, {
           detail: { name: iface.name, up },
@@ -268,13 +274,14 @@ export class AnthNetworkMonitor extends LitElement {
           composed: true,
         }),
       )
-      this.refresh()
     } catch (error) {
       this.actionError =
         error instanceof Error ? error.message : String(error)
     } finally {
       this.busy = false
     }
+
+    if (changed) this.refresh()
   }
 
   private renderSortButton(key: NetworkSortKey, label: string) {
@@ -404,7 +411,11 @@ export class AnthNetworkMonitor extends LitElement {
               )}
             </select>
           </label>
-          <button type="button" @click=${this.refresh} ?disabled=${!this.client}>
+          <button
+            type="button"
+            @click=${this.refresh}
+            ?disabled=${!this.client || this.busy}
+          >
             Refresh
           </button>
           <button

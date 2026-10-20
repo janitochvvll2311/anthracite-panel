@@ -149,7 +149,7 @@ export class AnthProcessMonitor extends LitElement {
   }
 
   private async refreshSnapshot(generation: number): Promise<void> {
-    if (!this.client) return
+    if (!this.client || this.busy) return
 
     try {
       const snapshot = await this.client.list()
@@ -163,6 +163,10 @@ export class AnthProcessMonitor extends LitElement {
   }
 
   private applySnapshot(snapshot: ProcessSnapshot): void {
+    // A signal is in flight; applying an older snapshot now would make the
+    // table flicker. The post-action refresh catches up.
+    if (this.busy) return
+
     const previous = this.previous
     const previousByKey = new Map<string, number>()
     const elapsed =
@@ -277,8 +281,10 @@ export class AnthProcessMonitor extends LitElement {
 
     this.busy = true
     this.errorMessage = ''
+    let sent = false
     try {
       await this.client.signal(process.pid, this.pendingSignal)
+      sent = true
       this.dispatchEvent(
         new CustomEvent<AnthProcessSignalDetail>(ANTH_PROCESS_SIGNAL_EVENT, {
           detail: { pid: process.pid, signal: this.pendingSignal },
@@ -286,13 +292,14 @@ export class AnthProcessMonitor extends LitElement {
           composed: true,
         }),
       )
-      this.refresh()
     } catch (error) {
       this.errorMessage =
         error instanceof Error ? error.message : String(error)
     } finally {
       this.busy = false
     }
+
+    if (sent) this.refresh()
   }
 
   override render() {
@@ -325,7 +332,11 @@ export class AnthProcessMonitor extends LitElement {
               Tree
             </button>
           </div>
-          <button type="button" @click=${this.refresh} ?disabled=${!this.client}>
+          <button
+            type="button"
+            @click=${this.refresh}
+            ?disabled=${!this.client || this.busy}
+          >
             Refresh
           </button>
           <button

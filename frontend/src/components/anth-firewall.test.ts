@@ -103,6 +103,38 @@ describe('AnthFirewall', () => {
     expect(input(element, 'input[type="number"]').value).toBe('')
   })
 
+  it('does not refresh while a mutation is in flight', async () => {
+    const client = new FakeFirewallClient()
+    const element = await mount(client)
+    let finish!: (message: string) => void
+    client.addRule = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve
+        }),
+    )
+
+    input(element, 'input[type="number"]').value = '8080'
+    input(element, 'input[type="number"]').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    )
+    const form = element.shadowRoot?.querySelector('form')
+    if (!form) throw new Error('form was not rendered')
+    form.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    )
+    await flush(element)
+
+    expect(client.get).toHaveBeenCalledTimes(1)
+    await element.refresh()
+    expect(client.get).toHaveBeenCalledTimes(1)
+
+    finish('allowed tcp/8080')
+    await flush(element)
+
+    expect(client.get).toHaveBeenCalledTimes(2)
+  })
+
   it('validates the port and comment before calling the client', async () => {
     const client = new FakeFirewallClient()
     const element = await mount(client)

@@ -46,6 +46,7 @@ Both forms are equivalent.
 
 ```toml
 socket_path = "/var/tmp/anth.sock"
+sudo = false
 
 [process]
 control = false
@@ -65,18 +66,19 @@ max_upload_bytes = 67108864
 ```
 
 Unknown keys are rejected rather than ignored, so a typo fails loudly. The
-removed `firewall.sudo` and `firewall.sudo_password` keys are the exception:
-they are accepted for compatibility, ignored and omitted when the config is
-written. A
-relative or missing file is not fatal for serving subcommands: they write a
-default config when it cannot be loaded. Client subcommands (`echo`,
-`host-info`, `process`, `network`, `firewall`, `file`) never create the file — they use
-defaults if it is absent, so probing a machine does not leave files behind.
+legacy `network.sudo`, `firewall.sudo` and `firewall.sudo_password` keys are
+accepted for compatibility, ignored and omitted when the config is written; use
+the top-level `sudo` instead. A relative or missing file is not fatal for
+serving subcommands: they write a default config when it cannot be loaded.
+Client subcommands (`echo`, `host-info`, `process`, `network`, `firewall`,
+`file`) never create the file — they use defaults if it is absent, so probing a
+machine does not leave files behind.
 
-Debug builds bootstrap a missing file with `[process] control = true`,
-`[network] control = true`, `[firewall] control = true` and `[files] write = true`
-so the whole UI is testable locally. Release builds keep all four off. An existing file is never
-rewritten; remove it or edit it to change the generated defaults.
+Debug builds bootstrap a missing file with global `sudo = true`,
+`[process] control = true`, `[network] control = true`,
+`[firewall] control = true` and `[files] write = true` so the whole UI is
+testable locally. Release builds keep the controls off. An existing file is
+never rewritten; remove it or edit it to change the generated defaults.
 
 ## Serving
 

@@ -205,6 +205,39 @@ describe('AnthNetworkMonitor', () => {
     )
   })
 
+  it('does not apply stream snapshots while a state change is in flight', async () => {
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    let finish!: () => void
+    client.setState = vi.fn(
+      (_name: string, _up: boolean) =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+
+    button(element, 'Down').click()
+    await flush(element)
+
+    client.emit(
+      networkSnapshot([
+        networkInterface({ state: 'down', up: false, running: false }),
+      ]),
+    )
+    await element.updateComplete
+
+    expect(findButton(element, 'Up')).toBeUndefined()
+    expect(findButton(element, 'Down')).toBeDefined()
+    expect(client.list).toHaveBeenCalledTimes(1)
+
+    finish()
+    await flush(element)
+
+    expect(findButton(element, 'Up')).toBeDefined()
+    expect(client.list).toHaveBeenCalledTimes(2)
+  })
+
   it('does not change an interface when confirmation is cancelled', async () => {
     const client = new FakeNetworkClient()
     const element = await mount(client)

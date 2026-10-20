@@ -191,10 +191,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
 - **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]`, `[process]`,
   `[network]`, `[firewall]` and `[files]`) is TOML with
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at
-  `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`,
+  `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, global `sudo = false`,
   `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
-  `process.control = false`, `network.control = false`, `firewall.control = false`,
-  legacy `firewall.sudo`/`sudo_password` keys are accepted and ignored,
+  `process.control = false`, `network.control = false`,
+  `firewall.control = false`, legacy `network.sudo`/`firewall.sudo` and
+  `firewall.sudo_password` are accepted and ignored,
   `files.root = "/"`, `files.write = false`, `max_entries = 5000`,
   `max_preview_bytes = 1 MiB` and
   `max_upload_bytes = 64 MiB`. `auto` resolves `$SHELL`, then the account's
@@ -202,9 +203,10 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
   `Config::load_or_default`, which never writes. `Config::server_default` returns
-  `Config::dev_default` in debug builds, which sets `process.control = true`,
-  `network.control = true`, `firewall.control = true` and `files.write = true`;
-  release builds keep all four off.
+  `Config::dev_default` in debug builds, which sets global `sudo = true`,
+  `process.control = true`, `network.control = true`,
+  `firewall.control = true` and `files.write = true`; release builds keep the
+  controls off.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
   `POST /api/echo`, `GET /api/terminal` (WebSocket),
@@ -243,8 +245,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   selected-process preview shows the full command, left-aligned and vertically
   centered in the footer. `anth-process-monitor` owns filtering, the flat/tree
   toggle, SSE lifecycle and confirmed signals, and only depends on the injected
-  `ProcessClient`. Both are exercised by Vitest component tests and the
-  `src/components/anth-process-monitor.test.html` dev harness.
+  `ProcessClient`. It ignores stream snapshots while a signal is in flight and
+  refreshes once it finishes. Both are exercised by Vitest component tests and
+  the `src/components/anth-process-monitor.test.html` dev harness.
 - **Filesystem explorer**: `files.rs` validates `[files] root`, normalizes virtual
   paths, rejects `..` and symlink escapes, lists directories, reads stateless chunks
   and performs atomic uploads through a per-connection temporary file. Writes are
@@ -262,29 +265,38 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `src/components/anth-file-explorer.test.html` file is the dev harness.
 - **Network monitor**: `network.rs` reads `/sys/class/net` and `/proc/net/dev`,
   resolves IPv4/IPv6 with `getifaddrs(3)` and enforces `[network] control` plus
-  the loopback-down guard before calling `SIOCSIFFLAGS`. The guard runs on the
-  flags returned by `SIOCGIFFLAGS`, so an unreadable sysfs `flags` file cannot
-  fail open. Snapshots cap the list at 2000 interfaces and report `total` and
+  the loopback-down guard before calling `SIOCSIFFLAGS`. Global `sudo` defaults
+  to `false` in release and `true` in the generated debug config; it tries
+  `sudo -n ip link set` first and falls back to the ioctl when sudo cannot
+  elevate. The guard reads the flags with `SIOCGIFFLAGS` before either path, so
+  an unreadable sysfs `flags` file cannot fail open. Snapshots cap the list at
+  2000 interfaces and report `total` and
   `warning` when shortened; the fit loop also enforces the 1 MiB serialized
   line cap for address-heavy rows. Up/down runs on a blocking worker.
   `anth-network-monitor` follows the SSE stream through an injected
   `NetworkClient`, computes RX/TX rates from cumulative counters and only shows
-  controls when the snapshot says `control_enabled`. The dev harness is
+  controls when the snapshot says `control_enabled`. It ignores stream snapshots
+  while an up/down action is in flight and refreshes once it finishes. The dev
+  harness is
   `src/components/anth-network-monitor.test.html`; tests live beside the
   component and `lib/network/`.
 - **Firewall**: `firewall.rs` shells out to `nft` with an argument vector and owns a
   dedicated `inet anthracite input` table. `deny` initializes the table and chain
   and adds a tagged drop rule; `allow` removes the matching managed drop, and
   `delete`/`flush` only touch that chain.
-  `[firewall] control` defaults to `false`; status remains read-only. The daemon
-  runs `nft` directly and relies on `CAP_NET_ADMIN` or root. The Docker runtime
-  installs `nftables` and sets `CAP_NET_ADMIN` on `nft`; the container needs
-  `--cap-add NET_ADMIN`. Blocking nft calls run on a blocking worker.
+  `[firewall] control` defaults to `false`; status remains read-only. Global
+  `sudo` defaults to `false` in release and `true` in the generated debug
+  config, which runs `nft` through `sudo -n` and falls back to direct nft when
+  sudo cannot elevate. The daemon otherwise relies on `CAP_NET_ADMIN` or root.
+  The Docker runtime installs `nftables` and sets `CAP_NET_ADMIN` on `nft`; the
+  container needs `--cap-add NET_ADMIN`. Blocking nft calls run on a blocking
+  worker.
 - **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
   `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
-  deletes/flushes. It only renders controls when `control_enabled` is true. The dev
-  harness is `src/components/anth-firewall.test.html`; tests live beside the
-  component and `lib/firewall/`.
+  deletes/flushes. It only renders controls when `control_enabled` is true and
+  suppresses refreshes while a mutation is in flight. The dev harness is
+  `src/components/anth-firewall.test.html`; tests live beside the component and
+  `lib/firewall/`.
 - **Frontend host info**: `anth-host-info` renders the `GET /api/host-info`
   snapshot and follows `/api/host-info/watch` through the injected
   `HostInfoClient`. It formats uptime, load, memory and swap, and exposes

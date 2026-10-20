@@ -404,6 +404,43 @@ describe('AnthProcessMonitor', () => {
     expect(client.listCalls).toBe(2)
   })
 
+  it('does not apply stream snapshots while a signal is in flight', async () => {
+    const client = new FakeClient()
+    client.queue = [
+      snapshot([processInfo({ pid: 42 })], { control_enabled: true }),
+    ]
+    const { element } = await mount(client)
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    let finish!: () => void
+    client.signal = vi.fn(
+      (_pid: number, _signal: ProcessSignal) =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        }),
+    )
+
+    flatRow(element)?.click()
+    await flush(element)
+    element.shadowRoot?.querySelector<HTMLButtonElement>('.signal button')?.click()
+    await flush(element)
+
+    client.emit(
+      snapshot([processInfo({ pid: 99, command: '/usr/bin/postgres' })], {
+        control_enabled: true,
+      }),
+    )
+    await flush(element)
+
+    expect(table(element).processes.map((process) => process.pid)).toEqual([42])
+    expect(client.listCalls).toBe(1)
+
+    finish()
+    await flush(element)
+
+    expect(table(element).processes.map((process) => process.pid)).toEqual([99])
+    expect(client.listCalls).toBe(2)
+  })
+
   it('does not signal when the confirmation is rejected', async () => {
     const client = new FakeClient()
     client.queue = [

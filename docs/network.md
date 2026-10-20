@@ -13,22 +13,36 @@ IP addresses are visible to anyone who can reach the API.
 Network control is **off by default**:
 
 ```toml
+sudo = false
+
 [network]
 control = false
 ```
 
-Set it to `true` to allow up/down requests:
+Set `control` to `true` to allow up/down requests. The top-level `sudo = true`
+covers both network and firewall control commands; it tries
+`sudo -n ip link set` first, which is meant for development when the daemon runs
+as an unprivileged user with a `NOPASSWD` sudoers rule for `ip`:
 
 ```toml
+sudo = true
+
 [network]
 control = true
 ```
 
+If sudo is missing, requires a password or is not allowed, the daemon retries
+the in-process ioctl so `CAP_NET_ADMIN` or a root daemon still works. Passwords
+are never stored. The loopback-down guard runs before the sudo command.
+
+The legacy `network.sudo` key is still accepted so older configs keep loading,
+but it is ignored at runtime and never written back.
+
 Changing the file requires a daemon restart.
 
-Debug builds (`cargo run`) bootstrap a missing config with `control = true` so
-the feature can be tested locally. Release builds generate `false`, and an
-existing file is never rewritten.
+Debug builds (`cargo run`) bootstrap a missing config with global `sudo = true`
+and `control = true` so the feature can be tested locally. Release builds
+generate `false` for both, and an existing file is never rewritten.
 
 Network control is limited to administrative state:
 
@@ -54,8 +68,8 @@ anth-panel network down eth0 --yes
 cumulative counters; `--watch` redraws them but does not compute rates.
 
 `up` and `down` return exit code `1` when the daemon refuses the change or the
-operation fails. The daemon must be running as a user with `CAP_NET_ADMIN`
-(usually root) for a state change to succeed.
+operation fails. The daemon needs `CAP_NET_ADMIN`, root, or global `sudo = true`
+with a passwordless sudoers rule for `ip`.
 
 ## Data sources
 
@@ -64,9 +78,11 @@ operation fails. The daemon must be running as a user with `CAP_NET_ADMIN`
 - `/proc/net/dev` for the RX/TX byte, packet, error and drop counters.
 - `getifaddrs(3)` for IPv4 and IPv6 addresses and prefix lengths.
 
-No external command such as `ip` is required. The parser takes a filesystem root
-in tests, so fixtures can exercise the sysfs and `/proc` paths without touching
-the host.
+The default state-change path uses the `SIOCSIFFLAGS` ioctl and needs no
+external command. With global `sudo = true`, the daemon first tries
+`sudo -n ip link set`; a missing or unusable sudo/ip falls back to the ioctl.
+The parser takes a filesystem root in tests, so fixtures can exercise the sysfs
+and `/proc` paths without touching the host.
 
 ## Data model
 

@@ -42,28 +42,38 @@ override another firewall table, which still applies.
 Firewall control is **off by default**:
 
 ```toml
+sudo = false
+
 [firewall]
 control = false
 ```
 
-Set it to `true` to allow changes:
+Set `control` to `true` to allow changes. The top-level `sudo = true` covers
+both firewall and network control commands; it runs every `nft` invocation as
+`sudo -n nft` and is meant for development when the daemon runs as an
+unprivileged user with a `NOPASSWD` sudoers rule for `nft`:
 
 ```toml
+sudo = true
+
 [firewall]
 control = true
 ```
 
-The daemon runs `nft` directly. Grant the nft binary `CAP_NET_ADMIN`, run the
-daemon as root, or use the container capability described below.
+Passwords are never stored. If sudo is missing, requires a password or is not
+allowed, the daemon retries `nft` directly so a file capability or a root daemon
+still works. Otherwise grant the nft binary `CAP_NET_ADMIN`, run the daemon as
+root, or use the container capability described below.
 
-Older configs that still contain `sudo` or `sudo_password` keep loading: both
-keys are accepted for compatibility, ignored at runtime and never written back.
+The legacy `firewall.sudo` and `firewall.sudo_password` keys are still accepted
+so older configs keep loading, but they are ignored at runtime and never
+written back.
 
 Changing the file requires a daemon restart.
 
-Debug builds (`cargo run`) bootstrap a missing config with `control = true` so
-the feature can be tested locally. Release builds generate `false`, and an
-existing file is never rewritten.
+Debug builds (`cargo run`) bootstrap a missing config with global `sudo = true`
+and `control = true` so the feature can be tested locally. Release builds
+generate `false` for both, and an existing file is never rewritten.
 
 ## CLI
 

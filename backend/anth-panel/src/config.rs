@@ -93,6 +93,10 @@ pub struct NetworkConfig {
     /// interface down can disconnect the host, and the panel has no
     /// authentication yet.
     pub control: bool,
+    /// Old per-section sudo flag. The global top-level `sudo` replaces it;
+    /// this is accepted so earlier configs keep loading and is never written.
+    #[serde(default, skip_serializing, rename = "sudo")]
+    _legacy_sudo: bool,
 }
 
 /// Firewall management settings.
@@ -103,11 +107,12 @@ pub struct FirewallConfig {
     /// no authentication yet and firewall changes can disconnect the host.
     pub control: bool,
 
-    /// Legacy key from the removed sudo support. Accepted so old configs keep
-    /// loading, ignored at runtime and never written back.
+    /// Old per-section sudo flag. The global top-level `sudo` replaces it;
+    /// this is accepted so earlier configs keep loading and is never written.
     #[serde(default, skip_serializing, rename = "sudo")]
     _legacy_sudo: bool,
-    /// Legacy key from the removed sudo support, handled like `_legacy_sudo`.
+    /// Legacy password key. Passwords are no longer stored or used; the key is
+    /// accepted so old configs keep loading and is never written back.
     #[serde(default, skip_serializing, rename = "sudo_password")]
     _legacy_sudo_password: Option<String>,
 }
@@ -146,6 +151,10 @@ impl Default for FilesConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub socket_path: String,
+    /// Run privileged control commands through `sudo -n`. This single switch
+    /// covers both `ip link set` and `nft`; each path falls back to its direct
+    /// mechanism when sudo cannot elevate.
+    pub sudo: bool,
     pub terminal: TerminalConfig,
     pub process: ProcessConfig,
     pub network: NetworkConfig,
@@ -157,6 +166,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             socket_path: DEFAULT_SOCKET_PATH.to_string(),
+            sudo: false,
             terminal: TerminalConfig::default(),
             process: ProcessConfig::default(),
             network: NetworkConfig::default(),
@@ -171,9 +181,13 @@ impl Config {
     ///
     /// Production defaults stay safe: process control, network control, firewall
     /// control and file writes are off unless an existing config file explicitly
-    /// enables them.
+    /// enables them. Development also sets the global `sudo` flag so `ip link
+    /// set` and `nft` work when the daemon runs unprivileged.
     pub fn dev_default() -> Self {
-        let mut config = Self::default();
+        let mut config = Self {
+            sudo: true,
+            ..Self::default()
+        };
         config.process.control = true;
         config.network.control = true;
         config.firewall.control = true;
@@ -237,9 +251,10 @@ impl Config {
 
     /// Loads the configuration at `path`, or writes a default one first when it
     /// cannot be read, so a first server run bootstraps the configuration file.
-    /// Debug builds bootstrap with process control, network control, firewall
-    /// control and file writes enabled; release builds keep all four off. A failure to persist the default is
-    /// reported but not fatal: the freshly built defaults are still usable.
+    /// Debug builds bootstrap with global sudo, process control, network
+    /// control, firewall control and file writes enabled; release builds keep
+    /// them off. A failure to persist the default is reported but not fatal:
+    /// the freshly built defaults are still usable.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
         match Self::load(&path) {
             Ok(config) => config,
@@ -250,7 +265,7 @@ impl Config {
                 let config = Self::server_default();
                 if cfg!(debug_assertions) {
                     eprintln!(
-                        "Debug build: process control, network control, firewall control and file writes are enabled in the generated config."
+                        "Debug build: global sudo, process control, network control, firewall control and file writes are enabled in the generated config."
                     );
                 }
                 if let Err(e) = config.save(&path) {
@@ -293,28 +308,60 @@ mod tests {
     }
 
     #[test]
-    fn firewall_control_is_off_by_default_and_on_in_debug_defaults() {
-        assert!(!FirewallConfig::default().control);
+    fn global_sudo_is_off_by_default_and_on_in_debug_defaults() {
+        assert!(!Config::default().sudo);
         if cfg!(debug_assertions) {
-            assert!(Config::dev_default().firewall.control);
+            let dev = Config::dev_default();
+            assert!(dev.sudo);
+            let text = dev.to_toml().unwrap();
+            assert!(text.contains("sudo = true"), "{text}");
         }
+
+        let release = Config::default().to_toml().unwrap();
+        assert!(release.contains("sudo = false"), "{release}");
     }
 
     #[test]
-    fn legacy_sudo_keys_are_accepted_and_never_written_back() {
+    fn global_sudo_is_loaded_and_legacy_section_keys_are_ignored() {
         let config = Config::from_toml(
             r#"
+sudo = true
+
+[network]
+control = true
+sudo = false
+
 [firewall]
 control = true
-sudo = true
+sudo = false
 sudo_password = "secret"
 "#,
         )
         .unwrap();
 
+        assert!(config.sudo);
+        assert!(config.network.control);
         assert!(config.firewall.control);
         let text = config.to_toml().unwrap();
-        assert!(!text.contains("sudo"), "{text}");
+        assert_eq!(text.matches("sudo").count(), 1, "{text}");
+        assert!(text.contains("sudo = true"), "{text}");
+        assert!(!text.contains("sudo_password"), "{text}");
+    }
+
+    #[test]
+    fn legacy_section_sudo_keys_do_not_enable_the_global_flag() {
+        let config = Config::from_toml(
+            r#"
+[network]
+sudo = true
+
+[firewall]
+sudo = true
+"#,
+        )
+        .unwrap();
+
+        assert!(!config.sudo);
     }
 
     #[test]
