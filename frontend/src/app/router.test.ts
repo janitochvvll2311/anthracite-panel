@@ -28,6 +28,15 @@ describe('parseRoute', () => {
     })
   })
 
+  it('treats a malformed percent escape as an unknown path', () => {
+    // A hand-edited link must not abort the shell's constructor.
+    expect(parseRoute('#/panel/%')).toEqual({ kind: 'unknown', path: 'panel/%' })
+    expect(parseRoute('#/panel/a%zz')).toEqual({
+      kind: 'unknown',
+      path: 'panel/a%zz',
+    })
+  })
+
   it('reports anything else as an unknown path', () => {
     expect(parseRoute('#/nope')).toEqual({ kind: 'unknown', path: 'nope' })
     expect(parseRoute('#/panel')).toEqual({ kind: 'unknown', path: 'panel' })

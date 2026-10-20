@@ -20,10 +20,27 @@ export function parseRoute(hash: string): Route {
 
   const segments = path.split('/')
   if (segments[0] === 'panel' && segments.length === 2 && segments[1] !== '') {
-    return { kind: 'panel', panel: decodeURIComponent(segments[1]) }
+    const panel = decodeSegment(segments[1])
+    if (panel !== undefined) return { kind: 'panel', panel }
   }
 
   return { kind: 'unknown', path }
+}
+
+/**
+ * Decodes one path segment, or gives up.
+ *
+ * A hand-edited or truncated link can contain a lone `%`, which makes
+ * `decodeURIComponent` throw. Letting that escape would abort the shell's
+ * constructor and leave a blank page, so a malformed segment is an unknown
+ * route instead.
+ */
+function decodeSegment(segment: string): string | undefined {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return undefined
+  }
 }
 
 /** Canonical hash for a route, so links and the address bar agree. */
