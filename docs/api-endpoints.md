@@ -87,8 +87,10 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `POST` | `/api/files/delete` | Delete an entry |
 | `POST` | `/api/files/upload` | Upload a raw body |
 
-Anything else falls through to the embedded web UI, which serves static files
-and returns `index.html` for unknown paths so the SPA can route.
+Anything under `/api` that is not a route listed above answers `404` with the
+usual `{"error": ...}` body. Every other path falls through to the embedded web
+UI, which serves static files and returns `index.html` for unknown paths so the
+SPA can route.
 
 ## `GET /healthz`
 

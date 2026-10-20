@@ -9,6 +9,7 @@ pub mod config;
 pub mod daemon;
 pub mod files;
 pub mod firewall;
+pub mod handler;
 pub mod hostinfo;
 pub mod network;
 pub mod poll;

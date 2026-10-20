@@ -1403,7 +1403,16 @@ fn error_detail(error: ApiError) -> String {
 #[folder = "www"]
 struct Asset;
 
+/// Serves the embedded SPA, and answers an unknown `/api` path with JSON.
+///
+/// Falling through to `index.html` would answer `200 text/html` for a typo in a
+/// client, which is indistinguishable from a working route until the JSON parse
+/// fails. The SPA fallback stays for browser routes only.
 async fn static_handler(uri: Uri) -> impl IntoResponse {
+    if uri.path() == "/api" || uri.path().starts_with("/api/") {
+        return ApiError::new(StatusCode::NOT_FOUND, "no such API route").into_response();
+    }
+
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 

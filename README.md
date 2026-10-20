@@ -20,6 +20,7 @@ in the HTTP server.
 | [docs/volumes.md](docs/volumes.md) | Storage inventory, mount and unmount policy, privileges |
 | [docs/accounts.md](docs/accounts.md) | Local users and groups, guard matrix, privileges and container limits |
 | [docs/files.md](docs/files.md) | Filesystem root, chunked transfers, write policy and web explorer |
+| [docs/design/platform-upgrades.md](docs/design/platform-upgrades.md) | Plan and progress for the platform upgrade series |
 
 ## Layout
 
