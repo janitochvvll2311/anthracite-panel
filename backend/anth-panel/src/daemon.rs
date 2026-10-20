@@ -20,6 +20,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::accounts;
+use crate::accounts_admin;
 use crate::config::{Config, FilesConfig};
 use crate::files::{FileService, PendingUpload};
 use crate::firewall;
@@ -39,6 +41,11 @@ pub struct Policy {
     pub network_control: bool,
     pub firewall_control: bool,
     pub volume_control: bool,
+    /// The `[accounts]` policy the guards and the snapshot read. The control
+    /// switches live here too, so a snapshot can never disagree with the gate.
+    pub accounts: crate::config::AccountsConfig,
+    /// The account the daemon runs as, which it may not delete or lock.
+    pub daemon_user: String,
     /// `None` disables the mount target ceiling.
     pub mount_root: Option<std::path::PathBuf>,
     /// Paths no unmount may cover: the socket, the config and the served root.
@@ -134,6 +141,82 @@ pub fn handle_request_with(request: Request, policy: &Policy, files: &FileServic
                 Ok(message) => Response::VolumeChanged { message },
                 Err(error) => Response::VolumeError(error),
             }
+        }
+        Request::AccountList => Response::AccountSnapshot(accounts::collect(&policy.accounts)),
+        Request::AccountCreate {
+            name,
+            uid,
+            gid,
+            gecos,
+            home,
+            shell,
+            system,
+        } => handle_account(policy, format!("created user {name}"), |guard| {
+            accounts_admin::plan_create(
+                guard,
+                &accounts_admin::CreateArgs {
+                    name: &name,
+                    uid,
+                    gid,
+                    gecos: gecos.as_deref(),
+                    home: home.as_deref(),
+                    shell: shell.as_deref(),
+                    system,
+                },
+            )
+            .map(|call| vec![call])
+        }),
+        Request::AccountModify {
+            name,
+            gecos,
+            shell,
+            home,
+            primary_gid,
+            locked,
+        } => handle_account(policy, format!("modified user {name}"), |guard| {
+            accounts_admin::plan_modify(
+                guard,
+                &accounts_admin::ModifyArgs {
+                    name: &name,
+                    gecos: gecos.as_deref(),
+                    shell: shell.as_deref(),
+                    home: home.as_deref(),
+                    primary_gid,
+                    locked,
+                },
+            )
+            .map(|call| vec![call])
+        }),
+        Request::AccountDelete { name, remove_home } => {
+            handle_account(policy, format!("deleted user {name}"), |guard| {
+                accounts_admin::plan_delete(guard, &name, remove_home).map(|call| vec![call])
+            })
+        }
+        Request::AccountSetPassword { name, password } => {
+            handle_account(policy, format!("password updated for {name}"), |guard| {
+                accounts_admin::plan_set_password(
+                    guard,
+                    policy.accounts.manage_passwords,
+                    &name,
+                    password.expose(),
+                )
+                .map(|call| vec![call])
+            })
+        }
+        Request::AccountGroupCreate { name, gid, system } => {
+            handle_account(policy, format!("created group {name}"), |guard| {
+                accounts_admin::plan_group_create(guard, &name, gid, system).map(|call| vec![call])
+            })
+        }
+        Request::AccountGroupModify { name, gid, members } => {
+            handle_account(policy, format!("modified group {name}"), |guard| {
+                accounts_admin::plan_group_modify(guard, &name, gid, members.as_deref())
+            })
+        }
+        Request::AccountGroupDelete { name } => {
+            handle_account(policy, format!("deleted group {name}"), |guard| {
+                accounts_admin::plan_group_delete(guard, &name).map(|call| vec![call])
+            })
         }
         Request::VolumeUnmount { target } => match volumes::unmount(
             policy.volume_control,
@@ -576,6 +659,24 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
+            // Account requests read `/etc` and run `getent`; mutations also
+            // shell out to the account tools. All of them go to a blocking
+            // worker: a slow `nsswitch` lookup or a hung `useradd` would
+            // otherwise stall this loop for every client.
+            other if is_account_request(&other) => {
+                let policy = policy.clone();
+                let files = Arc::clone(&files);
+                match tokio::task::spawn_blocking(move || {
+                    handle_request_with(other, &policy, &files)
+                })
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error) => Response::Error {
+                        detail: format!("the account task did not finish: {error}"),
+                    },
+                }
+            }
             other => handle_request_with(other, &policy, &files),
         };
 
@@ -632,6 +733,23 @@ async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> Outp
     }
 }
 
+/// Whether a request reads or mutates accounts and therefore belongs on a
+/// blocking worker. `AccountList` is included: the collection path still runs
+/// two blocking `getent` calls, so it is not a cheap synchronous read.
+fn is_account_request(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::AccountList
+            | Request::AccountCreate { .. }
+            | Request::AccountModify { .. }
+            | Request::AccountDelete { .. }
+            | Request::AccountSetPassword { .. }
+            | Request::AccountGroupCreate { .. }
+            | Request::AccountGroupModify { .. }
+            | Request::AccountGroupDelete { .. }
+    )
+}
+
 pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
     match std::fs::remove_file(path.as_ref()) {
         Ok(()) => Ok(()),
@@ -640,15 +758,54 @@ pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
     }
 }
 
-/// Builds the deployment policy from the loaded config plus the path it was
-/// loaded from. Kept separate from `serve` so tests can assert the config file
-/// ends up in `protected_paths`.
+/// Validates a mutation against the unfitted inventory, then runs it.
+///
+/// The snapshot is read once per request, unfitted, so a guard never mistakes a
+/// truncated list for a missing account. `plan` returns every call the request
+/// needs, which is more than one when a group changes both its gid and its
+/// members.
+fn handle_account(
+    policy: &Policy,
+    message: String,
+    plan: impl FnOnce(
+        &accounts_admin::Guard<'_>,
+    ) -> Result<Vec<accounts_admin::PlannedCall>, anth_proto::AccountError>,
+) -> Response {
+    if !policy.accounts.control {
+        return Response::AccountError(anth_proto::AccountError::new(
+            anth_proto::AccountErrorKind::Disabled,
+            "account control is disabled",
+        ));
+    }
+
+    let (snapshot, _, ranges) =
+        accounts::collect_detailed(&policy.accounts, &accounts::SystemProbe::new());
+    let guard =
+        accounts_admin::Guard::new(&snapshot, &policy.accounts, policy.daemon_user.as_str())
+            .with_id_ranges(ranges);
+
+    let calls = match plan(&guard) {
+        Ok(calls) => calls,
+        Err(error) => return Response::AccountError(error),
+    };
+
+    let runner = accounts_admin::system_runner(policy.sudo);
+    for call in &calls {
+        if let Err(error) = accounts_admin::run_planned(&runner, call) {
+            return Response::AccountError(error);
+        }
+    }
+    Response::AccountChanged { message }
+}
+
 pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
     Policy {
         process_control: config.process.control,
         network_control: config.network.control,
         firewall_control: config.firewall.control,
         volume_control: config.volumes.control,
+        accounts: config.accounts.clone(),
+        daemon_user: accounts_admin::daemon_user(),
         mount_root: mount_root(&config.volumes.mount_root),
         protected_paths: volumes::protected_paths(
             Some(config_path),
@@ -696,5 +853,24 @@ pub async fn serve(
                 eprintln!("Error handling connection: {e}");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_list_uses_the_blocking_account_path() {
+        // The list also runs `getent`, so it must not fall through to the
+        // synchronous helper. Mutations are included for the same reason.
+        assert!(is_account_request(&Request::AccountList));
+        assert!(is_account_request(&Request::AccountDelete {
+            name: "alice".to_string(),
+            remove_home: false,
+        }));
+        assert!(!is_account_request(&Request::Echo {
+            message: "hello".to_string(),
+        }));
     }
 }

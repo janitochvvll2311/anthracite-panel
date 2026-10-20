@@ -182,7 +182,7 @@ where
     }
 }
 
-async fn read_once(client: &mut AnthClient, request: &Request) -> Result<Response, String> {
+pub async fn read_once(client: &mut AnthClient, request: &Request) -> Result<Response, String> {
     client
         .send_request(request)
         .await

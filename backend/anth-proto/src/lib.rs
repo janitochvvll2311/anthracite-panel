@@ -6,6 +6,7 @@ use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
 use tokio_util::codec::{Framed, FramedRead, FramedWrite, LinesCodec};
 
+pub mod accounts;
 pub mod b64;
 pub mod files;
 pub mod firewall;
@@ -14,6 +15,10 @@ pub mod process;
 pub mod terminal;
 pub mod volumes;
 
+pub use accounts::{
+    AccountError, AccountErrorKind, AccountGroup, AccountSnapshot, AccountSource, AccountUser,
+    SecretString,
+};
 pub use files::{
     FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten,
     DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
@@ -143,6 +148,78 @@ pub enum Request {
     VolumeUnmount {
         target: String,
     },
+    /// Ask the daemon for one snapshot of users and groups.
+    AccountList,
+    /// Create a local user. The account is created locked: setting a password is
+    /// a separate request behind its own switch.
+    AccountCreate {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uid: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gid: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gecos: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        home: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shell: Option<String>,
+        #[serde(default)]
+        system: bool,
+    },
+    /// Change the mutable fields of a local user. Unset fields are left alone.
+    AccountModify {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gecos: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shell: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        home: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        primary_gid: Option<u32>,
+        /// `Some(true)` locks, `Some(false)` unlocks, `None` leaves it alone.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        locked: Option<bool>,
+    },
+    /// Delete a local user.
+    AccountDelete {
+        name: String,
+        #[serde(default)]
+        remove_home: bool,
+    },
+    /// Set a local user's password. Requires `[accounts] manage_passwords`.
+    ///
+    /// The password travels in the request body, never in a command line, and
+    /// `Debug` is handwritten below so it cannot leak through a log line.
+    AccountSetPassword {
+        name: String,
+        password: SecretString,
+    },
+    /// Create a local group.
+    AccountGroupCreate {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gid: Option<u32>,
+        #[serde(default)]
+        system: bool,
+    },
+    /// Replace a local group's gid and/or member list.
+    ///
+    /// `members` replaces the whole list rather than adding or removing one
+    /// entry: replacement is idempotent, so a retried request cannot partially
+    /// apply.
+    AccountGroupModify {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gid: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        members: Option<Vec<String>>,
+    },
+    /// Delete a local group.
+    AccountGroupDelete {
+        name: String,
+    },
     /// Start a terminal session. The reply is `Response::TerminalOpened`,
     /// after which output arrives unsolicited as `Response::TerminalOutput`.
     TerminalOpen(TerminalOpenArgs),
@@ -229,6 +306,14 @@ pub enum Response {
     },
     /// A volume operation failed with a machine-readable reason.
     VolumeError(VolumeError),
+    /// One user and group snapshot.
+    AccountSnapshot(AccountSnapshot),
+    /// An account change succeeded. The message is ready for the CLI.
+    AccountChanged {
+        message: String,
+    },
+    /// An account operation failed with a machine-readable reason.
+    AccountError(AccountError),
     /// One directory listing.
     FileListing(FileListing),
     /// One chunk of a file.

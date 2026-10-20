@@ -367,6 +367,101 @@ daemon's socket, config, served root or executable are refused. A busy
 filesystem reports an error; there is no lazy or forced unmount. The command
 asks for confirmation unless `--yes` is given.
 
+### `account`
+
+Inspects the host's users and groups and, when `[accounts] control = true`,
+changes local ones. See [accounts.md](accounts.md) for the guard matrix, the
+error kinds and the container's root requirement.
+
+#### `account list`
+
+```bash
+anth-panel account list
+anth-panel account ls
+```
+
+Prints two tables. The first lists users as USER, UID, GID, GROUP, STATE, SHELL
+and SOURCE. STATE is `locked`, `unlocked`, or `?` when `/etc/shadow` could not
+be read. The second lists groups as GROUP, GID, MEMBERS and SOURCE. SOURCE is
+`local` for an entry the panel can change and `nss` for one resolved from a
+directory service, which is read-only. `ls` is an alias.
+
+#### `account user create <NAME>`
+
+```bash
+anth-panel account user create alice
+anth-panel account user create alice --comment "Alice Example" --shell /bin/bash
+anth-panel account user create alice --uid 1500 --gid 1500
+anth-panel account user create svc --system
+```
+
+`--home` defaults to `/home/<NAME>` and must resolve inside
+`accounts.home_root`. `--shell` must be on the allowlist. `--system` requires
+`accounts.allow_system`. The new account is **locked**: it cannot log in until
+a password is set with `account user password`.
+
+#### `account user modify <NAME>`
+
+```bash
+anth-panel account user modify alice --comment "Alice B"
+anth-panel account user modify alice --lock
+anth-panel account user modify alice --unlock
+anth-panel account user modify alice --shell /bin/sh
+```
+
+Only the flags given are changed. `--lock` and `--unlock` are mutually
+exclusive. The home directory is never moved, only re-pointed.
+
+#### `account user delete <NAME>`
+
+```bash
+anth-panel account user delete alice
+anth-panel account user delete alice --remove-home --yes
+```
+
+The home directory is kept unless `--remove-home` is passed, and then it must
+still resolve inside `accounts.home_root`. Without `--yes` the command asks for
+confirmation on a TTY and refuses to run when stdin is not a terminal.
+
+#### `account user password <NAME>`
+
+```bash
+anth-panel account user password alice
+printf '%s' "$NEW_PASSWORD" | anth-panel account user password alice --stdin
+```
+
+Prompts twice with echo off on `/dev/tty`, or reads the password from stdin with
+`--stdin`. The password is never accepted as a flag, because argv is readable
+by every account on the host. Requires `[accounts] manage_passwords = true`,
+which is separate from `control`. Without `--yes` the command asks for
+confirmation first.
+
+#### `account group create <NAME>`
+
+```bash
+anth-panel account group create developers
+anth-panel account group create developers --gid 2000
+```
+
+#### `account group modify <NAME>`
+
+```bash
+anth-panel account group modify developers --members alice,bob
+anth-panel account group modify developers --gid 2100
+```
+
+`--members` **replaces** the member list, so a retried request is idempotent and
+there is no separate "add" and "remove". Changing the members asks for
+confirmation unless `--yes`.
+
+#### `account group delete <NAME>`
+
+```bash
+anth-panel account group delete developers --yes
+```
+
+A group that is somebody's primary group is refused.
+
 ### `file`
 
 Browses and, when `[files] write = true`, manages files below the configured

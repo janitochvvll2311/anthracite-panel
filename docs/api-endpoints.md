@@ -829,6 +829,118 @@ destination.
 | `413` | Body or upload exceeds `max_upload_bytes` |
 | `502` | Daemon error |
 
+## Accounts
+
+Read path is always available. Every mutation below requires
+`[accounts] control = true` and answers `403` otherwise; the password route
+requires `[accounts] manage_passwords = true` instead. See
+[accounts.md](accounts.md).
+
+### `GET /api/accounts`
+
+```json
+{
+  "users": [
+    {
+      "name": "alice",
+      "uid": 1001,
+      "gid": 1001,
+      "group": "alice",
+      "gecos": "Alice Example",
+      "home": "/home/alice",
+      "shell": "/bin/sh",
+      "locked": true,
+      "system": false,
+      "source": "local",
+      "groups": ["alice", "developers"]
+    }
+  ],
+  "groups": [
+    { "name": "developers", "gid": 2000, "members": ["alice"], "system": false,
+      "source": "local" }
+  ],
+  "control_enabled": true,
+  "password_enabled": false,
+  "timestamp_ms": 1700000000000,
+  "total_users": 1,
+  "total_groups": 1,
+  "truncated": false,
+  "warning": null
+}
+```
+
+`source` is `local` or `nss`. `locked` is `null` when `/etc/shadow` could not be
+read; it is never reported as `false` by default.
+
+### `POST /api/accounts/users`
+
+```json
+{ "name": "alice", "uid": 1500, "gid": 1500, "gecos": "Alice",
+  "home": "/home/alice", "shell": "/bin/sh", "system": false }
+```
+
+Only `name` is required. Every field is validated by the daemon's guards. A
+new account is locked.
+
+### `POST /api/accounts/users/{name}`
+
+```json
+{ "gecos": "Alice B", "shell": "/bin/bash", "home": "/home/alice",
+  "primary_gid": 1500, "locked": true }
+```
+
+Omitted fields are unchanged. An empty object is `400 invalid`. A
+`primary_gid` must name an existing group; a gid no group carries is
+`404 not_found`. A gid below the host's `GID_MIN` is refused with
+`403 protected` unless `accounts.allow_system` is enabled.
+
+### `POST /api/accounts/users/{name}/delete`
+
+```json
+{ "remove_home": false }
+```
+
+The body may be empty. `remove_home` is only honoured when the home resolves
+inside `accounts.home_root`.
+
+### `POST /api/accounts/users/{name}/password`
+
+```json
+{ "password": "correct-horse-battery" }
+```
+
+Answers `403` unless `manage_passwords` is on. The password is not logged and
+does not appear in the response.
+
+### `POST /api/accounts/groups`
+
+```json
+{ "name": "developers", "gid": 2000, "system": false }
+```
+
+### `POST /api/accounts/groups/{name}`
+
+```json
+{ "gid": 2100, "members": ["alice", "bob"] }
+```
+
+`members` replaces the list. Both fields may be set together, which becomes a
+`groupmod` followed by a `gpasswd`.
+
+### `POST /api/accounts/groups/{name}/delete`
+
+No body.
+
+### Mutation responses
+
+```json
+{ "message": "created user alice" }
+```
+
+Failures use the shared `{"error": "..."}` shape. `invalid` is `400`,
+`disabled` / `protected` / `permission_denied` are `403`, `not_found` is `404`,
+`conflict` is `409`, `failed` is `500` and `unsupported` is `501`.
+
 ## `POST /api/echo`
 
 Returns the message unchanged. Useful as a round-trip check of the whole chain

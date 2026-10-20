@@ -587,6 +587,15 @@ impl CommandRunner for RecordingRunner {
         ));
         self.result.clone()
     }
+
+    fn run_with_stdin(
+        &self,
+        program: &str,
+        args: &[&str],
+        _input: &str,
+    ) -> Result<CommandOutput, CommandError> {
+        self.run(program, args)
+    }
 }
 
 #[test]

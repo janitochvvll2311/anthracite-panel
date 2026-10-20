@@ -4,8 +4,8 @@
 //! enabled and cannot elevate (no `NOPASSWD` rule, no TTY), the command is
 //! retried directly so a root daemon or a file capability still works.
 
-use std::io;
-use std::process::Command;
+use std::io::{self, Write};
+use std::process::{Command, Stdio};
 
 /// Result of one invocation, decoupled from `std::process::Output` so tests can
 /// script responses without spawning a process.
@@ -26,6 +26,20 @@ pub enum CommandError {
 
 pub trait CommandRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, CommandError>;
+
+    /// Runs one invocation with `input` written to its stdin.
+    ///
+    /// Separate from `run` because only account management needs it: a password
+    /// must reach `chpasswd` without passing through argv, which is readable in
+    /// `/proc` and recorded in shell history. There is no default
+    /// implementation on purpose: a runner that silently dropped `input` would
+    /// set an empty password, so every implementation has to decide.
+    fn run_with_stdin(
+        &self,
+        program: &str,
+        args: &[&str],
+        input: &str,
+    ) -> Result<CommandOutput, CommandError>;
 }
 
 /// Runs commands directly, or through `sudo -n` with a direct retry.
@@ -41,16 +55,35 @@ impl SystemRunner {
 
 impl CommandRunner for SystemRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, CommandError> {
-        if !self.use_sudo {
-            return execute(program, false, args);
-        }
+        run_with_input(self.use_sudo, program, args, None)
+    }
 
-        let elevated = execute(program, true, args);
-        if should_fallback_from_sudo(&elevated) {
-            execute(program, false, args)
-        } else {
-            elevated
-        }
+    fn run_with_stdin(
+        &self,
+        program: &str,
+        args: &[&str],
+        input: &str,
+    ) -> Result<CommandOutput, CommandError> {
+        run_with_input(self.use_sudo, program, args, Some(input))
+    }
+}
+
+/// Runs one command, retrying without sudo when sudo cannot elevate.
+fn run_with_input(
+    use_sudo: bool,
+    program: &str,
+    args: &[&str],
+    input: Option<&str>,
+) -> Result<CommandOutput, CommandError> {
+    if !use_sudo {
+        return execute_with_input(program, false, args, input);
+    }
+
+    let elevated = execute_with_input(program, true, args, input);
+    if should_fallback_from_sudo(&elevated) {
+        execute_with_input(program, false, args, input)
+    } else {
+        elevated
     }
 }
 
@@ -59,25 +92,67 @@ pub fn execute(
     use_sudo: bool,
     args: &[&str],
 ) -> Result<CommandOutput, CommandError> {
-    let output = command(program, use_sudo, args).env("LC_ALL", "C").output();
+    execute_with_input(program, use_sudo, args, None)
+}
 
-    match output {
-        Ok(output) => Ok(CommandOutput {
-            ok: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: join_stderr(&output.stderr),
-        }),
+fn execute_with_input(
+    program: &str,
+    use_sudo: bool,
+    args: &[&str],
+    input: Option<&str>,
+) -> Result<CommandOutput, CommandError> {
+    let child = command(program, use_sudo, args)
+        .env("LC_ALL", "C")
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    let mut child = match child {
+        Ok(child) => child,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let missing = if use_sudo { "sudo" } else { program };
-            Err(CommandError::Unavailable {
+            return Err(CommandError::Unavailable {
                 program: missing.to_string(),
-            })
+            });
         }
-        Err(error) => Err(CommandError::Failed {
+        Err(error) => {
+            return Err(CommandError::Failed {
+                program: program.to_string(),
+                detail: error.to_string(),
+            });
+        }
+    };
+
+    if let Some(input) = input {
+        let Some(mut stdin) = child.stdin.take() else {
+            return Err(CommandError::Failed {
+                program: program.to_string(),
+                detail: "could not open stdin for the command".to_string(),
+            });
+        };
+        // A command that exits before reading (a rejected password, say) closes
+        // the pipe; that is its answer, not a transport failure, so the write
+        // error is ignored and the exit status is reported instead.
+        let _ = stdin.write_all(input.as_bytes());
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| CommandError::Failed {
             program: program.to_string(),
             detail: error.to_string(),
-        }),
-    }
+        })?;
+
+    Ok(CommandOutput {
+        ok: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: join_stderr(&output.stderr),
+    })
 }
 
 fn join_stderr(bytes: &[u8]) -> String {
@@ -193,5 +268,40 @@ mod tests {
     fn a_real_command_reports_success() {
         let output = execute("true", false, &[]).unwrap();
         assert!(output.ok);
+    }
+
+    #[test]
+    fn stdin_reaches_the_command() {
+        let output = execute_with_input("cat", false, &[], Some("secret line\n")).unwrap();
+        assert!(output.ok);
+        assert_eq!(output.stdout, "secret line\n");
+    }
+
+    #[test]
+    fn without_stdin_the_command_sees_eof() {
+        // `cat` with no stdin must not hang waiting for the test's terminal.
+        let output = execute("cat", false, &[]).unwrap();
+        assert!(output.ok);
+        assert!(output.stdout.is_empty());
+    }
+
+    #[test]
+    fn a_command_that_exits_before_reading_reports_its_own_failure() {
+        // `false` never reads stdin, so the write fails with EPIPE. That is the
+        // command's answer, not a transport error: the exit status must win.
+        let output = execute_with_input("false", false, &[], Some("ignored\n")).unwrap();
+        assert!(!output.ok);
+    }
+
+    #[test]
+    fn the_stdin_path_reports_a_missing_program() {
+        let error = execute_with_input("anth-definitely-not-a-real-binary", false, &[], Some("x"))
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CommandError::Unavailable {
+                program: "anth-definitely-not-a-real-binary".to_string(),
+            }
+        );
     }
 }

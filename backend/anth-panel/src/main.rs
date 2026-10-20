@@ -1,18 +1,23 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use anth_panel::cli::{
-    Cli, Command, EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs,
-    FileUploadArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
-    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
-    ProcessSignalArgs, VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
+    AccountArgs, AccountCommand, AccountGroupCommand, AccountGroupDeleteArgs,
+    AccountGroupModifyArgs, AccountUserArgs, AccountUserCommand, AccountUserDeleteArgs,
+    AccountUserPasswordArgs, Cli, Command, EndpointArgs, FileArgs, FileCommand, FileDeleteArgs,
+    FileReadArgs, FileUploadArgs, FirewallAddArgs, FirewallArgs, FirewallCommand,
+    FirewallDeleteArgs, FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs,
+    ProcessArgs, ProcessCommand, ProcessSignalArgs, VolumeArgs, VolumeCommand, VolumeMountArgs,
+    VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::stream;
 use anth_panel::{AppState, request_for, router};
-use anth_proto::{AnthClient, DEFAULT_FILE_CHUNK, FileChunk, FirewallAction, Request, Response};
+use anth_proto::{
+    AnthClient, DEFAULT_FILE_CHUNK, FileChunk, FirewallAction, Request, Response, SecretString,
+};
 use tokio::net::TcpListener;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
@@ -67,8 +72,246 @@ async fn serve_run(
     result.map(|_| ExitCode::SUCCESS)
 }
 
-/// How often a subcommand repeats, or `None` to read once. A subcommand opts
-/// into streaming by answering `Some` here; nothing else needs to change.
+/// Reads a password without ever putting it on a command line.
+///
+/// Interaction is on `/dev/tty` rather than stdin when stdin is a terminal, so
+/// `--stdin` and an interactive prompt cannot be confused. Echo is disabled for
+/// the prompt and the terminal is restored even when reading fails.
+fn read_password(from_stdin: bool) -> Result<SecretString, String> {
+    use std::io::IsTerminal;
+
+    if from_stdin {
+        let mut password = String::new();
+        std::io::stdin()
+            .read_to_string(&mut password)
+            .map_err(|error| format!("failed to read the password from stdin: {error}"))?;
+        // Strip exactly one trailing newline, as every `passwd` does.
+        let password = password.strip_suffix('\n').unwrap_or(&password);
+        let password = password.strip_suffix('\r').unwrap_or(password);
+        if password.is_empty() {
+            return Err("the password read from stdin is empty".to_string());
+        }
+        return Ok(SecretString::new(password));
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(
+            "refusing to prompt for a password when stdin is not a terminal; pipe it with --stdin"
+                .to_string(),
+        );
+    }
+
+    let tty = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|error| format!("could not open /dev/tty: {error}"))?;
+    let mut reader = std::io::BufReader::new(&tty);
+    let mut writer = &tty;
+
+    let first = prompt_hidden(&mut reader, &mut writer, "Password: ")?;
+    let second = prompt_hidden(&mut reader, &mut writer, "Repeat password: ")?;
+    if first != second {
+        return Err("the passwords do not match".to_string());
+    }
+    Ok(SecretString::new(first))
+}
+
+fn prompt_hidden(
+    reader: &mut impl BufRead,
+    writer: &mut impl std::io::Write,
+    prompt: &str,
+) -> Result<String, String> {
+    write!(writer, "{prompt}").map_err(|error| format!("failed to write the prompt: {error}"))?;
+    writer.flush().ok();
+
+    let echo_off = EchoGuard::disable();
+    let mut line = String::new();
+    let read = reader.read_line(&mut line);
+    drop(echo_off);
+    writeln!(writer).ok();
+
+    read.map_err(|error| format!("failed to read the password: {error}"))?;
+    let line = line
+        .strip_suffix('\n')
+        .unwrap_or(&line)
+        .strip_suffix('\r')
+        .unwrap_or(&line)
+        .to_string();
+    if line.is_empty() {
+        return Err("the password is empty".to_string());
+    }
+    Ok(line)
+}
+
+/// Turns terminal echo off for as long as it is alive, including on unwind.
+struct EchoGuard {
+    original: Option<libc::termios>,
+}
+
+impl EchoGuard {
+    fn disable() -> Self {
+        let mut original: libc::termios = unsafe { std::mem::zeroed() };
+        // fd 0 is the terminal in this path; a failure leaves echo on, which is
+        // a privacy bug but not a hang, so it does not abort the prompt.
+        if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut original) } != 0 {
+            return Self { original: None };
+        }
+        let mut hidden = original;
+        hidden.c_lflag &= !libc::ECHO;
+        if unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &hidden) } != 0 {
+            return Self { original: None };
+        }
+        Self {
+            original: Some(original),
+        }
+    }
+}
+
+impl Drop for EchoGuard {
+    fn drop(&mut self) {
+        if let Some(original) = self.original {
+            unsafe {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &original);
+            }
+        }
+    }
+}
+
+/// Sends `account user password`. The password is read here, never assembled
+/// from argv, and travels only in the request body.
+async fn send_account_password(config_path: &str, args: &AccountUserPasswordArgs) -> ExitCode {
+    if let Err(error) = confirm_account_password(args) {
+        return fail_confirmation(error);
+    }
+    let password = match read_password(args.stdin) {
+        Ok(password) => password,
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let request = Request::AccountSetPassword {
+        name: args.name.clone(),
+        password,
+    };
+    let config = Config::load_or_default(config_path);
+    let socket = match tokio::net::UnixStream::connect(&config.socket_path).await {
+        Ok(socket) => socket,
+        Err(error) => {
+            eprintln!("[ERROR] could not reach the daemon: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut client = AnthClient::new(socket);
+    let response = match stream::read_once(&mut client, &request).await {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match response {
+        Response::AccountChanged { message } => {
+            println!("[OK] {message}");
+            ExitCode::SUCCESS
+        }
+        Response::AccountError(error) => {
+            eprintln!("[ERROR] {}", error.detail);
+            ExitCode::FAILURE
+        }
+        Response::Error { detail } => {
+            eprintln!("[ERROR] {detail}");
+            ExitCode::FAILURE
+        }
+        other => {
+            eprintln!("[ERROR] unexpected response: {other:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn fail_confirmation(error: String) -> ExitCode {
+    eprintln!("[ERROR] {error}");
+    ExitCode::FAILURE
+}
+
+/// Prints the cancellation notice once, for every account subcommand that asks.
+fn report_cancel(confirmed: bool) -> bool {
+    if !confirmed {
+        eprintln!("[cancelled]");
+    }
+    confirmed
+}
+
+fn confirm_account_password(args: &AccountUserPasswordArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || format!("Set the password for `{}`? [y/N] ", args.name),
+        "refusing to change a password without --yes when stdin is not a terminal",
+    )
+    .map(report_cancel)
+}
+
+fn confirm_account_user_delete(args: &AccountUserDeleteArgs) -> Result<bool, String> {
+    let extra = if args.remove_home {
+        " and delete its home directory"
+    } else {
+        ""
+    };
+    confirm_action(
+        args.yes,
+        || format!("Delete user `{}`{extra}? [y/N] ", args.name),
+        "refusing to delete a user without --yes when stdin is not a terminal",
+    )
+    .map(report_cancel)
+}
+
+fn confirm_account_group_delete(args: &AccountGroupDeleteArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || format!("Delete group `{}`? [y/N] ", args.name),
+        "refusing to delete a group without --yes when stdin is not a terminal",
+    )
+    .map(report_cancel)
+}
+
+fn confirm_account_group_modify(args: &AccountGroupModifyArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || format!("Replace the members of `{}`? [y/N] ", args.name),
+        "refusing to change group membership without --yes when stdin is not a terminal",
+    )
+    .map(report_cancel)
+}
+
+/// Confirmation for every account subcommand that changes or removes data.
+/// `None` covers the read-only and additive ones, which need no prompt.
+fn account_confirmation(command: &Command) -> Option<Result<bool, String>> {
+    let Command::Account(AccountArgs { command }) = command else {
+        return None;
+    };
+    match command {
+        AccountCommand::List => None,
+        AccountCommand::User(args) => match &args.command {
+            AccountUserCommand::Create(_) => None,
+            AccountUserCommand::Modify(_) => None,
+            AccountUserCommand::Delete(args) => Some(confirm_account_user_delete(args)),
+            // Handled by `send_account_password` before this runs.
+            AccountUserCommand::Password(_) => None,
+        },
+        AccountCommand::Group(args) => match &args.command {
+            AccountGroupCommand::Create(_) => None,
+            AccountGroupCommand::Modify(args) if args.members.is_some() => {
+                Some(confirm_account_group_modify(args))
+            }
+            AccountGroupCommand::Modify(_) => None,
+            AccountGroupCommand::Delete(args) => Some(confirm_account_group_delete(args)),
+        },
+    }
+}
+
 fn watch_interval(command: &Command) -> Result<Option<Duration>, String> {
     match command {
         Command::HostInfo(WatchArgs { watch }) => match watch.as_deref() {
@@ -612,6 +855,29 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    // The password never travels through `request_for`: it is read from the
+    // terminal here and sent on its own request.
+    if let Command::Account(AccountArgs {
+        command:
+            AccountCommand::User(AccountUserArgs {
+                command: AccountUserCommand::Password(args),
+            }),
+    }) = command
+    {
+        return Some(send_account_password(config_path, args).await);
+    }
+
+    for confirmed in [account_confirmation(command)].into_iter().flatten() {
+        match confirmed {
+            Ok(true) => {}
+            Ok(false) => return Some(ExitCode::SUCCESS),
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
     let request: Request = request_for(command)?;
     let interval = match watch_interval(command) {
         Ok(interval) => interval,
@@ -665,6 +931,7 @@ async fn main() -> ExitCode {
         | Command::Network(_)
         | Command::Firewall(_)
         | Command::Volume(_)
+        | Command::Account(_)
         | Command::File(_) => {
             unreachable!("handled by send_command")
         }

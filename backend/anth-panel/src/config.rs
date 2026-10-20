@@ -168,6 +168,44 @@ impl Default for VolumesConfig {
     }
 }
 
+/// Account management settings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AccountsConfig {
+    /// Whether the daemon accepts create, modify and delete requests for local
+    /// users and groups. Off by default: this is the first operation that can
+    /// hand out root, and the panel has no authentication.
+    pub control: bool,
+    /// Whether the daemon accepts password changes. A second switch on purpose:
+    /// inventory and structure are recoverable, a changed password is not.
+    pub manage_passwords: bool,
+    /// Allow changes to accounts below `UID_MIN`.
+    pub allow_system: bool,
+    /// Allow changes to `sudo`, `wheel`, `admin`, `root`, `docker` and `lxd`.
+    /// The last two are root-equivalent, which is why they are on this list.
+    pub allow_privileged_groups: bool,
+    /// New home directories must resolve below this path.
+    pub home_root: String,
+    /// Login shells a user may be given. Empty means "read `/etc/shells`".
+    pub shells: Vec<String>,
+    /// Shell used when a create request does not name one.
+    pub default_shell: String,
+}
+
+impl Default for AccountsConfig {
+    fn default() -> Self {
+        Self {
+            control: false,
+            manage_passwords: false,
+            allow_system: false,
+            allow_privileged_groups: false,
+            home_root: "/home".to_string(),
+            shells: Vec::new(),
+            default_shell: "/bin/sh".to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -181,6 +219,7 @@ pub struct Config {
     pub network: NetworkConfig,
     pub firewall: FirewallConfig,
     pub volumes: VolumesConfig,
+    pub accounts: AccountsConfig,
     pub files: FilesConfig,
 }
 
@@ -194,6 +233,7 @@ impl Default for Config {
             network: NetworkConfig::default(),
             firewall: FirewallConfig::default(),
             volumes: VolumesConfig::default(),
+            accounts: AccountsConfig::default(),
             files: FilesConfig::default(),
         }
     }
@@ -215,6 +255,9 @@ impl Config {
         config.network.control = true;
         config.firewall.control = true;
         config.volumes.control = true;
+        config.accounts.control = true;
+        // Deliberately not enabled even here: a debug build must not be able to
+        // change a password by accident.
         config.files.write = true;
         config
     }

@@ -48,6 +48,8 @@ pub enum Command {
     Firewall(FirewallArgs),
     /// Browse, mount and unmount storage volumes.
     Volume(VolumeArgs),
+    /// Inspect and manage users and groups on the daemon host.
+    Account(AccountArgs),
     /// Browse and manage files on the daemon host.
     File(FileArgs),
     /// Open an interactive terminal on the daemon host.
@@ -255,6 +257,187 @@ pub struct VolumeMountArgs {
 pub struct VolumeUnmountArgs {
     #[arg(value_name = "TARGET", help = "Mountpoint to unmount")]
     pub target: String,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AccountArgs {
+    #[command(subcommand)]
+    pub command: AccountCommand,
+}
+
+/// `account` subcommands, split into `user` and `group` so the flag sets stay
+/// disjoint. There are deliberately no aliases: `user` alone would read like an
+/// unrelated command in `--help`.
+#[derive(Subcommand, Debug)]
+pub enum AccountCommand {
+    /// List users and groups as tables.
+    #[command(alias = "ls")]
+    List,
+    /// Create, change or delete a user.
+    User(AccountUserArgs),
+    /// Create, change or delete a group.
+    Group(AccountGroupArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AccountUserArgs {
+    #[command(subcommand)]
+    pub command: AccountUserCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AccountUserCommand {
+    /// Create a locked local user.
+    Create(AccountUserCreateArgs),
+    /// Change a local user.
+    Modify(AccountUserModifyArgs),
+    /// Delete a local user.
+    Delete(AccountUserDeleteArgs),
+    /// Set a local user's password, read from the terminal or stdin.
+    Password(AccountUserPasswordArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AccountUserCreateArgs {
+    #[arg(value_name = "NAME", help = "Login name")]
+    pub name: String,
+
+    #[arg(long, value_name = "UID", help = "Explicit user id")]
+    pub uid: Option<u32>,
+
+    #[arg(long, value_name = "GID", help = "Existing primary group id")]
+    pub gid: Option<u32>,
+
+    #[arg(long = "comment", value_name = "TEXT", help = "Description (GECOS)")]
+    pub gecos: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Home directory, below accounts.home_root"
+    )]
+    pub home: Option<String>,
+
+    #[arg(long, value_name = "SHELL", help = "Login shell from the allowlist")]
+    pub shell: Option<String>,
+
+    #[arg(long, help = "Create a system account")]
+    pub system: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AccountUserModifyArgs {
+    #[arg(value_name = "NAME", help = "Login name")]
+    pub name: String,
+
+    #[arg(long = "comment", value_name = "TEXT", help = "Description (GECOS)")]
+    pub gecos: Option<String>,
+
+    #[arg(long, value_name = "SHELL", help = "Login shell from the allowlist")]
+    pub shell: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Home directory, below accounts.home_root"
+    )]
+    pub home: Option<String>,
+
+    #[arg(long, value_name = "GID", help = "Primary group id")]
+    pub gid: Option<u32>,
+
+    #[arg(long, help = "Lock the account", conflicts_with = "unlock")]
+    pub lock: bool,
+
+    #[arg(long, help = "Unlock the account")]
+    pub unlock: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AccountUserDeleteArgs {
+    #[arg(value_name = "NAME", help = "Login name")]
+    pub name: String,
+
+    #[arg(
+        long,
+        help = "Also remove the home directory, which must be inside accounts.home_root"
+    )]
+    pub remove_home: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AccountUserPasswordArgs {
+    #[arg(value_name = "NAME", help = "Login name")]
+    pub name: String,
+
+    #[arg(
+        long,
+        help = "Read the password from stdin, which must be piped; never from argv"
+    )]
+    pub stdin: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AccountGroupArgs {
+    #[command(subcommand)]
+    pub command: AccountGroupCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AccountGroupCommand {
+    /// Create a local group.
+    Create(AccountGroupCreateArgs),
+    /// Change a group's gid or replace its member list.
+    Modify(AccountGroupModifyArgs),
+    /// Delete a local group.
+    Delete(AccountGroupDeleteArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AccountGroupCreateArgs {
+    #[arg(value_name = "NAME", help = "Group name")]
+    pub name: String,
+
+    #[arg(long, value_name = "GID", help = "Explicit group id")]
+    pub gid: Option<u32>,
+
+    #[arg(long, help = "Create a system group")]
+    pub system: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AccountGroupModifyArgs {
+    #[arg(value_name = "NAME", help = "Group name")]
+    pub name: String,
+
+    #[arg(long, value_name = "GID", help = "New group id")]
+    pub gid: Option<u32>,
+
+    #[arg(
+        long,
+        value_name = "USERS",
+        value_delimiter = ',',
+        help = "Replace the member list with these users"
+    )]
+    pub members: Option<Vec<String>>,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AccountGroupDeleteArgs {
+    #[arg(value_name = "NAME", help = "Group name")]
+    pub name: String,
 
     #[arg(long, help = "Do not ask for confirmation")]
     pub yes: bool,
