@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+<file target-language="es" source-language="en" original="lit-localize-inputs" datatype="plaintext">
+<body>
+<trans-unit id="s2c545909c1963f06">
+  <source>host control</source>
+  <target>control del host</target>
+</trans-unit>
+<trans-unit id="sefcf950b3cc4fc3b">
+  <source>Language</source>
+  <target>Idioma</target>
+</trans-unit>
+<trans-unit id="s4caed5b7a7e5d89b">
+  <source>English</source>
+  <target>Inglés</target>
+</trans-unit>
+<trans-unit id="sf1868dc19e3917bb">
+  <source>Spanish</source>
+  <target>Español</target>
+</trans-unit>
+<trans-unit id="sfbc2025cebc1aa1e">
+  <source>No such page.</source>
+  <target>No existe esa página.</target>
+</trans-unit>
+<trans-unit id="sb8b7458cf38d2bb2">
+  <source>Go home</source>
+  <target>Volver al inicio</target>
+</trans-unit>
+<trans-unit id="s977f2b612bbc07a8">
+  <source>Control panel</source>
+  <target>Panel de control</target>
+</trans-unit>
+<trans-unit id="s96334444c7de7fdb">
+  <source>Pick a feature. Every panel talks to the local daemon over the panel API.</source>
+  <target>Elige una función. Cada panel habla con el daemon local a través de la API del panel.</target>
+</trans-unit>
+<trans-unit id="se0f63a2010bbe3eb">
+  <source>No such panel.</source>
+  <target>No existe ese panel.</target>
+</trans-unit>
+<trans-unit id="s1b8f375c1729973b">
+  <source>All panels</source>
+  <target>Todos los paneles</target>
+</trans-unit>
+<trans-unit id="scfc74c13891def2d">
+  <source>Host info</source>
+  <target>Información del host</target>
+</trans-unit>
+<trans-unit id="s086392fd79ccf57f">
+  <source>Operating system, CPU, load average, memory and swap.</source>
+  <target>Sistema operativo, CPU, carga media, memoria y swap.</target>
+</trans-unit>
+<trans-unit id="sfdd447bcde2c13ba">
+  <source>Processes</source>
+  <target>Procesos</target>
+</trans-unit>
+<trans-unit id="s758e7a304346191f">
+  <source>Live process table with signals and tree view.</source>
+  <target>Tabla de procesos en vivo con señales y vista de árbol.</target>
+</trans-unit>
+<trans-unit id="s803ce7e1a2294d50">
+  <source>Files</source>
+  <target>Archivos</target>
+</trans-unit>
+<trans-unit id="sf827e191cd0eb84d">
+  <source>Browse the host filesystem, preview, upload and edit.</source>
+  <target>Explora el sistema de archivos del host, previsualiza, sube y edita.</target>
+</trans-unit>
+<trans-unit id="s9feb1a1345ccc3e5">
+  <source>Network</source>
+  <target>Red</target>
+</trans-unit>
+<trans-unit id="s9ff84c154f2aa73f">
+  <source>Interfaces, addresses, traffic rates and link state.</source>
+  <target>Interfaces, direcciones, tasas de tráfico y estado del enlace.</target>
+</trans-unit>
+<trans-unit id="s1b98c44242bc9e51">
+  <source>Firewall</source>
+  <target>Cortafuegos</target>
+</trans-unit>
+<trans-unit id="s55f6d4f4b22042c7">
+  <source>Managed nftables chain, allow and deny rules.</source>
+  <target>Cadena gestionada de nftables, reglas de permitir y denegar.</target>
+</trans-unit>
+<trans-unit id="sf49525241bba3b06">
+  <source>Storage</source>
+  <target>Almacenamiento</target>
+</trans-unit>
+<trans-unit id="sf4dd43d78322113b">
+  <source>Block devices, mounts, mounting and unmounting.</source>
+  <target>Dispositivos de bloque, montajes, montar y desmontar.</target>
+</trans-unit>
+<trans-unit id="se48bd9e6c2a3109d">
+  <source>Accounts</source>
+  <target>Cuentas</target>
+</trans-unit>
+<trans-unit id="s1fc4cec44ea91e2c">
+  <source>Local users and groups, locks and passwords.</source>
+  <target>Usuarios y grupos locales, bloqueos y contraseñas.</target>
+</trans-unit>
+<trans-unit id="s62c75c025c5c6db1">
+  <source>Terminal</source>
+  <target>Terminal</target>
+</trans-unit>
+<trans-unit id="sf44217e9aafc68bd">
+  <source>Interactive shell on the host.</source>
+  <target>Shell interactivo en el host.</target>
+</trans-unit>
+</body>
+</file>
+</xliff>

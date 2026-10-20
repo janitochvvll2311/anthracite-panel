@@ -1,0 +1,52 @@
+import { describe, expect, it } from 'vitest'
+
+import { panelHash, parseRoute, routeHash } from './router'
+
+describe('parseRoute', () => {
+  it('treats an empty hash as the home page', () => {
+    expect(parseRoute('')).toEqual({ kind: 'home' })
+    expect(parseRoute('#')).toEqual({ kind: 'home' })
+    expect(parseRoute('#/')).toEqual({ kind: 'home' })
+  })
+
+  it('parses a panel route and decodes its id', () => {
+    expect(parseRoute('#/panel/processes')).toEqual({
+      kind: 'panel',
+      panel: 'processes',
+    })
+    expect(parseRoute('#/panel/a%20b')).toEqual({ kind: 'panel', panel: 'a b' })
+  })
+
+  it('tolerates missing and trailing slashes', () => {
+    expect(parseRoute('panel/network')).toEqual({
+      kind: 'panel',
+      panel: 'network',
+    })
+    expect(parseRoute('#/panel/network/')).toEqual({
+      kind: 'panel',
+      panel: 'network',
+    })
+  })
+
+  it('reports anything else as an unknown path', () => {
+    expect(parseRoute('#/nope')).toEqual({ kind: 'unknown', path: 'nope' })
+    expect(parseRoute('#/panel')).toEqual({ kind: 'unknown', path: 'panel' })
+    expect(parseRoute('#/panel/a/b')).toEqual({
+      kind: 'unknown',
+      path: 'panel/a/b',
+    })
+  })
+})
+
+describe('routeHash', () => {
+  it('round-trips every route kind', () => {
+    for (const hash of ['#/', '#/panel/files', '#/nope']) {
+      expect(routeHash(parseRoute(hash))).toBe(hash)
+    }
+  })
+
+  it('encodes a panel id with reserved characters', () => {
+    expect(panelHash('a b')).toBe('#/panel/a%20b')
+    expect(parseRoute(panelHash('a b'))).toEqual({ kind: 'panel', panel: 'a b' })
+  })
+})

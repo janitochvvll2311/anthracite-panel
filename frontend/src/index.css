@@ -1,24 +1,59 @@
+/*
+ * Page-level styles for the panel.
+ *
+ * Design tokens match `src/harness/harness.css` so the shell, the dev harnesses
+ * and any future window frame share one palette.
+ */
+
 :root {
-  color-scheme: light dark;
-  background-color: #ffffff;
+  color-scheme: dark;
+  --page-bg: #070a0f;
+  --panel: #101721;
+  --panel-border: #223041;
+  --text: #dbe6f2;
+  --muted: #8b9bad;
+  --accent: #7dd3fc;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --err: #f87171;
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    background-color: #16171d;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100svh;
+  margin: 0;
+  background: var(--page-bg);
 }
 
 body {
-  margin: 0;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-width: 320px;
-  min-height: 100svh;
+  font: 15px/1.6 var(--sans);
+  color: var(--text);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  background:
+    radial-gradient(
+      70% 45% at 50% -10%,
+      rgba(125, 211, 252, 0.12),
+      transparent 70%
+    ),
+    radial-gradient(
+      50% 35% at 100% 100%,
+      rgba(110, 231, 183, 0.07),
+      transparent 70%
+    ),
+    var(--page-bg);
+}
+
+a {
+  color: var(--accent);
 }

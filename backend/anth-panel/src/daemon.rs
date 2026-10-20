@@ -7,6 +7,10 @@
 //! Each session owns a thread that reads the PTY and forwards bytes into a
 //! channel. The connection loop merges those channels and never touches the PTY
 //! directly, so a shell sitting idle at a prompt cannot stall the socket.
+//!
+//! Request dispatch lives in `crate::handler`. This module owns the connection,
+//! the sessions and the uploads, and asks the handler chain about everything
+//! that is stateless.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -20,14 +24,10 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::accounts;
 use crate::accounts_admin;
 use crate::config::{Config, FilesConfig};
 use crate::files::{FileService, PendingUpload};
-use crate::firewall;
-use crate::hostinfo;
-use crate::network;
-use crate::process;
+use crate::handler::{self, CoreHandler, Dispatch};
 use crate::terminal::{OpenError, Output, Sessions, supports_line_editing};
 use crate::volumes;
 
@@ -55,8 +55,7 @@ pub struct Policy {
 }
 
 pub fn handle_request(request: Request) -> Response {
-    let files = FileService::new(&FilesConfig::default())
-        .expect("the default filesystem root must be usable");
+    let files = handler::default_files();
     handle_request_with(request, &Policy::default(), &files)
 }
 
@@ -65,200 +64,10 @@ pub fn handle_request(request: Request) -> Response {
 /// Process, network, firewall and volume control and file writes are deployment
 /// policy: the socket protocol itself does not know whether the host allows
 /// them. This synchronous path is used by the line helper and unit tests.
-/// The async connection loop special-cases blocking reads so they run on a
-/// blocking worker instead of a Tokio task.
+/// The async connection loop sends blocking requests to a worker instead.
 pub fn handle_request_with(request: Request, policy: &Policy, files: &FileService) -> Response {
-    match request {
-        Request::Echo { message } => Response::Ok { message },
-        Request::HostInfo => Response::HostInfo(Box::new(hostinfo::collect())),
-        Request::ProcessList => Response::ProcessSnapshot(process::collect(policy.process_control)),
-        Request::ProcessSignal { pid, signal } => {
-            match process::send_signal(pid, signal, policy.process_control) {
-                Ok(()) => Response::ProcessSignalled { pid, signal },
-                Err(error) => Response::Error {
-                    detail: error.detail(),
-                },
-            }
-        }
-        Request::NetworkList => Response::NetworkSnapshot(network::collect(policy.network_control)),
-        Request::NetworkSetState { name, up } => {
-            match network::set_state(policy.network_control, policy.sudo, &name, up) {
-                Ok(()) => Response::NetworkStateChanged { name, up },
-                Err(error) => Response::NetworkError(error),
-            }
-        }
-        Request::FirewallStatus => match firewall::status(policy.firewall_control, policy.sudo) {
-            Ok(snapshot) => Response::FirewallSnapshot(snapshot),
-            Err(error) => Response::FirewallError(error),
-        },
-        Request::FirewallAddRule {
-            action,
-            port,
-            protocol,
-            comment,
-        } => match firewall::add_rule(
-            policy.firewall_control,
-            policy.sudo,
-            action,
-            port,
-            protocol,
-            comment.as_deref(),
-        ) {
-            Ok(message) => Response::FirewallChanged { message },
-            Err(error) => Response::FirewallError(error),
-        },
-        Request::FirewallDeleteRule { handle } => {
-            match firewall::delete_rule(policy.firewall_control, policy.sudo, handle) {
-                Ok(message) => Response::FirewallChanged { message },
-                Err(error) => Response::FirewallError(error),
-            }
-        }
-        Request::FirewallFlush => match firewall::flush(policy.firewall_control, policy.sudo) {
-            Ok(message) => Response::FirewallChanged { message },
-            Err(error) => Response::FirewallError(error),
-        },
-        Request::VolumeList => Response::VolumeSnapshot(volumes::collect(policy.volume_control)),
-        Request::VolumeMount {
-            device,
-            target,
-            fs_type,
-            read_only,
-            allow_removable,
-        } => {
-            let args = volumes::MountArgs {
-                device: &device,
-                target: &target,
-                fs_type: fs_type.as_deref(),
-                read_only,
-                allow_removable,
-            };
-            match volumes::mount(
-                policy.volume_control,
-                policy.sudo,
-                policy.mount_root.as_deref(),
-                &args,
-            ) {
-                Ok(message) => Response::VolumeChanged { message },
-                Err(error) => Response::VolumeError(error),
-            }
-        }
-        Request::AccountList => Response::AccountSnapshot(accounts::collect(&policy.accounts)),
-        Request::AccountCreate {
-            name,
-            uid,
-            gid,
-            gecos,
-            home,
-            shell,
-            system,
-        } => handle_account(policy, format!("created user {name}"), |guard| {
-            accounts_admin::plan_create(
-                guard,
-                &accounts_admin::CreateArgs {
-                    name: &name,
-                    uid,
-                    gid,
-                    gecos: gecos.as_deref(),
-                    home: home.as_deref(),
-                    shell: shell.as_deref(),
-                    system,
-                },
-            )
-            .map(|call| vec![call])
-        }),
-        Request::AccountModify {
-            name,
-            gecos,
-            shell,
-            home,
-            primary_gid,
-            locked,
-        } => handle_account(policy, format!("modified user {name}"), |guard| {
-            accounts_admin::plan_modify(
-                guard,
-                &accounts_admin::ModifyArgs {
-                    name: &name,
-                    gecos: gecos.as_deref(),
-                    shell: shell.as_deref(),
-                    home: home.as_deref(),
-                    primary_gid,
-                    locked,
-                },
-            )
-            .map(|call| vec![call])
-        }),
-        Request::AccountDelete { name, remove_home } => {
-            handle_account(policy, format!("deleted user {name}"), |guard| {
-                accounts_admin::plan_delete(guard, &name, remove_home).map(|call| vec![call])
-            })
-        }
-        Request::AccountSetPassword { name, password } => {
-            handle_account(policy, format!("password updated for {name}"), |guard| {
-                accounts_admin::plan_set_password(
-                    guard,
-                    policy.accounts.manage_passwords,
-                    &name,
-                    password.expose(),
-                )
-                .map(|call| vec![call])
-            })
-        }
-        Request::AccountGroupCreate { name, gid, system } => {
-            handle_account(policy, format!("created group {name}"), |guard| {
-                accounts_admin::plan_group_create(guard, &name, gid, system).map(|call| vec![call])
-            })
-        }
-        Request::AccountGroupModify { name, gid, members } => {
-            handle_account(policy, format!("modified group {name}"), |guard| {
-                accounts_admin::plan_group_modify(guard, &name, gid, members.as_deref())
-            })
-        }
-        Request::AccountGroupDelete { name } => {
-            handle_account(policy, format!("deleted group {name}"), |guard| {
-                accounts_admin::plan_group_delete(guard, &name).map(|call| vec![call])
-            })
-        }
-        Request::VolumeUnmount { target } => match volumes::unmount(
-            policy.volume_control,
-            policy.sudo,
-            &policy.protected_paths,
-            &target,
-        ) {
-            Ok(message) => Response::VolumeChanged { message },
-            Err(error) => Response::VolumeError(error),
-        },
-        Request::FileList { path } => match files.list(&path) {
-            Ok(listing) => Response::FileListing(listing),
-            Err(error) => Response::FileError(error),
-        },
-        Request::FileRead { path, offset, len } => match files.read(&path, offset, len) {
-            Ok(chunk) => Response::FileChunk(chunk),
-            Err(error) => Response::FileError(error),
-        },
-        Request::FileMkdir { path, recursive } => match files.mkdir(&path, recursive) {
-            Ok(path) => Response::FileCreated { path },
-            Err(error) => Response::FileError(error),
-        },
-        Request::FileRename { from, to } => match files.rename(&from, &to) {
-            Ok((from, to)) => Response::FileRenamed { from, to },
-            Err(error) => Response::FileError(error),
-        },
-        Request::FileDelete { path, recursive } => match files.delete(&path, recursive) {
-            Ok(path) => Response::FileDeleted { path },
-            Err(error) => Response::FileError(error),
-        },
-        // Uploads are stateful and need a live connection; `pump` owns them.
-        Request::FileWriteStart { .. }
-        | Request::FileWriteChunk { .. }
-        | Request::FileWriteFinish { .. }
-        | Request::FileWriteAbort { .. }
-        | Request::TerminalOpen(_)
-        | Request::TerminalInput { .. }
-        | Request::TerminalResize { .. }
-        | Request::TerminalClose { .. } => Response::Error {
-            detail: "this request requires an open connection".to_string(),
-        },
-    }
+    let core = CoreHandler;
+    handler::dispatch(&[&core], &request, &Dispatch { policy, files })
 }
 
 /// An empty `mount_root` disables the target ceiling; anything else is the
@@ -298,8 +107,7 @@ pub async fn serve_connection(
     serve_connection_with(socket, sessions, program, Policy::default(), files).await
 }
 
-/// Serves one connection with the process, network and file policies applied to
-/// requests.
+/// Serves one connection with the deployment policy applied to requests.
 pub async fn serve_connection_with(
     socket: UnixStream,
     sessions: Arc<Sessions>,
@@ -337,6 +145,45 @@ struct OutputReply {
     ended: bool,
 }
 
+/// Answers one request that carries no connection state.
+async fn answer(
+    core: &CoreHandler,
+    request: Request,
+    policy: &Policy,
+    files: &Arc<FileService>,
+) -> Response {
+    if !handler::blocks(&[core], &request) {
+        return handler::dispatch(
+            &[core],
+            &request,
+            &Dispatch {
+                policy,
+                files: files.as_ref(),
+            },
+        );
+    }
+
+    let policy = policy.clone();
+    let files = Arc::clone(files);
+    match tokio::task::spawn_blocking(move || {
+        handler::dispatch(
+            &[&CoreHandler],
+            &request,
+            &Dispatch {
+                policy: &policy,
+                files: files.as_ref(),
+            },
+        )
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => Response::Error {
+            detail: format!("the request worker did not finish: {error}"),
+        },
+    }
+}
+
 async fn pump(
     socket: UnixStream,
     sessions: Arc<Sessions>,
@@ -349,13 +196,7 @@ async fn pump(
     let mut reader = AnthReader::from_read_half(read_half);
     let mut writer = AnthWriter::from_write_half(write_half);
 
-    let process_control = policy.process_control;
-    let network_control = policy.network_control;
-    let firewall_control = policy.firewall_control;
-    let sudo_enabled = policy.sudo;
-    let volume_control = policy.volume_control;
-    let mount_root = policy.mount_root.clone();
-    let protected_paths = policy.protected_paths.clone();
+    let core = CoreHandler;
 
     let mut output = futures::stream::select_all(Vec::<OutputStream>::new());
     let mut uploads: HashMap<u32, PendingUpload> = HashMap::new();
@@ -363,7 +204,7 @@ async fn pump(
 
     loop {
         // With no sessions open there is nothing to watch but the socket, which
-        // keeps the common case identical to the old request/response loop.
+        // keeps the common case identical to a request/response loop.
         let next = if owned.is_empty() {
             reader.receive_request().await
         } else {
@@ -408,156 +249,6 @@ async fn pump(
         };
 
         let response = match request {
-            Request::ProcessList => {
-                match tokio::task::spawn_blocking(move || process::collect(process_control)).await {
-                    Ok(snapshot) => Response::ProcessSnapshot(snapshot),
-                    Err(error) => Response::Error {
-                        detail: format!("failed to read the process table: {error}"),
-                    },
-                }
-            }
-            Request::NetworkList => {
-                match tokio::task::spawn_blocking(move || network::collect(network_control)).await {
-                    Ok(snapshot) => Response::NetworkSnapshot(snapshot),
-                    Err(error) => Response::Error {
-                        detail: format!("failed to read the network interfaces: {error}"),
-                    },
-                }
-            }
-            Request::VolumeList => {
-                match tokio::task::spawn_blocking(move || volumes::collect(volume_control)).await {
-                    Ok(snapshot) => Response::VolumeSnapshot(snapshot),
-                    Err(error) => Response::Error {
-                        detail: format!("failed to read the storage inventory: {error}"),
-                    },
-                }
-            }
-            Request::VolumeMount {
-                device,
-                target,
-                fs_type,
-                read_only,
-                allow_removable,
-            } => {
-                let mount_root = mount_root.clone();
-                match tokio::task::spawn_blocking(move || {
-                    let args = volumes::MountArgs {
-                        device: &device,
-                        target: &target,
-                        fs_type: fs_type.as_deref(),
-                        read_only,
-                        allow_removable,
-                    };
-                    volumes::mount(volume_control, sudo_enabled, mount_root.as_deref(), &args)
-                })
-                .await
-                {
-                    Ok(Ok(message)) => Response::VolumeChanged { message },
-                    Ok(Err(error)) => Response::VolumeError(error),
-                    Err(error) => Response::VolumeError(anth_proto::VolumeError::new(
-                        anth_proto::VolumeErrorKind::Failed,
-                        format!("the mount worker failed: {error}"),
-                    )),
-                }
-            }
-            Request::VolumeUnmount { target } => {
-                let protected_paths = protected_paths.clone();
-                match tokio::task::spawn_blocking(move || {
-                    volumes::unmount(volume_control, sudo_enabled, &protected_paths, &target)
-                })
-                .await
-                {
-                    Ok(Ok(message)) => Response::VolumeChanged { message },
-                    Ok(Err(error)) => Response::VolumeError(error),
-                    Err(error) => Response::VolumeError(anth_proto::VolumeError::new(
-                        anth_proto::VolumeErrorKind::Failed,
-                        format!("the unmount worker failed: {error}"),
-                    )),
-                }
-            }
-            Request::NetworkSetState { name, up } => {
-                let interface = name.clone();
-                match tokio::task::spawn_blocking(move || {
-                    network::set_state(network_control, sudo_enabled, &interface, up)
-                })
-                .await
-                {
-                    Ok(Ok(())) => Response::NetworkStateChanged { name, up },
-                    Ok(Err(error)) => Response::NetworkError(error),
-                    Err(error) => Response::NetworkError(anth_proto::NetworkError::new(
-                        anth_proto::NetworkErrorKind::Failed,
-                        format!("failed to change the interface state: {error}"),
-                    )),
-                }
-            }
-            Request::FirewallStatus => {
-                match tokio::task::spawn_blocking(move || {
-                    firewall::status(firewall_control, sudo_enabled)
-                })
-                .await
-                {
-                    Ok(Ok(snapshot)) => Response::FirewallSnapshot(snapshot),
-                    Ok(Err(error)) => Response::FirewallError(error),
-                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
-                        anth_proto::FirewallErrorKind::Failed,
-                        format!("failed to read the firewall: {error}"),
-                    )),
-                }
-            }
-            Request::FirewallAddRule {
-                action,
-                port,
-                protocol,
-                comment,
-            } => {
-                match tokio::task::spawn_blocking(move || {
-                    firewall::add_rule(
-                        firewall_control,
-                        sudo_enabled,
-                        action,
-                        port,
-                        protocol,
-                        comment.as_deref(),
-                    )
-                })
-                .await
-                {
-                    Ok(Ok(message)) => Response::FirewallChanged { message },
-                    Ok(Err(error)) => Response::FirewallError(error),
-                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
-                        anth_proto::FirewallErrorKind::Failed,
-                        format!("failed to change the firewall: {error}"),
-                    )),
-                }
-            }
-            Request::FirewallDeleteRule { handle } => {
-                match tokio::task::spawn_blocking(move || {
-                    firewall::delete_rule(firewall_control, sudo_enabled, handle)
-                })
-                .await
-                {
-                    Ok(Ok(message)) => Response::FirewallChanged { message },
-                    Ok(Err(error)) => Response::FirewallError(error),
-                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
-                        anth_proto::FirewallErrorKind::Failed,
-                        format!("failed to change the firewall: {error}"),
-                    )),
-                }
-            }
-            Request::FirewallFlush => {
-                match tokio::task::spawn_blocking(move || {
-                    firewall::flush(firewall_control, sudo_enabled)
-                })
-                .await
-                {
-                    Ok(Ok(message)) => Response::FirewallChanged { message },
-                    Ok(Err(error)) => Response::FirewallError(error),
-                    Err(error) => Response::FirewallError(anth_proto::FirewallError::new(
-                        anth_proto::FirewallErrorKind::Failed,
-                        format!("failed to change the firewall: {error}"),
-                    )),
-                }
-            }
             Request::FileWriteStart { path, overwrite } => {
                 match files.start_upload(&path, overwrite) {
                     Ok(upload) => {
@@ -659,25 +350,7 @@ async fn pump(
                 // asked for the session to end: there is nothing to confirm.
                 continue;
             }
-            // Account requests read `/etc` and run `getent`; mutations also
-            // shell out to the account tools. All of them go to a blocking
-            // worker: a slow `nsswitch` lookup or a hung `useradd` would
-            // otherwise stall this loop for every client.
-            other if is_account_request(&other) => {
-                let policy = policy.clone();
-                let files = Arc::clone(&files);
-                match tokio::task::spawn_blocking(move || {
-                    handle_request_with(other, &policy, &files)
-                })
-                .await
-                {
-                    Ok(response) => response,
-                    Err(error) => Response::Error {
-                        detail: format!("the account task did not finish: {error}"),
-                    },
-                }
-            }
-            other => handle_request_with(other, &policy, &files),
+            other => answer(&core, other, &policy, &files).await,
         };
 
         writer.send_response(&response).await?;
@@ -733,69 +406,12 @@ async fn exit_response(sessions: &Arc<Sessions>, id: u32, event: Output) -> Outp
     }
 }
 
-/// Whether a request reads or mutates accounts and therefore belongs on a
-/// blocking worker. `AccountList` is included: the collection path still runs
-/// two blocking `getent` calls, so it is not a cheap synchronous read.
-fn is_account_request(request: &Request) -> bool {
-    matches!(
-        request,
-        Request::AccountList
-            | Request::AccountCreate { .. }
-            | Request::AccountModify { .. }
-            | Request::AccountDelete { .. }
-            | Request::AccountSetPassword { .. }
-            | Request::AccountGroupCreate { .. }
-            | Request::AccountGroupModify { .. }
-            | Request::AccountGroupDelete { .. }
-    )
-}
-
 pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
     match std::fs::remove_file(path.as_ref()) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
-}
-
-/// Validates a mutation against the unfitted inventory, then runs it.
-///
-/// The snapshot is read once per request, unfitted, so a guard never mistakes a
-/// truncated list for a missing account. `plan` returns every call the request
-/// needs, which is more than one when a group changes both its gid and its
-/// members.
-fn handle_account(
-    policy: &Policy,
-    message: String,
-    plan: impl FnOnce(
-        &accounts_admin::Guard<'_>,
-    ) -> Result<Vec<accounts_admin::PlannedCall>, anth_proto::AccountError>,
-) -> Response {
-    if !policy.accounts.control {
-        return Response::AccountError(anth_proto::AccountError::new(
-            anth_proto::AccountErrorKind::Disabled,
-            "account control is disabled",
-        ));
-    }
-
-    let (snapshot, _, ranges) =
-        accounts::collect_detailed(&policy.accounts, &accounts::SystemProbe::new());
-    let guard =
-        accounts_admin::Guard::new(&snapshot, &policy.accounts, policy.daemon_user.as_str())
-            .with_id_ranges(ranges);
-
-    let calls = match plan(&guard) {
-        Ok(calls) => calls,
-        Err(error) => return Response::AccountError(error),
-    };
-
-    let runner = accounts_admin::system_runner(policy.sudo);
-    for call in &calls {
-        if let Err(error) = accounts_admin::run_planned(&runner, call) {
-            return Response::AccountError(error);
-        }
-    }
-    Response::AccountChanged { message }
 }
 
 pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
@@ -853,24 +469,5 @@ pub async fn serve(
                 eprintln!("Error handling connection: {e}");
             }
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn account_list_uses_the_blocking_account_path() {
-        // The list also runs `getent`, so it must not fall through to the
-        // synchronous helper. Mutations are included for the same reason.
-        assert!(is_account_request(&Request::AccountList));
-        assert!(is_account_request(&Request::AccountDelete {
-            name: "alice".to_string(),
-            remove_home: false,
-        }));
-        assert!(!is_account_request(&Request::Echo {
-            message: "hello".to_string(),
-        }));
     }
 }

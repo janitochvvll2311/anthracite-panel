@@ -34,7 +34,8 @@ backend/
       lib.rs                #   module re-exports
       cli.rs                #   clap definitions
       config.rs             #   Config struct, TOML load/save, default paths
-      daemon.rs             #   Unix socket listener and request dispatch
+      daemon.rs             #   Unix socket listener, sessions, uploads
+      handler.rs            #   handler chain: request dispatch, blocking policy
       client.rs             #   CLI client: builds a Request, prints the Response
       api.rs                #   axum HTTP API + WebSocket upgrade + rust-embed SPA
       app.rs                #   AppState shared by the routes
@@ -60,8 +61,12 @@ backend/
 frontend/                   # Vite + Lit + TypeScript, package name `anth-panel`
   vite.config.ts            # proxies /healthz and /api (including WebSocket)
   vitest.config.ts          # frontend unit tests, happy-dom environment
+  lit-localize.json         # i18n config: English source, Spanish target
+  xliff/es.xlf              # extracted messages and their Spanish translations
   src/
-    components/             # terminal, process, file and host-info components, tests and harnesses
+    app/                    # shell, panel registry, hash router, i18n runtime
+    generated/              # lit-localize output; regenerate, never edit
+    components/             # feature components, tests and harnesses
     harness/                # anth-harness page shell + shared harness.css for dev pages
     lib/ws/                 # generic JSON WebSocket transport and tests
     lib/terminal/           # terminal interface, protocol, WebSocket adapter and tests
@@ -104,12 +109,18 @@ holds only a `.gitkeep` and Vite serves the UI, proxying the API routes itself â
 output into `www/` first:
 
 ```bash
-cd frontend && npm install && npm run build && cp -r dist/. ../backend/anth-panel/www/
+cd frontend && bun install && bun run build && cp -r dist/. ../backend/anth-panel/www/
 ```
 
+`bun run build` regenerates the locale bundle first, then type checks and
+bundles. `bun run i18n:extract` rewrites `xliff/es.xlf` after message changes;
+fill in the `<target>` of each new unit before building, or the build fails on
+the missing translation.
+
 Generated files under `www/` are gitignored except the placeholder. A missing folder
-surfaces as `no associated function named 'get' found for struct 'Asset'`. The frontend
-has a `bun.lock`, but `npm` works fine and `bun` is not required.
+surfaces as `no associated function named 'get' found for struct 'Asset'`. `rust-embed`
+caches the folder per compilation of the file that declares it, so touching
+`api.rs` is the reliable way to re-embed after copying new assets.
 
 ### Frontend unit tests
 
@@ -119,9 +130,11 @@ do not need a real canvas, and the process tests use an injected fake client rat
 than a daemon. Run them from `frontend/`:
 
 ```bash
-npm test          # vitest run
-npm run test:watch
+bun run test          # vitest run
+bun run test:watch
 ```
+
+`bun` is the only package manager: `npm`, `npx` and `corepack` are not installed.
 
 ## Running locally
 
@@ -129,7 +142,7 @@ Development uses two processes; the frontend proxies to the backend:
 
 ```bash
 cd backend  && cargo run -p anth-panel -- run --addr 127.0.0.1:8080   # daemon + API
-cd frontend && npm run dev                                            # UI on :5173
+cd frontend && bun run dev                                            # UI on :5173
 ```
 
 Single-purpose invocations:
@@ -233,8 +246,27 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `type`/`data` envelope; the envelope stays a `anth-proto` concern for socket clients
   only. See `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via
   `api::ApiError`, including bodies axum rejects before the handler runs. A fallback
-  static handler serves the embedded SPA and falls back to `index.html`. Table tests
+  static handler serves the embedded SPA and falls back to `index.html`, except
+  under `/api`, where an unknown route is a JSON `404`. Table tests
   exercise the router through `tower::ServiceExt::oneshot`.
+- **Dispatch**: `anth_panel::handler` owns the request chain. A `Handler` answers
+  `None` for a request it does not know and the next handler tries, which is the
+  seam a plugin will use later. `CoreHandler` holds every built-in command, and
+  `Handler::blocks` states whether a request may block, so the connection loop no
+  longer keeps its own list. `daemon.rs` keeps only what needs a live connection:
+  uploads and terminal sessions. A new command therefore touches the protocol,
+  the client, the CLI and one handler arm.
+- **Web app shell**: `frontend/src/app/` holds the shell (`anth-app`), the panel
+  registry, a pure hash router (`#/panel/<id>`) and the `lit-localize` runtime.
+  The shell renders one card per registry entry and mounts the chosen custom
+  element itself, because a tag name is data rather than markup. Clients are
+  created by the registry and can be replaced through `clientFactory`, which is
+  how the shell tests mount every panel without a socket. `index.html` mounts the
+  shell; only `index.html` is a Vite build entry, so harnesses stay out of `dist/`.
+- **Localization**: source strings are English and wrapped in `msg()`. `bun run
+  i18n:extract` writes `frontend/xliff/es.xlf`, `bun run build` regenerates
+  `src/generated/locales/es.ts` before type checking. The locale is stored in
+  `localStorage` under `anth.locale`. Generated locale files are committed.
 - **Process monitor**: `process.rs` reads `/proc`, resolves users from `/etc/passwd`
   and enforces the signal allowlist and ownership policy. `[process] control` defaults
   to `false`; the daemon refuses pid 1, its own pid, other users' processes and

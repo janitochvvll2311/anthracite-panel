@@ -1332,6 +1332,30 @@ async fn missing_files_return_not_found() {
     assert!(value["error"].is_string());
 }
 
+/// A typo in a route must be a JSON 404, not the SPA's index page: a client
+/// that receives HTML with status 200 only finds out when parsing fails.
+#[tokio::test]
+async fn an_unknown_api_route_returns_a_json_not_found() {
+    let app = anth_panel::router(AppState::new(Config::default()));
+    for uri in ["/api/does-not-exist", "/api"] {
+        let response = app
+            .clone()
+            .oneshot(HttpRequest::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "for {uri}");
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/json",
+            "for {uri}"
+        );
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value["error"].is_string(), "for {uri}");
+    }
+}
+
 #[tokio::test]
 async fn mkdir_rename_and_delete_routes_mutate_the_root() {
     let fixture = file_fixture("mutate-routes", true, 1024);
