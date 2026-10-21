@@ -158,6 +158,10 @@ fn parse_signal(value: &str) -> Result<ProcessSignal, String> {
 }
 
 #[derive(Args, Debug)]
+#[command(
+    after_help = "Everything after PROGRAM is passed to it verbatim, so put \
+                          `--cwd` and `--yes` before the program."
+)]
 pub struct ProcessSpawnArgs {
     #[arg(
         value_name = "PROGRAM",

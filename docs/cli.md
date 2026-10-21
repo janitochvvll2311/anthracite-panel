@@ -259,13 +259,15 @@ and pid 1 or the daemon itself are rejected.
 
 ```bash
 anth-panel process spawn /bin/ls -la /tmp
-anth-panel process spawn /usr/bin/uptime --pretty --cwd /tmp --yes
+anth-panel process spawn --cwd /tmp --yes /usr/bin/uptime --pretty
 ```
 
 `PROGRAM` must be an absolute path that appears in `[process] spawn_allow`, and
-`[process] spawn` must be `true`. Everything after the program is passed as an
+`[process] spawn` must be `true`. Everything after `PROGRAM` is passed as an
 argument vector, not through a shell, so quoting on the command line is the
-shell's job and nothing is re-split.
+shell's job and nothing is re-split. That also means `--cwd` and `--yes` must
+come **before** `PROGRAM`; after it they are arguments to the program. Use `--`
+to pass an argument that starts with a hyphen.
 
 `--cwd DIR` sets the working directory. The output of the started process is
 discarded and the daemon does not supervise it; the command prints the new pid
