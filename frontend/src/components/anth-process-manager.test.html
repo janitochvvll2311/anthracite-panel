@@ -3,7 +3,7 @@
   Dev-only harness for the process monitor components.
 
   Run `npm run dev` and open
-  http://localhost:5173/src/components/anth-process-monitor.test.html. Vite's build input is only
+  http://localhost:5173/src/components/anth-process-manager.test.html. Vite's build input is only
   index.html, so this file never reaches dist/.
 -->
 <html lang="en">
@@ -14,16 +14,17 @@
       name="description"
       content="Dev harness for the Anthracite Panel process monitor components."
     />
-    <title>anth-process-monitor · test harness</title>
+    <title>anth-process-manager · test harness</title>
     <link rel="stylesheet" href="/src/harness/harness.css" />
   </head>
   <body>
-    <anth-harness heading="anth-process-monitor" width="1400px">
+    <anth-harness heading="anth-process-manager" width="1400px">
       <p slot="description">
         Live process table backed by <code>GET /api/processes/watch</code>.
         CPU percentages are computed in the browser from consecutive tick
-        snapshots. Debug builds generate <code>[process] control = true</code>;
-        release builds keep signals off unless the config enables them.
+        snapshots. Debug builds generate <code>[process] control = true</code>
+        and <code>[process] spawn = true</code> with a small allowlist; release
+        builds keep both off unless the config enables them.
       </p>
 
       <section class="harness-notes" aria-label="Harness notes">
@@ -36,6 +37,10 @@
             <li>Expand or collapse branching nodes with the chevron control.</li>
             <li>Pause and resume the SSE stream.</li>
             <li>Select a process and send a signal after confirming.</li>
+            <li>
+              Start a process from <code>spawn_allow</code>; the allowlist chips
+              fill the program word and keep the arguments you typed.
+            </li>
           </ul>
         </article>
         <article class="harness-note">
@@ -56,7 +61,7 @@
         </article>
       </section>
 
-      <anth-process-monitor id="monitor"></anth-process-monitor>
+      <anth-process-manager id="manager"></anth-process-manager>
       <p id="event-log" class="harness-event-log" aria-live="polite">
         no signal sent yet
       </p>
@@ -64,16 +69,20 @@
 
     <script type="module">
       import '/src/harness/anth-harness.ts'
-      import '/src/components/anth-process-monitor.ts'
+      import '/src/components/anth-process-manager.ts'
       import { HttpProcessClient } from '/src/lib/processes/process-client.ts'
 
-      const monitor = document.querySelector('#monitor')
+      const manager = document.querySelector('#manager')
       const log = document.querySelector('#event-log')
 
-      monitor.client = new HttpProcessClient({ baseUrl: '/api/processes' })
-      monitor.addEventListener('anth-process-signal', (event) => {
+      manager.client = new HttpProcessClient({ baseUrl: '/api/processes' })
+      manager.addEventListener('anth-process-signal', (event) => {
         const { pid, signal } = event.detail
         log.textContent = `sent ${signal.toUpperCase()} to PID ${pid}`
+      })
+      manager.addEventListener('anth-process-spawned', (event) => {
+        const { pid, program, args } = event.detail
+        log.textContent = `started ${program} ${args.join(' ')} as PID ${pid}`
       })
     </script>
   </body>

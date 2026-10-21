@@ -63,13 +63,19 @@ export class AnthSettings extends LitElement {
     }
 
     input[type='text'],
-    input[type='number'] {
+    input[type='number'],
+    textarea {
       padding: 0.45rem 0.55rem;
       color: inherit;
       font: 13px/1.4 var(--sans, system-ui, sans-serif);
       border: 1px solid var(--panel-border, #223041);
       border-radius: 7px;
       background: var(--panel, #101721);
+    }
+
+    textarea {
+      resize: vertical;
+      font-family: var(--mono, monospace);
     }
 
     .actions {
@@ -191,6 +197,27 @@ export class AnthSettings extends LitElement {
                 this.setNested('process', 'control', (event.target as HTMLInputElement).checked)}
             />
             ${msg('Allow process signals')}
+          </label>
+          <label class="check">
+            <input
+              type="checkbox"
+              .checked=${this.draft.process.spawn}
+              @change=${(event: Event) =>
+                this.setNested(
+                  'process',
+                  'spawn',
+                  (event.target as HTMLInputElement).checked,
+                )}
+            />
+            ${msg('Allow starting processes')}
+          </label>
+          <label class="field">
+            <span>${msg('Allowed programs, one absolute path per line')}</span>
+            <textarea
+              rows="3"
+              placeholder="/bin/ls&#10;/usr/bin/uptime"
+              @change=${(event: Event) => this.setSpawnAllow(event)}
+            >${this.draft.process.spawn_allow.join('\n')}</textarea>
           </label>
           <label class="check">
             <input
@@ -481,6 +508,21 @@ export class AnthSettings extends LitElement {
     }
   }
 
+  /**
+   * Parses the allowlist textarea into absolute paths.
+   *
+   * Blank lines are dropped rather than kept as empty entries, because an empty
+   * program can never match and would only make the list look non-empty to the
+   * daemon's "deny when the allowlist is empty" rule.
+   */
+  private setSpawnAllow(event: Event): void {
+    const lines = (event.target as HTMLTextAreaElement).value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+    this.setNested('process', 'spawn_allow', lines)
+  }
+
   /** Sends the sections that differ from the loaded view. */
   private buildPatch(): ConfigPatch {
     const patch: Record<string, unknown> = {}
@@ -494,7 +536,7 @@ export class AnthSettings extends LitElement {
         const beforeRecord = before as Record<string, unknown>
         const afterRecord = after as Record<string, unknown>
         for (const field of Object.keys(beforeRecord)) {
-          if (beforeRecord[field] !== afterRecord[field]) {
+          if (!sameFieldValue(beforeRecord[field], afterRecord[field])) {
             changed[field] = afterRecord[field]
           }
         }
@@ -529,6 +571,23 @@ export class AnthSettings extends LitElement {
       this.saving = false
     }
   }
+}
+
+/**
+ * Field comparison for the patch diff.
+ *
+ * Arrays are compared element by element: `structuredClone` gives the draft its
+ * own array instances, so a reference compare marks every array field as changed
+ * and a save with no edits would still PATCH the allowlist.
+ */
+function sameFieldValue(before: unknown, after: unknown): boolean {
+  if (Array.isArray(before) && Array.isArray(after)) {
+    return (
+      before.length === after.length &&
+      before.every((value, index) => value === after[index])
+    )
+  }
+  return before === after
 }
 
 declare global {

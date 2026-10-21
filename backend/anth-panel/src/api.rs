@@ -22,8 +22,9 @@ use anth_proto::{
     AccountError, AccountErrorKind, AccountSnapshot, AnthClient, DEFAULT_FILE_CHUNK,
     DEFAULT_TERMINAL_SIZE, FileChunk, FileError, FileErrorKind, FileListing, FileWritten,
     FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallSnapshot,
-    NetworkError, NetworkErrorKind, NetworkSnapshot, ProcessSignal, ProcessSnapshot, Request,
-    Response as CommandResponse, TerminalSize, VolumeError, VolumeErrorKind, VolumeSnapshot,
+    NetworkError, NetworkErrorKind, NetworkSnapshot, ProcessSignal, ProcessSnapshot,
+    ProcessSpawnErrorKind, Request, Response as CommandResponse, TerminalSize, VolumeError,
+    VolumeErrorKind, VolumeSnapshot,
 };
 
 pub fn router(app: AppState) -> Router {
@@ -52,6 +53,7 @@ pub fn router(app: AppState) -> Router {
         .route("/api/processes", get(get_processes))
         .route("/api/processes/watch", get(watch_processes))
         .route("/api/processes/{pid}/signal", post(post_process_signal))
+        .route("/api/processes/spawn", post(post_process_spawn))
         .route("/api/network", get(get_network))
         .route("/api/network/watch", get(watch_network))
         .route("/api/network/{name}/state", post(post_network_state))
@@ -255,6 +257,60 @@ pub async fn post_process_signal(
             Ok(Json(serde_json::json!({ "pid": pid, "signal": signal })))
         }
         CommandResponse::Error { detail } => Err(ApiError::bad_request(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// Body of `POST /api/processes/spawn`.
+#[derive(Debug, Deserialize)]
+pub struct SpawnArgs {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+/// `POST /api/processes/spawn` — start a program from the allowlist.
+///
+/// The daemon re-checks the switch and the allowlist, so this handler does not
+/// duplicate the policy: asking twice is how the two copies drift apart. It only
+/// maps the refusal kind to a status code a client can act on.
+pub async fn post_process_spawn(
+    State(state): State<AppState>,
+    payload: Result<Json<SpawnArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+
+    let response = exchange(
+        &state,
+        &Request::ProcessSpawn {
+            program: args.program,
+            args: args.args,
+            cwd: args.cwd,
+        },
+    )
+    .await?;
+
+    match response {
+        CommandResponse::ProcessStarted(started) => Ok(Json(serde_json::json!({
+            "pid": started.pid,
+            "program": started.program,
+            "args": started.args,
+        }))),
+        CommandResponse::ProcessSpawnError(error) => Err(match error.kind {
+            // One refusal class: the operator is not allowed to do this, and a
+            // retry with the same input will fail the same way.
+            ProcessSpawnErrorKind::Disabled
+            | ProcessSpawnErrorKind::NotAllowed
+            | ProcessSpawnErrorKind::NotAbsolute
+            | ProcessSpawnErrorKind::NotExecutable
+            | ProcessSpawnErrorKind::PermissionDenied => {
+                ApiError::new(StatusCode::FORBIDDEN, error.detail)
+            }
+            ProcessSpawnErrorKind::NotFound => ApiError::new(StatusCode::NOT_FOUND, error.detail),
+            ProcessSpawnErrorKind::Failed => ApiError::bad_request(error.detail),
+        }),
         other => Err(unexpected_response(other)),
     }
 }

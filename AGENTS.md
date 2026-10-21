@@ -250,7 +250,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at
   `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, global `sudo = false`,
   `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
-  `process.control = false`, `network.control = false`,
+  `process.control = false` with `process.spawn = false` and an empty
+  `spawn_allow`, `network.control = false`,
   `firewall.control = false`, `volumes.control = false` with
   `volumes.mount_root = "/mnt"`, legacy `network.sudo`/`firewall.sudo` and
   `firewall.sudo_password` are accepted and ignored,
@@ -275,8 +276,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
   `POST /api/echo`, `GET /api/terminal` (WebSocket),
-  `GET /api/processes`, `GET /api/processes/watch?interval=2s` (SSE) and
-  `POST /api/processes/{pid}/signal`; the network routes are `GET /api/network`,
+  `GET /api/processes`, `GET /api/processes/watch?interval=2s` (SSE),
+  `POST /api/processes/{pid}/signal` and `POST /api/processes/spawn`; the network routes are `GET /api/network`,
   `GET /api/network/watch?interval=2s` (SSE) and
   `POST /api/network/{name}/state`; the firewall routes are `GET /api/firewall`,
   `POST /api/firewall/rules`, `POST /api/firewall/rules/{handle}/delete` and
@@ -314,10 +315,16 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   i18n:extract` writes `frontend/xliff/es.xlf`, `bun run build` regenerates
   `src/generated/locales/es.ts` before type checking. The locale is stored in
   `localStorage` under `anth.locale`. Generated locale files are committed.
-- **Process monitor**: `process.rs` reads `/proc`, resolves users from `/etc/passwd`
-  and enforces the signal allowlist and ownership policy. `[process] control` defaults
-  to `false`; the daemon refuses pid 1, its own pid, other users' processes and
-  anything outside `term/kill/hup/int/quit/stop/cont`. Snapshots cap rows at 2000,
+- **Process manager**: `process.rs` reads `/proc`, resolves users from `/etc/passwd`
+  and enforces the signal allowlist and ownership policy through one
+  `ProcessPolicy` built from `[process]` per request. `[process] control` and
+  `[process] spawn` both default to `false`; the daemon refuses pid 1, its own pid,
+  other users' processes and anything outside `term/kill/hup/int/quit/stop/cont`.
+  Spawning additionally requires the canonicalised program to appear in
+  `spawn_allow`, and an empty list denies every request even with `spawn = true`.
+  The child is detached with `Stdio::null()` and reaped by a thread per child, so
+  a short-lived spawn does not leave a zombie and the global `SIGCHLD`
+  disposition (which the PTYs depend on) is untouched. Snapshots cap rows at 2000,
   truncate commands to 256 characters and then fit the serialized snapshot to the
   1 MiB line cap by shortening commands further and dropping the least busy rows.
   Command shortening sets `truncated`; dropping rows also adds a human-readable
@@ -325,18 +332,21 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   async connection loop.
   CPU percentages are computed by the client from `cpu_ticks`, `clock_ticks` and
   `timestamp_ms`; the daemon never keeps a sampler.
-- **Frontend process monitor**: `anth-process-table` is a controller that owns
+- **Frontend process manager**: `anth-process-table` is a controller that owns
   sort state and renders one of two renderers: `anth-process-flat-table` (compact
   table) or `anth-process-tree` (free-form tree with CSS guides and SVG
   expand/collapse chevrons). Both show PID, COMMAND, THREADS, USER, STATE, MEM
   and CPU; PPID is used only for nesting. Flat headers are all sortable; the tree
   omits PID and COMMAND sorting. A tree command stays on one line while the
   selected-process preview shows the full command, left-aligned and vertically
-  centered in the footer. `anth-process-monitor` owns filtering, the flat/tree
-  toggle, SSE lifecycle and confirmed signals, and only depends on the injected
-  `ProcessClient`. It ignores stream snapshots while a signal is in flight and
-  refreshes once it finishes. Both are exercised by Vitest component tests and
-  the `src/components/anth-process-monitor.test.html` dev harness.
+  centered in the footer. `anth-process-manager` owns filtering, the flat/tree
+  toggle, SSE lifecycle, confirmed signals and the spawn modal, and only depends
+  on the injected `ProcessClient`. It ignores stream snapshots while a signal is
+  in flight and refreshes once it finishes. Spawn controls come from the
+  snapshot's `spawn_enabled`/`spawn_allow`, so a disabled daemon shows a
+  disabled button with the reason instead of a form that cannot succeed. Both are
+  exercised by Vitest component tests and the
+  `src/components/anth-process-manager.test.html` dev harness.
 - **Filesystem explorer**: `files.rs` validates `[files] root`, normalizes virtual
   paths, rejects `..` and symlink escapes, lists directories, reads stateless chunks
   and performs atomic uploads through a per-connection temporary file. Writes are

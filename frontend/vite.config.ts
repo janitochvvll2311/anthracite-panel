@@ -7,7 +7,7 @@ export default defineConfig({
     rollupOptions: {
       // Only the app shell is a build entry. Dev harnesses such as
       // `src/components/anth-terminal.test.html`,
-      // `src/components/anth-process-monitor.test.html`,
+      // `src/components/anth-process-manager.test.html`,
       // `src/components/anth-file-explorer.test.html`,
       // `src/components/anth-host-info.test.html`,
       // `src/components/anth-network-monitor.test.html`,

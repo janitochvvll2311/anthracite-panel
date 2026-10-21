@@ -556,6 +556,8 @@ fn process_snapshot() -> anth_proto::ProcessSnapshot {
         clock_ticks: 100,
         timestamp_ms: 1_700_000_000_000,
         control_enabled: true,
+        spawn_enabled: true,
+        spawn_allow: vec!["/bin/echo".to_string()],
         total: 1,
         truncated: false,
         warning: None,
@@ -1938,4 +1940,201 @@ async fn a_malformed_account_body_is_a_bad_request() {
 
     let (status, _) = post(anth_panel::router(state), "/api/accounts/users", "not json").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+fn config_with_process_spawn(path: &std::path::Path, allow: &[&str]) -> Config {
+    let mut config = config_at(path);
+    config.process.spawn = true;
+    config.process.spawn_allow = allow.iter().map(|entry| entry.to_string()).collect();
+    config
+}
+
+/// A one-connection server that answers `ProcessSpawn` with `response`.
+fn spawn_process_spawn_server<F>(path: &std::path::Path, answer: F) -> tokio::task::JoinHandle<()>
+where
+    F: Fn() -> Response + Send + 'static,
+{
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(request)) = server.receive_request().await {
+                let answer = match request {
+                    Request::ProcessSpawn { .. } => answer(),
+                    other => Response::Error {
+                        detail: format!("unexpected request: {other:?}"),
+                    },
+                };
+                if server.send_response(&answer).await.is_err() {
+                    break;
+                }
+            }
+        }
+    })
+}
+
+#[tokio::test]
+async fn process_spawn_route_returns_the_started_process() {
+    let path = unique_socket("process-spawn-route");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_process_spawn_server(&path, || {
+        Response::ProcessStarted(anth_proto::ProcessSpawned {
+            pid: 4242,
+            program: "/bin/echo".to_string(),
+            args: vec!["hi".to_string()],
+        })
+    });
+
+    let app = anth_panel::router(AppState::new(config_with_process_spawn(
+        &path,
+        &["/bin/echo"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/processes/spawn")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"program":"/bin/echo","args":["hi"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({"pid": 4242, "program": "/bin/echo", "args": ["hi"]})
+    );
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn process_spawn_maps_each_refusal_to_a_usable_status() {
+    // A client has to tell "you may not" from "there is no such program", so
+    // the kind decides the status rather than every refusal collapsing to 400.
+    let cases = [
+        (
+            anth_proto::ProcessSpawnErrorKind::Disabled,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::ProcessSpawnErrorKind::NotAllowed,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::ProcessSpawnErrorKind::NotAbsolute,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::ProcessSpawnErrorKind::NotExecutable,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::ProcessSpawnErrorKind::PermissionDenied,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            anth_proto::ProcessSpawnErrorKind::NotFound,
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            anth_proto::ProcessSpawnErrorKind::Failed,
+            StatusCode::BAD_REQUEST,
+        ),
+    ];
+
+    for (index, (kind, expected)) in cases.into_iter().enumerate() {
+        let path = unique_socket(&format!("process-spawn-status-{index}"));
+        let _ = std::fs::remove_file(&path);
+        let server = spawn_process_spawn_server(&path, move || {
+            Response::ProcessSpawnError(anth_proto::ProcessSpawnError {
+                kind,
+                detail: format!("refused: {kind:?}"),
+            })
+        });
+
+        let app = anth_panel::router(AppState::new(config_with_process_spawn(
+            &path,
+            &["/bin/echo"],
+        )));
+        let response = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/processes/spawn")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"program":"/bin/echo"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), expected, "kind {kind:?}");
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value["error"].as_str().unwrap().contains("refused"));
+
+        server.abort();
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[tokio::test]
+async fn process_spawn_rejects_a_malformed_body_as_json() {
+    let path = unique_socket("process-spawn-bad-body");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_process_spawn(
+        &path,
+        &["/bin/echo"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/processes/spawn")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"args":["hi"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["error"].is_string());
+}
+
+#[tokio::test]
+async fn process_snapshot_exposes_the_spawn_switch_and_allowlist() {
+    let path = unique_socket("process-spawn-snapshot");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_process_server(&path, process_snapshot());
+
+    let app = anth_panel::router(AppState::new(config_at(&path)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("GET")
+                .uri("/api/processes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["spawn_enabled"], serde_json::json!(true));
+    assert_eq!(value["spawn_allow"], serde_json::json!(["/bin/echo"]));
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
 }

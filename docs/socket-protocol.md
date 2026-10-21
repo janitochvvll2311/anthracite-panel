@@ -108,6 +108,28 @@ to the daemon user, and the pid is not protected. See
 
 Reply: `ProcessSignalled`.
 
+### `ProcessSpawn`
+
+Starts a program from the daemon allowlist.
+
+```json
+{"type":"ProcessSpawn","data":{"program":"/bin/ls","args":["-la","/tmp"],"cwd":"/tmp"}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `program` | string | yes | Absolute path; must canonicalise to an entry in `[process] spawn_allow` |
+| `args` | string[] | no | Argument vector; defaults to empty. Never parsed by a shell |
+| `cwd` | string | no | Absolute, existing working directory |
+
+The daemon refuses the request unless `[process] spawn = true` and the
+canonicalised program appears in `spawn_allow`. An empty allowlist denies every
+request. The child gets stdin closed and its output discarded, and the daemon
+does not supervise it.
+
+Reply: `ProcessStarted`, or `ProcessSpawnError` with a machine-readable `kind`.
+
 ### `NetworkList`
 
 Returns one snapshot of every network interface. Takes no arguments, so the
@@ -383,6 +405,8 @@ Reply to `ProcessList`.
     "clock_ticks": 100,
     "timestamp_ms": 1700000000000,
     "control_enabled": false,
+    "spawn_enabled": false,
+    "spawn_allow": [],
     "total": 1,
     "truncated": false
   }
@@ -411,6 +435,31 @@ Successful reply to `ProcessSignal`.
 ```
 
 A refused signal arrives as an `Error` response instead.
+
+### `ProcessStarted`
+
+Successful reply to `ProcessSpawn`.
+
+```json
+{"type":"ProcessStarted","data":{"pid":4321,"program":"/bin/ls","args":["-la"]}}
+
+```
+
+`program` is the canonical path that was executed, which may differ from the
+requested text on a merged-usr host.
+
+### `ProcessSpawnError`
+
+A `ProcessSpawn` request was refused or failed.
+
+```json
+{"type":"ProcessSpawnError","data":{"kind":"NotAllowed","detail":"`/bin/sh` is not in the spawn allowlist"}}
+
+```
+
+`kind` is one of `Disabled`, `NotAbsolute`, `NotFound`, `NotAllowed`,
+`NotExecutable`, `PermissionDenied` or `Failed`. A client should branch on
+`kind`, not on the message text.
 
 ### `NetworkSnapshot`
 

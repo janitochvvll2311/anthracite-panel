@@ -138,6 +138,12 @@ pub struct ProcessConfig {
     /// Whether the daemon accepts signal requests. Off by default: killing a
     /// process is destructive and the panel has no authentication yet.
     pub control: bool,
+    /// Whether the daemon accepts spawn requests. Separate from `control`
+    /// because starting a process and killing one are different risks.
+    pub spawn: bool,
+    /// Absolute programs `spawn` may start. An empty list denies every spawn,
+    /// so enabling `spawn` alone opens nothing.
+    pub spawn_allow: Vec<String>,
 }
 
 /// Network interface monitoring and control settings.
@@ -309,6 +315,15 @@ impl Config {
             ..Self::default()
         };
         config.process.control = true;
+        // Spawn is enabled only with a fixed, harmless allowlist. An empty list
+        // would deny everything and make the feature untestable locally; a wide
+        // list would make a debug build a shell launcher.
+        config.process.spawn = true;
+        config.process.spawn_allow = vec![
+            "/bin/echo".to_string(),
+            "/bin/sleep".to_string(),
+            "/usr/bin/uptime".to_string(),
+        ];
         config.network.control = true;
         config.firewall.control = true;
         config.volumes.control = true;

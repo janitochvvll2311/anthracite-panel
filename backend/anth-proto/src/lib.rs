@@ -31,7 +31,10 @@ pub use network::{
     NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind, NetworkInterface,
     NetworkSnapshot,
 };
-pub use process::{ProcessInfo, ProcessSignal, ProcessSnapshot};
+pub use process::{
+    ProcessInfo, ProcessSignal, ProcessSnapshot, ProcessSpawnError, ProcessSpawnErrorKind,
+    ProcessSpawned,
+};
 pub use terminal::{
     TerminalOpenArgs, TerminalOpened, TerminalSize, DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK,
     MAX_TERMINAL_INPUT,
@@ -62,6 +65,14 @@ pub enum Request {
     ProcessSignal {
         pid: u32,
         signal: ProcessSignal,
+    },
+    /// Start a program from the allowlisted set. Requires `[process] spawn`.
+    ProcessSpawn {
+        program: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        cwd: Option<String>,
     },
     /// Ask the daemon for one snapshot of every network interface.
     NetworkList,
@@ -281,6 +292,10 @@ pub enum Response {
         pid: u32,
         signal: ProcessSignal,
     },
+    /// A process was started.
+    ProcessStarted(ProcessSpawned),
+    /// A spawn request was refused or failed.
+    ProcessSpawnError(ProcessSpawnError),
     /// One network-interface snapshot.
     NetworkSnapshot(NetworkSnapshot),
     /// An interface was brought up or down.

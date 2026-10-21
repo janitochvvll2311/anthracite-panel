@@ -260,6 +260,8 @@ fn renders_process_rows_and_a_truncation_warning() {
         clock_ticks: 100,
         timestamp_ms: 1_700_000_000_000,
         control_enabled: false,
+        spawn_enabled: false,
+        spawn_allow: Vec::new(),
         total: 2500,
         truncated: true,
         warning: Some("showing 2000 of 2500 processes".to_string()),

@@ -30,6 +30,7 @@ it into a stream becomes `/watch`.
 | `anth-panel process list` | `GET /api/processes` |
 | `anth-panel process list --watch 2s` | `GET /api/processes/watch?interval=2s` |
 | `anth-panel process signal 123 term` | `POST /api/processes/123/signal` with `{"signal":"term"}` |
+| `anth-panel process spawn /bin/ls -la` | `POST /api/processes/spawn` with `{"program":"/bin/ls","args":["-la"]}` |
 | `anth-panel network list` | `GET /api/network` |
 | `anth-panel network list --watch 2s` | `GET /api/network/watch?interval=2s` |
 | `anth-panel network down eth0` | `POST /api/network/eth0/state` with `{"up":false}` |
@@ -69,6 +70,7 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/processes` | One process-table snapshot |
 | `GET` | `/api/processes/watch` | Process snapshots as SSE |
 | `POST` | `/api/processes/{pid}/signal` | Send an allowlisted signal |
+| `POST` | `/api/processes/spawn` | Start a program from `[process] spawn_allow` |
 | `GET` | `/api/network` | One network-interface snapshot |
 | `GET` | `/api/network/watch` | Network snapshots as SSE |
 | `POST` | `/api/network/{name}/state` | Bring an interface up or down |
@@ -270,6 +272,8 @@ curl -s localhost:8080/api/processes
   "clock_ticks": 100,
   "timestamp_ms": 1700000000000,
   "control_enabled": false,
+  "spawn_enabled": false,
+  "spawn_allow": [],
   "total": 1,
   "truncated": false
 }
@@ -280,6 +284,8 @@ curl -s localhost:8080/api/processes
 | `clock_ticks` | `sysconf(_SC_CLK_TCK)`, for converting tick deltas to CPU percent |
 | `timestamp_ms` | Wall-clock time of the snapshot |
 | `control_enabled` | Whether `[process] control` allows signals |
+| `spawn_enabled` | Whether `[process] spawn` allows starting programs |
+| `spawn_allow` | Absolute programs the daemon will start; empty denies every spawn |
 | `total` | Processes found before truncation |
 | `truncated` | Whether rows or command lines were shortened |
 | `warning` | Present only when rows were dropped |
@@ -355,6 +361,38 @@ detail.
 | `502` | The daemon answered with an unexpected error |
 | `503` | No daemon is listening on the socket |
 
+## `POST /api/processes/spawn`
+
+Starts a program from the daemon allowlist.
+
+```bash
+curl -s -X POST localhost:8080/api/processes/spawn \
+  -H 'content-type: application/json' \
+  -d '{"program":"/bin/ls","args":["-la","/tmp"],"cwd":"/tmp"}'
+```
+
+```json
+{"pid":4321,"program":"/bin/ls","args":["-la","/tmp"]}
+```
+
+`args` and `cwd` are optional. `program` must be an absolute path that
+canonicalises to an entry in `[process] spawn_allow`, and `[process] spawn` must
+be `true`; an empty allowlist denies every request. The program is executed
+directly, never through a shell, with stdin closed and output discarded. The
+daemon does not supervise the child.
+
+| Status | When |
+| --- | --- |
+| `200` | Process started; the body carries its pid |
+| `400` | Invalid body, or the daemon refused for another reason |
+| `403` | Spawning is disabled, the program is not in the allowlist, is not absolute, is not executable, or cannot be read |
+| `404` | The program or the working directory does not exist |
+| `502` | The daemon answered with an unexpected error |
+| `503` | No daemon is listening on the socket |
+
+See [processes.md](processes.md) for the allowlist rules. `PATCH /api/config`
+writes the new allowlist to the file, but a running daemon keeps the policy it
+read at startup, so a change takes effect after a restart.
 
 ## `GET /api/network`
 

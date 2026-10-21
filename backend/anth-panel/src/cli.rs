@@ -133,6 +133,8 @@ pub enum ProcessCommand {
     List(WatchArgs),
     /// Send an allowlisted signal to one process.
     Signal(ProcessSignalArgs),
+    /// Start a program from the configured allowlist.
+    Spawn(ProcessSpawnArgs),
 }
 
 #[derive(Args, Debug)]
@@ -153,6 +155,33 @@ pub struct ProcessSignalArgs {
 
 fn parse_signal(value: &str) -> Result<ProcessSignal, String> {
     value.parse()
+}
+
+#[derive(Args, Debug)]
+pub struct ProcessSpawnArgs {
+    #[arg(
+        value_name = "PROGRAM",
+        help = "Absolute program path; must appear in `[process] spawn_allow`"
+    )]
+    pub program: String,
+
+    #[arg(
+        value_name = "ARG",
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Arguments passed to the program"
+    )]
+    pub args: Vec<String>,
+
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Absolute working directory for the new process"
+    )]
+    pub cwd: Option<String>,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
 }
 
 #[derive(Args, Debug)]

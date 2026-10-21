@@ -21,6 +21,11 @@ pub fn request_for(command: &Command) -> Option<Request> {
                 pid: signal.pid,
                 signal: signal.signal,
             }),
+            ProcessCommand::Spawn(spawn) => Some(Request::ProcessSpawn {
+                program: spawn.program.clone(),
+                args: spawn.args.clone(),
+                cwd: spawn.cwd.clone(),
+            }),
         },
         Command::Network(args) => match &args.command {
             NetworkCommand::List(_) => Some(Request::NetworkList),

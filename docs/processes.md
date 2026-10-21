@@ -9,21 +9,47 @@ proxy that authenticates users. Command lines can contain secrets.
 
 ## Configuration
 
-Process control is **off by default**:
+Process control and spawning are **off by default**:
 
 ```toml
 [process]
 control = false
+spawn = false
+spawn_allow = []
 ```
 
-Set it to `true` to allow signal requests:
+Set `control` to `true` to allow signal requests. Set `spawn` to `true` and list
+absolute program paths in `spawn_allow` to allow starting processes:
 
 ```toml
 [process]
 control = true
+spawn = true
+spawn_allow = ["/bin/ls", "/usr/bin/uptime"]
 ```
 
-Changing the file requires a daemon restart.
+Changing the file requires a daemon restart. `PATCH /api/config` updates the file
+and the API process, but a running daemon keeps the policy it read at startup.
+
+### Spawning
+
+`spawn` is a second, independent switch. Signals can be enabled without
+spawning and the reverse. An empty `spawn_allow` denies every request even when
+`spawn = true`: the list is the authority, not the switch, so an operator who
+forgets the list gets a refusal rather than an open panel.
+
+The daemon validates each request:
+
+- the program must be an absolute path;
+- the path is canonicalised, so a symlink that points outside the allowlist is
+  refused rather than resolved;
+- the canonical path must match an entry in `spawn_allow` exactly;
+- a missing working directory, or one that is not a directory, is refused;
+- the program inherits the daemon's environment, with stdin closed and output
+  discarded — it is a fire-and-forget start, not a job queue.
+
+The daemon does not supervise what it starts. The new process is its own
+process group and keeps running if the daemon stops.
 
 Debug builds (`cargo run`) bootstrap a missing config with `control = true` so
 signals can be tested locally. Release builds still generate `false`, and an
@@ -110,10 +136,13 @@ The browser components live in `frontend/src/components/`:
   is used for nesting but is not displayed. The tree does not sort by PID or
   COMMAND. Its command stays on one line; the selection preview keeps the full
   command, left-aligned and vertically centered.
-- `<anth-process-monitor>` fetches snapshots, follows the SSE stream, computes
-  CPU percentages and sends signals through an injected `ProcessClient`. It
-  owns the flat/tree toggle and filtering.
+- `<anth-process-manager>` fetches snapshots, follows the SSE stream, computes
+  CPU percentages, sends signals and starts allowlisted programs through an
+  injected `ProcessClient`. It owns the flat/tree toggle and filtering. The
+  spawn button is disabled with a reason when the snapshot reports
+  `spawn_enabled = false` or an empty `spawn_allow`, so the form never offers an
+  action the daemon would refuse.
 
-`frontend/src/components/anth-process-monitor.test.html` is the dev-only
+`frontend/src/components/anth-process-manager.test.html` is the dev-only
 harness. The same behaviour is covered by the Vitest tests under
 `frontend/src/components/` and `frontend/src/lib/processes/`.

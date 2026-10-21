@@ -31,7 +31,7 @@ import '../components/anth-file-explorer'
 import '../components/anth-firewall'
 import '../components/anth-host-info'
 import '../components/anth-network-monitor'
-import '../components/anth-process-monitor'
+import '../components/anth-process-manager'
 import '../components/anth-terminal'
 import '../components/anth-volume-manager'
 
@@ -69,10 +69,11 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'processes',
-    element: 'anth-process-monitor',
+    element: 'anth-process-manager',
     icon: '⚙️',
     title: () => msg('Processes'),
-    description: () => msg('Live process table with signals and tree view.'),
+    description: () =>
+      msg('Live process table with signals, tree view and spawning.'),
     createClient: () => new HttpProcessClient({ fetchImpl: currentApiFetch() }),
   },
   {

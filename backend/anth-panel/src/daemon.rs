@@ -37,7 +37,9 @@ type OutputStream = Pin<Box<dyn Stream<Item = (u32, Output)> + Send>>;
 /// Deployment policy for the operations exposed by the socket.
 #[derive(Debug, Clone, Default)]
 pub struct Policy {
-    pub process_control: bool,
+    /// The `[process]` policy, resolved once so the snapshot and both gates
+    /// read the same values.
+    pub process: crate::process::ProcessPolicy,
     pub network_control: bool,
     pub firewall_control: bool,
     pub volume_control: bool,
@@ -416,7 +418,7 @@ pub fn clear_socket_path(path: impl AsRef<Path>) -> std::io::Result<()> {
 
 pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
     Policy {
-        process_control: config.process.control,
+        process: crate::process::ProcessPolicy::new(&config.process),
         network_control: config.network.control,
         firewall_control: config.firewall.control,
         volume_control: config.volumes.control,

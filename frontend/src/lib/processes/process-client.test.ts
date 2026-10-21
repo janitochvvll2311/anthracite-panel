@@ -23,6 +23,8 @@ function snapshot(overrides: Partial<ProcessSnapshot> = {}): ProcessSnapshot {
     clock_ticks: 100,
     timestamp_ms: 1000,
     control_enabled: false,
+    spawn_enabled: false,
+    spawn_allow: [],
     total: 1,
     truncated: false,
     ...overrides,
@@ -165,6 +167,57 @@ describe('HttpProcessClient', () => {
 
     await expect(client.signal(1, 'kill')).rejects.toThrow(
       'pid 1 is protected',
+    )
+  })
+
+  it('posts a spawn request and returns the started process', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ pid: 4242, program: '/bin/echo', args: ['hi'] }),
+    )
+    const client = new HttpProcessClient({ fetchImpl })
+
+    const started = await client.spawn({ program: '/bin/echo', args: ['hi'] })
+
+    expect(started).toEqual({ pid: 4242, program: '/bin/echo', args: ['hi'] })
+    expect(fetchImpl).toHaveBeenCalledWith('/api/processes/spawn', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ program: '/bin/echo', args: ['hi'] }),
+    })
+  })
+
+  it('omits an absent cwd instead of sending null', async () => {
+    // The daemon deserializes `cwd` as `#[serde(default)] Option<String>`; a
+    // literal null would fail the body parse rather than mean "unset".
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse({ pid: 1, program: '/bin/echo', args: [] }),
+    )
+    const client = new HttpProcessClient({ fetchImpl })
+
+    await client.spawn({ program: '/bin/echo' })
+
+    const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body as string)
+    expect(body).toEqual({ program: '/bin/echo' })
+    expect('cwd' in body).toBe(false)
+    expect('args' in body).toBe(false)
+  })
+
+  it('uses the API error message when a spawn is refused', async () => {
+    const client = new HttpProcessClient({
+      fetchImpl: vi.fn(async () =>
+        jsonResponse(
+          { error: '/bin/sh is not in the allowlist' },
+          { ok: false, status: 403, statusText: 'Forbidden' },
+        ),
+      ),
+    })
+
+    await expect(client.spawn({ program: '/bin/sh' })).rejects.toThrow(
+      '/bin/sh is not in the allowlist',
     )
   })
 })

@@ -420,6 +420,8 @@ fn process_snapshot_and_signal_responses_roundtrip() {
         clock_ticks: 100,
         timestamp_ms: 1_700_000_000_000,
         control_enabled: false,
+        spawn_enabled: true,
+        spawn_allow: vec!["/bin/echo".to_string()],
         total: 1,
         truncated: false,
         warning: None,

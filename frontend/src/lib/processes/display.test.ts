@@ -5,7 +5,11 @@ import {
   compareProcesses,
   defaultDirection,
   formatKib,
+  parseCommandLine,
+  parseSpawnForm,
   sortValue,
+  spawnBlockReason,
+  splitCommandLine,
   stateLabel,
 } from './display'
 
@@ -101,5 +105,77 @@ describe('process display helpers', () => {
         'asc',
       ),
     ).toBe(0)
+  })
+
+  it('splits a command line without ever invoking a shell', () => {
+    expect(splitCommandLine('/bin/ls -la /tmp')).toEqual([
+      '/bin/ls',
+      '-la',
+      '/tmp',
+    ])
+    // Quotes group, and the quotes themselves do not survive into the argv the
+    // daemon receives.
+    expect(splitCommandLine('/bin/echo "hello there"')).toEqual([
+      '/bin/echo',
+      'hello there',
+    ])
+    expect(splitCommandLine("/bin/echo 'a b' c")).toEqual([
+      '/bin/echo',
+      'a b',
+      'c',
+    ])
+    // A backslash escapes the next character outside single quotes.
+    expect(splitCommandLine('/bin/echo a\\ b')).toEqual(['/bin/echo', 'a b'])
+    // An empty argument is still an argument, which a naive filter would drop.
+    expect(splitCommandLine('/bin/echo ""')).toEqual(['/bin/echo', ''])
+  })
+
+  it('drops no argument when splitting a typed command', () => {
+    expect(parseCommandLine('/usr/bin/uptime --pretty')).toEqual({
+      program: '/usr/bin/uptime',
+      args: ['--pretty'],
+    })
+    expect(parseCommandLine('/usr/bin/uptime')).toEqual({
+      program: '/usr/bin/uptime',
+      args: [],
+    })
+  })
+
+  it('refuses a spawn form that the daemon would refuse', () => {
+    expect(parseSpawnForm({ command: '', cwd: '' })).toEqual({
+      error: 'Enter a program to start.',
+    })
+    expect(parseSpawnForm({ command: 'echo hi', cwd: '' })).toEqual({
+      error: 'The program must be an absolute path, for example /bin/ls.',
+    })
+    expect(parseSpawnForm({ command: '/bin/ls', cwd: 'tmp' })).toEqual({
+      error: 'The working directory must be an absolute path.',
+    })
+  })
+
+  it('omits an empty working directory instead of sending an empty string', () => {
+    expect(parseSpawnForm({ command: '/bin/ls -la', cwd: '  ' })).toEqual({
+      program: '/bin/ls',
+      args: ['-la'],
+    })
+    expect(parseSpawnForm({ command: '/bin/ls', cwd: '/tmp' })).toEqual({
+      program: '/bin/ls',
+      args: [],
+      cwd: '/tmp',
+    })
+  })
+
+  it('blocks spawning when the daemon switch is off or the allowlist is empty', () => {
+    expect(
+      spawnBlockReason({ spawn_enabled: false, spawn_allow: ['/bin/ls'] }),
+    ).toContain('disabled')
+    // The empty allowlist is its own message: an operator who enabled the
+    // switch needs to know why nothing is allowed.
+    expect(
+      spawnBlockReason({ spawn_enabled: true, spawn_allow: [] }),
+    ).toContain('spawn_allow')
+    expect(
+      spawnBlockReason({ spawn_enabled: true, spawn_allow: ['/bin/ls'] }),
+    ).toBeUndefined()
   })
 })

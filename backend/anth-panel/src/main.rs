@@ -10,7 +10,7 @@ use anth_panel::cli::{
     EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
     FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs, FirewallFlushArgs,
     NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs,
-    VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
+    ProcessSpawnArgs, VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::read_password;
@@ -268,6 +268,19 @@ fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
         args.yes,
         || format!("Send {} to process {}? [y/N] ", args.signal, args.pid),
         "refusing to signal without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_spawn(args: &ProcessSpawnArgs) -> Result<bool, String> {
+    let command = if args.args.is_empty() {
+        args.program.clone()
+    } else {
+        format!("{} {}", args.program, args.args.join(" "))
+    };
+    confirm_action(
+        args.yes,
+        || format!("Start `{command}`? [y/N] "),
+        "refusing to start a process without --yes when stdin is not a terminal",
     )
 }
 
@@ -582,6 +595,23 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
     }) = command
     {
         return Some(send_file_upload(config_path, args).await);
+    }
+
+    if let Command::Process(ProcessArgs {
+        command: ProcessCommand::Spawn(args),
+    }) = command
+    {
+        match confirm_spawn(args) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
     }
 
     if let Command::Process(ProcessArgs {

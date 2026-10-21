@@ -12,7 +12,7 @@ export interface ConfigView {
   socket_path: string
   sudo: boolean
   terminal: { shell: string; max_sessions: number; token_set: boolean }
-  process: { control: boolean }
+  process: { control: boolean; spawn: boolean; spawn_allow: string[] }
   network: { control: boolean }
   firewall: { control: boolean }
   volumes: { control: boolean; mount_root: string }

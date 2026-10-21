@@ -9,7 +9,7 @@ function view(): ConfigView {
     socket_path: '/var/tmp/anth.sock',
     sudo: false,
     terminal: { shell: 'auto', max_sessions: 4, token_set: false },
-    process: { control: false },
+    process: { control: false, spawn: false, spawn_allow: [] },
     network: { control: false },
     firewall: { control: false },
     volumes: { control: false, mount_root: '/mnt' },
@@ -71,6 +71,23 @@ describe('AnthSettings', () => {
       'Accounts',
       'Session',
     ])
+  })
+
+  it('treats an unedited allowlist array as unchanged', async () => {
+    // `structuredClone` gives the draft its own array, so a reference compare
+    // would report the allowlist as edited on every save.
+    const initial = view()
+    initial.process.spawn = true
+    initial.process.spawn_allow = ['/bin/echo', '/usr/bin/uptime']
+    const { element, patch } = await mount(initial)
+
+    const save = [...(element.shadowRoot?.querySelectorAll('button') ?? [])].find(
+      (button) => button.textContent?.includes('Save'),
+    )
+    save?.click()
+    await element.updateComplete
+
+    expect(patch).not.toHaveBeenCalled()
   })
 
   it('sends nothing when no field changed', async () => {
