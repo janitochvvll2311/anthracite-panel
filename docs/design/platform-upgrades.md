@@ -70,14 +70,34 @@ Additional decisions taken while planning:
 | 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
 | 8 (point 8) | Plugin system and the WireGuard plugin | not started |
 
-## Phase 5 — file manager (in progress)
+## Phase 5 — file manager (done)
 
 Split into four commits so each one is reviewable on its own:
 
 1. Recycle bin (freedesktop trash). Done.
 2. Archive create/extract/list, with the extraction guards. Done.
-3. Text editing endpoints, then the CodeMirror component.
-4. Rename `anth-file-explorer` to `anth-file-manager`, harness and docs.
+3. Text editing endpoints, then the CodeMirror component. Done.
+4. Rename `anth-file-explorer` to `anth-file-manager`, harness and docs. Done.
+
+### Text editing — what was decided while implementing
+
+- Saving is a new endpoint, not `upload`. Upload replaces a file by name and
+  knows nothing about what the editor loaded; an edit has to refuse when the
+  file moved underneath it, and that needs a precondition.
+- The precondition is the mtime from the listing, which the client already
+  receives. Passing it back as `expected_modified_ms` costs one field and needs
+  no server-side session or token per open buffer.
+- A refused save must leave the editor dirty. The text is still only in the
+  buffer, so labelling it "saved" would misstate where the data lives.
+- The editor writes through a symlink instead of replacing it. Renaming a
+  temporary file over a link would detach a linked config file, which is a
+  silent behaviour change for an "edit".
+- CodeMirror is loaded with `import()` behind the four-method `EditorHandle`.
+  The component then has one seam for tests, and the initial bundle does not
+  carry eight grammars.
+- Formats without a grammar the panel ships (`shell`, `toml`, plain text) keep
+  line numbers and bracket matching rather than claiming to be highlighted.
+  Word autocompletion from the document covers them all.
 
 ### Recycle bin — what was decided while implementing
 
