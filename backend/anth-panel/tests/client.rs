@@ -1,7 +1,8 @@
 use anth_panel::cli::{
-    Cli, Command, FileArgs, FileCommand, FileDeleteArgs, FileListArgs, FileMkdirArgs, FileReadArgs,
-    FileRenameArgs, FileUploadArgs, FirewallArgs, FirewallCommand, NetworkArgs, NetworkCommand,
-    NetworkStateArgs, PortSpec, ProcessArgs, ProcessCommand, ProcessSignalArgs, WatchArgs,
+    Cli, Command, DaemonArgs, FileArgs, FileCommand, FileDeleteArgs, FileListArgs, FileMkdirArgs,
+    FileReadArgs, FileRenameArgs, FileUploadArgs, FirewallArgs, FirewallCommand, NetworkArgs,
+    NetworkCommand, NetworkStateArgs, PortSpec, ProcessArgs, ProcessCommand, ProcessSignalArgs,
+    WatchArgs,
 };
 use anth_panel::{handle_response, request_for};
 use anth_proto::{
@@ -97,7 +98,7 @@ fn request_for_host_info_builds_a_host_info_request() {
 
 #[test]
 fn request_for_is_none_for_locally_served_commands() {
-    assert!(request_for(&Command::Daemon).is_none());
+    assert!(request_for(&Command::Daemon(DaemonArgs::default())).is_none());
     assert!(request_for(&Command::Api(Default::default())).is_none());
     assert!(request_for(&Command::Run(Default::default())).is_none());
     assert!(request_for(&Command::Terminal(Default::default())).is_none());
@@ -536,4 +537,19 @@ fn handle_response_accepts_firewall_frames_without_panicking() {
         FirewallErrorKind::Disabled,
         "firewall control is disabled",
     )));
+}
+
+#[test]
+fn daemon_interactive_flag_is_parsed() {
+    let cli = Cli::try_parse_from(["anth-panel", "daemon", "--interactive"]).unwrap();
+    match cli.command {
+        Command::Daemon(args) => assert!(args.interactive),
+        other => panic!("expected daemon, got {other:?}"),
+    }
+
+    let cli = Cli::try_parse_from(["anth-panel", "daemon"]).unwrap();
+    match cli.command {
+        Command::Daemon(args) => assert!(!args.interactive),
+        other => panic!("expected daemon, got {other:?}"),
+    }
 }

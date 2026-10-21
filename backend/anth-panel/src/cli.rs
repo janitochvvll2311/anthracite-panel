@@ -1,5 +1,5 @@
 use anth_proto::{ArchiveFormat, FirewallProtocol, ProcessSignal};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "anth-panel")]
@@ -25,10 +25,17 @@ impl Cli {
     }
 }
 
+/// The command definition, exposed so the interactive console renders the same
+/// help text as the binary. Built on demand because `Cli::command` is not
+/// `const`.
+pub fn command_parser() -> clap::Command {
+    Cli::command()
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Serve the Unix-socket daemon.
-    Daemon,
+    Daemon(DaemonArgs),
     /// Serve the HTTP API and the embedded web UI.
     Api(EndpointArgs),
     /// Serve the daemon and the HTTP API from a single process.
@@ -899,6 +906,15 @@ pub struct TerminalArgs {
         help = "Initial terminal height in rows; defaults to the local terminal height"
     )]
     pub rows: Option<u16>,
+}
+
+#[derive(Args, Debug, Default)]
+pub struct DaemonArgs {
+    #[arg(
+        long,
+        help = "Read commands from stdin and send them to the daemon being served"
+    )]
+    pub interactive: bool,
 }
 
 #[derive(Args, Debug, Default)]

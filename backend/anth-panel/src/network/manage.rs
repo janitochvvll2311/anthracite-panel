@@ -222,6 +222,7 @@ pub fn create(
     }
 
     let argv = create_command(state, args)?;
+    let argv = argv.iter().map(String::as_str).collect::<Vec<_>>();
     run(runner, "ip", &argv, "create")?;
 
     if let Some(mtu) = args.mtu {
@@ -251,10 +252,14 @@ pub fn create(
 
 /// Builds the argv for the create. Everything the caller controls is validated
 /// before it gets here, and each value stays a separate element.
-fn create_command<'a>(
+///
+/// The vector is owned because the VLAN identifier is rendered from a number:
+/// borrowing it would either truncate the argv or require the caller to keep a
+/// string alive, which is exactly how `id` once lost its value.
+fn create_command(
     state: &NetworkState,
-    args: &'a NetworkCreateArgs,
-) -> Result<Vec<&'a str>, NetworkError> {
+    args: &NetworkCreateArgs,
+) -> Result<Vec<String>, NetworkError> {
     match args.kind {
         NetworkInterfaceKind::Veth => {
             let peer = args
@@ -266,20 +271,39 @@ fn create_command<'a>(
                 return Err(invalid(format!("interface `{peer}` already exists")));
             }
             Ok(vec![
-                "link", "add", &args.name, "type", "veth", "peer", "name", peer,
+                "link".into(),
+                "add".into(),
+                args.name.clone(),
+                "type".into(),
+                "veth".into(),
+                "peer".into(),
+                "name".into(),
+                peer.into(),
             ])
         }
-        NetworkInterfaceKind::Bridge => Ok(vec!["link", "add", &args.name, "type", "bridge"]),
-        NetworkInterfaceKind::Bond => Ok(vec![
-            "link",
-            "add",
-            &args.name,
-            "type",
-            "bond",
-            "mode",
-            "active-backup",
+        NetworkInterfaceKind::Bridge => Ok(vec![
+            "link".into(),
+            "add".into(),
+            args.name.clone(),
+            "type".into(),
+            "bridge".into(),
         ]),
-        NetworkInterfaceKind::Dummy => Ok(vec!["link", "add", &args.name, "type", "dummy"]),
+        NetworkInterfaceKind::Bond => Ok(vec![
+            "link".into(),
+            "add".into(),
+            args.name.clone(),
+            "type".into(),
+            "bond".into(),
+            "mode".into(),
+            "active-backup".into(),
+        ]),
+        NetworkInterfaceKind::Dummy => Ok(vec![
+            "link".into(),
+            "add".into(),
+            args.name.clone(),
+            "type".into(),
+            "dummy".into(),
+        ]),
         NetworkInterfaceKind::Vlan => {
             let link = args
                 .link
@@ -298,10 +322,26 @@ fn create_command<'a>(
                 )));
             }
             Ok(vec![
-                "link", "add", "link", link, "name", &args.name, "type", "vlan", "id",
+                "link".into(),
+                "add".into(),
+                "link".into(),
+                link.into(),
+                "name".into(),
+                args.name.clone(),
+                "type".into(),
+                "vlan".into(),
+                "id".into(),
+                vlan_id.to_string(),
             ])
         }
-        NetworkInterfaceKind::TunTap => Ok(vec!["tuntap", "add", "dev", &args.name, "mode", "tap"]),
+        NetworkInterfaceKind::TunTap => Ok(vec![
+            "tuntap".into(),
+            "add".into(),
+            "dev".into(),
+            args.name.clone(),
+            "mode".into(),
+            "tap".into(),
+        ]),
         NetworkInterfaceKind::Physical
         | NetworkInterfaceKind::Wireless
         | NetworkInterfaceKind::Loopback

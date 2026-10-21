@@ -274,10 +274,12 @@ fn create_vlan_validates_the_identifier_and_the_parent() {
         },
     )
     .unwrap();
+    // The identifier must reach the argv: `ip ... type vlan id` with a bare
+    // `id` fails on every host.
     assert_eq!(
         runner.calls()[0].1,
         vec![
-            "link", "add", "link", "eth0", "name", "eth0.10", "type", "vlan", "id",
+            "link", "add", "link", "eth0", "name", "eth0.10", "type", "vlan", "id", "10",
         ]
     );
 }

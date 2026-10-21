@@ -1179,9 +1179,10 @@ async fn main() -> ExitCode {
     }
 
     let result = match &cli.command {
-        Command::Daemon => anth_panel::daemon::serve(
+        Command::Daemon(args) => anth_panel::daemon::serve_with_console(
             &Config::load_or_create(config_path),
             std::path::Path::new(config_path),
+            args.interactive,
         )
         .await
         .map(|()| ExitCode::SUCCESS)

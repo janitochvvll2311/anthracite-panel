@@ -112,6 +112,41 @@ anth-panel daemon
 Prints `Listening on <path>` once bound. Any previous socket file at that path is
 removed first, so a stale file from a crashed process does not block startup.
 
+#### `daemon --interactive`
+
+```bash
+anth-panel daemon --interactive
+```
+
+Serves the socket as usual and additionally reads commands from stdin, so a
+debugging session needs one terminal instead of two. Each line is a normal
+subcommand without the `anth-panel` prefix:
+
+```
+anth-panel daemon --interactive
+Type a command without the `anth-panel` prefix, or `help`.
+host-info
+process list
+echo "hola mundo"
+quit
+```
+
+The console parses the line with the same clap definition the binary uses and
+renders the reply with the same table renderer, so a typed command behaves
+exactly like the subcommand, including its flags and its confirmation prompts.
+`help` prints the command list; `quit` or `exit` closes the console, and closing
+stdin does the same.
+
+A watch command prints one frame instead of streaming, because a stream would
+hold the console until interrupted. Four subcommands are refused because they
+describe a local action rather than a request: `daemon`, `api` and `run` would
+fight the running process for the socket, and `auth` and `config` edit the
+config file directly. Run those as separate invocations. `terminal` is also not
+available yet, since it needs raw-mode stdin, which the console would take from
+the line reader.
+
+The console never stops the daemon: when it exits, the socket keeps serving.
+
 ### `api`
 
 Serves the HTTP API and the embedded web UI. Blocks until interrupted.

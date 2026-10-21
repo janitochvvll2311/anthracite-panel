@@ -359,10 +359,11 @@ fn read_interfaces(
         }
 
         let base = entry.path();
-        let kind = interface_kind(&base);
         let flags = read_trimmed(base.join("flags"))
             .and_then(|text| parse_flags(&text))
             .unwrap_or(0);
+        let loopback = flags & (libc::IFF_LOOPBACK as u32) != 0;
+        let kind = interface_kind(&base, loopback);
         let traffic = counters.get(&name).copied().unwrap_or_default();
 
         interfaces.push(NetworkInterface {
@@ -373,7 +374,7 @@ fn read_interfaces(
             state: read_trimmed(base.join("operstate")).unwrap_or_else(|| "unknown".to_string()),
             up: flags & (libc::IFF_UP as u32) != 0,
             running: flags & (libc::IFF_RUNNING as u32) != 0,
-            loopback: flags & (libc::IFF_LOOPBACK as u32) != 0,
+            loopback,
             mac: read_trimmed(base.join("address")).unwrap_or_default(),
             mtu: read_trimmed(base.join("mtu"))
                 .and_then(|text| text.parse().ok())
@@ -401,12 +402,20 @@ fn read_interfaces(
     interfaces
 }
 
-/// Classifies a device from its sysfs directory.
+/// Classifies a device from its sysfs directory and its `IFF_LOOPBACK` flag.
+///
+/// Loopback comes from the flag, not from `type`: sysfs reports `772`
+/// (`ARPHRD_LOOPBACK`) for `lo`, and reading that as "dummy" would let the
+/// delete and bring-down guards miss the one interface they must always refuse.
+/// A real dummy is `ARPHRD_ETHER` with `iflink == ifindex`.
 ///
 /// A `device` link is the reliable signal for real hardware: virtual devices
 /// have no parent device. Wireless is checked first because a wireless NIC also
 /// has a `device` link, and the operator needs the more specific label.
-fn interface_kind(base: &Path) -> NetworkInterfaceKind {
+fn interface_kind(base: &Path, loopback: bool) -> NetworkInterfaceKind {
+    if loopback {
+        return NetworkInterfaceKind::Loopback;
+    }
     let wireless = base.join("wireless").is_dir() || base.join("phy80211").exists();
     if wireless {
         return NetworkInterfaceKind::Wireless;
@@ -436,7 +445,12 @@ fn interface_kind(base: &Path) -> NetworkInterfaceKind {
     {
         return NetworkInterfaceKind::Veth;
     }
-    if read_trimmed(base.join("type")).as_deref() == Some("772") {
+    // A dummy is not distinguishable from an idle bridge port by name alone,
+    // but it is by its link type and the absence of an upper device.
+    if matches!((index, link), (Some(index), Some(link)) if index == link)
+        && read_trimmed(base.join("type")).as_deref() == Some("1")
+        && !base.join("upper").is_dir()
+    {
         return NetworkInterfaceKind::Dummy;
     }
 
@@ -718,11 +732,15 @@ mod tests {
         fs::write(eth0.join("mtu"), "1500\n").unwrap();
         fs::write(eth0.join("speed"), "1000\n").unwrap();
         fs::write(eth0.join("duplex"), "full\n").unwrap();
+        fs::write(eth0.join("type"), "1\n").unwrap();
         fs::write(lo.join("ifindex"), "1\n").unwrap();
         fs::write(lo.join("operstate"), "unknown\n").unwrap();
         fs::write(lo.join("flags"), "0x9\n").unwrap();
         fs::write(lo.join("address"), "00:00:00:00:00:00\n").unwrap();
         fs::write(lo.join("mtu"), "65536\n").unwrap();
+        // `lo` reports ARPHRD_LOOPBACK (772); reading that as "dummy" is the
+        // bug this fixture guards against.
+        fs::write(lo.join("type"), "772\n").unwrap();
 
         fs::write(
             root.join("proc/net/dev"),
@@ -785,11 +803,40 @@ mod tests {
         assert_eq!(snapshot.interfaces[0].rx_bytes, 12345);
         assert_eq!(snapshot.interfaces[0].tx_packets, 20);
         assert_eq!(snapshot.interfaces[0].rx_errors, 1);
+        assert_eq!(snapshot.interfaces[0].kind, NetworkInterfaceKind::Other);
         assert_eq!(snapshot.interfaces[1].name, "lo");
         assert!(snapshot.interfaces[1].up);
         assert!(!snapshot.interfaces[1].running);
         assert!(snapshot.interfaces[1].loopback);
         assert_eq!(snapshot.interfaces[1].speed_mbps, None);
+        // The loopback guards in `manage.rs` branch on this, so `kind` must be
+        // `Loopback` and never `Dummy` even though sysfs says 772.
+        assert_eq!(snapshot.interfaces[1].kind, NetworkInterfaceKind::Loopback);
+        assert!(!snapshot.interfaces[1].physical);
+    }
+
+    #[test]
+    fn a_dummy_is_ether_with_matching_links_and_no_upper() {
+        let root = unique_dir("network-dummy");
+        let dummy = root.join("sys/class/net/d0");
+        fs::create_dir_all(&dummy).unwrap();
+        fs::write(dummy.join("ifindex"), "7\n").unwrap();
+        fs::write(dummy.join("iflink"), "7\n").unwrap();
+        fs::write(dummy.join("type"), "1\n").unwrap();
+
+        assert_eq!(interface_kind(&dummy, false), NetworkInterfaceKind::Dummy);
+
+        // A veth has the same type but a different `iflink`.
+        fs::write(dummy.join("iflink"), "3\n").unwrap();
+        assert_eq!(interface_kind(&dummy, false), NetworkInterfaceKind::Veth);
+
+        // A bridge port has an upper device.
+        fs::write(dummy.join("iflink"), "7\n").unwrap();
+        fs::create_dir_all(dummy.join("upper")).unwrap();
+        assert_eq!(interface_kind(&dummy, false), NetworkInterfaceKind::Other);
+
+        // The flag wins over every sysfs signal.
+        assert_eq!(interface_kind(&dummy, true), NetworkInterfaceKind::Loopback);
     }
 
     #[test]
