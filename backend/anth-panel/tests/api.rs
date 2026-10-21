@@ -71,14 +71,14 @@ fn spawn_host_info_server(
     })
 }
 
-#[test]
-fn app_state_stores_the_configuration() {
+#[tokio::test]
+async fn app_state_stores_the_configuration() {
     let config = Config {
         socket_path: "/tmp/state.sock".to_string(),
         ..Config::default()
     };
     let state = AppState::new(config.clone());
-    assert_eq!(state.config, config);
+    assert_eq!(state.config().await, config);
 }
 
 #[test]

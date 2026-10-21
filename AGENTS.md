@@ -205,6 +205,46 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `render_process_snapshot`, `render_network_snapshot`, `render_firewall_snapshot`
   and `render_file_listing` map snapshots onto it. It is a local renderer, not a
   dependency.
+- **Authentication**: `anth_panel::auth` is the browser boundary, not the socket.
+  `password.rs` is PBKDF2-HMAC-SHA256 with the digest format
+  `pbkdf2-sha256$<iterations>$<salt>$<digest>` (base64url, no padding); the
+  iteration count comes from `[auth] iterations` and debug builds default low so
+  the suite stays fast. `jwt.rs` signs HS256 only and rejects `alg: none` and any
+  other algorithm; every token also carries a `sid`, which is what ties it to the
+  session store. `session.rs` keys sessions by `sid` and keeps a fingerprint of
+  the current refresh `jti`. `verify_access` asks the store whether the session is
+  live, so a password change invalidates access tokens immediately instead of at
+  their expiry. Presenting anything but the current refresh token for a live
+  session cancels that session, which covers a replayed rotation and an access
+  token offered as a refresh token alike. Policy fields sit behind an inner lock
+  (`apply_config`), so a settings save keeps the sessions; only a credential
+  change rebuilds the service. `cookies.rs` owns the
+  `HttpOnly`/`SameSite=Strict` attributes and the optional `Secure` flag.
+  `middleware.rs::protect` wraps the whole router once, so a new route is
+  protected by default and a public one needs an explicit exemption; it accepts
+  the `anth_access` cookie or a Bearer token. Every token carries a `kind`, and
+  only `access` reaches a route: a refresh token passes the signature check but
+  is refused, which is what stops a leaked one from being a 12-hour credential.
+  `refresh` does its check, spend and re-issue under one write lock, so two
+  callers holding one token get one pair between them. `GET /api/auth/session`
+  reports the *remaining* seconds from each token's `exp`, and the shell hands
+  every panel client a `withRetry` fetch (`lib/http.ts`) that renews once on a
+  `401`, so a tab that outlives its access token recovers on the next call. `routes.rs` serves
+  `/api/auth/{session,login,refresh,logout,password}`. The daemon socket itself
+  is still unauthenticated — this layer covers HTTP only.
+- **Config API**: `config_api.rs` serves `GET`/`PATCH /api/config`. The view is a
+  projection of `Config` with secrets replaced by `password_set`/`token_set`
+  booleans. A patch replaces only the keys it names, is round-tripped through
+  TOML to prove it reloads, then applied in memory with
+  `AppState::replace_config` (policy only, sessions untouched) and written with
+  `AppState::persist`. Disabling auth from the panel is refused on purpose; that
+  is a host-only decision. `AppState::replace_auth` is the other path: it swaps
+  in a new service and drops every session, which is what `POST
+  /api/auth/password` needs.
+- **Settings CLI**: `settings.rs` backs `auth status|enable|set-password` and
+  `config get|set`. They edit the file directly and never touch the daemon.
+  `set_password` reuses `password::hash_password_with_iterations`; `set_key`
+  validates before writing so a bad value leaves the file untouched.
 - **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]`, `[process]`,
   `[network]`, `[firewall]`, `[volumes]` and `[files]`) is TOML with
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at
@@ -216,7 +256,14 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `firewall.sudo_password` are accepted and ignored,
   `files.root = "/"`, `files.write = false`, `max_entries = 5000`,
   `max_preview_bytes = 1 MiB` and
-  `max_upload_bytes = 64 MiB`. `auto` resolves `$SHELL`, then the account's
+  `max_upload_bytes = 64 MiB`. `[auth]` defaults to `enabled = true` with an
+  empty `password_hash`, `username = "admin"`, a generated `jwt_secret`,
+  `access_token_secs = 900`, `refresh_token_secs = 43200` and
+  `cookie_secure = false`. `Config::load_or_create` fills the empty password hash
+  and signing key on first run, prints the generated password once and stores
+  only the digest. `Config::save` writes through `write_private`, which opens with
+  mode `0600` and tightens an existing file, because the signing key in it is
+  enough to forge a token. `auto` resolves `$SHELL`, then the account's
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
@@ -408,6 +455,17 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   unmount, and the removable checkbox only appears for removable media. Tests
   live beside the component and `lib/volumes/`; the dev harness is
   `src/components/anth-volume-manager.test.html`.
+- **Frontend auth**: `lib/auth/auth-client.ts` talks to `/api/auth/*`. The tokens
+  are `HttpOnly` cookies, so the client never sees one; it reads the session,
+  arms one silent refresh slightly before the access token expires, and shares a
+  single in-flight refresh across callers because rotation would make the second
+  one fail. `anth-login` is the form and reports success upward; `anth-app` owns
+  the gate, showing the login when the session is gone and a sign-out button when
+  auth is on. The shell takes an injectable `authClient`, which is how its tests
+  avoid a server.
+- **Frontend settings**: `anth-settings` renders `GET /api/config` and saves the
+  sections that differ through `PATCH /api/config`, so a field changed by another
+  tab is not overwritten. `lib/config/config-client.ts` owns the transport.
 - **Frontend host info**: `anth-host-info` renders the `GET /api/host-info`
   snapshot and follows `/api/host-info/watch` through the injected
   `HostInfoClient`. It formats uptime, load, memory and swap, and exposes
@@ -477,6 +535,9 @@ sync with behaviour; they are the contract for people writing clients:
 - `docs/volumes.md` — storage inventory, mount and unmount policy, privileges.
 - `docs/accounts.md` — local user and group inventory, guard matrix, the
   `shadow-utils` dependency and the container's root requirement.
+
+`docs/api-endpoints.md` also documents the session lifecycle and `PATCH
+/api/config`, and `docs/cli.md` the `auth` and `config` commands.
 
 `AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
 duplicate route tables here — point at the doc.

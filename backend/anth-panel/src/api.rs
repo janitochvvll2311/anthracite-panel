@@ -27,12 +27,24 @@ use anth_proto::{
 };
 
 pub fn router(app: AppState) -> Router {
-    let upload_limit = usize::try_from(app.config.files.max_upload_bytes)
+    let upload_limit = usize::try_from(app.max_upload_bytes())
         .unwrap_or(usize::MAX)
         .max(1);
 
     Router::new()
         .route("/healthz", get(get_healthz))
+        .route("/api/auth/login", post(crate::auth::routes::post_login))
+        .route("/api/auth/refresh", post(crate::auth::routes::post_refresh))
+        .route("/api/auth/logout", post(crate::auth::routes::post_logout))
+        .route("/api/auth/session", get(crate::auth::routes::get_session))
+        .route(
+            "/api/auth/password",
+            post(crate::auth::routes::post_password),
+        )
+        .route(
+            "/api/config",
+            get(crate::config_api::get_config).patch(crate::config_api::patch_config),
+        )
         .route("/api/host-info", get(get_host_info))
         .route("/api/host-info/watch", get(watch_host_info))
         .route("/api/echo", post(post_echo))
@@ -82,6 +94,10 @@ pub fn router(app: AppState) -> Router {
         .route("/api/files/upload", post(post_file_upload))
         .layer(DefaultBodyLimit::max(upload_limit))
         .fallback(static_handler)
+        .layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            crate::auth::middleware::require_auth,
+        ))
         .with_state(app)
 }
 
@@ -98,15 +114,19 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    fn new(status: StatusCode, detail: impl Into<String>) -> Self {
+    pub(crate) fn new(status: StatusCode, detail: impl Into<String>) -> Self {
         Self {
             status,
             detail: detail.into(),
         }
     }
 
-    fn bad_request(detail: impl Into<String>) -> Self {
+    pub(crate) fn bad_request(detail: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, detail)
+    }
+
+    pub(crate) fn internal(detail: impl Into<String>) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, detail)
     }
 
     pub fn status(&self) -> StatusCode {
@@ -223,7 +243,7 @@ pub async fn post_process_signal(
     let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
     let signal = ProcessSignal::from_str(&args.signal).map_err(ApiError::bad_request)?;
 
-    if !state.config.process.control {
+    if !state.config().await.process.control {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "process control is disabled",
@@ -304,7 +324,7 @@ pub async fn post_volume_mount(
     payload: Result<Json<VolumeMountBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_volume_control(&state)?;
+    require_volume_control(&state).await?;
 
     match exchange(
         &state,
@@ -339,7 +359,7 @@ pub async fn post_volume_unmount(
     payload: Result<Json<VolumeUnmountBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_volume_control(&state)?;
+    require_volume_control(&state).await?;
 
     match exchange(
         &state,
@@ -382,7 +402,7 @@ pub async fn post_account_create(
     payload: Result<Json<AccountCreateBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_account_control(&state)?;
+    require_account_control(&state).await?;
     account_change(
         &state,
         Request::AccountCreate {
@@ -420,7 +440,7 @@ pub async fn post_account_modify(
     payload: Result<Json<AccountModifyBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_account_control(&state)?;
+    require_account_control(&state).await?;
     account_change(
         &state,
         Request::AccountModify {
@@ -454,7 +474,7 @@ pub async fn post_account_delete(
         Ok(Json(body)) => body.remove_home,
         Err(_) => false,
     };
-    require_account_control(&state)?;
+    require_account_control(&state).await?;
     account_change(&state, Request::AccountDelete { name, remove_home }).await
 }
 
@@ -471,7 +491,7 @@ pub async fn post_account_password(
     payload: Result<Json<AccountPasswordBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_account_password_control(&state)?;
+    require_account_password_control(&state).await?;
     account_change(
         &state,
         Request::AccountSetPassword {
@@ -498,7 +518,7 @@ pub async fn post_account_group_create(
     payload: Result<Json<AccountGroupCreateBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_account_control(&state)?;
+    require_account_control(&state).await?;
     account_change(
         &state,
         Request::AccountGroupCreate {
@@ -526,7 +546,7 @@ pub async fn post_account_group_modify(
     payload: Result<Json<AccountGroupModifyBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(body) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_account_control(&state)?;
+    require_account_control(&state).await?;
     account_change(
         &state,
         Request::AccountGroupModify {
@@ -543,7 +563,7 @@ pub async fn post_account_group_delete(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    require_account_control(&state)?;
+    require_account_control(&state).await?;
     account_change(&state, Request::AccountGroupDelete { name }).await
 }
 
@@ -558,8 +578,8 @@ async fn account_change(state: &AppState, request: Request) -> Result<Json<Value
     }
 }
 
-fn require_account_control(state: &AppState) -> Result<(), ApiError> {
-    if !state.config.accounts.control {
+async fn require_account_control(state: &AppState) -> Result<(), ApiError> {
+    if !state.config().await.accounts.control {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "account control is disabled",
@@ -568,8 +588,8 @@ fn require_account_control(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn require_account_password_control(state: &AppState) -> Result<(), ApiError> {
-    if !state.config.accounts.manage_passwords {
+async fn require_account_password_control(state: &AppState) -> Result<(), ApiError> {
+    if !state.config().await.accounts.manage_passwords {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "password changes are disabled",
@@ -578,8 +598,8 @@ fn require_account_password_control(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn require_volume_control(state: &AppState) -> Result<(), ApiError> {
-    if state.config.volumes.control {
+async fn require_volume_control(state: &AppState) -> Result<(), ApiError> {
+    if state.config().await.volumes.control {
         Ok(())
     } else {
         Err(ApiError::new(
@@ -632,7 +652,7 @@ pub async fn post_network_state(
 ) -> Result<Json<Value>, ApiError> {
     let Path(name) = path.map_err(|e| ApiError::bad_request(e.body_text()))?;
     let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_network_control(&state)?;
+    require_network_control(&state).await?;
 
     match exchange(
         &state,
@@ -652,8 +672,8 @@ pub async fn post_network_state(
     }
 }
 
-fn require_network_control(state: &AppState) -> Result<(), ApiError> {
-    if state.config.network.control {
+async fn require_network_control(state: &AppState) -> Result<(), ApiError> {
+    if state.config().await.network.control {
         Ok(())
     } else {
         Err(ApiError::new(
@@ -717,7 +737,7 @@ pub async fn post_firewall_rule(
     payload: Result<Json<FirewallRuleArgs>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_firewall_control(&state)?;
+    require_firewall_control(&state).await?;
 
     match exchange(
         &state,
@@ -748,7 +768,7 @@ pub async fn post_firewall_delete(
     path: Result<Path<u64>, PathRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Path(handle) = path.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_firewall_control(&state)?;
+    require_firewall_control(&state).await?;
 
     match exchange(&state, &Request::FirewallDeleteRule { handle }).await? {
         CommandResponse::FirewallChanged { message } => {
@@ -765,7 +785,7 @@ pub async fn post_firewall_delete(
 
 /// `POST /api/firewall/flush` — remove every managed rule.
 pub async fn post_firewall_flush(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    require_firewall_control(&state)?;
+    require_firewall_control(&state).await?;
 
     match exchange(&state, &Request::FirewallFlush).await? {
         CommandResponse::FirewallChanged { message } => {
@@ -780,8 +800,8 @@ pub async fn post_firewall_flush(State(state): State<AppState>) -> Result<Json<V
     }
 }
 
-fn require_firewall_control(state: &AppState) -> Result<(), ApiError> {
-    if state.config.firewall.control {
+async fn require_firewall_control(state: &AppState) -> Result<(), ApiError> {
+    if state.config().await.firewall.control {
         Ok(())
     } else {
         Err(ApiError::new(
@@ -940,7 +960,7 @@ pub async fn post_file_mkdir(
     payload: Result<Json<FileMkdirArgs>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_file_write(&state)?;
+    require_file_write(&state).await?;
 
     match exchange(
         &state,
@@ -964,7 +984,7 @@ pub async fn post_file_rename(
     payload: Result<Json<FileRenameArgs>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_file_write(&state)?;
+    require_file_write(&state).await?;
 
     match exchange(
         &state,
@@ -990,7 +1010,7 @@ pub async fn post_file_delete(
     payload: Result<Json<FileDeleteArgs>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_file_write(&state)?;
+    require_file_write(&state).await?;
 
     match exchange(
         &state,
@@ -1015,7 +1035,7 @@ pub async fn post_file_upload(
     body: Body,
 ) -> Result<Json<Value>, ApiError> {
     let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
-    require_file_write(&state)?;
+    require_file_write(&state).await?;
 
     let written = upload_stream(&state, &query.path, query.overwrite, body).await?;
     Ok(Json(
@@ -1023,8 +1043,8 @@ pub async fn post_file_upload(
     ))
 }
 
-fn require_file_write(state: &AppState) -> Result<(), ApiError> {
-    if state.config.files.write {
+async fn require_file_write(state: &AppState) -> Result<(), ApiError> {
+    if state.config().await.files.write {
         Ok(())
     } else {
         Err(ApiError::new(
@@ -1035,7 +1055,7 @@ fn require_file_write(state: &AppState) -> Result<(), ApiError> {
 }
 
 async fn read_preview(state: &AppState, path: &str) -> Result<(Vec<u8>, u64, bool), ApiError> {
-    let max = state.config.files.max_preview_bytes;
+    let max = state.config().await.files.max_preview_bytes;
     let mut client = state
         .create_client()
         .await
@@ -1128,7 +1148,8 @@ async fn upload_stream(
         }
     };
 
-    let result = forward_upload(&mut client, id, body, state.config.files.max_upload_bytes).await;
+    let max_upload = state.config().await.files.max_upload_bytes;
+    let result = forward_upload(&mut client, id, body, max_upload).await;
     if result.is_err() {
         let _ = query_command(&mut client, &Request::FileWriteAbort { id }).await;
     }

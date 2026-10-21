@@ -86,9 +86,18 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `POST` | `/api/files/rename` | Rename an entry |
 | `POST` | `/api/files/delete` | Delete an entry |
 | `POST` | `/api/files/upload` | Upload a raw body |
+| `GET` | `/api/auth/session` | Whether the session is open |
+| `POST` | `/api/auth/login` | Exchange a password for the token pair |
+| `POST` | `/api/auth/refresh` | Rotate the access and refresh tokens |
+| `POST` | `/api/auth/logout` | Revoke the session and clear the cookies |
+| `POST` | `/api/auth/password` | Change the panel password |
+| `GET` | `/api/config` | The editable configuration view |
+| `PATCH` | `/api/config` | Change configuration fields |
 
-Anything under `/api` that is not a route listed above answers `404` with the
-usual `{"error": ...}` body. Every other path falls through to the embedded web
+Everything under `/api` except `/api/auth/login`, `/api/auth/refresh` and
+`/api/auth/session` requires a session when `[auth] enabled` is true; see
+[Authentication](#authentication). Anything under `/api` that is not a route
+listed above answers `404` with the usual `{"error": ...}` body. Every other path falls through to the embedded web
 UI, which serves static files and returns `index.html` for unknown paths so the
 SPA can route.
 
@@ -974,10 +983,12 @@ Interactive terminal over a WebSocket. The handshake upgrades to a WebSocket and
 the panel opens one PTY session per connection through the daemon. Closing the
 WebSocket closes the session and kills its process group.
 
-> Before this route is exposed beyond a trusted network, it needs authentication.
-> The terminal token in the config is reserved for that follow-up; it is **not
-> enforced** by this route yet. Keep `anth-panel api`/`run` on loopback or behind
-> a reverse proxy that authenticates users.
+> With `[auth] enabled` this upgrade needs a session like every other `/api`
+> route, so a browser that has not signed in cannot open a PTY. The per-session
+> `terminal.token` is still **not enforced**; it is reserved for a capability
+> that outlives the panel session. The daemon socket itself stays
+> unauthenticated, so keep `anth-panel api`/`run` on loopback or behind a proxy
+> that authenticates users when the host is not trusted.
 
 ### Query parameters
 
@@ -1055,3 +1066,122 @@ route. To add one:
 For a streaming variant, reuse `poll::stream` for the cadence and
 `SseStream::new("<event-name>")` for the framing rather than writing either
 again.
+
+## Authentication
+
+`[auth] enabled = true` puts a middleware in front of every `/api` route. It
+accepts either credential:
+
+- the `anth_access` cookie, which the browser sends by itself;
+- an `Authorization: Bearer <token>` header, for a script or a client that does
+  not keep cookies.
+
+`/healthz` stays open so a container probe keeps working, and the three login
+routes stay open because requiring a session to log in would deadlock.
+
+A rejection is `401` with `{"error": "authentication required"}`. A token that
+is well formed but expired gives `{"error": "session expired"}` so the UI knows
+to try a refresh before showing the login screen.
+
+Both cookies are `HttpOnly` and `SameSite=Strict`; add `Secure` with
+`[auth] cookie_secure = true` once the panel is behind HTTPS. `SameSite=Strict`
+is what makes the panel safe without a CSRF token: a cross-site form post never
+carries the cookie.
+
+### `GET /api/auth/session`
+
+Reports the login state, never a secret.
+
+```json
+{
+  "enabled": true,
+  "authenticated": true,
+  "username": "admin",
+  "access_expires_in": 870,
+  "refresh_expires_in": 43100
+}
+```
+
+`access_expires_in` and `refresh_expires_in` are **seconds remaining**, both `0`
+when that token is absent. A tab opened halfway through an access token reports
+the time left, not the configured lifetime, so its silent refresh is scheduled
+correctly. The shell uses them to arm a silent refresh slightly
+before the access token expires.
+
+`authenticated` is `true` only when the presented cookie **verifies and names a
+live session**. A stale or forged cookie reports `false`, so the shell shows the
+login instead of rendering panels that every `/api` call would reject.
+
+### `POST /api/auth/login`
+
+```json
+{ "username": "admin", "password": "..." }
+```
+
+Sets both cookies and answers:
+
+```json
+{ "username": "admin", "role": "admin", "access_expires_in": 900 }
+```
+
+The UI then reads `GET /api/auth/session` for the rest of the state. A wrong user
+and a wrong password answer the same `401 {"error": "invalid credentials"}` so
+the route cannot be used to enumerate the account name.
+
+### `POST /api/auth/refresh`
+
+Takes the refresh cookie, nothing in the body. Rotates the pair: the presented
+refresh token is spent and a new one is issued. Rotation does not extend the
+login: the new refresh token keeps the session's original expiry.
+
+The check, the spend and the re-issue happen under one lock, so two callers
+holding the same token get exactly one `200` between them and the loser sees the
+session cancelled. A refresh token is not an API credential: it is rejected by
+the same check that keeps the two halves apart, so a leaked one cannot be used
+as a Bearer token for its whole life.
+
+Presenting a token that is not the current one for a live session answers `401`
+and cancels that session. That covers both a rotated token being replayed and an
+access token offered in place of a refresh token, and in both cases one of the
+two holders is an intruder. The honest client is signed out too, which is the
+point: the panel cannot tell which copy is genuine.
+
+### `POST /api/auth/logout`
+
+Revokes the session, if the refresh cookie names one, and clears both cookies
+with `Max-Age=0`. It is safe to call without a session.
+
+### `POST /api/auth/password`
+
+```json
+{ "current_password": "...", "new_password": "..." }
+```
+
+Requires a session. The new password must be at least 8 characters.
+
+The change rotates the signing key and drops every session, then clears both
+cookies. Two consequences follow, and both are deliberate:
+
+- an access token handed out before the change stops working **immediately**
+  rather than when it expires, because the service that signed it is gone;
+- the caller is signed out like everyone else. A password change is what an
+  operator does when a credential may be compromised, so leaving one working
+  token behind would defeat it.
+
+### `GET /api/config` and `PATCH /api/config`
+
+The view is the TOML file without secrets: `[auth] password_hash` and
+`[terminal] token` are reported as `password_set` and `token_set` booleans.
+
+A patch replaces only the fields it names; an absent key keeps its value. The
+result is serialized and re-parsed before it is stored, so a patch that would
+produce an unloadable file is rejected with `400`. It is then applied in memory
+and written to the file the process was started with.
+
+`{"auth": {"enabled": false}}` is refused. Turning the password requirement off
+is a host decision, made with `anth-panel auth enable --disable`, so a stolen
+session cannot remove the lock from the panel itself.
+
+```json
+{ "files": { "write": true }, "volumes": { "mount_root": "/srv" } }
+```

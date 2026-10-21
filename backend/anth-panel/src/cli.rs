@@ -54,6 +54,69 @@ pub enum Command {
     File(FileArgs),
     /// Open an interactive terminal on the daemon host.
     Terminal(TerminalArgs),
+    /// Manage the panel login: enable it or change the password.
+    Auth(AuthArgs),
+    /// Read and change the panel configuration.
+    Config(ConfigArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AuthArgs {
+    #[command(subcommand)]
+    pub command: AuthCommand,
+}
+
+/// `auth` subcommands. They edit the config file directly; a running server
+/// picks the change up on its next start, and `auth set-password` says so.
+#[derive(Subcommand, Debug)]
+pub enum AuthCommand {
+    /// Turn the login on or off.
+    Enable(AuthToggleArgs),
+    /// Change the panel password.
+    SetPassword(AuthSetPasswordArgs),
+    /// Print whether the login is on and which account it uses.
+    Status,
+}
+
+#[derive(Args, Debug)]
+pub struct AuthToggleArgs {
+    /// Turn the login off instead of on.
+    #[arg(long)]
+    pub disable: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AuthSetPasswordArgs {
+    /// Read the password from stdin instead of prompting on the terminal.
+    #[arg(long)]
+    pub stdin: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub command: ConfigCommand,
+}
+
+/// `config` subcommands. `get` prints the whole file; `set` changes one key.
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommand {
+    /// Print the configuration as TOML.
+    Get,
+    /// Change one key and save the file.
+    Set(ConfigSetArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ConfigSetArgs {
+    #[arg(
+        value_name = "KEY",
+        help = "Dotted key, e.g. files.write or accounts.control"
+    )]
+    pub key: String,
+
+    #[arg(value_name = "VALUE", help = "New value, parsed as a TOML literal")]
+    pub value: String,
 }
 
 #[derive(Args, Debug)]

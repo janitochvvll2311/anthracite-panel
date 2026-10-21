@@ -1,0 +1,84 @@
+<!doctype html>
+<!--
+  Dev-only harness for the login screen.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-login.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel login screen."
+    />
+    <title>anth-login · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-login" width="720px">
+      <p slot="description">
+        The sign-in screen shown when the auth cookies are gone. The harness
+        accepts the user <code>admin</code> with the password
+        <code>hunter2</code> and rejects everything else with the same message
+        the daemon sends.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Submit with a wrong password: the error comes from the server.</li>
+            <li>Submit with <code>hunter2</code>: the field clears and the event fires.</li>
+            <li>Press Enter instead of clicking: the form still submits.</li>
+            <li>The password is never stored; it is cleared on both paths.</li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Session shape</h2>
+          <p>
+            On success the component reports the session it read back from
+            <code>GET /api/auth/session</code>. The shell, not this component,
+            decides what to render next.
+          </p>
+        </article>
+      </section>
+
+      <div slot="actions" class="harness-controls">
+        <span id="result" class="harness-note">not signed in</span>
+      </div>
+
+      <anth-login id="login"></anth-login>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-login.ts'
+
+      const result = document.querySelector('#result')
+      const login = document.querySelector('#login')
+
+      const session = {
+        enabled: true,
+        authenticated: true,
+        username: 'admin',
+        access_expires_in: 900,
+        refresh_expires_in: 43200,
+      }
+
+      login.client = {
+        async login(username, password) {
+          if (username !== 'admin' || password !== 'hunter2') {
+            throw new Error('invalid credentials')
+          }
+          return session
+        },
+      }
+      login.onAuthenticated = (value) => {
+        result.textContent = `signed in as ${value.username}`
+      }
+    </script>
+  </body>
+</html>

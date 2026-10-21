@@ -53,8 +53,8 @@ Additional decisions taken while planning:
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Handler-forward dispatch, `/api` 404, app shell, i18n rig, bun toolchain | done |
-| 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, in review |
-| 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | not started |
+| 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, merged in #16 |
+| 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, in review |
 | 3 (point 6) | Floating windows, minimize, standalone window | not started |
 | 4 (point 1) | `anth-process-manager` and process spawning | not started |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
@@ -105,3 +105,116 @@ Notes for the next phase:
   `Arc<RwLock<Config>>` when the config endpoints land.
 - The handler chain has room for a plugin link; phase 8 appends it after
   `CoreHandler`.
+
+## Phase 1 — UI utilities (done)
+
+What changed:
+
+- `lib/ui/dialog.ts` exposes `confirmAction`, `promptText` and `showAlert` as
+  promises routed through one `anth-dialog-host`. One dialog is visible at a
+  time and a second request queues behind it, because two stacked confirmations
+  from one click is a caller bug the operator cannot answer.
+- `anth-modal` is a thin wrapper over the native `<dialog>` element, which
+  already supplies the top layer, the focus trap and `Escape`. It never closes
+  itself: it reports `escape`, `backdrop`, `close` or `programmatic` and the
+  owner decides, so a dialog with unsaved input can refuse.
+- Every panel component now asks through those helpers instead of
+  `window.confirm`/`prompt`/`alert`, which block the event loop and freeze a
+  live terminal session.
+- `anth-tab-panel` parks a hidden tab with `remove()` rather than
+  `display: none`. A detached custom element keeps its properties, its shadow
+  root and its internal state, so a tab resumes where it left off while its SSE
+  stream and WebSocket are closed.
+- Each tab is observed individually, because a parked tab is detached and an
+  observer on the panel only watches descendants. `connectedCallback`
+  re-observes every known tab: `registerTabs` returns early for an id it already
+  knows, so a panel that is moved or re-appended would otherwise watch nothing.
+- Restoring a tab changes no property, so `willUpdate` never runs in the child.
+  The panel dispatches `anth-tab-show` on the element it puts back, and
+  `lib/ui/tab-visibility` is the shared subscription helper. The process,
+  network and host-info monitors start their stream from it, but only when the
+  stream was live when the tab was parked: a stream the operator paused with the
+  Pause button is not resurrected by a tab switch.
+- The dialog host restores focus to the opener once the last dialog of a burst
+  is answered. The frame is removed while its native `<dialog>` is still open,
+  so the browser's own restoration never runs.
+
+Dev harnesses: `anth-dialog.test.html` and `anth-tab-panel.test.html`, both
+linked from `component-index.test.html`.
+
+Verification: 326 frontend tests, `tsc --noEmit`, and the dialog and tab
+harnesses checked in a real browser.
+
+Lessons for later phases:
+
+- A component that owns a connection and lives inside a tab must start it from
+  `connectedCallback` (or from `onTabShow`) as well as from `willUpdate`, and
+  must release the listener in `disconnectedCallback`.
+- `bun` can disappear from `PATH` after a shell restart. The local binaries
+  under `frontend/node_modules/.bin` are the reliable way to run `tsc` and
+  `vitest`; `npm` is uninstalled and must not be used.
+
+## Phase 2 — Authentication and configuration (done)
+
+What changed:
+
+- `anth_panel::auth` is a module tree rather than a middleware with helpers
+  inside it: `password` (PBKDF2-HMAC-SHA256), `jwt` (HS256 only), `session`
+  (refresh store and `AuthService`), `cookies` (attributes and parsing),
+  `middleware` (the gate) and `routes` (the five endpoints). Each has its own
+  unit tests, so a change to the digest format or the token claims fails next to
+  the code that produced it rather than in an HTTP test.
+- `jwt.rs` accepts one algorithm. A parser that honours the token's own `alg`
+  header is the classic JWT bug: `alg: none` or a swapped RS256 turns
+  verification off. The header is read, compared and ignored otherwise.
+- Refresh tokens rotate. Every login stores a `jti`; a refresh revokes the one
+  it presented and issues a new pair. Presenting an already-revoked `jti`
+  cancels the session instead of answering `401` once, because reuse is what a
+  stolen cookie looks like.
+- The layer protects the whole router in one place (`protect`), so a new route
+  is closed by default and the three login routes carry an explicit public
+  marker. Adding per-route `#[layer]` calls is how one endpoint ends up
+  unprotected after a refactor.
+- The middleware accepts the cookie or `Authorization: Bearer`, because the UI
+  keeps cookies and a script has neither a browser nor a cookie jar. Both paths
+  verify the same token and reach the same claims.
+- `AppState` became `Arc<RwLock<Config>>` plus `Arc<RwLock<SharedAuth>>`, with
+  `config().await` and `auth().await` accessors. `PATCH /api/config` needs to
+  change both at runtime, and a copied `Config` cannot express that.
+- A patch is validated by serializing it and parsing it back before it is
+  stored. The alternative is discovering the file is unloadable on the next
+  restart, when the panel no longer starts.
+- `PATCH` refuses `auth.enabled = false`. The panel is exactly the place a
+  stolen session would go to remove the lock, so turning auth off stays a host
+  command.
+- First run with auth on generates a password, prints it once to the terminal
+  and stores only the digest, plus a generated signing key. A panel that starts
+  with an empty password hash is an open shell, so the default has to be a
+  usable secret rather than a disabled feature.
+- `auth` and `config` subcommands edit the file directly. The password is read
+  with echo off from `/dev/tty` (or stdin with `--stdin`), never assembled from
+  an argument, so it does not appear in `ps` or in shell history.
+- The frontend `AuthClient` owns the silent refresh and shares one in-flight
+  request. Rotation makes a second concurrent refresh fail, and a page with
+  several panels would otherwise log itself out as soon as two streams refreshed
+  at once.
+- `anth-app` is the gate: `unknown` until the session read finishes, then the
+  login or the panels. Rendering nothing in between is what prevents a flash of
+  protected content.
+- `anth-settings` diffs the draft against the loaded view and sends only the
+  changed sections. A full replacement would overwrite a field another tab
+  changed while the form was open.
+
+Verification: backend suite green including 19 router-level auth tests, 343
+frontend tests, `tsc --noEmit`, `cargo fmt --check` and `cargo clippy` clean.
+Harnesses: `anth-login.test.html` and `anth-settings.test.html`.
+
+Lessons for later phases:
+
+- Anything that adds a route inherits the session gate; a public route needs a
+  deliberate exemption, never a missing layer.
+- A component that reads a stream must cope with a `401` mid-stream. The
+  refresh keeps the cookie alive, but a revoked session ends the stream and the
+  shell has to take the operator back to the login.
+- The daemon socket is still unauthenticated. Panel auth is a browser boundary;
+  do not describe it as protecting the socket.

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import type { AuthClient, SessionInfo } from '../lib/auth/auth-client'
+
 import './anth-app'
 import type { AnthApp } from './anth-app'
 import { PANELS } from './panels'
@@ -42,11 +44,37 @@ function fakeClient(panel: { id: string }): unknown {
   }
 }
 
-async function mount(): Promise<AnthApp> {
+/** An open session, so the shell renders the panels instead of the login. */
+const openSession: SessionInfo = {
+  enabled: false,
+  authenticated: true,
+  username: 'admin',
+  access_expires_in: 900,
+  refresh_expires_in: 3600,
+}
+
+/** Auth stub: the shell only needs the session read and the expiry hook. */
+function authStub(session: SessionInfo = openSession): AuthClient {
+  return {
+    session: async () => session,
+    refresh: async () => session,
+    login: async () => session,
+    logout: async () => {},
+    changePassword: async () => {},
+    onExpired: () => {},
+    scheduleRefresh: () => {},
+    cancelRefresh: () => {},
+  } as unknown as AuthClient
+}
+
+async function mount(session: SessionInfo = openSession): Promise<AnthApp> {
   const element = document.createElement('anth-app') as AnthApp
   element.clientFactory = fakeClient
+  element.authClient = authStub(session)
   document.body.append(element)
   await element.updateComplete
+  // The session read resolves after the first render.
+  for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0))
   return element
 }
 
@@ -137,5 +165,53 @@ describe('AnthApp', () => {
       'en',
       'es',
     ])
+  })
+
+  it('shows the login screen when there is no session', async () => {
+    const anonymous: SessionInfo = {
+      enabled: true,
+      authenticated: false,
+      username: 'admin',
+      access_expires_in: 900,
+      refresh_expires_in: 0,
+    }
+    const element = await mount(anonymous)
+
+    const login = element.shadowRoot?.querySelector('anth-login')
+    expect(login).not.toBeNull()
+    expect(element.shadowRoot?.querySelector('.card')).toBeNull()
+  })
+
+  it('opens the panel once the login succeeds', async () => {
+    const anonymous: SessionInfo = {
+      enabled: true,
+      authenticated: false,
+      username: 'admin',
+      access_expires_in: 900,
+      refresh_expires_in: 0,
+    }
+    const element = await mount(anonymous)
+    const login = element.shadowRoot?.querySelector('anth-login') as
+      | HTMLElement
+      | null
+    expect(login).not.toBeNull()
+
+    // The screen reports success with the fresh session.
+    ;(login as unknown as { onAuthenticated: (s: SessionInfo) => void }).onAuthenticated(
+      { ...openSession, enabled: true },
+    )
+    await element.updateComplete
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(element.shadowRoot?.querySelector('anth-login')).toBeNull()
+    expect(element.shadowRoot?.querySelector('.card')).not.toBeNull()
+  })
+
+  it('offers a sign-out button only when auth is enabled', async () => {
+    const element = await mount(openSession)
+    expect(element.shadowRoot?.querySelector('.signout')).toBeNull()
+
+    const secured = await mount({ ...openSession, enabled: true })
+    expect(secured.shadowRoot?.querySelector('.signout')).not.toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-use std::io::{BufRead, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -6,18 +6,17 @@ use std::time::Duration;
 use anth_panel::cli::{
     AccountArgs, AccountCommand, AccountGroupCommand, AccountGroupDeleteArgs,
     AccountGroupModifyArgs, AccountUserArgs, AccountUserCommand, AccountUserDeleteArgs,
-    AccountUserPasswordArgs, Cli, Command, EndpointArgs, FileArgs, FileCommand, FileDeleteArgs,
-    FileReadArgs, FileUploadArgs, FirewallAddArgs, FirewallArgs, FirewallCommand,
-    FirewallDeleteArgs, FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs,
-    ProcessArgs, ProcessCommand, ProcessSignalArgs, VolumeArgs, VolumeCommand, VolumeMountArgs,
-    VolumeUnmountArgs, WatchArgs,
+    AccountUserPasswordArgs, AuthArgs, AuthCommand, Cli, Command, ConfigArgs, ConfigCommand,
+    EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
+    FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs, FirewallFlushArgs,
+    NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs,
+    VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
+use anth_panel::read_password;
 use anth_panel::stream;
 use anth_panel::{AppState, request_for, router};
-use anth_proto::{
-    AnthClient, DEFAULT_FILE_CHUNK, FileChunk, FirewallAction, Request, Response, SecretString,
-};
+use anth_proto::{AnthClient, DEFAULT_FILE_CHUNK, FileChunk, FirewallAction, Request, Response};
 use tokio::net::TcpListener;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
@@ -29,14 +28,19 @@ fn resolve_addr(args: &EndpointArgs) -> String {
         .unwrap_or_else(|| DEFAULT_ADDR.to_string())
 }
 
-async fn serve_api(config: Config, args: &EndpointArgs) -> Result<ExitCode, String> {
+async fn serve_api(
+    config: Config,
+    config_path: &str,
+    args: &EndpointArgs,
+) -> Result<ExitCode, String> {
     let address = resolve_addr(args);
     let listener = TcpListener::bind(&address)
         .await
         .map_err(|e| format!("Failed to bind to address {address}: {e}"))?;
 
     println!("Server is listening on {address}");
-    axum::serve(listener, router(AppState::new(config)))
+    let state = AppState::with_config_path(config, Path::new(config_path));
+    axum::serve(listener, router(state))
         .await
         .map_err(|e| format!("Server error: {e}"))?;
     Ok(ExitCode::SUCCESS)
@@ -63,119 +67,14 @@ async fn serve_run(
     });
 
     println!("Daemon and server are running (http://{address})");
-    let result = axum::serve(listener, router(AppState::new(config)))
+    let state = AppState::with_config_path(config, Path::new(config_path));
+    let result = axum::serve(listener, router(state))
         .await
         .map_err(|e| format!("Server error: {e}"));
 
     daemon.abort();
     let _ = daemon.await;
     result.map(|_| ExitCode::SUCCESS)
-}
-
-/// Reads a password without ever putting it on a command line.
-///
-/// Interaction is on `/dev/tty` rather than stdin when stdin is a terminal, so
-/// `--stdin` and an interactive prompt cannot be confused. Echo is disabled for
-/// the prompt and the terminal is restored even when reading fails.
-fn read_password(from_stdin: bool) -> Result<SecretString, String> {
-    use std::io::IsTerminal;
-
-    if from_stdin {
-        let mut password = String::new();
-        std::io::stdin()
-            .read_to_string(&mut password)
-            .map_err(|error| format!("failed to read the password from stdin: {error}"))?;
-        // Strip exactly one trailing newline, as every `passwd` does.
-        let password = password.strip_suffix('\n').unwrap_or(&password);
-        let password = password.strip_suffix('\r').unwrap_or(password);
-        if password.is_empty() {
-            return Err("the password read from stdin is empty".to_string());
-        }
-        return Ok(SecretString::new(password));
-    }
-
-    if !std::io::stdin().is_terminal() {
-        return Err(
-            "refusing to prompt for a password when stdin is not a terminal; pipe it with --stdin"
-                .to_string(),
-        );
-    }
-
-    let tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .map_err(|error| format!("could not open /dev/tty: {error}"))?;
-    let mut reader = std::io::BufReader::new(&tty);
-    let mut writer = &tty;
-
-    let first = prompt_hidden(&mut reader, &mut writer, "Password: ")?;
-    let second = prompt_hidden(&mut reader, &mut writer, "Repeat password: ")?;
-    if first != second {
-        return Err("the passwords do not match".to_string());
-    }
-    Ok(SecretString::new(first))
-}
-
-fn prompt_hidden(
-    reader: &mut impl BufRead,
-    writer: &mut impl std::io::Write,
-    prompt: &str,
-) -> Result<String, String> {
-    write!(writer, "{prompt}").map_err(|error| format!("failed to write the prompt: {error}"))?;
-    writer.flush().ok();
-
-    let echo_off = EchoGuard::disable();
-    let mut line = String::new();
-    let read = reader.read_line(&mut line);
-    drop(echo_off);
-    writeln!(writer).ok();
-
-    read.map_err(|error| format!("failed to read the password: {error}"))?;
-    let line = line
-        .strip_suffix('\n')
-        .unwrap_or(&line)
-        .strip_suffix('\r')
-        .unwrap_or(&line)
-        .to_string();
-    if line.is_empty() {
-        return Err("the password is empty".to_string());
-    }
-    Ok(line)
-}
-
-/// Turns terminal echo off for as long as it is alive, including on unwind.
-struct EchoGuard {
-    original: Option<libc::termios>,
-}
-
-impl EchoGuard {
-    fn disable() -> Self {
-        let mut original: libc::termios = unsafe { std::mem::zeroed() };
-        // fd 0 is the terminal in this path; a failure leaves echo on, which is
-        // a privacy bug but not a hang, so it does not abort the prompt.
-        if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut original) } != 0 {
-            return Self { original: None };
-        }
-        let mut hidden = original;
-        hidden.c_lflag &= !libc::ECHO;
-        if unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &hidden) } != 0 {
-            return Self { original: None };
-        }
-        Self {
-            original: Some(original),
-        }
-    }
-}
-
-impl Drop for EchoGuard {
-    fn drop(&mut self) {
-        if let Some(original) = self.original {
-            unsafe {
-                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &original);
-            }
-        }
-    }
 }
 
 /// Sends `account user password`. The password is read here, never assembled
@@ -900,10 +799,90 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
     )
 }
 
+/// Runs one `auth` subcommand against the config file.
+fn run_auth(config_path: &str, args: &AuthArgs) -> ExitCode {
+    let config = Config::load_or_create(config_path);
+
+    let updated = match &args.command {
+        AuthCommand::Status => {
+            anth_panel::settings::report_status(&config);
+            return ExitCode::SUCCESS;
+        }
+        AuthCommand::Enable(toggle) => anth_panel::settings::toggle_auth(config, toggle),
+        AuthCommand::SetPassword(password_args) => {
+            let password = match anth_panel::settings::read_password(password_args) {
+                Ok(password) => password,
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            anth_panel::settings::set_password(config, password.expose())
+        }
+    };
+
+    match updated {
+        Ok(config) => match config.save(config_path) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs one `config` subcommand against the config file.
+fn run_config(config_path: &str, args: &ConfigArgs) -> ExitCode {
+    match &args.command {
+        ConfigCommand::Get => {
+            let config = Config::load_or_create(config_path);
+            match config.to_toml() {
+                Ok(text) => {
+                    print!("{text}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        ConfigCommand::Set(set) => {
+            let mut config = Config::load_or_create(config_path);
+            if let Err(error) = anth_panel::settings::set_key(&mut config, set) {
+                eprintln!("[ERROR] {error}");
+                return ExitCode::FAILURE;
+            }
+            match config.save(config_path) {
+                Ok(()) => {
+                    println!("{} = {}", set.key, set.value);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let config_path = cli.config_path.as_deref().unwrap_or(DEFAULT_CONFIG_PATH);
+
+    if let Command::Auth(args) = &cli.command {
+        return run_auth(config_path, args);
+    }
+    if let Command::Config(args) = &cli.command {
+        return run_config(config_path, args);
+    }
 
     if let Some(code) = send_command(config_path, &cli.command).await {
         return code;
@@ -917,7 +896,9 @@ async fn main() -> ExitCode {
         .await
         .map(|()| ExitCode::SUCCESS)
         .map_err(|e| e.to_string()),
-        Command::Api(args) => serve_api(Config::load_or_create(config_path), args).await,
+        Command::Api(args) => {
+            serve_api(Config::load_or_create(config_path), config_path, args).await
+        }
         Command::Run(args) => {
             serve_run(Config::load_or_create(config_path), config_path, args).await
         }
@@ -932,8 +913,10 @@ async fn main() -> ExitCode {
         | Command::Firewall(_)
         | Command::Volume(_)
         | Command::Account(_)
-        | Command::File(_) => {
-            unreachable!("handled by send_command")
+        | Command::File(_)
+        | Command::Auth(_)
+        | Command::Config(_) => {
+            unreachable!("handled by send_command or run_auth/run_config")
         }
     };
 

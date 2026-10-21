@@ -106,6 +106,135 @@
   <source>Interactive shell on the host.</source>
   <target>Shell interactivo en el host.</target>
 </trans-unit>
+<trans-unit id="s6ebc9bd6feae62a3">
+  <source>Loading…</source>
+<target>Cargando…</target></trans-unit>
+<trans-unit id="s7cfe12cd14df9950">
+  <source>Sign out</source>
+<target>Cerrar sesión</target></trans-unit>
+<trans-unit id="s5e27738a2e8eb763">
+  <source>Sign in</source>
+<target>Iniciar sesión</target></trans-unit>
+<trans-unit id="s2508531945b27ba0">
+  <source>This panel controls the host. Sign in to continue.</source>
+<target>Este panel controla el host. Inicia sesión para continuar.</target></trans-unit>
+<trans-unit id="sa48f81f001b893d2">
+  <source>User</source>
+<target>Usuario</target></trans-unit>
+<trans-unit id="sf6e1665c7022a1f8">
+  <source>Password</source>
+<target>Contraseña</target></trans-unit>
+<trans-unit id="s59169c4e8fbcdccf">
+  <source>Signing in…</source>
+<target>Iniciando sesión…</target></trans-unit>
+<trans-unit id="sed55fd26889ee7b8">
+  <source>Sign in failed</source>
+<target>No se pudo iniciar sesión</target></trans-unit>
+<trans-unit id="s13c123f97668a70b">
+  <source>Access</source>
+<target>Acceso</target></trans-unit>
+<trans-unit id="s5f4044ea5484cf2f">
+  <source>Run privileged commands through sudo</source>
+<target>Ejecutar comandos privilegiados con sudo</target></trans-unit>
+<trans-unit id="sceda7554e599ef64">
+  <source>Allow file writes</source>
+<target>Permitir escritura de archivos</target></trans-unit>
+<trans-unit id="s5be968b6bc0731da">
+  <source>Allow process signals</source>
+<target>Permitir señales a procesos</target></trans-unit>
+<trans-unit id="s5273b10e2bcbb5dd">
+  <source>Allow interface up and down</source>
+<target>Permitir activar y desactivar interfaces</target></trans-unit>
+<trans-unit id="s45e9c4b0dda77c13">
+  <source>Allow firewall changes</source>
+<target>Permitir cambios en el cortafuegos</target></trans-unit>
+<trans-unit id="s9df52bac0fb08416">
+  <source>Allow mount and unmount</source>
+<target>Permitir montar y desmontar</target></trans-unit>
+<trans-unit id="sfed17b0e30748cdf">
+  <source>Paths</source>
+<target>Rutas</target></trans-unit>
+<trans-unit id="sed08dcd559f27d68">
+  <source>Files root</source>
+<target>Raíz de archivos</target></trans-unit>
+<trans-unit id="s13bdf433c1894d5a">
+  <source>Mount root</source>
+<target>Raíz de montaje</target></trans-unit>
+<trans-unit id="sdc899f5dc43d90b3">
+  <source>Socket path</source>
+<target>Ruta del socket</target></trans-unit>
+<trans-unit id="s3ee72443376939d7">
+  <source>Terminal shell</source>
+<target>Shell de la terminal</target></trans-unit>
+<trans-unit id="sb15d4f1e13d04925">
+  <source>Limits</source>
+<target>Límites</target></trans-unit>
+<trans-unit id="sef02ceb9a6ef43dc">
+  <source>Max terminal sessions</source>
+<target>Sesiones de terminal máximas</target></trans-unit>
+<trans-unit id="s8e7ac9b48bfd11fe">
+  <source>Max directory entries</source>
+<target>Entradas de directorio máximas</target></trans-unit>
+<trans-unit id="s578cf31bfdb18dc2">
+  <source>Max preview bytes</source>
+<target>Bytes de vista previa máximos</target></trans-unit>
+<trans-unit id="s3db2a9c079a5a2c9">
+  <source>Max upload bytes</source>
+<target>Bytes de subida máximos</target></trans-unit>
+<trans-unit id="sfaa5798b0b9ac8b4">
+  <source>Allow account changes</source>
+<target>Permitir cambios de cuentas</target></trans-unit>
+<trans-unit id="s14265f76ac01f766">
+  <source>Allow password changes</source>
+<target>Permitir cambios de contraseñas</target></trans-unit>
+<trans-unit id="s4d83b7694c18750d">
+  <source>Allow system accounts</source>
+<target>Permitir cuentas de sistema</target></trans-unit>
+<trans-unit id="sfafeb62ea011a37d">
+  <source>Allow privileged groups</source>
+<target>Permitir grupos privilegiados</target></trans-unit>
+<trans-unit id="s62278f512692e037">
+  <source>Session</source>
+<target>Sesión</target></trans-unit>
+<trans-unit id="s831a4c7e89784daf">
+  <source>Account name</source>
+<target>Nombre de la cuenta</target></trans-unit>
+<trans-unit id="se8805eda5f0135a5">
+  <source>Access token lifetime (seconds)</source>
+<target>Vigencia del token de acceso (segundos)</target></trans-unit>
+<trans-unit id="s95e8eeecb54ac124">
+  <source>Refresh token lifetime (seconds)</source>
+<target>Vigencia del token de refresco (segundos)</target></trans-unit>
+<trans-unit id="seffd4151645fad26">
+  <source>Mark the auth cookies Secure (needs HTTPS)</source>
+<target>Marcar las cookies de sesión como Secure (requiere HTTPS)</target></trans-unit>
+<trans-unit id="sf8de0014bcf8f5b6">
+  <source>Password set:</source>
+<target>Contraseña establecida:</target></trans-unit>
+<trans-unit id="sb53f7a197981b790">
+  <source>yes</source>
+<target>sí</target></trans-unit>
+<trans-unit id="s08b35907b5589afa">
+  <source>no</source>
+<target>no</target></trans-unit>
+<trans-unit id="s8da48e199bf7754c">
+  <source>Change it with `anth-panel auth set-password` on the host.</source>
+<target>Cámbiala con `anth-panel auth set-password` en el host.</target></trans-unit>
+<trans-unit id="sb060188bb28bfa9f">
+  <source>Saving…</source>
+<target>Guardando…</target></trans-unit>
+<trans-unit id="s33f85f24c0f5f008">
+  <source>Save</source>
+<target>Guardar</target></trans-unit>
+<trans-unit id="sd5b6130b4937488c">
+  <source>Reload</source>
+<target>Recargar</target></trans-unit>
+<trans-unit id="s2f55cab780a5deac">
+  <source>Nothing changed.</source>
+<target>Nada cambió.</target></trans-unit>
+<trans-unit id="s1c7d83e8dc6b85de">
+  <source>Saved.</source>
+<target>Guardado.</target></trans-unit>
 </body>
 </file>
 </xliff>

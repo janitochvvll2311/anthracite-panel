@@ -4,6 +4,61 @@ use std::{error::Error, path::Path};
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/anth/config.toml";
 pub const DEFAULT_SOCKET_PATH: &str = "/var/tmp/anth.sock";
 
+/// Panel authentication settings.
+///
+/// The password is stored only as a PBKDF2 digest. `enabled` exists so tests and
+/// a deliberately open loopback deployment can turn the whole layer off; the
+/// bootstrap in `Config::load_or_create` turns it on and creates `admin` the
+/// first time, printing the generated password once.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuthConfig {
+    /// Master switch. When false the API serves every route unauthenticated.
+    pub enabled: bool,
+    /// Panel account name.
+    pub username: String,
+    /// `pbkdf2-sha256$<iterations>$<salt>$<digest>`, never the password.
+    pub password_hash: String,
+    /// HS256 signing key. Generated on bootstrap and never printed.
+    pub jwt_secret: String,
+    /// Lifetime of an access token.
+    pub access_token_secs: u64,
+    /// Lifetime of a refresh token, which also bounds one login session.
+    pub refresh_token_secs: u64,
+    /// PBKDF2 cost for new hashes.
+    pub iterations: u32,
+    /// Set the `Secure` flag on the auth cookies. A loopback deployment over
+    /// plain HTTP needs it off; anything behind TLS needs it on.
+    pub cookie_secure: bool,
+    /// One-time bootstrap password. Never serialized: it exists so the server
+    /// can print it after the first start and is dropped immediately after.
+    #[serde(skip)]
+    pub bootstrap_password: Option<String>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            username: "admin".to_string(),
+            password_hash: String::new(),
+            jwt_secret: String::new(),
+            access_token_secs: 15 * 60,
+            refresh_token_secs: 12 * 60 * 60,
+            iterations: crate::auth::password::default_iterations(),
+            cookie_secure: false,
+            bootstrap_password: None,
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Whether a usable password hash and signing key are present.
+    pub fn is_configured(&self) -> bool {
+        !self.password_hash.is_empty() && !self.jwt_secret.is_empty()
+    }
+}
+
 /// Web terminal settings. The token is reserved for the pending auth layer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -221,6 +276,7 @@ pub struct Config {
     pub volumes: VolumesConfig,
     pub accounts: AccountsConfig,
     pub files: FilesConfig,
+    pub auth: AuthConfig,
 }
 
 impl Default for Config {
@@ -235,6 +291,7 @@ impl Default for Config {
             volumes: VolumesConfig::default(),
             accounts: AccountsConfig::default(),
             files: FilesConfig::default(),
+            auth: AuthConfig::default(),
         }
     }
 }
@@ -323,7 +380,7 @@ impl Config {
     /// release builds keep them off. A failure to persist the default is reported but not fatal:
     /// the freshly built defaults are still usable.
     pub fn load_or_create(path: impl AsRef<Path>) -> Self {
-        match Self::load(&path) {
+        let mut config = match Self::load(&path) {
             Ok(config) => config,
             Err(e) => {
                 eprintln!("Failed to load config: {e}");
@@ -335,12 +392,78 @@ impl Config {
                         "Debug build: global sudo, process control, network control, firewall control, volume control and file writes are enabled in the generated config."
                     );
                 }
-                if let Err(e) = config.save(&path) {
-                    eprintln!("Failed to save default config: {e}");
-                }
                 config
             }
+        };
+
+        if config.bootstrap_auth() {
+            let printed = config.print_bootstrap_password();
+            if let Err(e) = config.save(&path) {
+                eprintln!("Failed to save config: {e}");
+            }
+            eprintln!("{printed}");
         }
+
+        config
+    }
+
+    /// Fills in the auth section the first time a server starts.
+    ///
+    /// Returns `true` when something was generated, which is the caller's signal
+    /// to persist and to print the one-time password. An operator who ran
+    /// `auth set-password` before the first start already has a hash, so this
+    /// only supplies the signing key and leaves the credential alone.
+    pub fn bootstrap_auth(&mut self) -> bool {
+        let mut changed = false;
+
+        if self.auth.jwt_secret.is_empty() {
+            self.auth.jwt_secret = crate::auth::jwt::random_id()
+                + &crate::auth::jwt::random_id()
+                + &crate::auth::jwt::random_id();
+            changed = true;
+        }
+
+        if self.auth.password_hash.is_empty() {
+            let password = crate::auth::password::generate_password(20);
+            match crate::auth::password::hash_password_with_iterations(
+                &password,
+                self.auth
+                    .iterations
+                    .max(crate::auth::password::DEV_ITERATIONS),
+            ) {
+                Ok(hash) => {
+                    self.auth.password_hash = hash;
+                    self.auth.bootstrap_password = Some(password);
+                    self.auth.enabled = true;
+                    changed = true;
+                }
+                Err(e) => eprintln!("Failed to hash the bootstrap password: {e}"),
+            }
+        }
+
+        changed
+    }
+
+    /// Takes the one-time bootstrap password, if this run generated one.
+    ///
+    /// It is not serialized: the config holds only the hash.
+    pub fn take_bootstrap_password(&mut self) -> Option<String> {
+        self.auth.bootstrap_password.take()
+    }
+
+    /// The message printed once, after the first start creates the account.
+    fn print_bootstrap_password(&mut self) -> String {
+        let Some(password) = self.take_bootstrap_password() else {
+            return String::new();
+        };
+        format!(
+            "\nPanel authentication is now enabled.\n\
+             Username: {}\n\
+             Password: {}\n\
+             This password is shown once and is stored only as a hash in the config.\n\
+             Change it with `anth-panel auth set-password`.\n",
+            self.auth.username, password
+        )
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), String> {
@@ -355,14 +478,41 @@ impl Config {
             })?;
         }
 
-        std::fs::write(
-            path,
-            self.to_toml().map_err(|source| {
-                format!("Error serializing config at {}: {source}", path.display())
-            })?,
-        )
-        .map_err(|source| format!("Error writing config at {}: {source}", path.display()))
+        let body = self.to_toml().map_err(|source| {
+            format!("Error serializing config at {}: {source}", path.display())
+        })?;
+        write_private(path, &body)
+            .map_err(|source| format!("Error writing config at {}: {source}", path.display()))
     }
+}
+
+/// Writes `body` to `path` with mode `0600`.
+///
+/// The file holds the PBKDF2 digest and the JWT signing key. With the default
+/// umask a plain `fs::write` leaves it world-readable, and any local account
+/// that can read the signing key can forge an access token and skip the
+/// password. The mode is set before the content is written, so the secret is
+/// never briefly readable by others.
+fn write_private(path: &Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        // `mode` only applies when the file is created, so an existing file
+        // written by an older build has to be tightened too.
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(body.as_bytes())?;
+    file.sync_all()
 }
 
 #[cfg(test)]
