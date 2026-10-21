@@ -637,6 +637,23 @@ describe('AnthProcessManager', () => {
     expect(start.title).toContain('disabled')
   })
 
+  it('renders a snapshot from a daemon that omits the allowlist', async () => {
+    // A daemon predating `spawn_allow` sends no key at all. Reading `.length`
+    // on `undefined` used to throw during render and take the whole panel down
+    // with it, so absence has to mean "nothing allowed".
+    const client = new FakeClient()
+    const legacy = { ...snapshot(), spawn_enabled: true } as ProcessSnapshot
+    delete (legacy as { spawn_allow?: string[] }).spawn_allow
+    client.current = legacy
+
+    const { element } = await mount(client)
+
+    expect(element).toBeDefined()
+    const start = button(element.shadowRoot!, 'Start process')
+    expect(start.disabled).toBe(true)
+    expect(start.title).toContain('spawn_allow')
+  })
+
   it('explains an empty allowlist on the start button', async () => {
     const client = new FakeClient()
     client.current = snapshot([processInfo()], {

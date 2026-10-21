@@ -48,8 +48,10 @@ The daemon validates each request:
 - the program inherits the daemon's environment, with stdin closed and output
   discarded — it is a fire-and-forget start, not a job queue.
 
-The daemon does not supervise what it starts. The new process is its own
-process group and keeps running if the daemon stops.
+The daemon does not supervise what it starts. The child calls `setsid()` before
+`exec`, so it leads its own session and process group and keeps running if the
+daemon stops — including when the whole group is signalled or a service manager
+stops the daemon's cgroup.
 
 Debug builds (`cargo run`) bootstrap a missing config with `control = true` so
 signals can be tested locally. Release builds still generate `false`, and an

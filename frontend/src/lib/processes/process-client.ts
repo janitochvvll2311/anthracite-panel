@@ -40,8 +40,11 @@ export interface ProcessSnapshot {
   control_enabled: boolean
   /** Whether the daemon accepts a spawn request at all. */
   spawn_enabled: boolean
-  /** Absolute programs the daemon will start. Empty denies every spawn. */
-  spawn_allow: string[]
+  /**
+   * Absolute programs the daemon will start. Empty denies every spawn. A
+   * daemon predating the field omits it, so treat absence as empty.
+   */
+  spawn_allow?: string[]
   total: number
   truncated: boolean
   warning?: string

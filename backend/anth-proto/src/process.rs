@@ -92,8 +92,10 @@ pub struct ProcessSnapshot {
     /// Whether the daemon allows starting processes.
     #[serde(default)]
     pub spawn_enabled: bool,
-    /// Programs the daemon is willing to start. Empty means spawn is closed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Programs the daemon is willing to start. Empty means spawn is closed,
+    /// which is a meaningful state, so it is always sent: an omitted key would
+    /// be indistinguishable from an older daemon that never had the field.
+    #[serde(default)]
     pub spawn_allow: Vec<String>,
     /// Number of processes found before any truncation.
     pub total: usize,

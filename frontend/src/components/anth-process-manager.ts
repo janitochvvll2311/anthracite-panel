@@ -258,7 +258,9 @@ export class AnthProcessManager extends LitElement {
     this.total = snapshot.total
     this.controlEnabled = snapshot.control_enabled
     this.spawnEnabled = snapshot.spawn_enabled
-    this.spawnAllow = snapshot.spawn_allow
+    // `?? []` guards a daemon older than the field: an absent list must read as
+    // "nothing is allowed" rather than throw on `.length` during render.
+    this.spawnAllow = snapshot.spawn_allow ?? []
     this.warning =
       snapshot.warning ??
       (snapshot.processes.length < snapshot.total

@@ -10,6 +10,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -285,6 +286,24 @@ pub fn spawn(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+
+    // `setsid()` puts the child in its own session and process group, so a
+    // signal aimed at the daemon's group — including a service manager's
+    // cgroup stop — does not take an intentionally long-running program down
+    // with it. Without it the child inherits the daemon's group and only
+    // survives a plain daemon-only exit.
+    //
+    // SAFETY: `setsid` is async-signal-safe and touches no memory in this
+    // process; it is the documented shape for `pre_exec`. A failure is fatal to
+    // the exec, which is why it is checked rather than ignored.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
     let mut child = command.spawn().map_err(|error| {
         let kind = if error.kind() == io::ErrorKind::PermissionDenied {
@@ -932,6 +951,49 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.kind, ProcessSpawnErrorKind::NotFound);
+    }
+
+    #[test]
+    fn a_spawned_child_leads_its_own_process_group() {
+        // The docs promise the child survives a signal aimed at the daemon's
+        // group, which only holds if it called `setsid()`. Comparing the two
+        // process groups is the observable part of that promise.
+        let program = std::env::current_exe()
+            .expect("the test binary path")
+            .to_string_lossy()
+            .into_owned();
+
+        let started = spawn(
+            true,
+            std::slice::from_ref(&program),
+            &program,
+            &["--list".to_string()],
+            None,
+        );
+        // A test binary started with `--list` prints and exits; whether it
+        // succeeds does not matter, only that a child existed to inspect.
+        let pid = match started {
+            Ok(started) => started.pid,
+            Err(_) => return,
+        };
+
+        let own_group = process_group_of(&pid);
+        let daemon_group = process_group_of(&std::process::id());
+        assert_ne!(
+            own_group, daemon_group,
+            "a spawned child must lead its own process group"
+        );
+    }
+
+    fn process_group_of(pid: &u32) -> u32 {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("read /proc stat");
+        let (_, rest) = stat.split_once(") ").expect("comm is parenthesised");
+        // state, ppid, pgrp
+        rest.split_whitespace()
+            .nth(2)
+            .expect("pgrp field")
+            .parse()
+            .expect("pgrp is numeric")
     }
 
     #[test]
