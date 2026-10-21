@@ -511,12 +511,20 @@ the archive side and the store, `plugins/mod.rs` the config and the registry.
 - `render_argv` is the only way a capability becomes an argument vector. It
   refuses an undeclared argument, a value failing its validator, a missing
   value, and free text for a capability that did not set `accepts_text`.
+- Every validator rejects a leading `-` in the shared prelude, because an
+  operand that looks like an option is read as one: `wg show --force` is the
+  flag a plugin was not granted. `plugin_dir` validates the id before joining,
+  so an id such as `../victim` cannot reach a recursive delete.
 - `install` extracts to a staging directory, validates, hashes, then renames.
   Every member must be `plugin.toml`, `plugin.wasm` or under `web/`; the guard
   reuses `files::archive::safe_member` and opens with `O_NOFOLLOW`. A failure
   leaves nothing behind.
-- `load` re-hashes the module on every start and compares the version, so a
-  bundle rewritten on disk is disabled rather than trusted. The module path is
+- `load` hashes the module on every start and compares it against
+  **`grant.wasm_sha256`**, not against the manifest's own hash: a manifest can
+  be rewritten alongside a rewritten module, so comparing against it would keep
+  the pair consistent while the grant still names the old digest. It also
+  compares the version, and takes the advertised capability list from the grant
+  rather than the manifest. The module path is
   pinned to `plugin.wasm` instead of being read from the manifest, so rewriting
   the manifest cannot re-point the file a grant was hashed against.
 - `plugin list|install|remove|enable|approve` run locally, like `auth` and

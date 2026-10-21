@@ -358,6 +358,92 @@ fn a_rewritten_manifest_version_is_caught_on_load() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The case the previous version of `load` missed: rewriting the module *and*
+/// updating the manifest's own hash keeps the pair consistent, so a check that
+/// trusts the manifest passes. Only the grant's digest can catch it.
+#[test]
+fn a_rewritten_module_with_a_matching_manifest_hash_is_caught() {
+    let dir = scratch("rewrite-both");
+    let bundle = valid_bundle(&dir, "");
+    let config = config_at(&dir.join("plugins"));
+    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+
+    let evil = b"\0asm\x01\0\0\0EVIL".to_vec();
+    fs::write(installed.root.join("plugin.wasm"), &evil).unwrap();
+    let text = manifest_text(&sha_of(&evil), "");
+    fs::write(installed.root.join("plugin.toml"), text).unwrap();
+
+    let error = load(&installed.root, &grant).unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Tampered);
+    assert!(error.detail.contains("the grant says"), "{}", error.detail);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A plugin may rewrite its manifest to claim capabilities. The advertised set
+/// comes from the grant, so the panel can never display authority that does not
+/// exist.
+#[test]
+fn a_loaded_plugin_advertises_the_granted_capabilities_not_the_manifests() {
+    let dir = scratch("claim");
+    let bundle = valid_bundle(&dir, "");
+    let config = config_at(&dir.join("plugins"));
+    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+
+    // The grant froze no capability; the manifest now claims one.
+    assert!(grant.capabilities.is_empty());
+    let wasm = wasm_bytes();
+    fs::write(
+        installed.root.join("plugin.toml"),
+        manifest_text(
+            &sha_of(&wasm),
+            "\n[[capability]]\nid = \"wg.delete\"\nprogram = \"wg\"\nargv = [\"show\"]\n",
+        ),
+    )
+    .unwrap();
+
+    let reloaded = load(&installed.root, &grant).unwrap();
+    assert!(
+        reloaded.plugin.capabilities.is_empty(),
+        "advertised {:?}",
+        reloaded.plugin.capabilities
+    );
+    assert!(!reloaded.plugin.enabled || grant.enabled);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_advertised_state_follows_the_grant() {
+    let dir = scratch("state");
+    let bundle = valid_bundle(&dir, "");
+    let config = config_at(&dir.join("plugins"));
+    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+
+    let mut disabled = grant;
+    disabled.enabled = false;
+    assert!(!load(&installed.root, &disabled).unwrap().plugin.enabled);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn an_id_with_a_path_separator_cannot_reach_outside_the_root() {
+    let dir = scratch("traversal");
+    let root = dir.join("plugins");
+    fs::create_dir_all(&root).unwrap();
+
+    let victim = dir.join("victim");
+    fs::create_dir_all(&victim).unwrap();
+    fs::write(victim.join("keep"), b"important").unwrap();
+
+    let error = remove(&root, "../victim").unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Invalid);
+    assert!(victim.join("keep").exists(), "the sibling was deleted");
+
+    assert!(plugin_dir(&root, "../victim").is_err());
+    assert!(plugin_dir(&root, "/etc").is_err());
+    assert!(plugin_dir(&root, "org.anth.test").is_ok());
+    fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn loading_an_unchanged_bundle_succeeds() {
     let dir = scratch("reload");

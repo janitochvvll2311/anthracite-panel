@@ -1304,7 +1304,14 @@ fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
                 );
                 return ExitCode::FAILURE;
             }
-            let root = anth_panel::plugins::bundle::plugin_dir(&plugins.root_path(), &approve.id);
+            let root =
+                match anth_panel::plugins::bundle::plugin_dir(&plugins.root_path(), &approve.id) {
+                    Ok(root) => root,
+                    Err(error) => {
+                        eprintln!("[ERROR] {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
             let text = match std::fs::read_to_string(root.join("plugin.toml")) {
                 Ok(text) => text,
                 Err(error) => {
@@ -1319,6 +1326,13 @@ fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            // Approving must not freeze a digest the file does not have: once
+            // `load` trusts the grant's hash, an unchecked approve would write a
+            // grant that makes the plugin permanently unloadable.
+            if let Err(error) = anth_panel::plugins::bundle::verify(&root, &manifest.wasm.sha256) {
+                eprintln!("[ERROR] {error}");
+                return ExitCode::FAILURE;
+            }
             let grant = anth_panel::plugins::PluginGrant::from_manifest(&manifest);
             println!(
                 "Approved {} {} with {} capabilit{}",

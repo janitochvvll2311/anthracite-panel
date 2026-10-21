@@ -143,6 +143,13 @@ impl ArgType {
         if value.chars().any(char::is_control) {
             return Err("contains a control character".to_string());
         }
+        // A value that starts with `-` is read by the program as an option, not
+        // as the operand it was validated to be. Checking it here rather than
+        // per type matters: a new validator would otherwise inherit the hole,
+        // and `wg show --force` is exactly the flag a plugin was not granted.
+        if value.starts_with('-') {
+            return Err("must not start with `-`".to_string());
+        }
 
         match self {
             ArgType::Ifname => {
@@ -152,7 +159,7 @@ impl ArgType {
                 if value.contains('/') || value.contains("..") || value.starts_with('.') {
                     return Err("not a plain interface name".to_string());
                 }
-                if value.chars().any(char::is_whitespace) || value == "-" {
+                if value.chars().any(char::is_whitespace) {
                     return Err("not a plain interface name".to_string());
                 }
                 Ok(())
@@ -161,8 +168,8 @@ impl ArgType {
                 if value.len() > 253 {
                     return Err("a host name is at most 253 bytes".to_string());
                 }
-                if value.starts_with('-') || value.ends_with('-') {
-                    return Err("a host name cannot start or end with `-`".to_string());
+                if value.ends_with('-') {
+                    return Err("a host name cannot end with `-`".to_string());
                 }
                 if !value
                     .chars()
@@ -534,7 +541,7 @@ impl Manifest {
     }
 }
 
-fn validate_id(id: &str) -> Result<(), PluginError> {
+pub fn validate_id(id: &str) -> Result<(), PluginError> {
     if id.is_empty() || id.len() > MAX_ID_LEN {
         return Err(PluginError::invalid(format!(
             "a plugin id is 1 to {MAX_ID_LEN} bytes"
@@ -1144,6 +1151,47 @@ type = "ifname"
         assert!(ArgType::Hex32.validate(&"a".repeat(31)).is_err());
         assert!(ArgType::Hex32.validate(&"z".repeat(32)).is_err());
         assert!(ArgType::Hex64.validate(&"0".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn no_validator_accepts_a_leading_dash() {
+        // A value that looks like an option is how a plugin would add a flag
+        // the admin never approved: `wg show --force`.
+        for kind in [
+            ArgType::Ifname,
+            ArgType::Hostname,
+            ArgType::Port,
+            ArgType::Ipv4,
+            ArgType::Ipv6,
+            ArgType::Cidr,
+            ArgType::Hex32,
+            ArgType::Hex64,
+            ArgType::Path,
+            ArgType::Text,
+        ] {
+            for value in ["-f", "--force", "-", "--"] {
+                assert!(kind.validate(value).is_err(), "{kind:?} accepted `{value}`");
+            }
+        }
+    }
+
+    #[test]
+    fn a_leading_dash_never_reaches_the_argv() {
+        let text = format!("{MINIMAL}{CAPABILITY}")
+            .replace("type = \"ifname\"", "type = \"text\"")
+            .replace(
+                "id = \"wg.status\"",
+                "id = \"wg.status\"\naccepts_text = true",
+            );
+        let parsed = manifest(&text).unwrap();
+        let mut values = BTreeMap::new();
+        values.insert("interface".to_string(), "--force".to_string());
+        assert_eq!(
+            render_argv(&parsed.capabilities[0], &values)
+                .unwrap_err()
+                .kind,
+            PluginErrorKind::Denied
+        );
     }
 
     #[test]

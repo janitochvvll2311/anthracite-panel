@@ -80,7 +80,6 @@ pub fn install(
                 "`wasm.path` must be `{WASM_FILE}`"
             )));
         }
-        verify_wasm(&staging, &manifest)?;
         Ok(manifest)
     });
 
@@ -92,7 +91,7 @@ pub fn install(
         }
     };
 
-    let destination = plugin_dir(plugins_root, &manifest.plugin.id);
+    let destination = plugin_dir(plugins_root, &manifest.plugin.id)?;
     if destination.exists() {
         let _ = fs::remove_dir_all(&staging);
         return Err(PluginError::new(
@@ -101,11 +100,18 @@ pub fn install(
         ));
     }
 
+    let grant = PluginGrant::from_manifest(&manifest);
+    // Hash against the grant, not the manifest, so `install` and `load` apply
+    // one rule: the digest the admin approved is the one that must match.
+    if let Err(error) = verify_wasm(&staging, &grant.wasm_sha256) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+
     fs::rename(&staging, &destination)
         .map_err(|error| io_error(format!("could not install the bundle: {error}")))?;
 
-    let grant = PluginGrant::from_manifest(&manifest);
-    Ok((installed_view(&manifest, destination), grant))
+    Ok((installed_view(&manifest, &grant, destination), grant))
 }
 
 /// Re-reads an installed plugin and confirms its module still matches `grant`.
@@ -135,7 +141,12 @@ pub fn load(root: &Path, grant: &PluginGrant) -> Result<Installed, PluginError> 
             ),
         ));
     }
-    verify_wasm(root, &manifest)?;
+    // The expected digest comes from the grant, never from the manifest. A
+    // manifest lives inside a bundle an attacker can write, so comparing the
+    // module to the manifest's own hash would let a rewritten module travel
+    // with a rewritten hash and stay consistent while the grant still names the
+    // old one. The grant is the only digest the admin approved.
+    verify_wasm(root, &grant.wasm_sha256)?;
 
     if !manifest.plugin.version.eq(&grant.version) {
         return Err(PluginError::new(
@@ -147,21 +158,23 @@ pub fn load(root: &Path, grant: &PluginGrant) -> Result<Installed, PluginError> 
         ));
     }
 
-    Ok(installed_view(&manifest, root.to_path_buf()))
+    Ok(installed_view(&manifest, grant, root.to_path_buf()))
 }
 
-fn installed_view(manifest: &Manifest, root: PathBuf) -> Installed {
+/// Builds the public view, taking the capability list from the grant.
+///
+/// The manifest is content; the grant is policy. A field the admin reads, and
+/// that the host side will iterate when it wires execution, must never
+/// advertise authority the grant does not carry — a plugin able to add
+/// `wg.delete` to its own manifest would otherwise be *shown* as holding it.
+fn installed_view(manifest: &Manifest, grant: &PluginGrant, root: PathBuf) -> Installed {
     Installed {
         plugin: InstalledPlugin {
             id: manifest.plugin.id.clone(),
             version: manifest.plugin.version.clone(),
             name: manifest.plugin.name.clone(),
-            enabled: true,
-            capabilities: manifest
-                .capabilities
-                .iter()
-                .map(|capability| capability.id.clone())
-                .collect(),
+            enabled: grant.enabled,
+            capabilities: grant.capabilities.clone(),
             api: manifest.api.clone(),
             ui: manifest.ui.clone(),
         },
@@ -169,21 +182,26 @@ fn installed_view(manifest: &Manifest, root: PathBuf) -> Installed {
     }
 }
 
-fn verify_wasm(root: &Path, manifest: &Manifest) -> Result<(), PluginError> {
-    // The fixed name, not `manifest.wasm.path`: the path is validated as
-    // staying inside the bundle, but loading through it would mean a rewritten
-    // manifest could point at a different file than the one the grant hashed.
+/// Confirms the module's bytes match `expected`.
+///
+/// The path is the fixed [`WASM_FILE`], not `manifest.wasm.path`: the path is
+/// validated as staying inside the bundle, but loading through it would let a
+/// rewritten manifest point the hash check at a different file.
+/// Public form of [`verify_wasm`], for a caller that has a digest to check
+/// before recording it.
+pub fn verify(root: &Path, expected: &str) -> Result<(), PluginError> {
+    verify_wasm(root, expected)
+}
+
+fn verify_wasm(root: &Path, expected: &str) -> Result<(), PluginError> {
     let path = root.join(WASM_FILE);
     let bytes = fs::read(&path)
         .map_err(|error| io_error(format!("could not read `{}`: {error}", path.display())))?;
     let actual = hex(&Sha256::digest(&bytes));
-    if !actual.eq_ignore_ascii_case(&manifest.wasm.sha256) {
+    if !actual.eq_ignore_ascii_case(expected) {
         return Err(PluginError::new(
             PluginErrorKind::Tampered,
-            format!(
-                "the module hashes to {actual}, the manifest says {}",
-                manifest.wasm.sha256
-            ),
+            format!("the module hashes to {actual}, the grant says {expected}"),
         ));
     }
     Ok(())
@@ -198,8 +216,14 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The canonical directory for one plugin.
-pub fn plugin_dir(plugins_root: &Path, id: &str) -> PathBuf {
-    plugins_root.join(id)
+///
+/// The id is validated here rather than at each call site because the result is
+/// used for recursive deletion: `plugin remove ../victim` must not be able to
+/// reach a sibling of the plugin root, and a future caller cannot forget a
+/// check that lives inside the function it calls.
+pub fn plugin_dir(plugins_root: &Path, id: &str) -> Result<PathBuf, PluginError> {
+    crate::plugins::manifest::validate_id(id)?;
+    Ok(plugins_root.join(id))
 }
 
 fn staging_dir(plugins_root: &Path) -> Result<PathBuf, PluginError> {
@@ -384,7 +408,7 @@ pub fn list(plugins_root: &Path, grants: &[PluginGrant]) -> (Vec<InstalledPlugin
 /// Removes one plugin directory. The caller drops the grant separately, since
 /// the config is the source of truth for authority.
 pub fn remove(plugins_root: &Path, id: &str) -> Result<(), PluginError> {
-    let root = plugin_dir(plugins_root, id);
+    let root = plugin_dir(plugins_root, id)?;
     match fs::remove_dir_all(&root) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Err(PluginError::new(

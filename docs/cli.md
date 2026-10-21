@@ -587,9 +587,10 @@ capabilities = ["wg.status"]
 enabled = true
 ```
 
-That grant is the authority. At every load the module is re-hashed; a mismatch
-disables the plugin and leaves it with no capabilities, whatever its manifest
-says. A version bump that declares new capabilities needs
+That grant is the authority. At every load the module is re-hashed and compared
+against the grant's digest — never against the manifest's, which a writer could
+update alongside a rewritten module. A mismatch disables the plugin, and the
+capability list the panel shows is the grant's, not the manifest's. A version bump that declares new capabilities needs
 `plugin approve --accept-capabilities`, which is the only command that widens a
 grant.
 

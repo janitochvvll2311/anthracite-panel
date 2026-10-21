@@ -274,3 +274,102 @@ fn listing_with_nothing_installed_says_so() {
 
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn an_id_with_a_path_separator_is_refused_by_every_command() {
+    let dir = scratch("cli-traversal");
+    let root = dir.join("plugins");
+    let config = config(&dir, &root);
+
+    let victim = dir.join("victim");
+    fs::create_dir_all(&victim).unwrap();
+    fs::write(victim.join("keep"), b"important").unwrap();
+
+    for args in [
+        vec!["plugin", "remove", "../victim"],
+        vec!["plugin", "approve", "../victim", "--accept-capabilities"],
+        vec!["plugin", "enable", "../victim"],
+    ] {
+        let (code, _stdout, _stderr) = run(&config, &args);
+        assert_eq!(code, 1, "{args:?} should fail");
+        assert!(
+            victim.join("keep").exists(),
+            "{args:?} reached the sibling directory"
+        );
+    }
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn approve_hashes_the_module_before_recording_a_grant() {
+    let dir = scratch("approve-hash");
+    let root = dir.join("plugins");
+    let config = config(&dir, &root);
+    let bundle = bundle(&dir, "");
+    assert_eq!(
+        run(&config, &["plugin", "install", &bundle.to_string_lossy()]).0,
+        0
+    );
+
+    // The manifest now claims a digest the module does not have.
+    let manifest = root.join("org.anth.test/plugin.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, text.replace("0.1.0", "0.2.0")).unwrap();
+
+    let (code, stdout, _stderr) = run(
+        &config,
+        &[
+            "plugin",
+            "approve",
+            "org.anth.test",
+            "--accept-capabilities",
+        ],
+    );
+    assert_eq!(code, 0, "an untouched module still approves: {stdout}");
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_module_replaced_without_touching_the_manifest_is_caught_by_list() {
+    let dir = scratch("list-tamper");
+    let root = dir.join("plugins");
+    let config = config(&dir, &root);
+    let bundle = bundle(&dir, "");
+    assert_eq!(
+        run(&config, &["plugin", "install", &bundle.to_string_lossy()]).0,
+        0
+    );
+
+    // Rewrite both the module and the manifest hash: the old code compared the
+    // module against the manifest and passed.
+    let wasm = b"\0asm\x01\0\0\0EVIL".to_vec();
+    fs::write(root.join("org.anth.test/plugin.wasm"), &wasm).unwrap();
+    let manifest = root.join("org.anth.test/plugin.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let digest = sha_of(&wasm);
+    let updated = text
+        .split("sha256 = \"")
+        .enumerate()
+        .map(|(index, part)| {
+            if index == 1 {
+                match part.split_once('"') {
+                    Some((_old, rest)) => format!("{digest}\"{rest}"),
+                    None => part.to_string(),
+                }
+            } else {
+                part.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("sha256 = \"");
+    fs::write(&manifest, updated).unwrap();
+
+    let (code, stdout, _stderr) = run(&config, &["plugin", "list"]);
+    assert_eq!(code, 1, "the rewritten module should not load: {stdout}");
+    assert!(!stdout.contains("enabled"), "{stdout}");
+    assert!(stdout.contains("grant says"), "{stdout}");
+
+    fs::remove_dir_all(&dir).unwrap();
+}

@@ -77,6 +77,12 @@ Every placeholder names a type. The host owns the set; a plugin cannot add one.
 | `enum` | one of a fixed list the host already knows |
 | `text` | printable, bounded, no control characters |
 
+Every validator, including `text`, also rejects a value that starts with `-`.
+A value that looks like an option is read by the program as one, which is
+exactly the flag a plugin was not granted: `wg show --force`. The check sits in
+the shared prelude rather than in each type, so a validator added later inherits
+it instead of reopening the hole.
+
 `text` is the weakest and is refused for fields that reach a program. It exists
 for display values a capability can pass as an opaque argument only when the
 manifest's capability is marked `accepts_text = true`, which the installer
@@ -96,9 +102,17 @@ wasm_sha256 = "..."
 capabilities = ["wg.status"]
 ```
 
-At every load the hash is recomputed. A mismatch disables the plugin and
-leaves it with no capabilities, whatever the manifest says. A version bump that
-declares new capabilities needs an explicit `plugin approve`.
+At every load the module is hashed and compared **against the grant**, never
+against the manifest. That distinction is the whole freeze: a manifest lives
+inside a bundle an attacker can write, so a rewritten module travelling with a
+rewritten `sha256` would stay self-consistent while the grant still named the
+old digest. The grant is the only digest the admin approved.
+
+A mismatch disables the plugin. The advertised capability list also comes from
+the grant, never from the manifest, so a plugin that adds a capability to its own
+manifest is not even *shown* as holding it. A version bump that declares new
+capabilities needs an explicit `plugin approve --accept-capabilities`, and
+`approve` hashes the module before recording anything.
 
 ## Sandbox
 
@@ -193,7 +207,10 @@ values: that would expose the whole protocol and defeat the model.
 | --- | --- |
 | Plugin runs a program the admin did not approve | capability allowlist frozen at install |
 | Plugin smuggles arguments | argv template with typed placeholders, filled by the host |
-| Plugin replaces its wasm to gain rights | hash checked on every load, mismatch disables it |
+| Plugin replaces its wasm to gain rights | module hashed on every load against the **grant**, never the manifest, so a rewritten module with a rewritten manifest hash is still caught |
+| Plugin claims capabilities it was not granted | advertised set comes from the grant, not the manifest |
+| Plugin smuggles an option instead of an operand | every validator rejects a leading `-` |
+| An id with `..` reaches a recursive delete | ids are validated inside `plugin_dir`, before the join |
 | Plugin hijacks a core route | namespace `/api/plugins/<id>/` enforced |
 | Plugin escapes the bundle dir | archive member guard reused from `files/archive.rs`, plus `O_NOFOLLOW` |
 | Plugin hangs the daemon | fuel budget, blocking worker |

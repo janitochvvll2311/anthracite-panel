@@ -396,10 +396,18 @@ pub struct PluginView {
     pub ui: Vec<crate::plugins::UiAnchor>,
 }
 
-pub async fn get_plugins(State(state): State<AppState>) -> Json<PluginsView> {
+pub async fn get_plugins(State(state): State<AppState>) -> Result<Json<PluginsView>, ApiError> {
     let config = state.config().await;
-    let registry = crate::plugins::PluginRegistry::load(&config.plugins);
-    Json(PluginsView {
+    // Loading walks the plugin root and hashes every module, up to 32 MiB each.
+    // That is blocking work, so it goes to a worker rather than stalling the
+    // runtime for the duration of the hashing a settings page triggers on poll.
+    let plugins = config.plugins.clone();
+    let registry =
+        tokio::task::spawn_blocking(move || crate::plugins::PluginRegistry::load(&plugins))
+            .await
+            .map_err(|error| ApiError::internal(format!("plugin scan failed: {error}")))?;
+
+    Ok(Json(PluginsView {
         enabled: config.plugins.enabled,
         install_from_web: config.plugins.install_from_web,
         plugins: registry
@@ -416,7 +424,7 @@ pub async fn get_plugins(State(state): State<AppState>) -> Json<PluginsView> {
             })
             .collect(),
         problems: registry.problems().to_vec(),
-    })
+    }))
 }
 
 pub async fn get_volumes(State(state): State<AppState>) -> Result<Json<VolumeSnapshot>, ApiError> {
