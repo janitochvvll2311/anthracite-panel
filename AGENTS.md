@@ -584,6 +584,18 @@ sync with behaviour; they are the contract for people writing clients:
 `AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
 duplicate route tables here — point at the doc.
 
+## Environment
+
+- **Rust target is musl, always.** `backend/.cargo/config.toml` pins
+  `x86_64-unknown-linux-musl`. Run a bare `cargo build` / `cargo test` /
+  `cargo clippy`; never pass `--target x86_64-unknown-linux-gnu`. A sandbox that
+  lost its toolchain needs `rustup target add x86_64-unknown-linux-musl` plus
+  `apt-get install musl-tools` (for `musl-gcc`, which the C dependencies use).
+- **bun is the only package manager, and `bunx` does not exist.** Run scripts as
+  `bun run <script>` from `frontend/`. `npm`, `npx` and `corepack` are removed on
+  purpose; reinstalling one to "just run a script" breaks the rule.
+- `tsc` is reached through `bun run tsc --noEmit`; there is no global `tsc`.
+
 ## Code style
 
 - Errors: library functions return `Result<T, Box<dyn Error + Send + Sync>>`;
