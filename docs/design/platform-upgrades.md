@@ -65,7 +65,7 @@ Additional decisions taken while planning:
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
 | 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
 | 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
-| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | in progress: recycle bin and archives landed |
+| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | done, in review (#22) |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
 | 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
 | 8 (point 8) | Plugin system and the WireGuard plugin | not started |
