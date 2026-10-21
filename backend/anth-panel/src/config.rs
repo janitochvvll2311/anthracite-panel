@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{error::Error, path::Path};
 
+use crate::plugins::PluginsConfig;
+
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/anth/config.toml";
 pub const DEFAULT_SOCKET_PATH: &str = "/var/tmp/anth.sock";
 
@@ -300,6 +302,7 @@ pub struct Config {
     pub accounts: AccountsConfig,
     pub files: FilesConfig,
     pub auth: AuthConfig,
+    pub plugins: PluginsConfig,
 }
 
 impl Default for Config {
@@ -315,6 +318,7 @@ impl Default for Config {
             accounts: AccountsConfig::default(),
             files: FilesConfig::default(),
             auth: AuthConfig::default(),
+            plugins: PluginsConfig::default(),
         }
     }
 }

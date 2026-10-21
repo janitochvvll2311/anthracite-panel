@@ -15,6 +15,7 @@ pub mod handler;
 pub mod hostinfo;
 pub mod network;
 pub mod password_prompt;
+pub mod plugins;
 pub mod poll;
 pub mod process;
 pub mod render;

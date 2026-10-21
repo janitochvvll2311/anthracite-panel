@@ -148,7 +148,7 @@ pub fn outcome_for(command: &Command) -> Outcome {
     match command {
         Command::Terminal(_) => Outcome::Terminal,
         Command::Daemon | Command::Api(_) | Command::Run(_) => Outcome::Server,
-        Command::Auth(_) | Command::Config(_) => Outcome::Local,
+        Command::Auth(_) | Command::Config(_) | Command::Plugin(_) => Outcome::Local,
         Command::File(args) => match &args.command {
             // Chunked transfers own their socket loop, so `request_for` has no
             // form for them; the dispatcher still runs them.

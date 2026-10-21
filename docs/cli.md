@@ -558,6 +558,50 @@ the same dotted keys the file uses, such as `files.write` or
 The panel's settings page edits the same fields through `PATCH /api/config`
 while the process runs; the CLI is for a host with no browser.
 
+### `plugin`
+
+Installs and manages plugin bundles. The commands edit the bundle directory and
+the `[plugins] grants` in the config, so they run locally; a running server
+reads the grants at start and the command prints a reminder to restart it.
+
+| Command | Description |
+| --- | --- |
+| `plugin list` | List installed plugins with their state, capabilities and UI slots. |
+| `plugin install <BUNDLE>` | Install a zip and record its grant. |
+| `plugin remove <ID>` | Delete the bundle and forget its grant. |
+| `plugin enable <ID>` | Turn a disabled plugin back on. |
+| `plugin enable <ID> --disable` | Stop a plugin from loading, keeping it installed. |
+| `plugin approve <ID> --accept-capabilities` | Re-read a bundle and record its current capabilities. |
+
+A bundle is a zip holding `plugin.toml`, `plugin.wasm` and an optional `web/`
+directory. Anything else is refused rather than skipped. The install validates
+the manifest against host policy, hashes the module and writes the *validated*
+capability list to the config:
+
+```toml
+[[plugins.grants]]
+id = "org.anth.wireguard"
+version = "0.1.0"
+wasm_sha256 = "..."
+capabilities = ["wg.status"]
+enabled = true
+```
+
+That grant is the authority. At every load the module is re-hashed; a mismatch
+disables the plugin and leaves it with no capabilities, whatever its manifest
+says. A version bump that declares new capabilities needs
+`plugin approve --accept-capabilities`, which is the only command that widens a
+grant.
+
+A plugin never sends an argv. It names a capability, and the host renders the
+argv from the template frozen at install, validating each value with a
+validator the host owns. See [design/plugins.md](design/plugins.md) for the
+schema, the validators and the threat table.
+
+`plugin list` also prints a `[WARN]` line for a directory that has no grant or
+whose module no longer matches. A plugin that fails to load is reported, never
+silently skipped.
+
 ### `account`
 
 Inspects the host's users and groups and, when `[accounts] control = true`,

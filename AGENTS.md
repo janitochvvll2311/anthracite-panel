@@ -434,6 +434,24 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `MAX_LINE_LEN`, setting `total`, `truncated` and `warning`. Mutations read
   through `read_table`, which is unfitted, so shortening never hides a rule from
   `allow` or `flush`.
+- **Plugins**: `plugins/` is the authority boundary. The model is a kitchen: the
+  daemon runs programs (chef), the manifest declares which programs and with what
+  shape (recipe), and the plugin only supplies declarative values (helper). A
+  plugin **never** sends an argv — `manifest::render_argv` builds it from a
+  template frozen in the `[plugins] grants` at install, validating each value
+  with an `ArgType` the host owns. Programs must be on `PROGRAM_ALLOWLIST`, or
+  the capability names a `job` the host implements its own argv for. `bundle.rs`
+  extracts to a staging directory, refuses any member that is not
+  `plugin.toml`, `plugin.wasm` or under `web/` (reusing
+  `files::archive::safe_member` plus `O_NOFOLLOW`), hashes the module and only
+  then renames. `load` re-hashes on every start and compares the version, so a
+  rewritten bundle is disabled rather than trusted; the module path is pinned to
+  `plugin.wasm` so a rewritten manifest cannot re-point it. `plugin
+  list|install|remove|enable|approve` run locally like `auth` and `config`, and
+  `approve` requires `--accept-capabilities` because widening a grant is never
+  implicit. `GET /api/plugins` is read-only and reads the bundle directory, so
+  the daemon stays unaware of which plugins the panel shows. Design and threat
+  table: `docs/design/plugins.md`.
 - **Accounts**: `accounts.rs` reads `/etc/passwd` and `/etc/group` for what the
   panel can change, and `getent` for what the host actually resolves, tagging
   every entry `local` or `nss`; an `nss` entry is read-only. Lock state comes

@@ -1,0 +1,410 @@
+//! Plugin bundles: reading a zip, freezing its recipe, and installing it.
+//!
+//! The two jobs here are confining the archive and freezing the grant. The
+//! member guard is the same [`safe_member`](crate::files::archive::safe_member)
+//! the file manager uses, so there is one answer to "may this name be written",
+//! not two that can drift. Writes additionally open with `O_NOFOLLOW`, because
+//! a check followed by a create is two syscalls and a concurrent writer could
+//! swap a directory for a link in between.
+//!
+//! Installation is the only moment a plugin gains authority. It reads the
+//! manifest, validates it against host policy, hashes the module, writes the
+//! bundle to disk and records a grant whose capability list is the *normalized*
+//! one from the manifest — never the text of the file, which the plugin could
+//! rewrite later.
+
+use std::collections::BTreeMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest as _, Sha256};
+
+use super::manifest::{
+    InstalledPlugin, MAX_MANIFEST_BYTES, Manifest, PluginError, PluginErrorKind, PluginGrant,
+    WASM_FILE,
+};
+
+/// Largest bundle accepted. A wasm module plus web assets; anything larger is a
+/// mistake or an attack, and the limit is applied while extracting.
+pub const MAX_BUNDLE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Maximum number of entries in one bundle.
+pub const MAX_BUNDLE_ENTRIES: usize = 512;
+
+/// Every file a bundle may contain. A name outside this list is refused rather
+/// than skipped: a bundle carrying something unexpected is a bundle the admin
+/// should look at, not one to install minus a file.
+fn is_allowed_member(name: &str) -> bool {
+    name == "plugin.toml"
+        || name == "plugin.wasm"
+        || (name.starts_with("web/") && !name.ends_with('/'))
+}
+
+fn io_error(detail: impl Into<String>) -> PluginError {
+    PluginError::new(PluginErrorKind::Io, detail)
+}
+
+/// One bundle on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installed {
+    pub plugin: InstalledPlugin,
+    pub root: PathBuf,
+}
+
+impl Installed {
+    /// Path to the wasm module.
+    pub fn wasm_path(&self) -> PathBuf {
+        self.root.join(WASM_FILE)
+    }
+}
+
+/// Reads a bundle and installs it under `plugins_root/<id>`.
+///
+/// The extraction goes to a temporary directory first, so a bundle that fails
+/// halfway — a bad hash, a refused member — leaves no half-installed plugin
+/// that a later load would try to run.
+pub fn install(
+    bundle: &Path,
+    plugins_root: &Path,
+) -> Result<(Installed, PluginGrant), PluginError> {
+    let staging = staging_dir(plugins_root)?;
+
+    let result = extract_bundle(bundle, &staging).and_then(|()| {
+        let text = fs::read_to_string(staging.join("plugin.toml"))
+            .map_err(|error| io_error(format!("the bundle has no `plugin.toml`: {error}")))?;
+        let manifest = Manifest::parse(&text)?;
+        if manifest.wasm.path.trim() != WASM_FILE {
+            return Err(PluginError::invalid(format!(
+                "`wasm.path` must be `{WASM_FILE}`"
+            )));
+        }
+        verify_wasm(&staging, &manifest)?;
+        Ok(manifest)
+    });
+
+    let manifest = match result {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
+
+    let destination = plugin_dir(plugins_root, &manifest.plugin.id);
+    if destination.exists() {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(PluginError::new(
+            PluginErrorKind::Conflict,
+            format!("plugin `{}` is already installed", manifest.plugin.id),
+        ));
+    }
+
+    fs::rename(&staging, &destination)
+        .map_err(|error| io_error(format!("could not install the bundle: {error}")))?;
+
+    let grant = PluginGrant::from_manifest(&manifest);
+    Ok((installed_view(&manifest, destination), grant))
+}
+
+/// Re-reads an installed plugin and confirms its module still matches `grant`.
+///
+/// This is what makes the freeze real. A manifest is a file inside the bundle,
+/// so a plugin directory that a local user can write is a plugin directory that
+/// can be re-pointed; the hash is checked on every load rather than trusted.
+pub fn load(root: &Path, grant: &PluginGrant) -> Result<Installed, PluginError> {
+    let text = fs::read_to_string(root.join("plugin.toml"))
+        .map_err(|error| io_error(format!("could not read the manifest: {error}")))?;
+    let manifest = Manifest::parse(&text)?;
+
+    if manifest.wasm.path.trim() != WASM_FILE {
+        return Err(PluginError::new(
+            PluginErrorKind::Tampered,
+            format!("`wasm.path` must be `{WASM_FILE}`"),
+        ));
+    }
+    if manifest.plugin.id != grant.id {
+        return Err(PluginError::new(
+            PluginErrorKind::Tampered,
+            format!(
+                "`{}` declares `{}`, the grant is for `{}`",
+                root.display(),
+                manifest.plugin.id,
+                grant.id
+            ),
+        ));
+    }
+    verify_wasm(root, &manifest)?;
+
+    if !manifest.plugin.version.eq(&grant.version) {
+        return Err(PluginError::new(
+            PluginErrorKind::Tampered,
+            format!(
+                "`{}` is version {}, the grant froze {}",
+                manifest.plugin.id, manifest.plugin.version, grant.version
+            ),
+        ));
+    }
+
+    Ok(installed_view(&manifest, root.to_path_buf()))
+}
+
+fn installed_view(manifest: &Manifest, root: PathBuf) -> Installed {
+    Installed {
+        plugin: InstalledPlugin {
+            id: manifest.plugin.id.clone(),
+            version: manifest.plugin.version.clone(),
+            name: manifest.plugin.name.clone(),
+            enabled: true,
+            capabilities: manifest
+                .capabilities
+                .iter()
+                .map(|capability| capability.id.clone())
+                .collect(),
+            api: manifest.api.clone(),
+            ui: manifest.ui.clone(),
+        },
+        root,
+    }
+}
+
+fn verify_wasm(root: &Path, manifest: &Manifest) -> Result<(), PluginError> {
+    // The fixed name, not `manifest.wasm.path`: the path is validated as
+    // staying inside the bundle, but loading through it would mean a rewritten
+    // manifest could point at a different file than the one the grant hashed.
+    let path = root.join(WASM_FILE);
+    let bytes = fs::read(&path)
+        .map_err(|error| io_error(format!("could not read `{}`: {error}", path.display())))?;
+    let actual = hex(&Sha256::digest(&bytes));
+    if !actual.eq_ignore_ascii_case(&manifest.wasm.sha256) {
+        return Err(PluginError::new(
+            PluginErrorKind::Tampered,
+            format!(
+                "the module hashes to {actual}, the manifest says {}",
+                manifest.wasm.sha256
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+/// The canonical directory for one plugin.
+pub fn plugin_dir(plugins_root: &Path, id: &str) -> PathBuf {
+    plugins_root.join(id)
+}
+
+fn staging_dir(plugins_root: &Path) -> Result<PathBuf, PluginError> {
+    fs::create_dir_all(plugins_root).map_err(|error| {
+        io_error(format!(
+            "could not create `{}`: {error}",
+            plugins_root.display()
+        ))
+    })?;
+    let unique = format!(
+        ".staging-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let path = plugins_root.join(unique);
+    fs::create_dir(&path)
+        .map_err(|error| io_error(format!("could not stage the bundle: {error}")))?;
+    Ok(path)
+}
+
+/// Extracts a bundle into `destination`, refusing anything unexpected first.
+///
+/// The whole archive is inspected before a byte is written: a bundle that names
+/// an entry it may not contain is rejected as a unit. Writing as we went would
+/// leave those earlier entries behind, and "installed with one file missing" is
+/// a worse state than "not installed".
+fn extract_bundle(bundle: &Path, destination: &Path) -> Result<(), PluginError> {
+    let file = File::open(bundle)
+        .map_err(|error| io_error(format!("could not open `{}`: {error}", bundle.display())))?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|error| PluginError::invalid(format!("not a zip bundle: {error}")))?;
+
+    if zip.len() > MAX_BUNDLE_ENTRIES {
+        return Err(PluginError::invalid(format!(
+            "the bundle has {} entries, at most {MAX_BUNDLE_ENTRIES} are allowed",
+            zip.len()
+        )));
+    }
+
+    let mut planned: Vec<(String, PathBuf, usize)> = Vec::with_capacity(zip.len());
+    let mut total = 0u64;
+
+    for index in 0..zip.len() {
+        let entry = zip
+            .by_index(index)
+            .map_err(|error| PluginError::invalid(format!("unreadable entry: {error}")))?;
+        let raw = entry.name().to_string();
+
+        if entry.is_dir() {
+            // Directories are implied by their members; an explicit one is
+            // allowed but never materialized on its own.
+            continue;
+        }
+
+        let relative = crate::files::archive::safe_member(&raw)
+            .ok_or_else(|| PluginError::denied(format!("`{raw}` is not a safe bundle path")))?;
+        let name = relative.to_string_lossy().replace('\\', "/");
+
+        if !is_allowed_member(&name) {
+            return Err(PluginError::denied(format!(
+                "`{name}` is not part of a bundle; a bundle holds `plugin.toml`, `plugin.wasm` and `web/`"
+            )));
+        }
+        if name == "plugin.toml" && entry.size() > MAX_MANIFEST_BYTES as u64 {
+            return Err(PluginError::invalid(format!(
+                "`plugin.toml` is larger than {MAX_MANIFEST_BYTES} bytes"
+            )));
+        }
+
+        total = total.saturating_add(entry.size());
+        if total > MAX_BUNDLE_BYTES {
+            return Err(PluginError::invalid(format!(
+                "the bundle expands past {MAX_BUNDLE_BYTES} bytes"
+            )));
+        }
+        planned.push((name, relative, index));
+    }
+
+    for (name, relative, index) in planned {
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|error| PluginError::invalid(format!("unreadable entry: {error}")))?;
+        let target = destination.join(&relative);
+
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                io_error(format!("could not create `{}`: {error}", parent.display()))
+            })?;
+        }
+
+        let mut out = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&target)
+            .map_err(|error| match error.raw_os_error() {
+                Some(libc::ELOOP) => {
+                    PluginError::denied(format!("`{name}` would be written through a symlink"))
+                }
+                _ => io_error(format!("could not write `{name}`: {error}")),
+            })?;
+
+        // Copy with a ceiling rather than trusting the declared size: a zip can
+        // lie about `size()`, and the count above would then be fantasy.
+        let mut written = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let read = entry
+                .read(&mut buffer)
+                .map_err(|error| io_error(format!("could not read `{name}`: {error}")))?;
+            if read == 0 {
+                break;
+            }
+            written = written.saturating_add(read as u64);
+            if written > MAX_BUNDLE_BYTES {
+                return Err(PluginError::invalid(format!(
+                    "`{name}` expands past {MAX_BUNDLE_BYTES} bytes"
+                )));
+            }
+            out.write_all(&buffer[..read])
+                .map_err(|error| io_error(format!("could not write `{name}`: {error}")))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Collects the installed plugins under `plugins_root`, one directory per id.
+///
+/// A directory whose manifest cannot be read is reported rather than skipped:
+/// silently hiding a broken plugin makes a missing feature look like a bug in
+/// the panel.
+pub fn list(plugins_root: &Path, grants: &[PluginGrant]) -> (Vec<InstalledPlugin>, Vec<String>) {
+    let mut found = Vec::new();
+    let mut problems = Vec::new();
+
+    let entries = match fs::read_dir(plugins_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (found, problems),
+        Err(error) => {
+            problems.push(format!(
+                "could not read `{}`: {error}",
+                plugins_root.display()
+            ));
+            return (found, problems);
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+
+        match grants.iter().find(|grant| grant.id == name) {
+            None => problems.push(format!("`{name}` has no grant and will not load")),
+            Some(grant) => match load(&path, grant) {
+                Ok(installed) => {
+                    let mut plugin = installed.plugin;
+                    plugin.enabled = grant.enabled;
+                    found.push(plugin);
+                }
+                Err(error) => problems.push(format!("`{name}`: {error}")),
+            },
+        }
+    }
+
+    found.sort_by(|left, right| left.id.cmp(&right.id));
+    (found, problems)
+}
+
+/// Removes one plugin directory. The caller drops the grant separately, since
+/// the config is the source of truth for authority.
+pub fn remove(plugins_root: &Path, id: &str) -> Result<(), PluginError> {
+    let root = plugin_dir(plugins_root, id);
+    match fs::remove_dir_all(&root) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(PluginError::new(
+            PluginErrorKind::Missing,
+            format!("plugin `{id}` is not installed"),
+        )),
+        Err(error) => Err(io_error(format!(
+            "could not remove `{}`: {error}",
+            root.display()
+        ))),
+    }
+}
+
+/// Reads a grant list keyed by id, which is how the config stores them.
+pub fn grants_by_id(grants: &[PluginGrant]) -> BTreeMap<&str, &PluginGrant> {
+    grants
+        .iter()
+        .map(|grant| (grant.id.as_str(), grant))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests;

@@ -8,7 +8,7 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use futures::StreamExt;
 use rust_embed::RustEmbed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use std::net::SocketAddr;
@@ -90,6 +90,7 @@ pub fn router(app: AppState) -> Router {
             "/api/accounts/groups/{name}/delete",
             post(post_account_group_delete),
         )
+        .route("/api/plugins", get(get_plugins))
         .route("/api/volumes", get(get_volumes))
         .route("/api/volumes/mount", post(post_volume_mount))
         .route("/api/volumes/unmount", post(post_volume_unmount))
@@ -369,6 +370,53 @@ fn account_snapshot_json(response: CommandResponse) -> Result<AccountSnapshot, A
         CommandResponse::Error { detail } => Err(gateway(detail)),
         other => Err(unexpected_response(other)),
     }
+}
+
+/// Body of `GET /api/plugins`.
+///
+/// Read-only and derived from the bundle directory, so it does not travel over
+/// the socket: the daemon has no opinion about which plugins the panel shows.
+#[derive(Debug, Serialize)]
+pub struct PluginsView {
+    pub enabled: bool,
+    pub install_from_web: bool,
+    pub plugins: Vec<PluginView>,
+    /// Plugins that failed to load, for the settings view to display.
+    pub problems: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PluginView {
+    pub id: String,
+    pub version: String,
+    pub name: String,
+    pub enabled: bool,
+    pub capabilities: Vec<String>,
+    pub api: Vec<crate::plugins::ApiAnchor>,
+    pub ui: Vec<crate::plugins::UiAnchor>,
+}
+
+pub async fn get_plugins(State(state): State<AppState>) -> Json<PluginsView> {
+    let config = state.config().await;
+    let registry = crate::plugins::PluginRegistry::load(&config.plugins);
+    Json(PluginsView {
+        enabled: config.plugins.enabled,
+        install_from_web: config.plugins.install_from_web,
+        plugins: registry
+            .plugins()
+            .iter()
+            .map(|plugin| PluginView {
+                id: plugin.id.clone(),
+                version: plugin.version.clone(),
+                name: plugin.name.clone(),
+                enabled: plugin.enabled,
+                capabilities: plugin.capabilities.clone(),
+                api: plugin.api.clone(),
+                ui: plugin.ui.clone(),
+            })
+            .collect(),
+        problems: registry.problems().to_vec(),
+    })
 }
 
 pub async fn get_volumes(State(state): State<AppState>) -> Result<Json<VolumeSnapshot>, ApiError> {

@@ -73,6 +73,8 @@ pub enum Command {
     Auth(AuthArgs),
     /// Read and change the panel configuration.
     Config(ConfigArgs),
+    /// Install, inspect and remove plugins.
+    Plugin(PluginArgs),
 }
 
 #[derive(Args, Debug)]
@@ -111,6 +113,28 @@ pub struct AuthSetPasswordArgs {
 pub struct ConfigArgs {
     #[command(subcommand)]
     pub command: ConfigCommand,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginArgs {
+    #[command(subcommand)]
+    pub command: PluginCommand,
+}
+
+/// `plugin` subcommands. They edit the bundle directory and the grants in the
+/// config, so they are local: a running server picks the change up on restart.
+#[derive(Subcommand, Debug)]
+pub enum PluginCommand {
+    /// List the installed plugins and their capabilities.
+    List,
+    /// Install a bundle and record its grant.
+    Install(PluginInstallArgs),
+    /// Remove an installed plugin and forget its grant.
+    Remove(PluginIdArgs),
+    /// Turn a plugin on or off without uninstalling it.
+    Enable(PluginToggleArgs),
+    /// Confirm the capabilities of a plugin whose version changed.
+    Approve(PluginApproveArgs),
 }
 
 /// `config` subcommands. `get` prints the whole file; `set` changes one key.
@@ -924,4 +948,34 @@ pub struct EndpointArgs {
         help = "Address the HTTP API binds to; defaults to ANTH_PANEL_ADDR or 0.0.0.0:8080"
     )]
     pub addr: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginInstallArgs {
+    /// Path to the plugin zip.
+    pub bundle: String,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginIdArgs {
+    /// Plugin id, for example `org.anth.wireguard`.
+    pub id: String,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginToggleArgs {
+    /// Plugin id, for example `org.anth.wireguard`.
+    pub id: String,
+    /// Turn the plugin off instead of on.
+    #[arg(long)]
+    pub disable: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginApproveArgs {
+    /// Plugin id, for example `org.anth.wireguard`.
+    pub id: String,
+    /// Re-read the bundle and record its current capabilities.
+    #[arg(long)]
+    pub accept_capabilities: bool,
 }
