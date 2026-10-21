@@ -205,23 +205,25 @@ What changed:
   changed sections. A full replacement would overwrite a field another tab
   changed while the form was open.
 
-Two review rounds followed, and the second one found three regressions in the
-first round's fixes. All are closed:
+Two review rounds followed. The second one reopened one of the first round's
+fixes and caught two bugs that round had missed. All six are closed:
 
-- Access tokens were verified by signature alone, so a password change left one
-  working for its full lifetime. Every token now carries a `sid`, and
-  `verify_access` asks the session store whether that session is live. A
-  password change rotates the signing key and rebuilds the service, so the old
-  token dies at once rather than at expiry.
+- **Regression.** Rotation had a check-then-act window: two concurrent refreshes
+  of one token both got a pair. `7bede34` held one `sessions.write()` across the
+  check and the spend, keyed by `jti`; `fc40e81` dropped the lock before
+  re-reading the session by `sid`. The check, the spend and the re-issue now
+  happen in one write-lock section.
+- **Missed in round one.** Access tokens were verified by signature alone, so a
+  password change left one working for its full lifetime. Every token now
+  carries a `sid`, and `verify_access` asks the session store whether that
+  session is live. A password change rotates the signing key and rebuilds the
+  service, so the old token dies at once rather than at expiry.
+- **Missed in round one.** A refresh token was accepted as an API credential.
+  Tokens carry a `kind`, and only `access` reaches a route, so a leaked refresh
+  token is good for one rotation and nothing else.
 - `replace_config` rebuilt the auth service, which signed the operator out on a
   settings save. Policy fields now sit behind an inner lock and are applied in
   place; a credential change uses the separate `replace_auth`.
-- Rotation had a check-then-act window: two concurrent refreshes of one token
-  both got a pair. The check, the spend and the re-issue now happen in one
-  write-lock section.
-- A refresh token was accepted as an API credential. Tokens carry a `kind`, and
-  only `access` reaches a route, so a leaked refresh token is good for one
-  rotation and nothing else.
 - `access_expires_in` and `refresh_expires_in` reported the configured TTL
   instead of the time left, so a tab loaded mid-token scheduled its silent
   refresh too late. They are computed from each token's `exp`.
@@ -249,6 +251,11 @@ Lessons for later phases:
 - A countdown in an API response has to be a countdown. Reporting the configured
   TTL is the kind of thing the writer of the endpoint cannot notice and every
   client gets wrong.
-- A retry belongs next to the transport. Eleven clients now share one
-  `withRetry` fetch, so a mid-session expiry recovers everywhere instead of
-  nowhere.
+- A retry belongs next to the transport, but registering the client is what
+  wires it. Seven panel clients pass `fetchImpl: currentApiFetch()` in
+  `frontend/src/app/panels.ts` (host-info, processes, files, network, firewall,
+  volumes, accounts); a new `PANELS` entry must do the same or the client falls
+  back to the bare `globalThis.fetch`. `HttpConfigClient` and `AuthClient`
+  build their own fetch, and the `watch` streams go through `watchJson` and an
+  `EventSource`, which never reach `withRetry`. A stream reader still has to
+  handle a `401` itself.
