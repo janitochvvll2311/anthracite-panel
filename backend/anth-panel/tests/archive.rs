@@ -978,3 +978,50 @@ with open({tar:?}, "rb") as source, lzma.open({out:?}, "wb", format=lzma.FORMAT_
         "hola\n"
     );
 }
+
+#[test]
+fn a_symlink_swapped_in_after_the_check_is_refused_by_the_open() {
+    // The previous guard was `symlink_metadata` followed by `File::create`: two
+    // syscalls, so a writer could swap the path between them. `O_NOFOLLOW`
+    // makes the open itself refuse the link. This test cannot win that race
+    // from the outside, so it asserts the mechanism instead: the target is
+    // already a symlink by the time the open runs, and the open must fail with
+    // ELOOP rather than write through it.
+    let fixture = Fixture::new("symlink-open");
+    let outside = fixture.base.join("outside.txt");
+    fs::write(&outside, "original\n").unwrap();
+    let link = fixture.out().join("planted.txt");
+    fs::create_dir_all(fixture.out()).unwrap();
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+    let archive_path = fixture.base.join("planted.zip");
+    let script = format!(
+        r#"
+import zipfile
+with zipfile.ZipFile({path:?}, "w") as zf:
+    zf.writestr("planted.txt", "attacker payload")
+"#,
+        path = archive_path.to_string_lossy(),
+    );
+    assert!(Command::new("python3").arg("-c").arg(script).status().unwrap().success());
+
+    let error = archive::extract(
+        &archive_path,
+        ArchiveFormat::Zip,
+        &fixture.out(),
+        ArchiveLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, FileErrorKind::InvalidPath);
+    assert!(
+        error.detail.contains("symlink"),
+        "the error should name the symlink: {}",
+        error.detail
+    );
+    assert_eq!(
+        fs::read_to_string(&outside).unwrap(),
+        "original\n",
+        "the file behind the symlink was modified"
+    );
+}

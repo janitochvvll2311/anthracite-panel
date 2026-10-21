@@ -13,9 +13,9 @@
 //! exposes no control over the filter chain, so the output would not match what
 //! users expect of a `.7z`.
 
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anth_proto::{ArchiveEntry, ArchiveFormat, FileError, FileErrorKind};
@@ -575,7 +575,7 @@ fn prepare_parent(destination: &Path, relative: &Path) -> Result<PathBuf, FileEr
 /// plant one. Checking the final component here means a pre-existing symlink is
 /// an error instead of a redirect, which is the half of the escape
 /// `prepare_parent` alone cannot cover.
-fn write_target(destination: &Path, relative: &Path) -> Result<PathBuf, FileError> {
+fn write_target(destination: &Path, relative: &Path) -> Result<(PathBuf, File), FileError> {
     let parent = prepare_parent(destination, relative)?;
     let name = relative
         .file_name()
@@ -595,9 +595,36 @@ fn write_target(destination: &Path, relative: &Path) -> Result<PathBuf, FileErro
             FileErrorKind::InvalidPath,
             format!("`{}` is a directory", target.display()),
         )),
-        Ok(_) => Ok(target),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(target),
+        Ok(_) => create_file(&target),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_file(&target),
         Err(error) => Err(io_error(&target, error)),
+    }
+}
+
+/// Opens the target for writing without ever following a link.
+///
+/// `symlink_metadata` above and `File::create` here are two syscalls, so a
+/// concurrent writer could swap the path for a symlink between them. `O_NOFOLLOW`
+/// closes that window: the open itself refuses a link, so the check is no longer
+/// advisory. Truncation is kept because extracting over an existing entry is the
+/// documented behaviour.
+fn create_file(target: &Path) -> Result<(PathBuf, File), FileError> {
+    match OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(target)
+    {
+        Ok(file) => Ok((target.to_path_buf(), file)),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => Err(FileError::new(
+            FileErrorKind::InvalidPath,
+            format!(
+                "`{}` is a symlink; the archive would write through it",
+                target.display()
+            ),
+        )),
+        Err(error) => Err(io_error(target, error)),
     }
 }
 
@@ -952,8 +979,7 @@ fn extract_tar<R: Read>(
             continue;
         }
 
-        let target = write_target(destination, &relative)?;
-        let mut file = File::create(&target).map_err(|e| io_error(&target, e))?;
+        let (_, mut file) = write_target(destination, &relative)?;
         budget.copy(&mut entry, &mut file, &name)?;
         written.push(relative.to_string_lossy().into_owned());
     }
@@ -990,8 +1016,7 @@ fn extract_zip(
             continue;
         }
 
-        let target = write_target(destination, &relative)?;
-        let mut file = File::create(&target).map_err(|e| io_error(&target, e))?;
+        let (_, mut file) = write_target(destination, &relative)?;
         budget.copy(&mut entry, &mut file, &name)?;
         written.push(relative.to_string_lossy().into_owned());
     }
@@ -1053,17 +1078,10 @@ fn extract_7z(
                 return Ok(true);
             }
 
-            let target = match write_target(destination, &relative) {
-                Ok(target) => target,
+            let (_, mut file) = match write_target(destination, &relative) {
+                Ok(created) => created,
                 Err(error) => {
                     failure = Some(error);
-                    return Ok(false);
-                }
-            };
-            let mut file = match File::create(&target) {
-                Ok(file) => file,
-                Err(error) => {
-                    failure = Some(io_error(&target, error));
                     return Ok(false);
                 }
             };

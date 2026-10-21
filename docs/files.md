@@ -275,6 +275,9 @@ An archive is untrusted input, so extraction refuses rather than repairs:
 - **A symlink an archive later writes through** is stopped by creating every
   intermediate directory and refusing to traverse one that is a symlink. This is
   the classic two-step tar escape: store `link -> /tmp`, then `link/owned.txt`.
+  The final component is opened with `O_NOFOLLOW`, so the check and the open are
+  a single kernel decision rather than two syscalls a concurrent writer could
+  interleave.
 - **Zip bombs** are caught while writing, not after. `[files] max_archive_bytes`
   (default 4 GiB) caps the total uncompressed size and each entry, and
   `max_entries` caps how many members one archive may hold. The counter is
