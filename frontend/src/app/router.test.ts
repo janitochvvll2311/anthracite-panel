@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { panelHash, parseRoute, routeHash } from './router'
+import { panelHash, parseRoute, routeHash, windowUrl } from './router'
 
 describe('parseRoute', () => {
   it('treats an empty hash as the home page', () => {
@@ -57,5 +57,25 @@ describe('routeHash', () => {
   it('encodes a panel id with reserved characters', () => {
     expect(panelHash('a b')).toBe('#/panel/a%20b')
     expect(parseRoute(panelHash('a b'))).toEqual({ kind: 'panel', panel: 'a b' })
+  })
+})
+
+describe('window routes', () => {
+  it('parses a standalone window route', () => {
+    expect(parseRoute('#/window/processes')).toEqual({
+      kind: 'window',
+      panel: 'processes',
+    })
+  })
+
+  it('round-trips a window route', () => {
+    const route = { kind: 'window' as const, panel: 'host info' }
+    expect(parseRoute(routeHash(route))).toEqual(route)
+  })
+
+  it('builds an absolute URL without the current hash', () => {
+    expect(windowUrl('files', 'http://host:8080/')).toBe(
+      'http://host:8080/#/window/files',
+    )
   })
 })

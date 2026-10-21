@@ -1,0 +1,193 @@
+<!doctype html>
+<!--
+  Dev-only harness for the floating window desktop.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-desktop.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel floating windows."
+    />
+    <title>anth-desktop · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+    <style>
+      .tiles {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-block-end: 12px;
+      }
+
+      .tiles button {
+        padding: 6px 12px;
+        border: 1px solid var(--panel-border, #223041);
+        border-radius: 6px;
+        background: var(--panel, #101721);
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .demo {
+        display: grid;
+        place-items: center;
+        block-size: 100%;
+        font: 13px/1.5 var(--mono, monospace);
+        color: var(--muted, #8b9bad);
+      }
+    </style>
+  </head>
+  <body>
+    <anth-harness heading="anth-desktop" width="1100px">
+      <p slot="description">
+        Draggable, resizable, minimizable windows. Each window is a view over one
+        entry the desktop owns, so the layout survives a reload and a minimized
+        panel is detached rather than hidden. The demos report their own
+        connect and disconnect counts: a minimized panel stops counting.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Open two panels, then drag the title bars around.</li>
+            <li>
+              Drag a window past an edge: it stops with its title bar still on
+              screen.
+            </li>
+            <li>Resize from the bottom-right corner; it cannot collapse.</li>
+            <li>
+              Minimize a window and watch its counter freeze, then restore it
+              from the taskbar and watch the panel resume in place.
+            </li>
+            <li>Click a window behind another: it comes to the front.</li>
+            <li>Reload the page: the arrangement and the z order come back.</li>
+            <li>
+              Press the pop-out button: the panel opens at
+              <code>#/window/&lt;id&gt;</code> with no shell around it.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Minimized means detached</h2>
+          <p>
+            A hidden element keeps its timers, its stream and its WebSocket. The
+            desktop removes a minimized body from the document instead, which
+            fires <code>disconnectedCallback</code> in the demo panel and stops
+            its counter. Restoring appends the same instance, so state survives.
+          </p>
+        </article>
+        <article class="harness-note">
+          <h2>Markup</h2>
+          <pre><code>&lt;anth-desktop storage-key="demo"&gt;&lt;/anth-desktop&gt;
+desktop.panels = [{ id: 'demo', heading: 'Demo' }]
+desktop.createPanel = (id) =&gt; document.createElement('demo-panel')</code></pre>
+        </article>
+      </section>
+
+      <div slot="actions" class="harness-controls">
+        <span id="event" class="harness-note">no event yet</span>
+        <button type="button" id="reset">Forget the layout</button>
+      </div>
+
+      <div class="tiles">
+        <button type="button" data-open="alpha">Open alpha</button>
+        <button type="button" data-open="beta">Open beta</button>
+        <button type="button" data-open="gamma">Open gamma</button>
+      </div>
+
+      <anth-desktop id="desktop" storage-key="harness"></anth-desktop>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-desktop.ts'
+
+      customElements.define(
+        'demo-panel',
+        class extends HTMLElement {
+          timer = 0
+          ticks = 0
+          connects = 0
+
+          connectedCallback() {
+            this.connects += 1
+            this.innerHTML = `<p class="demo" data-role="body"></p>`
+            this.timer = setInterval(() => {
+              this.ticks += 1
+              this.paint()
+            }, 250)
+            this.paint()
+          }
+
+          disconnectedCallback() {
+            clearInterval(this.timer)
+          }
+
+          paint() {
+            const body = this.querySelector('[data-role="body"]')
+            if (!body) return
+            body.textContent =
+              `${this.dataset.panel}: ${this.ticks} ticks, ` +
+              `connect #${this.connects}`
+          }
+        },
+      )
+
+      const headings = { alpha: 'Alpha', beta: 'Beta', gamma: 'Gamma' }
+      const desktop = document.querySelector('#desktop')
+      const event = document.querySelector('#event')
+
+      desktop.panels = Object.entries(headings).map(([id, heading]) => ({
+        id,
+        heading,
+      }))
+      desktop.createPanel = (id) => {
+        const element = document.createElement('demo-panel')
+        element.dataset.panel = id
+        return element
+      }
+
+      for (const button of document.querySelectorAll('[data-open]')) {
+        button.addEventListener('click', () => {
+          desktop.open(button.dataset.open)
+        })
+      }
+
+      for (const type of [
+        'anth-window-move',
+        'anth-window-resize',
+        'anth-window-minimize',
+        'anth-window-close',
+        'anth-window-focus',
+      ]) {
+        desktop.addEventListener(type, (detail) => {
+          event.textContent =
+            type === 'anth-window-move' || type === 'anth-window-resize'
+              ? `${type}: ${Math.round(detail.detail.rect.width)}×` +
+                `${Math.round(detail.detail.rect.height)}`
+              : `${type}: ${detail.detail.id}`
+        })
+      }
+
+      desktop.addEventListener('anth-window-popout', (detail) => {
+        const id = detail.detail.id
+        const url = `${location.href.split('#')[0]}#/window/${id}`
+        const opened = window.open(url, `anth-window-${id}`, 'popup,noopener')
+        event.textContent = opened
+          ? `pop-out: ${id}`
+          : 'pop-out blocked by the browser'
+      })
+
+      document.querySelector('#reset').addEventListener('click', () => {
+        localStorage.removeItem('anth.windows.harness')
+        event.textContent = 'layout forgotten; reload to see the default'
+      })
+    </script>
+  </body>
+</html>

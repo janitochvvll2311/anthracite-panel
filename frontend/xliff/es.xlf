@@ -235,6 +235,38 @@
 <trans-unit id="s1c7d83e8dc6b85de">
   <source>Saved.</source>
 <target>Guardado.</target></trans-unit>
+<trans-unit id="s3ec0434bf1919f28">
+  <source>Open in a separate window</source>
+  <target>Abrir en una ventana aparte</target>
+</trans-unit>
+<trans-unit id="sb3bb196f2e968940">
+  <source>Open windows</source>
+  <target>Ventanas abiertas</target>
+</trans-unit>
+<trans-unit id="s9b6a66f858ce4653">
+  <source>No open windows.</source>
+  <target>No hay ventanas abiertas.</target>
+</trans-unit>
+<trans-unit id="s1c109a21525649fd">
+  <source>Minimize</source>
+  <target>Minimizar</target>
+</trans-unit>
+<trans-unit id="s5e8250fb85d64c23">
+  <source>Close</source>
+  <target>Cerrar</target>
+</trans-unit>
+<trans-unit id="sa9df513a8df776c1">
+  <source>Resize</source>
+  <target>Redimensionar</target>
+</trans-unit>
+<trans-unit id="sbac9c007b11678b4">
+  <source>Open another panel</source>
+  <target>Abrir otro panel</target>
+</trans-unit>
+<trans-unit id="seef0ce71f86fbe92">
+  <source>Choose…</source>
+  <target>Elegir…</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

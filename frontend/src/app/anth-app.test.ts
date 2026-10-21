@@ -105,32 +105,87 @@ describe('AnthApp', () => {
     )
   })
 
-  it('mounts the feature element for a panel route', async () => {
+  it('opens the panel in a floating window for a panel route', async () => {
     const element = await mount()
     await navigate('#/panel/host-info')
+
+    const desktop = element.shadowRoot?.querySelector('anth-desktop')
+    const window = desktop?.shadowRoot?.querySelector('anth-window')
+    expect(window?.getAttribute('heading')).toBe(PANELS[0].title())
+  })
+
+  it('opens the routed panel on a deep link', async () => {
+    globalThis.location.hash = '#/panel/host-info'
+    const element = await mount()
+
+    const desktop = element.shadowRoot?.querySelector('anth-desktop')
+    const windows = desktop?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info'],
+    )
+  })
+
+  it('keeps the first window open when another panel is opened', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+    await navigate('#/panel/files')
+
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info', 'files'],
+    )
+  })
+
+  it('opens the panel picked in the toolbar select', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+
+    const select = element.shadowRoot?.querySelector<HTMLSelectElement>(
+      '.toolbar-select',
+    )
+    expect(select?.options).toHaveLength(PANELS.length)
+
+    select!.value = 'files'
+    select!.dispatchEvent(new Event('change'))
+    await new Promise((r) => setTimeout(r, 0))
+
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info', 'files'],
+    )
+    expect(select?.value).toBe('')
+  })
+
+  it('mounts the feature element for a standalone window route', async () => {
+    const element = await mount()
+    await navigate('#/window/host-info')
 
     const mounted = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
     expect(mounted?.localName).toBe('anth-host-info')
   })
 
-  it('does not remount the feature element when the route stays the same', async () => {
+  it('does not remount the standalone element when the route stays the same', async () => {
     const element = await mount()
-    await navigate('#/panel/host-info')
+    await navigate('#/window/host-info')
     const first = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
 
-    await navigate('#/panel/host-info')
+    await navigate('#/window/host-info')
     const second = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
 
     expect(second).toBe(first)
   })
 
-  it('replaces the feature element when the panel changes', async () => {
+  it('replaces the standalone element when the panel changes', async () => {
     const element = await mount()
-    await navigate('#/panel/host-info')
-    await navigate('#/panel/files')
+    await navigate('#/window/host-info')
+    await navigate('#/window/files')
 
     const mounted = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
