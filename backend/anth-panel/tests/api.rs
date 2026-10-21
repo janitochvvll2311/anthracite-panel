@@ -1092,6 +1092,7 @@ fn file_fixture(name: &str, write: bool, max_preview_bytes: u64) -> FileFixture 
         max_entries: 5000,
         max_preview_bytes,
         max_upload_bytes: 1024 * 1024,
+        ..FilesConfig::default()
     };
     let service = FileService::new(&config.files).unwrap();
     let server = spawn_file_server(&socket, service);
@@ -1119,8 +1120,18 @@ fn spawn_file_server(path: &Path, service: FileService) -> tokio::task::JoinHand
 
                 while let Some(Ok(request)) = server.receive_request().await {
                     let response = match request {
-                        Request::FileWriteStart { path, overwrite } => {
-                            match service.start_upload(&path, overwrite) {
+                        Request::FileWriteStart {
+                            path,
+                            overwrite,
+                            require_existing,
+                            expected_modified_ms,
+                        } => {
+                            match service.start_upload(
+                                &path,
+                                overwrite,
+                                require_existing,
+                                expected_modified_ms,
+                            ) {
                                 Ok(upload) => {
                                     let id = next_upload;
                                     next_upload += 1;

@@ -19,12 +19,12 @@ use crate::poll;
 use crate::sse::SseStream;
 use crate::stream;
 use anth_proto::{
-    AccountError, AccountErrorKind, AccountSnapshot, AnthClient, DEFAULT_FILE_CHUNK,
-    DEFAULT_TERMINAL_SIZE, FileChunk, FileError, FileErrorKind, FileListing, FileWritten,
-    FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallSnapshot,
-    NetworkError, NetworkErrorKind, NetworkSnapshot, ProcessSignal, ProcessSnapshot,
-    ProcessSpawnErrorKind, Request, Response as CommandResponse, TerminalSize, VolumeError,
-    VolumeErrorKind, VolumeSnapshot,
+    AccountError, AccountErrorKind, AccountSnapshot, AnthClient, ArchiveFormat, ArchiveListing,
+    DEFAULT_FILE_CHUNK, DEFAULT_TERMINAL_SIZE, FileChunk, FileError, FileErrorKind, FileListing,
+    FileWritten, FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol,
+    FirewallSnapshot, NetworkError, NetworkErrorKind, NetworkSnapshot, ProcessSignal,
+    ProcessSnapshot, ProcessSpawnErrorKind, Request, Response as CommandResponse, TerminalSize,
+    TrashListing, VolumeError, VolumeErrorKind, VolumeSnapshot,
 };
 
 pub fn router(app: AppState) -> Router {
@@ -93,6 +93,14 @@ pub fn router(app: AppState) -> Router {
         .route("/api/files/mkdir", post(post_file_mkdir))
         .route("/api/files/rename", post(post_file_rename))
         .route("/api/files/delete", post(post_file_delete))
+        .route("/api/files/trash", post(post_file_trash))
+        .route("/api/files/trash/list", get(get_trash))
+        .route("/api/files/trash/restore", post(post_trash_restore))
+        .route("/api/files/trash/empty", post(post_trash_empty))
+        .route("/api/files/archive", post(post_archive_create))
+        .route("/api/files/archive/list", get(get_archive_listing))
+        .route("/api/files/archive/extract", post(post_archive_extract))
+        .route("/api/files/write", post(post_file_write))
         .route("/api/files/upload", post(post_file_upload))
         .layer(DefaultBodyLimit::max(upload_limit))
         .fallback(static_handler)
@@ -918,10 +926,51 @@ pub struct FileRenameArgs {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ArchiveCreateArgs {
+    pub path: String,
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(default)]
+    pub format: Option<ArchiveFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArchiveExtractArgs {
+    pub path: String,
+    #[serde(default)]
+    pub into: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArchivePathQuery {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileWriteQuery {
+    pub path: String,
+    /// The mtime the editor loaded. Omitted means "overwrite regardless".
+    #[serde(default)]
+    pub expected_modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FileDeleteArgs {
     pub path: String,
     #[serde(default)]
     pub recursive: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrashPathArgs {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrashRestoreArgs {
+    pub id: String,
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 /// `GET /api/files?path=/` — one directory listing.
@@ -1084,7 +1133,171 @@ pub async fn post_file_delete(
     }
 }
 
-/// `POST /api/files/upload?path=/...` — raw request body, streamed to the daemon.
+/// `POST /api/files/trash` — move one entry to the trash.
+pub async fn post_file_trash(
+    State(state): State<AppState>,
+    payload: Result<Json<TrashPathArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_file_write(&state).await?;
+
+    match exchange(&state, &Request::FileTrash { path: args.path }).await? {
+        CommandResponse::FileTrashed { path, id } => {
+            Ok(Json(serde_json::json!({ "path": path, "id": id })))
+        }
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// `GET /api/files/trash/list` — what the trash holds.
+pub async fn get_trash(State(state): State<AppState>) -> Result<Json<TrashListing>, ApiError> {
+    match exchange(&state, &Request::FileTrashList).await? {
+        CommandResponse::TrashListing(listing) => Ok(Json(listing)),
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// `POST /api/files/trash/restore` — put one entry back.
+pub async fn post_trash_restore(
+    State(state): State<AppState>,
+    payload: Result<Json<TrashRestoreArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_file_write(&state).await?;
+
+    match exchange(
+        &state,
+        &Request::FileTrashRestore {
+            id: args.id,
+            overwrite: args.overwrite,
+        },
+    )
+    .await?
+    {
+        CommandResponse::FileRestored { id, path } => {
+            Ok(Json(serde_json::json!({ "id": id, "path": path })))
+        }
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// `POST /api/files/trash/empty` — delete everything in the trash.
+pub async fn post_trash_empty(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    require_file_write(&state).await?;
+
+    match exchange(&state, &Request::FileTrashEmpty).await? {
+        CommandResponse::FileTrashEmptied { removed } => {
+            Ok(Json(serde_json::json!({ "removed": removed })))
+        }
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// `POST /api/files/archive` — compress one entry.
+pub async fn post_archive_create(
+    State(state): State<AppState>,
+    payload: Result<Json<ArchiveCreateArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_file_write(&state).await?;
+
+    match exchange(
+        &state,
+        &Request::FileArchiveCreate {
+            path: args.path,
+            destination: args.destination,
+            format: args.format,
+        },
+    )
+    .await?
+    {
+        CommandResponse::FileArchiveCreated { path } => {
+            Ok(Json(serde_json::json!({ "path": path })))
+        }
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// `GET /api/files/archive/list?path=/a.zip` — members of one archive.
+pub async fn get_archive_listing(
+    State(state): State<AppState>,
+    query: Result<Query<ArchivePathQuery>, QueryRejection>,
+) -> Result<Json<ArchiveListing>, ApiError> {
+    let Query(args) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
+
+    match exchange(&state, &Request::FileArchiveList { path: args.path }).await? {
+        CommandResponse::ArchiveListing(listing) => Ok(Json(listing)),
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// `POST /api/files/archive/extract` — unpack one archive.
+pub async fn post_archive_extract(
+    State(state): State<AppState>,
+    payload: Result<Json<ArchiveExtractArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_file_write(&state).await?;
+
+    match exchange(
+        &state,
+        &Request::FileArchiveExtract {
+            path: args.path,
+            into: args.into,
+        },
+    )
+    .await?
+    {
+        CommandResponse::FileArchiveExtracted { path, entries } => Ok(Json(
+            serde_json::json!({ "path": path, "entries": entries }),
+        )),
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
+/// `POST /api/files/write?path=/a.txt&expected_modified_ms=...` — save text.
+///
+/// The body is the raw text, streamed through the same chunk flow as an upload.
+/// A JSON body would carry the whole file in one socket line, and the line cap
+/// is 1 MiB, so any larger file opened in the editor could not be saved.
+pub async fn post_file_write(
+    State(state): State<AppState>,
+    query: Result<Query<FileWriteQuery>, QueryRejection>,
+    body: Body,
+) -> Result<Json<Value>, ApiError> {
+    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_file_write(&state).await?;
+
+    let written = upload_stream(
+        &state,
+        &query.path,
+        true,
+        true,
+        query.expected_modified_ms,
+        body,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({
+        "path": written.path,
+        "size": written.size,
+        "modified_ms": written.modified_ms,
+    })))
+}
+
 pub async fn post_file_upload(
     State(state): State<AppState>,
     query: Result<Query<FileUploadQuery>, QueryRejection>,
@@ -1093,7 +1306,7 @@ pub async fn post_file_upload(
     let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
     require_file_write(&state).await?;
 
-    let written = upload_stream(&state, &query.path, query.overwrite, body).await?;
+    let written = upload_stream(&state, &query.path, query.overwrite, false, None, body).await?;
     Ok(Json(
         serde_json::json!({ "path": written.path, "size": written.size }),
     ))
@@ -1178,6 +1391,8 @@ async fn upload_stream(
     state: &AppState,
     path: &str,
     overwrite: bool,
+    require_existing: bool,
+    expected_modified_ms: Option<u64>,
     body: Body,
 ) -> Result<FileWritten, ApiError> {
     let mut client = state
@@ -1190,6 +1405,8 @@ async fn upload_stream(
         &Request::FileWriteStart {
             path: path.to_string(),
             overwrite,
+            require_existing,
+            expected_modified_ms,
         },
     )
     .await?
@@ -1339,7 +1556,9 @@ fn file_api_error(error: FileError) -> ApiError {
     let status = match error.kind {
         FileErrorKind::NotFound => StatusCode::NOT_FOUND,
         FileErrorKind::PermissionDenied | FileErrorKind::Disabled => StatusCode::FORBIDDEN,
-        FileErrorKind::AlreadyExists | FileErrorKind::DirectoryNotEmpty => StatusCode::CONFLICT,
+        FileErrorKind::AlreadyExists
+        | FileErrorKind::DirectoryNotEmpty
+        | FileErrorKind::Conflict => StatusCode::CONFLICT,
         FileErrorKind::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         FileErrorKind::InvalidPath | FileErrorKind::NotADirectory | FileErrorKind::IsADirectory => {
             StatusCode::BAD_REQUEST

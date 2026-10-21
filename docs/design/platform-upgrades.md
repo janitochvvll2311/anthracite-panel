@@ -14,9 +14,9 @@ repository.
 | 3 | JWT covers the HTTP and WebSocket interface only; the Unix socket relies on file permissions |
 | 4 | JWT is implemented in-tree (HS256 over `hmac` + `sha2` + `base64`) to keep the musl build free of C dependencies |
 | 5 | The file editor uses CodeMirror 6, loaded with a dynamic `import()` |
-| 6 | Archives: `zip`, `tar`, `tar.gz`; `.xz` and `.zstd` are out of scope for this version |
+| 6 | Archives: in-tree pure-Rust crates for `zip`, `tar`, `tar.gz`, `tar.xz` and `7z` extraction; no external archive binary. Creation is `zip`/`tar`/`tar.gz`/`tar.xz`; creating `.7z` is not offered. Superseded the earlier "`.xz` out of scope" wording — see phase 5 notes |
 | 7 | Partitions use `sfdisk`; `mkfs` is supported behind its own switch |
-| 8 | Recycle bin is per directory (`.anth-trash/` beside the entries) |
+| 8 | Recycle bin follows the freedesktop.org trash spec (`.Trash/$uid` or `.Trash-$uid` per volume, `$XDG_DATA_HOME/Trash` for the home volume), so deletions are restorable from the desktop too. Supersedes the earlier per-directory `.anth-trash/` |
 | 9 | `bun` only; `npm` and `npx` are uninstalled |
 | 10 | Renames drop the old custom element names, with no compatibility alias |
 | 11 | UI source language is English; Spanish ships through `lit-localize`; all code, comments and docs stay in English |
@@ -26,6 +26,7 @@ repository.
 | 15 | Network interfaces support create, edit, rename and delete, rename only while the link is down |
 | 16 | Partitions support create, edit, resize and delete, plus `mkfs` behind its switch |
 | 17 | A plugin manifest requires a binary `sha256`; a signature is optional and its absence is warned about, not rejected |
+| 18 | Plugins can be installed from the web UI, not only from the CLI. The upload route is gated by `[plugins] install_from_web`, which defaults to `false` in release and `true` in the generated debug config, following the same rule as the other control switches. The UI must show a dangerous-action warning naming the code execution risk before the install button is enabled |
 
 Additional decisions taken while planning:
 
@@ -45,8 +46,34 @@ Additional decisions taken while planning:
 - Plugins: `plugin.toml` manifest, one long-lived JSON-lines process per plugin
   binary, one plugin per zip, binary must match the host architecture. Plugins
   never extend the `anth-proto` enums; they receive `Request::Plugin`.
-- Trash layout: `<directory>/.anth-trash/<id>/` with `meta.json`, hidden from
-  normal listings, with a configurable retention size.
+- Plugin installation is reachable from two places: `plugin install PATH` on the
+  CLI and `POST /api/plugins/install` from the web UI. Both end in the same
+  `plugins::install` function, so the zip checks, the manifest validation and
+  the `sha256` comparison exist once. The web route is gated by
+  `[plugins] install_from_web`: off in release, on in the generated debug
+  config, the same rule the process, network, firewall, volume and file
+  switches follow. The debug default is safe only because it is paired with a
+  signed-manifest requirement and the UI warning below; a debug build is a
+  developer's own machine, and leaving the switch off there would mean the only
+  untested path is the dangerous one.
+- The web UI treats installation as a dangerous action. The install control
+  stays disabled until the operator acknowledges a warning that names the
+  consequence, the panel says the plugin will run with the daemon's privileges,
+  and the acknowledgement is per session rather than persisted — a stored
+  "do not warn me again" would turn a deliberate confirmation into a default.
+  `anth-modal` renders the warning; the harness uses the same flow. The warning
+  is unconditional: it does not disappear because the switch happens to be on
+  in a debug build.
+- Trash layout: freedesktop.org Trash specification 1.0 — `<files>/` and
+  `<info>/<name>.trashinfo`, chosen per volume, with a configurable retention
+  size.
+- Archives are extracted in-tree rather than by shelling out. `7z`, `p7zip` and
+  `xz` are not in the runtime image, and Alpine's `tar` is BusyBox, whose
+  escape behaviour could not be verified here; the extraction guard should not
+  depend on an unverified binary.
+- A deletion on a volume with no usable trash directory is refused rather than
+  silently made permanent; the request may ask for a permanent delete
+  explicitly.
 
 ## Phases
 
@@ -57,10 +84,79 @@ Additional decisions taken while planning:
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
 | 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
 | 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
-| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
+| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | done, in review (#22) |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
-| 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
-| 8 (point 8) | Plugin system and the WireGuard plugin | not started |
+| 7a (point 4) | Partition create/edit/resize/delete | not started |
+| 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | not started |
+| 8 (point 8) | Plugin system, CLI and web-UI install, WireGuard plugin | not started |
+
+## Phase 5 — file manager (done)
+
+Split into four commits so each one is reviewable on its own:
+
+1. Recycle bin (freedesktop trash). Done.
+2. Archive create/extract/list, with the extraction guards. Done.
+3. Text editing endpoints, then the CodeMirror component. Done.
+4. Rename `anth-file-explorer` to `anth-file-manager`, harness and docs. Done.
+
+### Text editing — what was decided while implementing
+
+- Saving is a new endpoint, not `upload`. Upload replaces a file by name and
+  knows nothing about what the editor loaded; an edit has to refuse when the
+  file moved underneath it, and that needs a precondition.
+- The precondition is the mtime from the listing, which the client already
+  receives. Passing it back as `expected_modified_ms` costs one field and needs
+  no server-side session or token per open buffer.
+- A refused save must leave the editor dirty. The text is still only in the
+  buffer, so labelling it "saved" would misstate where the data lives.
+- The editor writes through a symlink instead of replacing it. Renaming a
+  temporary file over a link would detach a linked config file, which is a
+  silent behaviour change for an "edit".
+- CodeMirror is loaded with `import()` behind the four-method `EditorHandle`.
+  The component then has one seam for tests, and the initial bundle does not
+  carry eight grammars.
+- Formats without a grammar the panel ships (`shell`, `toml`, plain text) keep
+  line numbers and bracket matching rather than claiming to be highlighted.
+  Word autocompletion from the document covers them all.
+
+### Recycle bin — what was decided while implementing
+
+- The spec keys the home trash on the *device* holding `$HOME`, not on the path
+  being equal to `$HOME`. Comparing paths looked right on a desktop and was
+  wrong in a container, where `/`, `/tmp` and `/home` are one overlay; the first
+  end-to-end run picked `/.Trash-10001` and failed with `EACCES`. A test now
+  pins the device rule.
+- A volume with no writable trash directory is an error naming the directory,
+  not a silent permanent delete.
+- `DeletionDate` is written in UTC. The spec asks for local time and the daemon
+  has no timezone database; readers only display the value, so a valid UTC stamp
+  beats a stamp that is wrong for half the year.
+- `.trashinfo` values are parsed strictly: a malformed percent escape or a
+  missing `Path` is skipped, never guessed at. `Path` is untrusted input on
+  restore and goes through `normalize` plus the root resolution.
+- Retention (`[files] max_trash_bytes`, default 1 GiB) is best effort and runs
+  after the move, so it can never fail a delete that already happened.
+
+### Archives — what was decided while implementing
+
+- The crates are the boundary. Delegating to `tar`/`xz`/`7z` would put the
+  security check in a binary whose escape handling differs between GNU tar and
+  BusyBox, and the runtime image has BusyBox.
+- `.7z` creation is refused. `sevenz-rust2` exposes no control over the filter
+  chain, so the output would not be what users expect of a `.7z`; reading is
+  fully supported.
+- The extractor refuses a hostile member instead of skipping it. A partial tree
+  that looks complete is worse than an error.
+- Backslashes are rejected outright. They are ordinary filename characters on
+  Unix, so accepting them creates a tree that becomes an escape when copied to
+  Windows.
+- The end-to-end run caught two bugs the unit tests missed: `docs.zip` extracted
+  into `docs` produced `docs/docs/`, and a zip directory entry rendered as
+  `docs//`. Both now have regression tests. The strip is conditional on the
+  archive's single common root matching the destination's own name, so an
+  unrelated destination keeps the stored layout.
+- Interop is asserted against system `tar` and Python's `zipfile` rather than
+  against our own reader, so a writer bug cannot certify itself.
 
 ## Phase 4 — process management (done)
 

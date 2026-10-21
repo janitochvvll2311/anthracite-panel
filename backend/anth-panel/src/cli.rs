@@ -1,5 +1,5 @@
-use anth_proto::{FirewallProtocol, ProcessSignal};
-use clap::{Args, Parser, Subcommand};
+use anth_proto::{ArchiveFormat, FirewallProtocol, ProcessSignal};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "anth-panel")]
@@ -558,8 +558,101 @@ pub enum FileCommand {
     Upload(FileUploadArgs),
     /// Rename a file or directory.
     Rename(FileRenameArgs),
-    /// Delete a file or directory.
+    /// Delete a file or directory permanently.
     Delete(FileDeleteArgs),
+    /// Move a file or directory to the freedesktop trash.
+    Trash(FileTrashArgs),
+    /// Inspect or empty the trash.
+    TrashBin(FileTrashBinArgs),
+    /// Compress one entry into an archive.
+    Archive(FileArchiveArgs),
+    /// Inspect or extract an archive.
+    Unarchive(FileUnarchiveArgs),
+    /// Replace a text file with the contents of a local file.
+    Write(FileWriteArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct FileWriteArgs {
+    #[arg(value_name = "PATH", help = "File to overwrite")]
+    pub path: String,
+
+    #[arg(
+        value_name = "SOURCE",
+        help = "Local file to read; `-` reads standard input"
+    )]
+    pub source: String,
+
+    #[arg(
+        long,
+        value_name = "MILLIS",
+        help = "Only save when the file still has this modification time"
+    )]
+    pub expected_modified_ms: Option<u64>,
+}
+
+#[derive(Args, Debug)]
+pub struct FileArchiveArgs {
+    #[arg(value_name = "PATH", help = "Entry to compress")]
+    pub path: String,
+
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        help = "Archive to write; defaults to PATH plus a suffix"
+    )]
+    pub output: Option<String>,
+
+    #[arg(
+        short,
+        long,
+        value_name = "FORMAT",
+        value_enum,
+        help = "Archive format; inferred from --output when omitted"
+    )]
+    pub format: Option<ArchiveFormatArg>,
+}
+
+#[derive(Args, Debug)]
+pub struct FileUnarchiveArgs {
+    /// List the members without extracting anything.
+    #[arg(long, conflicts_with_all = ["into"])]
+    pub list: bool,
+
+    #[arg(value_name = "PATH", help = "Archive to read")]
+    pub path: String,
+
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        help = "Directory to extract into; defaults to PATH without its suffix"
+    )]
+    pub into: Option<String>,
+}
+
+/// CLI spelling of an archive format. Kept separate from the protocol enum so
+/// clap owns the flag names.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveFormatArg {
+    Zip,
+    Tar,
+    #[value(name = "tar.gz")]
+    TarGz,
+    #[value(name = "tar.xz")]
+    TarXz,
+}
+
+impl ArchiveFormatArg {
+    pub fn to_protocol(self) -> ArchiveFormat {
+        match self {
+            Self::Zip => ArchiveFormat::Zip,
+            Self::Tar => ArchiveFormat::Tar,
+            Self::TarGz => ArchiveFormat::TarGz,
+            Self::TarXz => ArchiveFormat::TarXz,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -624,6 +717,49 @@ pub struct FileDeleteArgs {
     #[arg(long, help = "Delete a directory and everything below it")]
     pub recursive: bool,
 
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FileTrashArgs {
+    #[arg(value_name = "PATH", help = "Entry to move to the trash")]
+    pub path: String,
+}
+
+#[derive(Args, Debug)]
+pub struct FileTrashBinArgs {
+    #[command(subcommand)]
+    pub command: TrashBinCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TrashBinCommand {
+    /// List what the trash holds.
+    List,
+    /// Put one entry back where it came from.
+    Restore(TrashRestoreArgs),
+    /// Delete everything in the trash.
+    Empty(TrashEmptyArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct TrashRestoreArgs {
+    #[arg(
+        value_name = "ID",
+        help = "Trash identifier, as printed by `trash-bin list`"
+    )]
+    pub id: String,
+
+    #[arg(long, help = "Replace the entry that now occupies the original path")]
+    pub overwrite: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct TrashEmptyArgs {
     #[arg(long, help = "Do not ask for confirmation")]
     pub yes: bool,
 }

@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import './anth-file-explorer'
-import type { AnthFileExplorer } from './anth-file-explorer'
+import './anth-file-manager'
+import type { AnthFileManager } from './anth-file-manager'
 import {
   FakeFileClient,
   fileEntry,
   fileListing,
   textResult,
 } from '../test/fake-file-client'
+
 import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 
-async function flush(element: AnthFileExplorer): Promise<void> {
+async function flush(element: AnthFileManager): Promise<void> {
   for (let i = 0; i < 4; i++) {
     await Promise.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -21,10 +22,10 @@ async function mount(
   client: FakeFileClient,
   path = '/',
   options: { autoLoad?: boolean; showHidden?: boolean } = {},
-): Promise<AnthFileExplorer> {
+): Promise<AnthFileManager> {
   const element = document.createElement(
-    'anth-file-explorer',
-  ) as AnthFileExplorer
+    'anth-file-manager',
+  ) as AnthFileManager
   element.client = client
   element.path = path
   if (options.autoLoad !== undefined) element.autoLoad = options.autoLoad
@@ -35,13 +36,13 @@ async function mount(
   return element
 }
 
-function rows(element: AnthFileExplorer): HTMLElement[] {
+function rows(element: AnthFileManager): HTMLElement[] {
   return [
     ...(element.shadowRoot?.querySelectorAll<HTMLElement>('tbody tr') ?? []),
   ]
 }
 
-function button(element: AnthFileExplorer, label: string): HTMLButtonElement {
+function button(element: AnthFileManager, label: string): HTMLButtonElement {
   const match = [...(element.shadowRoot?.querySelectorAll('button') ?? [])].find(
     (candidate) => candidate.textContent?.trim().startsWith(label),
   )
@@ -49,7 +50,7 @@ function button(element: AnthFileExplorer, label: string): HTMLButtonElement {
   return match
 }
 
-function selectFile(element: AnthFileExplorer, name: string): void {
+function selectFile(element: AnthFileManager, name: string): void {
   const row = rows(element).find((candidate) =>
     candidate.textContent?.includes(name),
   )
@@ -62,7 +63,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('AnthFileExplorer', () => {
+describe('AnthFileManager', () => {
   it('lists a directory with breadcrumbs and a read-only badge', async () => {
     const client = new FakeFileClient()
     client.listings.set(
@@ -208,6 +209,81 @@ describe('AnthFileExplorer', () => {
     ).toContain('/api/files/download?path=%2Fnote.txt')
   })
 
+  it('offers the editor for a writable text file and saves with the loaded mtime', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        entries: [
+          fileEntry({ name: 'note.txt', path: '/note.txt', modified_ms: 1234 }),
+        ],
+      }),
+    )
+    client.readResults.set('/note.txt', textResult('hello world'))
+
+    const element = await mount(client)
+    selectFile(element, 'note.txt')
+    await flush(element)
+
+    const toggle = element.shadowRoot?.querySelector<HTMLButtonElement>(
+      '.edit-toggle',
+    )
+    expect(toggle?.textContent?.trim()).toBe('Edit')
+    toggle?.click()
+    await flush(element)
+
+    const editor = element.shadowRoot?.querySelector('anth-file-editor')
+    expect(editor).not.toBeNull()
+    // The precondition is the mtime the listing reported, not the read time.
+    expect(
+      (editor as unknown as { save: unknown }).save,
+    ).toBeTypeOf('function')
+    await (
+      editor as unknown as { save: (c: string) => Promise<unknown> }
+    ).save('changed')
+    expect(client.writeCalls).toEqual([
+      { path: '/note.txt', contents: 'changed', expectedModifiedMs: 1234 },
+    ])
+  })
+
+  it('hides the editor when writes are disabled', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: false,
+        entries: [fileEntry({ name: 'note.txt', path: '/note.txt' })],
+      }),
+    )
+    client.readResults.set('/note.txt', textResult('hello'))
+
+    const element = await mount(client)
+    selectFile(element, 'note.txt')
+    await flush(element)
+
+    expect(element.shadowRoot?.querySelector('.edit-toggle')).toBeNull()
+  })
+
+  it('hides the editor for a binary format', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        entries: [fileEntry({ name: 'archive.zip', path: '/archive.zip' })],
+      }),
+    )
+    // A zip whose first bytes happen to be printable still must not be edited.
+    client.readResults.set('/archive.zip', textResult('PK readable'))
+
+    const element = await mount(client)
+    selectFile(element, 'archive.zip')
+    await flush(element)
+
+    expect(element.shadowRoot?.querySelector('.edit-toggle')).toBeNull()
+  })
+
   it('never renders SVG previews as active images', async () => {
     const client = new FakeFileClient()
     client.listings.set(
@@ -326,6 +402,53 @@ describe('AnthFileExplorer', () => {
     await answerDialogs('confirm')
     await flush(element)
     expect(client.deleteCalls).toEqual([{ path: '/file.txt', recursive: false }])
+  })
+
+  it('offers no editor for a truncated preview', async () => {
+    // Saving a truncated preview would write only the first slice back to the
+    // file, silently discarding the rest.
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        entries: [fileEntry({ name: 'big.txt', path: '/big.txt' })],
+      }),
+    )
+    client.readResults.set('/big.txt', textResult('first slice', { truncated: true }))
+
+    const element = await mount(client)
+    selectFile(element, 'big.txt')
+    await flush(element)
+
+    expect(element.shadowRoot?.textContent).toContain('Preview truncated')
+    const labels = [...(element.shadowRoot?.querySelectorAll('button') ?? [])].map(
+      (candidate) => candidate.textContent?.trim(),
+    )
+    expect(labels).not.toContain('Edit')
+  })
+
+  it('moves to the trash instead of deleting when trash is enabled', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        trash_enabled: true,
+        entries: [fileEntry({ name: 'file.txt' })],
+      }),
+    )
+
+    const element = await mount(client)
+    selectFile(element, 'file.txt')
+    await flush(element)
+    button(element, 'Delete').click()
+    await flush(element)
+    await answerDialogs('confirm')
+    await flush(element)
+
+    expect(client.trashCalls).toEqual([{ path: '/file.txt' }])
+    expect(client.deleteCalls).toEqual([])
   })
 
   it('does not reload the listing while a mutation is in flight', async () => {

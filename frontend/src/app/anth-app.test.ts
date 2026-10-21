@@ -272,7 +272,7 @@ describe('AnthApp', () => {
 
     const mounted = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
-    expect(mounted?.localName).toBe('anth-file-explorer')
+    expect(mounted?.localName).toBe('anth-file-manager')
   })
 
   it('explains an unknown panel instead of mounting anything', async () => {

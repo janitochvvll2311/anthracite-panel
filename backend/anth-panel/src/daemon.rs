@@ -251,8 +251,13 @@ async fn pump(
         };
 
         let response = match request {
-            Request::FileWriteStart { path, overwrite } => {
-                match files.start_upload(&path, overwrite) {
+            Request::FileWriteStart {
+                path,
+                overwrite,
+                require_existing,
+                expected_modified_ms,
+            } => {
+                match files.start_upload(&path, overwrite, require_existing, expected_modified_ms) {
                     Ok(upload) => {
                         let id = allocate_upload_id(&mut next_upload_id, &uploads);
                         uploads.insert(id, upload);

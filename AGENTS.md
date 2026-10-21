@@ -88,15 +88,26 @@ the protocol without depending on the panel. `anth-panel` depends on it.
 
 ## Build and test
 
-Run these from `backend/`. The workspace pins `x86_64-unknown-linux-musl` in
-`.cargo/config.toml`, so a bare `cargo build` needs that target installed. When it is
-not installed, override the target explicitly:
+Run these from `backend/`. The project targets **`x86_64-unknown-linux-musl`
+only**: `.cargo/config.toml` pins it, so a bare `cargo build` (no `--target`) is
+the supported invocation and produces the same static binary the Dockerfile
+ships. Do not add `--target x86_64-unknown-linux-gnu`; a glibc build diverges
+from production and needs a toolchain the project does not install.
+
+Prerequisites, once per machine:
 
 ```bash
-cargo build  --workspace --target x86_64-unknown-linux-gnu
-cargo test   --workspace --target x86_64-unknown-linux-gnu
+rustup target add x86_64-unknown-linux-musl
+sudo apt-get install musl-tools     # provides musl-gcc for the C dependencies
+```
+
+Then:
+
+```bash
+cargo build  --workspace
+cargo test   --workspace
 cargo fmt --check
-cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu
+cargo clippy --workspace --all-targets
 ```
 
 There is no CI configuration, no `rustfmt.toml` and no `clippy.toml` — defaults apply.
@@ -347,7 +358,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   disabled button with the reason instead of a form that cannot succeed. Both are
   exercised by Vitest component tests and the
   `src/components/anth-process-manager.test.html` dev harness.
-- **Filesystem explorer**: `files.rs` validates `[files] root`, normalizes virtual
+- **Filesystem**: `files.rs` validates `[files] root`, normalizes virtual
   paths, rejects `..` and symlink escapes, lists directories, reads stateless chunks
   and performs atomic uploads through a per-connection temporary file. Writes are
   gated by `[files] write`, which defaults to `false`. `FileError` carries a
@@ -355,13 +366,22 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `render_file_listing` is the CLI table; the API streams uploads and downloads
   through the chunked flow instead of buffering a whole file, and inline previews
   force `text/plain` plus `nosniff` except for a safe raster-image allowlist.
-- **Frontend file explorer**: `anth-file-explorer` owns breadcrumbs, navigation,
-  sorting, hidden-file filtering, previews, uploads and confirmed writes. It only
-  depends on the injected `FileClient`; `lib/files/file-client.ts` implements
-  `/api/files` and `lib/files/display.ts` owns path, size and sort helpers. The
-  read-only state comes from the listing's `write_enabled`. Tests live under
-  `src/components/` and `src/lib/files/`; the
-  `src/components/anth-file-explorer.test.html` file is the dev harness.
+- **Frontend file manager**: `anth-file-manager` owns breadcrumbs, navigation,
+  sorting, hidden-file filtering, previews, uploads, archives, the recycle bin,
+  the text editor and confirmed writes. It only depends on the injected
+  `FileClient`; `lib/files/file-client.ts` implements `/api/files` and
+  `lib/files/display.ts` owns path, size and sort helpers. The read-only state
+  comes from the listing's `write_enabled`.
+  `anth-file-editor` is the CodeMirror editor behind the preview's Edit button:
+  it imports CodeMirror dynamically, keeps the buffer dirty when a save is
+  refused, and sends the mtime it loaded as the save precondition. Tests live
+  under `src/components/` and `src/lib/files/`; the
+  `src/components/anth-file-manager.test.html` file is the dev harness.
+- **Frontend editor**: `lib/editor/language.ts` maps a file name to a grammar
+  (pure, tested) and `lib/editor/codemirror-setup.ts` owns everything
+  CodeMirror-specific behind the four-method `EditorHandle` the component sees.
+  A failed dynamic import falls back to a textarea so the editor is never a
+  blank pane.
 - **Network monitor**: `network.rs` reads `/sys/class/net` and `/proc/net/dev`,
   resolves IPv4/IPv6 with `getifaddrs(3)` and enforces `[network] control` plus
   the loopback-down guard before calling `SIOCSIFFLAGS`. Global `sudo` defaults
@@ -563,6 +583,21 @@ sync with behaviour; they are the contract for people writing clients:
 
 `AGENTS.md` is for contributors and agents; `docs/` is for users. Do not
 duplicate route tables here — point at the doc.
+
+## Environment
+
+- **Rust target is musl, always.** `backend/.cargo/config.toml` pins
+  `x86_64-unknown-linux-musl`. Run a bare `cargo build` / `cargo test` /
+  `cargo clippy`; never pass `--target x86_64-unknown-linux-gnu`. A sandbox that
+  lost its toolchain needs `rustup target add x86_64-unknown-linux-musl` plus
+  `apt-get install musl-tools` (for `musl-gcc`, which the C dependencies use).
+  The host `x86_64-unknown-linux-gnu` std stays installed by rustup because
+  proc-macros and build scripts compile for the host; that is a toolchain
+  requirement, not a project target. Never build the project itself for gnu.
+- **bun is the only package manager, and `bunx` does not exist.** Run scripts as
+  `bun run <script>` from `frontend/`. `npm`, `npx` and `corepack` are removed on
+  purpose; reinstalling one to "just run a script" breaks the rule.
+- `tsc` is reached through `bun run tsc --noEmit`; there is no global `tsc`.
 
 ## Code style
 

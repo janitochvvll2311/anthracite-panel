@@ -2,7 +2,7 @@ use anth_proto::{Request, Response};
 
 use crate::cli::{
     AccountCommand, AccountGroupCommand, AccountUserCommand, Command, FileCommand, FirewallCommand,
-    NetworkCommand, ProcessCommand, VolumeCommand,
+    NetworkCommand, ProcessCommand, TrashBinCommand, VolumeCommand,
 };
 use crate::render;
 
@@ -126,6 +126,35 @@ pub fn request_for(command: &Command) -> Option<Request> {
                 path: list.path.clone(),
             }),
             FileCommand::Read(_) | FileCommand::Upload(_) => None,
+            FileCommand::Trash(args) => Some(Request::FileTrash {
+                path: args.path.clone(),
+            }),
+            FileCommand::TrashBin(bin) => match &bin.command {
+                TrashBinCommand::List => Some(Request::FileTrashList),
+                TrashBinCommand::Restore(args) => Some(Request::FileTrashRestore {
+                    id: args.id.clone(),
+                    overwrite: args.overwrite,
+                }),
+                TrashBinCommand::Empty(_) => Some(Request::FileTrashEmpty),
+            },
+            FileCommand::Archive(args) => Some(Request::FileArchiveCreate {
+                path: args.path.clone(),
+                destination: args.output.clone(),
+                format: args.format.map(|format| format.to_protocol()),
+            }),
+            FileCommand::Unarchive(args) => Some(if args.list {
+                Request::FileArchiveList {
+                    path: args.path.clone(),
+                }
+            } else {
+                Request::FileArchiveExtract {
+                    path: args.path.clone(),
+                    into: args.into.clone(),
+                }
+            }),
+            // The body comes from a local file or stdin, so it cannot be built
+            // by `request_for`; `main` owns that loop.
+            FileCommand::Write(_) => None,
             FileCommand::Mkdir(args) => Some(Request::FileMkdir {
                 path: args.path.clone(),
                 recursive: args.parents,

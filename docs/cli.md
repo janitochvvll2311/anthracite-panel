@@ -539,7 +539,12 @@ root. Paths are virtual: `/` means `[files] root`, not necessarily the host's
 real root. See [files.md](files.md) for the containment and symlink policy.
 
 There are deliberately no aliases: the subcommands are `list`, `read`, `mkdir`,
-`upload`, `rename` and `delete`.
+`upload`, `rename`, `delete`, `trash`, `trash-bin`, `archive`, `unarchive` and
+`write`.
+
+`delete` is the permanent, unconditional removal. `trash` is the reversible
+one and is what the panel uses when `[files] trash = true`; both are explicit so
+a script cannot mistake one for the other.
 
 #### `file list [PATH]`
 
@@ -576,9 +581,54 @@ Renames one entry without overwriting an existing destination.
 
 #### `file delete <PATH> [--recursive] [--yes]`
 
-Deletes one file, symlink or empty directory. A non-empty directory requires
-`--recursive`. Without `--yes`, the command asks for confirmation on a TTY and
-refuses to run when stdin is not a terminal.
+Deletes one file, symlink or empty directory **permanently**. A non-empty
+directory requires `--recursive`. Without `--yes`, the command asks for
+confirmation on a TTY and refuses to run when stdin is not a terminal. Use
+`trash` when the entry should be recoverable.
+
+#### `file trash <PATH>`
+
+Moves one entry to the freedesktop trash, keeping its original path so it can be
+restored. Requires `[files] trash = true`; the trash root is the one belonging
+to the daemon's account. Prints the identifier `trash-bin restore` takes.
+
+#### `file trash-bin <list|restore|empty>`
+
+```bash
+anth-panel file trash-bin list
+anth-panel file trash-bin restore <ID> [--overwrite] [--yes]
+anth-panel file trash-bin empty [--yes]
+```
+
+`list` prints the id, name, original path, size and deletion time of every entry
+the daemon can see, plus how much space the trash holds against its retention
+ceiling. `restore` puts one entry back at its recorded path; `--overwrite`
+replaces whatever now occupies it. `empty` deletes every entry for good.
+`restore` and `empty` can destroy data, so both ask for confirmation unless
+`--yes` is given.
+
+#### `file archive <PATH> [-o OUTPUT] [-f FORMAT]`
+
+Compresses one entry. Format is inferred from `--output`; without `--output` the
+archive sits beside the entry with a suffix for that format. `zip`, `tar`,
+`tar.gz`, `tar.xz` and `7z` can be extracted, but only the first four can be
+written: there is no 7z encoder.
+
+#### `file unarchive <PATH> [--into DIR] [--list]`
+
+Extracts an archive. `--into` defaults to the archive path with its suffix
+removed. `--list` prints the members without writing anything and conflicts
+with `--into`. Extraction refuses absolute members, `..`, backslashes and any
+entry that would write through a symlink, and stops at the `[files]
+max_archive_bytes` and entry-count limits.
+
+#### `file write <PATH> <SOURCE> [--expected-modified-ms MILLIS]`
+
+Replaces a text file with a local file, or with stdin when `SOURCE` is `-`.
+The file must already exist and the save is atomic. `--expected-modified-ms`
+turns the save into an optimistic one: if the file changed since that
+timestamp the command fails instead of overwriting, which is how the editor
+avoids clobbering a concurrent edit.
 
 ### `terminal`
 

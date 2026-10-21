@@ -20,8 +20,9 @@ pub use accounts::{
     SecretString,
 };
 pub use files::{
-    FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten,
-    DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
+    ArchiveEntry, ArchiveFormat, ArchiveListing, FileChunk, FileEntry, FileError, FileErrorKind,
+    FileKind, FileListing, FileWritten, TrashEntry, TrashListing, DEFAULT_FILE_CHUNK,
+    MAX_FILE_CHUNK,
 };
 pub use firewall::{
     FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallRule,
@@ -117,14 +118,58 @@ pub enum Request {
         to: String,
     },
     /// Delete one entry. Directories require `recursive` unless empty.
+    ///
+    /// Unconditional: this is the permanent delete. `FileTrash` is the
+    /// reversible one, and it is the default in the panel.
     FileDelete {
         path: String,
         recursive: bool,
     },
-    /// Begin an atomic upload. The reply is `FileWriteStarted`.
+    /// Move one entry to the freedesktop trash. Requires `[files] trash`.
+    FileTrash {
+        path: String,
+    },
+    /// List every trash directory the daemon can see.
+    FileTrashList,
+    /// Restore one entry from the trash to its recorded original path.
+    FileTrashRestore {
+        id: String,
+        overwrite: bool,
+    },
+    /// Remove every entry from the trash, freeing the space permanently.
+    FileTrashEmpty,
+    /// Create an archive from one entry. Without `destination` the archive sits
+    /// beside it with a suffix chosen from `format`.
+    FileArchiveCreate {
+        path: String,
+        destination: Option<String>,
+        format: Option<ArchiveFormat>,
+    },
+    /// List one archive without extracting it.
+    FileArchiveList {
+        path: String,
+    },
+    /// Extract one archive. Without `into` the default is the archive's
+    /// directory with the suffix removed.
+    FileArchiveExtract {
+        path: String,
+        into: Option<String>,
+    },
+    /// Begin an atomic upload or an editor save. The reply is
+    /// `FileWriteStarted`.
+    ///
+    /// A save and an upload share the chunk flow so neither can drift from the
+    /// other's guards. `require_existing` selects save semantics: the target
+    /// must already be a regular file. `expected_modified_ms` adds the
+    /// optimistic precondition the editor relies on, and is checked before a
+    /// single chunk is accepted.
     FileWriteStart {
         path: String,
         overwrite: bool,
+        #[serde(default)]
+        require_existing: bool,
+        #[serde(default)]
+        expected_modified_ms: Option<u64>,
     },
     /// Append one chunk to an open upload.
     FileWriteChunk {
@@ -341,6 +386,33 @@ pub enum Response {
     },
     FileDeleted {
         path: String,
+    },
+    /// An entry was moved to the trash.
+    FileTrashed {
+        path: String,
+        id: String,
+    },
+    /// One trash listing.
+    TrashListing(TrashListing),
+    /// An entry was restored to its original path.
+    FileRestored {
+        id: String,
+        path: String,
+    },
+    /// The trash was emptied.
+    FileTrashEmptied {
+        removed: usize,
+    },
+    /// An archive was created.
+    FileArchiveCreated {
+        path: String,
+    },
+    /// One archive listing.
+    ArchiveListing(ArchiveListing),
+    /// An archive was extracted.
+    FileArchiveExtracted {
+        path: String,
+        entries: usize,
     },
     FileRenamed {
         from: String,

@@ -6,6 +6,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,6 +17,16 @@ use anth_proto::{
 };
 
 use crate::config::FilesConfig;
+use anth_proto::{ArchiveFormat, ArchiveListing, TrashListing};
+
+pub mod archive;
+pub mod trash;
+pub mod volumes;
+
+pub use archive::ArchiveLimits;
+
+pub use trash::{TrashDirectory, TrashService};
+pub use volumes::{home_paths, live_topdirs, topdirs_from_mountinfo};
 
 static UPLOAD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -26,6 +37,24 @@ pub struct FileService {
     write: bool,
     max_entries: usize,
     max_upload_bytes: u64,
+    /// Whether `[files] trash` is on. Separate from `write`: trashing deletes
+    /// an entry from its directory, so it is its own permission.
+    trash: bool,
+    max_trash_bytes: Option<u64>,
+    /// Ceiling on the uncompressed size one extraction may produce.
+    max_archive_bytes: u64,
+    /// Overrides where the trash lives. Tests point it at a temporary
+    /// directory so the trash stays inside the fixture; production reads
+    /// mountinfo and the XDG variables.
+    trash_paths: Option<TrashPaths>,
+}
+
+/// The volumes and directories the trash resolves against.
+#[derive(Debug, Clone)]
+pub struct TrashPaths {
+    pub topdirs: Vec<PathBuf>,
+    pub home: PathBuf,
+    pub data_home: PathBuf,
 }
 
 /// An upload that has not been committed yet.
@@ -74,6 +103,10 @@ impl FileService {
             write: config.write,
             max_entries: config.max_entries,
             max_upload_bytes: config.max_upload_bytes,
+            trash: config.trash,
+            max_trash_bytes: (config.max_trash_bytes > 0).then_some(config.max_trash_bytes),
+            max_archive_bytes: config.max_archive_bytes,
+            trash_paths: None,
         })
     }
 
@@ -83,6 +116,47 @@ impl FileService {
 
     pub fn max_upload_bytes(&self) -> u64 {
         self.max_upload_bytes
+    }
+
+    /// Pins the mount table instead of reading `/proc/self/mountinfo`. The home
+    /// and data directories keep following the environment.
+    pub fn with_topdirs(self, topdirs: Vec<PathBuf>) -> Self {
+        let (home, data_home) = home_paths();
+        self.with_trash_paths(TrashPaths {
+            topdirs,
+            home,
+            data_home,
+        })
+    }
+
+    /// Pins the whole trash view, which is what a test needs: the mount table
+    /// alone still sends the home volume's trash to the real `$HOME`.
+    pub fn with_trash_paths(mut self, paths: TrashPaths) -> Self {
+        self.trash_paths = Some(paths);
+        self
+    }
+
+    fn topdirs(&self) -> Vec<PathBuf> {
+        match &self.trash_paths {
+            Some(paths) => paths.topdirs.clone(),
+            None => live_topdirs(),
+        }
+    }
+
+    /// The trash service, bound to the mount table.
+    pub fn trash_service(&self) -> TrashService {
+        let (home, data_home) = match &self.trash_paths {
+            Some(paths) => (paths.home.clone(), paths.data_home.clone()),
+            None => home_paths(),
+        };
+        TrashService::new(
+            self.trash,
+            self.max_trash_bytes,
+            self.max_entries,
+            home,
+            data_home,
+            self.topdirs(),
+        )
     }
 
     /// Lists one directory below the configured root.
@@ -166,6 +240,7 @@ impl FileService {
                 )
             }),
             write_enabled: self.write,
+            trash_enabled: self.trash,
         })
     }
 
@@ -289,8 +364,330 @@ impl FileService {
         Ok(path)
     }
 
+    /// Moves one entry to the trash of the volume holding it.
+    ///
+    /// Refuses when the volume has no usable trash directory rather than
+    /// quietly making the delete permanent: a user who picked "move to trash"
+    /// should not lose the file because a mount was read-only.
+    pub fn trash(&self, path: &str) -> Result<(String, String), FileError> {
+        self.require_write()?;
+        if !self.trash {
+            return Err(FileError::new(
+                FileErrorKind::Disabled,
+                "the trash is disabled; enable `[files] trash`".to_string(),
+            ));
+        }
+        let path = normalize(path)?;
+        if path == "/" {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "the filesystem root cannot be trashed",
+            ));
+        }
+
+        let host = self.host_entry(&path)?;
+        // `symlink_metadata` so a dangling symlink can be trashed, and so a
+        // symlink is moved rather than the directory it points at.
+        fs::symlink_metadata(&host).map_err(|e| io_error(&path, e))?;
+
+        let topdir = self.topdir_of(&host).ok_or_else(|| {
+            FileError::new(
+                FileErrorKind::Disabled,
+                format!("no mount point covers `{path}`, so it has no trash"),
+            )
+        })?;
+
+        let service = self.trash_service();
+        let id = service.move_to_trash(&host, &path, &topdir)?;
+        Ok((path, id))
+    }
+
+    /// Restores one trashed entry to its recorded path.
+    pub fn restore(&self, id: &str, overwrite: bool) -> Result<(String, String), FileError> {
+        self.require_write()?;
+        let service = self.trash_service();
+        let entry = service.find(id)?;
+
+        // The recorded path was written by whoever deleted the file, which may
+        // be another application, so it is untrusted input: normalize rejects
+        // `..`, and the host resolution below keeps it inside the root.
+        let path = normalize(&entry.original_path)?;
+        if path == "/" {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "the filesystem root is not a restore target",
+            ));
+        }
+        let host_target = self.host_create(&path)?;
+
+        service.restore(id, &host_target, overwrite)?;
+        Ok((id.to_string(), path))
+    }
+
+    /// Empties every trash directory the daemon can see.
+    pub fn empty_trash(&self) -> Result<usize, FileError> {
+        self.require_write()?;
+        self.trash_service().empty()
+    }
+
+    /// Lists every trash directory the daemon can see.
+    pub fn trash_listing(&self) -> Result<TrashListing, FileError> {
+        self.trash_service().list()
+    }
+
+    /// The longest mount point that contains `host`, which is the volume whose
+    /// trash the entry belongs in.
+    fn topdir_of(&self, host: &Path) -> Option<PathBuf> {
+        let mut best: Option<PathBuf> = None;
+        for topdir in self.topdirs() {
+            if host.starts_with(&topdir) {
+                let longer = best.as_ref().is_none_or(|current| {
+                    topdir.components().count() > current.components().count()
+                });
+                if longer {
+                    best = Some(topdir);
+                }
+            }
+        }
+        best
+    }
+
+    /// Saves text over an existing file atomically.
+    ///
+    /// `expected_modified_ms` is the mtime the editor loaded. When it no longer
+    /// matches, the file changed under the editor and the save is refused: two
+    /// people editing the same file through this panel must not silently
+    /// overwrite each other. A `None` precondition means the caller accepts
+    /// whatever is on disk, which is what a deliberate "overwrite" does.
+    ///
+    /// The write goes through [`FileService::start_upload`] so a save and an
+    /// upload cannot drift apart in their guards; only the text-specific checks
+    /// (NUL bytes, existing size) happen here.
+    pub fn write_text(
+        &self,
+        path: &str,
+        contents: &str,
+        expected_modified_ms: Option<u64>,
+    ) -> Result<u64, FileError> {
+        self.require_write()?;
+        let path = normalize(path)?;
+        let host = self.host_existing(&path)?;
+        let metadata = fs::metadata(&host).map_err(|e| io_error(&path, e))?;
+        if metadata.is_dir() {
+            return Err(FileError::new(
+                FileErrorKind::IsADirectory,
+                format!("`{path}` is a directory"),
+            ));
+        }
+        if metadata.len() > self.max_upload_bytes {
+            return Err(FileError::new(
+                FileErrorKind::TooLarge,
+                format!(
+                    "`{path}` is larger than files.max_upload_bytes ({} bytes)",
+                    self.max_upload_bytes
+                ),
+            ));
+        }
+        if contents.len() as u64 > self.max_upload_bytes {
+            return Err(FileError::new(
+                FileErrorKind::TooLarge,
+                format!(
+                    "the new contents exceed files.max_upload_bytes ({} bytes)",
+                    self.max_upload_bytes
+                ),
+            ));
+        }
+        if contents.contains('\0') {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "the editor only saves text; the contents contain a NUL byte".to_string(),
+            ));
+        }
+
+        // `host` is the resolved target, so a save through a symlink updates
+        // the file it points at instead of detaching the link.
+        let mut upload = self.start_upload(&path, true, true, expected_modified_ms)?;
+        for chunk in contents.as_bytes().chunks(MAX_FILE_CHUNK as usize) {
+            upload.write_chunk(chunk)?;
+        }
+        upload.finish()?;
+
+        let saved = fs::metadata(&host).map_err(|e| io_error(&path, e))?;
+        Ok(modified_ms(&saved).unwrap_or(0))
+    }
+
+    /// Creates an archive from one entry.
+    pub fn create_archive(
+        &self,
+        path: &str,
+        destination: Option<&str>,
+        format: Option<ArchiveFormat>,
+    ) -> Result<String, FileError> {
+        self.require_write()?;
+        let path = normalize(path)?;
+        let source = self.host_existing(&path)?;
+
+        // The default name sits beside the entry, which is where a user looks
+        // for it, and the default format keeps the file readable elsewhere.
+        let (destination, format) = match destination {
+            Some(given) => {
+                let destination = normalize(given)?;
+                let format = format
+                    .or_else(|| archive::detect(Path::new(&destination), None))
+                    .ok_or_else(|| {
+                        FileError::new(
+                            FileErrorKind::InvalidPath,
+                            format!("cannot tell the archive format of `{destination}`"),
+                        )
+                    })?;
+                (destination, format)
+            }
+            None => {
+                let format = format.unwrap_or(ArchiveFormat::TarGz);
+                let suffix = match format {
+                    ArchiveFormat::Zip => "zip",
+                    ArchiveFormat::Tar => "tar",
+                    ArchiveFormat::TarGz => "tar.gz",
+                    ArchiveFormat::TarXz => "tar.xz",
+                    ArchiveFormat::SevenZ => {
+                        return Err(FileError::new(
+                            FileErrorKind::Disabled,
+                            "creating a .7z archive is not supported; extract it instead"
+                                .to_string(),
+                        ));
+                    }
+                };
+                (format!("{path}.{suffix}"), format)
+            }
+        };
+
+        if destination == path {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "an archive cannot be written over its own source".to_string(),
+            ));
+        }
+        let host_destination = self.host_create(&destination)?;
+        match fs::symlink_metadata(&host_destination) {
+            Ok(_) => {
+                return Err(FileError::new(
+                    FileErrorKind::AlreadyExists,
+                    format!("`{destination}` already exists"),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_error(&destination, e)),
+        }
+
+        archive::create(&source, &host_destination, format)
+            .map_err(|error| replace_path(error, &destination))?;
+        Ok(destination)
+    }
+
+    /// Lists one archive without extracting it.
+    pub fn list_archive(&self, path: &str) -> Result<ArchiveListing, FileError> {
+        let path = normalize(path)?;
+        let host = self.host_existing(&path)?;
+        let magic = read_magic(&host);
+        let format = archive::detect(Path::new(&path), magic.as_deref()).ok_or_else(|| {
+            FileError::new(
+                FileErrorKind::InvalidPath,
+                format!("`{path}` is not an archive this daemon can read"),
+            )
+        })?;
+
+        let entries = archive::list(&host, format, self.max_entries)?;
+        let total = entries.len();
+        Ok(ArchiveListing {
+            path,
+            format: Some(format),
+            entries,
+            total,
+            truncated: total >= self.max_entries,
+            warning: (total >= self.max_entries).then(|| {
+                format!("showing the first {total} entries; raise files.max_entries to see more")
+            }),
+        })
+    }
+
+    /// Extracts one archive into a directory.
+    ///
+    /// `into` defaults to the archive's own directory with the suffix removed,
+    /// which is what a file manager does when a user double-clicks an archive.
+    pub fn extract_archive(
+        &self,
+        path: &str,
+        into: Option<&str>,
+    ) -> Result<(String, Vec<String>), FileError> {
+        self.require_write()?;
+        let path = normalize(path)?;
+        let host = self.host_existing(&path)?;
+        let magic = read_magic(&host);
+        let format = archive::detect(Path::new(&path), magic.as_deref()).ok_or_else(|| {
+            FileError::new(
+                FileErrorKind::InvalidPath,
+                format!("`{path}` is not an archive this daemon can read"),
+            )
+        })?;
+
+        let destination = match into {
+            Some(given) => normalize(given)?,
+            None => {
+                let stem = path.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(&path);
+                // `.tar.gz` would otherwise become `x.tar`.
+                let stem = stem.strip_suffix(".tar").unwrap_or(stem);
+                let stem = if stem.is_empty() { &path } else { stem };
+                stem.to_string()
+            }
+        };
+
+        if destination == "/" {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "refusing to extract an archive over the filesystem root".to_string(),
+            ));
+        }
+
+        let host_destination = self.host_create_any(&destination)?;
+        fs::create_dir_all(&host_destination).map_err(|e| io_error(&destination, e))?;
+
+        let limits = ArchiveLimits {
+            max_total_bytes: self.max_archive_bytes,
+            max_entries: self.max_entries,
+            max_entry_bytes: self.max_archive_bytes,
+        };
+        // `docs.zip` must not produce `docs/docs/` when the destination is
+        // already `docs`, which is what the default naming produces.
+        let expected_root = Path::new(&destination)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        let written = archive::extract_with(
+            &host,
+            format,
+            &host_destination,
+            limits,
+            expected_root.as_deref(),
+        )
+        .map_err(|error| replace_path(error, &destination))?;
+
+        Ok((destination, written))
+    }
+
     /// Opens a temporary file next to the destination.
-    pub fn start_upload(&self, path: &str, overwrite: bool) -> Result<PendingUpload, FileError> {
+    ///
+    /// An editor save and an upload share this function; `require_existing`
+    /// selects the save contract (the target must already be a regular file,
+    /// and the mode it had is carried onto the replacement) while the
+    /// precondition is checked here, before any bytes are accepted. Doing the
+    /// checks once means an upload cannot gain access a save would refuse, or
+    /// the reverse.
+    pub fn start_upload(
+        &self,
+        path: &str,
+        overwrite: bool,
+        require_existing: bool,
+        expected_modified_ms: Option<u64>,
+    ) -> Result<PendingUpload, FileError> {
         self.require_write()?;
         let path = normalize(path)?;
         if path == "/" {
@@ -300,34 +697,65 @@ impl FileService {
             ));
         }
 
-        let final_path = self.host_create(&path)?;
-        match fs::symlink_metadata(&final_path) {
+        // A save writes through a symlink: `host_create` keeps the link as the
+        // final component, so renaming the temp file over it would detach the
+        // link instead of updating the file it names.
+        let mut final_path = self.host_create(&path)?;
+        let metadata = match fs::symlink_metadata(&final_path) {
             Ok(metadata) if metadata.file_type().is_dir() => {
                 return Err(FileError::new(
                     FileErrorKind::IsADirectory,
                     format!("`{path}` is a directory"),
                 ));
             }
-            Ok(_) if !overwrite => {
+            Ok(metadata) => Some(metadata),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(io_error(&path, e)),
+        };
+
+        if require_existing && metadata.is_none() {
+            return Err(FileError::new(
+                FileErrorKind::NotFound,
+                format!("`{path}` does not exist; a save cannot create it"),
+            ));
+        }
+        if metadata.is_some() && !overwrite {
+            return Err(FileError::new(
+                FileErrorKind::AlreadyExists,
+                format!("`{path}` already exists"),
+            ));
+        }
+        let metadata = match (&metadata, require_existing) {
+            (Some(_), true) => {
+                final_path = self.host_existing(&path)?;
+                Some(fs::metadata(&final_path).map_err(|e| io_error(&path, e))?)
+            }
+            _ => metadata,
+        };
+        if let (Some(expected), Some(metadata)) = (expected_modified_ms, &metadata) {
+            let current = modified_ms(metadata).unwrap_or(0);
+            if current != expected {
                 return Err(FileError::new(
-                    FileErrorKind::AlreadyExists,
-                    format!("`{path}` already exists"),
+                    FileErrorKind::Conflict,
+                    format!(
+                        "`{path}` changed on disk after it was opened; reload it before saving"
+                    ),
                 ));
             }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_error(&path, e)),
         }
 
         let parent = final_path
             .parent()
             .ok_or_else(|| FileError::new(FileErrorKind::InvalidPath, "path has no parent"))?;
         let temp_path = unique_temp_path(parent);
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map_err(|e| io_error(&path, e))?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        // The replacement inherits the target's mode, so a save cannot turn a
+        // `0600` config holding the JWT key into a world-readable file.
+        if let Some(metadata) = &metadata {
+            options.mode(metadata.permissions().mode());
+        }
+        let file = options.open(&temp_path).map_err(|e| io_error(&path, e))?;
 
         Ok(PendingUpload {
             virtual_path: path,
@@ -482,9 +910,14 @@ impl PendingUpload {
             .map_err(|e| io_error(&self.virtual_path, e))?;
         self.committed = true;
 
+        let modified_ms = fs::metadata(&self.final_path)
+            .ok()
+            .and_then(|metadata| modified_ms(&metadata))
+            .unwrap_or(0);
         Ok(FileWritten {
             path: self.virtual_path.clone(),
             size: self.received,
+            modified_ms,
         })
     }
 }
@@ -586,6 +1019,27 @@ fn unique_temp_path(parent: &Path) -> PathBuf {
         ".anth-upload-{}-{nanos}-{counter}",
         std::process::id()
     ))
+}
+
+/// Reads the first bytes of a file so the format can be sniffed.
+///
+/// A missing or unreadable file yields `None`: detection then answers from the
+/// name alone, and the caller reports the real error when it opens the file.
+fn read_magic(path: &Path) -> Option<Vec<u8>> {
+    let mut buffer = [0u8; 512];
+    let mut file = File::open(path).ok()?;
+    let read = file.read(&mut buffer).ok()?;
+    Some(buffer[..read].to_vec())
+}
+
+/// Rewrites the path inside an error raised by the archive module, which knows
+/// host paths while callers and clients speak virtual ones.
+fn replace_path(mut error: FileError, virtual_path: &str) -> FileError {
+    if let Some(index) = error.detail.find("`: ") {
+        let rest = error.detail[index + 3..].to_string();
+        error.detail = format!("`{virtual_path}`: {rest}");
+    }
+    error
 }
 
 fn io_error(path: &str, error: std::io::Error) -> FileError {

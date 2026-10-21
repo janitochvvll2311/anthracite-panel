@@ -8,9 +8,10 @@ use anth_panel::cli::{
     AccountGroupModifyArgs, AccountUserArgs, AccountUserCommand, AccountUserDeleteArgs,
     AccountUserPasswordArgs, AuthArgs, AuthCommand, Cli, Command, ConfigArgs, ConfigCommand,
     EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
-    FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs, FirewallFlushArgs,
-    NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs,
-    ProcessSpawnArgs, VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
+    FileWriteArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
+    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
+    ProcessSignalArgs, ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs,
+    VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::read_password;
@@ -345,6 +346,27 @@ fn confirm_delete(args: &FileDeleteArgs) -> Result<bool, String> {
     )
 }
 
+fn confirm_trash_restore(args: &TrashRestoreArgs) -> Result<bool, String> {
+    let verb = if args.overwrite {
+        "Restore over the existing entry"
+    } else {
+        "Restore"
+    };
+    confirm_action(
+        args.yes,
+        || format!("{verb} `{}`? [y/N] ", args.id),
+        "refusing to restore without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_trash_empty(args: &TrashEmptyArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || "Empty the trash? This cannot be undone. [y/N] ".to_string(),
+        "refusing to empty the trash without --yes when stdin is not a terminal",
+    )
+}
+
 fn confirm_volume_mount(args: &VolumeMountArgs) -> Result<bool, String> {
     confirm_action(
         args.yes,
@@ -487,6 +509,8 @@ async fn send_file_upload(config_path: &str, args: &FileUploadArgs) -> ExitCode 
         &Request::FileWriteStart {
             path: args.dest.clone(),
             overwrite: args.overwrite,
+            require_existing: false,
+            expected_modified_ms: None,
         },
     )
     .await
@@ -784,6 +808,30 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    // Restoring over an existing entry and emptying the trash are the two
+    // irreversible trash operations, so they confirm like a delete does.
+    if let Command::File(FileArgs {
+        command: FileCommand::TrashBin(args),
+    }) = command
+    {
+        let confirmed = match &args.command {
+            TrashBinCommand::Restore(args) => confirm_trash_restore(args),
+            TrashBinCommand::Empty(args) => confirm_trash_empty(args),
+            TrashBinCommand::List => Ok(true),
+        };
+        match confirmed {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
     // The password never travels through `request_for`: it is read from the
     // terminal here and sent on its own request.
     if let Command::Account(AccountArgs {
@@ -807,6 +855,13 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    if let Command::File(FileArgs {
+        command: FileCommand::Write(args),
+    }) = command
+    {
+        return Some(write_text_file(config_path, args).await);
+    }
+
     let request: Request = request_for(command)?;
     let interval = match watch_interval(command) {
         Ok(interval) => interval,
@@ -827,6 +882,120 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         )
         .await,
     )
+}
+
+/// Replaces a remote text file with a local one, or with stdin.
+///
+/// The body travels as chunks for the same reason an upload does: a single
+/// socket line is capped at 1 MiB, and an editor that can open a file must be
+/// able to save it. `--if-unchanged` reuses the editor's optimistic
+/// precondition, so a script cannot clobber a file that moved under it.
+async fn write_text_file(config_path: &str, args: &FileWriteArgs) -> ExitCode {
+    let mut contents = String::new();
+    let read = if args.source == "-" {
+        std::io::stdin().read_to_string(&mut contents)
+    } else {
+        std::fs::read_to_string(&args.source).map(|text| {
+            contents = text;
+            0
+        })
+    };
+    if let Err(error) = read {
+        eprintln!("[ERROR] cannot read `{}`: {error}", args.source);
+        return ExitCode::FAILURE;
+    }
+
+    let config = client_config(config_path);
+    let mut client = match connect_client(&config).await {
+        Ok(client) => client,
+        Err(code) => return code,
+    };
+
+    let id = match exchange(
+        &mut client,
+        &Request::FileWriteStart {
+            path: args.path.clone(),
+            overwrite: true,
+            require_existing: true,
+            expected_modified_ms: args.expected_modified_ms,
+        },
+    )
+    .await
+    {
+        Ok(Response::FileWriteStarted { id }) => id,
+        Ok(Response::FileError(error)) => {
+            eprintln!("[ERROR] {}", error.detail);
+            return ExitCode::FAILURE;
+        }
+        Ok(Response::Error { detail }) => {
+            eprintln!("[ERROR] {detail}");
+            return ExitCode::FAILURE;
+        }
+        Ok(other) => {
+            eprintln!("[ERROR] unexpected daemon response: {other:?}");
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    for chunk in contents.as_bytes().chunks(DEFAULT_FILE_CHUNK as usize) {
+        match exchange(
+            &mut client,
+            &Request::FileWriteChunk {
+                id,
+                bytes: chunk.to_vec(),
+            },
+        )
+        .await
+        {
+            Ok(Response::FileWriteAccepted { .. }) => {}
+            Ok(Response::FileError(error)) => {
+                eprintln!("[ERROR] {}", error.detail);
+                let _ = exchange(&mut client, &Request::FileWriteAbort { id }).await;
+                return ExitCode::FAILURE;
+            }
+            Ok(Response::Error { detail }) => {
+                eprintln!("[ERROR] {detail}");
+                let _ = exchange(&mut client, &Request::FileWriteAbort { id }).await;
+                return ExitCode::FAILURE;
+            }
+            Ok(other) => {
+                eprintln!("[ERROR] unexpected daemon response: {other:?}");
+                let _ = exchange(&mut client, &Request::FileWriteAbort { id }).await;
+                return ExitCode::FAILURE;
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    match exchange(&mut client, &Request::FileWriteFinish { id }).await {
+        Ok(Response::FileWritten(written)) => {
+            println!("[OK] wrote {} ({} bytes)", written.path, written.size);
+            ExitCode::SUCCESS
+        }
+        Ok(Response::FileError(error)) => {
+            eprintln!("[ERROR] {}", error.detail);
+            ExitCode::FAILURE
+        }
+        Ok(Response::Error { detail }) => {
+            eprintln!("[ERROR] {detail}");
+            ExitCode::FAILURE
+        }
+        Ok(other) => {
+            eprintln!("[ERROR] unexpected daemon response: {other:?}");
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Runs one `auth` subcommand against the config file.

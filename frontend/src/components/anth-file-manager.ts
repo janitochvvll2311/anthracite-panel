@@ -15,6 +15,8 @@ import {
   type FileSortKey,
 } from '../lib/files/display'
 import { confirmAction, promptText } from '../lib/ui/dialog'
+import { isEditable } from '../lib/editor/language'
+import './anth-file-editor'
 
 type PreviewKind = 'text' | 'image' | 'binary'
 
@@ -29,13 +31,13 @@ interface FilePreview {
 }
 
 /**
- * Filesystem explorer.
+ * Filesystem manager.
  *
  * The component owns navigation, sorting, hidden-file filtering and write
  * confirmations. It depends on the injected `FileClient`, not on `/api`.
  */
-@customElement('anth-file-explorer')
-export class AnthFileExplorer extends LitElement {
+@customElement('anth-file-manager')
+export class AnthFileManager extends LitElement {
   @property({ attribute: false })
   client?: FileClient
 
@@ -74,6 +76,11 @@ export class AnthFileExplorer extends LitElement {
 
   @state()
   private busy = false
+
+  /** The path open in the editor, if any. Editing replaces the preview. */
+  @state()
+  private editing = false
+
 
   private generation = 0
   private previewGeneration = 0
@@ -236,6 +243,43 @@ export class AnthFileExplorer extends LitElement {
     this.revokePreviewUrl()
     this.preview = undefined
     this.previewLoading = false
+    this.editing = false
+  }
+
+  /**
+   * Saves through the client, passing the mtime the preview was read at.
+   *
+   * The daemon refuses when the file changed since, and the editor keeps the
+   * buffer dirty; here that means the message is surfaced and the preview is
+   * not silently refreshed over the user's text.
+   */
+  private async saveEdit(contents: string): Promise<{ modified_ms: number }> {
+    const preview = this.preview
+    if (!preview || !this.client) throw new Error('nothing to save')
+
+    const result = await this.client.writeText(
+      preview.entry.path,
+      contents,
+      preview.entry.modified_ms,
+    )
+    // The saved text is now the file, so the preview can show it without a
+    // second round trip.
+    this.preview = {
+      ...preview,
+      text: contents,
+      size: result.size,
+      truncated: false,
+      entry: { ...preview.entry, size: result.size, modified_ms: result.modified_ms },
+    }
+    return result
+  }
+
+  private handleEditorKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      // Leaving the editor discards nothing: the text is still in the editor's
+      // history, but the preview is what the file on disk says.
+      this.editing = false
+    }
   }
 
   private revokePreviewUrl(): void {
@@ -290,21 +334,33 @@ export class AnthFileExplorer extends LitElement {
     )
   }
 
+  /**
+   * Deletes the selection, through the trash when the daemon offers it.
+   *
+   * A permanent delete of a directory is unrecoverable, so the panel only does
+   * it when trashing is off, and the prompt says which one is about to happen.
+   */
   private async deleteSelected(): Promise<void> {
     const selected = this.selected
     if (!selected || !this.client) return
+    const trashable = this.listing?.trash_enabled === true
     const accepted = await confirmAction({
-      title: `Delete ${selected.name}?`,
-      message:
-        selected.kind === 'directory'
-          ? `${selected.path} and everything inside it is removed.`
-          : selected.path,
-      confirmLabel: 'Delete',
-      danger: true,
+      title: trashable
+        ? `Move ${selected.name} to the trash?`
+        : `Delete ${selected.name}?`,
+      message: trashable
+        ? `${selected.path} can be restored from the trash.`
+        : selected.kind === 'directory'
+          ? `${selected.path} and everything inside it is removed permanently.`
+          : `${selected.path} is removed permanently.`,
+      confirmLabel: trashable ? 'Move to trash' : 'Delete',
+      danger: !trashable,
     })
     if (!accepted) return
     void this.mutate(() =>
-      this.client!.delete(selected.path, selected.kind === 'directory'),
+      trashable
+        ? this.client!.trash(selected.path)
+        : this.client!.delete(selected.path, selected.kind === 'directory'),
     )
   }
 
@@ -373,18 +429,43 @@ export class AnthFileExplorer extends LitElement {
             ${formatBytes(preview.size)}
           </div>
         </div>
+        <span class="spacer"></span>
+        ${preview.kind === 'text' &&
+        !preview.truncated &&
+        isEditable(preview.entry.path) &&
+        this.listing?.write_enabled === true
+          ? html`<button
+              type="button"
+              class="edit-toggle"
+              @click=${() => (this.editing = !this.editing)}
+            >
+              ${this.editing ? 'Close editor' : 'Edit'}
+            </button>`
+          : nothing}
         ${link
           ? html`<a class="download" href=${link} download>Download</a>`
           : nothing}
       </header>
       ${preview.truncated
         ? html`<p class="warning" role="status">
-            Preview truncated; use Download for the full file.
+            Preview truncated; use Download for the full file. Editing is
+            disabled because saving the preview would discard the rest.
           </p>`
         : nothing}
-      ${preview.kind === 'text'
-        ? html`<pre class="text-preview">${preview.text}</pre>`
-        : preview.kind === 'image'
+      ${this.editing
+        ? html`
+            <div class="editor-host" @keydown=${this.handleEditorKeydown}>
+              <anth-file-editor
+                .path=${preview.entry.path}
+                .contents=${preview.text ?? ''}
+                .writable=${this.listing?.write_enabled === true}
+                .save=${(contents: string) => this.saveEdit(contents)}
+              ></anth-file-editor>
+            </div>
+          `
+        : preview.kind === 'text'
+          ? html`<pre class="text-preview">${preview.text}</pre>`
+          : preview.kind === 'image'
           ? html`<img
               class="image-preview"
               src=${preview.url}
@@ -404,7 +485,7 @@ export class AnthFileExplorer extends LitElement {
     const writable = listing?.write_enabled === true
 
     return html`
-      <section class="explorer" part="explorer">
+      <section class="explorer" part="file-manager">
         <header class="toolbar">
           <nav class="crumbs" aria-label="Breadcrumb">
             ${breadcrumbs(current).map(
@@ -798,6 +879,29 @@ export class AnthFileExplorer extends LitElement {
       margin-bottom: 8px;
     }
 
+    .preview-head .spacer {
+      flex: 1;
+    }
+
+    .edit-toggle {
+      font: inherit;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border, #cfd8e3);
+      background: var(--surface, #fff);
+      cursor: pointer;
+    }
+
+    .editor-host {
+      min-height: 18rem;
+      height: 60vh;
+      display: flex;
+    }
+
+    .editor-host anth-file-editor {
+      flex: 1;
+    }
+
     .preview-head strong {
       overflow-wrap: anywhere;
     }
@@ -867,7 +971,7 @@ function messageOf(error: unknown): string {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'anth-file-explorer': AnthFileExplorer
+    'anth-file-manager': AnthFileManager
   }
 }
 

@@ -1,8 +1,8 @@
 //! Rendering of host information as a bordered text table.
 
 use anth_proto::{
-    AccountSnapshot, FileKind, FileListing, FirewallSnapshot, HostInfo, NetworkSnapshot,
-    ProcessSnapshot, Response, VolumeDevice, VolumeSnapshot,
+    AccountSnapshot, ArchiveListing, FileKind, FileListing, FirewallSnapshot, HostInfo,
+    NetworkSnapshot, ProcessSnapshot, Response, TrashListing, VolumeDevice, VolumeSnapshot,
 };
 
 const TOP_LEFT: char = '┌';
@@ -534,6 +534,73 @@ fn percent(part: u64, total: u64) -> f64 {
     }
 }
 
+/// One archive listing: members, sizes and the compression ratio when the
+/// format reports both sizes.
+pub fn render_archive_listing(listing: &ArchiveListing) -> String {
+    let mut rows = Vec::with_capacity(listing.entries.len());
+    for entry in &listing.entries {
+        let (kind, name) = match entry.kind {
+            // Zip directory entries already end in `/`; adding a second one
+            // turns `docs/` into `docs//`.
+            FileKind::Directory => (
+                "dir",
+                if entry.name.ends_with('/') {
+                    entry.name.clone()
+                } else {
+                    format!("{}/", entry.name)
+                },
+            ),
+            _ => ("file", entry.name.clone()),
+        };
+        let size = if entry.kind == FileKind::Directory {
+            "-".to_string()
+        } else {
+            format_bytes(entry.size)
+        };
+        let ratio = match entry.compressed {
+            Some(compressed) if entry.size > 0 => {
+                format!("{}%", compressed.saturating_mul(100) / entry.size)
+            }
+            _ => "-".to_string(),
+        };
+        rows.push(vec![
+            kind.to_string(),
+            name,
+            size,
+            entry
+                .compressed
+                .map(format_bytes)
+                .unwrap_or_else(|| "-".to_string()),
+            ratio,
+        ]);
+    }
+
+    let mut table = Table::new(vec![
+        "TYPE".to_string(),
+        "NAME".to_string(),
+        "SIZE".to_string(),
+        "STORED".to_string(),
+        "RATIO".to_string(),
+    ]);
+    for row in rows {
+        table.push(row);
+    }
+    let mut out = table.render();
+
+    let format = listing
+        .format
+        .map(|format| format.label().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    out.push_str(&format!(
+        "\n{} holds {} entries ({format}).\n",
+        listing.path, listing.total
+    ));
+    if let Some(warning) = &listing.warning {
+        out.push_str(&format!("{warning}\n"));
+    }
+    out
+}
+
 /// Formats one daemon response as the text the CLI prints. Errors carry the
 /// same `[ERROR]` prefix as successful commands carry `[OK]`.
 pub fn render_response(response: &Response) -> String {
@@ -557,6 +624,12 @@ pub fn render_response(response: &Response) -> String {
             )
         }
         Response::ProcessSpawnError(error) => format!("[ERROR] {}", error.detail),
+        Response::FileArchiveCreated { path } => format!("[OK] created {path}"),
+        Response::ArchiveListing(listing) => render_archive_listing(listing),
+        Response::FileArchiveExtracted { path, entries } => {
+            let noun = if *entries == 1 { "entry" } else { "entries" };
+            format!("[OK] extracted {entries} {noun} into {path}")
+        }
         Response::NetworkSnapshot(snapshot) => render_network_snapshot(snapshot),
         Response::NetworkStateChanged { name, up } => {
             let state = if *up { "up" } else { "down" };
@@ -589,6 +662,12 @@ pub fn render_response(response: &Response) -> String {
             format!("[OK] upload {id} received {received} bytes")
         }
         Response::FileWriteAborted { id } => format!("[OK] upload {id} aborted"),
+        Response::FileTrashed { path, id } => format!("[OK] moved {path} to the trash as {id}"),
+        Response::TrashListing(listing) => render_trash_listing(listing),
+        Response::FileRestored { id, path } => format!("[OK] restored {id} to {path}"),
+        Response::FileTrashEmptied { removed } => {
+            format!("[OK] emptied the trash ({removed} entries removed)")
+        }
         Response::FileError(error) => format!("[ERROR] {}", error.detail),
         // A CLI subcommand never opens a terminal, so these are only reachable
         // if a daemon volunteers frames nobody asked for.
@@ -685,6 +764,55 @@ pub fn render_file_listing(listing: &FileListing) -> String {
     if let Some(warning) = &listing.warning {
         output.push('\n');
         output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
+}
+
+/// The trash table. Kept beside the listing renderer because both answer a
+/// "what is here" question and share the size and timestamp helpers.
+pub fn render_trash_listing(listing: &TrashListing) -> String {
+    let mut table = Table::new(vec![
+        "TYPE".to_string(),
+        "NAME".to_string(),
+        "SIZE".to_string(),
+        "DELETED FROM".to_string(),
+    ]);
+
+    for entry in &listing.entries {
+        let kind = match entry.kind {
+            FileKind::Directory => "dir",
+            FileKind::File => "file",
+            FileKind::Symlink => "link",
+            FileKind::Other => "other",
+        };
+        table.push(vec![
+            kind.to_string(),
+            entry.name.clone(),
+            if matches!(entry.kind, FileKind::Directory) {
+                "-".to_string()
+            } else {
+                format_bytes(entry.size)
+            },
+            entry.original_path.clone(),
+        ]);
+    }
+
+    let mut output = table.render();
+    let retention = match listing.max_bytes {
+        Some(max) => format!(" of {}", format_bytes(max)),
+        None => String::new(),
+    };
+    output.push_str(&format!(
+        "\nTrash holds {} entries using {}{retention}.",
+        listing.total,
+        format_bytes(listing.used_bytes)
+    ));
+    if !listing.enabled {
+        output.push_str("\nThe trash is disabled ([files] trash), so entries can be listed and restored but not created.");
+    }
+    if let Some(warning) = &listing.warning {
+        output.push_str("\nWarning: ");
         output.push_str(warning);
     }
     output

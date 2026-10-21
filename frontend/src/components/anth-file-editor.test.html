@@ -1,0 +1,144 @@
+<!doctype html>
+<!--
+  Dev-only harness for the file editor.
+
+  Run `npm run dev` and open
+  http://localhost:5173/src/components/anth-file-editor.test.html. Vite's build input is only
+  index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel text editor component."
+    />
+    <title>anth-file-editor · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-file-editor" width="1180px">
+      <p slot="description">
+        CodeMirror-backed text editor used by the file explorer preview. It shows
+        line numbers, syntax highlighting for the grammars the panel ships, and
+        word autocompletion. Saving goes through <code>POST /api/files/write</code>
+        with the mtime the file was loaded at, so a concurrent change is refused
+        instead of overwritten.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Pick one of the sample files; each exercises a different grammar.</li>
+            <li>Type to mark the buffer dirty and press Save to write it back.</li>
+            <li>
+              Save with <em>Stale precondition</em> ticked to see the conflict
+              path: the daemon refuses and the buffer stays dirty.
+            </li>
+            <li>Untick writes to see the read-only state.</li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li>Open <code>/src/components/anth-file-editor.test.html</code>.</li>
+          </ul>
+        </article>
+      </section>
+
+      <div class="harness-toolbar">
+        <label class="harness-field">
+          File
+          <select id="sample">
+            <option value="/notes.md">notes.md</option>
+            <option value="/main.rs">main.rs</option>
+            <option value="/app.ts">app.ts</option>
+            <option value="/settings.json">settings.json</option>
+            <option value="/compose.yml">compose.yml</option>
+          </select>
+        </label>
+        <label class="harness-field">
+          Path
+          <input id="path" type="text" value="/notes.md" />
+        </label>
+        <button id="load" type="button">Load</button>
+        <label class="harness-check">
+          <input id="writable" type="checkbox" checked />
+          Writes enabled
+        </label>
+        <label class="harness-check">
+          <input id="stale" type="checkbox" />
+          Stale precondition
+        </label>
+      </div>
+
+      <p id="status" role="status" class="harness-note"></p>
+
+      <anth-file-editor id="editor"></anth-file-editor>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-file-editor.ts'
+      import { HttpFileClient } from '/src/lib/files/file-client.ts'
+
+      const client = new HttpFileClient()
+      const editor = document.getElementById('editor')
+      const path = document.getElementById('path')
+      const sample = document.getElementById('sample')
+      const writable = document.getElementById('writable')
+      const stale = document.getElementById('stale')
+      const status = document.getElementById('status')
+
+      // The mtime the file was loaded at; the save precondition.
+      let modifiedMs = null
+
+      async function load(target) {
+        path.value = target
+        status.textContent = `Loading ${target}…`
+        try {
+          const result = await client.read(target)
+          editor.path = target
+          editor.contents = await result.blob.text()
+          editor.writable = writable.checked
+          // A stale precondition is simulated by sending the wrong mtime, which
+          // is exactly what a concurrent edit produces.
+          modifiedMs = stale.checked ? 1 : null
+          editor.save = async (contents) => {
+            status.textContent = 'Saving…'
+            try {
+              const saved = await client.writeText(target, contents, modifiedMs)
+              modifiedMs = saved.modified_ms
+              status.textContent = `Saved (${saved.size} bytes)`
+              return saved
+            } catch (error) {
+              status.textContent = `Refused: ${error.message}`
+              throw error
+            }
+          }
+          await editor.updateComplete
+          status.textContent = `${target}: ${result.size} bytes`
+        } catch (error) {
+          status.textContent = `Cannot open ${target}: ${error.message}`
+        }
+      }
+
+      sample.addEventListener('change', () => void load(sample.value))
+      document
+        .getElementById('load')
+        .addEventListener('click', () => void load(path.value || '/notes.md'))
+      writable.addEventListener('change', () => {
+        editor.writable = writable.checked
+      })
+
+      void load(sample.value)
+    </script>
+  </body>
+</html>
