@@ -54,7 +54,7 @@ Additional decisions taken while planning:
 | --- | --- | --- |
 | 0 | Handler-forward dispatch, `/api` 404, app shell, i18n rig, bun toolchain | done |
 | 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, merged in #16 |
-| 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, in review |
+| 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
 | 3 (point 6) | Floating windows, minimize, standalone window | not started |
 | 4 (point 1) | `anth-process-manager` and process spawning | not started |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
@@ -205,7 +205,30 @@ What changed:
   changed sections. A full replacement would overwrite a field another tab
   changed while the form was open.
 
-Verification: backend suite green including 19 router-level auth tests, 343
+Two review rounds followed, and the second one found three regressions in the
+first round's fixes. All are closed:
+
+- Access tokens were verified by signature alone, so a password change left one
+  working for its full lifetime. Every token now carries a `sid`, and
+  `verify_access` asks the session store whether that session is live. A
+  password change rotates the signing key and rebuilds the service, so the old
+  token dies at once rather than at expiry.
+- `replace_config` rebuilt the auth service, which signed the operator out on a
+  settings save. Policy fields now sit behind an inner lock and are applied in
+  place; a credential change uses the separate `replace_auth`.
+- Rotation had a check-then-act window: two concurrent refreshes of one token
+  both got a pair. The check, the spend and the re-issue now happen in one
+  write-lock section.
+- A refresh token was accepted as an API credential. Tokens carry a `kind`, and
+  only `access` reaches a route, so a leaked refresh token is good for one
+  rotation and nothing else.
+- `access_expires_in` and `refresh_expires_in` reported the configured TTL
+  instead of the time left, so a tab loaded mid-token scheduled its silent
+  refresh too late. They are computed from each token's `exp`.
+- The config file was world-readable; it holds the digest and the signing key.
+  `Config::save` writes it `0600`.
+
+Verification: backend suite green including 27 router-level auth tests, 348
 frontend tests, `tsc --noEmit`, `cargo fmt --check` and `cargo clippy` clean.
 Harnesses: `anth-login.test.html` and `anth-settings.test.html`.
 
@@ -218,3 +241,14 @@ Lessons for later phases:
   shell has to take the operator back to the login.
 - The daemon socket is still unauthenticated. Panel auth is a browser boundary;
   do not describe it as protecting the socket.
+- A token must say what it is for, not only who it belongs to. "Signature valid
+  and session live" was true of both halves of the pair, and that made a refresh
+  token a 12-hour API credential.
+- Check-and-act on shared state belongs in one lock section. The rotation bug was
+  invisible to a single-threaded test and showed up under eight.
+- A countdown in an API response has to be a countdown. Reporting the configured
+  TTL is the kind of thing the writer of the endpoint cannot notice and every
+  client gets wrong.
+- A retry belongs next to the transport. Eleven clients now share one
+  `withRetry` fetch, so a mid-session expiry recovers everywhere instead of
+  nowhere.
