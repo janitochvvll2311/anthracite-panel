@@ -591,6 +591,9 @@ duplicate route tables here — point at the doc.
   `cargo clippy`; never pass `--target x86_64-unknown-linux-gnu`. A sandbox that
   lost its toolchain needs `rustup target add x86_64-unknown-linux-musl` plus
   `apt-get install musl-tools` (for `musl-gcc`, which the C dependencies use).
+  The host `x86_64-unknown-linux-gnu` std stays installed by rustup because
+  proc-macros and build scripts compile for the host; that is a toolchain
+  requirement, not a project target. Never build the project itself for gnu.
 - **bun is the only package manager, and `bunx` does not exist.** Run scripts as
   `bun run <script>` from `frontend/`. `npm`, `npx` and `corepack` are removed on
   purpose; reinstalling one to "just run a script" breaks the rule.
