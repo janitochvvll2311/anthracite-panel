@@ -6,6 +6,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -239,6 +240,7 @@ impl FileService {
                 )
             }),
             write_enabled: self.write,
+            trash_enabled: self.trash,
         })
     }
 
@@ -457,6 +459,10 @@ impl FileService {
     /// people editing the same file through this panel must not silently
     /// overwrite each other. A `None` precondition means the caller accepts
     /// whatever is on disk, which is what a deliberate "overwrite" does.
+    ///
+    /// The write goes through [`FileService::start_upload`] so a save and an
+    /// upload cannot drift apart in their guards; only the text-specific checks
+    /// (NUL bytes, existing size) happen here.
     pub fn write_text(
         &self,
         path: &str,
@@ -498,38 +504,13 @@ impl FileService {
             ));
         }
 
-        if let Some(expected) = expected_modified_ms {
-            let current = modified_ms(&metadata).unwrap_or(0);
-            if current != expected {
-                return Err(FileError::new(
-                    FileErrorKind::Conflict,
-                    format!(
-                        "`{path}` changed on disk after it was opened; reload it before saving"
-                    ),
-                ));
-            }
+        // `host` is the resolved target, so a save through a symlink updates
+        // the file it points at instead of detaching the link.
+        let mut upload = self.start_upload(&path, true, true, expected_modified_ms)?;
+        for chunk in contents.as_bytes().chunks(MAX_FILE_CHUNK as usize) {
+            upload.write_chunk(chunk)?;
         }
-
-        // Write beside the target and rename, so a failed save cannot leave a
-        // half-written file behind.
-        let parent = host
-            .parent()
-            .ok_or_else(|| FileError::new(FileErrorKind::InvalidPath, "path has no parent"))?;
-        let temp_path = unique_temp_path(parent);
-        {
-            let mut temp = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp_path)
-                .map_err(|e| io_error(&path, e))?;
-            temp.write_all(contents.as_bytes())
-                .map_err(|e| io_error(&path, e))?;
-            temp.sync_all().map_err(|e| io_error(&path, e))?;
-        }
-        if let Err(error) = fs::rename(&temp_path, &host) {
-            let _ = fs::remove_file(&temp_path);
-            return Err(io_error(&path, error));
-        }
+        upload.finish()?;
 
         let saved = fs::metadata(&host).map_err(|e| io_error(&path, e))?;
         Ok(modified_ms(&saved).unwrap_or(0))
@@ -693,7 +674,20 @@ impl FileService {
     }
 
     /// Opens a temporary file next to the destination.
-    pub fn start_upload(&self, path: &str, overwrite: bool) -> Result<PendingUpload, FileError> {
+    ///
+    /// An editor save and an upload share this function; `require_existing`
+    /// selects the save contract (the target must already be a regular file,
+    /// and the mode it had is carried onto the replacement) while the
+    /// precondition is checked here, before any bytes are accepted. Doing the
+    /// checks once means an upload cannot gain access a save would refuse, or
+    /// the reverse.
+    pub fn start_upload(
+        &self,
+        path: &str,
+        overwrite: bool,
+        require_existing: bool,
+        expected_modified_ms: Option<u64>,
+    ) -> Result<PendingUpload, FileError> {
         self.require_write()?;
         let path = normalize(path)?;
         if path == "/" {
@@ -703,34 +697,65 @@ impl FileService {
             ));
         }
 
-        let final_path = self.host_create(&path)?;
-        match fs::symlink_metadata(&final_path) {
+        // A save writes through a symlink: `host_create` keeps the link as the
+        // final component, so renaming the temp file over it would detach the
+        // link instead of updating the file it names.
+        let mut final_path = self.host_create(&path)?;
+        let metadata = match fs::symlink_metadata(&final_path) {
             Ok(metadata) if metadata.file_type().is_dir() => {
                 return Err(FileError::new(
                     FileErrorKind::IsADirectory,
                     format!("`{path}` is a directory"),
                 ));
             }
-            Ok(_) if !overwrite => {
+            Ok(metadata) => Some(metadata),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(io_error(&path, e)),
+        };
+
+        if require_existing && metadata.is_none() {
+            return Err(FileError::new(
+                FileErrorKind::NotFound,
+                format!("`{path}` does not exist; a save cannot create it"),
+            ));
+        }
+        if metadata.is_some() && !overwrite {
+            return Err(FileError::new(
+                FileErrorKind::AlreadyExists,
+                format!("`{path}` already exists"),
+            ));
+        }
+        let metadata = match (&metadata, require_existing) {
+            (Some(_), true) => {
+                final_path = self.host_existing(&path)?;
+                Some(fs::metadata(&final_path).map_err(|e| io_error(&path, e))?)
+            }
+            _ => metadata,
+        };
+        if let (Some(expected), Some(metadata)) = (expected_modified_ms, &metadata) {
+            let current = modified_ms(metadata).unwrap_or(0);
+            if current != expected {
                 return Err(FileError::new(
-                    FileErrorKind::AlreadyExists,
-                    format!("`{path}` already exists"),
+                    FileErrorKind::Conflict,
+                    format!(
+                        "`{path}` changed on disk after it was opened; reload it before saving"
+                    ),
                 ));
             }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_error(&path, e)),
         }
 
         let parent = final_path
             .parent()
             .ok_or_else(|| FileError::new(FileErrorKind::InvalidPath, "path has no parent"))?;
         let temp_path = unique_temp_path(parent);
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-            .map_err(|e| io_error(&path, e))?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        // The replacement inherits the target's mode, so a save cannot turn a
+        // `0600` config holding the JWT key into a world-readable file.
+        if let Some(metadata) = &metadata {
+            options.mode(metadata.permissions().mode());
+        }
+        let file = options.open(&temp_path).map_err(|e| io_error(&path, e))?;
 
         Ok(PendingUpload {
             virtual_path: path,
@@ -885,9 +910,14 @@ impl PendingUpload {
             .map_err(|e| io_error(&self.virtual_path, e))?;
         self.committed = true;
 
+        let modified_ms = fs::metadata(&self.final_path)
+            .ok()
+            .and_then(|metadata| modified_ms(&metadata))
+            .unwrap_or(0);
         Ok(FileWritten {
             path: self.virtual_path.clone(),
             size: self.received,
+            modified_ms,
         })
     }
 }

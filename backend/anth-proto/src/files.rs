@@ -55,6 +55,10 @@ pub struct FileListing {
     pub warning: Option<String>,
     /// Whether the daemon accepts the write operations.
     pub write_enabled: bool,
+    /// Whether Delete moves entries to the trash instead of removing them.
+    /// Separate from `write_enabled` because `[files] trash` is its own opt-in.
+    #[serde(default)]
+    pub trash_enabled: bool,
 }
 
 /// One chunk of a file.
@@ -73,6 +77,10 @@ pub struct FileChunk {
 pub struct FileWritten {
     pub path: String,
     pub size: u64,
+    /// New mtime in milliseconds, so the editor can update its precondition
+    /// without a second round trip that could race the next save.
+    #[serde(default)]
+    pub modified_ms: u64,
 }
 
 /// Archive formats the daemon can read or write.

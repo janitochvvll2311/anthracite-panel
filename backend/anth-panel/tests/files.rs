@@ -189,7 +189,10 @@ fn write_operations_are_disabled_by_default() {
         FileErrorKind::Disabled
     );
     assert_eq!(
-        service.start_upload("/file", false).unwrap_err().kind,
+        service
+            .start_upload("/file", false, false, None)
+            .unwrap_err()
+            .kind,
         FileErrorKind::Disabled
     );
 }
@@ -244,7 +247,10 @@ fn protects_the_virtual_root_from_mutation() {
         FileErrorKind::InvalidPath
     );
     assert_eq!(
-        service.start_upload("/", false).unwrap_err().kind,
+        service
+            .start_upload("/", false, false, None)
+            .unwrap_err()
+            .kind,
         FileErrorKind::IsADirectory
     );
 }
@@ -254,7 +260,9 @@ fn uploads_atomically_and_cleans_up_aborted_files() {
     let root = TempRoot::new("upload");
     let service = service(root.path(), true);
 
-    let mut upload = service.start_upload("/result.txt", false).unwrap();
+    let mut upload = service
+        .start_upload("/result.txt", false, false, None)
+        .unwrap();
     assert_eq!(upload.write_chunk(b"hello ").unwrap(), 6);
     assert_eq!(upload.write_chunk(b"world").unwrap(), 11);
     let written = upload.finish().unwrap();
@@ -265,11 +273,16 @@ fn uploads_atomically_and_cleans_up_aborted_files() {
         b"hello world"
     );
     assert_eq!(
-        service.start_upload("/result.txt", false).unwrap_err().kind,
+        service
+            .start_upload("/result.txt", false, false, None)
+            .unwrap_err()
+            .kind,
         FileErrorKind::AlreadyExists
     );
 
-    let mut upload = service.start_upload("/result.txt", true).unwrap();
+    let mut upload = service
+        .start_upload("/result.txt", true, false, None)
+        .unwrap();
     upload.write_chunk(b"replaced").unwrap();
     upload.finish().unwrap();
     assert_eq!(
@@ -277,7 +290,9 @@ fn uploads_atomically_and_cleans_up_aborted_files() {
         b"replaced"
     );
 
-    let mut aborted = service.start_upload("/aborted.txt", false).unwrap();
+    let mut aborted = service
+        .start_upload("/aborted.txt", false, false, None)
+        .unwrap();
     aborted.write_chunk(b"partial").unwrap();
     drop(aborted);
     assert!(!root.path().join("aborted.txt").exists());
@@ -306,7 +321,7 @@ fn enforces_the_upload_limit() {
         ..FilesConfig::default()
     })
     .unwrap();
-    let mut upload = service.start_upload("/big", false).unwrap();
+    let mut upload = service.start_upload("/big", false, false, None).unwrap();
 
     assert_eq!(
         upload.write_chunk(b"12345").unwrap_err().kind,

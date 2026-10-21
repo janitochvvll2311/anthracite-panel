@@ -303,6 +303,7 @@ fn render_file_listing_shows_types_sizes_and_warning() {
         truncated: false,
         warning: Some("showing 2 of 3 entries".to_string()),
         write_enabled: false,
+        trash_enabled: false,
     };
 
     let out = render_file_listing(&listing);

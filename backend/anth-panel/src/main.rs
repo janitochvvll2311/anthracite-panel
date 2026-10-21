@@ -509,6 +509,8 @@ async fn send_file_upload(config_path: &str, args: &FileUploadArgs) -> ExitCode 
         &Request::FileWriteStart {
             path: args.dest.clone(),
             overwrite: args.overwrite,
+            require_existing: false,
+            expected_modified_ms: None,
         },
     )
     .await
@@ -882,11 +884,12 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
     )
 }
 
-/// Replaces a remote text file with a local one.
+/// Replaces a remote text file with a local one, or with stdin.
 ///
-/// The body travels in one request, so the size is bounded by the daemon's own
-/// `files.max_upload_bytes` and the socket line cap; that is the same ceiling
-/// the web editor obeys.
+/// The body travels as chunks for the same reason an upload does: a single
+/// socket line is capped at 1 MiB, and an editor that can open a file must be
+/// able to save it. `--if-unchanged` reuses the editor's optimistic
+/// precondition, so a script cannot clobber a file that moved under it.
 async fn write_text_file(config_path: &str, args: &FileWriteArgs) -> ExitCode {
     let mut contents = String::new();
     let read = if args.source == "-" {
@@ -902,19 +905,97 @@ async fn write_text_file(config_path: &str, args: &FileWriteArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let config = Config::load_or_default(config_path);
-    let request = Request::FileWriteText {
-        path: args.path.clone(),
-        contents,
-        expected_modified_ms: args.expected_modified_ms,
+    let config = client_config(config_path);
+    let mut client = match connect_client(&config).await {
+        Ok(client) => client,
+        Err(code) => return code,
     };
-    stream::follow(
-        Path::new(&config.socket_path),
-        &request,
-        None,
-        anth_panel::render_response,
+
+    let id = match exchange(
+        &mut client,
+        &Request::FileWriteStart {
+            path: args.path.clone(),
+            overwrite: true,
+            require_existing: true,
+            expected_modified_ms: args.expected_modified_ms,
+        },
     )
     .await
+    {
+        Ok(Response::FileWriteStarted { id }) => id,
+        Ok(Response::FileError(error)) => {
+            eprintln!("[ERROR] {}", error.detail);
+            return ExitCode::FAILURE;
+        }
+        Ok(Response::Error { detail }) => {
+            eprintln!("[ERROR] {detail}");
+            return ExitCode::FAILURE;
+        }
+        Ok(other) => {
+            eprintln!("[ERROR] unexpected daemon response: {other:?}");
+            return ExitCode::FAILURE;
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    for chunk in contents.as_bytes().chunks(DEFAULT_FILE_CHUNK as usize) {
+        match exchange(
+            &mut client,
+            &Request::FileWriteChunk {
+                id,
+                bytes: chunk.to_vec(),
+            },
+        )
+        .await
+        {
+            Ok(Response::FileWriteAccepted { .. }) => {}
+            Ok(Response::FileError(error)) => {
+                eprintln!("[ERROR] {}", error.detail);
+                let _ = exchange(&mut client, &Request::FileWriteAbort { id }).await;
+                return ExitCode::FAILURE;
+            }
+            Ok(Response::Error { detail }) => {
+                eprintln!("[ERROR] {detail}");
+                let _ = exchange(&mut client, &Request::FileWriteAbort { id }).await;
+                return ExitCode::FAILURE;
+            }
+            Ok(other) => {
+                eprintln!("[ERROR] unexpected daemon response: {other:?}");
+                let _ = exchange(&mut client, &Request::FileWriteAbort { id }).await;
+                return ExitCode::FAILURE;
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    match exchange(&mut client, &Request::FileWriteFinish { id }).await {
+        Ok(Response::FileWritten(written)) => {
+            println!("[OK] wrote {} ({} bytes)", written.path, written.size);
+            ExitCode::SUCCESS
+        }
+        Ok(Response::FileError(error)) => {
+            eprintln!("[ERROR] {}", error.detail);
+            ExitCode::FAILURE
+        }
+        Ok(Response::Error { detail }) => {
+            eprintln!("[ERROR] {detail}");
+            ExitCode::FAILURE
+        }
+        Ok(other) => {
+            eprintln!("[ERROR] unexpected daemon response: {other:?}");
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Runs one `auth` subcommand against the config file.

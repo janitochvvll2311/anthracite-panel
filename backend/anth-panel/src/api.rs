@@ -947,9 +947,8 @@ pub struct ArchivePathQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct FileWriteArgs {
+pub struct FileWriteQuery {
     pub path: String,
-    pub contents: String,
     /// The mtime the editor loaded. Omitted means "overwrite regardless".
     #[serde(default)]
     pub expected_modified_ms: Option<u64>,
@@ -1270,40 +1269,35 @@ pub async fn post_archive_extract(
     }
 }
 
-/// `POST /api/files/write` — save text over an existing file.
+/// `POST /api/files/write?path=/a.txt&expected_modified_ms=...` — save text.
+///
+/// The body is the raw text, streamed through the same chunk flow as an upload.
+/// A JSON body would carry the whole file in one socket line, and the line cap
+/// is 1 MiB, so any larger file opened in the editor could not be saved.
 pub async fn post_file_write(
     State(state): State<AppState>,
-    payload: Result<Json<FileWriteArgs>, JsonRejection>,
+    query: Result<Query<FileWriteQuery>, QueryRejection>,
+    body: Body,
 ) -> Result<Json<Value>, ApiError> {
-    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
     require_file_write(&state).await?;
 
-    match exchange(
+    let written = upload_stream(
         &state,
-        &Request::FileWriteText {
-            path: args.path,
-            contents: args.contents,
-            expected_modified_ms: args.expected_modified_ms,
-        },
+        &query.path,
+        true,
+        true,
+        query.expected_modified_ms,
+        body,
     )
-    .await?
-    {
-        CommandResponse::FileTextWritten {
-            path,
-            size,
-            modified_ms,
-        } => Ok(Json(serde_json::json!({
-            "path": path,
-            "size": size,
-            "modified_ms": modified_ms,
-        }))),
-        CommandResponse::FileError(error) => Err(file_api_error(error)),
-        CommandResponse::Error { detail } => Err(gateway(detail)),
-        other => Err(unexpected_response(other)),
-    }
+    .await?;
+    Ok(Json(serde_json::json!({
+        "path": written.path,
+        "size": written.size,
+        "modified_ms": written.modified_ms,
+    })))
 }
 
-/// `POST /api/files/upload?path=/...` — raw request body, streamed to the daemon.
 pub async fn post_file_upload(
     State(state): State<AppState>,
     query: Result<Query<FileUploadQuery>, QueryRejection>,
@@ -1312,7 +1306,7 @@ pub async fn post_file_upload(
     let Query(query) = query.map_err(|e| ApiError::bad_request(e.body_text()))?;
     require_file_write(&state).await?;
 
-    let written = upload_stream(&state, &query.path, query.overwrite, body).await?;
+    let written = upload_stream(&state, &query.path, query.overwrite, false, None, body).await?;
     Ok(Json(
         serde_json::json!({ "path": written.path, "size": written.size }),
     ))
@@ -1397,6 +1391,8 @@ async fn upload_stream(
     state: &AppState,
     path: &str,
     overwrite: bool,
+    require_existing: bool,
+    expected_modified_ms: Option<u64>,
     body: Body,
 ) -> Result<FileWritten, ApiError> {
     let mut client = state
@@ -1409,6 +1405,8 @@ async fn upload_stream(
         &Request::FileWriteStart {
             path: path.to_string(),
             overwrite,
+            require_existing,
+            expected_modified_ms,
         },
     )
     .await?

@@ -1120,8 +1120,18 @@ fn spawn_file_server(path: &Path, service: FileService) -> tokio::task::JoinHand
 
                 while let Some(Ok(request)) = server.receive_request().await {
                     let response = match request {
-                        Request::FileWriteStart { path, overwrite } => {
-                            match service.start_upload(&path, overwrite) {
+                        Request::FileWriteStart {
+                            path,
+                            overwrite,
+                            require_existing,
+                            expected_modified_ms,
+                        } => {
+                            match service.start_upload(
+                                &path,
+                                overwrite,
+                                require_existing,
+                                expected_modified_ms,
+                            ) {
                                 Ok(upload) => {
                                     let id = next_upload;
                                     next_upload += 1;

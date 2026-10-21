@@ -155,17 +155,21 @@ pub enum Request {
         path: String,
         into: Option<String>,
     },
-    /// Save text over an existing file, optionally only when its mtime still
-    /// matches what the editor loaded.
-    FileWriteText {
-        path: String,
-        contents: String,
-        expected_modified_ms: Option<u64>,
-    },
-    /// Begin an atomic upload. The reply is `FileWriteStarted`.
+    /// Begin an atomic upload or an editor save. The reply is
+    /// `FileWriteStarted`.
+    ///
+    /// A save and an upload share the chunk flow so neither can drift from the
+    /// other's guards. `require_existing` selects save semantics: the target
+    /// must already be a regular file. `expected_modified_ms` adds the
+    /// optimistic precondition the editor relies on, and is checked before a
+    /// single chunk is accepted.
     FileWriteStart {
         path: String,
         overwrite: bool,
+        #[serde(default)]
+        require_existing: bool,
+        #[serde(default)]
+        expected_modified_ms: Option<u64>,
     },
     /// Append one chunk to an open upload.
     FileWriteChunk {
@@ -409,13 +413,6 @@ pub enum Response {
     FileArchiveExtracted {
         path: String,
         entries: usize,
-    },
-    /// Text was saved. `modified_ms` is the new mtime, which the editor uses as
-    /// the precondition for its next save.
-    FileTextWritten {
-        path: String,
-        size: u64,
-        modified_ms: u64,
     },
     FileRenamed {
         from: String,

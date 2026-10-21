@@ -240,3 +240,65 @@ fn a_symlink_inside_the_root_is_written_through_rather_than_replaced() {
         "after"
     );
 }
+
+#[test]
+fn saving_preserves_the_mode_and_owner_visible_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new("mode");
+    let path = fixture.write("secret.toml", "token = \"old\"");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(&fixture.base, fs::Permissions::from_mode(0o755)).unwrap();
+
+    fixture
+        .service
+        .write_text("/secret.toml", "token = \"new\"", None)
+        .unwrap();
+
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "a save must not loosen the mode, or writing a 0600 config would publish it"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "token = \"new\"");
+}
+
+#[test]
+fn a_save_larger_than_one_chunk_still_lands() {
+    // The request used to carry the whole file in one socket line, capped at
+    // 1 MiB. The editor must be able to save anything it can open.
+    let fixture = Fixture::new("large");
+    fixture.write("big.txt", "x");
+    let body = "l".repeat(3 * 1024 * 1024 + 17);
+
+    let modified = fixture.service.write_text("/big.txt", &body, None).unwrap();
+
+    assert!(modified > 0);
+    assert_eq!(
+        fs::read_to_string(fixture.base.join("big.txt"))
+            .unwrap()
+            .len(),
+        body.len()
+    );
+}
+
+#[test]
+fn a_save_through_a_symlink_updates_the_target() {
+    let fixture = Fixture::new("symlink-save");
+    let target = fixture.write("real.txt", "before");
+    std::os::unix::fs::symlink(&target, fixture.base.join("link.txt")).unwrap();
+
+    fixture
+        .service
+        .write_text("/link.txt", "after", None)
+        .unwrap();
+
+    assert_eq!(fs::read_to_string(&target).unwrap(), "after");
+    assert!(
+        fs::symlink_metadata(fixture.base.join("link.txt"))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "saving must write through the link, not replace it"
+    );
+}

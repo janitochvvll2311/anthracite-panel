@@ -591,6 +591,14 @@ fn file_requests_roundtrip() {
         Request::FileWriteStart {
             path: "/tmp/upload".to_string(),
             overwrite: true,
+            require_existing: false,
+            expected_modified_ms: None,
+        },
+        Request::FileWriteStart {
+            path: "/tmp/edit.txt".to_string(),
+            overwrite: true,
+            require_existing: true,
+            expected_modified_ms: Some(1_700_000_000_000),
         },
         Request::FileWriteChunk {
             id: 3,
@@ -625,6 +633,7 @@ fn file_response_roundtrip_and_wire_format() {
         truncated: false,
         warning: None,
         write_enabled: true,
+        trash_enabled: false,
     };
 
     let responses = [
@@ -639,6 +648,7 @@ fn file_response_roundtrip_and_wire_format() {
         Response::FileWritten(anth_proto::FileWritten {
             path: "/a.txt".to_string(),
             size: 3,
+            modified_ms: 1_700_000_000_000,
         }),
         Response::FileCreated {
             path: "/new".to_string(),

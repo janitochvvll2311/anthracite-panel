@@ -309,18 +309,6 @@ fn handle_core(request: &Request, policy: &Policy, files: &FileService) -> Respo
             Ok(path) => Response::FileArchiveCreated { path },
             Err(error) => Response::FileError(error),
         },
-        Request::FileWriteText {
-            path,
-            contents,
-            expected_modified_ms,
-        } => match files.write_text(path, contents, *expected_modified_ms) {
-            Ok(modified_ms) => Response::FileTextWritten {
-                path: path.clone(),
-                size: contents.len() as u64,
-                modified_ms,
-            },
-            Err(error) => Response::FileError(error),
-        },
         Request::FileArchiveList { path } => match files.list_archive(path) {
             Ok(listing) => Response::ArchiveListing(listing),
             Err(error) => Response::FileError(error),

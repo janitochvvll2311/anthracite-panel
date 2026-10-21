@@ -332,6 +332,8 @@ fn handle_request_with_files_lists_the_configured_root() {
         Request::FileWriteStart {
             path: "/x".to_string(),
             overwrite: false,
+            require_existing: false,
+            expected_modified_ms: None,
         },
         &anth_panel::daemon::Policy::default(),
         &files,
