@@ -14,7 +14,7 @@
 //! users expect of a `.7z`.
 
 use std::fs::{self, File};
-use std::io::{BufReader, Cursor, Read, Seek, Write};
+use std::io::{self, BufReader, Read, Seek, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -123,6 +123,174 @@ pub fn safe_member(name: &str) -> Option<PathBuf> {
     Some(parts.iter().collect())
 }
 
+/// Reported when an archive decompresses past `files.max_archive_bytes`.
+///
+/// Carried inside an [`io::Error`] so the extractor can tell "the archive is a
+/// bomb" apart from an ordinary read failure and answer `TooLarge`.
+#[derive(Debug)]
+struct ExpandsPastLimit {
+    limit: u64,
+}
+
+impl std::fmt::Display for ExpandsPastLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the archive expands past files.max_archive_bytes ({})",
+            self.limit
+        )
+    }
+}
+
+impl std::error::Error for ExpandsPastLimit {}
+
+impl From<ExpandsPastLimit> for io::Error {
+    fn from(error: ExpandsPastLimit) -> Self {
+        io::Error::new(io::ErrorKind::InvalidData, error)
+    }
+}
+
+/// Decompresses `.xz` on demand and stops at the configured ceiling.
+///
+/// `lzma_rs::xz_decompress` needs a `Write` sink, and a `Vec` sink grows to the
+/// *whole* uncompressed size before a single entry is read, so listing a 58 KB
+/// archive could cost hundreds of megabytes. The work therefore runs on a
+/// worker feeding a bounded channel: peak memory follows the channel depth, not
+/// the archive, and the reader stops as soon as the byte count passes the limit.
+struct BoundedXz {
+    chunks: std::sync::mpsc::Receiver<Vec<u8>>,
+    worker: Option<std::thread::JoinHandle<Result<(), lzma_rs::error::Error>>>,
+    chunk: Vec<u8>,
+    position: usize,
+    produced: u64,
+    limit: u64,
+    done: bool,
+}
+
+impl BoundedXz {
+    /// The channel holds a few small chunks, so a fast decompressor blocks
+    /// instead of buffering the archive ahead of the tar reader.
+    const DEPTH: usize = 4;
+    const CHUNK: usize = 64 * 1024;
+
+    fn new<R: Read + Send + 'static>(input: R, limit: u64) -> Self {
+        let (sender, chunks) = std::sync::mpsc::sync_channel(Self::DEPTH);
+        let worker = std::thread::spawn(move || {
+            let mut sink = ChannelWriter {
+                sender,
+                pending: Vec::with_capacity(Self::CHUNK),
+            };
+            lzma_rs::xz_decompress(&mut BufReader::new(input), &mut sink)
+        });
+        Self {
+            chunks,
+            worker: Some(worker),
+            chunk: Vec::new(),
+            position: 0,
+            produced: 0,
+            limit,
+            done: false,
+        }
+    }
+
+    /// Joins the worker once the channel closes, surfacing a decompression
+    /// failure that would otherwise look like a clean end of stream.
+    fn finish(&mut self) -> io::Result<()> {
+        self.done = true;
+        match self.worker.take() {
+            Some(worker) => match worker.join() {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("xz decompression failed: {error}"),
+                )),
+                Err(_) => Err(io::Error::other("the xz decompression worker panicked")),
+            },
+            None => Ok(()),
+        }
+    }
+}
+
+impl Read for BoundedXz {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        while self.position >= self.chunk.len() {
+            if self.done {
+                return Ok(0);
+            }
+            match self.chunks.recv() {
+                Ok(next) => {
+                    self.produced += next.len() as u64;
+                    if self.produced > self.limit {
+                        return Err(ExpandsPastLimit { limit: self.limit }.into());
+                    }
+                    self.chunk = next;
+                    self.position = 0;
+                }
+                Err(_) => {
+                    self.finish()?;
+                    return Ok(0);
+                }
+            }
+        }
+
+        let available = self.chunk.len() - self.position;
+        let take = available.min(out.len());
+        out[..take].copy_from_slice(&self.chunk[self.position..self.position + take]);
+        self.position += take;
+        Ok(take)
+    }
+}
+
+impl Drop for BoundedXz {
+    fn drop(&mut self) {
+        // Dropping the receiver is what unblocks a worker waiting to send, so
+        // an abandoned archive cannot leak a thread.
+        let worker = self.worker.take();
+        drop(std::mem::replace(
+            &mut self.chunks,
+            std::sync::mpsc::sync_channel(1).1,
+        ));
+        if let Some(worker) = worker {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// Buffers a `Write` stream into fixed chunks for [`BoundedXz`].
+struct ChannelWriter {
+    sender: std::sync::mpsc::SyncSender<Vec<u8>>,
+    pending: Vec<u8>,
+}
+
+impl Write for ChannelWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(bytes);
+        if self.pending.len() >= BoundedXz::CHUNK {
+            let chunk = std::mem::replace(&mut self.pending, Vec::with_capacity(BoundedXz::CHUNK));
+            self.sender
+                .send(chunk)
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the reader went away"))?;
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.pending.is_empty() {
+            let chunk = std::mem::take(&mut self.pending);
+            self.sender
+                .send(chunk)
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the reader went away"))?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ChannelWriter {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
+
 /// How much of an archive to accept, tracked while extracting.
 struct Budget {
     limits: ArchiveLimits,
@@ -167,7 +335,7 @@ impl Budget {
         loop {
             let read = reader
                 .read(&mut buffer)
-                .map_err(|e| extract_error(member, e))?;
+                .map_err(|e| stream_error(member, e))?;
             if read == 0 {
                 break;
             }
@@ -203,6 +371,27 @@ fn extract_error(member: &str, error: impl std::fmt::Display) -> FileError {
     FileError::new(FileErrorKind::Io, format!("`{member}`: {error}"))
 }
 
+/// Turns a read failure from the decompression stream into the right kind.
+///
+/// A stream that expands past the ceiling is not an I/O fault, so it must not
+/// reach the user as one: `TooLarge` is what the HTTP layer maps to `413` and
+/// what the editor can explain.
+/// Maps a tar header failure, which is where the bomb surfaces when the
+/// ceiling is hit while the next header is read.
+fn arch_error(error: io::Error) -> FileError {
+    stream_error("archive", error)
+}
+
+fn stream_error(member: &str, error: io::Error) -> FileError {
+    if let Some(limit) = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<ExpandsPastLimit>())
+    {
+        return FileError::new(FileErrorKind::TooLarge, limit.to_string());
+    }
+    extract_error(member, error)
+}
+
 fn io_error(path: &Path, error: std::io::Error) -> FileError {
     let kind = match error.kind() {
         std::io::ErrorKind::NotFound => FileErrorKind::NotFound,
@@ -218,6 +407,12 @@ fn io_error(path: &Path, error: std::io::Error) -> FileError {
 /// `safe_member` already removed `..`, but an archive may still contain a
 /// symlink entry followed by a file beneath it. Creating every intermediate
 /// directory and checking that it is a real directory closes that hole.
+/// Resolves the directory that will hold `relative`, creating it as needed.
+///
+/// Every intermediate component is checked, but that is only half the guard: a
+/// symlink can also sit at the *final* component, where `File::create` would
+/// follow it and write outside the destination. [`write_target`] is the other
+/// half, and both are needed because `prepare_parent` cannot see the file name.
 fn prepare_parent(destination: &Path, relative: &Path) -> Result<PathBuf, FileError> {
     let mut current = destination.to_path_buf();
     let parent = relative.parent().unwrap_or(Path::new(""));
@@ -245,6 +440,40 @@ fn prepare_parent(destination: &Path, relative: &Path) -> Result<PathBuf, FileEr
         }
     }
     Ok(current)
+}
+
+/// Returns the final path for one member, refusing to write through a link.
+///
+/// An archive cannot store a link *and* write through it, because links are
+/// skipped during extraction. A link can still already exist in the
+/// destination, though, and the attacker only needs a writable destination to
+/// plant one. Checking the final component here means a pre-existing symlink is
+/// an error instead of a redirect, which is the half of the escape
+/// `prepare_parent` alone cannot cover.
+fn write_target(destination: &Path, relative: &Path) -> Result<PathBuf, FileError> {
+    let parent = prepare_parent(destination, relative)?;
+    let name = relative
+        .file_name()
+        .map(|n| n.to_owned())
+        .unwrap_or_default();
+    let target = parent.join(name);
+
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(FileError::new(
+            FileErrorKind::InvalidPath,
+            format!(
+                "`{}` is a symlink; the archive would write through it",
+                target.display()
+            ),
+        )),
+        Ok(metadata) if metadata.is_dir() => Err(FileError::new(
+            FileErrorKind::InvalidPath,
+            format!("`{}` is a directory", target.display()),
+        )),
+        Ok(_) => Ok(target),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(target),
+        Err(error) => Err(io_error(&target, error)),
+    }
 }
 
 /// Creates an archive from one virtual path.
@@ -533,12 +762,8 @@ pub fn extract_with(
             )?;
         }
         ArchiveFormat::TarXz => {
-            let file = File::open(archive).map_err(|e| io_error(archive, e))?;
-            let mut decompressed = Vec::new();
-            lzma_rs::xz_decompress(&mut BufReader::new(file), &mut decompressed)
-                .map_err(|e| extract_error(&archive.display().to_string(), e))?;
             extract_tar(
-                decompressed.as_slice(),
+                xz_reader(archive, budget.limits.max_total_bytes)?,
                 destination,
                 &mut budget,
                 &mut written,
@@ -565,10 +790,10 @@ fn extract_tar<R: Read>(
     strip: Option<&str>,
 ) -> Result<(), FileError> {
     let mut archive = tar::Archive::new(reader);
-    let entries = archive.entries().map_err(|e| extract_error("archive", e))?;
+    let entries = archive.entries().map_err(arch_error)?;
 
     for entry in entries {
-        let mut entry = entry.map_err(|e| extract_error("archive", e))?;
+        let mut entry = entry.map_err(arch_error)?;
         let name = entry
             .path()
             .map(|p| p.to_string_lossy().into_owned())
@@ -579,14 +804,14 @@ fn extract_tar<R: Read>(
         budget.admit_entry()?;
 
         let entry_type = entry.header().entry_type();
-        let target = prepare_parent(destination, &relative)?.join(
-            relative
-                .file_name()
-                .map(|n| n.to_owned())
-                .unwrap_or_default(),
-        );
 
         if entry_type.is_dir() {
+            let target = prepare_parent(destination, &relative)?.join(
+                relative
+                    .file_name()
+                    .map(|n| n.to_owned())
+                    .unwrap_or_default(),
+            );
             fs::create_dir_all(&target).map_err(|e| io_error(&target, e))?;
             written.push(relative.to_string_lossy().into_owned());
             continue;
@@ -602,6 +827,7 @@ fn extract_tar<R: Read>(
             continue;
         }
 
+        let target = write_target(destination, &relative)?;
         let mut file = File::create(&target).map_err(|e| io_error(&target, e))?;
         budget.copy(&mut entry, &mut file, &name)?;
         written.push(relative.to_string_lossy().into_owned());
@@ -627,19 +853,19 @@ fn extract_zip(
         };
         budget.admit_entry()?;
 
-        let target = prepare_parent(destination, &relative)?.join(
-            relative
-                .file_name()
-                .map(|n| n.to_owned())
-                .unwrap_or_default(),
-        );
-
         if entry.is_dir() {
+            let target = prepare_parent(destination, &relative)?.join(
+                relative
+                    .file_name()
+                    .map(|n| n.to_owned())
+                    .unwrap_or_default(),
+            );
             fs::create_dir_all(&target).map_err(|e| io_error(&target, e))?;
             written.push(relative.to_string_lossy().into_owned());
             continue;
         }
 
+        let target = write_target(destination, &relative)?;
         let mut file = File::create(&target).map_err(|e| io_error(&target, e))?;
         budget.copy(&mut entry, &mut file, &name)?;
         written.push(relative.to_string_lossy().into_owned());
@@ -681,20 +907,19 @@ fn extract_7z(
                 return Ok(false);
             }
 
-            let target = match prepare_parent(destination, &relative) {
-                Ok(parent) => parent.join(
-                    relative
-                        .file_name()
-                        .map(|n| n.to_owned())
-                        .unwrap_or_default(),
-                ),
-                Err(error) => {
-                    failure = Some(error);
-                    return Ok(false);
-                }
-            };
-
             if entry.is_directory() {
+                let target = match prepare_parent(destination, &relative) {
+                    Ok(parent) => parent.join(
+                        relative
+                            .file_name()
+                            .map(|n| n.to_owned())
+                            .unwrap_or_default(),
+                    ),
+                    Err(error) => {
+                        failure = Some(error);
+                        return Ok(false);
+                    }
+                };
                 if let Err(error) = fs::create_dir_all(&target) {
                     failure = Some(io_error(&target, error));
                     return Ok(false);
@@ -703,6 +928,13 @@ fn extract_7z(
                 return Ok(true);
             }
 
+            let target = match write_target(destination, &relative) {
+                Ok(target) => target,
+                Err(error) => {
+                    failure = Some(error);
+                    return Ok(false);
+                }
+            };
             let mut file = match File::create(&target) {
                 Ok(file) => file,
                 Err(error) => {
@@ -731,17 +963,29 @@ fn extract_7z(
 
 /// Walks a tar stream for the listing. Separate from `extract_tar` because it
 /// reads headers only and must not touch the filesystem.
+/// Ceiling for a listing, which only reads headers.
+///
+/// `list` takes no limits argument because the headers are cheap; the stream
+/// still has to be bounded, and a listing needs far less than an extraction.
+const MAX_LIST_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// Opens an `.xz` archive as a bounded stream.
+fn xz_reader(archive: &Path, limit: u64) -> Result<BoundedXz, FileError> {
+    let file = File::open(archive).map_err(|e| io_error(archive, e))?;
+    Ok(BoundedXz::new(file, limit))
+}
+
 fn list_tar<R: Read>(
     reader: R,
     max_entries: usize,
     entries: &mut Vec<ArchiveEntry>,
 ) -> Result<(), FileError> {
     let mut archive = tar::Archive::new(reader);
-    for entry in archive.entries().map_err(|e| extract_error("archive", e))? {
+    for entry in archive.entries().map_err(arch_error)? {
         if entries.len() >= max_entries {
             break;
         }
-        let entry = entry.map_err(|e| extract_error("archive", e))?;
+        let entry = entry.map_err(arch_error)?;
         let name = entry
             .path()
             .map(|p| p.to_string_lossy().into_owned())
@@ -882,11 +1126,14 @@ pub fn list(
             )?;
         }
         ArchiveFormat::TarXz => {
-            let file = File::open(archive).map_err(|e| io_error(archive, e))?;
-            let mut decompressed = Vec::new();
-            lzma_rs::xz_decompress(&mut BufReader::new(file), &mut decompressed)
-                .map_err(|e| extract_error(&archive.display().to_string(), e))?;
-            list_tar(Cursor::new(decompressed), max_entries, &mut entries)?;
+            // Listing decompresses too, so it needs the same ceiling; without
+            // one, merely opening a bomb in the panel was enough to exhaust
+            // memory.
+            list_tar(
+                xz_reader(archive, MAX_LIST_BYTES)?,
+                max_entries,
+                &mut entries,
+            )?;
         }
     }
 

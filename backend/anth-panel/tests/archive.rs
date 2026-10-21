@@ -705,3 +705,102 @@ fn detects_every_supported_extension() {
     }
     assert_eq!(archive::detect(Path::new("a.rar"), None), None);
 }
+
+#[test]
+fn a_final_component_symlink_cannot_redirect_a_write_outside() {
+    // A lone symlink member used to be enough: prepare the parent, then let
+    // File::create follow the link the archive just wrote. The final component
+    // must be refused before anything is opened.
+    let fixture = Fixture::new("final-symlink");
+    let outside = fixture.base.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let victim = outside.join("owned.txt");
+    fs::write(&victim, "original").unwrap();
+    let archive_path = fixture.base.join("final.tar");
+    let script = format!(
+        r#"
+import tarfile
+with tarfile.open({path:?}, "w") as tar:
+    info = tarfile.TarInfo("owned.txt")
+    info.type = tarfile.SYMTYPE
+    info.linkname = {victim:?}
+    tar.addfile(info)
+"#,
+        path = archive_path.to_string_lossy(),
+        victim = victim.to_string_lossy(),
+    );
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success(),
+        "python3 could not write the symlink archive"
+    );
+
+    let result = archive::extract(&archive_path, ArchiveFormat::Tar, &fixture.out(), limits());
+
+    assert_eq!(
+        fs::read_to_string(&victim).unwrap(),
+        "original",
+        "the final-component symlink was followed out of the destination"
+    );
+    if let Err(error) = result {
+        assert!(
+            matches!(error.kind, FileErrorKind::InvalidPath | FileErrorKind::Io),
+            "unexpected error kind {:?}",
+            error.kind
+        );
+    }
+}
+
+#[test]
+fn a_tar_xz_bomb_is_stopped_without_materializing_it() {
+    // `lzma_rs` can only decompress into a sink, so a naive implementation
+    // inflates the whole stream in memory before the entry budget ever runs.
+    let fixture = Fixture::new("xz-bomb");
+    let archive_path = fixture.base.join("bomb.tar.xz");
+    let script = format!(
+        r#"
+import tarfile, io, lzma
+body = b"\0" * (64 * 1024 * 1024)
+with lzma.open({path:?}, "wb", format=lzma.FORMAT_XZ, preset=9) as xz:
+    with tarfile.open(fileobj=xz, mode="w") as tar:
+        info = tarfile.TarInfo("big.bin")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+"#,
+        path = archive_path.to_string_lossy(),
+    );
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success(),
+        "python3 could not write the xz archive"
+    );
+
+    let error = archive::extract(
+        &archive_path,
+        ArchiveFormat::TarXz,
+        &fixture.out(),
+        ArchiveLimits {
+            max_total_bytes: 1024 * 1024,
+            max_entries: 100,
+            max_entry_bytes: 1024 * 1024,
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, FileErrorKind::TooLarge);
+    let written = fs::metadata(fixture.out().join("big.bin"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    assert!(
+        written <= 1024 * 1024,
+        "the extractor kept writing past the limit: {written} bytes"
+    );
+}
