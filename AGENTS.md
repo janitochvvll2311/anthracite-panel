@@ -472,6 +472,18 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   pause/resume, refresh and interval controls. `lib/hostinfo/display.ts` owns
   the pure formatting helpers; tests live beside both modules and the harness is
   `src/components/anth-host-info.test.html`.
+- **Frontend desktop**: `anth-desktop` owns the open windows for the whole
+  shell — one entry per panel, a global z order and the `localStorage`
+  arrangement (`lib/ui/windows` holds the pure geometry and storage helpers).
+  `anth-window` is controlled: it renders the `rect`, `z` and `minimized` it is
+  given and reports `move`, `resize`, `focus`, `minimize`, `popout` and
+  `close`. A minimized window is **detached** (`remove()`), not hidden, so its
+  SSE stream and terminal WebSocket close while its state survives; restoring
+  re-appends the same element. Opening a panel that is already open raises it
+  instead of building a second copy, which would start a second stream against
+  the same daemon. `#/window/<id>` is a route, so a pop-out is a URL behind the
+  same session gate. The shell renders one desktop for every route, so a window
+  outlives a navigation; the harness is `src/components/anth-desktop.test.html`.
 - **Shared web helpers**: `lib/http.ts` owns `responseError` and the common
   fetch/EventSource option types, `lib/stream.ts` owns the `EventSource`
   lifecycle and JSON event parsing, and `lib/format.ts` owns `formatBytes` and
