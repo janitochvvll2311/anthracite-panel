@@ -1003,7 +1003,14 @@ with zipfile.ZipFile({path:?}, "w") as zf:
 "#,
         path = archive_path.to_string_lossy(),
     );
-    assert!(Command::new("python3").arg("-c").arg(script).status().unwrap().success());
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     let error = archive::extract(
         &archive_path,
@@ -1024,4 +1031,185 @@ with zipfile.ZipFile({path:?}, "w") as zf:
         "original\n",
         "the file behind the symlink was modified"
     );
+}
+
+#[test]
+fn a_corrupted_xz_block_is_caught_by_its_check() {
+    // The check covers the block's uncompressed bytes, so flipping a byte in the
+    // compressed payload must fail the decode rather than produce wrong output.
+    // Without verification this test would pass a mutated tar to the extractor.
+    let fixture = Fixture::new("xz-corrupt");
+    let source = fixture.base.join("payload.bin");
+    let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    fs::write(&source, &bytes).unwrap();
+    assert!(
+        Command::new("tar")
+            .arg("-cf")
+            .arg(fixture.base.join("payload.tar"))
+            .arg("--owner=0")
+            .arg("--group=0")
+            .arg("-C")
+            .arg(&fixture.base)
+            .arg("payload.bin")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let archive_path = fixture.base.join("payload.tar.xz");
+    // One block on purpose: `extract` stops at the tar end marker, so a check
+    // that lives in a later block is never read. The check that must fire here
+    // is the one covering the payload the extractor actually consumed.
+    let script = format!(
+        r#"
+import lzma
+with open({tar:?}, "rb") as source, lzma.open({out:?}, "wb", format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC64) as xz:
+    xz.write(source.read())
+"#,
+        tar = fixture.base.join("payload.tar").to_string_lossy(),
+        out = archive_path.to_string_lossy(),
+    );
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let compressed = Command::new("xz")
+        .arg("--list")
+        .arg("--verbose")
+        .arg(&archive_path)
+        .output()
+        .expect("xz is missing");
+    assert!(
+        String::from_utf8_lossy(&compressed.stdout).contains("Blocks:"),
+        "xz is missing"
+    );
+    let mut damaged = fs::read(&archive_path).unwrap();
+    // Corrupt the stored check rather than the payload: a flipped payload byte
+    // can be caught by the LZMA2 decoder itself ("dist overflow"), which would
+    // pass this test without the check being verified at all. The check sits
+    // immediately before the index, and the footer gives the index size, so the
+    // last block's 8-byte CRC64 is at `index_start - 8`.
+    let footer = damaged.len() - 12;
+    let backward = u32::from_le_bytes([
+        damaged[footer + 4],
+        damaged[footer + 5],
+        damaged[footer + 6],
+        damaged[footer + 7],
+    ]) as usize;
+    let index_start = footer - (backward + 1) * 4;
+    let check_at = index_start - 8;
+    damaged[check_at] ^= 0xff;
+    fs::write(&archive_path, &damaged).unwrap();
+
+    let error = archive::extract(
+        &archive_path,
+        ArchiveFormat::TarXz,
+        &fixture.out(),
+        ArchiveLimits::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, FileErrorKind::InvalidPath, "{}", error.detail);
+    assert!(
+        error.detail.contains("CRC64"),
+        "the check itself should be what fails: {}",
+        error.detail
+    );
+}
+
+#[test]
+fn the_xz_delta_filter_is_refused_rather_than_ignored() {
+    // 0x03 is the delta filter, not "no filter". Skipping it would decode the
+    // LZMA2 stream without undoing the delta, so the tar reader would see
+    // shifted bytes and the failure would look like a corrupt archive.
+    let fixture = Fixture::new("xz-delta");
+    fs::write(fixture.base.join("note.txt"), "hola\n").unwrap();
+    assert!(
+        Command::new("tar")
+            .arg("-cf")
+            .arg(fixture.base.join("note.tar"))
+            .arg("-C")
+            .arg(&fixture.base)
+            .arg("note.txt")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let archive_path = fixture.base.join("note-delta.tar.xz");
+    let compressed = Command::new("xz")
+        .arg("-k")
+        .arg("-c")
+        .arg("--delta=dist=4")
+        .arg("--lzma2=preset=1")
+        .arg(fixture.base.join("note.tar"))
+        .output()
+        .expect("xz is missing");
+    assert!(
+        compressed.status.success(),
+        "xz could not write the archive"
+    );
+    fs::write(&archive_path, &compressed.stdout).unwrap();
+
+    let error = archive::extract(
+        &archive_path,
+        ArchiveFormat::TarXz,
+        &fixture.out(),
+        ArchiveLimits::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        error.detail.contains("delta filter"),
+        "the error should name the delta filter: {}",
+        error.detail
+    );
+}
+
+#[test]
+fn a_sha256_xz_stream_verifies() {
+    // SHA-256 is the third check type and the one with the largest trailer, so
+    // getting the trailer size wrong shows up as a truncated-block error.
+    let fixture = Fixture::new("xz-sha256");
+    fs::write(fixture.base.join("note.txt"), "hola\n").unwrap();
+    assert!(
+        Command::new("tar")
+            .arg("-cf")
+            .arg(fixture.base.join("note.tar"))
+            .arg("-C")
+            .arg(&fixture.base)
+            .arg("note.txt")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let archive_path = fixture.base.join("note-sha.tar.xz");
+    let script = format!(
+        r#"
+import lzma
+with open({tar:?}, "rb") as source, lzma.open({out:?}, "wb", format=lzma.FORMAT_XZ, check=lzma.CHECK_SHA256) as xz:
+    xz.write(source.read())
+"#,
+        tar = fixture.base.join("note.tar").to_string_lossy(),
+        out = archive_path.to_string_lossy(),
+    );
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let written = archive::extract(
+        &archive_path,
+        ArchiveFormat::TarXz,
+        &fixture.out(),
+        ArchiveLimits::default(),
+    )
+    .expect("a SHA-256 stream must verify");
+    assert_eq!(written, vec!["note.txt".to_string()]);
 }

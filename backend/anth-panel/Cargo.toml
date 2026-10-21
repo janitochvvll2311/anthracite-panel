@@ -11,6 +11,7 @@ tar = "0.4"
 lzma-rs = "0.3"
 lzma-rust2 = { version = "0.2", default-features = false }
 crc32fast = "1"
+crc = "3"
 sevenz-rust2 = "0.13"
 flate2 = "1"
 anth-proto = { path = "../anth-proto" }

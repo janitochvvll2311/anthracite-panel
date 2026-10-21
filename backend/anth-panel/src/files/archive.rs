@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use anth_proto::{ArchiveEntry, ArchiveFormat, FileError, FileErrorKind};
 use lzma_rust2::LZMA2Reader;
+use sha2::{Digest as _, Sha256};
 
 /// Bounds applied to one extraction.
 ///
@@ -187,7 +188,8 @@ struct XzStream<R> {
     reader: Option<Positioned<BufReader<R>>>,
     decoder: Option<LZMA2Reader<Positioned<BufReader<R>>>>,
     block_start: u64,
-    check: u64,
+    check: XzCheck,
+    hasher: Hasher,
     produced: u64,
     limit: u64,
     finished: bool,
@@ -217,10 +219,10 @@ impl<R: Read> XzStream<R> {
             return Err(corrupt("the xz stream header checksum does not match"));
         }
         let check = match header[7] {
-            0x00 => 0,
-            0x01 => 4,
-            0x04 => 8,
-            0x0a => 32,
+            0x00 => XzCheck::None,
+            0x01 => XzCheck::Crc32,
+            0x04 => XzCheck::Crc64,
+            0x0a => XzCheck::Sha256,
             _ => unreachable!("the check type was validated above"),
         };
 
@@ -229,6 +231,7 @@ impl<R: Read> XzStream<R> {
             decoder: None,
             block_start: 12,
             check,
+            hasher: Hasher::new(check),
             produced: 0,
             limit,
             finished: false,
@@ -260,6 +263,7 @@ impl<R: Read> XzStream<R> {
             .map_err(|e| corrupt(format!("the xz block header is truncated: {e}")))?;
         self.block_start = reader.position - header_len as u64;
         let dictionary = parse_block_header(&block)?;
+        self.hasher = Hasher::new(self.check);
         let reader = self
             .reader
             .take()
@@ -280,10 +284,21 @@ impl<R: Read> XzStream<R> {
             if scratch[..padding as usize].iter().any(|byte| *byte != 0) {
                 return Err(corrupt("the xz block padding is not zero"));
             }
-            let mut check = [0u8; 32];
-            reader
-                .read_exact(&mut check[..self.check as usize])
-                .map_err(|e| corrupt(format!("the xz block check is truncated: {e}")))?;
+            let size = self.check.size();
+            if size > 0 {
+                let mut stored = [0u8; 32];
+                reader
+                    .read_exact(&mut stored[..size])
+                    .map_err(|e| corrupt(format!("the xz block check is truncated: {e}")))?;
+                let computed =
+                    std::mem::replace(&mut self.hasher, Hasher::new(self.check)).finish();
+                if computed != stored[..size].to_vec() {
+                    return Err(corrupt(format!(
+                        "the xz {} check does not match; the archive is corrupt",
+                        self.check.name()
+                    )));
+                }
+            }
             self.reader = Some(reader);
         }
         self.open_block()
@@ -310,6 +325,7 @@ impl<R: Read> Read for XzStream<R> {
                 }
                 continue;
             }
+            self.hasher.update(&out[..read]);
             self.produced += read as u64;
             if self.produced > self.limit {
                 return Err(ExpandsPastLimit { limit: self.limit }.into());
@@ -319,9 +335,102 @@ impl<R: Read> Read for XzStream<R> {
     }
 }
 
+/// Integrity check named by the stream flags.
+///
+/// The check covers one block's uncompressed bytes, so it is reset at every
+/// block boundary rather than carried across the stream.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum XzCheck {
+    None,
+    Crc32,
+    Crc64,
+    Sha256,
+}
+
+impl XzCheck {
+    fn size(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Crc32 => 4,
+            Self::Crc64 => 8,
+            Self::Sha256 => 32,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::None => "no",
+            Self::Crc32 => "CRC32",
+            Self::Crc64 => "CRC64",
+            Self::Sha256 => "SHA-256",
+        }
+    }
+}
+
+/// CRC-64/XZ as a `'static` item.
+///
+/// `Digest` borrows the `Crc` it came from, and `crc::CRC_64_XZ` is a `const`,
+/// so the table has to live in a `static` for the digest to outlive the block.
+static XZ_CRC: crc::Crc<u64, crc::Table<16>> =
+    crc::Crc::<u64, crc::Table<16>>::new(&crc::CRC_64_XZ);
+
+/// Accumulates the bytes of one block and produces the check the header promised.
+enum Hasher {
+    None,
+    Crc32(crc32fast::Hasher),
+    Crc64(Box<crc::Digest<'static, u64, crc::Table<16>>>),
+    Sha256(Box<Sha256>),
+}
+
+impl Hasher {
+    fn new(check: XzCheck) -> Self {
+        match check {
+            XzCheck::None => Self::None,
+            XzCheck::Crc32 => Self::Crc32(crc32fast::Hasher::new()),
+            XzCheck::Crc64 => Self::Crc64(Box::new(XZ_CRC.digest())),
+            XzCheck::Sha256 => Self::Sha256(Box::new(Sha256::new())),
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Self::None => {}
+            Self::Crc32(hasher) => hasher.update(bytes),
+            Self::Crc64(hasher) => hasher.update(bytes),
+            Self::Sha256(hasher) => sha2::Digest::update(hasher.as_mut(), bytes),
+        }
+    }
+
+    /// Returns the check bytes in the little-endian form xz stores them.
+    fn finish(self) -> Vec<u8> {
+        match self {
+            Self::None => Vec::new(),
+            Self::Crc32(hasher) => hasher.finalize().to_le_bytes().to_vec(),
+            Self::Crc64(hasher) => hasher.finalize().to_le_bytes().to_vec(),
+            Self::Sha256(hasher) => sha2::Digest::finalize(*hasher).to_vec(),
+        }
+    }
+}
+
+/// A malformed archive carried through a `Read` signature.
+///
+/// `io::Error` can only carry one payload, so the detail travels in this
+/// wrapper and `stream_error` unwraps it back into `InvalidPath`. Without it a
+/// corrupt xz stream would surface as a generic IO failure.
+#[derive(Debug)]
+struct CorruptArchive(String);
+
+impl std::fmt::Display for CorruptArchive {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CorruptArchive {}
+
 /// Carries a `FileError` through a `Read` signature without losing its kind.
 fn to_io(error: FileError) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, error.detail)
+    io::Error::new(io::ErrorKind::InvalidData, CorruptArchive(error.detail))
 }
 
 /// Reads the LZMA2 block header that follows the block size byte.
@@ -354,10 +463,17 @@ fn parse_block_header(block: &[u8]) -> Result<u32, FileError> {
                 return Err(corrupt("the xz LZMA2 properties have the wrong size"));
             }
             dictionary = Some(dictionary_size(block[offset])?);
-        } else if id != 0x03 {
+        } else if id == 0x03 {
+            // 0x03 is the delta filter, not "no filter". Accepting it and
+            // skipping its properties would decode the LZMA2 stream without
+            // undoing the delta, so the tar reader would see shifted bytes.
             return Err(corrupt(
-                "only the LZMA2 filter, with no BCJ or delta filter, is supported",
+                "the xz delta filter is not supported; only LZMA2 is decoded",
             ));
+        } else {
+            return Err(corrupt(format!(
+                "the xz filter 0x{id:02x} is not supported; only LZMA2 is decoded"
+            )));
         }
         offset += props_len;
     }
@@ -513,6 +629,12 @@ fn stream_error(member: &str, error: io::Error) -> FileError {
         .and_then(|inner| inner.downcast_ref::<ExpandsPastLimit>())
     {
         return FileError::new(FileErrorKind::TooLarge, limit.to_string());
+    }
+    if let Some(corrupt) = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<CorruptArchive>())
+    {
+        return FileError::new(FileErrorKind::InvalidPath, corrupt.0.clone());
     }
     extract_error(member, error)
 }
@@ -935,53 +1057,68 @@ pub fn extract_with(
 }
 
 fn extract_tar<R: Read>(
-    reader: R,
+    mut reader: R,
     destination: &Path,
     budget: &mut Budget,
     written: &mut Vec<String>,
     strip: Option<&str>,
 ) -> Result<(), FileError> {
-    let mut archive = tar::Archive::new(reader);
-    let entries = archive.entries().map_err(arch_error)?;
+    {
+        let mut archive = tar::Archive::new(&mut reader);
+        let entries = archive.entries().map_err(arch_error)?;
 
-    for entry in entries {
-        let mut entry = entry.map_err(arch_error)?;
-        let name = entry
-            .path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let Some(relative) = resolve(&name, strip)? else {
-            continue;
-        };
-        budget.admit_entry()?;
+        for entry in entries {
+            let mut entry = entry.map_err(arch_error)?;
+            let name = entry
+                .path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let Some(relative) = resolve(&name, strip)? else {
+                continue;
+            };
+            budget.admit_entry()?;
 
-        let entry_type = entry.header().entry_type();
+            let entry_type = entry.header().entry_type();
 
-        if entry_type.is_dir() {
-            let target = prepare_parent(destination, &relative)?.join(
-                relative
-                    .file_name()
-                    .map(|n| n.to_owned())
-                    .unwrap_or_default(),
-            );
-            fs::create_dir_all(&target).map_err(|e| io_error(&target, e))?;
+            if entry_type.is_dir() {
+                let target = prepare_parent(destination, &relative)?.join(
+                    relative
+                        .file_name()
+                        .map(|n| n.to_owned())
+                        .unwrap_or_default(),
+                );
+                fs::create_dir_all(&target).map_err(|e| io_error(&target, e))?;
+                written.push(relative.to_string_lossy().into_owned());
+                continue;
+            }
+            if entry_type.is_symlink() || entry_type.is_hard_link() {
+                // Links are materialised as files only when the archive also
+                // contains their target; storing them would let a later entry write
+                // through them, which is the classic tar escape.
+                written.push(format!("{} (link skipped)", relative.display()));
+                continue;
+            }
+            if !entry_type.is_file() {
+                continue;
+            }
+
+            let (_, mut file) = write_target(destination, &relative)?;
+            budget.copy(&mut entry, &mut file, &name)?;
             written.push(relative.to_string_lossy().into_owned());
-            continue;
         }
-        if entry_type.is_symlink() || entry_type.is_hard_link() {
-            // Links are materialised as files only when the archive also
-            // contains their target; storing them would let a later entry write
-            // through them, which is the classic tar escape.
-            written.push(format!("{} (link skipped)", relative.display()));
-            continue;
-        }
-        if !entry_type.is_file() {
-            continue;
-        }
+    }
 
-        let (_, mut file) = write_target(destination, &relative)?;
-        budget.copy(&mut entry, &mut file, &name)?;
-        written.push(relative.to_string_lossy().into_owned());
+    // `tar` stops at the end-of-archive marker, so the last block's integrity
+    // check is never read unless someone drains the decoder. Without this a
+    // truncated or corrupted tail would extract without complaint.
+    let mut sink = [0u8; 64 * 1024];
+    loop {
+        match reader.read(&mut sink) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(arch_error(error)),
+        }
     }
     Ok(())
 }

@@ -288,8 +288,13 @@ An archive is untrusted input, so extraction refuses rather than repairs:
   `Read`, so peak memory follows the read buffer rather than the expansion: a
   39 KB archive that expands to 256 MiB costs under a megabyte. The dictionary
   size a block declares is capped at 256 MiB, because the decoder allocates it
-  up front. BCJ and delta filters are refused rather than ignored, and the block
-  checks (CRC32, CRC64, SHA-256) are skipped rather than verified.
+  up front. BCJ and delta filters are refused rather than ignored.
+- **The xz block checks are verified.** CRC32, CRC64 and SHA-256 are accumulated
+  while decoding and compared with the stored value at each block boundary; a
+  mismatch fails the request with `InvalidPath` and writes nothing further. The
+  extractor drains the decoder after `tar` reaches its end-of-archive marker,
+  because `tar` stops reading there and would otherwise leave the final block's
+  check unverified.
 - **A refused member fails the request.** Skipping it would leave a partial tree
   that looks complete.
 
