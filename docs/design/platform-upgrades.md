@@ -14,9 +14,9 @@ repository.
 | 3 | JWT covers the HTTP and WebSocket interface only; the Unix socket relies on file permissions |
 | 4 | JWT is implemented in-tree (HS256 over `hmac` + `sha2` + `base64`) to keep the musl build free of C dependencies |
 | 5 | The file editor uses CodeMirror 6, loaded with a dynamic `import()` |
-| 6 | Archives: `zip`, `tar`, `tar.gz`; `.xz` and `.zstd` are out of scope for this version |
+| 6 | Archives: in-tree pure-Rust crates for `zip`, `tar`, `tar.gz`, `tar.xz` and `7z` extraction; no external archive binary. Creation is `zip`/`tar`/`tar.gz`/`tar.xz`; creating `.7z` is not offered. Superseded the earlier "`.xz` out of scope" wording — see phase 5 notes |
 | 7 | Partitions use `sfdisk`; `mkfs` is supported behind its own switch |
-| 8 | Recycle bin is per directory (`.anth-trash/` beside the entries) |
+| 8 | Recycle bin follows the freedesktop.org trash spec (`.Trash/$uid` or `.Trash-$uid` per volume, `$XDG_DATA_HOME/Trash` for the home volume), so deletions are restorable from the desktop too. Supersedes the earlier per-directory `.anth-trash/` |
 | 9 | `bun` only; `npm` and `npx` are uninstalled |
 | 10 | Renames drop the old custom element names, with no compatibility alias |
 | 11 | UI source language is English; Spanish ships through `lit-localize`; all code, comments and docs stay in English |
@@ -45,8 +45,16 @@ Additional decisions taken while planning:
 - Plugins: `plugin.toml` manifest, one long-lived JSON-lines process per plugin
   binary, one plugin per zip, binary must match the host architecture. Plugins
   never extend the `anth-proto` enums; they receive `Request::Plugin`.
-- Trash layout: `<directory>/.anth-trash/<id>/` with `meta.json`, hidden from
-  normal listings, with a configurable retention size.
+- Trash layout: freedesktop.org Trash specification 1.0 — `<files>/` and
+  `<info>/<name>.trashinfo`, chosen per volume, with a configurable retention
+  size.
+- Archives are extracted in-tree rather than by shelling out. `7z`, `p7zip` and
+  `xz` are not in the runtime image, and Alpine's `tar` is BusyBox, whose
+  escape behaviour could not be verified here; the extraction guard should not
+  depend on an unverified binary.
+- A deletion on a volume with no usable trash directory is refused rather than
+  silently made permanent; the request may ask for a permanent delete
+  explicitly.
 
 ## Phases
 
@@ -57,10 +65,37 @@ Additional decisions taken while planning:
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
 | 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
 | 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
-| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
+| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | in progress: recycle bin landed |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
 | 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
 | 8 (point 8) | Plugin system and the WireGuard plugin | not started |
+
+## Phase 5 — file manager (in progress)
+
+Split into four commits so each one is reviewable on its own:
+
+1. Recycle bin (freedesktop trash). Done.
+2. Archive create/extract/list, with the extraction guards.
+3. Text editing endpoints, then the CodeMirror component.
+4. Rename `anth-file-explorer` to `anth-file-manager`, harness and docs.
+
+### Recycle bin — what was decided while implementing
+
+- The spec keys the home trash on the *device* holding `$HOME`, not on the path
+  being equal to `$HOME`. Comparing paths looked right on a desktop and was
+  wrong in a container, where `/`, `/tmp` and `/home` are one overlay; the first
+  end-to-end run picked `/.Trash-10001` and failed with `EACCES`. A test now
+  pins the device rule.
+- A volume with no writable trash directory is an error naming the directory,
+  not a silent permanent delete.
+- `DeletionDate` is written in UTC. The spec asks for local time and the daemon
+  has no timezone database; readers only display the value, so a valid UTC stamp
+  beats a stamp that is wrong for half the year.
+- `.trashinfo` values are parsed strictly: a malformed percent escape or a
+  missing `Path` is skipped, never guessed at. `Path` is untrusted input on
+  restore and goes through `normalize` plus the root resolution.
+- Retention (`[files] max_trash_bytes`, default 1 GiB) is best effort and runs
+  after the move, so it can never fail a delete that already happened.
 
 ## Phase 4 — process management (done)
 

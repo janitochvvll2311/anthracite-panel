@@ -2,7 +2,7 @@
 
 use anth_proto::{
     AccountSnapshot, FileKind, FileListing, FirewallSnapshot, HostInfo, NetworkSnapshot,
-    ProcessSnapshot, Response, VolumeDevice, VolumeSnapshot,
+    ProcessSnapshot, Response, TrashListing, VolumeDevice, VolumeSnapshot,
 };
 
 const TOP_LEFT: char = '┌';
@@ -589,6 +589,12 @@ pub fn render_response(response: &Response) -> String {
             format!("[OK] upload {id} received {received} bytes")
         }
         Response::FileWriteAborted { id } => format!("[OK] upload {id} aborted"),
+        Response::FileTrashed { path, id } => format!("[OK] moved {path} to the trash as {id}"),
+        Response::TrashListing(listing) => render_trash_listing(listing),
+        Response::FileRestored { id, path } => format!("[OK] restored {id} to {path}"),
+        Response::FileTrashEmptied { removed } => {
+            format!("[OK] emptied the trash ({removed} entries removed)")
+        }
         Response::FileError(error) => format!("[ERROR] {}", error.detail),
         // A CLI subcommand never opens a terminal, so these are only reachable
         // if a daemon volunteers frames nobody asked for.
@@ -685,6 +691,55 @@ pub fn render_file_listing(listing: &FileListing) -> String {
     if let Some(warning) = &listing.warning {
         output.push('\n');
         output.push_str("Warning: ");
+        output.push_str(warning);
+    }
+    output
+}
+
+/// The trash table. Kept beside the listing renderer because both answer a
+/// "what is here" question and share the size and timestamp helpers.
+pub fn render_trash_listing(listing: &TrashListing) -> String {
+    let mut table = Table::new(vec![
+        "TYPE".to_string(),
+        "NAME".to_string(),
+        "SIZE".to_string(),
+        "DELETED FROM".to_string(),
+    ]);
+
+    for entry in &listing.entries {
+        let kind = match entry.kind {
+            FileKind::Directory => "dir",
+            FileKind::File => "file",
+            FileKind::Symlink => "link",
+            FileKind::Other => "other",
+        };
+        table.push(vec![
+            kind.to_string(),
+            entry.name.clone(),
+            if matches!(entry.kind, FileKind::Directory) {
+                "-".to_string()
+            } else {
+                format_bytes(entry.size)
+            },
+            entry.original_path.clone(),
+        ]);
+    }
+
+    let mut output = table.render();
+    let retention = match listing.max_bytes {
+        Some(max) => format!(" of {}", format_bytes(max)),
+        None => String::new(),
+    };
+    output.push_str(&format!(
+        "\nTrash holds {} entries using {}{retention}.",
+        listing.total,
+        format_bytes(listing.used_bytes)
+    ));
+    if !listing.enabled {
+        output.push_str("\nThe trash is disabled ([files] trash), so entries can be listed and restored but not created.");
+    }
+    if let Some(warning) = &listing.warning {
+        output.push_str("\nWarning: ");
         output.push_str(warning);
     }
     output

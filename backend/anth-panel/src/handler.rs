@@ -285,6 +285,22 @@ fn handle_core(request: &Request, policy: &Policy, files: &FileService) -> Respo
             Ok(path) => Response::FileDeleted { path },
             Err(error) => Response::FileError(error),
         },
+        Request::FileTrash { path } => match files.trash(path) {
+            Ok((path, id)) => Response::FileTrashed { path, id },
+            Err(error) => Response::FileError(error),
+        },
+        Request::FileTrashList => match files.trash_listing() {
+            Ok(listing) => Response::TrashListing(listing),
+            Err(error) => Response::FileError(error),
+        },
+        Request::FileTrashRestore { id, overwrite } => match files.restore(id, *overwrite) {
+            Ok((id, path)) => Response::FileRestored { id, path },
+            Err(error) => Response::FileError(error),
+        },
+        Request::FileTrashEmpty => match files.empty_trash() {
+            Ok(removed) => Response::FileTrashEmptied { removed },
+            Err(error) => Response::FileError(error),
+        },
         // Stateful requests belong to a live connection. Reaching them here
         // means a caller used the line helper outside a session.
         Request::FileWriteStart { .. }

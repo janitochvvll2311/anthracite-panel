@@ -2,7 +2,7 @@ use anth_proto::{Request, Response};
 
 use crate::cli::{
     AccountCommand, AccountGroupCommand, AccountUserCommand, Command, FileCommand, FirewallCommand,
-    NetworkCommand, ProcessCommand, VolumeCommand,
+    NetworkCommand, ProcessCommand, TrashBinCommand, VolumeCommand,
 };
 use crate::render;
 
@@ -126,6 +126,17 @@ pub fn request_for(command: &Command) -> Option<Request> {
                 path: list.path.clone(),
             }),
             FileCommand::Read(_) | FileCommand::Upload(_) => None,
+            FileCommand::Trash(args) => Some(Request::FileTrash {
+                path: args.path.clone(),
+            }),
+            FileCommand::TrashBin(bin) => match &bin.command {
+                TrashBinCommand::List => Some(Request::FileTrashList),
+                TrashBinCommand::Restore(args) => Some(Request::FileTrashRestore {
+                    id: args.id.clone(),
+                    overwrite: args.overwrite,
+                }),
+                TrashBinCommand::Empty(_) => Some(Request::FileTrashEmpty),
+            },
             FileCommand::Mkdir(args) => Some(Request::FileMkdir {
                 path: args.path.clone(),
                 recursive: args.parents,

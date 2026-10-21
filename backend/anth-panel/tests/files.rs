@@ -35,9 +35,7 @@ fn service(root: &Path, write: bool) -> FileService {
     FileService::new(&FilesConfig {
         root: root.to_string_lossy().into_owned(),
         write,
-        max_entries: 5000,
-        max_preview_bytes: 1024 * 1024,
-        max_upload_bytes: 64 * 1024 * 1024,
+        ..FilesConfig::default()
     })
     .unwrap()
 }
@@ -108,10 +106,8 @@ fn truncates_a_listing_at_max_entries() {
 
     let service = FileService::new(&FilesConfig {
         root: root.path().to_string_lossy().into_owned(),
-        write: false,
         max_entries: 2,
-        max_preview_bytes: 1024,
-        max_upload_bytes: 1024,
+        ..FilesConfig::default()
     })
     .unwrap();
     let listing = service.list("/").unwrap();
@@ -307,6 +303,7 @@ fn enforces_the_upload_limit() {
         max_entries: 10,
         max_preview_bytes: 10,
         max_upload_bytes: 4,
+        ..FilesConfig::default()
     })
     .unwrap();
     let mut upload = service.start_upload("/big", false).unwrap();

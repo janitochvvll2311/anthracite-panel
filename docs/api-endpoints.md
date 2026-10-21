@@ -46,6 +46,10 @@ it into a stream becomes `/watch`.
 | `anth-panel file mkdir /tmp/a` | `POST /api/files/mkdir` with `{"path":"/tmp/a"}` |
 | `anth-panel file rename /a /b` | `POST /api/files/rename` with `{"from":"/a","to":"/b"}` |
 | `anth-panel file delete /a` | `POST /api/files/delete` with `{"path":"/a"}` |
+| `anth-panel file trash /a` | `POST /api/files/trash` with `{"path":"/a"}` |
+| `anth-panel file trash-bin list` | `GET /api/files/trash/list` |
+| `anth-panel file trash-bin restore a.txt` | `POST /api/files/trash/restore` with `{"id":"a.txt"}` |
+| `anth-panel file trash-bin empty` | `POST /api/files/trash/empty` |
 | `anth-panel file upload ./a /b` | `POST /api/files/upload?path=/b` with a raw body |
 
 **HTTP errors are always JSON.** Every HTTP response that fails, including a
@@ -86,7 +90,11 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/files/download` | File download |
 | `POST` | `/api/files/mkdir` | Create a directory |
 | `POST` | `/api/files/rename` | Rename an entry |
-| `POST` | `/api/files/delete` | Delete an entry |
+| `POST` | `/api/files/delete` | Delete an entry permanently |
+| `POST` | `/api/files/trash` | Move an entry to the freedesktop trash |
+| `GET` | `/api/files/trash/list` | List every trash directory |
+| `POST` | `/api/files/trash/restore` | Restore one trashed entry |
+| `POST` | `/api/files/trash/empty` | Delete every trashed entry |
 | `POST` | `/api/files/upload` | Upload a raw body |
 | `GET` | `/api/auth/session` | Whether the session is open |
 | `POST` | `/api/auth/login` | Exchange a password for the token pair |

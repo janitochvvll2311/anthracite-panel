@@ -194,6 +194,12 @@ pub struct FilesConfig {
     pub max_preview_bytes: u64,
     /// Maximum size of one upload.
     pub max_upload_bytes: u64,
+    /// Whether the daemon moves deletions to the freedesktop trash. Off by
+    /// default: it writes outside `files.root`, so it is opt-in like `write`.
+    pub trash: bool,
+    /// Retention ceiling for the trash in bytes. `0` keeps everything until the
+    /// trash is emptied by hand.
+    pub max_trash_bytes: u64,
 }
 
 impl Default for FilesConfig {
@@ -204,6 +210,8 @@ impl Default for FilesConfig {
             max_entries: 5000,
             max_preview_bytes: 1024 * 1024,
             max_upload_bytes: 64 * 1024 * 1024,
+            trash: false,
+            max_trash_bytes: 1024 * 1024 * 1024,
         }
     }
 }

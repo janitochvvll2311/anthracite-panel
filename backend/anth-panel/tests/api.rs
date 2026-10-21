@@ -1092,6 +1092,7 @@ fn file_fixture(name: &str, write: bool, max_preview_bytes: u64) -> FileFixture 
         max_entries: 5000,
         max_preview_bytes,
         max_upload_bytes: 1024 * 1024,
+        ..FilesConfig::default()
     };
     let service = FileService::new(&config.files).unwrap();
     let server = spawn_file_server(&socket, service);

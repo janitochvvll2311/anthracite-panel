@@ -75,6 +75,44 @@ pub struct FileWritten {
     pub size: u64,
 }
 
+/// One entry held by the freedesktop trash.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TrashEntry {
+    /// Identifier under the trash `files/` and `info/` directories.
+    pub id: String,
+    /// Name the entry had before it was deleted.
+    pub name: String,
+    /// Virtual path the entry is restored to.
+    pub original_path: String,
+    /// Raw `DeletionDate` from the `.trashinfo` file, as written by the
+    /// application that deleted it. Not parsed: another desktop may have
+    /// written a timezone this daemon does not use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<String>,
+    pub kind: FileKind,
+    pub size: u64,
+    /// Host path of the trash directory holding the entry.
+    pub location: String,
+    /// Modification time of the stored entry, used to order the listing.
+    pub stored_ms: Option<u64>,
+}
+
+/// Contents of every trash directory the daemon can see.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct TrashListing {
+    pub entries: Vec<TrashEntry>,
+    /// Number of entries found before the row cap was applied.
+    pub total: usize,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    /// Whether `[files] trash` is on, so the panel knows if trashing works.
+    pub enabled: bool,
+    /// Bytes currently held, and the retention ceiling when one is set.
+    pub used_bytes: u64,
+    pub max_bytes: Option<u64>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FileErrorKind {

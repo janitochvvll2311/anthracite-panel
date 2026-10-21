@@ -20,8 +20,8 @@ pub use accounts::{
     SecretString,
 };
 pub use files::{
-    FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten,
-    DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
+    FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten, TrashEntry,
+    TrashListing, DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
 };
 pub use firewall::{
     FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallRule,
@@ -117,10 +117,26 @@ pub enum Request {
         to: String,
     },
     /// Delete one entry. Directories require `recursive` unless empty.
+    ///
+    /// Unconditional: this is the permanent delete. `FileTrash` is the
+    /// reversible one, and it is the default in the panel.
     FileDelete {
         path: String,
         recursive: bool,
     },
+    /// Move one entry to the freedesktop trash. Requires `[files] trash`.
+    FileTrash {
+        path: String,
+    },
+    /// List every trash directory the daemon can see.
+    FileTrashList,
+    /// Restore one entry from the trash to its recorded original path.
+    FileTrashRestore {
+        id: String,
+        overwrite: bool,
+    },
+    /// Remove every entry from the trash, freeing the space permanently.
+    FileTrashEmpty,
     /// Begin an atomic upload. The reply is `FileWriteStarted`.
     FileWriteStart {
         path: String,
@@ -341,6 +357,22 @@ pub enum Response {
     },
     FileDeleted {
         path: String,
+    },
+    /// An entry was moved to the trash.
+    FileTrashed {
+        path: String,
+        id: String,
+    },
+    /// One trash listing.
+    TrashListing(TrashListing),
+    /// An entry was restored to its original path.
+    FileRestored {
+        id: String,
+        path: String,
+    },
+    /// The trash was emptied.
+    FileTrashEmptied {
+        removed: usize,
     },
     FileRenamed {
         from: String,

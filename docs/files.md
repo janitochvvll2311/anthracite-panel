@@ -151,6 +151,62 @@ cd frontend && npm run dev
 Unit tests cover the client, display helpers and component under
 `frontend/src/lib/files/` and `frontend/src/components/`.
 
+## Recycle bin
+
+`[files] trash = true` makes `file trash` and `POST /api/files/trash` move an
+entry to the [freedesktop.org trash](https://specifications.freedesktop.org/trash-spec/latest/)
+instead of deleting it. `file delete` stays unconditional: the panel asks before
+it, and a permanent delete has to remain reachable.
+
+Each volume keeps its own trash, so a move never crosses a filesystem and stays
+an atomic `rename`:
+
+| Volume | Directory |
+| --- | --- |
+| The filesystem holding `$HOME` | `$XDG_DATA_HOME/Trash` (default `~/.local/share/Trash`) |
+| Any other volume | `<topdir>/.Trash/$uid`, else `<topdir>/.Trash-$uid` |
+
+`<topdir>/.Trash/$uid` is only used when `<topdir>/.Trash` is a real directory,
+not a symlink, world-writable and sticky. The home volume is chosen by comparing
+the device, not the path: in a container `/` and `/home` are one overlay, and a
+`.Trash-UID` at `/` would need root.
+
+Entries are stored under their original name in `files/` and described by
+`info/<name>.trashinfo`:
+
+```ini
+[Trash Info]
+Path=/notes.txt
+DeletionDate=2026-10-21T06:06:40
+```
+
+`Path` is percent-encoded as the specification requires, so a name with spaces,
+`%` or non-ASCII text survives unchanged. A taken name gets a numbered suffix
+(`notes.txt`, `notes.txt.1`, ...), as the specification prescribes. The file is
+written before the move and removed only after a successful restore, so a crash
+leaves either a restorable entry or nothing — never an entry that cannot be
+restored.
+
+### Restoring
+
+`file trash-bin restore ID` reads `Path` back and re-validates it: it is
+percent-decoded, must normalize without `..`, and is resolved inside
+`files.root`. The value comes from whichever application deleted the file, which
+may not be this daemon, so it is treated as untrusted input. An existing target
+is refused unless `--overwrite` is given, and `--overwrite` never replaces a
+directory.
+
+### Retention
+
+`[files] max_trash_bytes` (default 1 GiB, `0` for no ceiling) drops the oldest
+entries after a move. Retention is best effort: it runs after the move has
+already succeeded, and a failure to prune does not fail the request.
+
+A volume without a writable trash directory is refused rather than deleted
+permanently, with a message naming the directory. That is the deliberate
+difference from a desktop file manager: silently turning a reversible delete
+into an irreversible one is worse than an error.
+
 ## Security
 
 Authentication is still unimplemented, as with the terminal and process routes.

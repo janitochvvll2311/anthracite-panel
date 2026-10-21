@@ -16,6 +16,13 @@ use anth_proto::{
 };
 
 use crate::config::FilesConfig;
+use anth_proto::TrashListing;
+
+pub mod trash;
+pub mod volumes;
+
+pub use trash::{TrashDirectory, TrashService};
+pub use volumes::{home_paths, live_topdirs, topdirs_from_mountinfo};
 
 static UPLOAD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -26,6 +33,22 @@ pub struct FileService {
     write: bool,
     max_entries: usize,
     max_upload_bytes: u64,
+    /// Whether `[files] trash` is on. Separate from `write`: trashing deletes
+    /// an entry from its directory, so it is its own permission.
+    trash: bool,
+    max_trash_bytes: Option<u64>,
+    /// Overrides where the trash lives. Tests point it at a temporary
+    /// directory so the trash stays inside the fixture; production reads
+    /// mountinfo and the XDG variables.
+    trash_paths: Option<TrashPaths>,
+}
+
+/// The volumes and directories the trash resolves against.
+#[derive(Debug, Clone)]
+pub struct TrashPaths {
+    pub topdirs: Vec<PathBuf>,
+    pub home: PathBuf,
+    pub data_home: PathBuf,
 }
 
 /// An upload that has not been committed yet.
@@ -74,6 +97,9 @@ impl FileService {
             write: config.write,
             max_entries: config.max_entries,
             max_upload_bytes: config.max_upload_bytes,
+            trash: config.trash,
+            max_trash_bytes: (config.max_trash_bytes > 0).then_some(config.max_trash_bytes),
+            trash_paths: None,
         })
     }
 
@@ -83,6 +109,47 @@ impl FileService {
 
     pub fn max_upload_bytes(&self) -> u64 {
         self.max_upload_bytes
+    }
+
+    /// Pins the mount table instead of reading `/proc/self/mountinfo`. The home
+    /// and data directories keep following the environment.
+    pub fn with_topdirs(self, topdirs: Vec<PathBuf>) -> Self {
+        let (home, data_home) = home_paths();
+        self.with_trash_paths(TrashPaths {
+            topdirs,
+            home,
+            data_home,
+        })
+    }
+
+    /// Pins the whole trash view, which is what a test needs: the mount table
+    /// alone still sends the home volume's trash to the real `$HOME`.
+    pub fn with_trash_paths(mut self, paths: TrashPaths) -> Self {
+        self.trash_paths = Some(paths);
+        self
+    }
+
+    fn topdirs(&self) -> Vec<PathBuf> {
+        match &self.trash_paths {
+            Some(paths) => paths.topdirs.clone(),
+            None => live_topdirs(),
+        }
+    }
+
+    /// The trash service, bound to the mount table.
+    pub fn trash_service(&self) -> TrashService {
+        let (home, data_home) = match &self.trash_paths {
+            Some(paths) => (paths.home.clone(), paths.data_home.clone()),
+            None => home_paths(),
+        };
+        TrashService::new(
+            self.trash,
+            self.max_trash_bytes,
+            self.max_entries,
+            home,
+            data_home,
+            self.topdirs(),
+        )
     }
 
     /// Lists one directory below the configured root.
@@ -287,6 +354,94 @@ impl FileService {
         }
 
         Ok(path)
+    }
+
+    /// Moves one entry to the trash of the volume holding it.
+    ///
+    /// Refuses when the volume has no usable trash directory rather than
+    /// quietly making the delete permanent: a user who picked "move to trash"
+    /// should not lose the file because a mount was read-only.
+    pub fn trash(&self, path: &str) -> Result<(String, String), FileError> {
+        self.require_write()?;
+        if !self.trash {
+            return Err(FileError::new(
+                FileErrorKind::Disabled,
+                "the trash is disabled; enable `[files] trash`".to_string(),
+            ));
+        }
+        let path = normalize(path)?;
+        if path == "/" {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "the filesystem root cannot be trashed",
+            ));
+        }
+
+        let host = self.host_entry(&path)?;
+        // `symlink_metadata` so a dangling symlink can be trashed, and so a
+        // symlink is moved rather than the directory it points at.
+        fs::symlink_metadata(&host).map_err(|e| io_error(&path, e))?;
+
+        let topdir = self.topdir_of(&host).ok_or_else(|| {
+            FileError::new(
+                FileErrorKind::Disabled,
+                format!("no mount point covers `{path}`, so it has no trash"),
+            )
+        })?;
+
+        let service = self.trash_service();
+        let id = service.move_to_trash(&host, &path, &topdir)?;
+        Ok((path, id))
+    }
+
+    /// Restores one trashed entry to its recorded path.
+    pub fn restore(&self, id: &str, overwrite: bool) -> Result<(String, String), FileError> {
+        self.require_write()?;
+        let service = self.trash_service();
+        let entry = service.find(id)?;
+
+        // The recorded path was written by whoever deleted the file, which may
+        // be another application, so it is untrusted input: normalize rejects
+        // `..`, and the host resolution below keeps it inside the root.
+        let path = normalize(&entry.original_path)?;
+        if path == "/" {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "the filesystem root is not a restore target",
+            ));
+        }
+        let host_target = self.host_create(&path)?;
+
+        service.restore(id, &host_target, overwrite)?;
+        Ok((id.to_string(), path))
+    }
+
+    /// Empties every trash directory the daemon can see.
+    pub fn empty_trash(&self) -> Result<usize, FileError> {
+        self.require_write()?;
+        self.trash_service().empty()
+    }
+
+    /// Lists every trash directory the daemon can see.
+    pub fn trash_listing(&self) -> Result<TrashListing, FileError> {
+        self.trash_service().list()
+    }
+
+    /// The longest mount point that contains `host`, which is the volume whose
+    /// trash the entry belongs in.
+    fn topdir_of(&self, host: &Path) -> Option<PathBuf> {
+        let mut best: Option<PathBuf> = None;
+        for topdir in self.topdirs() {
+            if host.starts_with(&topdir) {
+                let longer = best.as_ref().is_none_or(|current| {
+                    topdir.components().count() > current.components().count()
+                });
+                if longer {
+                    best = Some(topdir);
+                }
+            }
+        }
+        best
     }
 
     /// Opens a temporary file next to the destination.

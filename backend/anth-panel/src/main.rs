@@ -10,7 +10,8 @@ use anth_panel::cli::{
     EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
     FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs, FirewallFlushArgs,
     NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs,
-    ProcessSpawnArgs, VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
+    ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs, VolumeArgs, VolumeCommand,
+    VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::read_password;
@@ -342,6 +343,27 @@ fn confirm_delete(args: &FileDeleteArgs) -> Result<bool, String> {
         args.yes,
         || format!("{verb} `{}`? [y/N] ", args.path),
         "refusing to delete without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_trash_restore(args: &TrashRestoreArgs) -> Result<bool, String> {
+    let verb = if args.overwrite {
+        "Restore over the existing entry"
+    } else {
+        "Restore"
+    };
+    confirm_action(
+        args.yes,
+        || format!("{verb} `{}`? [y/N] ", args.id),
+        "refusing to restore without --yes when stdin is not a terminal",
+    )
+}
+
+fn confirm_trash_empty(args: &TrashEmptyArgs) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || "Empty the trash? This cannot be undone. [y/N] ".to_string(),
+        "refusing to empty the trash without --yes when stdin is not a terminal",
     )
 }
 
@@ -772,6 +794,30 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
     }) = command
     {
         match confirm_delete(args) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("[cancelled]");
+                return Some(ExitCode::SUCCESS);
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return Some(ExitCode::FAILURE);
+            }
+        }
+    }
+
+    // Restoring over an existing entry and emptying the trash are the two
+    // irreversible trash operations, so they confirm like a delete does.
+    if let Command::File(FileArgs {
+        command: FileCommand::TrashBin(args),
+    }) = command
+    {
+        let confirmed = match &args.command {
+            TrashBinCommand::Restore(args) => confirm_trash_restore(args),
+            TrashBinCommand::Empty(args) => confirm_trash_empty(args),
+            TrashBinCommand::List => Ok(true),
+        };
+        match confirmed {
             Ok(true) => {}
             Ok(false) => {
                 eprintln!("[cancelled]");

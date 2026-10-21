@@ -558,8 +558,12 @@ pub enum FileCommand {
     Upload(FileUploadArgs),
     /// Rename a file or directory.
     Rename(FileRenameArgs),
-    /// Delete a file or directory.
+    /// Delete a file or directory permanently.
     Delete(FileDeleteArgs),
+    /// Move a file or directory to the freedesktop trash.
+    Trash(FileTrashArgs),
+    /// Inspect or empty the trash.
+    TrashBin(FileTrashBinArgs),
 }
 
 #[derive(Args, Debug)]
@@ -624,6 +628,49 @@ pub struct FileDeleteArgs {
     #[arg(long, help = "Delete a directory and everything below it")]
     pub recursive: bool,
 
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct FileTrashArgs {
+    #[arg(value_name = "PATH", help = "Entry to move to the trash")]
+    pub path: String,
+}
+
+#[derive(Args, Debug)]
+pub struct FileTrashBinArgs {
+    #[command(subcommand)]
+    pub command: TrashBinCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TrashBinCommand {
+    /// List what the trash holds.
+    List,
+    /// Put one entry back where it came from.
+    Restore(TrashRestoreArgs),
+    /// Delete everything in the trash.
+    Empty(TrashEmptyArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct TrashRestoreArgs {
+    #[arg(
+        value_name = "ID",
+        help = "Trash identifier, as printed by `trash-bin list`"
+    )]
+    pub id: String,
+
+    #[arg(long, help = "Replace the entry that now occupies the original path")]
+    pub overwrite: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct TrashEmptyArgs {
     #[arg(long, help = "Do not ask for confirmation")]
     pub yes: bool,
 }

@@ -310,6 +310,7 @@ fn handle_request_with_files_lists_the_configured_root() {
         max_entries: 100,
         max_preview_bytes: 1024,
         max_upload_bytes: 1024,
+        ..FilesConfig::default()
     })
     .unwrap();
 
