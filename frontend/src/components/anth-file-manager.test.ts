@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import './anth-file-explorer'
-import type { AnthFileExplorer } from './anth-file-explorer'
+import './anth-file-manager'
+import type { AnthFileManager } from './anth-file-manager'
 import {
   FakeFileClient,
   fileEntry,
@@ -10,7 +10,7 @@ import {
 
 import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 
-async function flush(element: AnthFileExplorer): Promise<void> {
+async function flush(element: AnthFileManager): Promise<void> {
   for (let i = 0; i < 4; i++) {
     await Promise.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -22,10 +22,10 @@ async function mount(
   client: FakeFileClient,
   path = '/',
   options: { autoLoad?: boolean; showHidden?: boolean } = {},
-): Promise<AnthFileExplorer> {
+): Promise<AnthFileManager> {
   const element = document.createElement(
-    'anth-file-explorer',
-  ) as AnthFileExplorer
+    'anth-file-manager',
+  ) as AnthFileManager
   element.client = client
   element.path = path
   if (options.autoLoad !== undefined) element.autoLoad = options.autoLoad
@@ -36,13 +36,13 @@ async function mount(
   return element
 }
 
-function rows(element: AnthFileExplorer): HTMLElement[] {
+function rows(element: AnthFileManager): HTMLElement[] {
   return [
     ...(element.shadowRoot?.querySelectorAll<HTMLElement>('tbody tr') ?? []),
   ]
 }
 
-function button(element: AnthFileExplorer, label: string): HTMLButtonElement {
+function button(element: AnthFileManager, label: string): HTMLButtonElement {
   const match = [...(element.shadowRoot?.querySelectorAll('button') ?? [])].find(
     (candidate) => candidate.textContent?.trim().startsWith(label),
   )
@@ -50,7 +50,7 @@ function button(element: AnthFileExplorer, label: string): HTMLButtonElement {
   return match
 }
 
-function selectFile(element: AnthFileExplorer, name: string): void {
+function selectFile(element: AnthFileManager, name: string): void {
   const row = rows(element).find((candidate) =>
     candidate.textContent?.includes(name),
   )
@@ -63,7 +63,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('AnthFileExplorer', () => {
+describe('AnthFileManager', () => {
   it('lists a directory with breadcrumbs and a read-only badge', async () => {
     const client = new FakeFileClient()
     client.listings.set(

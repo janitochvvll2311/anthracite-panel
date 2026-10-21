@@ -347,7 +347,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   disabled button with the reason instead of a form that cannot succeed. Both are
   exercised by Vitest component tests and the
   `src/components/anth-process-manager.test.html` dev harness.
-- **Filesystem explorer**: `files.rs` validates `[files] root`, normalizes virtual
+- **Filesystem**: `files.rs` validates `[files] root`, normalizes virtual
   paths, rejects `..` and symlink escapes, lists directories, reads stateless chunks
   and performs atomic uploads through a per-connection temporary file. Writes are
   gated by `[files] write`, which defaults to `false`. `FileError` carries a
@@ -355,13 +355,22 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `render_file_listing` is the CLI table; the API streams uploads and downloads
   through the chunked flow instead of buffering a whole file, and inline previews
   force `text/plain` plus `nosniff` except for a safe raster-image allowlist.
-- **Frontend file explorer**: `anth-file-explorer` owns breadcrumbs, navigation,
-  sorting, hidden-file filtering, previews, uploads and confirmed writes. It only
-  depends on the injected `FileClient`; `lib/files/file-client.ts` implements
-  `/api/files` and `lib/files/display.ts` owns path, size and sort helpers. The
-  read-only state comes from the listing's `write_enabled`. Tests live under
-  `src/components/` and `src/lib/files/`; the
-  `src/components/anth-file-explorer.test.html` file is the dev harness.
+- **Frontend file manager**: `anth-file-manager` owns breadcrumbs, navigation,
+  sorting, hidden-file filtering, previews, uploads, archives, the recycle bin,
+  the text editor and confirmed writes. It only depends on the injected
+  `FileClient`; `lib/files/file-client.ts` implements `/api/files` and
+  `lib/files/display.ts` owns path, size and sort helpers. The read-only state
+  comes from the listing's `write_enabled`.
+  `anth-file-editor` is the CodeMirror editor behind the preview's Edit button:
+  it imports CodeMirror dynamically, keeps the buffer dirty when a save is
+  refused, and sends the mtime it loaded as the save precondition. Tests live
+  under `src/components/` and `src/lib/files/`; the
+  `src/components/anth-file-manager.test.html` file is the dev harness.
+- **Frontend editor**: `lib/editor/language.ts` maps a file name to a grammar
+  (pure, tested) and `lib/editor/codemirror-setup.ts` owns everything
+  CodeMirror-specific behind the four-method `EditorHandle` the component sees.
+  A failed dynamic import falls back to a textarea so the editor is never a
+  blank pane.
 - **Network monitor**: `network.rs` reads `/sys/class/net` and `/proc/net/dev`,
   resolves IPv4/IPv6 with `getifaddrs(3)` and enforces `[network] control` plus
   the loopback-down guard before calling `SIOCSIFFLAGS`. Global `sudo` defaults

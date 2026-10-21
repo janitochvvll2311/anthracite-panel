@@ -31,13 +31,13 @@ interface FilePreview {
 }
 
 /**
- * Filesystem explorer.
+ * Filesystem manager.
  *
  * The component owns navigation, sorting, hidden-file filtering and write
  * confirmations. It depends on the injected `FileClient`, not on `/api`.
  */
-@customElement('anth-file-explorer')
-export class AnthFileExplorer extends LitElement {
+@customElement('anth-file-manager')
+export class AnthFileManager extends LitElement {
   @property({ attribute: false })
   client?: FileClient
 
@@ -471,7 +471,7 @@ export class AnthFileExplorer extends LitElement {
     const writable = listing?.write_enabled === true
 
     return html`
-      <section class="explorer" part="explorer">
+      <section class="explorer" part="file-manager">
         <header class="toolbar">
           <nav class="crumbs" aria-label="Breadcrumb">
             ${breadcrumbs(current).map(
@@ -957,7 +957,7 @@ function messageOf(error: unknown): string {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'anth-file-explorer': AnthFileExplorer
+    'anth-file-manager': AnthFileManager
   }
 }
 

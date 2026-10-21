@@ -1,9 +1,9 @@
 <!doctype html>
 <!--
-  Dev-only harness for the file explorer components.
+  Dev-only harness for the file manager component.
 
   Run `npm run dev` and open
-  http://localhost:5173/src/components/anth-file-explorer.test.html. Vite's build input is only
+  http://localhost:5173/src/components/anth-file-manager.test.html. Vite's build input is only
   index.html, so this file never reaches dist/.
 -->
 <html lang="en">
@@ -12,17 +12,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Dev harness for the Anthracite Panel file explorer component."
+      content="Dev harness for the Anthracite Panel file manager component."
     />
-    <title>anth-file-explorer · test harness</title>
+    <title>anth-file-manager · test harness</title>
     <link rel="stylesheet" href="/src/harness/harness.css" />
   </head>
   <body>
-    <anth-harness heading="anth-file-explorer" width="1180px">
+    <anth-harness heading="anth-file-manager" width="1180px">
       <p slot="description">
-        Filesystem explorer backed by <code>GET /api/files</code>. It shows
-        breadcrumbs, sorting, hidden files, text/image previews and the write
-        controls. The listing scrolls inside a bounded height so the preview
+        Filesystem manager backed by <code>GET /api/files</code>. It shows
+        breadcrumbs, sorting, hidden files, archives, a text editor,
+        text/image previews and the write controls. The listing scrolls inside a bounded height so the preview
         stays visible. Debug builds generate <code>[files] write = true</code>;
         in release, enable it explicitly before testing uploads, renaming or
         deletion.
@@ -50,7 +50,7 @@
               <code>backend/</code>.
             </li>
             <li><code>npm run dev</code> from <code>frontend/</code>.</li>
-            <li>Open <code>/src/components/anth-file-explorer.test.html</code> on the Vite port.</li>
+            <li>Open <code>/src/components/anth-file-manager.test.html</code> on the Vite port.</li>
           </ul>
         </article>
       </section>
@@ -67,32 +67,32 @@
         </label>
       </div>
 
-      <anth-file-explorer id="explorer" show-hidden></anth-file-explorer>
+      <anth-file-manager id="manager" show-hidden></anth-file-manager>
     </anth-harness>
 
     <script type="module">
       import '/src/harness/anth-harness.ts'
-      import '/src/components/anth-file-explorer.ts'
+      import '/src/components/anth-file-manager.ts'
       import { HttpFileClient } from '/src/lib/files/file-client.ts'
 
-      const explorer = document.getElementById('explorer')
+      const manager = document.getElementById("manager")
       const path = document.getElementById('path')
       const hidden = document.getElementById('hidden')
 
-      explorer.client = new HttpFileClient()
-      hidden.checked = explorer.showHidden
+      manager.client = new HttpFileClient()
+      hidden.checked = manager.showHidden
 
       document.getElementById('go').addEventListener('click', () => {
-        explorer.navigate(path.value || '/')
-        path.value = explorer.path
+        manager.navigate(path.value || '/')
+        path.value = manager.path
       })
 
       hidden.addEventListener('change', () => {
-        explorer.showHidden = hidden.checked
+        manager.showHidden = hidden.checked
       })
 
-      explorer.addEventListener('click', () => {
-        path.value = explorer.path
+      manager.addEventListener('click', () => {
+        path.value = manager.path
       })
     </script>
   </body>

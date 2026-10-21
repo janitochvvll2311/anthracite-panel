@@ -27,7 +27,7 @@ import { currentApiFetch } from '../lib/http'
 import { msg } from '@lit/localize'
 
 import '../components/anth-account-manager'
-import '../components/anth-file-explorer'
+import '../components/anth-file-manager'
 import '../components/anth-firewall'
 import '../components/anth-host-info'
 import '../components/anth-network-monitor'
@@ -78,7 +78,7 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'files',
-    element: 'anth-file-explorer',
+    element: 'anth-file-manager',
     icon: '📁',
     title: () => msg('Files'),
     description: () =>

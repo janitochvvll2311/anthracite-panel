@@ -123,29 +123,30 @@ wire format.
 
 ## Web component
 
-`frontend/src/components/anth-file-explorer.ts` implements breadcrumbs, sorting,
-hidden-file filtering, previews, uploads and the write controls. It depends on
+`frontend/src/components/anth-file-manager.ts` implements breadcrumbs, sorting,
+hidden-file filtering, previews, the text editor, archives (create, list and
+extract), the recycle bin and the write controls. It depends on
 the injected `FileClient`; `frontend/src/lib/files/file-client.ts` implements the
 HTTP version.
 
-The explorer has a bounded height by default, so the file list scrolls inside the
+The manager has a bounded height by default, so the file list scrolls inside the
 component and the preview stays visible. Override it with the
 `--anth-file-height` CSS property when embedding it:
 
 ```css
-anth-file-explorer {
+anth-file-manager {
   --anth-file-height: 620px;
 }
 ```
 
 The dev harness is
-`frontend/src/components/anth-file-explorer.test.html`. It is not part of the
+`frontend/src/components/anth-file-manager.test.html`. It is not part of the
 Vite production build. Run it with:
 
 ```bash
 cd backend && cargo run -p anth-panel -- run
 cd frontend && npm run dev
-# open http://localhost:5173/src/components/anth-file-explorer.test.html
+# open http://localhost:5173/src/components/anth-file-manager.test.html
 ```
 
 Unit tests cover the client, display helpers and component under
@@ -209,7 +210,7 @@ into an irreversible one is worse than an error.
 
 ## Text editing
 
-The file explorer opens a text file in a CodeMirror editor with line numbers,
+The file manager opens a text file in a CodeMirror editor with line numbers,
 syntax highlighting and word autocompletion. The grammar comes from the file
 name; formats without a grammar the panel ships (`shell`, `toml`, plain text)
 keep line numbers and bracket matching rather than pretending to highlight.
