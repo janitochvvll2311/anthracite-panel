@@ -26,7 +26,7 @@ repository.
 | 15 | Network interfaces support create, edit, rename and delete, rename only while the link is down |
 | 16 | Partitions support create, edit, resize and delete, plus `mkfs` behind its switch |
 | 17 | A plugin manifest requires a binary `sha256`; a signature is optional and its absence is warned about, not rejected |
-| 18 | Plugins can be installed from the web UI, not only from the CLI. The upload route is gated by `[plugins] install_from_web`, which defaults to `false` even in debug builds, and the UI must show a dangerous-action warning naming the code execution risk before the install button is enabled |
+| 18 | Plugins can be installed from the web UI, not only from the CLI. The upload route is gated by `[plugins] install_from_web`, which defaults to `false` in release and `true` in the generated debug config, following the same rule as the other control switches. The UI must show a dangerous-action warning naming the code execution risk before the install button is enabled |
 
 Additional decisions taken while planning:
 
@@ -50,17 +50,20 @@ Additional decisions taken while planning:
   CLI and `POST /api/plugins/install` from the web UI. Both end in the same
   `plugins::install` function, so the zip checks, the manifest validation and
   the `sha256` comparison exist once. The web route is gated by
-  `[plugins] install_from_web` (default `false`, and it stays `false` in debug
-  builds, unlike the other control switches). Installing a plugin runs
-  arbitrary code as the daemon's user, which is why this switch does not follow
-  the debug-defaults-on rule the process, network, firewall, volume and file
-  switches follow: those grant power over the host, this one grants execution.
+  `[plugins] install_from_web`: off in release, on in the generated debug
+  config, the same rule the process, network, firewall, volume and file
+  switches follow. The debug default is safe only because it is paired with a
+  signed-manifest requirement and the UI warning below; a debug build is a
+  developer's own machine, and leaving the switch off there would mean the only
+  untested path is the dangerous one.
 - The web UI treats installation as a dangerous action. The install control
   stays disabled until the operator acknowledges a warning that names the
   consequence, the panel says the plugin will run with the daemon's privileges,
   and the acknowledgement is per session rather than persisted — a stored
   "do not warn me again" would turn a deliberate confirmation into a default.
-  `anth-modal` renders the warning; the harness uses the same flow.
+  `anth-modal` renders the warning; the harness uses the same flow. The warning
+  is unconditional: it does not disappear because the switch happens to be on
+  in a debug build.
 - Trash layout: freedesktop.org Trash specification 1.0 — `<files>/` and
   `<info>/<name>.trashinfo`, chosen per volume, with a configurable retention
   size.
