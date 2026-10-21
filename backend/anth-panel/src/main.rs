@@ -1383,6 +1383,12 @@ fn run_plugin_call(
         return ExitCode::FAILURE;
     }
 
+    // `enabled` is the master switch: the registry loads nothing and `install`
+    // denies when it is off, so this path must not become a way around it.
+    if !plugins.enabled {
+        eprintln!("[ERROR] plugins are disabled in the configuration");
+        return ExitCode::FAILURE;
+    }
     let Some(grant) = config
         .plugins
         .grants
@@ -1426,6 +1432,12 @@ fn run_plugin_call(
         Ok(reply) => {
             for line in &reply.log {
                 eprintln!("[plugin] {line}");
+            }
+            if reply.log_dropped > 0 {
+                eprintln!(
+                    "[WARN] the plugin logged {} more line(s) than the host accepts",
+                    reply.log_dropped
+                );
             }
             println!("{}", reply.body);
             ExitCode::SUCCESS

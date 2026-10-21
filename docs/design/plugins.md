@@ -99,8 +99,23 @@ into the config together with the wasm hash:
 id = "org.anth.wireguard"
 version = "0.1.0"
 wasm_sha256 = "..."
-capabilities = ["wg.status"]
+enabled = true
+
+[[plugins.grants.recipes]]
+id = "wg.status"
+program = "wg"
+argv = ["show", "{interface}", "dump"]
+accepts_text = false
+
+[plugins.grants.recipes.args.interface]
+type = "ifname"
+optional = false
 ```
+
+A grant written before the recipes existed carries `capabilities = ["..."]`.
+`PluginGrant` denies unknown fields, so that config fails to load with the stale
+key named, instead of deserializing into an empty recipe list and leaving the
+plugin installed, listed, and unable to run anything.
 
 The grant freezes the whole **recipe** — program, argv template and typed
 arguments — not only the id. `invoke` renders argv from the grant, so a grant
@@ -126,10 +141,23 @@ capabilities needs an explicit `plugin approve --accept-capabilities`, and
 filesystem, clock or randomness except what the host hands it. Static musl
 builds stay trivial, which is the repository rule.
 
-Limits: a fuel budget (default 50M per invocation, configurable) and a memory
-ceiling. An invocation runs on a blocking worker so a busy plugin cannot stall
-the connection loop. There is no wall-clock kill for wasm, so fuel *is* the
-guarantee against a runaway loop.
+Limits, because fuel alone is not one:
+
+- a fuel budget (default 50M per invocation, configurable) for guest
+  instructions;
+- a 64 MiB ceiling on the guest's linear memory;
+- 32 capability calls per invocation. Fuel counts instructions, and one
+  `anth_exec` costs a handful of them for one subprocess, so a loop over a
+  granted capability is an amplifier, not a cost: measured at 100k spawns in 7 s
+  with fuel never exhausted;
+- 64 KiB of `anth_log` output, since the log is a host-side `Vec` outside
+  `StoreLimits`. Past the cap the host drops lines and reports how many, rather
+  than returning a log that looks complete;
+- a 30 s deadline, checked between host calls, for a guest blocked on a slow
+  child process.
+
+An invocation runs on a blocking worker so a busy plugin cannot stall the
+connection loop.
 
 ### ABI
 
@@ -219,7 +247,8 @@ values: that would expose the whole protocol and defeat the model.
 | An id with `..` reaches a recursive delete | ids are validated inside `plugin_dir`, before the join |
 | Plugin hijacks a core route | namespace `/api/plugins/<id>/` enforced |
 | Plugin escapes the bundle dir | archive member guard reused from `files/archive.rs`, plus `O_NOFOLLOW` |
-| Plugin hangs the daemon | fuel budget, blocking worker |
+| Plugin hangs the daemon | fuel budget, 32 calls per invocation, 30 s deadline, blocking worker |
+| Plugin exhausts host memory through its log | 64 KiB log cap, dropped lines reported |
 | Plugin reads host secrets | no WASI: no filesystem, no env, no clock |
 | Plugin impersonates another | unique id, duplicate registration refused |
 | Zip bomb at install | same limits as file extraction |

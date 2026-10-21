@@ -326,3 +326,88 @@ fn probe_accepts_the_fixture_and_rejects_garbage() {
     assert!(probe(&guest()).is_ok());
     assert!(probe(b"\0asm").is_err());
 }
+
+/// A guest that calls `wg.status` in a loop until the host stops it.
+fn looping_guest() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+             (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
+             (memory (export "memory") 1)
+             (func (export "anth_alloc") (param i32) (result i32) (i32.const 1024))
+             (func (export "anth_free") (param i32) (param i32))
+             (func (export "anth_abi_version") (result i32) (i32.const 1))
+             (data (i32.const 0) "wg.status")
+             (data (i32.const 64) "{\"interface\":\"wg0\"}")
+             (func (export "anth_handle") (param i32) (param i32) (result i64)
+               (local $i i32)
+               (block $done
+                 (loop $again
+                   (br_if $done (i32.ge_u (local.get $i) (i32.const 100000)))
+                   (drop (call $exec (i32.const 0) (i32.const 9) (i32.const 64) (i32.const 19)))
+                   (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                   (br $again)))
+               (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 0))))"#,
+    )
+    .expect("the looping guest must compile")
+}
+
+#[test]
+fn a_guest_cannot_amplify_one_call_into_unbounded_spawns() {
+    // Fuel counts guest instructions, and one `anth_exec` costs a handful of
+    // them. Without the ceiling this guest produced 100k subprocesses in 7s and
+    // never ran out of fuel.
+    let runner = Recorder::ok("");
+    let reply = invoke(
+        &looping_guest(),
+        "org.anth.test",
+        &grant(),
+        &runner,
+        request(),
+        DEFAULT_FUEL,
+    )
+    .unwrap();
+
+    assert_eq!(
+        runner.calls().len(),
+        MAX_EXECS_PER_INVOCATION as usize,
+        "the host must stop spawning at the ceiling"
+    );
+    assert_eq!(reply.execs, MAX_EXECS_PER_INVOCATION);
+}
+
+#[test]
+fn a_guest_that_floods_the_log_is_cut_off_and_told_so() {
+    // The log is a host-side Vec, outside StoreLimits, so it needs its own cap.
+    // 1000 lines of 140 bytes is ~137 KiB: past MAX_LOG_BYTES (64 KiB), and the
+    // guest is told some lines were dropped rather than the caller printing a
+    // log that looks complete.
+    let guest = wat::parse_str(
+        r#"(module
+             (import "env" "anth_log" (func $log (param i32 i32)))
+             (memory (export "memory") 1)
+             (data (i32.const 16) "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+             (func (export "anth_alloc") (param i32) (result i32) (i32.const 1024))
+             (func (export "anth_free") (param i32) (param i32))
+             (func (export "anth_abi_version") (result i32) (i32.const 1))
+             (func (export "anth_handle") (param i32) (param i32) (result i64)
+               (local $i i32)
+               (block $done
+                 (loop $again
+                   (br_if $done (i32.ge_u (local.get $i) (i32.const 1000)))
+                   (call $log (i32.const 16) (i32.const 140))
+                   (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                   (br $again)))
+               (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 0))))"#,
+    )
+    .unwrap();
+
+    let runner = Recorder::ok("");
+    let reply = invoke(&guest, "org.anth.test", &grant(), &runner, request(), 0).unwrap();
+
+    let bytes: usize = reply.log.iter().map(String::len).sum();
+    assert!(
+        bytes <= MAX_LOG_BYTES,
+        "the log held {bytes} bytes, past the {MAX_LOG_BYTES} cap"
+    );
+    assert!(reply.log_dropped > 0, "the truncation must be reported");
+}

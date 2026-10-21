@@ -31,6 +31,30 @@ pub const DEFAULT_FUEL: u64 = 50_000_000;
 /// return a pointer and a length that makes the host allocate without bound.
 const MAX_STRING_BYTES: usize = 4 * 1024 * 1024;
 
+/// Ceiling on the total bytes a guest may accumulate through `anth_log`.
+///
+/// `StoreLimits::memory_size` bounds the guest's *linear* memory. The log is a
+/// `Vec<String>` on the host heap, outside that limit, so without a cap a guest
+/// can turn a 64 KiB line in a loop into a hundred megabytes the caller then
+/// prints. Measured before this cap: 2000 lines of 64 KiB left 131 MB.
+const MAX_LOG_BYTES: usize = 64 * 1024;
+
+/// Ceiling on how many capabilities one invocation may run.
+///
+/// Fuel bounds guest *instructions*, not the host work those instructions ask
+/// for. An `anth_exec` costs a few instructions and one subprocess, so a guest
+/// looping on a granted capability is an amplifier: measured at 100k spawns in
+/// 7 s with fuel never exhausted. This bound is what makes the "a plugin cannot
+/// hang the daemon" claim true, since fuel alone does not.
+pub const MAX_EXECS_PER_INVOCATION: u32 = 32;
+
+/// Wall-clock ceiling on one invocation, as a second backstop.
+///
+/// Fuel stops a compute loop and the exec ceiling stops spawn amplification, but
+/// neither stops a guest that blocks inside a slow child process. A deadline
+/// checked between host calls turns "holds the thread forever" into a refusal.
+pub const MAX_INVOCATION: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A guest refused to do something, could not run, or ran out of fuel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestError {
@@ -76,6 +100,10 @@ pub struct GuestReply {
     /// guest that answered from its own data from one that asked the host
     /// something.
     pub execs: u32,
+    /// Log lines refused once [`MAX_LOG_BYTES`] was reached. Non-zero means
+    /// `log` is incomplete, which the caller must say rather than print as if
+    /// the guest had said nothing more.
+    pub log_dropped: u32,
 }
 
 /// Everything a guest can reach. One per invocation, so nothing survives between
@@ -85,7 +113,13 @@ struct Host<'a> {
     grant: &'a PluginGrant,
     runner: &'a dyn CommandRunner,
     log: Vec<String>,
+    /// Bytes already held by `log`, so the cap does not rescan the vector.
+    log_bytes: usize,
+    /// Log lines dropped after the cap was reached, reported instead of silently
+    /// discarded: a truncated log that looks complete is worse than a loud one.
+    log_dropped: u32,
     execs: u32,
+    deadline: std::time::Instant,
     limits: StoreLimits,
 }
 
@@ -124,7 +158,10 @@ pub fn invoke(
             grant,
             runner,
             log: Vec::new(),
+            log_bytes: 0,
+            log_dropped: 0,
             execs: 0,
+            deadline: std::time::Instant::now() + MAX_INVOCATION,
             limits,
         },
     );
@@ -184,6 +221,7 @@ pub fn invoke(
         body,
         log: store.data().log.clone(),
         execs: store.data().execs,
+        log_dropped: store.data().log_dropped,
     })
 }
 
@@ -235,9 +273,16 @@ fn define_host_functions(linker: &mut Linker<Host<'_>>) -> Result<(), GuestError
             "env",
             "anth_log",
             |mut caller: Caller<'_, Host<'_>>, ptr: i32, len: i32| {
-                if let Ok(line) = read_string(&mut caller, ptr, len) {
-                    caller.data_mut().log.push(line);
+                let Ok(line) = read_string(&mut caller, ptr, len) else {
+                    return;
+                };
+                let host = caller.data_mut();
+                if host.log_bytes + line.len() > MAX_LOG_BYTES {
+                    host.log_dropped += 1;
+                    return;
                 }
+                host.log_bytes += line.len();
+                host.log.push(line);
             },
         )
         .map_err(|error| {
@@ -274,6 +319,21 @@ fn execute(
         .program
         .clone()
         .ok_or_else(|| format!("`{capability}` names no program"))?;
+
+    // Two bounds that fuel cannot provide. Fuel counts guest instructions, and
+    // one `anth_exec` costs a handful of them for one subprocess, so without
+    // these a loop is an amplifier rather than a cost.
+    if caller.data().execs >= MAX_EXECS_PER_INVOCATION {
+        return Err(format!(
+            "`{plugin}` exceeded {MAX_EXECS_PER_INVOCATION} capability calls in one invocation"
+        ));
+    }
+    if std::time::Instant::now() > caller.data().deadline {
+        return Err(format!(
+            "`{plugin}` exceeded the {}s budget for one invocation",
+            MAX_INVOCATION.as_secs()
+        ));
+    }
 
     let values: BTreeMap<String, String> = serde_json::from_str(arguments)
         .map_err(|error| format!("arguments must be a JSON object: {error}"))?;

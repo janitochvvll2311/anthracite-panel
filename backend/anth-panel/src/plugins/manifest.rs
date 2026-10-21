@@ -820,12 +820,12 @@ impl GrantedCapability {
 /// whatever a later manifest claims, and `wasm_sha256` is what makes the freeze
 /// real: a swapped module is caught before it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginGrant {
     pub id: String,
     pub version: String,
     pub wasm_sha256: String,
     /// Frozen recipes. This is the authority; `allowed_ids` is only a view.
-    #[serde(default)]
     pub recipes: Vec<GrantedCapability>,
     /// Whether the plugin is loaded at all. `plugin approve` sets it after a
     /// version that declares new capabilities.

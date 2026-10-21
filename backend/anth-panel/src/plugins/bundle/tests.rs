@@ -803,3 +803,52 @@ fn a_broken_plugin_does_not_stop_the_others_from_loading() {
     assert!(problems.iter().any(|p| p.contains("org.anth.broken")));
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn load_refuses_a_module_that_hashes_right_but_cannot_be_loaded() {
+    // The digest is checked first, so this is the case where the bytes are the
+    // approved ones and still unusable. `load` has to say so, or a daemon start
+    // and `plugin call` disagree about whether the plugin works.
+    let dir = scratch("loadprobe");
+    let config = config_at(&dir.join("plugins"));
+    let bundle = valid_bundle(&dir, "");
+    let (_, grant) = install_bundle(&bundle, &config).unwrap();
+    let root = dir.join("plugins").join("org.anth.test");
+
+    // Bytes the grant will approve and the parser will not accept: version 2 of
+    // the format does not exist.
+    let bytes = b"\0asm\x02\0\0\0";
+    fs::write(root.join("plugin.wasm"), bytes).unwrap();
+    let mut grant = grant;
+    grant.wasm_sha256 = sha_of(bytes);
+
+    let error = load(&root, &grant).unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Invalid, "{}", error.detail);
+    assert!(
+        error.detail.contains("cannot be loaded"),
+        "{}",
+        error.detail
+    );
+}
+
+#[test]
+fn a_grant_written_before_the_recipes_existed_is_rejected_loudly() {
+    // Phase 8a wrote `capabilities = ["wg.status"]`. With `recipes` merely
+    // defaulted it deserialized into an empty list, so the plugin listed and ran
+    // nothing, silently. Rejecting the stale key turns that into an error at
+    // startup.
+    let stale = r#"
+id = "org.anth.test"
+version = "0.1.0"
+wasm_sha256 = "aa"
+capabilities = ["wg.status"]
+enabled = true
+"#;
+    let error = toml::from_str::<PluginGrant>(stale)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("capabilities") || error.contains("unknown field"),
+        "the error must name the stale key: {error}"
+    );
+}

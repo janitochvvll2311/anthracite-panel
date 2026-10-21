@@ -166,6 +166,10 @@ pub fn load(root: &Path, grant: &PluginGrant) -> Result<Installed, PluginError> 
             ),
         ));
     }
+    // The hash proves these are the approved bytes; it does not prove they load.
+    // Probing here too, not only at install, is what makes the daemon's view and
+    // the CLI's view agree about a plugin being usable.
+    verify_module(root)?;
 
     Ok(installed_view(&manifest, grant, root.to_path_buf()))
 }
