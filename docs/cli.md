@@ -88,6 +88,10 @@ generates one: it prints the account name and the password to the terminal
 once, stores only the PBKDF2 digest and a generated signing key, and never
 shows the password again. Set a new one with `anth-panel auth set-password`.
 
+The file is written with mode `0600` because it holds the digest and the signing
+key. A local account that can read the key could forge an access token, so the
+mode is set before the content is written and tightened again on every save.
+
 Debug builds bootstrap a missing file with global `sudo = true`,
 `[process] control = true`, `[network] control = true`,
 `[firewall] control = true` and `[files] write = true` so the whole UI is

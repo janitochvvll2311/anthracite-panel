@@ -97,7 +97,7 @@ pub async fn get_session(State(state): State<AppState>, headers: HeaderMap) -> J
         return Json(SessionInfo {
             enabled: false,
             authenticated: true,
-            username: auth.username().to_string(),
+            username: auth.username(),
             access_expires_in: 0,
             refresh_expires_in: 0,
         });
@@ -105,12 +105,16 @@ pub async fn get_session(State(state): State<AppState>, headers: HeaderMap) -> J
 
     let access = cookies::read(&headers, cookies::ACCESS_COOKIE)
         .and_then(|token| auth.verify_access(&token).ok());
-    let refresh = cookies::read(&headers, cookies::REFRESH_COOKIE);
+    // A cookie is not a session: it has to verify *and* name a live session.
+    // Reporting `authenticated: true` from an unverified cookie renders the
+    // panels while every `/api` call answers 401.
+    let refresh = cookies::read(&headers, cookies::REFRESH_COOKIE)
+        .filter(|token| auth.holds_current_refresh(token));
 
     Json(SessionInfo {
         enabled: true,
         authenticated: access.is_some() || refresh.is_some(),
-        username: auth.username().to_string(),
+        username: auth.username(),
         access_expires_in: auth.access_ttl(),
         refresh_expires_in: if refresh.is_some() {
             auth.refresh_ttl()
@@ -163,9 +167,14 @@ pub async fn post_password(
 
     let mut config = state.config().await;
     config.auth.password_hash = hash;
-    state.replace_config(config).await;
+    // A new signing key *and* an empty session map: rebuilding the service is
+    // what makes the access tokens already issued stop working immediately,
+    // instead of at the end of their 15-minute life.
+    config.auth.jwt_secret = crate::auth::jwt::random_id()
+        + &crate::auth::jwt::random_id()
+        + &crate::auth::jwt::random_id();
+    state.replace_auth(config).await;
     state.persist().await.map_err(ApiError::internal)?;
-    state.auth().await.revoke_all();
 
     let (access, refresh) = {
         let mut cleared = cookies::clearing().into_iter();

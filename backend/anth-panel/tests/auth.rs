@@ -516,3 +516,185 @@ async fn disabling_auth_from_the_panel_is_refused() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+// ---- regressions from the phase 2 review -----------------------------------
+
+#[tokio::test]
+async fn a_password_change_stops_the_access_token_already_handed_out() {
+    let state = state("hunter2");
+    let app = anth_panel::router(state.clone());
+    let access = login_access_cookie(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/password")
+                .header(header::COOKIE, format!("anth_access={access}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "current_password": "hunter2",
+                        "new_password": "a-longer-one"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The cookie that worked a moment ago must not reach a protected route any
+    // more, and it must not wait for its own expiry to stop.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/processes")
+                .header(header::COOKIE, format!("anth_access={access}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn saving_the_config_keeps_the_session_open() {
+    let state = state("hunter2");
+    let app = anth_panel::router(state.clone());
+    let access = login_access_cookie(&app).await;
+    assert_eq!(state.auth().await.session_count(), 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/config")
+                .header(header::COOKIE, format!("anth_access={access}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"files":{"write":true}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_eq!(
+        state.auth().await.session_count(),
+        1,
+        "a settings save must not sign the operator out"
+    );
+}
+
+#[tokio::test]
+async fn replaying_a_rotated_refresh_token_ends_the_session() {
+    let app = anth_panel::router(state("hunter2"));
+
+    let login = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            serde_json::json!({ "username": "admin", "password": "hunter2" }),
+        ))
+        .await
+        .unwrap();
+    let first = cookie_value(&cookie_header(&login, "anth_refresh").unwrap());
+
+    let rotated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/refresh")
+                .header(header::COOKIE, format!("anth_refresh={first}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), StatusCode::OK);
+    let second = cookie_value(&cookie_header(&rotated, "anth_refresh").unwrap());
+
+    // The copy the intruder holds.
+    let replay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/refresh")
+                .header(header::COOKIE, format!("anth_refresh={first}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+
+    // The honest client is cancelled too: one of the two copies is stolen.
+    let afterwards = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/refresh")
+                .header(header::COOKIE, format!("anth_refresh={second}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(afterwards.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn the_session_endpoint_does_not_trust_an_unverified_cookie() {
+    let app = anth_panel::router(state("hunter2"));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/session")
+                .header(
+                    header::COOKIE,
+                    "anth_access=expired.garbage.token; anth_refresh=whatever",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = body_json(response).await;
+    assert_eq!(
+        body["authenticated"], false,
+        "an unverified cookie must not render the shell"
+    );
+}
+
+#[tokio::test]
+async fn the_config_file_is_not_readable_by_other_accounts() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!(
+        "anth-config-mode-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+
+    config_with_auth("hunter2").save(&path).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "the file holds the password digest and the signing key"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

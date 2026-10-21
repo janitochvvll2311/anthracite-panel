@@ -18,9 +18,7 @@ use tokio::sync::RwLock;
 /// The configuration lives behind a lock because the settings endpoints write
 /// it: `PATCH /api/config` has to change the in-memory copy *and* the file in
 /// one step, and a request that read the config at boot would otherwise keep
-/// serving the old policy until a restart. The auth service is rebuilt at the
-/// same time, so a password change revokes nothing by accident and takes effect
-/// immediately.
+/// serving the old policy until a restart.
 #[derive(Clone, Debug)]
 pub struct AppState {
     config: Arc<RwLock<Config>>,
@@ -73,11 +71,25 @@ impl AppState {
         Arc::clone(&*self.auth.read().await)
     }
 
-    /// Replaces the configuration and rebuilds the auth service.
+    /// Replaces the configuration without touching the live sessions.
     ///
-    /// Rebuilding drops every session, which is why a password change calls
-    /// this: a token signed with the old secret must stop working.
+    /// The auth *policy* is applied in place: the same `Arc<AuthService>` keeps
+    /// serving, so a settings save does not sign the operator out. Rebuilding
+    /// the service is reserved for a credential change, which is
+    /// [`Self::replace_auth`].
     pub async fn replace_config(&self, config: Config) {
+        self.max_upload_bytes
+            .store(config.files.max_upload_bytes, Ordering::Relaxed);
+        self.auth.write().await.apply_config(&config.auth);
+        *self.config.write().await = config;
+    }
+
+    /// Swaps in a new auth service, ending every session it held.
+    ///
+    /// A password change calls this: the new secret invalidates the access
+    /// tokens already handed out, and the empty session map invalidates the
+    /// refresh tokens with them.
+    pub async fn replace_auth(&self, config: Config) {
         let auth = Arc::new(AuthService::from_config(&config.auth));
         self.max_upload_bytes
             .store(config.files.max_upload_bytes, Ordering::Relaxed);

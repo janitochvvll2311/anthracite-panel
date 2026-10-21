@@ -210,9 +210,15 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `pbkdf2-sha256$<iterations>$<salt>$<digest>` (base64url, no padding); the
   iteration count comes from `[auth] iterations` and debug builds default low so
   the suite stays fast. `jwt.rs` signs HS256 only and rejects `alg: none` and any
-  other algorithm. `session.rs` holds refresh tokens in a `HashMap` keyed by
-  `jti`; rotation revokes the presented token, and a reused one cancels the whole
-  session because reuse means the cookie leaked. `cookies.rs` owns the
+  other algorithm; every token also carries a `sid`, which is what ties it to the
+  session store. `session.rs` keys sessions by `sid` and keeps a fingerprint of
+  the current refresh `jti`. `verify_access` asks the store whether the session is
+  live, so a password change invalidates access tokens immediately instead of at
+  their expiry. Presenting anything but the current refresh token for a live
+  session cancels that session, which covers a replayed rotation and an access
+  token offered as a refresh token alike. Policy fields sit behind an inner lock
+  (`apply_config`), so a settings save keeps the sessions; only a credential
+  change rebuilds the service. `cookies.rs` owns the
   `HttpOnly`/`SameSite=Strict` attributes and the optional `Secure` flag.
   `middleware.rs::protect` wraps the whole router once, so a new route is
   protected by default and a public one needs an explicit exemption; it accepts
@@ -223,8 +229,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   projection of `Config` with secrets replaced by `password_set`/`token_set`
   booleans. A patch replaces only the keys it names, is round-tripped through
   TOML to prove it reloads, then applied in memory with
-  `AppState::replace_config` and written with `AppState::persist`. Disabling auth
-  from the panel is refused on purpose; that is a host-only decision.
+  `AppState::replace_config` (policy only, sessions untouched) and written with
+  `AppState::persist`. Disabling auth from the panel is refused on purpose; that
+  is a host-only decision. `AppState::replace_auth` is the other path: it swaps
+  in a new service and drops every session, which is what `POST
+  /api/auth/password` needs.
 - **Settings CLI**: `settings.rs` backs `auth status|enable|set-password` and
   `config get|set`. They edit the file directly and never touch the daemon.
   `set_password` reuses `password::hash_password_with_iterations`; `set_key`
@@ -245,7 +254,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `access_token_secs = 900`, `refresh_token_secs = 43200` and
   `cookie_secure = false`. `Config::load_or_create` fills the empty password hash
   and signing key on first run, prints the generated password once and stores
-  only the digest. `auto` resolves `$SHELL`, then the account's
+  only the digest. `Config::save` writes through `write_private`, which opens with
+  mode `0600` and tightens an existing file, because the signing key in it is
+  enough to forge a token. `auto` resolves `$SHELL`, then the account's
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
   it through `Config::load_or_create`, which writes a default file when the path cannot
   be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses

@@ -478,14 +478,41 @@ impl Config {
             })?;
         }
 
-        std::fs::write(
-            path,
-            self.to_toml().map_err(|source| {
-                format!("Error serializing config at {}: {source}", path.display())
-            })?,
-        )
-        .map_err(|source| format!("Error writing config at {}: {source}", path.display()))
+        let body = self.to_toml().map_err(|source| {
+            format!("Error serializing config at {}: {source}", path.display())
+        })?;
+        write_private(path, &body)
+            .map_err(|source| format!("Error writing config at {}: {source}", path.display()))
     }
+}
+
+/// Writes `body` to `path` with mode `0600`.
+///
+/// The file holds the PBKDF2 digest and the JWT signing key. With the default
+/// umask a plain `fs::write` leaves it world-readable, and any local account
+/// that can read the signing key can forge an access token and skip the
+/// password. The mode is set before the content is written, so the secret is
+/// never briefly readable by others.
+fn write_private(path: &Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        // `mode` only applies when the file is created, so an existing file
+        // written by an older build has to be tightened too.
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(body.as_bytes())?;
+    file.sync_all()
 }
 
 #[cfg(test)]

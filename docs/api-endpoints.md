@@ -1106,6 +1106,10 @@ Reports the login state, never a secret.
 when that token is absent. The shell uses them to arm a silent refresh slightly
 before the access token expires.
 
+`authenticated` is `true` only when the presented cookie **verifies and names a
+live session**. A stale or forged cookie reports `false`, so the shell shows the
+login instead of rendering panels that every `/api` call would reject.
+
 ### `POST /api/auth/login`
 
 ```json
@@ -1125,9 +1129,14 @@ the route cannot be used to enumerate the account name.
 ### `POST /api/auth/refresh`
 
 Takes the refresh cookie, nothing in the body. Rotates the pair: the presented
-refresh token is revoked and a new one is issued. Presenting a token that was
-already rotated answers `401` and revokes the whole session, because a reused
-refresh token means the cookie leaked.
+refresh token is spent and a new one is issued. Rotation does not extend the
+login: the new refresh token keeps the session's original expiry.
+
+Presenting a token that is not the current one for a live session answers `401`
+and cancels that session. That covers both a rotated token being replayed and an
+access token offered in place of a refresh token, and in both cases one of the
+two holders is an intruder. The honest client is signed out too, which is the
+point: the panel cannot tell which copy is genuine.
 
 ### `POST /api/auth/logout`
 
@@ -1140,9 +1149,16 @@ with `Max-Age=0`. It is safe to call without a session.
 { "current_password": "...", "new_password": "..." }
 ```
 
-Requires a session. The new password must be at least 8 characters. Every
-session is revoked after the change, including the caller's, so a stolen cookie
-stops working with the old password.
+Requires a session. The new password must be at least 8 characters.
+
+The change rotates the signing key and drops every session, then clears both
+cookies. Two consequences follow, and both are deliberate:
+
+- an access token handed out before the change stops working **immediately**
+  rather than when it expires, because the service that signed it is gone;
+- the caller is signed out like everyone else. A password change is what an
+  operator does when a credential may be compromised, so leaving one working
+  token behind would defeat it.
 
 ### `GET /api/config` and `PATCH /api/config`
 

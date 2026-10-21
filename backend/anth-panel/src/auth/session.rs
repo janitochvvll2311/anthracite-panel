@@ -1,9 +1,14 @@
 //! Refresh-token bookkeeping and the panel's authentication service.
 //!
-//! Access tokens are stateless: the API verifies them and never consults this
-//! module. A refresh token is the stateful half, because rotation is what makes
-//! a stolen refresh token detectable: presenting a revoked `jti` cancels the
-//! whole session, which is the only reason the panel keeps a list at all.
+//! Access tokens are stateless in the signature sense, but not in the
+//! revocation sense: an access token names the session it belongs to, and the
+//! store below is asked whether that session is still live. Without that check
+//! a token issued before a password change keeps working for its whole lifetime,
+//! which defeats the reason the operator changed the password.
+//!
+//! Refresh tokens rotate. Presenting a token that is not the current one for a
+//! live session cancels that session: a valid signature naming an old
+//! identifier is what a copied cookie looks like from here.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -11,11 +16,23 @@ use std::sync::{Arc, RwLock};
 use super::jwt::{self, Claims};
 use super::password;
 
-/// One live login session, keyed by the refresh token's `jti`.
+/// One live login session.
+///
+/// The map is keyed by a session id that both tokens carry:
+///
+/// - the refresh half is the *current* `jti`, so anything else presented for a
+///   live session is a replay;
+/// - the access half has that session id plus a distinct `jti`, so an access
+///   token can be traced back here for revocation without being confused with
+///   the refresh token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Session {
     subject: String,
     expires_at: u64,
+    /// Fingerprint of the current refresh identifier. The identifier is already
+    /// unguessable; this only keeps a copy out of a memory dump in a form that
+    /// could be replayed.
+    refresh_hash: u64,
 }
 
 /// What a login attempt produced.
@@ -31,8 +48,11 @@ pub struct Issued {
     pub role: String,
 }
 
-/// Why a login or refresh was refused. Deliberately coarse: the caller turns
-/// every variant into the same response.
+/// Why a login or refresh was refused.
+///
+/// [`AuthError::Replayed`] is separate from [`AuthError::SessionExpired`] only
+/// so the caller can say why the login screen came back; neither variant names
+/// a credential.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthError {
     InvalidCredentials,
@@ -41,20 +61,32 @@ pub enum AuthError {
     NotConfigured,
 }
 
-/// Shared authentication state: the config values plus the live sessions.
+/// The `[auth]` fields that are policy rather than credentials.
 ///
-/// The config half is copied at construction. `auth enable` and `auth
-/// set-password` replace the whole service through `AppState`, so a running
-/// server never keeps a stale password or signing key.
-#[derive(Debug)]
-pub struct AuthService {
+/// Kept apart from the password digest and the signing key so the settings page
+/// can change a value without having to rebuild the service, which would end
+/// every session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Policy {
     enabled: bool,
     username: String,
-    password_hash: String,
-    secret: Vec<u8>,
     access_ttl: u64,
     refresh_ttl: u64,
     iterations: u32,
+    cookie_secure: bool,
+}
+
+/// Shared authentication state: the config values plus the live sessions.
+///
+/// The policy half is mutable because the settings page changes it while the
+/// panel runs, and that keeps the sessions. Changing a *credential* replaces
+/// the whole service through `AppState::replace_auth`, so a stale password or
+/// signing key never survives a change.
+#[derive(Debug)]
+pub struct AuthService {
+    policy: RwLock<Policy>,
+    password_hash: String,
+    secret: Vec<u8>,
     sessions: RwLock<HashMap<String, Session>>,
 }
 
@@ -69,20 +101,23 @@ impl AuthService {
         iterations: u32,
     ) -> Self {
         Self {
-            enabled,
-            username: username.into(),
+            policy: RwLock::new(Policy {
+                enabled,
+                username: username.into(),
+                access_ttl,
+                refresh_ttl,
+                iterations,
+                cookie_secure: false,
+            }),
             password_hash: password_hash.into(),
             secret: secret.into().into_bytes(),
-            access_ttl,
-            refresh_ttl,
-            iterations,
             sessions: RwLock::new(HashMap::new()),
         }
     }
 
     /// Builds the service from an `[auth]` section.
     pub fn from_config(config: &crate::config::AuthConfig) -> Self {
-        Self::new(
+        let service = Self::new(
             config.enabled,
             &config.username,
             &config.password_hash,
@@ -90,74 +125,148 @@ impl AuthService {
             config.access_token_secs,
             config.refresh_token_secs,
             config.iterations,
-        )
+        );
+        service.apply_config(config);
+        service
+    }
+
+    /// Applies a new `[auth]` section without ending any session.
+    ///
+    /// Only the policy fields move: the password hash, the signing key and the
+    /// session map stay. The caller is responsible for routing a credential
+    /// change through [`crate::app::AppState::replace_auth`], which does end
+    /// them.
+    pub fn apply_config(&self, config: &crate::config::AuthConfig) {
+        let mut policy = self.policy.write().expect("policy lock poisoned");
+        policy.enabled = config.enabled;
+        policy.username.clone_from(&config.username);
+        policy.access_ttl = config.access_token_secs;
+        policy.refresh_ttl = config.refresh_token_secs;
+        policy.iterations = config.iterations;
+        policy.cookie_secure = config.cookie_secure;
+    }
+
+    fn policy(&self) -> std::sync::RwLockReadGuard<'_, Policy> {
+        self.policy.read().expect("policy lock poisoned")
     }
 
     pub fn enabled(&self) -> bool {
-        self.enabled
+        self.policy().enabled
     }
 
-    pub fn username(&self) -> &str {
-        &self.username
+    pub fn username(&self) -> String {
+        self.policy().username.clone()
     }
 
     pub fn access_ttl(&self) -> u64 {
-        self.access_ttl
+        self.policy().access_ttl
     }
 
     pub fn refresh_ttl(&self) -> u64 {
-        self.refresh_ttl
+        self.policy().refresh_ttl
+    }
+
+    pub fn cookie_secure(&self) -> bool {
+        self.policy().cookie_secure
     }
 
     /// Checks a password and, on success, opens a session.
     pub fn login(&self, username: &str, password: &str) -> Result<Issued, AuthError> {
-        if !self.enabled || self.password_hash.is_empty() || self.secret.is_empty() {
+        let policy = self.policy();
+        if !policy.enabled || self.password_hash.is_empty() || self.secret.is_empty() {
             return Err(AuthError::NotConfigured);
         }
         // Compare the name in constant time too: a different name and a wrong
         // password must take the same path, or the response time names valid
         // accounts.
-        let name_matches = const_eq(username.as_bytes(), self.username.as_bytes());
+        let name_matches = const_eq(username.as_bytes(), policy.username.as_bytes());
         let password_matches = password::verify_password(password, &self.password_hash);
         if !name_matches || !password_matches {
             return Err(AuthError::InvalidCredentials);
         }
 
-        self.issue("admin")
+        let subject = policy.username.clone();
+        drop(policy);
+        self.issue(&subject)
     }
 
-    /// Exchanges a refresh token for a new pair, revoking the old one.
+    /// Exchanges a refresh token for a new pair, spending the presented one.
     ///
-    /// A token whose `jti` is unknown is either expired-and-pruned or replayed.
-    /// Either way the session is gone, so the caller must log in again. A replay
-    /// of a rotated token removes the whole subject's sessions.
+    /// A token whose session is unknown is expired-and-pruned or came from a
+    /// service that restarted: the caller logs in again. A token whose session
+    /// is live but whose `jti` is not the current one is a replay, and it costs
+    /// the subject that session.
     pub fn refresh(&self, token: &str) -> Result<Issued, AuthError> {
-        if !self.enabled || self.secret.is_empty() {
+        if !self.policy().enabled || self.secret.is_empty() {
             return Err(AuthError::NotConfigured);
         }
-        let now = jwt::now_seconds();
-        let claims = jwt::verify(token, &self.secret, now).map_err(|error| match error {
-            jwt::JwtError::Expired => AuthError::SessionExpired,
-            _ => AuthError::InvalidCredentials,
-        })?;
+        // An expired refresh token must still be *recognised*, so that a token
+        // from a session that was cancelled is not reported as a replay.
+        let claims =
+            jwt::verify(token, &self.secret, 0).map_err(|_| AuthError::InvalidCredentials)?;
+
+        let session_id = claims.sid.clone();
+        let presented_hash = fingerprint(&claims.jti);
 
         let mut sessions = self.sessions.write().expect("session lock poisoned");
-        let Some(session) = sessions.get(&claims.jti) else {
+        let Some(session) = sessions.get(&session_id) else {
             return Err(AuthError::SessionExpired);
         };
-        if session.expires_at <= now || session.subject != claims.sub {
-            sessions.remove(&claims.jti);
+        if session.expires_at <= jwt::now_seconds() || session.subject != claims.sub {
+            sessions.remove(&session_id);
             return Err(AuthError::SessionExpired);
         }
 
-        sessions.remove(&claims.jti);
+        if session.refresh_hash != presented_hash {
+            // The signature is valid and the session is live, so this is either
+            // a rotated token being replayed or an access token used as one.
+            // Both mean a token is where it should not be.
+            sessions.remove(&session_id);
+            return Err(AuthError::Replayed);
+        }
+
         drop(sessions);
-        self.issue(&claims.sub)
+        self.rotate(&session_id, &claims)
     }
 
-    /// Verifies an access token and returns its claims.
+    /// Verifies an access token and checks the session it belongs to.
+    ///
+    /// The signature check alone is not enough: a token signed before a
+    /// password change would otherwise keep working until it expired, and the
+    /// password change is exactly what the operator did to stop that.
     pub fn verify_access(&self, token: &str) -> Result<Claims, jwt::JwtError> {
-        jwt::verify(token, &self.secret, jwt::now_seconds())
+        let claims = jwt::verify(token, &self.secret, jwt::now_seconds())?;
+        if claims.sid.is_empty() {
+            return Err(jwt::JwtError::Malformed);
+        }
+
+        let now = jwt::now_seconds();
+        let sessions = self.sessions.read().expect("session lock poisoned");
+        match sessions.get(&claims.sid) {
+            Some(session) if session.expires_at > now => Ok(claims),
+            _ => Err(jwt::JwtError::Revoked),
+        }
+    }
+
+    /// Whether a refresh token is the *current* one for its live session.
+    ///
+    /// `GET /api/auth/session` asks this rather than merely checking that the
+    /// session exists, so a cookie that was rotated elsewhere does not claim the
+    /// login.
+    pub fn holds_current_refresh(&self, token: &str) -> bool {
+        if !self.policy().enabled || self.secret.is_empty() {
+            return false;
+        }
+        let Ok(claims) = jwt::verify(token, &self.secret, 0) else {
+            return false;
+        };
+        let now = jwt::now_seconds();
+        let sessions = self.sessions.read().expect("session lock poisoned");
+        sessions.get(&claims.sid).is_some_and(|session| {
+            session.expires_at > now
+                && session.subject == claims.sub
+                && session.refresh_hash == fingerprint(&claims.jti)
+        })
     }
 
     /// Ends one session. Unknown identifiers are ignored: logging out twice is
@@ -174,7 +283,7 @@ impl AuthService {
         self.sessions
             .write()
             .expect("session lock poisoned")
-            .remove(&claims.jti);
+            .remove(&claims.sid);
     }
 
     /// Ends every session, which is what a password change must do.
@@ -196,25 +305,78 @@ impl AuthService {
 
     /// Hashes a new password with this service's cost.
     pub fn hash_new_password(&self, password: &str) -> Result<String, String> {
-        password::hash_password_with_iterations(password, self.iterations)
+        password::hash_password_with_iterations(password, self.policy().iterations)
     }
 
+    /// Starts a session and returns its first token pair.
     fn issue(&self, subject: &str) -> Result<Issued, AuthError> {
+        let session_id = jwt::random_id();
         let now = jwt::now_seconds();
+        let session = Session {
+            subject: subject.to_string(),
+            expires_at: now + self.refresh_ttl(),
+            refresh_hash: 0,
+        };
+
+        let (issued, started) = self.mint(subject, &session_id, now, &session, None)?;
+        self.sessions
+            .write()
+            .expect("session lock poisoned")
+            .insert(session_id, started);
+        Ok(issued)
+    }
+
+    /// Replaces the refresh token of a live session.
+    fn rotate(&self, session_id: &str, claims: &Claims) -> Result<Issued, AuthError> {
+        let now = jwt::now_seconds();
+        let mut sessions = self.sessions.write().expect("session lock poisoned");
+        let Some(session) = sessions.get_mut(session_id) else {
+            return Err(AuthError::SessionExpired);
+        };
+
+        let subject = session.subject.clone();
+        let snapshot = session.clone();
+        drop(sessions);
+
+        let (issued, rotated) = self.mint(&subject, session_id, now, &snapshot, Some(claims))?;
+        let mut sessions = self.sessions.write().expect("session lock poisoned");
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.refresh_hash = rotated.refresh_hash;
+            session.expires_at = rotated.expires_at;
+        }
+        Ok(issued)
+    }
+
+    /// Signs a pair for `session_id` and returns it with the updated record.
+    ///
+    /// The refresh token keeps the `exp` of the session it belongs to: rotating
+    /// must not extend a login forever, only replace the identifier.
+    fn mint(
+        &self,
+        subject: &str,
+        session_id: &str,
+        now: u64,
+        session: &Session,
+        previous: Option<&Claims>,
+    ) -> Result<(Issued, Session), AuthError> {
+        let refresh_jti = jwt::random_id();
+        let refresh_exp = previous.map_or(session.expires_at, |claims| claims.exp);
+
         let access = Claims {
             sub: subject.to_string(),
             role: "admin".to_string(),
             iat: now,
-            exp: now + self.access_ttl,
+            exp: now + self.access_ttl(),
             jti: jwt::random_id(),
+            sid: session_id.to_string(),
         };
-        let refresh_jti = jwt::random_id();
         let refresh = Claims {
             sub: subject.to_string(),
             role: "admin".to_string(),
-            iat: now,
-            exp: now + self.refresh_ttl,
+            iat: previous.map_or(now, |claims| claims.iat),
+            exp: refresh_exp,
             jti: refresh_jti.clone(),
+            sid: session_id.to_string(),
         };
 
         let access_token =
@@ -222,30 +384,38 @@ impl AuthService {
         let refresh_token =
             jwt::sign(&refresh, &self.secret).map_err(|_| AuthError::NotConfigured)?;
 
-        self.sessions
-            .write()
-            .expect("session lock poisoned")
-            .insert(
-                refresh_jti,
-                Session {
-                    subject: subject.to_string(),
-                    expires_at: refresh.exp,
-                },
-            );
+        let mut updated = session.clone();
+        updated.refresh_hash = fingerprint(&refresh_jti);
+        updated.expires_at = refresh_exp;
 
-        Ok(Issued {
-            access_token,
-            refresh_token,
-            access_expires_in: self.access_ttl,
-            refresh_expires_in: self.refresh_ttl,
-            username: subject.to_string(),
-            role: "admin".to_string(),
-        })
+        Ok((
+            Issued {
+                access_token,
+                refresh_token,
+                access_expires_in: self.access_ttl(),
+                refresh_expires_in: refresh_exp.saturating_sub(now),
+                username: subject.to_string(),
+                role: "admin".to_string(),
+            },
+            updated,
+        ))
     }
 }
 
 /// The service shared with every request handler.
 pub type SharedAuth = Arc<AuthService>;
+
+/// A stable fingerprint of a token identifier.
+///
+/// The identifiers are 128 random bits, so this is not a security boundary; it
+/// keeps the stored form of a refresh identifier from being replayable on its
+/// own.
+fn fingerprint(value: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
 
 fn const_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
@@ -321,9 +491,73 @@ mod tests {
         assert_ne!(first.refresh_token, second.refresh_token);
         assert_eq!(
             service.refresh(&first.refresh_token),
-            Err(AuthError::SessionExpired),
+            Err(AuthError::Replayed),
             "a rotated token must not work twice"
         );
+    }
+
+    #[test]
+    fn replaying_a_rotated_token_cancels_the_session() {
+        let service = service();
+        let first = service.login("admin", "hunter2").unwrap();
+        let second = service.refresh(&first.refresh_token).unwrap();
+
+        // The intruder replays the copied token.
+        assert_eq!(
+            service.refresh(&first.refresh_token),
+            Err(AuthError::Replayed)
+        );
+
+        // The legitimate client's fresh token is gone too, which is the point:
+        // one of the two holders is an intruder and neither can be trusted.
+        assert_eq!(service.session_count(), 0);
+        assert_eq!(
+            service.refresh(&second.refresh_token),
+            Err(AuthError::SessionExpired)
+        );
+    }
+
+    #[test]
+    fn an_older_access_token_stops_at_once_after_a_revoke() {
+        let service = service();
+        let issued = service.login("admin", "hunter2").unwrap();
+        assert!(service.verify_access(&issued.access_token).is_ok());
+
+        service.revoke_all();
+        assert_eq!(
+            service.verify_access(&issued.access_token),
+            Err(jwt::JwtError::Revoked),
+            "revocation must not wait for the access token to expire"
+        );
+    }
+
+    #[test]
+    fn rotation_does_not_extend_the_session() {
+        let service = service();
+        let first = service.login("admin", "hunter2").unwrap();
+        let second = service.refresh(&first.refresh_token).unwrap();
+        assert!(
+            second.refresh_expires_in <= first.refresh_expires_in,
+            "a rotated token must inherit the session's expiry"
+        );
+    }
+
+    #[test]
+    fn an_access_token_from_a_replaced_service_is_refused() {
+        let service = service();
+        let issued = service.login("admin", "hunter2").unwrap();
+
+        // What `POST /api/auth/password` does: a new service with a new secret.
+        let replacement = AuthService::new(
+            true,
+            "admin",
+            service.password_hash.clone(),
+            "another-secret",
+            60,
+            600,
+            password::DEV_ITERATIONS,
+        );
+        assert!(replacement.verify_access(&issued.access_token).is_err());
     }
 
     #[test]
@@ -340,21 +574,43 @@ mod tests {
     }
 
     #[test]
-    fn verify_access_rejects_a_refresh_token_signed_for_another_secret() {
+    fn a_live_session_is_reported_and_a_revoked_one_is_not() {
         let service = service();
         let issued = service.login("admin", "hunter2").unwrap();
-        assert!(service.verify_access(&issued.access_token).is_ok());
+        assert!(service.holds_current_refresh(&issued.refresh_token));
 
-        let other = AuthService::new(
-            true,
-            "admin",
-            service.password_hash.clone(),
-            "another-secret",
-            60,
-            600,
-            password::DEV_ITERATIONS,
+        service.revoke(&issued.refresh_token);
+        assert!(!service.holds_current_refresh(&issued.refresh_token));
+    }
+
+    #[test]
+    fn a_forged_cookie_is_not_a_live_session() {
+        let service = service();
+        assert!(!service.holds_current_refresh("whatever"));
+        assert!(!service.holds_current_refresh("a.b.c"));
+    }
+
+    #[test]
+    fn a_rotated_away_cookie_does_not_claim_the_login() {
+        let service = service();
+        let first = service.login("admin", "hunter2").unwrap();
+        service.refresh(&first.refresh_token).unwrap();
+        assert!(
+            !service.holds_current_refresh(&first.refresh_token),
+            "a cookie that was rotated elsewhere must not report a session"
         );
-        assert!(other.verify_access(&issued.access_token).is_err());
+    }
+
+    #[test]
+    fn an_access_token_cannot_be_used_as_a_refresh_token() {
+        let service = service();
+        let issued = service.login("admin", "hunter2").unwrap();
+        // The access token names the live session but is not its refresh half.
+        assert_eq!(
+            service.refresh(&issued.access_token),
+            Err(AuthError::Replayed),
+            "a different token for a live session is treated as theft"
+        );
     }
 
     #[test]

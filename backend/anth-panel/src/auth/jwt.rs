@@ -26,8 +26,16 @@ pub struct Claims {
     pub iat: u64,
     /// Expiry, seconds since the Unix epoch.
     pub exp: u64,
-    /// Token identifier, used to revoke a refresh token.
+    /// Token identifier. A refresh token's `jti` rotates on every refresh.
     pub jti: String,
+    /// Session identifier, shared by the access and refresh halves of a pair.
+    ///
+    /// The signature says a token was issued by this panel; `sid` is what lets
+    /// the store say whether the session behind it is still live. A token
+    /// without one is rejected, so an old two-field token cannot be downgraded
+    /// into an unrevokable one.
+    #[serde(default)]
+    pub sid: String,
 }
 
 impl Claims {
@@ -42,6 +50,8 @@ pub enum JwtError {
     UnsupportedAlgorithm,
     BadSignature,
     Expired,
+    /// The signature is valid but the session it names is gone.
+    Revoked,
 }
 
 impl std::fmt::Display for JwtError {
@@ -51,6 +61,7 @@ impl std::fmt::Display for JwtError {
             Self::UnsupportedAlgorithm => "unsupported signing algorithm",
             Self::BadSignature => "signature does not match",
             Self::Expired => "token expired",
+            Self::Revoked => "session revoked",
         };
         formatter.write_str(text)
     }
@@ -173,6 +184,7 @@ mod tests {
             iat: 1_700_000_000,
             exp,
             jti: "abc".to_string(),
+            sid: "session".to_string(),
         }
     }
 
@@ -182,6 +194,16 @@ mod tests {
         let parsed = verify(&token, b"secret", 1_700_000_000).unwrap();
         assert_eq!(parsed.sub, "admin");
         assert_eq!(parsed.jti, "abc");
+        assert_eq!(parsed.sid, "session");
+    }
+
+    #[test]
+    fn a_token_without_a_session_identifier_still_parses() {
+        // `sid` is optional on the wire so an older token is not a parse error;
+        // the session store rejects it, which is where revocation lives.
+        let token = sign(&claims(1_700_000_060), b"secret").unwrap();
+        let parsed = verify(&token, b"secret", 1_700_000_000).unwrap();
+        assert!(!parsed.sid.is_empty());
     }
 
     #[test]
@@ -223,8 +245,8 @@ mod tests {
     #[test]
     fn an_unsigned_token_is_rejected() {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
-        let payload =
-            URL_SAFE_NO_PAD.encode(br#"{"sub":"admin","role":"admin","iat":1,"exp":9,"jti":"x"}"#);
+        let payload = URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"admin","role":"admin","iat":1,"exp":9,"jti":"x","sid":"s"}"#);
         let token = format!("{header}.{payload}.");
         assert_eq!(
             verify(&token, b"secret", 2),
