@@ -404,6 +404,53 @@ describe('AnthFileManager', () => {
     expect(client.deleteCalls).toEqual([{ path: '/file.txt', recursive: false }])
   })
 
+  it('offers no editor for a truncated preview', async () => {
+    // Saving a truncated preview would write only the first slice back to the
+    // file, silently discarding the rest.
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        entries: [fileEntry({ name: 'big.txt', path: '/big.txt' })],
+      }),
+    )
+    client.readResults.set('/big.txt', textResult('first slice', { truncated: true }))
+
+    const element = await mount(client)
+    selectFile(element, 'big.txt')
+    await flush(element)
+
+    expect(element.shadowRoot?.textContent).toContain('Preview truncated')
+    const labels = [...(element.shadowRoot?.querySelectorAll('button') ?? [])].map(
+      (candidate) => candidate.textContent?.trim(),
+    )
+    expect(labels).not.toContain('Edit')
+  })
+
+  it('moves to the trash instead of deleting when trash is enabled', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        trash_enabled: true,
+        entries: [fileEntry({ name: 'file.txt' })],
+      }),
+    )
+
+    const element = await mount(client)
+    selectFile(element, 'file.txt')
+    await flush(element)
+    button(element, 'Delete').click()
+    await flush(element)
+    await answerDialogs('confirm')
+    await flush(element)
+
+    expect(client.trashCalls).toEqual([{ path: '/file.txt' }])
+    expect(client.deleteCalls).toEqual([])
+  })
+
   it('does not reload the listing while a mutation is in flight', async () => {
     const client = new FakeFileClient()
     client.listings.set('/', fileListing({ write_enabled: true }))

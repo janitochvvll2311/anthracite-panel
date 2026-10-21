@@ -28,6 +28,8 @@ export interface FileListing {
   truncated: boolean
   warning?: string
   write_enabled: boolean
+  /** Delete moves entries to the trash instead of removing them. */
+  trash_enabled?: boolean
 }
 
 export interface FileReadResult {
@@ -35,6 +37,30 @@ export interface FileReadResult {
   size: number
   truncated: boolean
   mime: string
+}
+
+export interface TrashEntry {
+  id: string
+  name: string
+  original_path: string
+  deleted_at?: string | null
+  kind: FileKind
+  size: number
+  location: string
+}
+
+export interface TrashListing {
+  entries: TrashEntry[]
+  total: number
+  truncated: boolean
+  warning?: string
+  enabled: boolean
+  used_bytes: number
+}
+
+export interface TrashResult {
+  path: string
+  id: string
 }
 
 export interface FileWriteResult {
@@ -65,6 +91,11 @@ export interface FileClient {
   mkdir: (path: string, recursive?: boolean) => Promise<void>
   rename: (from: string, to: string) => Promise<void>
   delete: (path: string, recursive?: boolean) => Promise<void>
+  /** Moves one entry to the trash and returns its identifier. */
+  trash: (path: string) => Promise<TrashResult>
+  listTrash: () => Promise<TrashListing>
+  restore: (id: string, overwrite?: boolean) => Promise<void>
+  emptyTrash: () => Promise<number>
   upload: (
     path: string,
     file: Blob,
@@ -113,18 +144,24 @@ export class HttpFileClient implements FileClient {
     contents: string,
     expectedModifiedMs?: number | null,
   ): Promise<FileTextWriteResult> {
-    const response = await this.fetchImpl(`${this.baseUrl}/write`, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
+    // The body is the raw text, not JSON: the daemon streams it in chunks, and
+    // a JSON envelope would put the whole file in one socket line, which is
+    // capped at 1 MiB.
+    const precondition: Record<string, string> = {}
+    if (expectedModifiedMs !== null && expectedModifiedMs !== undefined) {
+      precondition.expected_modified_ms = String(expectedModifiedMs)
+    }
+    const response = await this.fetchImpl(
+      this.url('/write', path, precondition),
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'text/plain; charset=utf-8',
+        },
+        body: contents,
       },
-      body: JSON.stringify({
-        path,
-        contents,
-        expected_modified_ms: expectedModifiedMs ?? undefined,
-      }),
-    })
+    )
     if (!response.ok) throw await responseError(response)
     return (await response.json()) as FileTextWriteResult
   }
@@ -167,6 +204,49 @@ export class HttpFileClient implements FileClient {
       body: JSON.stringify({ path, recursive }),
     })
     if (!response.ok) throw await responseError(response)
+  }
+
+  async trash(path: string): Promise<TrashResult> {
+    const response = await this.fetchImpl(`${this.baseUrl}/trash`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ path }),
+    })
+    if (!response.ok) throw await responseError(response)
+    return (await response.json()) as TrashResult
+  }
+
+  async listTrash(): Promise<TrashListing> {
+    const response = await this.fetchImpl(`${this.baseUrl}/trash/list`, {
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok) throw await responseError(response)
+    return (await response.json()) as TrashListing
+  }
+
+  async restore(id: string, overwrite = false): Promise<void> {
+    const response = await this.fetchImpl(`${this.baseUrl}/trash/restore`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ id, overwrite }),
+    })
+    if (!response.ok) throw await responseError(response)
+  }
+
+  async emptyTrash(): Promise<number> {
+    const response = await this.fetchImpl(`${this.baseUrl}/trash/empty`, {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok) throw await responseError(response)
+    const body = (await response.json()) as { removed: number }
+    return body.removed
   }
 
   async upload(

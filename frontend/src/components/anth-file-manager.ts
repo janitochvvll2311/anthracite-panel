@@ -334,21 +334,33 @@ export class AnthFileManager extends LitElement {
     )
   }
 
+  /**
+   * Deletes the selection, through the trash when the daemon offers it.
+   *
+   * A permanent delete of a directory is unrecoverable, so the panel only does
+   * it when trashing is off, and the prompt says which one is about to happen.
+   */
   private async deleteSelected(): Promise<void> {
     const selected = this.selected
     if (!selected || !this.client) return
+    const trashable = this.listing?.trash_enabled === true
     const accepted = await confirmAction({
-      title: `Delete ${selected.name}?`,
-      message:
-        selected.kind === 'directory'
-          ? `${selected.path} and everything inside it is removed.`
-          : selected.path,
-      confirmLabel: 'Delete',
-      danger: true,
+      title: trashable
+        ? `Move ${selected.name} to the trash?`
+        : `Delete ${selected.name}?`,
+      message: trashable
+        ? `${selected.path} can be restored from the trash.`
+        : selected.kind === 'directory'
+          ? `${selected.path} and everything inside it is removed permanently.`
+          : `${selected.path} is removed permanently.`,
+      confirmLabel: trashable ? 'Move to trash' : 'Delete',
+      danger: !trashable,
     })
     if (!accepted) return
     void this.mutate(() =>
-      this.client!.delete(selected.path, selected.kind === 'directory'),
+      trashable
+        ? this.client!.trash(selected.path)
+        : this.client!.delete(selected.path, selected.kind === 'directory'),
     )
   }
 
@@ -419,6 +431,7 @@ export class AnthFileManager extends LitElement {
         </div>
         <span class="spacer"></span>
         ${preview.kind === 'text' &&
+        !preview.truncated &&
         isEditable(preview.entry.path) &&
         this.listing?.write_enabled === true
           ? html`<button
@@ -435,7 +448,8 @@ export class AnthFileManager extends LitElement {
       </header>
       ${preview.truncated
         ? html`<p class="warning" role="status">
-            Preview truncated; use Download for the full file.
+            Preview truncated; use Download for the full file. Editing is
+            disabled because saving the preview would discard the rest.
           </p>`
         : nothing}
       ${this.editing

@@ -216,11 +216,16 @@ name; formats without a grammar the panel ships (`shell`, `toml`, plain text)
 keep line numbers and bracket matching rather than pretending to highlight.
 
 `file write PATH SOURCE` (or `-` for stdin) and `POST /api/files/write` save the
-buffer. Both paths share one rule:
+buffer. The HTTP body is the raw text, with `path` and `expected_modified_ms` as
+query parameters: a JSON envelope would put the whole file in one socket line,
+and the daemon caps a line at 1 MiB, so a large file could be opened but not
+saved. Both paths share one rule:
 
-- **Saving is atomic.** The new text goes to a temporary file in the same
-  directory and is renamed over the target, so a crash or a full disk leaves the
-  old file intact instead of a truncated one.
+- **Saving is atomic and streams.** The text travels in chunks through the same
+  upload flow, goes to a temporary file in the same directory and is renamed
+  over the target, so a crash or a full disk leaves the old file intact instead
+  of a truncated one. The replacement keeps the target's mode, so saving a
+  `0600` config cannot publish it.
 - **A stale save is refused.** The editor sends the mtime it loaded. If the file
   changed since, the daemon answers `409` with a `Conflict` and writes nothing,
   because two people editing the same file must not silently overwrite each
@@ -231,6 +236,11 @@ buffer. Both paths share one rule:
   `[files] max_upload_bytes`.
 - **Symlinks are written through.** A path that resolves to a symlink updates
   its target, so editing a linked config file does not detach the link.
+- **A truncated preview is read-only.** The editor is disabled when the preview
+  stopped short of the file, because saving it would write only that slice back.
+- **Delete uses the trash when it is on.** With `[files] trash = true`, the
+  panel moves the selection to the freedesktop trash and the prompt says it can
+  be restored; otherwise it deletes permanently and says so.
 
 ## Archives
 

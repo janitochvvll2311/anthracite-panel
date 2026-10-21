@@ -1,5 +1,7 @@
 import { vi } from 'vitest'
 import type {
+  TrashListing,
+  TrashResult,
   FileTextWriteResult,
   FileClient,
   FileEntry,
@@ -61,6 +63,15 @@ export class FakeFileClient implements FileClient {
     expectedModifiedMs: number | null
   }> = []
   writeError?: Error
+  trashCalls: Array<{ path: string }> = []
+  restoreCalls: Array<{ id: string; overwrite: boolean }> = []
+  trashListing: TrashListing = {
+    entries: [],
+    total: 0,
+    truncated: false,
+    enabled: false,
+    used_bytes: 0,
+  }
 
   list = vi.fn(async (path: string): Promise<FileListing> => {
     if (this.listError) throw this.listError
@@ -110,6 +121,29 @@ export class FakeFileClient implements FileClient {
   delete = vi.fn(async (path: string, recursive = false): Promise<void> => {
     if (this.mutationError) throw this.mutationError
     this.deleteCalls.push({ path, recursive })
+  })
+
+  trash = vi.fn(async (path: string): Promise<TrashResult> => {
+    if (this.mutationError) throw this.mutationError
+    this.trashCalls.push({ path })
+    return { path, id: `trash-${this.trashCalls.length}` }
+  })
+
+  listTrash = vi.fn(async (): Promise<TrashListing> => {
+    if (this.listError) throw this.listError
+    return this.trashListing
+  })
+
+  restore = vi.fn(async (id: string, overwrite = false): Promise<void> => {
+    if (this.mutationError) throw this.mutationError
+    this.restoreCalls.push({ id, overwrite })
+  })
+
+  emptyTrash = vi.fn(async (): Promise<number> => {
+    if (this.mutationError) throw this.mutationError
+    const removed = this.trashListing.entries.length
+    this.trashListing = { ...this.trashListing, entries: [], total: 0 }
+    return removed
   })
 
   upload = vi.fn(

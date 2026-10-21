@@ -145,3 +145,68 @@ describe('HttpFileClient', () => {
     expect(result).toEqual({ path: '/uploaded.txt', size: 3 })
   })
 })
+
+describe('HttpFileClient saves', () => {
+  it('sends the text as the raw body with the precondition in the query', async () => {
+    // A JSON envelope would put the whole file in one socket line, and the
+    // daemon caps that at 1 MiB, so large files could be opened but not saved.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ path: '/a.txt', size: 5, modified_ms: 42 }),
+    )
+    const client = new HttpFileClient({ fetchImpl })
+
+    const result = await client.writeText('/a.txt', 'hello', 1_700)
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/files/write?path=%2Fa.txt&expected_modified_ms=1700',
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'text/plain; charset=utf-8',
+        },
+        body: 'hello',
+      },
+    )
+    expect(result).toEqual({ path: '/a.txt', size: 5, modified_ms: 42 })
+  })
+
+  it('omits the precondition when the caller accepts whatever is on disk', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ path: '/a.txt', size: 5, modified_ms: 42 }),
+    )
+    const client = new HttpFileClient({ fetchImpl })
+
+    await client.writeText('/a.txt', 'hello', null)
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/files/write?path=%2Fa.txt',
+      expect.objectContaining({ body: 'hello' }),
+    )
+  })
+
+  it('drives the trash endpoints', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ path: '/a', id: 'x' }))
+    const client = new HttpFileClient({ fetchImpl })
+
+    await client.trash('/a')
+    expect(fetchImpl).toHaveBeenLastCalledWith('/api/files/trash', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ path: '/a' }),
+    })
+
+    await client.restore('x')
+    expect(fetchImpl).toHaveBeenLastCalledWith('/api/files/trash/restore', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ id: 'x', overwrite: false }),
+    })
+  })
+})

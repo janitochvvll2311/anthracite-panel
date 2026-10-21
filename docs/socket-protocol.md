@@ -318,6 +318,17 @@ Opens an atomic upload and replies with an id.
 
 ```
 
+`require_existing` (default `false`) switches to editor-save semantics: the
+target must already be a regular file, the replacement keeps its mode, and a
+symlink is written through instead of replaced. `expected_modified_ms` adds the
+optimistic precondition, checked before any chunk is accepted, so a stale save
+fails without transferring the file.
+
+```json
+{"type":"FileWriteStart","data":{"path":"/etc/app.toml","overwrite":true,"require_existing":true,"expected_modified_ms":1700000000000}}
+
+```
+
 Reply: `FileWriteStarted`.
 
 ### `FileWriteChunk`
@@ -675,10 +686,15 @@ mirror the requests above. `FileListing` is:
     ],
     "total": 1,
     "truncated": false,
-    "write_enabled": false
+    "write_enabled": false,
+    "trash_enabled": false
   }
 }
 ```
+
+`trash_enabled` says whether Delete moves entries to the trash rather than
+removing them; it is separate from `write_enabled` because `[files] trash` is
+its own opt-in.
 
 `kind` is `file`, `directory`, `symlink` or `other`; symlinks also carry
 `target`. `FileChunk` is:
