@@ -55,7 +55,7 @@ Additional decisions taken while planning:
 | 0 | Handler-forward dispatch, `/api` 404, app shell, i18n rig, bun toolchain | done |
 | 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, merged in #16 |
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
-| 3 (point 6) | Floating windows, minimize, standalone window | not started |
+| 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
 | 4 (point 1) | `anth-process-manager` and process spawning | not started |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
@@ -259,3 +259,67 @@ Lessons for later phases:
   build their own fetch, and the `watch` streams go through `watchJson` and an
   `EventSource`, which never reach `withRetry`. A stream reader still has to
   handle a `401` itself.
+
+## Phase 3 — Floating windows (done)
+
+What changed:
+
+- `lib/ui/windows.ts` is the layout model and nothing else: `Rect`, the
+  `MIN_WIDTH`/`MIN_HEIGHT` floor, `dragRect`, `resizeRect`, `clampRect`,
+  `fitToViewport`, `initialRect` (a diagonal cascade so two windows do not land
+  on top of each other), `nextZ` and the `localStorage` read/write pair. Pure
+  functions, so the edge behaviour is tested without a browser drag.
+- `anth-window` is a controlled component: it renders the `rect`, `z` and
+  `minimized` it is given and reports `move`, `resize`, `focus`, `minimize`,
+  `popout` and `close`. The shell owns the layout because the z order is
+  global, which a per-window counter cannot express, and because the
+  arrangement has to survive a reload.
+- A press on a title-bar button does not start a drag. The buttons stop the
+  pointer event, so the drag handler never sees it; without that, releasing
+  over a button after a small hand tremor would both move the window and fire
+  the button.
+- `clampRect` keeps the title bar on screen rather than the whole rectangle.
+  Forcing the full box inside the viewport would make a tall terminal window
+  impossible to shrink, and the point of the clamp is only that the grab handle
+  stays reachable.
+- **Minimizing detaches the panel instead of hiding it.** `remove()` on a
+  connected custom element keeps its properties, shadow root and state, while
+  dropping its SSE stream and its terminal WebSocket, because those live in
+  `disconnectedCallback`. Restoring re-appends the same instance. The
+  alternative, `display: none`, keeps every stream open and is exactly the cost
+  the minimize exists to avoid. `anth-tab-panel` already used this technique;
+  the desktop reuses it for a different reason.
+- **One desktop, not one per panel.** The first draft rendered an `anth-desktop`
+  per panel route and passed `initialPanel`, which meant a window could never
+  outlive a navigation and two windows could never be open at once. The shell
+  now renders a single desktop with every registered panel, and navigating
+  opens a window in it. Opening a panel that is already open raises it instead
+  of building a second copy, which would have started a second polling stream
+  against the same daemon.
+- The toolbar's "Open all in windows" became a panel picker. Eight windows at
+  once covers the screen and buries the one the operator wanted; a `select`
+  that opens exactly one panel is the useful action.
+- `#/window/<panel>` is a real route, so a pop-out is a URL rather than a
+  `window.open` with a document written into it. It is behind the same session
+  gate as the rest of the shell: a pop-out must not become a way to skip the
+  login, and an expired session there returns to the login screen like any tab.
+- The deep-link case needed `firstUpdated`. A page loaded directly at
+  `#/panel/<id>` arrives with the route already parsed, so no `route` change
+  ever fires; without the first-render call the arrangement came back empty.
+
+Verification: 402 frontend tests, `tsc --noEmit`, `vite build`, and the
+`anth-desktop.test.html` harness in a real browser: open, drag, resize, minimize
+(panel timer stops), restore in place, raise by click, reload to restore the
+arrangement, and pop-out to `#/window/<id>`. A live `anth-panel run` served the
+embedded UI and two windows coexisting across a navigation.
+
+Lessons for later phases:
+
+- A `@property()` without `attribute:` does not read the attribute of the same
+  name. The minimize button silently did nothing until `window-id` was declared
+  explicitly; the unit tests passed because they set the property directly.
+- A layout that is persisted per storage key must be keyed to the thing that
+  owns it. Two desktops sharing a key would fight over the same geometry.
+- A controlled component that is also the drag surface must handle
+  `pointercancel`, not only `pointerup`: a drag that ends outside the window
+  otherwise stays "active" and follows the pointer on the next click.

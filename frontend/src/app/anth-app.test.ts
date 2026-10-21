@@ -85,13 +85,39 @@ async function navigate(hash: string): Promise<void> {
   for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0))
 }
 
+/**
+ * Runs `body` with `hashchange` listeners suppressed.
+ *
+ * A browser that loads `#/panel/x` parses the route before the element exists,
+ * so no `hashchange` ever fires. happy-dom emits one when the hash is
+ * assigned, which once hid a deep-link bug behind a passing assertion.
+ */
+async function withoutHashchange(body: () => Promise<void>): Promise<void> {
+  const add = globalThis.addEventListener.bind(globalThis)
+  const remove = globalThis.removeEventListener.bind(globalThis)
+  globalThis.addEventListener = ((type: string, listener: EventListener) => {
+    if (type !== 'hashchange') add(type, listener)
+  }) as typeof globalThis.addEventListener
+  globalThis.removeEventListener = ((type: string, listener: EventListener) => {
+    if (type !== 'hashchange') remove(type, listener)
+  }) as typeof globalThis.removeEventListener
+  try {
+    await body()
+  } finally {
+    globalThis.addEventListener = add
+    globalThis.removeEventListener = remove
+  }
+}
+
 beforeEach(() => {
   globalThis.location.hash = ''
+  localStorage.clear()
 })
 
 afterEach(() => {
   document.body.innerHTML = ''
   globalThis.location.hash = ''
+  localStorage.clear()
 })
 
 describe('AnthApp', () => {
@@ -105,32 +131,144 @@ describe('AnthApp', () => {
     )
   })
 
-  it('mounts the feature element for a panel route', async () => {
+  it('opens the panel in a floating window for a panel route', async () => {
     const element = await mount()
     await navigate('#/panel/host-info')
+
+    const desktop = element.shadowRoot?.querySelector('anth-desktop')
+    const window = desktop?.shadowRoot?.querySelector('anth-window')
+    expect(window?.getAttribute('heading')).toBe(PANELS[0].title())
+  })
+
+  it('opens the routed panel on a deep link', async () => {
+    globalThis.location.hash = '#/panel/host-info'
+    const element = await mount()
+
+    const desktop = element.shadowRoot?.querySelector('anth-desktop')
+    const windows = desktop?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info'],
+    )
+  })
+
+  it('opens the routed panel on a deep link without a route change event', async () => {
+    await withoutHashchange(async () => {
+      globalThis.location.hash = '#/panel/host-info'
+      const element = await mount()
+
+      const windows = element.shadowRoot
+        ?.querySelector('anth-desktop')
+        ?.shadowRoot?.querySelectorAll('anth-window')
+      expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+        ['host-info'],
+      )
+    })
+  })
+
+  it('opens the routed panel on a reload with a stored layout', async () => {
+    localStorage.setItem(
+      'anth.windows.desktop',
+      JSON.stringify([
+        {
+          id: 'files',
+          rect: { x: 40, y: 40, width: 500, height: 300 },
+          minimized: false,
+          z: 1,
+        },
+      ]),
+    )
+
+    await withoutHashchange(async () => {
+      globalThis.location.hash = '#/panel/host-info'
+      const element = await mount()
+
+      const windows = element.shadowRoot
+        ?.querySelector('anth-desktop')
+        ?.shadowRoot?.querySelectorAll('anth-window')
+      expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+        ['files', 'host-info'],
+      )
+    })
+  })
+
+  it('keeps the first window open when another panel is opened', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+    await navigate('#/panel/files')
+
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info', 'files'],
+    )
+  })
+
+  it('restores the arrangement after a visit to the home page', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+    await navigate('#/panel/files')
+    await navigate('#/')
+
+    expect(element.shadowRoot?.querySelector('anth-desktop')).toBeNull()
+
+    await navigate('#/panel/host-info')
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info', 'files'],
+    )
+  })
+
+  it('opens the panel picked in the toolbar select', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+
+    const select = element.shadowRoot?.querySelector<HTMLSelectElement>(
+      '.toolbar-select',
+    )
+    expect(select?.options).toHaveLength(PANELS.length)
+
+    select!.value = 'files'
+    select!.dispatchEvent(new Event('change'))
+    await new Promise((r) => setTimeout(r, 0))
+
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info', 'files'],
+    )
+    expect(select?.value).toBe('')
+  })
+
+  it('mounts the feature element for a standalone window route', async () => {
+    const element = await mount()
+    await navigate('#/window/host-info')
 
     const mounted = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
     expect(mounted?.localName).toBe('anth-host-info')
   })
 
-  it('does not remount the feature element when the route stays the same', async () => {
+  it('does not remount the standalone element when the route stays the same', async () => {
     const element = await mount()
-    await navigate('#/panel/host-info')
+    await navigate('#/window/host-info')
     const first = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
 
-    await navigate('#/panel/host-info')
+    await navigate('#/window/host-info')
     const second = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
 
     expect(second).toBe(first)
   })
 
-  it('replaces the feature element when the panel changes', async () => {
+  it('replaces the standalone element when the panel changes', async () => {
     const element = await mount()
-    await navigate('#/panel/host-info')
-    await navigate('#/panel/files')
+    await navigate('#/window/host-info')
+    await navigate('#/window/files')
 
     const mounted = element.shadowRoot?.querySelector('.panel-host')
       ?.firstElementChild
@@ -214,4 +352,60 @@ describe('AnthApp', () => {
     const secured = await mount({ ...openSession, enabled: true })
     expect(secured.shadowRoot?.querySelector('.signout')).not.toBeNull()
   })
+  it('opens one browser window and no in-page duplicate on pop-out', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+
+    const calls: string[][] = []
+    const opened = { opener: {} as unknown }
+    const original = globalThis.open
+    globalThis.open = ((...args: unknown[]) => {
+      calls.push(args.map(String))
+      return opened
+    }) as typeof globalThis.open
+
+    try {
+      element.shadowRoot
+        ?.querySelector<HTMLButtonElement>('.toolbar-action')
+        ?.click()
+      await new Promise((r) => setTimeout(r, 0))
+    } finally {
+      globalThis.open = original
+    }
+
+    expect(calls).toHaveLength(1)
+    // `noopener` in the feature string makes `open` return null, which used to
+    // read as "blocked" and open a duplicate panel, and a second stream with it.
+    expect(calls[0][2]).not.toContain('noopener')
+    expect(opened.opener).toBeNull()
+
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual([
+      'host-info',
+    ])
+  })
+
+  it('falls back to the in-page window when the pop-up is blocked', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+
+    const original = globalThis.open
+    globalThis.open = (() => null) as typeof globalThis.open
+    try {
+      element.shadowRoot
+        ?.querySelector<HTMLButtonElement>('.toolbar-action')
+        ?.click()
+      await new Promise((r) => setTimeout(r, 0))
+    } finally {
+      globalThis.open = original
+    }
+
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])]).toHaveLength(1)
+  })
+
 })

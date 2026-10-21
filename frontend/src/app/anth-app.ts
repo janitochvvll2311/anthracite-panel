@@ -13,9 +13,11 @@
 
 import { LitElement, css, html } from 'lit'
 import type { PropertyValues } from 'lit'
-import { customElement, property, state } from 'lit/decorators.js'
+import { customElement, property, query, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
+import '../components/anth-desktop'
+import type { AnthDesktop } from '../components/anth-desktop'
 import '../components/anth-login'
 
 import { AuthClient } from '../lib/auth/auth-client'
@@ -26,7 +28,7 @@ import { useApiFetch, withRetry } from '../lib/http'
 import { PANELS, findPanel } from './panels'
 import type { PanelLocale } from './i18n'
 import type { Route } from './router'
-import { panelHash, parseRoute } from './router'
+import { panelHash, parseRoute, windowUrl } from './router'
 
 setupLocalization()
 
@@ -146,6 +148,28 @@ export class AnthApp extends LitElement {
       font-size: 13px;
     }
 
+    .toolbar-open {
+      display: inline-flex;
+      gap: 0.35rem;
+      align-items: center;
+    }
+
+    .toolbar-label {
+      color: var(--muted, #8b9bad);
+      font: 11px/1.4 var(--mono, monospace);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .toolbar-select {
+      padding: 0.25rem 0.45rem;
+      color: inherit;
+      font: 12px/1.2 var(--mono, monospace);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel, #101721);
+    }
+
     .panel-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -246,8 +270,14 @@ export class AnthApp extends LitElement {
     if (this.authClient) this.auth = this.authClient
   }
 
+  /** Route whose panel was already opened, so an update does not raise it again. */
+  private syncedRoute = ''
+
   /** Panel id currently mounted in the host, so a route change remounts once. */
   private mountedPanel?: string
+
+  @query('anth-desktop')
+  private desktop?: AnthDesktop
 
   private readonly onHashChange = (): void => {
     this.route = parseRoute(globalThis.location?.hash ?? '')
@@ -354,6 +384,8 @@ export class AnthApp extends LitElement {
         return this.renderHome()
       case 'panel':
         return this.renderPanel(this.route.panel)
+      case 'window':
+        return this.renderStandalone(this.route.panel)
       case 'unknown':
         return html`<p class="unknown" role="alert">
           ${msg('No such page.')} <a class="back" href="#/">${msg('Go home')}</a>
@@ -397,9 +429,110 @@ export class AnthApp extends LitElement {
       <div class="panel-toolbar">
         <a class="back" href="#/">← ${msg('All panels')}</a>
         <h1 class="panel-title">${panel.title()}</h1>
+        <label class="toolbar-open">
+          <span class="toolbar-label">${msg('Open another panel')}</span>
+          <select
+            class="toolbar-select"
+            aria-label=${msg('Open another panel')}
+            @change=${this.onOpenPanel}
+          >
+            <option value="">${msg('Choose…')}</option>
+            ${PANELS.filter((entry) => entry.id !== panel.id).map(
+              (entry) => html`<option value=${entry.id}>${entry.title()}</option>`,
+            )}
+          </select>
+        </label>
+        <button
+          class="toolbar-action"
+          type="button"
+          @click=${() => this.popOut(panel.id)}
+        >
+          ${msg('Open in a separate window')}
+        </button>
       </div>
-      ${this.renderFeature(panel)}
+      <anth-desktop
+        storage-key="desktop"
+        .panels=${PANELS.map((entry) => ({
+          id: entry.id,
+          heading: entry.title(),
+        }))}
+        .createPanel=${(id: string) => {
+          const entry = findPanel(id)
+          return entry ? this.createFeatureElement(entry) : document.createElement('div')
+        }}
+        @anth-window-popout=${(event: CustomEvent<{ id: string }>) =>
+          this.popOut(event.detail.id)}
+      ></anth-desktop>
     `
+  }
+
+  /**
+   * One panel and nothing else, for its own browser window.
+   *
+   * The shell still owns the session, so this view is behind the same gate:
+   * a pop-out is not a way to skip the login, and a session that expires there
+   * takes the operator back to the login screen like any other tab.
+   */
+  private renderStandalone(id: string) {
+    const panel = findPanel(id)
+    if (!panel) {
+      return html`<p class="unknown" role="alert">${msg('No such panel.')}</p>`
+    }
+    return html`
+      <div class="standalone">
+        <h1 class="panel-title">${panel.title()}</h1>
+        ${this.renderFeature(panel)}
+      </div>
+    `
+  }
+
+  /** Opens the routed panel when navigation lands on it.
+   *
+   * Called from every update, not only a `route` change. The first render is
+   * the `Loading…` branch, so the desktop does not exist yet when a deep link
+   * arrives; the route only becomes openable once the session read renders the
+   * shell. `syncedRoute` keeps the call idempotent, because `open()` on an
+   * existing window raises it.
+   */
+  private readonly syncRouteWindow = (): void => {
+    if (this.route.kind !== 'panel') {
+      this.syncedRoute = ''
+      return
+    }
+    if (!this.desktop || this.syncedRoute === this.route.panel) return
+    this.desktop.open(this.route.panel)
+    this.syncedRoute = this.route.panel
+  }
+
+  /** Opens the panel an operator picked from the toolbar, in its own window. */
+  private readonly onOpenPanel = (event: Event): void => {
+    const select = event.target as HTMLSelectElement
+    const id = select.value
+    select.value = ''
+    if (id) this.desktop?.open(id)
+  }
+
+  /**
+   * Opens the panel in its own browser window.
+   *
+   * `noopener` cannot go in the feature string: the specification says a
+   * window opened with it has no opener, and `open` therefore returns `null`
+   * even when the pop-up succeeded. Treating that `null` as "blocked" is what
+   * used to open a duplicate in-page window, and with it a second stream
+   * against the same daemon. The opener is severed on the returned handle
+   * instead, which happens before the new document runs any script.
+   *
+   * A blocked popup still falls back to the in-page window, since the click
+   * otherwise looks ignored.
+   */
+  private popOut(id: string): void {
+    const url = windowUrl(id)
+    const opened = globalThis.open?.(url, `anth-window-${id}`, 'popup')
+    if (opened) {
+      opened.opener = null
+      return
+    }
+    this.desktop?.open(id)
   }
 
   private renderFeature(panel: PanelDefinition) {
@@ -418,9 +551,16 @@ export class AnthApp extends LitElement {
    * a locale switch re-renders the labels without dropping the live session.
    */
   protected override updated(changed: PropertyValues): void {
+    // Not gated on `route`: a deep link arrives with the route already set and
+    // the desktop only exists after the session read renders the shell.
+    this.syncRouteWindow()
+
     if (!changed.has('route')) return
 
-    const id = this.route.kind === 'panel' ? this.route.panel : undefined
+    // A panel route hands mounting to `anth-desktop`, which keeps one element
+    // per window and detaches a minimized one. Only the standalone view has a
+    // host the shell owns, so only that route mounts here.
+    const id = this.route.kind === 'window' ? this.route.panel : undefined
     if (id === this.mountedPanel) return
     this.mountedPanel = id
 

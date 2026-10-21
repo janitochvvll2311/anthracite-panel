@@ -9,6 +9,8 @@
 export type Route =
   | { kind: 'home' }
   | { kind: 'panel'; panel: string }
+  /** A panel alone in its own browser window, with no shell around it. */
+  | { kind: 'window'; panel: string }
   | { kind: 'unknown'; path: string }
 
 /** Every route starts with `#/`; a missing or malformed hash is the home page. */
@@ -19,9 +21,12 @@ export function parseRoute(hash: string): Route {
   if (path === '') return { kind: 'home' }
 
   const segments = path.split('/')
-  if (segments[0] === 'panel' && segments.length === 2 && segments[1] !== '') {
+  if (segments.length === 2 && segments[1] !== '') {
     const panel = decodeSegment(segments[1])
-    if (panel !== undefined) return { kind: 'panel', panel }
+    if (panel !== undefined) {
+      if (segments[0] === 'panel') return { kind: 'panel', panel }
+      if (segments[0] === 'window') return { kind: 'window', panel }
+    }
   }
 
   return { kind: 'unknown', path }
@@ -50,6 +55,8 @@ export function routeHash(route: Route): string {
       return '#/'
     case 'panel':
       return `#/panel/${encodeURIComponent(route.panel)}`
+    case 'window':
+      return `#/window/${encodeURIComponent(route.panel)}`
     case 'unknown':
       return `#/${route.path}`
   }
@@ -58,4 +65,20 @@ export function routeHash(route: Route): string {
 /** URL for one panel, used by the card links. */
 export function panelHash(panel: string): string {
   return routeHash({ kind: 'panel', panel })
+}
+
+/**
+ * Full URL for a panel in its own browser window.
+ *
+ * The hash is what the shell routes on, so the pop-out keeps working under the
+ * embedded SPA without a server route. `popup` is checked by the caller: a
+ * blocked popup must fall back to an in-page window, and a null return here
+ * would leave the operator with nothing.
+ */
+export function windowUrl(panel: string, base?: string): string {
+  const origin =
+    base ??
+    globalThis.location?.href?.split('#')[0] ??
+    ''
+  return `${origin}${routeHash({ kind: 'window', panel })}`
 }
