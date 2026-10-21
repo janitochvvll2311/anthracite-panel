@@ -56,7 +56,7 @@ Additional decisions taken while planning:
 | 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, merged in #16 |
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
 | 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
-| 4 (point 1) | `anth-process-manager` and process spawning | done, in review |
+| 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
 | 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
@@ -94,14 +94,30 @@ What changed:
   confirm-then-act flow the signal button already used.
 - `parseSpawnForm` validates before the request leaves the browser; the daemon
   still decides.
+- The child calls `setsid()` in `pre_exec`, so it leads its own session and
+  process group. Only the group-signal half is claimed: `setsid` changes the
+  session, not the cgroup, so a cgroup-scoped stop still kills the child.
 
 Bug found and fixed while doing this: `anth-settings` diffed its draft with
 `!==`, so the new `spawn_allow` array always looked edited and a save with no
 changes still sent a `PATCH`. Array fields now compare element by element.
 
-Verification: 156 + 57 + 62 + 27 + 31 + 25 + 18 + 11 + 7 backend tests,
-424 frontend tests, `tsc --noEmit`, `cargo fmt --check` and `cargo clippy
---all-targets` clean.
+Review found three more, each now covered by a test that fails without the fix:
+
+1. `spawn_allow` was serialised with `skip_serializing_if = "Vec::is_empty"`.
+   An empty list is the documented deny-all state, so omitting it left the
+   browser reading `undefined` and throwing on `.length` — which broke the whole
+   process panel in the default release config, not just the spawn form. The
+   field is always sent, and the client treats absence as empty.
+2. `pre_exec` never called `setsid()`, so the documented "own process group"
+   was false and a group signal took spawned children down with the daemon.
+3. The first version of that test spawned `--list`, which exits before `/proc`
+   can be read, so it failed about one run in ten under load. It now spawns
+   `sleep 30`, samples, and kills before asserting.
+
+Verification: 558 backend tests, 425 frontend tests, `tsc --noEmit`,
+`vite build`, `cargo fmt --check` and `cargo clippy --all-targets` clean, plus a
+live daemon for the spawn refusal paths, the process group and the auth gate.
 
 ## Phase 0 — foundation (done)
 
