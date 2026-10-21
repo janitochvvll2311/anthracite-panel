@@ -309,6 +309,89 @@ Reply: `FileRenamed`. The daemon refuses an existing destination.
 
 Reply: `FileDeleted`. A non-empty directory requires `recursive`.
 
+This is the permanent delete; `FileTrash` is the reversible one.
+
+### `FileTrash`
+
+```json
+{"type":"FileTrash","data":{"path":"/var/tmp/example"}}
+
+```
+
+Moves one entry to the freedesktop trash and replies with `FileTrashed`, whose
+`id` is what `FileTrashRestore` takes. Requires `[files] trash`.
+
+### `FileTrashList`
+
+```json
+{"type":"FileTrashList"}
+```
+
+Reply: `TrashListing`. It carries one `TrashEntry` per trashed item (`id`,
+`name`, `original_path`, `kind`, `size`, `deleted_at`, `location`,
+`stored_ms`), `total`, `truncated`, an optional `warning`, `enabled` for the
+`[files] trash` switch, and `used_bytes` against `max_bytes` so a client can
+show how full the trash is. `deleted_at` is the raw `DeletionDate` string,
+passed through rather than parsed, because another desktop may have written a
+timezone this daemon does not use. The listing is
+fitted to the 1 MiB line cap, so `total` can exceed the rows returned.
+
+### `FileTrashRestore`
+
+```json
+{"type":"FileTrashRestore","data":{"id":"a.txt","overwrite":false}}
+
+```
+
+Puts one entry back at its recorded original path and replies with
+`FileRestored`. Without `overwrite`, an occupied destination is refused.
+
+### `FileTrashEmpty`
+
+```json
+{"type":"FileTrashEmpty"}
+```
+
+Deletes every trashed entry for good and replies with `FileTrashEmptied`,
+which reports how many were removed.
+
+### `FileArchiveCreate`
+
+```json
+{"type":"FileArchiveCreate","data":{"path":"/var/tmp/docs","destination":null,"format":"tar.gz"}}
+
+```
+
+Compresses one entry and replies with `FileArchiveCreated`. `destination`
+defaults to `path` plus a suffix for `format`, and `format` is inferred from
+`destination` when it is omitted. `zip`, `tar`, `tar.gz` and `tar.xz` can be
+written; `7z` can only be read.
+
+### `FileArchiveList`
+
+```json
+{"type":"FileArchiveList","data":{"path":"/var/tmp/docs.tar.gz"}}
+
+```
+
+Reply: `ArchiveListing`, which carries `path`, the detected `format`, one
+`ArchiveEntry` per member and the usual `total`/`truncated`/`warning`. Nothing is
+extracted, but decompression still stops at `[files] max_archive_bytes`.
+
+### `FileArchiveExtract`
+
+```json
+{"type":"FileArchiveExtract","data":{"path":"/var/tmp/docs.tar.gz","into":null}}
+
+```
+
+Extracts one archive and replies with `FileArchiveExtracted`, which reports how
+many entries were written. `into` defaults to the archive path without its
+suffix. Absolute members, `..`, backslashes and any entry that would write
+through a symlink are refused, and extraction stops at the
+`[files] max_archive_bytes` and entry-count ceilings with `TooLarge` rather
+than an I/O error.
+
 ### `FileWriteStart`
 
 Opens an atomic upload and replies with an id.
