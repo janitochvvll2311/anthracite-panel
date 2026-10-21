@@ -1102,8 +1102,10 @@ Reports the login state, never a secret.
 }
 ```
 
-`access_expires_in` and `refresh_expires_in` are seconds remaining, both `0`
-when that token is absent. The shell uses them to arm a silent refresh slightly
+`access_expires_in` and `refresh_expires_in` are **seconds remaining**, both `0`
+when that token is absent. A tab opened halfway through an access token reports
+the time left, not the configured lifetime, so its silent refresh is scheduled
+correctly. The shell uses them to arm a silent refresh slightly
 before the access token expires.
 
 `authenticated` is `true` only when the presented cookie **verifies and names a
@@ -1131,6 +1133,12 @@ the route cannot be used to enumerate the account name.
 Takes the refresh cookie, nothing in the body. Rotates the pair: the presented
 refresh token is spent and a new one is issued. Rotation does not extend the
 login: the new refresh token keeps the session's original expiry.
+
+The check, the spend and the re-issue happen under one lock, so two callers
+holding the same token get exactly one `200` between them and the loser sees the
+session cancelled. A refresh token is not an API credential: it is rejected by
+the same check that keeps the two halves apart, so a leaked one cannot be used
+as a Bearer token for its whole life.
 
 Presenting a token that is not the current one for a live session answers `401`
 and cancels that session. That covers both a rotated token being replayed and an

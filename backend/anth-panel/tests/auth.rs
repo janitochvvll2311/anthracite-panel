@@ -698,3 +698,86 @@ async fn the_config_file_is_not_readable_by_other_accounts() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn a_refresh_cookie_is_not_an_api_credential() {
+    let app = anth_panel::router(state("hunter2"));
+    let login = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            serde_json::json!({ "username": "admin", "password": "hunter2" }),
+        ))
+        .await
+        .unwrap();
+    let refresh = cookie_value(&cookie_header(&login, "anth_refresh").unwrap());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/host-info")
+                .header(header::AUTHORIZATION, format!("Bearer {refresh}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "a leaked refresh token must not reach the API for its whole life"
+    );
+}
+
+#[tokio::test]
+async fn the_session_endpoint_counts_down() {
+    let app = anth_panel::router(state("hunter2"));
+    let login = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            serde_json::json!({ "username": "admin", "password": "hunter2" }),
+        ))
+        .await
+        .unwrap();
+    let access = cookie_value(&cookie_header(&login, "anth_access").unwrap());
+    let refresh = cookie_value(&cookie_header(&login, "anth_refresh").unwrap());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/session")
+                .header(
+                    header::COOKIE,
+                    format!("anth_access={access}; anth_refresh={refresh}"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(response).await;
+
+    // The configured lifetimes are 900 and 3600; a fresh pair must report those
+    // or less, never the raw config, and the refresh token must outlive the
+    // access one so the shell knows it can renew.
+    let access_left = body["access_expires_in"].as_u64().unwrap();
+    let refresh_left = body["refresh_expires_in"].as_u64().unwrap();
+    assert!(access_left <= 900 && access_left > 800, "{access_left}");
+    assert!(
+        refresh_left <= 3600 && refresh_left > 3500,
+        "{refresh_left}"
+    );
+    assert!(refresh_left > access_left);
+}
+
+#[tokio::test]
+async fn an_unauthenticated_session_reports_no_seconds_left() {
+    let app = anth_panel::router(state("hunter2"));
+    let body = body_json(app.oneshot(request("/api/auth/session")).await.unwrap()).await;
+    assert_eq!(body["access_expires_in"], 0);
+    assert_eq!(body["refresh_expires_in"], 0);
+}

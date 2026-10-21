@@ -23,6 +23,7 @@ import type { TerminalTransport } from '../lib/terminal/transport'
 import { WebSocketTerminalTransport } from '../lib/terminal/websocket-transport'
 import type { VolumeClient } from '../lib/volumes/volume-client'
 import { HttpVolumeClient } from '../lib/volumes/volume-client'
+import { currentApiFetch } from '../lib/http'
 import { msg } from '@lit/localize'
 
 import '../components/anth-account-manager'
@@ -64,7 +65,7 @@ export const PANELS: PanelDefinition[] = [
     title: () => msg('Host info'),
     description: () =>
       msg('Operating system, CPU, load average, memory and swap.'),
-    createClient: () => new HttpHostInfoClient(),
+    createClient: () => new HttpHostInfoClient({ fetchImpl: currentApiFetch() }),
   },
   {
     id: 'processes',
@@ -72,7 +73,7 @@ export const PANELS: PanelDefinition[] = [
     icon: '⚙️',
     title: () => msg('Processes'),
     description: () => msg('Live process table with signals and tree view.'),
-    createClient: () => new HttpProcessClient(),
+    createClient: () => new HttpProcessClient({ fetchImpl: currentApiFetch() }),
   },
   {
     id: 'files',
@@ -81,7 +82,7 @@ export const PANELS: PanelDefinition[] = [
     title: () => msg('Files'),
     description: () =>
       msg('Browse the host filesystem, preview, upload and edit.'),
-    createClient: () => new HttpFileClient(),
+    createClient: () => new HttpFileClient({ fetchImpl: currentApiFetch() }),
   },
   {
     id: 'network',
@@ -89,7 +90,7 @@ export const PANELS: PanelDefinition[] = [
     icon: '🌐',
     title: () => msg('Network'),
     description: () => msg('Interfaces, addresses, traffic rates and link state.'),
-    createClient: () => new HttpNetworkClient(),
+    createClient: () => new HttpNetworkClient({ fetchImpl: currentApiFetch() }),
   },
   {
     id: 'firewall',
@@ -97,7 +98,7 @@ export const PANELS: PanelDefinition[] = [
     icon: '🛡️',
     title: () => msg('Firewall'),
     description: () => msg('Managed nftables chain, allow and deny rules.'),
-    createClient: () => new HttpFirewallClient(),
+    createClient: () => new HttpFirewallClient({ fetchImpl: currentApiFetch() }),
   },
   {
     id: 'volumes',
@@ -105,7 +106,7 @@ export const PANELS: PanelDefinition[] = [
     icon: '💾',
     title: () => msg('Storage'),
     description: () => msg('Block devices, mounts, mounting and unmounting.'),
-    createClient: () => new HttpVolumeClient(),
+    createClient: () => new HttpVolumeClient({ fetchImpl: currentApiFetch() }),
   },
   {
     id: 'accounts',
@@ -113,7 +114,7 @@ export const PANELS: PanelDefinition[] = [
     icon: '👤',
     title: () => msg('Accounts'),
     description: () => msg('Local users and groups, locks and passwords.'),
-    createClient: () => new HttpAccountClient(),
+    createClient: () => new HttpAccountClient({ fetchImpl: currentApiFetch() }),
   },
   {
     id: 'terminal',

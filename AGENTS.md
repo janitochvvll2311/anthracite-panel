@@ -222,7 +222,14 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `HttpOnly`/`SameSite=Strict` attributes and the optional `Secure` flag.
   `middleware.rs::protect` wraps the whole router once, so a new route is
   protected by default and a public one needs an explicit exemption; it accepts
-  either the `anth_access` cookie or a Bearer token. `routes.rs` serves
+  the `anth_access` cookie or a Bearer token. Every token carries a `kind`, and
+  only `access` reaches a route: a refresh token passes the signature check but
+  is refused, which is what stops a leaked one from being a 12-hour credential.
+  `refresh` does its check, spend and re-issue under one write lock, so two
+  callers holding one token get one pair between them. `GET /api/auth/session`
+  reports the *remaining* seconds from each token's `exp`, and the shell hands
+  every panel client a `withRetry` fetch (`lib/http.ts`) that renews once on a
+  `401`, so a tab that outlives its access token recovers on the next call. `routes.rs` serves
   `/api/auth/{session,login,refresh,logout,password}`. The daemon socket itself
   is still unauthenticated — this layer covers HTTP only.
 - **Config API**: `config_api.rs` serves `GET`/`PATCH /api/config`. The view is a

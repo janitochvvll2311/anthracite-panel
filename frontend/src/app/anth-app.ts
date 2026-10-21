@@ -22,6 +22,7 @@ import { AuthClient } from '../lib/auth/auth-client'
 import type { SessionInfo } from '../lib/auth/auth-client'
 import { changeLocale, currentLocale, setupLocalization } from './i18n'
 import type { PanelDefinition } from './panels'
+import { useApiFetch, withRetry } from '../lib/http'
 import { PANELS, findPanel } from './panels'
 import type { PanelLocale } from './i18n'
 import type { Route } from './router'
@@ -256,6 +257,9 @@ export class AnthApp extends LitElement {
     super.connectedCallback()
     globalThis.addEventListener?.('hashchange', this.onHashChange)
     this.adoptAuthClient()
+    // Every panel client shares one retrying fetch: a tab that outlives its
+    // access token recovers on the next call instead of waiting for the timer.
+    useApiFetch(withRetry(globalThis.fetch.bind(globalThis), this.auth))
     this.auth.onExpired(this.onSessionExpired)
     void this.loadSession()
   }
@@ -263,6 +267,7 @@ export class AnthApp extends LitElement {
   override disconnectedCallback(): void {
     globalThis.removeEventListener?.('hashchange', this.onHashChange)
     this.auth.cancelRefresh()
+    useApiFetch(undefined)
     super.disconnectedCallback()
   }
 

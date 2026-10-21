@@ -28,6 +28,13 @@ pub struct Claims {
     pub exp: u64,
     /// Token identifier. A refresh token's `jti` rotates on every refresh.
     pub jti: String,
+    /// Which half of the pair this is: `access` or `refresh`.
+    ///
+    /// Without it a refresh token is a valid credential for the API, which
+    /// would let a leaked one keep full access for its whole life no matter how
+    /// often it rotates.
+    #[serde(default)]
+    pub kind: String,
     /// Session identifier, shared by the access and refresh halves of a pair.
     ///
     /// The signature says a token was issued by this panel; `sid` is what lets
@@ -184,6 +191,7 @@ mod tests {
             iat: 1_700_000_000,
             exp,
             jti: "abc".to_string(),
+            kind: "access".to_string(),
             sid: "session".to_string(),
         }
     }

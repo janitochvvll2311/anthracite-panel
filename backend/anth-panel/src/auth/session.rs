@@ -162,6 +162,20 @@ impl AuthService {
         self.policy().access_ttl
     }
 
+    /// Seconds left on an access token, for the client's refresh scheduling.
+    pub fn access_remaining(&self, token: &str) -> u64 {
+        jwt::verify(token, &self.secret, 0)
+            .map(|claims| claims.exp.saturating_sub(jwt::now_seconds()))
+            .unwrap_or(0)
+    }
+
+    /// Seconds left on a refresh token.
+    pub fn refresh_remaining(&self, token: &str) -> u64 {
+        jwt::verify(token, &self.secret, 0)
+            .map(|claims| claims.exp.saturating_sub(jwt::now_seconds()))
+            .unwrap_or(0)
+    }
+
     pub fn refresh_ttl(&self) -> u64 {
         self.policy().refresh_ttl
     }
@@ -204,29 +218,50 @@ impl AuthService {
         // from a session that was cancelled is not reported as a replay.
         let claims =
             jwt::verify(token, &self.secret, 0).map_err(|_| AuthError::InvalidCredentials)?;
+        if claims.kind != KIND_REFRESH {
+            return Err(AuthError::InvalidCredentials);
+        }
 
         let session_id = claims.sid.clone();
         let presented_hash = fingerprint(&claims.jti);
 
+        // The check, the spend and the re-issue happen under one write lock.
+        // Splitting them leaves a window where two callers holding the same
+        // token both pass the check and both receive a pair, which is exactly
+        // the replay this rotation exists to detect.
         let mut sessions = self.sessions.write().expect("session lock poisoned");
         let Some(session) = sessions.get(&session_id) else {
             return Err(AuthError::SessionExpired);
         };
-        if session.expires_at <= jwt::now_seconds() || session.subject != claims.sub {
+
+        let now = jwt::now_seconds();
+        if session.expires_at <= now || session.subject != claims.sub {
             sessions.remove(&session_id);
             return Err(AuthError::SessionExpired);
         }
-
         if session.refresh_hash != presented_hash {
-            // The signature is valid and the session is live, so this is either
-            // a rotated token being replayed or an access token used as one.
-            // Both mean a token is where it should not be.
+            // A valid signature for a live session that is not its current
+            // refresh token: a replay, or a token from another half offered
+            // here. Both mean a token is where it should not be.
             sessions.remove(&session_id);
             return Err(AuthError::Replayed);
         }
 
-        drop(sessions);
-        self.rotate(&session_id, &claims)
+        let (issued, rotated) = {
+            let snapshot = session.clone();
+            self.mint(
+                &snapshot.subject,
+                &session_id,
+                now,
+                &snapshot,
+                Some(&claims),
+            )?
+        };
+        if let Some(stored) = sessions.get_mut(&session_id) {
+            stored.refresh_hash = rotated.refresh_hash;
+            stored.expires_at = rotated.expires_at;
+        }
+        Ok(issued)
     }
 
     /// Verifies an access token and checks the session it belongs to.
@@ -236,7 +271,7 @@ impl AuthService {
     /// password change is exactly what the operator did to stop that.
     pub fn verify_access(&self, token: &str) -> Result<Claims, jwt::JwtError> {
         let claims = jwt::verify(token, &self.secret, jwt::now_seconds())?;
-        if claims.sid.is_empty() {
+        if claims.sid.is_empty() || claims.kind != KIND_ACCESS {
             return Err(jwt::JwtError::Malformed);
         }
 
@@ -260,6 +295,9 @@ impl AuthService {
         let Ok(claims) = jwt::verify(token, &self.secret, 0) else {
             return false;
         };
+        if claims.kind != KIND_REFRESH {
+            return false;
+        }
         let now = jwt::now_seconds();
         let sessions = self.sessions.read().expect("session lock poisoned");
         sessions.get(&claims.sid).is_some_and(|session| {
@@ -326,27 +364,6 @@ impl AuthService {
         Ok(issued)
     }
 
-    /// Replaces the refresh token of a live session.
-    fn rotate(&self, session_id: &str, claims: &Claims) -> Result<Issued, AuthError> {
-        let now = jwt::now_seconds();
-        let mut sessions = self.sessions.write().expect("session lock poisoned");
-        let Some(session) = sessions.get_mut(session_id) else {
-            return Err(AuthError::SessionExpired);
-        };
-
-        let subject = session.subject.clone();
-        let snapshot = session.clone();
-        drop(sessions);
-
-        let (issued, rotated) = self.mint(&subject, session_id, now, &snapshot, Some(claims))?;
-        let mut sessions = self.sessions.write().expect("session lock poisoned");
-        if let Some(session) = sessions.get_mut(session_id) {
-            session.refresh_hash = rotated.refresh_hash;
-            session.expires_at = rotated.expires_at;
-        }
-        Ok(issued)
-    }
-
     /// Signs a pair for `session_id` and returns it with the updated record.
     ///
     /// The refresh token keeps the `exp` of the session it belongs to: rotating
@@ -368,6 +385,7 @@ impl AuthService {
             iat: now,
             exp: now + self.access_ttl(),
             jti: jwt::random_id(),
+            kind: KIND_ACCESS.to_string(),
             sid: session_id.to_string(),
         };
         let refresh = Claims {
@@ -376,6 +394,7 @@ impl AuthService {
             iat: previous.map_or(now, |claims| claims.iat),
             exp: refresh_exp,
             jti: refresh_jti.clone(),
+            kind: KIND_REFRESH.to_string(),
             sid: session_id.to_string(),
         };
 
@@ -404,6 +423,10 @@ impl AuthService {
 
 /// The service shared with every request handler.
 pub type SharedAuth = Arc<AuthService>;
+
+/// Token halves. A refresh token is not an API credential.
+const KIND_ACCESS: &str = "access";
+const KIND_REFRESH: &str = "refresh";
 
 /// A stable fingerprint of a token identifier.
 ///
@@ -605,11 +628,77 @@ mod tests {
     fn an_access_token_cannot_be_used_as_a_refresh_token() {
         let service = service();
         let issued = service.login("admin", "hunter2").unwrap();
-        // The access token names the live session but is not its refresh half.
+        // Rejected on the token kind, before the session is even consulted, so
+        // a client that mixes the two up does not lose its session over it.
         assert_eq!(
             service.refresh(&issued.access_token),
-            Err(AuthError::Replayed),
-            "a different token for a live session is treated as theft"
+            Err(AuthError::InvalidCredentials)
+        );
+        assert_eq!(service.session_count(), 1);
+    }
+
+    #[test]
+    fn a_refresh_token_is_not_an_api_credential() {
+        let service = service();
+        let issued = service.login("admin", "hunter2").unwrap();
+        assert!(service.verify_access(&issued.access_token).is_ok());
+        assert_eq!(
+            service.verify_access(&issued.refresh_token),
+            Err(jwt::JwtError::Malformed),
+            "a refresh token must not reach a protected route"
+        );
+
+        // Spending it must not turn the *old* one into a credential either.
+        let rotated = service.refresh(&issued.refresh_token).unwrap();
+        assert_eq!(
+            service.verify_access(&issued.refresh_token),
+            Err(jwt::JwtError::Malformed)
+        );
+        assert_eq!(
+            service.verify_access(&rotated.refresh_token),
+            Err(jwt::JwtError::Malformed)
+        );
+    }
+
+    #[test]
+    fn a_concurrent_refresh_of_one_token_yields_one_pair() {
+        let service = std::sync::Arc::new(service());
+        let issued = service.login("admin", "hunter2").unwrap();
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let service = std::sync::Arc::clone(&service);
+            let token = issued.refresh_token.clone();
+            handles.push(std::thread::spawn(move || service.refresh(&token)));
+        }
+
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let successes = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(
+            successes, 1,
+            "two callers holding one token must not both get a pair"
+        );
+    }
+
+    #[test]
+    fn the_remaining_lifetime_shrinks() {
+        let service = AuthService::new(
+            true,
+            "admin",
+            password::hash_password_with_iterations("hunter2", password::DEV_ITERATIONS).unwrap(),
+            "test-secret",
+            60,
+            600,
+            password::DEV_ITERATIONS,
+        );
+        let issued = service.login("admin", "hunter2").unwrap();
+        let access = service.access_remaining(&issued.access_token);
+        let refresh = service.refresh_remaining(&issued.refresh_token);
+        assert!(access > 0 && access <= 60);
+        assert!(refresh > 0 && refresh <= 600);
+        assert!(
+            refresh > access,
+            "the refresh token outlives the access one"
         );
     }
 
