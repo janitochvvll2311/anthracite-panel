@@ -764,6 +764,56 @@ fn validate_ui_anchor(anchor: &UiAnchor) -> Result<(), PluginError> {
     Ok(())
 }
 
+/// One capability as frozen at install time.
+///
+/// The whole recipe is stored, not just the id. A grant holding ids alone would
+/// leave the argv template to be read from the manifest on every invocation, and
+/// the manifest is a file inside a bundle a local writer can rewrite. Freezing
+/// the template, the program and the validators is what makes `render_argv`
+/// authoritative rather than advisory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantedCapability {
+    pub id: String,
+    #[serde(default)]
+    pub job: Option<String>,
+    #[serde(default)]
+    pub program: Option<String>,
+    #[serde(default)]
+    pub argv: Vec<String>,
+    #[serde(default)]
+    pub args: BTreeMap<String, ArgSpec>,
+    #[serde(default)]
+    pub accepts_text: bool,
+}
+
+impl From<&Capability> for GrantedCapability {
+    fn from(capability: &Capability) -> Self {
+        Self {
+            id: capability.id.clone(),
+            job: capability.job.clone(),
+            program: capability.program.clone(),
+            argv: capability.argv.clone(),
+            args: capability.args.clone(),
+            accepts_text: capability.accepts_text,
+        }
+    }
+}
+
+impl GrantedCapability {
+    /// The shape `render_argv` takes, so a frozen recipe is rendered by the same
+    /// code that validated it at install.
+    pub fn as_capability(&self) -> Capability {
+        Capability {
+            id: self.id.clone(),
+            job: self.job.clone(),
+            program: self.program.clone(),
+            argv: self.argv.clone(),
+            args: self.args.clone(),
+            accepts_text: self.accepts_text,
+        }
+    }
+}
+
 /// The grant written to the config at install time.
 ///
 /// This is the frozen recipe. The capabilities here are what the plugin may use,
@@ -774,7 +824,9 @@ pub struct PluginGrant {
     pub id: String,
     pub version: String,
     pub wasm_sha256: String,
-    pub capabilities: Vec<String>,
+    /// Frozen recipes. This is the authority; `allowed_ids` is only a view.
+    #[serde(default)]
+    pub recipes: Vec<GrantedCapability>,
     /// Whether the plugin is loaded at all. `plugin approve` sets it after a
     /// version that declares new capabilities.
     #[serde(default = "default_true")]
@@ -792,17 +844,36 @@ impl PluginGrant {
             id: manifest.plugin.id.clone(),
             version: manifest.plugin.version.clone(),
             wasm_sha256: manifest.wasm.sha256.to_ascii_lowercase(),
-            capabilities: manifest
+            recipes: manifest
                 .capabilities
                 .iter()
-                .map(|capability| capability.id.clone())
+                .map(GrantedCapability::from)
                 .collect(),
             enabled: true,
         }
     }
 
     pub fn allows(&self, capability: &str) -> bool {
-        self.enabled && self.capabilities.iter().any(|id| id == capability)
+        self.enabled && self.recipes.iter().any(|recipe| recipe.id == capability)
+    }
+
+    /// The frozen recipe for `id`, if the grant allows it.
+    ///
+    /// Execution reads the recipe through this, never through the manifest, so
+    /// the program and the template are always the approved ones.
+    pub fn recipe(&self, id: &str) -> Option<&GrantedCapability> {
+        if !self.enabled {
+            return None;
+        }
+        self.recipes.iter().find(|recipe| recipe.id == id)
+    }
+
+    /// The capability ids this grant carries, in install order.
+    pub fn allowed_ids(&self) -> Vec<String> {
+        self.recipes
+            .iter()
+            .map(|recipe| recipe.id.clone())
+            .collect()
     }
 }
 
@@ -1091,7 +1162,7 @@ type = "ifname"
     fn a_grant_freezes_the_capability_list_and_hash() {
         let parsed = manifest(&format!("{MINIMAL}{CAPABILITY}")).unwrap();
         let grant = PluginGrant::from_manifest(&parsed);
-        assert_eq!(grant.capabilities, vec!["wg.status".to_string()]);
+        assert_eq!(grant.allowed_ids(), vec!["wg.status".to_string()]);
         assert!(grant.allows("wg.status"));
         assert!(!grant.allows("wg.peers"));
         assert!(grant.enabled);

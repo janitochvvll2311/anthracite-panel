@@ -1252,14 +1252,14 @@ fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
                 "Installed {} {} with {} capabilit{}",
                 installed.plugin.id,
                 installed.plugin.version,
-                grant.capabilities.len(),
-                if grant.capabilities.len() == 1 {
+                grant.allowed_ids().len(),
+                if grant.allowed_ids().len() == 1 {
                     "y"
                 } else {
                     "ies"
                 }
             );
-            for capability in &grant.capabilities {
+            for capability in grant.allowed_ids() {
                 println!("  {capability}");
             }
             config.plugins.upsert_grant(grant);
@@ -1338,18 +1338,101 @@ fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
                 "Approved {} {} with {} capabilit{}",
                 grant.id,
                 grant.version,
-                grant.capabilities.len(),
-                if grant.capabilities.len() == 1 {
+                grant.allowed_ids().len(),
+                if grant.allowed_ids().len() == 1 {
                     "y"
                 } else {
                     "ies"
                 }
             );
-            for capability in &grant.capabilities {
+            for capability in grant.allowed_ids() {
                 println!("  {capability}");
             }
             config.plugins.upsert_grant(grant);
             finish_plugin_change(&config, config_path)
+        }
+        PluginCommand::Call(call) => run_plugin_call(&plugins, &config, call),
+    }
+}
+
+/// Runs one plugin capability through its wasm module.
+///
+/// This is the CLI anchor: the core dispatcher declines a subcommand a plugin
+/// answers, and the plugin gets a request envelope. It can only act through
+/// `anth_exec`, against the recipe frozen in the grant.
+fn run_plugin_call(
+    plugins: &anth_panel::plugins::PluginsConfig,
+    config: &Config,
+    call: &anth_panel::cli::PluginCallArgs,
+) -> ExitCode {
+    let request = match call.request.as_str() {
+        "-" => {
+            let mut text = String::new();
+            if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text) {
+                eprintln!("[ERROR] could not read the request from stdin: {error}");
+                return ExitCode::FAILURE;
+            }
+            text
+        }
+        other => other.to_string(),
+    };
+    // Parse before loading anything: a malformed envelope is the caller's
+    // mistake and should not look like a broken plugin.
+    if let Err(error) = serde_json::from_str::<serde_json::Value>(&request) {
+        eprintln!("[ERROR] the request is not valid JSON: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    let Some(grant) = config
+        .plugins
+        .grants
+        .iter()
+        .find(|grant| grant.id == call.id)
+        .cloned()
+    else {
+        eprintln!("[ERROR] no plugin `{}` is installed", call.id);
+        return ExitCode::FAILURE;
+    };
+    let root = match anth_panel::plugins::bundle::plugin_dir(&plugins.root_path(), &call.id) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // `load` re-hashes the module against the grant, so a swapped file is caught
+    // here as well as at the daemon.
+    if let Err(error) = anth_panel::plugins::bundle::load(&root, &grant) {
+        eprintln!("[ERROR] {error}");
+        return ExitCode::FAILURE;
+    }
+    let wasm = match std::fs::read(root.join("plugin.wasm")) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("[ERROR] could not read the module: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let runner = anth_panel::command::SystemRunner::new(config.sudo);
+    match anth_panel::plugins::runtime::invoke(
+        &wasm,
+        &grant.id,
+        &grant,
+        &runner,
+        &request,
+        config.plugins.fuel,
+    ) {
+        Ok(reply) => {
+            for line in &reply.log {
+                eprintln!("[plugin] {line}");
+            }
+            println!("{}", reply.body);
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            ExitCode::FAILURE
         }
     }
 }

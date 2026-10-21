@@ -90,8 +90,8 @@ Additional decisions taken while planning:
 | 6 (point 3) | `anth-network-manager`: interface create/edit/rename/delete | done, merged in #23 |
 | 7a (point 4) | Partition create/edit/resize/delete | not started |
 | 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | not started |
-| 8a (point 8) | Plugin manifest, typed validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification | done, in review |
-| 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | not started |
+| 8a (point 8) | Plugin manifest, typed validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification | done, merged in #24 |
+| 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | done, in review |
 | 8c (point 8) | API anchors and namespacing | not started |
 | 8d (point 8) | UI anchors and asset serving | not started |
 | 8e (point 8) | WireGuard plugin: manifest, wasm, web components | not started |
@@ -498,7 +498,7 @@ interpreted speed, which is irrelevant for business logic.
 Grants live in the config rather than a state file, because the admin already
 reads and edits the config, and `plugin list` can audit authority from one place.
 
-### 8a — authority boundary (done, in review)
+### 8a — authority boundary (done, merged in #24)
 
 `plugins/manifest.rs` holds the schema and the validators, `plugins/bundle.rs`
 the archive side and the store, `plugins/mod.rs` the config and the registry.
@@ -527,8 +527,8 @@ the archive side and the store, `plugins/mod.rs` the config and the registry.
   rather than the manifest. The module path is
   pinned to `plugin.wasm` instead of being read from the manifest, so rewriting
   the manifest cannot re-point the file a grant was hashed against.
-- `plugin list|install|remove|enable|approve` run locally, like `auth` and
-  `config`, and say a restart is needed. `approve` needs the explicit
+- `plugin list|install|remove|enable|approve|call` run locally, like `auth` and
+  `config`, and say a restart is needed (except `call`, which runs at once). `approve` needs the explicit
   `--accept-capabilities` flag: widening a grant is never implicit.
 - `GET /api/plugins` is read-only and served from the bundle directory, so the
   daemon stays unaware of which plugins the panel shows.
@@ -536,5 +536,30 @@ the archive side and the store, `plugins/mod.rs` the config and the registry.
 Tests: 59 unit cases (schema, validators, argv rendering, tampering, archive
 guards) and 7 integration cases driving the real binary.
 
-Next: 8b. The host may only ever call `render_argv` for a capability the frozen
-grant allows, and a wasm module gets exactly one import for that.
+## 8b: the host
+
+The grant now freezes the **recipe**, not only the id. That is the change this
+phase forced: `invoke` renders argv from the grant, so a grant holding ids alone
+would have left the program and template to be read from the manifest — the file
+an attacker rewrites. `PluginGrant` carries `recipes: Vec<GrantedCapability>`,
+`allowed_ids()` is the view the CLI and the panel read, and `recipe(id)` is what
+execution uses.
+
+`runtime::invoke` runs one envelope against a `wasmi` engine with `consume_fuel`,
+a `StoreLimits` memory ceiling and exactly two imports (`anth_exec`, `anth_log`).
+The four documented exports are checked by name and signature, and the ABI
+version is compared before any request is written. `anth_exec` reads the recipe
+from the grant, refuses host `job`s, validates every argument with the host's own
+validators, and renders the argv itself.
+
+`install` and `load` now also parse the module (`runtime::probe`). A digest proves
+the bytes are the approved ones; it says nothing about whether they load.
+
+`plugin call <id> [REQUEST]` is the CLI anchor and the manual entry point.
+
+Tests: 13 runtime cases against a real `guest.wat` guest, including a module that
+loops until fuel runs out, a guest that smuggles `--force` through a value, and a
+guest importing WASI.
+
+Next: 8c. API anchors under `/api/plugins/<id>/`, with the same `invoke` call
+behind an axum handler and namespacing enforced at install.

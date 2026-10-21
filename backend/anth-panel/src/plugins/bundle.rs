@@ -25,6 +25,7 @@ use super::manifest::{
     InstalledPlugin, MAX_MANIFEST_BYTES, Manifest, PluginError, PluginErrorKind, PluginGrant,
     WASM_FILE,
 };
+use super::runtime;
 
 /// Largest bundle accepted. A wasm module plus web assets; anything larger is a
 /// mistake or an attack, and the limit is applied while extracting.
@@ -107,6 +108,14 @@ pub fn install(
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
     }
+    // Then check it is wasm the host can load. A digest proves the bytes are the
+    // ones the admin approved; it says nothing about whether they parse. Refusing
+    // here is the difference between a rejected upload and a plugin that is
+    // listed, hashes correctly, and fails on every request.
+    if let Err(error) = verify_module(&staging) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
 
     fs::rename(&staging, &destination)
         .map_err(|error| io_error(format!("could not install the bundle: {error}")))?;
@@ -174,7 +183,7 @@ fn installed_view(manifest: &Manifest, grant: &PluginGrant, root: PathBuf) -> In
             version: manifest.plugin.version.clone(),
             name: manifest.plugin.name.clone(),
             enabled: grant.enabled,
-            capabilities: grant.capabilities.clone(),
+            capabilities: grant.allowed_ids(),
             api: manifest.api.clone(),
             ui: manifest.ui.clone(),
         },
@@ -182,17 +191,30 @@ fn installed_view(manifest: &Manifest, grant: &PluginGrant, root: PathBuf) -> In
     }
 }
 
-/// Confirms the module's bytes match `expected`.
-///
-/// The path is the fixed [`WASM_FILE`], not `manifest.wasm.path`: the path is
-/// validated as staying inside the bundle, but loading through it would let a
-/// rewritten manifest point the hash check at a different file.
+/// Confirms the module parses and implements this host's ABI.
+fn verify_module(root: &Path) -> Result<(), PluginError> {
+    let path = root.join(WASM_FILE);
+    let bytes = fs::read(&path)
+        .map_err(|error| io_error(format!("could not read `{}`: {error}", path.display())))?;
+    runtime::probe(&bytes).map_err(|error| {
+        PluginError::new(
+            PluginErrorKind::Invalid,
+            format!("`{WASM_FILE}` cannot be loaded: {}", error.detail),
+        )
+    })
+}
+
 /// Public form of [`verify_wasm`], for a caller that has a digest to check
 /// before recording it.
 pub fn verify(root: &Path, expected: &str) -> Result<(), PluginError> {
     verify_wasm(root, expected)
 }
 
+/// Confirms the module's bytes match `expected`.
+///
+/// The path is the fixed [`WASM_FILE`], not `manifest.wasm.path`: the path is
+/// validated as staying inside the bundle, but loading through it would let a
+/// rewritten manifest point the hash check at a different file.
 fn verify_wasm(root: &Path, expected: &str) -> Result<(), PluginError> {
     let path = root.join(WASM_FILE);
     let bytes = fs::read(&path)

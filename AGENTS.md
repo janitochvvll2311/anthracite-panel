@@ -450,8 +450,16 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   list|install|remove|enable|approve` run locally like `auth` and `config`, and
   `approve` requires `--accept-capabilities` because widening a grant is never
   implicit. `GET /api/plugins` is read-only and reads the bundle directory, so
-  the daemon stays unaware of which plugins the panel shows. Design and threat
-  table: `docs/design/plugins.md`.
+  the daemon stays unaware of which plugins the panel shows.
+  `plugins/runtime.rs` is the `wasmi` host: one engine per call with
+  `consume_fuel` and `StoreLimits`, exactly two imports (`anth_exec`,
+  `anth_log`), and the four documented exports checked by name and signature
+  before a request is written. `anth_exec` reads the frozen recipe from the
+  **grant** and renders argv there; the manifest is never consulted for
+  authority. `install` and `load` both call `runtime::probe`, because a digest
+  proves the bytes were approved, not that they parse. `plugin call <ID>
+  [REQUEST]` is the CLI anchor; tests drive a real `plugins/guest.wat`. Design
+  and threat table: `docs/design/plugins.md`.
 - **Accounts**: `accounts.rs` reads `/etc/passwd` and `/etc/group` for what the
   panel can change, and `getent` for what the host actually resolves, tagging
   every entry `local` or `nss`; an `nss` entry is read-only. Lock state comes

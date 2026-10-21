@@ -35,9 +35,15 @@ base64 = "0.23.1"
 rand = "0.10.3"
 
 [dev-dependencies]
+# Compiles the fixture guest in tests only: the shipped binary has no business
+# carrying a text-format wasm parser.
+wat = "1"
 # The 7z fixture cannot come from this crate (it has no writer), so the test
 # uses the compressor directly.
 sevenz-rust2 = "0.13"
 http-body-util = "0.1"
 tokio-tungstenite = "0.29"
 tower = { version = "0.5.3", features = ["util"] }
+
+[target.x86_64-unknown-linux-musl.dependencies]
+wasmi = "2.0.0"

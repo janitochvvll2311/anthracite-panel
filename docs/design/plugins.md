@@ -102,6 +102,12 @@ wasm_sha256 = "..."
 capabilities = ["wg.status"]
 ```
 
+The grant freezes the whole **recipe** — program, argv template and typed
+arguments — not only the id. `invoke` renders argv from the grant, so a grant
+holding ids alone would leave the program and the template to be read from the
+manifest, which is the file an attacker rewrites. `allowed_ids()` is a view for
+the CLI and the panel; `recipe(id)` is what execution uses.
+
 At every load the module is hashed and compared **against the grant**, never
 against the manifest. That distinction is the whole freeze: a manifest lives
 inside a bundle an attacker can write, so a rewritten module travelling with a
@@ -223,7 +229,7 @@ values: that would expose the whole protocol and defeat the model.
 | Phase | Scope |
 | --- | --- |
 | 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification |
-| 8b | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest |
+| 8b | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest — done |
 | 8c | API anchors and namespacing |
 | 8d | UI anchors, asset serving |
 | 8e | WireGuard plugin: manifest, wasm, web components |
