@@ -178,7 +178,10 @@ desktop.createPanel = (id) =&gt; document.createElement('demo-panel')</code></pr
       desktop.addEventListener('anth-window-popout', (detail) => {
         const id = detail.detail.id
         const url = `${location.href.split('#')[0]}#/window/${id}`
-        const opened = window.open(url, `anth-window-${id}`, 'popup,noopener')
+        // No `noopener` in the feature string: it makes this call return null
+        // even on success. Sever the opener on the handle instead.
+        const opened = window.open(url, `anth-window-${id}`, 'popup')
+        if (opened) opened.opener = null
         event.textContent = opened
           ? `pop-out: ${id}`
           : 'pop-out blocked by the browser'

@@ -191,4 +191,17 @@ describe('anth-window', () => {
     await element.updateComplete
     expect(find()).not.toBeNull()
   })
+
+  it('reads the can-popout attribute the desktop writes', async () => {
+    const element = document.createElement('anth-window') as AnthWindow
+    element.setAttribute('window-id', 'files')
+    element.setAttribute('can-popout', '')
+    document.body.append(element)
+    await element.updateComplete
+
+    expect(element.canPopout).toBe(true)
+    expect(
+      element.shadowRoot?.querySelector('button[aria-label="Open in a separate window"]'),
+    ).not.toBeNull()
+  })
 })

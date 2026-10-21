@@ -63,6 +63,30 @@ describe('anth-desktop', () => {
     expect(desktop.shadowRoot?.querySelectorAll('anth-window')).toHaveLength(0)
   })
 
+  it('passes can-popout to the window, so the button renders', async () => {
+    const desktop = mount()
+    desktop.open('processes')
+    await settle()
+
+    const window = desktop.shadowRoot?.querySelector('anth-window') as
+      | (Element & { canPopout: boolean })
+      | null
+    expect(window?.hasAttribute('can-popout')).toBe(true)
+    // The attribute is only useful if the child maps it to the property.
+    expect(window?.canPopout).toBe(true)
+  })
+
+  it('hides the pop-out button when no-popout is set', async () => {
+    const desktop = mount()
+    desktop.noPopout = true
+    desktop.open('processes')
+    await settle()
+
+    expect(
+      desktop.shadowRoot?.querySelector('anth-window')?.hasAttribute('can-popout'),
+    ).toBe(false)
+  })
+
   it('detaches the body when minimized and restores the same element', async () => {
     const desktop = mount()
     desktop.open('processes')

@@ -270,6 +270,9 @@ export class AnthApp extends LitElement {
     if (this.authClient) this.auth = this.authClient
   }
 
+  /** Route whose panel was already opened, so an update does not raise it again. */
+  private syncedRoute = ''
+
   /** Panel id currently mounted in the host, so a route change remounts once. */
   private mountedPanel?: string
 
@@ -483,16 +486,22 @@ export class AnthApp extends LitElement {
     `
   }
 
-  /** Opens one window per panel, which is what "Open all" promises. */
-  /**
-   * Opens the routed panel when navigation lands on it.
+  /** Opens the routed panel when navigation lands on it.
    *
-   * Done here rather than through `initialPanel` because the desktop is reused
-   * across routes: closing a window and following the same link again must open
-   * it again, and an unchanged property would not.
+   * Called from every update, not only a `route` change. The first render is
+   * the `Loading…` branch, so the desktop does not exist yet when a deep link
+   * arrives; the route only becomes openable once the session read renders the
+   * shell. `syncedRoute` keeps the call idempotent, because `open()` on an
+   * existing window raises it.
    */
   private readonly syncRouteWindow = (): void => {
-    if (this.route.kind === 'panel') this.desktop?.open(this.route.panel)
+    if (this.route.kind !== 'panel') {
+      this.syncedRoute = ''
+      return
+    }
+    if (!this.desktop || this.syncedRoute === this.route.panel) return
+    this.desktop.open(this.route.panel)
+    this.syncedRoute = this.route.panel
   }
 
   /** Opens the panel an operator picked from the toolbar, in its own window. */
@@ -506,15 +515,24 @@ export class AnthApp extends LitElement {
   /**
    * Opens the panel in its own browser window.
    *
-   * `noopener` is deliberate: the new window must not get a handle on this one,
-   * because the panel it runs holds commands against the host. A blocked popup
-   * falls back to the in-page window rather than doing nothing, since the click
+   * `noopener` cannot go in the feature string: the specification says a
+   * window opened with it has no opener, and `open` therefore returns `null`
+   * even when the pop-up succeeded. Treating that `null` as "blocked" is what
+   * used to open a duplicate in-page window, and with it a second stream
+   * against the same daemon. The opener is severed on the returned handle
+   * instead, which happens before the new document runs any script.
+   *
+   * A blocked popup still falls back to the in-page window, since the click
    * otherwise looks ignored.
    */
   private popOut(id: string): void {
     const url = windowUrl(id)
-    const opened = globalThis.open?.(url, `anth-window-${id}`, 'popup,noopener')
-    if (!opened) this.desktop?.open(id)
+    const opened = globalThis.open?.(url, `anth-window-${id}`, 'popup')
+    if (opened) {
+      opened.opener = null
+      return
+    }
+    this.desktop?.open(id)
   }
 
   private renderFeature(panel: PanelDefinition) {
@@ -532,16 +550,12 @@ export class AnthApp extends LitElement {
    * here, which also means the element is rebuilt only when the panel changes:
    * a locale switch re-renders the labels without dropping the live session.
    */
-  protected override firstUpdated(): void {
-    // A deep link arrives with the route already set, so no `route` change
-    // fires and the desktop would otherwise open on an empty arrangement.
-    this.syncRouteWindow()
-  }
-
   protected override updated(changed: PropertyValues): void {
-    if (!changed.has('route')) return
-
+    // Not gated on `route`: a deep link arrives with the route already set and
+    // the desktop only exists after the session read renders the shell.
     this.syncRouteWindow()
+
+    if (!changed.has('route')) return
 
     // A panel route hands mounting to `anth-desktop`, which keeps one element
     // per window and detaches a minimized one. Only the standalone view has a

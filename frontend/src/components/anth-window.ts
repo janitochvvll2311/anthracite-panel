@@ -63,7 +63,7 @@ export class AnthWindow extends LitElement {
   active = false
 
   /** Shows the pop-out button. A window without a URL cannot leave the page. */
-  @property({ type: Boolean, attribute: 'popout-url' })
+  @property({ type: Boolean, attribute: 'can-popout' })
   canPopout = false
 
   @query('.frame')
