@@ -804,3 +804,177 @@ with lzma.open({path:?}, "wb", format=lzma.FORMAT_XZ, preset=9) as xz:
         "the extractor kept writing past the limit: {written} bytes"
     );
 }
+
+/// Peak resident memory, in kilobytes, for the current process.
+///
+/// `/proc/self/status` reports `VmHWM`, the high-water mark, so a test can
+/// measure a decode without sampling it. Linux-only, which is what the daemon
+/// targets.
+fn peak_rss_kb() -> u64 {
+    let status = fs::read_to_string("/proc/self/status").expect("no /proc/self/status");
+    status
+        .lines()
+        .find(|line| line.starts_with("VmHWM:"))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse().ok())
+        .expect("VmHWM is missing")
+}
+
+#[test]
+fn listing_a_compressed_bomb_does_not_allocate_its_expansion() {
+    // The previous decoder buffered each xz block internally before flushing to
+    // the sink, so a 39 KB archive became ~512 MB of resident memory even
+    // though the byte ceiling fired correctly. Listing is the sharper case: it
+    // has no tar reader to stop it early. The assertion is on measured memory,
+    // not on the returned error, because that is what regressed silently.
+    let fixture = Fixture::new("xz-memory");
+    let archive_path = fixture.base.join("bomb.tar.xz");
+    let script = format!(
+        r#"
+import lzma
+with lzma.open({path:?}, "wb", preset=9) as xz:
+    for _ in range(256):
+        xz.write(b"\0" * (1024 * 1024))
+"#,
+        path = archive_path.to_string_lossy(),
+    );
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success(),
+        "python3 could not write the xz archive"
+    );
+
+    let before = peak_rss_kb();
+    let _ = archive::list(&archive_path, ArchiveFormat::TarXz, 100);
+    let growth = peak_rss_kb().saturating_sub(before);
+
+    assert!(
+        growth < 32 * 1024,
+        "listing a 256 MiB expansion grew peak RSS by {growth} KiB"
+    );
+}
+
+#[test]
+fn a_multi_block_xz_archive_decodes_every_block() {
+    // `xz --block-size` emits one block per slice, and the block framing has to
+    // be walked rather than assumed: a decoder that read only the first block
+    // would hand `tar` a truncated stream.
+    let fixture = Fixture::new("xz-multiblock");
+    let script = format!(
+        r#"
+import lzma, os
+blob = os.urandom(200000)
+with lzma.open({path:?}, "wb", format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC64) as xz:
+    xz.write(blob)
+"#,
+        path = fixture.base.join("steps.raw").to_string_lossy(),
+    );
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let tar_path = fixture.base.join("bundle.tar");
+    assert!(
+        Command::new("tar")
+            .arg("-cf")
+            .arg(&tar_path)
+            .arg("--owner=0")
+            .arg("--group=0")
+            .arg("-C")
+            .arg(&fixture.base)
+            .arg("steps.raw")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let archive_path = fixture.base.join("bundle.tar.xz");
+    let compressed = Command::new("xz")
+        .arg("-k")
+        .arg("-c")
+        .arg("--block-size=2000")
+        .arg("-0")
+        .arg(&tar_path)
+        .output()
+        .expect("xz is missing");
+    assert!(
+        compressed.status.success(),
+        "xz could not write the archive"
+    );
+    fs::write(&archive_path, &compressed.stdout).unwrap();
+
+    let written = archive::extract(
+        &archive_path,
+        ArchiveFormat::TarXz,
+        &fixture.out(),
+        ArchiveLimits::default(),
+    )
+    .expect("a multi-block archive must decode");
+
+    assert_eq!(written, vec!["steps.raw".to_string()]);
+    assert_eq!(
+        fs::read(fixture.out().join("steps.raw")).unwrap(),
+        fs::read(fixture.base.join("steps.raw")).unwrap()
+    );
+}
+
+#[test]
+fn a_crc32_xz_stream_is_accepted() {
+    // `xz` defaults to CRC64 but Python's `lzma` writes CRC32 when asked, and
+    // both reach the same decoder. Rejecting CRC32 would have looked like a
+    // corrupt archive rather than an unsupported one.
+    let fixture = Fixture::new("xz-crc32");
+    let tar_path = fixture.base.join("note.tar");
+    fs::write(fixture.base.join("note.txt"), "hola\n").unwrap();
+    assert!(
+        Command::new("tar")
+            .arg("-cf")
+            .arg(&tar_path)
+            .arg("-C")
+            .arg(&fixture.base)
+            .arg("note.txt")
+            .status()
+            .unwrap()
+            .success()
+    );
+    let archive_path = fixture.base.join("note.tar.xz");
+    let script = format!(
+        r#"
+import lzma
+with open({tar:?}, "rb") as source, lzma.open({out:?}, "wb", format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC32) as xz:
+    xz.write(source.read())
+"#,
+        tar = tar_path.to_string_lossy(),
+        out = archive_path.to_string_lossy(),
+    );
+    assert!(
+        Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let written = archive::extract(
+        &archive_path,
+        ArchiveFormat::TarXz,
+        &fixture.out(),
+        ArchiveLimits::default(),
+    )
+    .expect("a CRC32 stream must decode");
+
+    assert_eq!(written, vec!["note.txt".to_string()]);
+    assert_eq!(
+        fs::read_to_string(fixture.out().join("note.txt")).unwrap(),
+        "hola\n"
+    );
+}

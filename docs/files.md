@@ -280,6 +280,13 @@ An archive is untrusted input, so extraction refuses rather than repairs:
   `max_entries` caps how many members one archive may hold. The counter is
   checked per 64 KiB chunk, so an entry that lies about its declared size cannot
   fill the disk first.
+- **`.tar.xz` is decoded as a stream**, not inflated into memory first. The
+  container is walked block by block and each LZMA2 chunk is pulled through a
+  `Read`, so peak memory follows the read buffer rather than the expansion: a
+  39 KB archive that expands to 256 MiB costs under a megabyte. The dictionary
+  size a block declares is capped at 256 MiB, because the decoder allocates it
+  up front. BCJ and delta filters are refused rather than ignored, and the block
+  checks (CRC32, CRC64, SHA-256) are skipped rather than verified.
 - **A refused member fails the request.** Skipping it would leave a partial tree
   that looks complete.
 

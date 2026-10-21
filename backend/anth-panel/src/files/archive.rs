@@ -19,6 +19,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anth_proto::{ArchiveEntry, ArchiveFormat, FileError, FileErrorKind};
+use lzma_rust2::LZMA2Reader;
 
 /// Bounds applied to one extraction.
 ///
@@ -150,145 +151,269 @@ impl From<ExpandsPastLimit> for io::Error {
     }
 }
 
-/// Decompresses `.xz` on demand and stops at the configured ceiling.
+/// Tracks how many bytes have been consumed, which the xz block framing needs
+/// in order to skip the padding that aligns a block check to four bytes.
+struct Positioned<R> {
+    inner: R,
+    position: u64,
+}
+
+impl<R: Read> Read for Positioned<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(out)?;
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+
+/// Decodes an `.xz` stream on demand, one LZMA2 chunk at a time.
 ///
-/// `lzma_rs::xz_decompress` needs a `Write` sink, and a `Vec` sink grows to the
-/// *whole* uncompressed size before a single entry is read, so listing a 58 KB
-/// archive could cost hundreds of megabytes. The work therefore runs on a
-/// worker feeding a bounded channel: peak memory follows the channel depth, not
-/// the archive, and the reader stops as soon as the byte count passes the limit.
-struct BoundedXz {
-    chunks: std::sync::mpsc::Receiver<Vec<u8>>,
-    worker: Option<std::thread::JoinHandle<Result<(), lzma_rs::error::Error>>>,
-    chunk: Vec<u8>,
-    position: usize,
+/// `lzma_rs::xz_decompress` takes a `Write` sink, but it accumulates a whole
+/// block in its own `LzAccumBuffer` and only flushes on a dictionary reset, so a
+/// 39 KB archive that expands to 256 MB costs ~512 MB of resident memory no
+/// matter what the sink does. Parsing the container here and decoding each
+/// block through [`LZMA2Reader`] keeps the working set at one chunk: that reader
+/// is a real `Read`, so a caller asking for 64 KB gets 64 KB.
+///
+/// The block framing is walked rather than assumed, so a multi-block archive
+/// still decodes. BCJ and delta filters are refused instead of ignored, because
+/// a decoder that silently skipped a transform would hand corrupt bytes to
+/// `tar` rather than fail.
+///
+/// The block checks are skipped, not verified, which matches the decoder this
+/// replaced: the size ceilings and the tar structure are the guard here, and
+/// verifying them would pull in a CRC64 implementation for no security gain.
+struct XzStream<R> {
+    reader: Option<Positioned<BufReader<R>>>,
+    decoder: Option<LZMA2Reader<Positioned<BufReader<R>>>>,
+    block_start: u64,
+    check: u64,
     produced: u64,
     limit: u64,
-    done: bool,
+    finished: bool,
 }
 
-impl BoundedXz {
-    /// The channel holds a few small chunks, so a fast decompressor blocks
-    /// instead of buffering the archive ahead of the tar reader.
-    const DEPTH: usize = 4;
-    const CHUNK: usize = 64 * 1024;
-
-    fn new<R: Read + Send + 'static>(input: R, limit: u64) -> Self {
-        let (sender, chunks) = std::sync::mpsc::sync_channel(Self::DEPTH);
-        let worker = std::thread::spawn(move || {
-            let mut sink = ChannelWriter {
-                sender,
-                pending: Vec::with_capacity(Self::CHUNK),
-            };
-            lzma_rs::xz_decompress(&mut BufReader::new(input), &mut sink)
-        });
-        Self {
-            chunks,
-            worker: Some(worker),
-            chunk: Vec::new(),
+impl<R: Read> XzStream<R> {
+    fn new(input: R, limit: u64) -> Result<Self, FileError> {
+        let mut reader = Positioned {
+            inner: BufReader::new(input),
             position: 0,
+        };
+        let mut header = [0u8; 12];
+        reader
+            .read_exact(&mut header)
+            .map_err(|e| corrupt(format!("the xz stream header is missing: {e}")))?;
+        if header[..6] != [0xfd, b'7', b'z', b'X', b'Z', 0x00] {
+            return Err(corrupt("the archive is not an xz stream"));
+        }
+        // Stream flags: bits 0-3 are reserved and bits 4-7 carry the check
+        // type (0 none, 1 CRC32, 4 CRC64, 10 SHA-256).
+        if header[6] != 0x00 || !matches!(header[7], 0x00 | 0x01 | 0x04 | 0x0a) {
+            return Err(corrupt("the xz stream flags are not supported"));
+        }
+        let expected = crc32fast::hash(&header[6..8]);
+        let found = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
+        if expected != found {
+            return Err(corrupt("the xz stream header checksum does not match"));
+        }
+        let check = match header[7] {
+            0x00 => 0,
+            0x01 => 4,
+            0x04 => 8,
+            0x0a => 32,
+            _ => unreachable!("the check type was validated above"),
+        };
+
+        Ok(Self {
+            reader: Some(reader),
+            decoder: None,
+            block_start: 12,
+            check,
             produced: 0,
             limit,
-            done: false,
-        }
+            finished: false,
+        })
     }
 
-    /// Joins the worker once the channel closes, surfacing a decompression
-    /// failure that would otherwise look like a clean end of stream.
-    fn finish(&mut self) -> io::Result<()> {
-        self.done = true;
-        match self.worker.take() {
-            Some(worker) => match worker.join() {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(error)) => Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("xz decompression failed: {error}"),
-                )),
-                Err(_) => Err(io::Error::other("the xz decompression worker panicked")),
-            },
-            None => Ok(()),
+    /// Reads the next block header, or reports the end of the stream.
+    ///
+    /// A zero size byte introduces the index rather than a block; the index and
+    /// the footer carry no payload, so they end the stream as far as the tar
+    /// reader is concerned.
+    fn open_block(&mut self) -> Result<bool, FileError> {
+        let reader = self
+            .reader
+            .as_mut()
+            .ok_or_else(|| corrupt("the xz reader is not available"))?;
+        let mut size = [0u8; 1];
+        reader
+            .read_exact(&mut size)
+            .map_err(|e| corrupt(format!("the xz block header is missing: {e}")))?;
+        if size[0] == 0 {
+            self.finished = true;
+            return Ok(false);
         }
+        let header_len = (size[0] as usize + 1) * 4;
+        let mut block = vec![0u8; header_len - 1];
+        reader
+            .read_exact(&mut block)
+            .map_err(|e| corrupt(format!("the xz block header is truncated: {e}")))?;
+        self.block_start = reader.position - header_len as u64;
+        let dictionary = parse_block_header(&block)?;
+        let reader = self
+            .reader
+            .take()
+            .ok_or_else(|| corrupt("the xz reader is not available"))?;
+        self.decoder = Some(LZMA2Reader::new(reader, dictionary, None));
+        Ok(true)
+    }
+
+    /// Skips the block padding and check, then opens the following block.
+    fn close_block(&mut self) -> Result<bool, FileError> {
+        if let Some(decoder) = self.decoder.take() {
+            let mut reader = decoder.into_inner();
+            let padding = (4 - (reader.position - self.block_start) % 4) % 4;
+            let mut scratch = [0u8; 3];
+            reader
+                .read_exact(&mut scratch[..padding as usize])
+                .map_err(|e| corrupt(format!("the xz block padding is truncated: {e}")))?;
+            if scratch[..padding as usize].iter().any(|byte| *byte != 0) {
+                return Err(corrupt("the xz block padding is not zero"));
+            }
+            let mut check = [0u8; 32];
+            reader
+                .read_exact(&mut check[..self.check as usize])
+                .map_err(|e| corrupt(format!("the xz block check is truncated: {e}")))?;
+            self.reader = Some(reader);
+        }
+        self.open_block()
     }
 }
 
-impl Read for BoundedXz {
+impl<R: Read> Read for XzStream<R> {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        while self.position >= self.chunk.len() {
-            if self.done {
+        if out.is_empty() || self.finished {
+            return Ok(0);
+        }
+        loop {
+            if self.decoder.is_none() && !self.open_block().map_err(to_io)? {
                 return Ok(0);
             }
-            match self.chunks.recv() {
-                Ok(next) => {
-                    self.produced += next.len() as u64;
-                    if self.produced > self.limit {
-                        return Err(ExpandsPastLimit { limit: self.limit }.into());
-                    }
-                    self.chunk = next;
-                    self.position = 0;
-                }
-                Err(_) => {
-                    self.finish()?;
+            let decoder = self
+                .decoder
+                .as_mut()
+                .expect("open_block installs a decoder or reports the end");
+            let read = decoder.read(out)?;
+            if read == 0 {
+                if !self.close_block().map_err(to_io)? {
                     return Ok(0);
                 }
+                continue;
             }
-        }
-
-        let available = self.chunk.len() - self.position;
-        let take = available.min(out.len());
-        out[..take].copy_from_slice(&self.chunk[self.position..self.position + take]);
-        self.position += take;
-        Ok(take)
-    }
-}
-
-impl Drop for BoundedXz {
-    fn drop(&mut self) {
-        // Dropping the receiver is what unblocks a worker waiting to send, so
-        // an abandoned archive cannot leak a thread.
-        let worker = self.worker.take();
-        drop(std::mem::replace(
-            &mut self.chunks,
-            std::sync::mpsc::sync_channel(1).1,
-        ));
-        if let Some(worker) = worker {
-            let _ = worker.join();
+            self.produced += read as u64;
+            if self.produced > self.limit {
+                return Err(ExpandsPastLimit { limit: self.limit }.into());
+            }
+            return Ok(read);
         }
     }
 }
 
-/// Buffers a `Write` stream into fixed chunks for [`BoundedXz`].
-struct ChannelWriter {
-    sender: std::sync::mpsc::SyncSender<Vec<u8>>,
-    pending: Vec<u8>,
+/// Carries a `FileError` through a `Read` signature without losing its kind.
+fn to_io(error: FileError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error.detail)
 }
 
-impl Write for ChannelWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.pending.extend_from_slice(bytes);
-        if self.pending.len() >= BoundedXz::CHUNK {
-            let chunk = std::mem::replace(&mut self.pending, Vec::with_capacity(BoundedXz::CHUNK));
-            self.sender
-                .send(chunk)
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the reader went away"))?;
-        }
-        Ok(bytes.len())
+/// Reads the LZMA2 block header that follows the block size byte.
+///
+/// Returns the dictionary size the block asks for. Only that field is needed up
+/// front: the LZMA2 decoder derives everything else from the chunk headers.
+fn parse_block_header(block: &[u8]) -> Result<u32, FileError> {
+    let flags = *block
+        .first()
+        .ok_or_else(|| corrupt("the xz block header is empty"))?;
+    let filters = (flags & 0x03) as usize + 1;
+    let mut offset = 1;
+    // Bit 6 records the compressed size, bit 7 the uncompressed one. Both are
+    // informational: the decoder learns the boundary from the LZMA2 end marker.
+    if flags & 0x40 != 0 {
+        read_varint(block, &mut offset)?;
     }
-
-    fn flush(&mut self) -> io::Result<()> {
-        if !self.pending.is_empty() {
-            let chunk = std::mem::take(&mut self.pending);
-            self.sender
-                .send(chunk)
-                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "the reader went away"))?;
-        }
-        Ok(())
+    if flags & 0x80 != 0 {
+        read_varint(block, &mut offset)?;
     }
+    let mut dictionary = None;
+    for _ in 0..filters {
+        let id = read_varint(block, &mut offset)?;
+        let props_len = read_varint(block, &mut offset)? as usize;
+        if offset + props_len > block.len() {
+            return Err(corrupt("the xz filter properties are truncated"));
+        }
+        if id == 0x21 {
+            if props_len != 1 {
+                return Err(corrupt("the xz LZMA2 properties have the wrong size"));
+            }
+            dictionary = Some(dictionary_size(block[offset])?);
+        } else if id != 0x03 {
+            return Err(corrupt(
+                "only the LZMA2 filter, with no BCJ or delta filter, is supported",
+            ));
+        }
+        offset += props_len;
+    }
+    dictionary.ok_or_else(|| corrupt("the xz block has no LZMA2 filter"))
 }
 
-impl Drop for ChannelWriter {
-    fn drop(&mut self) {
-        let _ = self.flush();
+/// Largest dictionary the decoder will allocate.
+///
+/// `LZMA2Reader` materialises the whole dictionary up front (`vec![0; size]`),
+/// so the declared size is an attacker-chosen allocation. `xz -9` uses 64 MiB;
+/// 256 MiB leaves room for anything a real archive asks for while keeping one
+/// hostile file from taking the daemon down.
+const MAX_XZ_DICTIONARY: u32 = 256 * 1024 * 1024;
+
+/// Expands the one-byte LZMA2 dictionary property.
+///
+/// The encoding is `(2 | (prop & 1)) << (prop / 2 + 11)`, with `40` meaning the
+/// maximum. Getting this wrong would allocate the wrong window and decode
+/// garbage, so the two special cases are spelled out.
+fn dictionary_size(prop: u8) -> Result<u32, FileError> {
+    if prop > 40 {
+        return Err(corrupt("the xz LZMA2 dictionary property is invalid"));
     }
+    if prop == 40 {
+        return Err(corrupt("the xz LZMA2 dictionary exceeds MAX_XZ_DICTIONARY"));
+    }
+    let base = 2u64 | u64::from(prop & 1);
+    let size = base << (u32::from(prop) / 2 + 11);
+    if size > u64::from(MAX_XZ_DICTIONARY) {
+        return Err(corrupt(format!(
+            "the xz LZMA2 dictionary is {} bytes, above the {} byte limit",
+            size, MAX_XZ_DICTIONARY
+        )));
+    }
+    Ok(size as u32)
+}
+
+/// Reads the xz variable-length integer encoding used by block headers.
+fn read_varint(bytes: &[u8], offset: &mut usize) -> Result<u64, FileError> {
+    let mut value = 0u64;
+    for shift in 0..9 {
+        let byte = *bytes
+            .get(*offset)
+            .ok_or_else(|| corrupt("the xz block header is truncated"))?;
+        *offset += 1;
+        value |= u64::from(byte & 0x7f) << (shift * 7);
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    Err(corrupt("the xz block header integer is too long"))
+}
+
+/// A malformed archive, reported as a bad request rather than a server fault.
+fn corrupt(message: impl Into<String>) -> FileError {
+    FileError::new(FileErrorKind::InvalidPath, message.into())
 }
 
 /// How much of an archive to accept, tracked while extracting.
@@ -970,9 +1095,9 @@ fn extract_7z(
 const MAX_LIST_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Opens an `.xz` archive as a bounded stream.
-fn xz_reader(archive: &Path, limit: u64) -> Result<BoundedXz, FileError> {
+fn xz_reader(archive: &Path, limit: u64) -> Result<XzStream<File>, FileError> {
     let file = File::open(archive).map_err(|e| io_error(archive, e))?;
-    Ok(BoundedXz::new(file, limit))
+    XzStream::new(file, limit)
 }
 
 fn list_tar<R: Read>(
