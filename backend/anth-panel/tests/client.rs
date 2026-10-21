@@ -61,7 +61,7 @@ fn request_for_network_builds_list_and_state_requests() {
 #[test]
 fn cli_parses_network_list_and_state_subcommands() {
     let cli = Cli::try_parse_from(["anth-panel", "network", "list", "--watch", "1s"]).unwrap();
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Network(NetworkArgs {
             command: NetworkCommand::List(args),
         }) => assert_eq!(args.watch.as_deref(), Some("1s")),
@@ -69,7 +69,7 @@ fn cli_parses_network_list_and_state_subcommands() {
     }
 
     let cli = Cli::try_parse_from(["anth-panel", "network", "down", "eth0", "--yes"]).unwrap();
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Network(NetworkArgs {
             command: NetworkCommand::Down(args),
         }) => {
@@ -107,7 +107,7 @@ fn request_for_is_none_for_locally_served_commands() {
 fn cli_parses_a_host_info_subcommand() {
     let cli = Cli::try_parse_from(["anth-panel", "host-info"]).unwrap();
     assert_eq!(cli.config_path, None);
-    match cli.command {
+    match cli.command.unwrap() {
         Command::HostInfo(args) => assert_eq!(args.watch, None),
         other => panic!("expected HostInfo, got {other:?}"),
     }
@@ -118,7 +118,7 @@ fn cli_accepts_a_config_flag_before_host_info() {
     let cli =
         Cli::try_parse_from(["anth-panel", "--config", "/tmp/anth.toml", "host-info"]).unwrap();
     assert_eq!(cli.config_path.as_deref(), Some("/tmp/anth.toml"));
-    assert!(matches!(cli.command, Command::HostInfo(_)));
+    assert!(matches!(cli.command, Some(Command::HostInfo(_))));
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn cli_parses_an_echo_subcommand() {
     let cli = Cli::try_parse_from(["anth-panel", "echo", "hello"]).unwrap();
     assert_eq!(cli.config_path, None);
 
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Echo { message } => assert_eq!(message, "hello"),
         other => panic!("expected Echo, got {other:?}"),
     }
@@ -143,8 +143,11 @@ fn cli_accepts_a_config_flag_before_the_subcommand() {
 }
 
 #[test]
-fn cli_requires_a_subcommand() {
-    assert!(Cli::try_parse_from(["anth-panel"]).is_err());
+fn a_bare_invocation_parses_but_has_nothing_to_run() {
+    // clap cannot require the subcommand once `-i` alone is valid, so `main`
+    // rejects an empty invocation instead. This guards the parse half.
+    let cli = Cli::try_parse_from(["anth-panel"]).unwrap();
+    assert!(cli.command.is_none());
 }
 
 #[test]
@@ -166,7 +169,7 @@ fn handle_response_accepts_ok_and_error_without_panicking() {
 fn cli_watch_flag_defaults_to_two_seconds_when_bare() {
     let cli = Cli::try_parse_from(["anth-panel", "host-info", "--watch"]).unwrap();
 
-    match cli.command {
+    match cli.command.unwrap() {
         Command::HostInfo(args) => assert_eq!(args.watch.as_deref(), Some("2s")),
         other => panic!("expected HostInfo, got {other:?}"),
     }
@@ -177,7 +180,7 @@ fn cli_watch_flag_accepts_an_explicit_interval() {
     for interval in ["500ms", "5s", "1m", "1.5s", "2h"] {
         let cli = Cli::try_parse_from(["anth-panel", "host-info", "--watch", interval]).unwrap();
 
-        match cli.command {
+        match cli.command.unwrap() {
             Command::HostInfo(args) => assert_eq!(args.watch.as_deref(), Some(interval)),
             other => panic!("expected HostInfo, got {other:?}"),
         }
@@ -190,7 +193,7 @@ fn cli_watch_flag_keeps_a_following_token_as_its_value() {
     // reach our parser rather than being silently dropped.
     let cli = Cli::try_parse_from(["anth-panel", "host-info", "--watch", "nope"]).unwrap();
 
-    match cli.command {
+    match cli.command.unwrap() {
         Command::HostInfo(args) => assert_eq!(args.watch.as_deref(), Some("nope")),
         other => panic!("expected HostInfo, got {other:?}"),
     }
@@ -207,7 +210,7 @@ fn cli_parses_a_terminal_subcommand() {
     let cli = Cli::try_parse_from(["anth-panel", "terminal"]).unwrap();
     assert_eq!(cli.config_path, None);
 
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Terminal(args) => {
             assert_eq!(args.cols, None);
             assert_eq!(args.rows, None);
@@ -221,7 +224,7 @@ fn cli_terminal_accepts_explicit_size_flags() {
     let cli =
         Cli::try_parse_from(["anth-panel", "terminal", "--cols", "120", "--rows", "40"]).unwrap();
 
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Terminal(args) => {
             assert_eq!(args.cols, Some(120));
             assert_eq!(args.rows, Some(40));
@@ -257,7 +260,7 @@ fn request_for_process_list_and_signal() {
 fn cli_parses_process_list_and_its_ls_alias() {
     for name in ["list", "ls"] {
         let cli = Cli::try_parse_from(["anth-panel", "process", name]).unwrap();
-        match cli.command {
+        match cli.command.unwrap() {
             Command::Process(ProcessArgs {
                 command: ProcessCommand::List(args),
             }) => assert_eq!(args.watch, None),
@@ -269,7 +272,7 @@ fn cli_parses_process_list_and_its_ls_alias() {
 #[test]
 fn cli_process_list_accepts_watch() {
     let cli = Cli::try_parse_from(["anth-panel", "process", "list", "--watch", "500ms"]).unwrap();
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Process(ProcessArgs {
             command: ProcessCommand::List(args),
         }) => assert_eq!(args.watch.as_deref(), Some("500ms")),
@@ -282,7 +285,7 @@ fn cli_parses_process_signal() {
     let cli =
         Cli::try_parse_from(["anth-panel", "process", "signal", "42", "TERM", "--yes"]).unwrap();
 
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Process(ProcessArgs {
             command: ProcessCommand::Signal(args),
         }) => {
@@ -400,7 +403,7 @@ fn file_commands_parse_their_flags() {
         "--overwrite",
     ])
     .unwrap();
-    match cli.command {
+    match cli.command.unwrap() {
         Command::File(FileArgs {
             command: FileCommand::Upload(args),
         }) => {
@@ -420,7 +423,7 @@ fn file_commands_parse_their_flags() {
         "--yes",
     ])
     .unwrap();
-    match cli.command {
+    match cli.command.unwrap() {
         Command::File(FileArgs {
             command: FileCommand::Delete(args),
         }) => {
@@ -506,7 +509,7 @@ fn cli_parses_firewall_subcommands() {
         "--yes",
     ])
     .unwrap();
-    match cli.command {
+    match cli.command.unwrap() {
         Command::Firewall(FirewallArgs {
             command: FirewallCommand::Allow(args),
         }) => {
@@ -521,9 +524,9 @@ fn cli_parses_firewall_subcommands() {
     let cli = Cli::try_parse_from(["anth-panel", "firewall", "list"]).unwrap();
     assert!(matches!(
         cli.command,
-        Command::Firewall(FirewallArgs {
+        Some(Command::Firewall(FirewallArgs {
             command: FirewallCommand::Status
-        })
+        }))
     ));
 }
 
@@ -536,4 +539,35 @@ fn handle_response_accepts_firewall_frames_without_panicking() {
         FirewallErrorKind::Disabled,
         "firewall control is disabled",
     )));
+}
+
+#[test]
+fn the_interactive_flag_is_global_and_has_a_short_form() {
+    for argv in [
+        ["anth-panel", "-i", "host-info"],
+        ["anth-panel", "--interactive", "host-info"],
+        ["anth-panel", "host-info", "-i"],
+        ["anth-panel", "host-info", "--interactive"],
+    ] {
+        let cli = Cli::try_parse_from(argv).unwrap();
+        assert!(cli.interactive, "{argv:?} must set the flag");
+        assert!(matches!(cli.command, Some(Command::HostInfo(_))));
+    }
+
+    let cli = Cli::try_parse_from(["anth-panel", "host-info"]).unwrap();
+    assert!(!cli.interactive);
+}
+
+#[test]
+fn the_interactive_flag_allows_omitting_the_subcommand() {
+    let cli = Cli::try_parse_from(["anth-panel", "-i"]).unwrap();
+    assert!(cli.interactive);
+    assert!(cli.command.is_none());
+}
+
+#[test]
+fn a_bare_invocation_has_no_subcommand() {
+    let cli = Cli::try_parse_from(["anth-panel"]).unwrap();
+    assert!(!cli.interactive);
+    assert!(cli.command.is_none());
 }

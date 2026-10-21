@@ -34,6 +34,10 @@ it into a stream becomes `/watch`.
 | `anth-panel network list` | `GET /api/network` |
 | `anth-panel network list --watch 2s` | `GET /api/network/watch?interval=2s` |
 | `anth-panel network down eth0` | `POST /api/network/eth0/state` with `{"up":false}` |
+| `anth-panel network create br0 --kind bridge` | `POST /api/network` with `{"name":"br0","kind":"bridge"}` |
+| `anth-panel network edit eth0 --mtu 9000` | `PATCH /api/network/eth0` with `{"mtu":9000}` |
+| `anth-panel network rename d0 d1` | `POST /api/network/d0/rename` with `{"new_name":"d1"}` |
+| `anth-panel network delete d0` | `POST /api/network/d0/delete` |
 | `anth-panel firewall status` | `GET /api/firewall` |
 | `anth-panel firewall allow 22/tcp` | `POST /api/firewall/rules` with `{"action":"allow","port":22}` |
 | `anth-panel firewall delete 3` | `POST /api/firewall/rules/3/delete` |
@@ -82,6 +86,10 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/network` | One network-interface snapshot |
 | `GET` | `/api/network/watch` | Network snapshots as SSE |
 | `POST` | `/api/network/{name}/state` | Bring an interface up or down |
+| `POST` | `/api/network` | Create one virtual interface |
+| `PATCH` | `/api/network/{name}` | Change an MTU or the administrative state |
+| `POST` | `/api/network/{name}/rename` | Rename an interface that is down |
+| `POST` | `/api/network/{name}/delete` | Delete an interface |
 | `GET` | `/api/firewall` | One managed firewall snapshot |
 | `POST` | `/api/firewall/rules` | Add a deny or remove a managed deny |
 | `POST` | `/api/firewall/rules/{handle}/delete` | Delete a rule by handle |
@@ -517,6 +525,85 @@ require a daemon user with `CAP_NET_ADMIN`; a permission failure is `403`.
 | `200` | State changed |
 | `400` | Invalid name or body |
 | `403` | Network control is disabled, the interface is protected, or permission was denied |
+| `404` | The interface does not exist |
+| `500` | The kernel operation failed |
+| `503` | No daemon is listening on the socket |
+
+## `POST /api/network`
+
+Creates one virtual interface. Kinds: `veth`, `bridge`, `bond`, `vlan`, `dummy`,
+`tun_tap`. Everything else is `400`.
+
+```bash
+curl -s -X POST localhost:8080/api/network \
+  -H 'content-type: application/json' \
+  -d '{"name":"br0","kind":"bridge","mtu":1500,"up":true}'
+```
+
+```json
+{"message":"created bridge interface `br0`"}
+```
+
+A `veth` takes `peer`; a `vlan` takes `link` and `vlan_id` (1-4094). The route
+returns `403` when `[network] manage = false`, `400` for an illegal name, an
+existing name, an out-of-range MTU or a kind that cannot be created, and `404`
+for a missing vlan parent.
+
+## `PATCH /api/network/{name}`
+
+Changes the MTU and/or the administrative state. An absent field is left alone,
+so `{"mtu":9000}` never takes the link down.
+
+```bash
+curl -s -X PATCH localhost:8080/api/network/eth0 \
+  -H 'content-type: application/json' \
+  -d '{"mtu":9000}'
+```
+
+```json
+{"message":"updated `eth0`: mtu 9000"}
+```
+
+An empty body is `400` ("nothing to change"). Bringing a loopback down is `403`.
+
+## `POST /api/network/{name}/rename`
+
+Renames an interface. It must be down; the daemon answers `403` otherwise.
+
+```bash
+curl -s -X POST localhost:8080/api/network/d0/rename \
+  -H 'content-type: application/json' \
+  -d '{"new_name":"d1"}'
+```
+
+```json
+{"message":"renamed `d0` to `d1`"}
+```
+
+## `POST /api/network/{name}/delete`
+
+Deletes an interface, including a physical device.
+
+```bash
+curl -s -X POST localhost:8080/api/network/d0/delete
+```
+
+```json
+{"message":"deleted interface `d0`"}
+```
+
+The route forwards the connection's peer address to the daemon, which refuses
+(`403`) to delete the interface that request arrived through, the last interface
+carrying a default route, or a loopback. The peer guard is skipped when the
+address is loopback or matches no interface, where it says nothing about the
+path. Deleting a physical device is allowed because removing a card on purpose
+is legitimate; the CLI and the web UI warn about it separately.
+
+| Status | When |
+| --- | --- |
+| `200` | The interface was created, edited, renamed or deleted |
+| `400` | Invalid name, body or parameters |
+| `403` | `[network] manage` is off, a guard refused the change, or permission was denied |
 | `404` | The interface does not exist |
 | `500` | The kernel operation failed |
 | `503` | No daemon is listening on the socket |

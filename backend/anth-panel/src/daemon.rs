@@ -41,6 +41,7 @@ pub struct Policy {
     /// read the same values.
     pub process: crate::process::ProcessPolicy,
     pub network_control: bool,
+    pub network_manage: bool,
     pub firewall_control: bool,
     pub volume_control: bool,
     /// The `[accounts]` policy the guards and the snapshot read. The control
@@ -425,6 +426,7 @@ pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
     Policy {
         process: crate::process::ProcessPolicy::new(&config.process),
         network_control: config.network.control,
+        network_manage: config.network.manage,
         firewall_control: config.firewall.control,
         volume_control: config.volumes.control,
         accounts: config.accounts.clone(),
@@ -447,10 +449,36 @@ pub async fn serve(
     config: &Config,
     config_path: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let socket_path = Path::new(&config.socket_path);
-    clear_socket_path(socket_path)?;
+    serve_with_ready(config, config_path, None).await
+}
 
-    let listener = UnixListener::bind(socket_path)?;
+/// Like [`serve`], but reports the bind result through `ready` before entering
+/// the accept loop.
+///
+/// The interactive session detaches a `daemon` subcommand and keeps its prompt,
+/// so it waits for this notice: without it a typed request could reach the
+/// socket before the listener exists.
+pub async fn serve_with_ready(
+    config: &Config,
+    config_path: &Path,
+    ready: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let socket_path = Path::new(&config.socket_path);
+    let bound = clear_socket_path(socket_path).and_then(|()| UnixListener::bind(socket_path));
+    let listener = match bound {
+        Ok(listener) => {
+            if let Some(ready) = ready {
+                let _ = ready.send(Ok(()));
+            }
+            listener
+        }
+        Err(error) => {
+            if let Some(ready) = ready {
+                let _ = ready.send(Err(error.to_string()));
+            }
+            return Err(error.into());
+        }
+    };
     println!("Listening on {}", socket_path.display());
 
     let sessions = Sessions::new(config.terminal.max_sessions);

@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_proto::{
     MAX_LINE_LEN, NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind,
-    NetworkInterface, NetworkSnapshot, Response,
+    NetworkInterface, NetworkInterfaceKind, NetworkSnapshot, Response,
 };
 
 use crate::text::read_trimmed;
@@ -48,14 +48,34 @@ struct Counters {
 
 /// Reads every interface on the host, including its IP addresses.
 pub fn collect(control_enabled: bool) -> NetworkSnapshot {
-    let mut snapshot = collect_from("/", control_enabled);
+    collect_with(Path::new("/"), control_enabled, false)
+}
+
+/// Reads every interface under `root`, resolving addresses only for the real
+/// filesystem: a fixture tree has no live interfaces to query.
+pub fn collect_with(
+    root: impl AsRef<Path>,
+    control_enabled: bool,
+    manage_enabled: bool,
+) -> NetworkSnapshot {
+    let root = root.as_ref();
+    let mut snapshot = collect_from(root, control_enabled);
+    if root != Path::new("/") {
+        return fit_snapshot(NetworkSnapshot {
+            manage_enabled,
+            ..snapshot
+        });
+    }
     let mut addresses = interface_addresses();
 
     for interface in &mut snapshot.interfaces {
         interface.addresses = addresses.remove(&interface.name).unwrap_or_default();
     }
 
-    fit_snapshot(snapshot)
+    fit_snapshot(NetworkSnapshot {
+        manage_enabled,
+        ..snapshot
+    })
 }
 
 /// Reads a snapshot from an alternative filesystem root. Addresses are not
@@ -74,6 +94,8 @@ pub fn collect_from(root: impl AsRef<Path>, control_enabled: bool) -> NetworkSna
         interfaces,
         timestamp_ms: timestamp_ms(),
         control_enabled,
+        // `collect_from` has no policy to read; `collect_with` fills this in.
+        manage_enabled: false,
         total,
         truncated,
         warning,
@@ -340,6 +362,8 @@ fn read_interfaces(
         let flags = read_trimmed(base.join("flags"))
             .and_then(|text| parse_flags(&text))
             .unwrap_or(0);
+        let loopback = flags & (libc::IFF_LOOPBACK as u32) != 0;
+        let kind = interface_kind(&base, loopback);
         let traffic = counters.get(&name).copied().unwrap_or_default();
 
         interfaces.push(NetworkInterface {
@@ -350,7 +374,7 @@ fn read_interfaces(
             state: read_trimmed(base.join("operstate")).unwrap_or_else(|| "unknown".to_string()),
             up: flags & (libc::IFF_UP as u32) != 0,
             running: flags & (libc::IFF_RUNNING as u32) != 0,
-            loopback: flags & (libc::IFF_LOOPBACK as u32) != 0,
+            loopback,
             mac: read_trimmed(base.join("address")).unwrap_or_default(),
             mtu: read_trimmed(base.join("mtu"))
                 .and_then(|text| text.parse().ok())
@@ -370,10 +394,67 @@ fn read_interfaces(
             tx_errors: traffic.tx_errors,
             rx_dropped: traffic.rx_dropped,
             tx_dropped: traffic.tx_dropped,
+            kind,
+            physical: kind == NetworkInterfaceKind::Physical,
         });
     }
 
     interfaces
+}
+
+/// Classifies a device from its sysfs directory and its `IFF_LOOPBACK` flag.
+///
+/// Loopback comes from the flag, not from `type`: sysfs reports `772`
+/// (`ARPHRD_LOOPBACK`) for `lo`, and reading that as "dummy" would let the
+/// delete and bring-down guards miss the one interface they must always refuse.
+/// A real dummy is `ARPHRD_ETHER` with `iflink == ifindex`.
+///
+/// A `device` link is the reliable signal for real hardware: virtual devices
+/// have no parent device. Wireless is checked first because a wireless NIC also
+/// has a `device` link, and the operator needs the more specific label.
+fn interface_kind(base: &Path, loopback: bool) -> NetworkInterfaceKind {
+    if loopback {
+        return NetworkInterfaceKind::Loopback;
+    }
+    let wireless = base.join("wireless").is_dir() || base.join("phy80211").exists();
+    if wireless {
+        return NetworkInterfaceKind::Wireless;
+    }
+    if base.join("device").exists() {
+        return NetworkInterfaceKind::Physical;
+    }
+    if base.join("bridge").is_dir() {
+        return NetworkInterfaceKind::Bridge;
+    }
+    if base.join("bonding").is_dir() {
+        return NetworkInterfaceKind::Bond;
+    }
+    if base.join("vlan").exists() || base.join("upper").is_dir() && base.join("vlan_id").exists() {
+        return NetworkInterfaceKind::Vlan;
+    }
+    if base.join("tun_flags").exists() {
+        return NetworkInterfaceKind::TunTap;
+    }
+    // `iflink` differing from `ifindex` is how the kernel marks a veth peer.
+    let index = read_trimmed(base.join("ifindex")).and_then(|text| text.parse::<u32>().ok());
+    let link = read_trimmed(base.join("iflink")).and_then(|text| text.parse::<u32>().ok());
+    if let (Some(index), Some(link)) = (index, link)
+        && index != link
+        && base.join("type").is_file()
+        && read_trimmed(base.join("type")).as_deref() == Some("1")
+    {
+        return NetworkInterfaceKind::Veth;
+    }
+    // A dummy is not distinguishable from an idle bridge port by name alone,
+    // but it is by its link type and the absence of an upper device.
+    if matches!((index, link), (Some(index), Some(link)) if index == link)
+        && read_trimmed(base.join("type")).as_deref() == Some("1")
+        && !base.join("upper").is_dir()
+    {
+        return NetworkInterfaceKind::Dummy;
+    }
+
+    NetworkInterfaceKind::Other
 }
 
 fn parse_flags(text: &str) -> Option<u32> {
@@ -651,11 +732,15 @@ mod tests {
         fs::write(eth0.join("mtu"), "1500\n").unwrap();
         fs::write(eth0.join("speed"), "1000\n").unwrap();
         fs::write(eth0.join("duplex"), "full\n").unwrap();
+        fs::write(eth0.join("type"), "1\n").unwrap();
         fs::write(lo.join("ifindex"), "1\n").unwrap();
         fs::write(lo.join("operstate"), "unknown\n").unwrap();
         fs::write(lo.join("flags"), "0x9\n").unwrap();
         fs::write(lo.join("address"), "00:00:00:00:00:00\n").unwrap();
         fs::write(lo.join("mtu"), "65536\n").unwrap();
+        // `lo` reports ARPHRD_LOOPBACK (772); reading that as "dummy" is the
+        // bug this fixture guards against.
+        fs::write(lo.join("type"), "772\n").unwrap();
 
         fs::write(
             root.join("proc/net/dev"),
@@ -718,11 +803,40 @@ mod tests {
         assert_eq!(snapshot.interfaces[0].rx_bytes, 12345);
         assert_eq!(snapshot.interfaces[0].tx_packets, 20);
         assert_eq!(snapshot.interfaces[0].rx_errors, 1);
+        assert_eq!(snapshot.interfaces[0].kind, NetworkInterfaceKind::Other);
         assert_eq!(snapshot.interfaces[1].name, "lo");
         assert!(snapshot.interfaces[1].up);
         assert!(!snapshot.interfaces[1].running);
         assert!(snapshot.interfaces[1].loopback);
         assert_eq!(snapshot.interfaces[1].speed_mbps, None);
+        // The loopback guards in `manage.rs` branch on this, so `kind` must be
+        // `Loopback` and never `Dummy` even though sysfs says 772.
+        assert_eq!(snapshot.interfaces[1].kind, NetworkInterfaceKind::Loopback);
+        assert!(!snapshot.interfaces[1].physical);
+    }
+
+    #[test]
+    fn a_dummy_is_ether_with_matching_links_and_no_upper() {
+        let root = unique_dir("network-dummy");
+        let dummy = root.join("sys/class/net/d0");
+        fs::create_dir_all(&dummy).unwrap();
+        fs::write(dummy.join("ifindex"), "7\n").unwrap();
+        fs::write(dummy.join("iflink"), "7\n").unwrap();
+        fs::write(dummy.join("type"), "1\n").unwrap();
+
+        assert_eq!(interface_kind(&dummy, false), NetworkInterfaceKind::Dummy);
+
+        // A veth has the same type but a different `iflink`.
+        fs::write(dummy.join("iflink"), "3\n").unwrap();
+        assert_eq!(interface_kind(&dummy, false), NetworkInterfaceKind::Veth);
+
+        // A bridge port has an upper device.
+        fs::write(dummy.join("iflink"), "7\n").unwrap();
+        fs::create_dir_all(dummy.join("upper")).unwrap();
+        assert_eq!(interface_kind(&dummy, false), NetworkInterfaceKind::Other);
+
+        // The flag wins over every sysfs signal.
+        assert_eq!(interface_kind(&dummy, true), NetworkInterfaceKind::Loopback);
     }
 
     #[test]
@@ -792,6 +906,7 @@ mod tests {
             interfaces,
             timestamp_ms: 1_700_000_000_000,
             control_enabled: true,
+            manage_enabled: true,
             total,
             truncated: false,
             warning: None,
@@ -909,3 +1024,7 @@ mod tests {
         assert_eq!(parse_flags("nope"), None);
     }
 }
+
+pub mod manage;
+
+pub use manage::{NetworkState, default_route_interfaces, interface_for_peer};

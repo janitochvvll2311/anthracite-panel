@@ -48,6 +48,7 @@ backend/
       volumes.rs            #   lsblk/mountinfo parsers, mount and unmount policy
       files.rs              #   virtual paths, listings, chunked reads and atomic uploads
       render.rs             #   bordered table renderer for the CLI
+      repl.rs               #   interactive session loop for `-i`
       stream.rs             #   repeat a request: interval parsing + frame output
       poll.rs               #   repeat an async read on a period (shared timing)
       text.rs               #   shared trimmed-file read for the inspectors
@@ -262,7 +263,7 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, global `sudo = false`,
   `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
   `process.control = false` with `process.spawn = false` and an empty
-  `spawn_allow`, `network.control = false`,
+  `spawn_allow`, `network.control = false`, `network.manage = false`,
   `firewall.control = false`, `volumes.control = false` with
   `volumes.mount_root = "/mnt"`, legacy `network.sudo`/`firewall.sudo` and
   `firewall.sudo_password` are accepted and ignored,
@@ -290,7 +291,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `GET /api/processes`, `GET /api/processes/watch?interval=2s` (SSE),
   `POST /api/processes/{pid}/signal` and `POST /api/processes/spawn`; the network routes are `GET /api/network`,
   `GET /api/network/watch?interval=2s` (SSE) and
-  `POST /api/network/{name}/state`; the firewall routes are `GET /api/firewall`,
+  `POST /api/network/{name}/state`, `POST /api/network`,
+  `PATCH /api/network/{name}`, `POST /api/network/{name}/rename` and
+  `POST /api/network/{name}/delete`; the firewall routes are `GET /api/firewall`,
   `POST /api/firewall/rules`, `POST /api/firewall/rules/{handle}/delete` and
   `POST /api/firewall/flush`; the account routes are
   `GET /api/accounts`, `POST /api/accounts/users`,
@@ -382,9 +385,18 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   CodeMirror-specific behind the four-method `EditorHandle` the component sees.
   A failed dynamic import falls back to a textarea so the editor is never a
   blank pane.
-- **Network monitor**: `network.rs` reads `/sys/class/net` and `/proc/net/dev`,
-  resolves IPv4/IPv6 with `getifaddrs(3)` and enforces `[network] control` plus
-  the loopback-down guard before calling `SIOCSIFFLAGS`. Global `sudo` defaults
+- **Network manager**: `network/mod.rs` reads `/sys/class/net` and `/proc/net/dev`,
+  resolves IPv4/IPv6 with `getifaddrs(3)`, derives each interface's `kind` and
+  `physical` flag from sysfs, and enforces `[network] control` plus the
+  loopback-down guard before calling `SIOCSIFFLAGS`. `network/manage.rs` owns
+  create/edit/rename/delete behind the separate `[network] manage` switch:
+  creation is limited to virtual kinds, rename requires the link down, and
+  delete refuses a loopback, the interface the request's `peer` resolves to
+  (`interface_for_peer`) and the last default-route carrier
+  (`default_route_interfaces`). `NetworkDelete` carries `peer` because the
+  socket cannot see the client; the HTTP route fills it from `ConnectInfo` via
+  the `PeerAddr` extractor, which degrades to `None` instead of a `500` when the
+  router has no connect-info layer. Global `sudo` defaults
   to `false` in release and `true` in the generated debug config; it tries
   `sudo -n ip link set` first and falls back to the ioctl when sudo cannot
   elevate. The guard reads the flags with `SIOCGIFFLAGS` before either path, so
@@ -392,12 +404,18 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   2000 interfaces and report `total` and
   `warning` when shortened; the fit loop also enforces the 1 MiB serialized
   line cap for address-heavy rows. Up/down runs on a blocking worker.
-  `anth-network-monitor` follows the SSE stream through an injected
+  `anth-network-manager` follows the SSE stream through an injected
   `NetworkClient`, computes RX/TX rates from cumulative counters and only shows
   controls when the snapshot says `control_enabled`. It ignores stream snapshots
-  while an up/down action is in flight and refreshes once it finishes. The dev
-  harness is
-  `src/components/anth-network-monitor.test.html`; tests live beside the
+  while an action is in flight and refreshes once it finishes. When
+  `manage_enabled` is true the toolbar offers a create form and the detail panel
+  offers MTU edit, rename and delete. `manageBlockReason`/`renameBlockReason`
+  mirror the daemon guards (loopback, link-down rename) so a row is disabled
+  with the reason in its `title` instead of offering an action that must fail;
+  they are a hint, never the policy, and cannot evaluate the peer-address guard.
+  Deleting a physical device is allowed but the confirmation says the host will
+  lose the link. The dev harness is
+  `src/components/anth-network-manager.test.html`; tests live beside the
   component and `lib/network/`.
 - **Firewall**: `firewall.rs` shells out to `nft` with an argument vector and owns a
   dedicated `inet anthracite input` table. `deny` initializes the table and chain
@@ -556,6 +574,19 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `--yes`. `volume mount` and `volume unmount` do too.
   `stream::follow` turns a `VolumeError` into exit code `1`, like the other
   typed error responses.
+- **Interactive sessions**: `-i`/`--interactive` is a global flag and
+  `Command` is an `Option` because `-i` alone is valid; `main` rejects a bare
+  invocation. `repl.rs` owns the loop (prompt, `help`, `quit`, empty lines,
+  quoting) and takes a `Runner`, a boxed `FnMut(Command) -> Future<u8>`; `main`
+  supplies one that calls `dispatch`, the same function a one-shot invocation
+  runs, so a typed command cannot drift from the subcommand. `repl::session`
+  takes a `Lines<R>` so tests drive it from a byte slice. `daemon`/`api`/`run`
+  are detached by the dispatcher on a background task (the session owns a
+  `BackgroundServers` registry of join handles) and awaited only until their
+  port is bound, so the prompt stays usable; starting the same service twice is
+  refused there because the second copy would steal the socket, and the registry
+  is aborted when the prompt closes. `terminal` is still refused: it needs the
+  stdin the line reader owns. A watch prints one frame instead of streaming.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
 

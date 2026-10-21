@@ -508,9 +508,11 @@ fn network_snapshot_and_state_responses_roundtrip() {
             tx_errors: 0,
             rx_dropped: 0,
             tx_dropped: 0,
+            ..anth_proto::NetworkInterface::default()
         }],
         timestamp_ms: 1_700_000_000_000,
         control_enabled: true,
+        manage_enabled: false,
         total: 1,
         truncated: false,
         warning: None,

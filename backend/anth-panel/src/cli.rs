@@ -1,5 +1,5 @@
 use anth_proto::{ArchiveFormat, FirewallProtocol, ProcessSignal};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "anth-panel")]
@@ -15,14 +15,29 @@ pub struct Cli {
     )]
     pub config_path: Option<String>,
 
+    #[arg(
+        short = 'i',
+        long,
+        global = true,
+        help = "Read commands from a prompt on stdin instead of running one"
+    )]
+    pub interactive: bool,
+
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 impl Cli {
     pub fn parse() -> Self {
         Parser::parse()
     }
+}
+
+/// The command definition, exposed so the interactive console renders the same
+/// help text as the binary. Built on demand because `Cli::command` is not
+/// `const`.
+pub fn command_parser() -> clap::Command {
+    Cli::command()
 }
 
 #[derive(Subcommand, Debug)]
@@ -204,6 +219,111 @@ pub enum NetworkCommand {
     Up(NetworkStateArgs),
     /// Bring one interface down.
     Down(NetworkStateArgs),
+    /// Create one virtual interface.
+    Create(NetworkCreateCli),
+    /// Change the MTU or the administrative state of an interface.
+    Edit(NetworkEditCli),
+    /// Rename an interface. It has to be down first.
+    Rename(NetworkRenameCli),
+    /// Delete an interface.
+    Delete(NetworkManageArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct NetworkCreateCli {
+    #[arg(value_name = "INTERFACE")]
+    pub name: String,
+
+    /// Kind of virtual interface to create.
+    #[arg(long, value_enum, default_value_t = NetworkKindArg::Dummy)]
+    pub kind: NetworkKindArg,
+
+    /// Peer interface name, required for a veth.
+    #[arg(long)]
+    pub peer: Option<String>,
+
+    /// Parent interface, required for a vlan.
+    #[arg(long)]
+    pub link: Option<String>,
+
+    /// VLAN identifier, 1-4094, required for a vlan.
+    #[arg(long)]
+    pub vlan_id: Option<u16>,
+
+    #[arg(long)]
+    pub mtu: Option<u32>,
+
+    /// Bring the interface up once it exists.
+    #[arg(long)]
+    pub up: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+impl From<NetworkKindArg> for anth_proto::NetworkInterfaceKind {
+    fn from(value: NetworkKindArg) -> Self {
+        match value {
+            NetworkKindArg::Veth => Self::Veth,
+            NetworkKindArg::Bridge => Self::Bridge,
+            NetworkKindArg::Bond => Self::Bond,
+            NetworkKindArg::Vlan => Self::Vlan,
+            NetworkKindArg::Dummy => Self::Dummy,
+            NetworkKindArg::TunTap => Self::TunTap,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum NetworkKindArg {
+    Veth,
+    Bridge,
+    Bond,
+    Vlan,
+    Dummy,
+    #[value(name = "tun-tap")]
+    TunTap,
+}
+
+#[derive(Args, Debug)]
+pub struct NetworkEditCli {
+    #[arg(value_name = "INTERFACE")]
+    pub name: String,
+
+    #[arg(long)]
+    pub mtu: Option<u32>,
+
+    /// Bring the interface up.
+    #[arg(long, conflicts_with = "down")]
+    pub up: bool,
+
+    /// Bring the interface down.
+    #[arg(long)]
+    pub down: bool,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct NetworkRenameCli {
+    #[arg(value_name = "INTERFACE")]
+    pub name: String,
+
+    #[arg(value_name = "NEW_NAME")]
+    pub new_name: String,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct NetworkManageArgs {
+    #[arg(value_name = "INTERFACE")]
+    pub name: String,
+
+    #[arg(long, help = "Do not ask for confirmation")]
+    pub yes: bool,
 }
 
 #[derive(Args, Debug)]
@@ -796,7 +916,7 @@ pub struct TerminalArgs {
     pub rows: Option<u16>,
 }
 
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, Clone)]
 pub struct EndpointArgs {
     #[arg(
         long,

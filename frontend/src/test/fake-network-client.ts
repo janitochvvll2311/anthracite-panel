@@ -1,6 +1,8 @@
 import { vi } from 'vitest'
 import type {
   NetworkClient,
+  NetworkCreateRequest,
+  NetworkEditRequest,
   NetworkHandlers,
   NetworkInterface,
   NetworkSnapshot,
@@ -32,6 +34,8 @@ export function networkInterface(
     tx_errors: 0,
     rx_dropped: 0,
     tx_dropped: 0,
+    kind: 'physical',
+    physical: true,
     ...overrides,
   }
 }
@@ -44,6 +48,7 @@ export function networkSnapshot(
     interfaces,
     timestamp_ms: 1_700_000_000_000,
     control_enabled: true,
+    manage_enabled: true,
     total: interfaces.length,
     truncated: false,
     ...overrides,
@@ -56,6 +61,11 @@ export class FakeNetworkClient implements NetworkClient {
   stateError?: Error
   watchCalls: number[] = []
   stateCalls: Array<{ name: string; up: boolean }> = []
+  createCalls: NetworkCreateRequest[] = []
+  editCalls: Array<{ name: string; request: NetworkEditRequest }> = []
+  renameCalls: Array<{ name: string; newName: string }> = []
+  removeCalls: string[] = []
+  mutateError?: Error
   handlers?: NetworkHandlers
   unsubscribes = 0
 
@@ -77,6 +87,28 @@ export class FakeNetworkClient implements NetworkClient {
   setState = vi.fn(async (name: string, up: boolean): Promise<void> => {
     if (this.stateError) throw this.stateError
     this.stateCalls.push({ name, up })
+  })
+
+  create = vi.fn(async (request: NetworkCreateRequest): Promise<void> => {
+    if (this.mutateError) throw this.mutateError
+    this.createCalls.push(request)
+  })
+
+  edit = vi.fn(
+    async (name: string, request: NetworkEditRequest): Promise<void> => {
+      if (this.mutateError) throw this.mutateError
+      this.editCalls.push({ name, request })
+    },
+  )
+
+  rename = vi.fn(async (name: string, newName: string): Promise<void> => {
+    if (this.mutateError) throw this.mutateError
+    this.renameCalls.push({ name, newName })
+  })
+
+  remove = vi.fn(async (name: string): Promise<void> => {
+    if (this.mutateError) throw this.mutateError
+    this.removeCalls.push(name)
   })
 
   emit(snapshot: NetworkSnapshot): void {

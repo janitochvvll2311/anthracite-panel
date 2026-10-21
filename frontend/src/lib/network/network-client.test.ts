@@ -135,3 +135,69 @@ describe('HttpNetworkClient', () => {
     await expect(client.setState('lo', false)).rejects.toThrow('loopback')
   })
 })
+
+describe('management requests', () => {
+  it('creates through POST /api/network', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(null, { status: 200 }),
+    ) as unknown as typeof fetch
+    const client = new HttpNetworkClient({ fetchImpl: fetchMock })
+
+    await client.create({ name: 'br0', kind: 'bridge', mtu: 1500, up: true })
+
+    const [url, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]
+    expect(url).toBe('/api/network')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({
+      name: 'br0',
+      kind: 'bridge',
+      mtu: 1500,
+      up: true,
+    })
+  })
+
+  it('edits with PATCH and only the fields the caller passed', async () => {
+    // An MTU edit must not carry `up: false`, which would take the link down.
+    const fetchMock = vi.fn(
+      async () => new Response(null, { status: 200 }),
+    ) as unknown as typeof fetch
+    const client = new HttpNetworkClient({ fetchImpl: fetchMock })
+
+    await client.edit('eth0', { mtu: 9000 })
+
+    const [url, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]
+    expect(url).toBe('/api/network/eth0')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body)).toEqual({ mtu: 9000 })
+  })
+
+  it('renames and deletes through their own sub-routes', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response(null, { status: 200 }),
+    ) as unknown as typeof fetch
+    const client = new HttpNetworkClient({ fetchImpl: fetchMock })
+
+    await client.rename('d0', 'd1')
+    await client.remove('eth0')
+
+    const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls[0][0]).toBe('/api/network/d0/rename')
+    expect(JSON.parse(calls[0][1].body)).toEqual({ new_name: 'd1' })
+    expect(calls[1][0]).toBe('/api/network/eth0/delete')
+  })
+
+  it('surfaces the daemon error body', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'refusing to delete `eth0`' }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        }),
+    ) as unknown as typeof fetch
+    const client = new HttpNetworkClient({ fetchImpl: fetchMock })
+
+    await expect(client.remove('eth0')).rejects.toThrow('refusing to delete')
+  })
+})

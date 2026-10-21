@@ -30,7 +30,7 @@ import '../components/anth-account-manager'
 import '../components/anth-file-manager'
 import '../components/anth-firewall'
 import '../components/anth-host-info'
-import '../components/anth-network-monitor'
+import '../components/anth-network-manager'
 import '../components/anth-process-manager'
 import '../components/anth-terminal'
 import '../components/anth-volume-manager'
@@ -87,7 +87,7 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'network',
-    element: 'anth-network-monitor',
+    element: 'anth-network-manager',
     icon: '🌐',
     title: () => msg('Network'),
     description: () => msg('Interfaces, addresses, traffic rates and link state.'),

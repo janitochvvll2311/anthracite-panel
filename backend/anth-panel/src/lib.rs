@@ -18,6 +18,7 @@ pub mod password_prompt;
 pub mod poll;
 pub mod process;
 pub mod render;
+pub mod repl;
 pub mod settings;
 pub mod sse;
 pub mod stream;

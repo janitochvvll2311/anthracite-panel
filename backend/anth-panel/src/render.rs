@@ -635,6 +635,7 @@ pub fn render_response(response: &Response) -> String {
             let state = if *up { "up" } else { "down" };
             format!("[OK] brought {name} {state}")
         }
+        Response::NetworkChanged { message } => format!("[OK] {message}"),
         Response::NetworkError(error) => format!("[ERROR] {}", error.detail),
         Response::AccountSnapshot(snapshot) => render_account_snapshot(snapshot),
         Response::AccountChanged { message } => format!("[OK] {message}"),

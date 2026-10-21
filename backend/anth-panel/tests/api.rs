@@ -497,13 +497,65 @@ fn network_snapshot() -> NetworkSnapshot {
             tx_errors: 0,
             rx_dropped: 0,
             tx_dropped: 0,
+            ..NetworkInterface::default()
         }],
         timestamp_ms: 1_700_000_000_000,
         control_enabled: true,
+        manage_enabled: false,
         total: 1,
         truncated: false,
         warning: None,
     }
+}
+
+fn config_with_network_manage(path: &std::path::Path, manage: bool) -> Config {
+    let mut config = config_at(path);
+    config.network.control = manage;
+    config.network.manage = manage;
+    config
+}
+
+/// Records the requests the daemon receives, so a route's wiring can be
+/// asserted without a real network stack.
+fn spawn_recording_server(
+    path: &std::path::Path,
+) -> (
+    tokio::task::JoinHandle<Vec<anth_proto::Request>>,
+    std::sync::Arc<tokio::sync::Mutex<Vec<anth_proto::Request>>>,
+) {
+    let listener = tokio::net::UnixListener::bind(path).unwrap();
+    let seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let recorder = seen.clone();
+    let handle = tokio::spawn(async move {
+        // One connection per request: the panel opens a fresh socket for each
+        // exchange, so a single-accept server would close after the first.
+        while let Ok((socket, _)) = listener.accept().await {
+            let mut server = AnthServer::new(socket);
+            while let Some(Ok(request)) = server.receive_request().await {
+                recorder.lock().await.push(request.clone());
+                let response = match request {
+                    anth_proto::Request::NetworkDelete { name, peer } => {
+                        // Echo the peer back so a test can prove the route
+                        // forwarded the client address to the daemon.
+                        Response::NetworkChanged {
+                            message: format!("{name}@{peer:?}"),
+                        }
+                    }
+                    anth_proto::Request::NetworkCreate(_)
+                    | anth_proto::Request::NetworkEdit(_)
+                    | anth_proto::Request::NetworkRename { .. } => Response::NetworkChanged {
+                        message: "ok".to_string(),
+                    },
+                    _ => Response::NetworkSnapshot(NetworkSnapshot::default()),
+                };
+                if server.send_response(&response).await.is_err() {
+                    break;
+                }
+            }
+        }
+        Vec::new()
+    });
+    (handle, seen)
 }
 
 fn config_with_network_control(path: &std::path::Path, control: bool) -> Config {
@@ -2145,6 +2197,129 @@ async fn process_snapshot_exposes_the_spawn_switch_and_allowlist() {
     let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(value["spawn_enabled"], serde_json::json!(true));
     assert_eq!(value["spawn_allow"], serde_json::json!(["/bin/echo"]));
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn network_management_requires_manage_to_be_enabled() {
+    // `manage` is separate from `control` on purpose: up/down must not imply
+    // create or delete.
+    let path = unique_socket("network-manage-off");
+    let _ = std::fs::remove_file(&path);
+
+    let mut config = config_at(&path);
+    config.network.control = true;
+    config.network.manage = false;
+    let app = anth_panel::router(AppState::new(config));
+
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/network/d0/delete")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn network_delete_forwards_the_client_address_to_the_daemon() {
+    // The self-lockout guard lives in the daemon and needs the peer address, so
+    // the route has to pass it. A route that dropped it would silently disable
+    // the guard everywhere.
+    let path = unique_socket("network-delete-peer");
+    let _ = std::fs::remove_file(&path);
+    let (server, seen) = spawn_recording_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_network_manage(&path, true)));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/network/eth0/delete")
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [10, 0, 0, 77],
+                    54321,
+                ))))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let requests = seen.lock().await;
+    assert_eq!(
+        serde_json::to_value(&requests[0]).unwrap(),
+        serde_json::json!({
+            "type": "NetworkDelete",
+            "data": {"name": "eth0", "peer": "10.0.0.77"},
+        })
+    );
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn network_create_and_edit_routes_map_their_bodies() {
+    let path = unique_socket("network-create-route");
+    let _ = std::fs::remove_file(&path);
+    let (server, seen) = spawn_recording_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_network_manage(&path, true)));
+    let created = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/network")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"name":"br0","kind":"bridge","mtu":1500,"up":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+
+    let edited = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("PATCH")
+                .uri("/api/network/br0")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"mtu":9000}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edited.status(), StatusCode::OK);
+
+    let requests = seen.lock().await;
+    assert_eq!(
+        serde_json::to_value(&requests[0]).unwrap(),
+        serde_json::json!({
+            "type": "NetworkCreate",
+            "data": {"name": "br0", "kind": "bridge", "mtu": 1500, "up": true},
+        })
+    );
+    // `up` is absent rather than false: an MTU edit must not take the link down.
+    assert_eq!(
+        serde_json::to_value(&requests[1]).unwrap(),
+        serde_json::json!({
+            "type": "NetworkEdit",
+            "data": {"name": "br0", "mtu": 9000},
+        })
+    );
 
     server.abort();
     let _ = std::fs::remove_file(&path);
