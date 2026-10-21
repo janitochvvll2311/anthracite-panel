@@ -48,7 +48,7 @@ backend/
       volumes.rs            #   lsblk/mountinfo parsers, mount and unmount policy
       files.rs              #   virtual paths, listings, chunked reads and atomic uploads
       render.rs             #   bordered table renderer for the CLI
-      repl.rs               #   interactive console for `daemon --interactive`
+      repl.rs               #   interactive session loop for `-i`
       stream.rs             #   repeat a request: interval parsing + frame output
       poll.rs               #   repeat an async read on a period (shared timing)
       text.rs               #   shared trimmed-file read for the inspectors
@@ -574,15 +574,15 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `--yes`. `volume mount` and `volume unmount` do too.
   `stream::follow` turns a `VolumeError` into exit code `1`, like the other
   typed error responses.
-- **Interactive console**: `repl.rs` backs `daemon --interactive`. It parses a
-  typed line with the binary's own clap definition (`Cli::try_parse_from`, with
-  a synthetic program name prepended) and sends it over the socket with the
-  normal `request_for` + `stream::follow` + `render_response` path, so it has no
-  grammar of its own and needs no work when a subcommand is added. It runs as a
-  task beside the accept loop, so closing stdin never stops the daemon. Watches
-  print one frame; `daemon`/`api`/`run` are refused because they would fight the
-  running process for the socket, and `auth`/`config` because they edit the file
-  locally. `terminal` is refused until the console owns raw-mode stdin.
+- **Interactive sessions**: `-i`/`--interactive` is a global flag and
+  `Command` is an `Option` because `-i` alone is valid; `main` rejects a bare
+  invocation. `repl.rs` owns the loop (prompt, `help`, `quit`, empty lines,
+  quoting) and takes a `Runner`, a boxed `FnMut(Command) -> Future<u8>`; `main`
+  supplies one that calls `dispatch`, the same function a one-shot invocation
+  runs, so a typed command cannot drift from the subcommand. `repl::session`
+  takes a `Lines<R>` so tests drive it from a byte slice. `daemon`/`api`/`run`
+  and `terminal` are refused: the first three never return, and `terminal` needs
+  the stdin the line reader owns. A watch prints one frame instead of streaming.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
 

@@ -15,8 +15,16 @@ pub struct Cli {
     )]
     pub config_path: Option<String>,
 
+    #[arg(
+        short = 'i',
+        long,
+        global = true,
+        help = "Read commands from a prompt on stdin instead of running one"
+    )]
+    pub interactive: bool,
+
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 impl Cli {
@@ -35,7 +43,7 @@ pub fn command_parser() -> clap::Command {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Serve the Unix-socket daemon.
-    Daemon(DaemonArgs),
+    Daemon,
     /// Serve the HTTP API and the embedded web UI.
     Api(EndpointArgs),
     /// Serve the daemon and the HTTP API from a single process.
@@ -906,15 +914,6 @@ pub struct TerminalArgs {
         help = "Initial terminal height in rows; defaults to the local terminal height"
     )]
     pub rows: Option<u16>,
-}
-
-#[derive(Args, Debug, Default)]
-pub struct DaemonArgs {
-    #[arg(
-        long,
-        help = "Read commands from stdin and send them to the daemon being served"
-    )]
-    pub interactive: bool,
 }
 
 #[derive(Args, Debug, Default)]

@@ -4,7 +4,7 @@
 the HTTP API, do both, or act as a client that talks to a running daemon.
 
 ```
-Usage: anth-panel [OPTIONS] <COMMAND>
+Usage: anth-panel [OPTIONS] [COMMAND]
 
 Commands:
   daemon     Serve the Unix-socket daemon
@@ -21,9 +21,13 @@ Commands:
 
 Options:
   -c, --config <FILE>  Path to the configuration file
+  -i, --interactive    Read commands from a prompt on stdin instead of running one
   -h, --help           Print help
   -V, --version        Print version
 ```
+
+`[COMMAND]` is optional only because `-i` alone is valid; without `-i` a bare
+invocation exits with an error. See [Interactive sessions](#interactive-sessions).
 
 ## Global options
 
@@ -112,40 +116,62 @@ anth-panel daemon
 Prints `Listening on <path>` once bound. Any previous socket file at that path is
 removed first, so a stale file from a crashed process does not block startup.
 
-#### `daemon --interactive`
+### Interactive sessions
+
+`-i` / `--interactive` is global: it works before or after the subcommand, and
+it turns the invocation into a prompt that runs commands one after another
+instead of exiting after one.
 
 ```bash
-anth-panel daemon --interactive
+anth-panel -i                     # bare prompt
+anth-panel --interactive          # same
+anth-panel -i host-info           # print the snapshot, then stay at the prompt
+anth-panel host-info -i           # same
 ```
 
-Serves the socket as usual and additionally reads commands from stdin, so a
-debugging session needs one terminal instead of two. Each line is a normal
-subcommand without the `anth-panel` prefix:
+A bare invocation without `-i` has nothing to run and exits with an error, since
+`-i` alone is valid and clap therefore cannot require the subcommand.
 
 ```
-anth-panel daemon --interactive
-Type a command without the `anth-panel` prefix, or `help`.
-host-info
-process list
-echo "hola mundo"
-quit
+$ anth-panel -i
+Type a command without the `anth-panel` prefix, or `help`. Ctrl-D or `quit` exits.
+> echo "hola mundo"
+[OK] hola mundo
+> host-info
+┌──────────────────┬─────────────────────────┐
+│ FIELD            │ VALUE                   │
+...
+> quit
 ```
 
-The console parses the line with the same clap definition the binary uses and
-renders the reply with the same table renderer, so a typed command behaves
-exactly like the subcommand, including its flags and its confirmation prompts.
-`help` prints the command list; `quit` or `exit` closes the console, and closing
-stdin does the same.
+Each line is parsed by the binary's own clap definition, executed by the same
+dispatcher a one-shot invocation uses, and rendered by the same table renderer,
+so a typed command behaves exactly like the subcommand: flags, defaults,
+confirmation prompts and error text included. `-i` is itself accepted on a typed
+line, so pasting a full command line works.
 
-A watch command prints one frame instead of streaming, because a stream would
-hold the console until interrupted. Four subcommands are refused because they
-describe a local action rather than a request: `daemon`, `api` and `run` would
-fight the running process for the socket, and `auth` and `config` edit the
-config file directly. Run those as separate invocations. `terminal` is also not
-available yet, since it needs raw-mode stdin, which the console would take from
-the line reader.
+`help` (or `?`) prints the command list. `quit` or `exit`, and Ctrl-D, close the
+prompt. A failed command reports its error and the prompt continues; an empty
+line is ignored. Quotes and backslashes group arguments, so
+`echo "hola mundo"` sends one message rather than two words; there is no
+expansion, pipeline or redirection.
 
-The console never stops the daemon: when it exits, the socket keeps serving.
+A watch flag is accepted but prints one frame: a stream would hold the prompt
+until interrupted, which a typed command should not do. A client session exits
+with `0` even after a failed command, because the session itself completed.
+
+Three subcommands are refused inside a session:
+
+- `daemon`, `api` and `run` serve and never return, so running one would block
+  the prompt forever with no way back.
+- `terminal` needs the terminal's own stdin, which the line reader owns.
+
+Run those as separate invocations. `auth` and `config` do run in a session, but
+note that they edit the config file in this process rather than through the
+daemon.
+
+The prompt never stops a server: `anth-panel -i` only reads, and the daemon is
+unaffected when the prompt exits.
 
 ### `api`
 

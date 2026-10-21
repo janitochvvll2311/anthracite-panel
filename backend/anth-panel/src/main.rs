@@ -19,6 +19,7 @@ use anth_panel::stream;
 use anth_panel::{AppState, request_for, router};
 use anth_proto::{AnthClient, DEFAULT_FILE_CHUNK, FileChunk, FirewallAction, Request, Response};
 use std::net::SocketAddr;
+use tokio::io::AsyncBufReadExt;
 use tokio::net::TcpListener;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
@@ -1162,27 +1163,27 @@ fn run_config(config_path: &str, args: &ConfigArgs) -> ExitCode {
     }
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    let cli = Cli::parse();
-    let config_path = cli.config_path.as_deref().unwrap_or(DEFAULT_CONFIG_PATH);
-
-    if let Command::Auth(args) = &cli.command {
+/// Runs one command to completion and reports its exit code.
+///
+/// This is the single dispatcher: `main` calls it once, and the interactive
+/// session calls it per line, so a typed command cannot drift from the
+/// one-shot invocation.
+async fn dispatch(config_path: &str, command: &Command) -> ExitCode {
+    if let Command::Auth(args) = command {
         return run_auth(config_path, args);
     }
-    if let Command::Config(args) = &cli.command {
+    if let Command::Config(args) = command {
         return run_config(config_path, args);
     }
 
-    if let Some(code) = send_command(config_path, &cli.command).await {
+    if let Some(code) = send_command(config_path, command).await {
         return code;
     }
 
-    let result = match &cli.command {
-        Command::Daemon(args) => anth_panel::daemon::serve_with_console(
+    let result = match command {
+        Command::Daemon => anth_panel::daemon::serve(
             &Config::load_or_create(config_path),
             std::path::Path::new(config_path),
-            args.interactive,
         )
         .await
         .map(|()| ExitCode::SUCCESS)
@@ -1215,6 +1216,51 @@ async fn main() -> ExitCode {
         Ok(code) => code,
         Err(e) => {
             eprintln!("[Error] {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Runs the global interactive session, one command per line.
+///
+/// The runner borrows the config path and calls the same [`dispatch`] a
+/// one-shot invocation uses; only the exit code is kept, because a session
+/// continues after a failure.
+async fn run_interactive(config_path: &str, first: Option<Command>) -> ExitCode {
+    let mut first = first;
+    let path = config_path.to_string();
+    let mut runner: anth_panel::repl::Runner = Box::new(move |command| {
+        let config_path = path.clone();
+        Box::pin(async move {
+            let code = dispatch(&config_path, &command).await;
+            u8::from(code == ExitCode::FAILURE)
+        })
+    });
+
+    let stdin = tokio::io::stdin();
+    let mut lines = tokio::io::BufReader::new(stdin).lines();
+    if let Err(e) = anth_panel::repl::session(first.take(), &mut lines, true, &mut runner).await {
+        eprintln!("[ERROR] {e}");
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let config_path = cli.config_path.as_deref().unwrap_or(DEFAULT_CONFIG_PATH);
+
+    if cli.interactive {
+        return run_interactive(config_path, cli.command).await;
+    }
+
+    match &cli.command {
+        Some(command) => dispatch(config_path, command).await,
+        // A bare invocation has nothing to run; clap cannot require the
+        // subcommand because `-i` alone is valid.
+        None => {
+            eprintln!("[ERROR] a command is required; run `anth-panel --help`");
             ExitCode::FAILURE
         }
     }

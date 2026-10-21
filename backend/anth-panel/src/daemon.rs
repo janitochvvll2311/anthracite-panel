@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -449,19 +449,6 @@ pub async fn serve(
     config: &Config,
     config_path: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    serve_with_console(config, config_path, false).await
-}
-
-/// Serves the socket, and additionally reads commands from stdin when
-/// `interactive` is set.
-///
-/// The console is a task rather than a step before the accept loop: stdin may
-/// close at any time, and closing it must not stop the daemon.
-pub async fn serve_with_console(
-    config: &Config,
-    config_path: &Path,
-    interactive: bool,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
     let socket_path = Path::new(&config.socket_path);
     clear_socket_path(socket_path)?;
 
@@ -476,15 +463,6 @@ pub async fn serve_with_console(
     );
     let program: Arc<str> = Arc::from(shell);
     let policy = policy_for(config, config_path);
-
-    if interactive {
-        let socket_path = PathBuf::from(&config.socket_path);
-        tokio::spawn(async move {
-            if let Err(e) = crate::repl::run(socket_path).await {
-                eprintln!("Interactive console stopped: {e}");
-            }
-        });
-    }
     let files = Arc::new(
         FileService::new(&config.files).map_err(|e| format!("invalid files configuration: {e}"))?,
     );
