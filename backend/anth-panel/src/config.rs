@@ -200,6 +200,9 @@ pub struct FilesConfig {
     /// Retention ceiling for the trash in bytes. `0` keeps everything until the
     /// trash is emptied by hand.
     pub max_trash_bytes: u64,
+    /// Ceiling on the uncompressed bytes one archive may expand to. This is the
+    /// zip-bomb guard, not a size limit on the archive itself.
+    pub max_archive_bytes: u64,
 }
 
 impl Default for FilesConfig {
@@ -212,6 +215,7 @@ impl Default for FilesConfig {
             max_upload_bytes: 64 * 1024 * 1024,
             trash: false,
             max_trash_bytes: 1024 * 1024 * 1024,
+            max_archive_bytes: 4 * 1024 * 1024 * 1024,
         }
     }
 }

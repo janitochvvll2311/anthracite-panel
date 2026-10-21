@@ -64,7 +64,6 @@ impl Fixture {
     fn data_home(&self) -> &Path {
         &self.data_home
     }
-
 }
 
 impl Drop for Fixture {

@@ -1,8 +1,8 @@
 //! Rendering of host information as a bordered text table.
 
 use anth_proto::{
-    AccountSnapshot, FileKind, FileListing, FirewallSnapshot, HostInfo, NetworkSnapshot,
-    ProcessSnapshot, Response, TrashListing, VolumeDevice, VolumeSnapshot,
+    AccountSnapshot, ArchiveListing, FileKind, FileListing, FirewallSnapshot, HostInfo,
+    NetworkSnapshot, ProcessSnapshot, Response, TrashListing, VolumeDevice, VolumeSnapshot,
 };
 
 const TOP_LEFT: char = '┌';
@@ -534,6 +534,73 @@ fn percent(part: u64, total: u64) -> f64 {
     }
 }
 
+/// One archive listing: members, sizes and the compression ratio when the
+/// format reports both sizes.
+pub fn render_archive_listing(listing: &ArchiveListing) -> String {
+    let mut rows = Vec::with_capacity(listing.entries.len());
+    for entry in &listing.entries {
+        let (kind, name) = match entry.kind {
+            // Zip directory entries already end in `/`; adding a second one
+            // turns `docs/` into `docs//`.
+            FileKind::Directory => (
+                "dir",
+                if entry.name.ends_with('/') {
+                    entry.name.clone()
+                } else {
+                    format!("{}/", entry.name)
+                },
+            ),
+            _ => ("file", entry.name.clone()),
+        };
+        let size = if entry.kind == FileKind::Directory {
+            "-".to_string()
+        } else {
+            format_bytes(entry.size)
+        };
+        let ratio = match entry.compressed {
+            Some(compressed) if entry.size > 0 => {
+                format!("{}%", compressed.saturating_mul(100) / entry.size)
+            }
+            _ => "-".to_string(),
+        };
+        rows.push(vec![
+            kind.to_string(),
+            name,
+            size,
+            entry
+                .compressed
+                .map(format_bytes)
+                .unwrap_or_else(|| "-".to_string()),
+            ratio,
+        ]);
+    }
+
+    let mut table = Table::new(vec![
+        "TYPE".to_string(),
+        "NAME".to_string(),
+        "SIZE".to_string(),
+        "STORED".to_string(),
+        "RATIO".to_string(),
+    ]);
+    for row in rows {
+        table.push(row);
+    }
+    let mut out = table.render();
+
+    let format = listing
+        .format
+        .map(|format| format.label().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    out.push_str(&format!(
+        "\n{} holds {} entries ({format}).\n",
+        listing.path, listing.total
+    ));
+    if let Some(warning) = &listing.warning {
+        out.push_str(&format!("{warning}\n"));
+    }
+    out
+}
+
 /// Formats one daemon response as the text the CLI prints. Errors carry the
 /// same `[ERROR]` prefix as successful commands carry `[OK]`.
 pub fn render_response(response: &Response) -> String {
@@ -557,6 +624,12 @@ pub fn render_response(response: &Response) -> String {
             )
         }
         Response::ProcessSpawnError(error) => format!("[ERROR] {}", error.detail),
+        Response::FileArchiveCreated { path } => format!("[OK] created {path}"),
+        Response::ArchiveListing(listing) => render_archive_listing(listing),
+        Response::FileArchiveExtracted { path, entries } => {
+            let noun = if *entries == 1 { "entry" } else { "entries" };
+            format!("[OK] extracted {entries} {noun} into {path}")
+        }
         Response::NetworkSnapshot(snapshot) => render_network_snapshot(snapshot),
         Response::NetworkStateChanged { name, up } => {
             let state = if *up { "up" } else { "down" };

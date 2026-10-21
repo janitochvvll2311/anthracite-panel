@@ -16,10 +16,13 @@ use anth_proto::{
 };
 
 use crate::config::FilesConfig;
-use anth_proto::TrashListing;
+use anth_proto::{ArchiveFormat, ArchiveListing, TrashListing};
 
+pub mod archive;
 pub mod trash;
 pub mod volumes;
+
+pub use archive::ArchiveLimits;
 
 pub use trash::{TrashDirectory, TrashService};
 pub use volumes::{home_paths, live_topdirs, topdirs_from_mountinfo};
@@ -37,6 +40,8 @@ pub struct FileService {
     /// an entry from its directory, so it is its own permission.
     trash: bool,
     max_trash_bytes: Option<u64>,
+    /// Ceiling on the uncompressed size one extraction may produce.
+    max_archive_bytes: u64,
     /// Overrides where the trash lives. Tests point it at a temporary
     /// directory so the trash stays inside the fixture; production reads
     /// mountinfo and the XDG variables.
@@ -99,6 +104,7 @@ impl FileService {
             max_upload_bytes: config.max_upload_bytes,
             trash: config.trash,
             max_trash_bytes: (config.max_trash_bytes > 0).then_some(config.max_trash_bytes),
+            max_archive_bytes: config.max_archive_bytes,
             trash_paths: None,
         })
     }
@@ -444,6 +450,163 @@ impl FileService {
         best
     }
 
+    /// Creates an archive from one entry.
+    pub fn create_archive(
+        &self,
+        path: &str,
+        destination: Option<&str>,
+        format: Option<ArchiveFormat>,
+    ) -> Result<String, FileError> {
+        self.require_write()?;
+        let path = normalize(path)?;
+        let source = self.host_existing(&path)?;
+
+        // The default name sits beside the entry, which is where a user looks
+        // for it, and the default format keeps the file readable elsewhere.
+        let (destination, format) = match destination {
+            Some(given) => {
+                let destination = normalize(given)?;
+                let format = format
+                    .or_else(|| archive::detect(Path::new(&destination), None))
+                    .ok_or_else(|| {
+                        FileError::new(
+                            FileErrorKind::InvalidPath,
+                            format!("cannot tell the archive format of `{destination}`"),
+                        )
+                    })?;
+                (destination, format)
+            }
+            None => {
+                let format = format.unwrap_or(ArchiveFormat::TarGz);
+                let suffix = match format {
+                    ArchiveFormat::Zip => "zip",
+                    ArchiveFormat::Tar => "tar",
+                    ArchiveFormat::TarGz => "tar.gz",
+                    ArchiveFormat::TarXz => "tar.xz",
+                    ArchiveFormat::SevenZ => {
+                        return Err(FileError::new(
+                            FileErrorKind::Disabled,
+                            "creating a .7z archive is not supported; extract it instead"
+                                .to_string(),
+                        ));
+                    }
+                };
+                (format!("{path}.{suffix}"), format)
+            }
+        };
+
+        if destination == path {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "an archive cannot be written over its own source".to_string(),
+            ));
+        }
+        let host_destination = self.host_create(&destination)?;
+        match fs::symlink_metadata(&host_destination) {
+            Ok(_) => {
+                return Err(FileError::new(
+                    FileErrorKind::AlreadyExists,
+                    format!("`{destination}` already exists"),
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_error(&destination, e)),
+        }
+
+        archive::create(&source, &host_destination, format)
+            .map_err(|error| replace_path(error, &destination))?;
+        Ok(destination)
+    }
+
+    /// Lists one archive without extracting it.
+    pub fn list_archive(&self, path: &str) -> Result<ArchiveListing, FileError> {
+        let path = normalize(path)?;
+        let host = self.host_existing(&path)?;
+        let magic = read_magic(&host);
+        let format = archive::detect(Path::new(&path), magic.as_deref()).ok_or_else(|| {
+            FileError::new(
+                FileErrorKind::InvalidPath,
+                format!("`{path}` is not an archive this daemon can read"),
+            )
+        })?;
+
+        let entries = archive::list(&host, format, self.max_entries)?;
+        let total = entries.len();
+        Ok(ArchiveListing {
+            path,
+            format: Some(format),
+            entries,
+            total,
+            truncated: total >= self.max_entries,
+            warning: (total >= self.max_entries).then(|| {
+                format!("showing the first {total} entries; raise files.max_entries to see more")
+            }),
+        })
+    }
+
+    /// Extracts one archive into a directory.
+    ///
+    /// `into` defaults to the archive's own directory with the suffix removed,
+    /// which is what a file manager does when a user double-clicks an archive.
+    pub fn extract_archive(
+        &self,
+        path: &str,
+        into: Option<&str>,
+    ) -> Result<(String, Vec<String>), FileError> {
+        self.require_write()?;
+        let path = normalize(path)?;
+        let host = self.host_existing(&path)?;
+        let magic = read_magic(&host);
+        let format = archive::detect(Path::new(&path), magic.as_deref()).ok_or_else(|| {
+            FileError::new(
+                FileErrorKind::InvalidPath,
+                format!("`{path}` is not an archive this daemon can read"),
+            )
+        })?;
+
+        let destination = match into {
+            Some(given) => normalize(given)?,
+            None => {
+                let stem = path.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(&path);
+                // `.tar.gz` would otherwise become `x.tar`.
+                let stem = stem.strip_suffix(".tar").unwrap_or(stem);
+                let stem = if stem.is_empty() { &path } else { stem };
+                stem.to_string()
+            }
+        };
+
+        if destination == "/" {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "refusing to extract an archive over the filesystem root".to_string(),
+            ));
+        }
+
+        let host_destination = self.host_create_any(&destination)?;
+        fs::create_dir_all(&host_destination).map_err(|e| io_error(&destination, e))?;
+
+        let limits = ArchiveLimits {
+            max_total_bytes: self.max_archive_bytes,
+            max_entries: self.max_entries,
+            max_entry_bytes: self.max_archive_bytes,
+        };
+        // `docs.zip` must not produce `docs/docs/` when the destination is
+        // already `docs`, which is what the default naming produces.
+        let expected_root = Path::new(&destination)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        let written = archive::extract_with(
+            &host,
+            format,
+            &host_destination,
+            limits,
+            expected_root.as_deref(),
+        )
+        .map_err(|error| replace_path(error, &destination))?;
+
+        Ok((destination, written))
+    }
+
     /// Opens a temporary file next to the destination.
     pub fn start_upload(&self, path: &str, overwrite: bool) -> Result<PendingUpload, FileError> {
         self.require_write()?;
@@ -741,6 +904,27 @@ fn unique_temp_path(parent: &Path) -> PathBuf {
         ".anth-upload-{}-{nanos}-{counter}",
         std::process::id()
     ))
+}
+
+/// Reads the first bytes of a file so the format can be sniffed.
+///
+/// A missing or unreadable file yields `None`: detection then answers from the
+/// name alone, and the caller reports the real error when it opens the file.
+fn read_magic(path: &Path) -> Option<Vec<u8>> {
+    let mut buffer = [0u8; 512];
+    let mut file = File::open(path).ok()?;
+    let read = file.read(&mut buffer).ok()?;
+    Some(buffer[..read].to_vec())
+}
+
+/// Rewrites the path inside an error raised by the archive module, which knows
+/// host paths while callers and clients speak virtual ones.
+fn replace_path(mut error: FileError, virtual_path: &str) -> FileError {
+    if let Some(index) = error.detail.find("`: ") {
+        let rest = error.detail[index + 3..].to_string();
+        error.detail = format!("`{virtual_path}`: {rest}");
+    }
+    error
 }
 
 fn io_error(path: &str, error: std::io::Error) -> FileError {

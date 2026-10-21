@@ -207,6 +207,52 @@ permanently, with a message naming the directory. That is the deliberate
 difference from a desktop file manager: silently turning a reversible delete
 into an irreversible one is worse than an error.
 
+## Archives
+
+`file archive PATH` compresses one entry; `file unarchive PATH` extracts it and
+`file unarchive --list PATH` inspects it without writing anything. Archives are
+handled in-process: the runtime image has no `7z` or `xz`, and its `tar` is
+BusyBox, so delegating would place the security boundary in behaviour this
+project cannot pin in a test.
+
+| Format | List | Extract | Create |
+| --- | --- | --- | --- |
+| `.zip` | yes | yes | yes |
+| `.tar` | yes | yes | yes |
+| `.tar.gz`, `.tgz` | yes | yes | yes |
+| `.tar.xz`, `.txz` | yes | yes | yes |
+| `.7z` | yes | yes | no |
+
+Creating `.7z` is refused with an explicit message rather than silently
+producing a file that other tools cannot read.
+
+The format comes from the file name and, when that name is unknown or missing,
+from the leading bytes (`PK`, `7z`, `\xfd7zXZ`, `\x1f\x8b`, `ustar`).
+
+### Extraction guards
+
+An archive is untrusted input, so extraction refuses rather than repairs:
+
+- **Absolute paths, `..` and Windows drive letters** are rejected, and so is a
+  backslash anywhere in a member name. A backslash is a legal character on Unix
+  and a separator on Windows, so a file named `..\..\x` would become an escape
+  the moment the tree is copied.
+- **A symlink an archive later writes through** is stopped by creating every
+  intermediate directory and refusing to traverse one that is a symlink. This is
+  the classic two-step tar escape: store `link -> /tmp`, then `link/owned.txt`.
+- **Zip bombs** are caught while writing, not after. `[files] max_archive_bytes`
+  (default 4 GiB) caps the total uncompressed size and each entry, and
+  `max_entries` caps how many members one archive may hold. The counter is
+  checked per 64 KiB chunk, so an entry that lies about its declared size cannot
+  fill the disk first.
+- **A refused member fails the request.** Skipping it would leave a partial tree
+  that looks complete.
+
+`docs.zip`, whose members are `docs/a.txt`, is unwrapped when the destination is
+already named `docs`; extracting into an unrelated directory keeps the archive's
+layout. Only an archive where *every* member shares one leading directory is
+eligible, so a mixed archive is never half-relocated.
+
 ## Security
 
 Authentication is still unimplemented, as with the terminal and process routes.

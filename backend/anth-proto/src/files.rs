@@ -75,6 +75,59 @@ pub struct FileWritten {
     pub size: u64,
 }
 
+/// Archive formats the daemon can read or write.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveFormat {
+    #[serde(rename = "zip")]
+    Zip,
+    #[serde(rename = "tar")]
+    Tar,
+    #[serde(rename = "tar.gz")]
+    TarGz,
+    #[serde(rename = "tar.xz")]
+    TarXz,
+    #[serde(rename = "7z")]
+    SevenZ,
+}
+
+impl ArchiveFormat {
+    /// The name clients and the CLI print. Kept next to the serde attributes so
+    /// the wire spelling and the display spelling cannot drift apart.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Zip => "zip",
+            Self::Tar => "tar",
+            Self::TarGz => "tar.gz",
+            Self::TarXz => "tar.xz",
+            Self::SevenZ => "7z",
+        }
+    }
+}
+
+/// One member of an archive.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveEntry {
+    pub name: String,
+    pub kind: FileKind,
+    /// Uncompressed size in bytes.
+    pub size: u64,
+    /// Size on disk inside the archive, when the format reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<u64>,
+}
+
+/// One archive and the entries it holds.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct ArchiveListing {
+    pub path: String,
+    pub format: Option<ArchiveFormat>,
+    pub entries: Vec<ArchiveEntry>,
+    pub total: usize,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
 /// One entry held by the freedesktop trash.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TrashEntry {

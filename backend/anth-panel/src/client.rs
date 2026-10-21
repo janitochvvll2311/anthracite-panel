@@ -137,6 +137,21 @@ pub fn request_for(command: &Command) -> Option<Request> {
                 }),
                 TrashBinCommand::Empty(_) => Some(Request::FileTrashEmpty),
             },
+            FileCommand::Archive(args) => Some(Request::FileArchiveCreate {
+                path: args.path.clone(),
+                destination: args.output.clone(),
+                format: args.format.map(|format| format.to_protocol()),
+            }),
+            FileCommand::Unarchive(args) => Some(if args.list {
+                Request::FileArchiveList {
+                    path: args.path.clone(),
+                }
+            } else {
+                Request::FileArchiveExtract {
+                    path: args.path.clone(),
+                    into: args.into.clone(),
+                }
+            }),
             FileCommand::Mkdir(args) => Some(Request::FileMkdir {
                 path: args.path.clone(),
                 recursive: args.parents,

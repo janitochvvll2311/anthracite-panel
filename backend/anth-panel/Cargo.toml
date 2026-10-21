@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Archives are handled in-tree: the runtime image has no `7z` or `xz`, and its
+# `tar` is BusyBox, whose escape handling is not the guard this daemon needs.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+lzma-rs = "0.3"
+sevenz-rust2 = "0.13"
+flate2 = "1"
 anth-proto = { path = "../anth-proto" }
 axum = { version = "0.8.9", features = ["ws"] }
 clap = { version = "4.6.7", features = ["derive"] }
@@ -25,6 +32,9 @@ base64 = "0.23.1"
 rand = "0.10.3"
 
 [dev-dependencies]
+# The 7z fixture cannot come from this crate (it has no writer), so the test
+# uses the compressor directly.
+sevenz-rust2 = "0.13"
 http-body-util = "0.1"
 tokio-tungstenite = "0.29"
 tower = { version = "0.5.3", features = ["util"] }

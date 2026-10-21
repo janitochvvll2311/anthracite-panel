@@ -1,5 +1,5 @@
-use anth_proto::{FirewallProtocol, ProcessSignal};
-use clap::{Args, Parser, Subcommand};
+use anth_proto::{ArchiveFormat, FirewallProtocol, ProcessSignal};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "anth-panel")]
@@ -564,6 +564,74 @@ pub enum FileCommand {
     Trash(FileTrashArgs),
     /// Inspect or empty the trash.
     TrashBin(FileTrashBinArgs),
+    /// Compress one entry into an archive.
+    Archive(FileArchiveArgs),
+    /// Inspect or extract an archive.
+    Unarchive(FileUnarchiveArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct FileArchiveArgs {
+    #[arg(value_name = "PATH", help = "Entry to compress")]
+    pub path: String,
+
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        help = "Archive to write; defaults to PATH plus a suffix"
+    )]
+    pub output: Option<String>,
+
+    #[arg(
+        short,
+        long,
+        value_name = "FORMAT",
+        value_enum,
+        help = "Archive format; inferred from --output when omitted"
+    )]
+    pub format: Option<ArchiveFormatArg>,
+}
+
+#[derive(Args, Debug)]
+pub struct FileUnarchiveArgs {
+    /// List the members without extracting anything.
+    #[arg(long, conflicts_with_all = ["into"])]
+    pub list: bool,
+
+    #[arg(value_name = "PATH", help = "Archive to read")]
+    pub path: String,
+
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        help = "Directory to extract into; defaults to PATH without its suffix"
+    )]
+    pub into: Option<String>,
+}
+
+/// CLI spelling of an archive format. Kept separate from the protocol enum so
+/// clap owns the flag names.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveFormatArg {
+    Zip,
+    Tar,
+    #[value(name = "tar.gz")]
+    TarGz,
+    #[value(name = "tar.xz")]
+    TarXz,
+}
+
+impl ArchiveFormatArg {
+    pub fn to_protocol(self) -> ArchiveFormat {
+        match self {
+            Self::Zip => ArchiveFormat::Zip,
+            Self::Tar => ArchiveFormat::Tar,
+            Self::TarGz => ArchiveFormat::TarGz,
+            Self::TarXz => ArchiveFormat::TarXz,
+        }
+    }
 }
 
 #[derive(Args, Debug)]

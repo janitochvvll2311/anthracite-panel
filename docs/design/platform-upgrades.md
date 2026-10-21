@@ -65,7 +65,7 @@ Additional decisions taken while planning:
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
 | 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
 | 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
-| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | in progress: recycle bin landed |
+| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | in progress: recycle bin and archives landed |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
 | 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
 | 8 (point 8) | Plugin system and the WireGuard plugin | not started |
@@ -75,7 +75,7 @@ Additional decisions taken while planning:
 Split into four commits so each one is reviewable on its own:
 
 1. Recycle bin (freedesktop trash). Done.
-2. Archive create/extract/list, with the extraction guards.
+2. Archive create/extract/list, with the extraction guards. Done.
 3. Text editing endpoints, then the CodeMirror component.
 4. Rename `anth-file-explorer` to `anth-file-manager`, harness and docs.
 
@@ -96,6 +96,27 @@ Split into four commits so each one is reviewable on its own:
   restore and goes through `normalize` plus the root resolution.
 - Retention (`[files] max_trash_bytes`, default 1 GiB) is best effort and runs
   after the move, so it can never fail a delete that already happened.
+
+### Archives — what was decided while implementing
+
+- The crates are the boundary. Delegating to `tar`/`xz`/`7z` would put the
+  security check in a binary whose escape handling differs between GNU tar and
+  BusyBox, and the runtime image has BusyBox.
+- `.7z` creation is refused. `sevenz-rust2` exposes no control over the filter
+  chain, so the output would not be what users expect of a `.7z`; reading is
+  fully supported.
+- The extractor refuses a hostile member instead of skipping it. A partial tree
+  that looks complete is worse than an error.
+- Backslashes are rejected outright. They are ordinary filename characters on
+  Unix, so accepting them creates a tree that becomes an escape when copied to
+  Windows.
+- The end-to-end run caught two bugs the unit tests missed: `docs.zip` extracted
+  into `docs` produced `docs/docs/`, and a zip directory entry rendered as
+  `docs//`. Both now have regression tests. The strip is conditional on the
+  archive's single common root matching the destination's own name, so an
+  unrelated destination keeps the stored layout.
+- Interop is asserted against system `tar` and Python's `zipfile` rather than
+  against our own reader, so a writer bug cannot certify itself.
 
 ## Phase 4 — process management (done)
 

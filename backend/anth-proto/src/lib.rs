@@ -20,8 +20,9 @@ pub use accounts::{
     SecretString,
 };
 pub use files::{
-    FileChunk, FileEntry, FileError, FileErrorKind, FileKind, FileListing, FileWritten, TrashEntry,
-    TrashListing, DEFAULT_FILE_CHUNK, MAX_FILE_CHUNK,
+    ArchiveEntry, ArchiveFormat, ArchiveListing, FileChunk, FileEntry, FileError, FileErrorKind,
+    FileKind, FileListing, FileWritten, TrashEntry, TrashListing, DEFAULT_FILE_CHUNK,
+    MAX_FILE_CHUNK,
 };
 pub use firewall::{
     FirewallAction, FirewallError, FirewallErrorKind, FirewallProtocol, FirewallRule,
@@ -137,6 +138,23 @@ pub enum Request {
     },
     /// Remove every entry from the trash, freeing the space permanently.
     FileTrashEmpty,
+    /// Create an archive from one entry. Without `destination` the archive sits
+    /// beside it with a suffix chosen from `format`.
+    FileArchiveCreate {
+        path: String,
+        destination: Option<String>,
+        format: Option<ArchiveFormat>,
+    },
+    /// List one archive without extracting it.
+    FileArchiveList {
+        path: String,
+    },
+    /// Extract one archive. Without `into` the default is the archive's
+    /// directory with the suffix removed.
+    FileArchiveExtract {
+        path: String,
+        into: Option<String>,
+    },
     /// Begin an atomic upload. The reply is `FileWriteStarted`.
     FileWriteStart {
         path: String,
@@ -373,6 +391,17 @@ pub enum Response {
     /// The trash was emptied.
     FileTrashEmptied {
         removed: usize,
+    },
+    /// An archive was created.
+    FileArchiveCreated {
+        path: String,
+    },
+    /// One archive listing.
+    ArchiveListing(ArchiveListing),
+    /// An archive was extracted.
+    FileArchiveExtracted {
+        path: String,
+        entries: usize,
     },
     FileRenamed {
         from: String,
