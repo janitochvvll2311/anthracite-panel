@@ -84,10 +84,10 @@ Additional decisions taken while planning:
 | 0 | Handler-forward dispatch, `/api` 404, app shell, i18n rig, bun toolchain | done |
 | 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, merged in #16 |
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
-| 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
+| 3 (point 6) | Floating windows, minimize, standalone window | done, merged in #20 |
 | 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
-| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | done, in review (#22) |
-| 6 (point 3) | `anth-network-manager`: interface create/edit/rename/delete | done, in review |
+| 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | done, merged in #22 |
+| 6 (point 3) | `anth-network-manager`: interface create/edit/rename/delete | done, merged in #23 |
 | 7a (point 4) | Partition create/edit/resize/delete | not started |
 | 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | not started |
 | 8 (point 8) | Plugin system, CLI and web-UI install, WireGuard plugin | not started |
