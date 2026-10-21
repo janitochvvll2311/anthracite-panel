@@ -41,6 +41,7 @@ pub struct Policy {
     /// read the same values.
     pub process: crate::process::ProcessPolicy,
     pub network_control: bool,
+    pub network_manage: bool,
     pub firewall_control: bool,
     pub volume_control: bool,
     /// The `[accounts]` policy the guards and the snapshot read. The control
@@ -425,6 +426,7 @@ pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
     Policy {
         process: crate::process::ProcessPolicy::new(&config.process),
         network_control: config.network.control,
+        network_manage: config.network.manage,
         firewall_control: config.firewall.control,
         volume_control: config.volumes.control,
         accounts: config.accounts.clone(),

@@ -53,6 +53,7 @@ control = false
 
 [network]
 control = false
+manage = false
 
 [firewall]
 control = false
@@ -94,8 +95,8 @@ mode is set before the content is written and tightened again on every save.
 
 Debug builds bootstrap a missing file with global `sudo = true`,
 `[process] control = true`, `[network] control = true`,
-`[firewall] control = true` and `[files] write = true` so the whole UI is
-testable locally. Release builds keep the controls off. An existing file is
+`[network] manage = true`, `[firewall] control = true` and
+`[files] write = true` so the whole UI is testable locally. Release builds keep the controls off. An existing file is
 never rewritten; remove it or edit it to change the generated defaults.
 
 ## Serving
@@ -279,8 +280,9 @@ when stdin is not a terminal.
 ### `network`
 
 Inspects network interfaces and, when `[network] control = true`, brings one up
-or down. Control is off by default; see [network.md](network.md) for the policy,
-data sources and safety limits.
+or down; when `[network] manage = true`, also creates, edits, renames and deletes
+them. Both switches are off by default; see [network.md](network.md) for the
+policy, data sources and safety limits.
 
 #### `network list [--watch]`
 
@@ -309,6 +311,50 @@ when stdin is not a terminal. The daemon refuses changes when
 `[network] control = false`, rejects invalid or unknown interface names, and
 will not bring a loopback interface down. The daemon user needs `CAP_NET_ADMIN` for the kernel
 operation to succeed.
+
+#### `network create <NAME> --kind <KIND>`
+
+```bash
+anth-panel network create br0 --kind bridge --mtu 1500 --up
+anth-panel network create veth0 --kind veth --peer veth1
+anth-panel network create eth0.10 --kind vlan --link eth0 --vlan-id 10
+```
+
+Creates one virtual interface. Kinds are `bridge`, `bond`, `dummy`, `veth`,
+`vlan` and `tun-tap`; a physical device cannot be created. `--peer` belongs to
+`veth`, `--link` and `--vlan-id` to `vlan`, and `--mtu` must be 68-65535.
+Without `--yes` the command confirms first. It exits `1` when the daemon refuses
+the request.
+
+#### `network edit <INTERFACE> [--mtu <MTU>] [--up|--down]`
+
+```bash
+anth-panel network edit eth0 --mtu 9000
+anth-panel network edit eth0 --down --yes
+```
+
+Changes only the fields that are given, so an MTU edit leaves the link state
+alone. At least one of `--mtu`, `--up` and `--down` is required.
+
+#### `network rename <INTERFACE> <NEW_NAME>`
+
+```bash
+anth-panel network rename d0 d1
+```
+
+Renames an interface. It must be down, or the daemon answers `1`. Names are
+limited to 15 bytes with no whitespace, slash or colon.
+
+#### `network delete <INTERFACE>`
+
+```bash
+anth-panel network delete d0 --yes
+```
+
+Deletes an interface, including a physical device; the confirmation names the
+device so the operator knows the host loses that link. The daemon still refuses
+a loopback, the last interface carrying a default route, and — over HTTP — the
+interface the request arrived through.
 
 ### `firewall`
 

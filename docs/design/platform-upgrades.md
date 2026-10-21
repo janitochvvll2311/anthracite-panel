@@ -24,6 +24,8 @@ repository.
 | 13 | `cookie_secure` defaults to `false`, which is what a loopback bind needs; a deployment behind TLS sets it to `true` |
 | 14 | Process spawn is gated by a binary allowlist; an empty list denies every spawn |
 | 15 | Network interfaces support create, edit, rename and delete, rename only while the link is down |
+| 19 | Physical interfaces may be deleted. The confirmation says so explicitly ("this is a physical device; the host will lose this link") instead of hiding the action, and the delete still requires the typed interface name |
+| 20 | Delete is refused for the interface the request arrived on (resolved from `peer_addr`), for any interface carrying the default route, and for the last interface carrying it. The peer guard is skipped when the address is a proxy or loopback, where the peer says nothing about the path; `[network] manage` stays `false` in release |
 | 16 | Partitions support create, edit, resize and delete, plus `mkfs` behind its switch |
 | 17 | A plugin manifest requires a binary `sha256`; a signature is optional and its absence is warned about, not rejected |
 | 18 | Plugins can be installed from the web UI, not only from the CLI. The upload route is gated by `[plugins] install_from_web`, which defaults to `false` in release and `true` in the generated debug config, following the same rule as the other control switches. The UI must show a dangerous-action warning naming the code execution risk before the install button is enabled |
@@ -85,7 +87,7 @@ Additional decisions taken while planning:
 | 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
 | 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | done, in review (#22) |
-| 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
+| 6 (point 3) | `anth-network-manager`: interface create/edit/rename/delete | done, in review |
 | 7a (point 4) | Partition create/edit/resize/delete | not started |
 | 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | not started |
 | 8 (point 8) | Plugin system, CLI and web-UI install, WireGuard plugin | not started |

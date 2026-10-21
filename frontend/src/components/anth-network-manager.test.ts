@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import './anth-network-monitor'
-import type { AnthNetworkMonitor } from './anth-network-monitor'
-import { ANTH_NETWORK_STATE_EVENT } from './anth-network-monitor'
+import './anth-network-manager'
+import type { AnthNetworkManager } from './anth-network-manager'
+import { ANTH_NETWORK_STATE_EVENT } from './anth-network-manager'
 import {
   FakeNetworkClient,
   networkInterface,
@@ -10,7 +10,7 @@ import {
 import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 import { ANTH_TAB_SHOW_EVENT } from '../lib/ui/tab-visibility'
 
-async function flush(element: AnthNetworkMonitor): Promise<void> {
+async function flush(element: AnthNetworkManager): Promise<void> {
   for (let i = 0; i < 4; i++) {
     await Promise.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -21,10 +21,10 @@ async function flush(element: AnthNetworkMonitor): Promise<void> {
 async function mount(
   client: FakeNetworkClient,
   options: { autoStart?: boolean; refreshInterval?: number } = {},
-): Promise<AnthNetworkMonitor> {
+): Promise<AnthNetworkManager> {
   const element = document.createElement(
-    'anth-network-monitor',
-  ) as AnthNetworkMonitor
+    'anth-network-manager',
+  ) as AnthNetworkManager
   element.client = client
   if (options.autoStart !== undefined) element.autoStart = options.autoStart
   if (options.refreshInterval !== undefined) {
@@ -37,7 +37,7 @@ async function mount(
 }
 
 function findButton(
-  element: AnthNetworkMonitor,
+  element: AnthNetworkManager,
   label: string,
 ): HTMLButtonElement | undefined {
   return [...(element.shadowRoot?.querySelectorAll('button') ?? [])].find(
@@ -45,13 +45,13 @@ function findButton(
   )
 }
 
-function button(element: AnthNetworkMonitor, label: string): HTMLButtonElement {
+function button(element: AnthNetworkManager, label: string): HTMLButtonElement {
   const match = findButton(element, label)
   if (!match) throw new Error(`button ${label} was not rendered`)
   return match
 }
 
-function rows(element: AnthNetworkMonitor): HTMLTableRowElement[] {
+function rows(element: AnthNetworkManager): HTMLTableRowElement[] {
   return [
     ...(element.shadowRoot?.querySelectorAll<HTMLTableRowElement>('tbody tr') ??
       []),
@@ -65,7 +65,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('AnthNetworkMonitor', () => {
+describe('AnthNetworkManager', () => {
   it('restarts the stream when a tab panel shows it again', async () => {
     const client = new FakeNetworkClient()
     const element = await mount(client)
@@ -356,5 +356,164 @@ describe('AnthNetworkMonitor', () => {
     expect(element.shadowRoot?.querySelector('.error')?.textContent).toContain(
       'daemon unavailable',
     )
+  })
+})
+
+describe('management', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    resetDialogs()
+  })
+
+  it('hides the Create button when the daemon refuses management', async () => {
+    const client = new FakeNetworkClient()
+    client.current = networkSnapshot([networkInterface()], {
+      manage_enabled: false,
+    })
+    const element = await mount(client)
+
+    const button = findButton(element, 'Create')
+    expect(button?.disabled).toBe(true)
+  })
+
+  it('creates an interface from the form', async () => {
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+
+    findButton(element, 'Create')!.click()
+    await element.updateComplete
+
+    const form = element.shadowRoot!.querySelector('form') as HTMLFormElement
+    ;(form.elements.namedItem('name') as HTMLInputElement).value = 'br0'
+    ;(form.elements.namedItem('kind') as HTMLSelectElement).value = 'veth'
+    ;(form.elements.namedItem('link') as HTMLInputElement).value = 'veth1'
+    ;(form.elements.namedItem('mtu') as HTMLInputElement).value = '9000'
+    form.dispatchEvent(new Event('submit', { cancelable: true }))
+    await flush(element)
+
+    expect(client.createCalls).toEqual([
+      { name: 'br0', kind: 'veth', peer: 'veth1', mtu: 9000, up: false },
+    ])
+    // The form closes after a successful create.
+    expect(element.shadowRoot!.querySelector('form')).toBeNull()
+  })
+
+  it('sends a vlan parent in `link`, not in `peer`', async () => {
+    // The daemon reads a different field per kind; sending the wrong one is
+    // accepted by the type but refused by the daemon.
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+
+    findButton(element, 'Create')!.click()
+    await element.updateComplete
+    const form = element.shadowRoot!.querySelector('form') as HTMLFormElement
+    ;(form.elements.namedItem('name') as HTMLInputElement).value = 'eth0.10'
+    ;(form.elements.namedItem('kind') as HTMLSelectElement).value = 'vlan'
+    ;(form.elements.namedItem('link') as HTMLInputElement).value = 'eth0'
+    ;(form.elements.namedItem('vlan_id') as HTMLInputElement).value = '10'
+    form.dispatchEvent(new Event('submit', { cancelable: true }))
+    await flush(element)
+
+    expect(client.createCalls[0].link).toBe('eth0')
+    expect(client.createCalls[0].peer).toBeUndefined()
+    expect(client.createCalls[0].vlan_id).toBe(10)
+  })
+
+  it('warns that a physical device will lose its link before deleting', async () => {
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+    rows(element)[0]?.click()
+    await flush(element)
+
+    findButton(element, 'Delete')!.click()
+    // Read the prompt before answering it: the host clears the dialog on
+    // settle, so `dialogText()` afterwards is empty by design.
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(dialogText()).toContain('physical device')
+
+    await answerDialogs('confirm')
+    await flush(element)
+
+    expect(client.removeCalls).toEqual(['eth0'])
+  })
+
+  it('disables Delete for a loopback and never calls the client', async () => {
+    const client = new FakeNetworkClient()
+    client.emit(
+      networkSnapshot([
+        networkInterface({
+          name: 'lo',
+          kind: 'loopback',
+          loopback: true,
+          physical: false,
+        }),
+      ]),
+    )
+    const element = await mount(client)
+    rows(element)[0]?.click()
+    await flush(element)
+
+    const button = findButton(element, 'Delete')
+    expect(button?.disabled).toBe(true)
+    expect(button?.title).toContain('loopback')
+    expect(client.removeCalls).toEqual([])
+  })
+
+  it('refuses to rename an interface that is up', async () => {
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+    rows(element)[0]?.click()
+    await flush(element)
+
+    const button = findButton(element, 'Rename')
+    expect(button?.disabled).toBe(true)
+    expect(button?.title).toContain('down first')
+  })
+
+  it('renames through the dialog once the link is down', async () => {
+    const client = new FakeNetworkClient()
+    client.emit(
+      networkSnapshot([networkInterface({ name: 'd0', kind: 'dummy', up: false })]),
+    )
+    const element = await mount(client)
+    rows(element)[0]?.click()
+    await flush(element)
+
+    findButton(element, 'Rename')!.click()
+    await answerDialogs('confirm', 'd1')
+    await flush(element)
+
+    expect(client.renameCalls).toEqual([{ name: 'd0', newName: 'd1' }])
+  })
+
+  it('sends only the MTU on an edit, so the link state is untouched', async () => {
+    const client = new FakeNetworkClient()
+    const element = await mount(client)
+    rows(element)[0]?.click()
+    await flush(element)
+
+    findButton(element, 'Edit MTU')!.click()
+    await answerDialogs('confirm', '9000')
+    await flush(element)
+
+    expect(client.editCalls).toEqual([{ name: 'eth0', request: { mtu: 9000 } }])
+  })
+
+  it('shows the daemon error and keeps the form open when a create fails', async () => {
+    const client = new FakeNetworkClient()
+    client.mutateError = new Error('interface `br0` already exists')
+    const element = await mount(client)
+
+    findButton(element, 'Create')!.click()
+    await element.updateComplete
+    const form = element.shadowRoot!.querySelector('form') as HTMLFormElement
+    ;(form.elements.namedItem('name') as HTMLInputElement).value = 'br0'
+    form.dispatchEvent(new Event('submit', { cancelable: true }))
+    await flush(element)
+
+    const alert = element.shadowRoot!.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain('already exists')
+    expect(element.shadowRoot!.querySelector('form')).not.toBeNull()
   })
 })

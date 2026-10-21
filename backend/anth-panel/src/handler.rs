@@ -15,6 +15,7 @@ use anth_proto::{Request, Response};
 
 use crate::accounts;
 use crate::accounts_admin;
+use crate::command::SystemRunner;
 use crate::config::FilesConfig;
 use crate::daemon::Policy;
 use crate::files::FileService;
@@ -87,6 +88,22 @@ impl Handler for CoreHandler {
     }
 }
 
+/// Builds the guard state from a fresh snapshot plus the default-route table.
+///
+/// It reads the host on every mutation rather than caching: an interface that
+/// appeared or started carrying the default route since the last snapshot must
+/// be visible to the guard, or the guard protects stale facts.
+fn network_state(policy: &Policy) -> network::manage::NetworkState {
+    let runner = runner_for(policy);
+    let routes = network::manage::default_route_interfaces(&runner);
+    let snapshot = network::collect_with("/", policy.network_control, policy.network_manage);
+    network::manage::NetworkState::from_snapshot(&snapshot, &routes)
+}
+
+fn runner_for(policy: &Policy) -> SystemRunner {
+    SystemRunner::new(policy.sudo)
+}
+
 fn handle_core(request: &Request, policy: &Policy, files: &FileService) -> Response {
     match request {
         Request::Echo { message } => Response::Ok {
@@ -115,13 +132,58 @@ fn handle_core(request: &Request, policy: &Policy, files: &FileService) -> Respo
             Ok(started) => Response::ProcessStarted(started),
             Err(error) => Response::ProcessSpawnError(error),
         },
-        Request::NetworkList => Response::NetworkSnapshot(network::collect(policy.network_control)),
+        Request::NetworkList => Response::NetworkSnapshot(network::collect_with(
+            "/",
+            policy.network_control,
+            policy.network_manage,
+        )),
         Request::NetworkSetState { name, up } => {
             match network::set_state(policy.network_control, policy.sudo, name, *up) {
                 Ok(()) => Response::NetworkStateChanged {
                     name: name.clone(),
                     up: *up,
                 },
+                Err(error) => Response::NetworkError(error),
+            }
+        }
+        Request::NetworkCreate(args) => {
+            let state = network_state(policy);
+            match network::manage::create(policy.network_manage, &state, &runner_for(policy), args)
+            {
+                Ok(message) => Response::NetworkChanged { message },
+                Err(error) => Response::NetworkError(error),
+            }
+        }
+        Request::NetworkEdit(args) => {
+            let state = network_state(policy);
+            match network::manage::edit(policy.network_manage, &state, &runner_for(policy), args) {
+                Ok(message) => Response::NetworkChanged { message },
+                Err(error) => Response::NetworkError(error),
+            }
+        }
+        Request::NetworkRename { name, new_name } => {
+            let state = network_state(policy);
+            match network::manage::rename(
+                policy.network_manage,
+                &state,
+                &runner_for(policy),
+                name,
+                new_name,
+            ) {
+                Ok(message) => Response::NetworkChanged { message },
+                Err(error) => Response::NetworkError(error),
+            }
+        }
+        Request::NetworkDelete { name, peer } => {
+            let state = network_state(policy);
+            match network::manage::delete(
+                policy.network_manage,
+                &state,
+                &runner_for(policy),
+                name,
+                peer.as_deref(),
+            ) {
+                Ok(message) => Response::NetworkChanged { message },
                 Err(error) => Response::NetworkError(error),
             }
         }

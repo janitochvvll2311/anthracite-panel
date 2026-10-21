@@ -9,15 +9,16 @@ use anth_panel::cli::{
     AccountUserPasswordArgs, AuthArgs, AuthCommand, Cli, Command, ConfigArgs, ConfigCommand,
     EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
     FileWriteArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
-    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
-    ProcessSignalArgs, ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs,
-    VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
+    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkKindArg, NetworkStateArgs, ProcessArgs,
+    ProcessCommand, ProcessSignalArgs, ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs,
+    TrashRestoreArgs, VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::read_password;
 use anth_panel::stream;
 use anth_panel::{AppState, request_for, router};
 use anth_proto::{AnthClient, DEFAULT_FILE_CHUNK, FileChunk, FirewallAction, Request, Response};
+use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:8080";
@@ -41,9 +42,12 @@ async fn serve_api(
 
     println!("Server is listening on {address}");
     let state = AppState::with_config_path(config, Path::new(config_path));
-    axum::serve(listener, router(state))
-        .await
-        .map_err(|e| format!("Server error: {e}"))?;
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| format!("Server error: {e}"))?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -69,9 +73,12 @@ async fn serve_run(
 
     println!("Daemon and server are running (http://{address})");
     let state = AppState::with_config_path(config, Path::new(config_path));
-    let result = axum::serve(listener, router(state))
-        .await
-        .map_err(|e| format!("Server error: {e}"));
+    let result = axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| format!("Server error: {e}"));
 
     daemon.abort();
     let _ = daemon.await;
@@ -283,6 +290,84 @@ fn confirm_spawn(args: &ProcessSpawnArgs) -> Result<bool, String> {
         || format!("Start `{command}`? [y/N] "),
         "refusing to start a process without --yes when stdin is not a terminal",
     )
+}
+
+/// Asks before a create, edit, rename or delete.
+///
+/// Delete gets the harshest prompt: it names the interface, says whether it is
+/// physical, and (for a physical device) says the host will lose that link. The
+/// guard that stops a delete of the connection itself lives in the daemon,
+/// because only the daemon can resolve the peer.
+fn confirm_network_manage(command: &NetworkCommand) -> Option<ExitCode> {
+    let outcome = match command {
+        NetworkCommand::Create(args) => confirm_action(
+            args.yes,
+            || {
+                format!(
+                    "Create {} interface `{}`? [y/N] ",
+                    kind_name(args.kind),
+                    args.name
+                )
+            },
+            "refusing to create an interface without --yes when stdin is not a terminal",
+        ),
+        NetworkCommand::Edit(args) => {
+            let change = match (args.mtu, args.up, args.down) {
+                (Some(mtu), true, _) => format!("set MTU to {mtu} and bring it up"),
+                (Some(mtu), _, true) => format!("set MTU to {mtu} and bring it down"),
+                (Some(mtu), _, _) => format!("set MTU to {mtu}"),
+                (None, true, _) => "bring it up".to_string(),
+                (None, _, true) => "bring it down".to_string(),
+                (None, false, false) => "change nothing".to_string(),
+            };
+            confirm_action(
+                args.yes,
+                || format!("{change} on interface `{}`? [y/N] ", args.name),
+                "refusing to edit an interface without --yes when stdin is not a terminal",
+            )
+        }
+        NetworkCommand::Rename(args) => confirm_action(
+            args.yes,
+            || format!("Rename `{}` to `{}`? [y/N] ", args.name, args.new_name),
+            "refusing to rename an interface without --yes when stdin is not a terminal",
+        ),
+        NetworkCommand::Delete(args) => confirm_action(
+            args.yes,
+            || {
+                format!(
+                    "Delete interface `{}`? This cannot be undone and may disconnect the host. [y/N] ",
+                    args.name
+                )
+            },
+            "refusing to delete an interface without --yes when stdin is not a terminal",
+        ),
+        NetworkCommand::List(_) | NetworkCommand::Up(_) | NetworkCommand::Down(_) => {
+            return None;
+        }
+    };
+
+    match outcome {
+        Ok(true) => None,
+        Ok(false) => {
+            eprintln!("[cancelled]");
+            Some(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            Some(ExitCode::FAILURE)
+        }
+    }
+}
+
+fn kind_name(kind: NetworkKindArg) -> &'static str {
+    match kind {
+        NetworkKindArg::Veth => "veth",
+        NetworkKindArg::Bridge => "bridge",
+        NetworkKindArg::Bond => "bond",
+        NetworkKindArg::Vlan => "vlan",
+        NetworkKindArg::Dummy => "dummy",
+        NetworkKindArg::TunTap => "tun/tap",
+    }
 }
 
 fn confirm_network_state(args: &NetworkStateArgs, up: bool) -> Result<bool, String> {
@@ -687,6 +772,12 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
                 return Some(ExitCode::FAILURE);
             }
         }
+    }
+
+    if let Command::Network(NetworkArgs { command }) = command
+        && let Some(response) = confirm_network_manage(command)
+    {
+        return Some(response);
     }
 
     if let Command::Volume(VolumeArgs {

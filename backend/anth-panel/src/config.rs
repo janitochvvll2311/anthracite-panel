@@ -154,6 +154,11 @@ pub struct NetworkConfig {
     /// interface down can disconnect the host, and the panel has no
     /// authentication yet.
     pub control: bool,
+    /// Whether the daemon accepts create, edit, rename and delete. Separate
+    /// from `control` because the panel offers no rollback: creating an
+    /// interface is recoverable, but the two switches should not be forced on
+    /// an operator who only wanted up/down.
+    pub manage: bool,
     /// Old per-section sudo flag. The global top-level `sudo` replaces it;
     /// this is accepted so earlier configs keep loading and is never written.
     #[serde(default, skip_serializing, rename = "sudo")]
@@ -337,6 +342,7 @@ impl Config {
             "/usr/bin/uptime".to_string(),
         ];
         config.network.control = true;
+        config.network.manage = true;
         config.firewall.control = true;
         config.volumes.control = true;
         config.accounts.control = true;

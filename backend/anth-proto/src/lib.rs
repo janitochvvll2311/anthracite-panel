@@ -29,8 +29,8 @@ pub use firewall::{
     FirewallSnapshot,
 };
 pub use network::{
-    NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind, NetworkInterface,
-    NetworkSnapshot,
+    NetworkAddress, NetworkAddressFamily, NetworkCreateArgs, NetworkEditArgs, NetworkError,
+    NetworkErrorKind, NetworkInterface, NetworkInterfaceKind, NetworkSnapshot,
 };
 pub use process::{
     ProcessInfo, ProcessSignal, ProcessSnapshot, ProcessSpawnError, ProcessSpawnErrorKind,
@@ -81,6 +81,25 @@ pub enum Request {
     NetworkSetState {
         name: String,
         up: bool,
+    },
+    /// Create one virtual interface. Requires `[network] manage`.
+    NetworkCreate(NetworkCreateArgs),
+    /// Change the MTU or the administrative state of an interface.
+    NetworkEdit(NetworkEditArgs),
+    /// Rename an interface. Refused while the link is up.
+    NetworkRename {
+        name: String,
+        new_name: String,
+    },
+    /// Delete an interface.
+    ///
+    /// `peer` is the address the HTTP request arrived from, when the caller has
+    /// one. The daemon refuses to delete the interface that address is routed
+    /// through, because that is the connection the operator is using.
+    NetworkDelete {
+        name: String,
+        #[serde(default)]
+        peer: Option<String>,
     },
     /// Ask the daemon for the managed nftables table.
     FirewallStatus,
@@ -347,6 +366,10 @@ pub enum Response {
     NetworkStateChanged {
         name: String,
         up: bool,
+    },
+    /// An interface was created, edited, renamed or deleted.
+    NetworkChanged {
+        message: String,
     },
     /// A network operation failed with a machine-readable reason.
     NetworkError(NetworkError),

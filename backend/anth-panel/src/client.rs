@@ -1,3 +1,4 @@
+use anth_proto::{NetworkCreateArgs, NetworkEditArgs};
 use anth_proto::{Request, Response};
 
 use crate::cli::{
@@ -36,6 +37,36 @@ pub fn request_for(command: &Command) -> Option<Request> {
             NetworkCommand::Down(args) => Some(Request::NetworkSetState {
                 name: args.name.clone(),
                 up: false,
+            }),
+            NetworkCommand::Create(args) => Some(Request::NetworkCreate(NetworkCreateArgs {
+                name: args.name.clone(),
+                kind: args.kind.into(),
+                peer: args.peer.clone(),
+                link: args.link.clone(),
+                vlan_id: args.vlan_id,
+                mtu: args.mtu,
+                up: args.up,
+            })),
+            NetworkCommand::Edit(args) => Some(Request::NetworkEdit(NetworkEditArgs {
+                name: args.name.clone(),
+                mtu: args.mtu,
+                // Both flags default to false, so "absent" is the only state
+                // that leaves the administrative state alone.
+                up: if args.up {
+                    Some(true)
+                } else if args.down {
+                    Some(false)
+                } else {
+                    None
+                },
+            })),
+            NetworkCommand::Rename(args) => Some(Request::NetworkRename {
+                name: args.name.clone(),
+                new_name: args.new_name.clone(),
+            }),
+            NetworkCommand::Delete(args) => Some(Request::NetworkDelete {
+                name: args.name.clone(),
+                peer: None,
             }),
         },
         Command::Firewall(args) => match &args.command {

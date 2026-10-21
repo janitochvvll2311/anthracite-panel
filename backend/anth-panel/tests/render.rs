@@ -344,6 +344,7 @@ fn render_network_snapshot_shows_addresses_speed_and_traffic() {
                 tx_errors: 2,
                 rx_dropped: 3,
                 tx_dropped: 4,
+                ..NetworkInterface::default()
             },
             NetworkInterface {
                 name: "lo".to_string(),
@@ -361,6 +362,7 @@ fn render_network_snapshot_shows_addresses_speed_and_traffic() {
         ],
         timestamp_ms: 1_700_000_000_000,
         control_enabled: true,
+        manage_enabled: true,
         total: 3,
         truncated: true,
         warning: Some("showing 2 of 3 interfaces".to_string()),

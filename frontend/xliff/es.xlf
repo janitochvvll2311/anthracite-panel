@@ -54,10 +54,6 @@
   <source>Processes</source>
   <target>Procesos</target>
 </trans-unit>
-<trans-unit id="s758e7a304346191f">
-  <source>Live process table with signals and tree view.</source>
-  <target>Tabla de procesos en vivo con señales y vista de árbol.</target>
-</trans-unit>
 <trans-unit id="s803ce7e1a2294d50">
   <source>Files</source>
   <target>Archivos</target>
@@ -266,6 +262,18 @@
 <trans-unit id="seef0ce71f86fbe92">
   <source>Choose…</source>
   <target>Elegir…</target>
+</trans-unit>
+<trans-unit id="sdbe246a8f55af98c">
+  <source>Live process table with signals, tree view and spawning.</source>
+  <target>Tabla de procesos en vivo con señales, vista de árbol y lanzamiento.</target>
+</trans-unit>
+<trans-unit id="s6af64cda4da4f9b3">
+  <source>Allow starting processes</source>
+  <target>Permitir iniciar procesos</target>
+</trans-unit>
+<trans-unit id="sf3519db77e9127b3">
+  <source>Allowed programs, one absolute path per line</source>
+  <target>Programas permitidos, una ruta absoluta por línea</target>
 </trans-unit>
 </body>
 </file>

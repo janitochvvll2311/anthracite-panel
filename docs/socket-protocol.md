@@ -160,6 +160,90 @@ unknown interfaces and bringing `lo` down are rejected. See
 
 Reply: `NetworkStateChanged`, or `NetworkError`.
 
+### `NetworkCreate`
+
+Creates one virtual interface.
+
+```json
+{"type":"NetworkCreate","data":{"name":"br0","kind":"bridge","mtu":1500,"up":true}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | At most 15 bytes, no whitespace, slash or colon |
+| `kind` | string | yes | `veth`, `bridge`, `bond`, `vlan`, `dummy` or `tun_tap` |
+| `peer` | string | for `veth` | Name of the other end |
+| `link` | string | for `vlan` | Existing parent interface |
+| `vlan_id` | number | for `vlan` | 1-4094 |
+| `mtu` | number | no | 68-65535 |
+| `up` | boolean | no | Bring it up after creating it |
+
+The daemon refuses the request unless `[network] manage = true`. A physical kind
+cannot be created: the panel must not invent hardware.
+
+Reply: `NetworkChanged`, or `NetworkError`.
+
+### `NetworkEdit`
+
+Changes the MTU and/or the administrative state of one interface. A field that
+is absent is left alone, so an MTU-only edit never changes the link state.
+
+```json
+{"type":"NetworkEdit","data":{"name":"eth0","mtu":9000}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | Existing interface |
+| `mtu` | number | no | 68-65535 |
+| `up` | boolean | no | New administrative state |
+
+At least one of `mtu` and `up` must be present; otherwise the daemon answers
+`Invalid`. Bringing `lo` down is rejected.
+
+Reply: `NetworkChanged`, or `NetworkError`.
+
+### `NetworkRename`
+
+Renames an interface. The link must be down.
+
+```json
+{"type":"NetworkRename","data":{"name":"d0","new_name":"d1"}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | Existing interface |
+| `new_name` | string | yes | At most 15 bytes, no whitespace, slash or colon |
+
+Reply: `NetworkChanged`, or `NetworkError`.
+
+### `NetworkDelete`
+
+Deletes an interface.
+
+```json
+{"type":"NetworkDelete","data":{"name":"d0","peer":"203.0.113.9"}}
+
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | Existing interface |
+| `peer` | string | no | Client address, used by the self-lockout guard |
+
+`peer` is the address the request came from. The daemon resolves it to the
+interface carrying it and refuses to delete that one, so a client cannot cut the
+path it is using. It also refuses a loopback, and the last interface carrying a
+default route. Without `peer` the self-lockout guard is skipped, because a
+socket client may be on this host or behind a NAT hop the daemon cannot see.
+Pass it when the caller knows the address; the HTTP route always does.
+
+Reply: `NetworkChanged`, or `NetworkError`.
+
 ### `FirewallStatus`
 
 Returns the managed `inet anthracite` table. Takes no arguments.
@@ -585,7 +669,9 @@ Reply to `NetworkList`.
         "rx_errors": 0,
         "tx_errors": 0,
         "rx_dropped": 0,
-        "tx_dropped": 0
+        "tx_dropped": 0,
+        "kind": "physical",
+        "physical": true
       }
     ],
     "timestamp_ms": 1700000000000,
@@ -602,6 +688,16 @@ fit the 1 MiB line cap; `total` reports the untruncated count and a shortened
 list adds a human-readable `warning`.
 Traffic counters are cumulative. `timestamp_ms` lets a client compute
 RX/TX rates between consecutive snapshots; the daemon does not keep a sampler.
+
+### `NetworkChanged`
+
+Successful reply to `NetworkCreate`, `NetworkEdit`, `NetworkRename` and
+`NetworkDelete`. The message is ready for the CLI, so one variant covers all
+four; a client that needs the new state asks for a fresh `NetworkList`.
+
+```json
+{"type":"NetworkChanged","data":{"message":"created bridge interface `br0`"}}
+```
 
 ### `NetworkStateChanged`
 

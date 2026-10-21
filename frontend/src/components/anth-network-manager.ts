@@ -5,6 +5,7 @@ import type {
   NetworkClient,
   NetworkConnectionStatus,
   NetworkInterface,
+  NetworkInterfaceKind,
   NetworkRow,
   NetworkSnapshot,
 } from '../lib/network/network-client'
@@ -23,10 +24,21 @@ import type {
   NetworkSortDirection,
   NetworkSortKey,
 } from '../lib/network/display'
-import { confirmAction } from '../lib/ui/dialog'
+import { confirmAction, promptText, showAlert } from '../lib/ui/dialog'
 import { onTabShow } from '../lib/ui/tab-visibility'
 
 export const ANTH_NETWORK_STATE_EVENT = 'anth-network-state'
+
+/** The create form's values, already validated. */
+export interface NetworkCreateForm {
+  name: string
+  kind: NetworkInterfaceKind
+  peer?: string
+  link?: string
+  vlan_id?: number
+  mtu?: number
+  up?: boolean
+}
 
 export interface AnthNetworkStateDetail {
   name: string
@@ -44,8 +56,8 @@ const INTERVALS = [1000, 2000, 5000, 10000]
  *
  * @fires anth-network-state - `{ name, up }` after a successful state change.
  */
-@customElement('anth-network-monitor')
-export class AnthNetworkMonitor extends LitElement {
+@customElement('anth-network-manager')
+export class AnthNetworkManager extends LitElement {
   @property({ attribute: false })
   client?: NetworkClient
 
@@ -58,6 +70,14 @@ export class AnthNetworkMonitor extends LitElement {
 
   @state()
   private rows: NetworkRow[] = []
+
+  /** Whether the daemon accepts create, edit, rename and delete. */
+  @state()
+  private manageEnabled = false
+
+  /** Which management form is open, if any. */
+  @state()
+  private form: 'create' | undefined
 
   @state()
   private status: NetworkConnectionStatus = 'idle'
@@ -197,6 +217,7 @@ export class AnthNetworkMonitor extends LitElement {
     this.rows = computeNetworkRows(snapshot, this.previous)
     this.previous = snapshot
     this.controlEnabled = snapshot.control_enabled
+    this.manageEnabled = snapshot.manage_enabled
     this.warning =
       snapshot.warning ??
       (snapshot.interfaces.length < snapshot.total
@@ -307,6 +328,134 @@ export class AnthNetworkMonitor extends LitElement {
     if (changed) this.refresh()
   }
 
+  /**
+   * Whether a management action applies to an interface.
+   *
+   * This mirrors the daemon's guards so the UI disables a row instead of
+   * offering an action certain to fail. It is a hint, never the policy: the
+   * daemon re-checks everything, including the peer-address guard, which the
+   * UI cannot evaluate.
+   */
+  manageBlockReason(iface: NetworkInterface): string {
+    if (!this.manageEnabled) return 'network management is disabled'
+    if (iface.kind === 'loopback') return 'loopback interfaces are protected'
+    return ''
+  }
+
+  renameBlockReason(iface: NetworkInterface): string {
+    const base = this.manageBlockReason(iface)
+    if (base !== '') return base
+    if (iface.up) return 'bring the interface down first'
+    return ''
+  }
+
+  private async createInterface(request: NetworkCreateForm): Promise<void> {
+    if (!this.client || this.busy) return
+    this.busy = true
+    this.actionError = ''
+    try {
+      await this.client.create(request)
+      this.form = undefined
+    } catch (error) {
+      this.actionError =
+        error instanceof Error ? error.message : String(error)
+    } finally {
+      this.busy = false
+      this.refresh()
+    }
+  }
+
+  private async editInterface(
+    iface: NetworkRow,
+    edit: { mtu?: number; up?: boolean },
+  ): Promise<void> {
+    if (!this.client || this.busy) return
+    this.busy = true
+    this.actionError = ''
+    try {
+      await this.client.edit(iface.name, edit)
+      this.form = undefined
+    } catch (error) {
+      this.actionError =
+        error instanceof Error ? error.message : String(error)
+    } finally {
+      this.busy = false
+      this.refresh()
+    }
+  }
+
+  private async renameInterface(iface: NetworkRow): Promise<void> {
+    if (!this.client || this.busy) return
+    if (this.renameBlockReason(iface) !== '') return
+
+    const newName = await promptText({
+      title: `Rename ${iface.name}`,
+      message: 'The interface must be down. Traffic stops until it is up again.',
+      label: 'New name',
+      value: iface.name,
+      confirmLabel: 'Rename',
+      validate: (value) => {
+        const trimmed = value.trim()
+        if (trimmed === '') return 'A name is required'
+        if (trimmed === iface.name) return 'The name did not change'
+        if (trimmed.length > 15) return 'Names are limited to 15 bytes'
+        if (/[\s/:]/.test(trimmed))
+          return 'Names cannot contain spaces, colons or slashes'
+        return undefined
+      },
+    })
+    if (newName === undefined) return
+
+    this.busy = true
+    this.actionError = ''
+    try {
+      await this.client.rename(iface.name, newName.trim())
+    } catch (error) {
+      this.actionError =
+        error instanceof Error ? error.message : String(error)
+    } finally {
+      this.busy = false
+      this.refresh()
+    }
+  }
+
+  private async deleteInterface(iface: NetworkRow): Promise<void> {
+    if (!this.client || this.busy) return
+
+    const blocked = this.manageBlockReason(iface)
+    if (blocked !== '') {
+      await showAlert({ title: 'Cannot delete this interface', message: blocked })
+      return
+    }
+
+    // A physical device gets an explicit warning rather than a hidden action:
+    // removing a card may be exactly what the operator wants, but they have to
+    // know the host loses that link.
+    const warning = iface.physical
+      ? ` ${iface.name} is a physical device. The host will lose this link, and any service using it will go down with it.`
+      : ''
+
+    const confirmed = await confirmAction({
+      title: `Delete ${iface.name}?`,
+      message: `This cannot be undone.${warning}`,
+      confirmLabel: 'Delete',
+      danger: true,
+    })
+    if (!confirmed) return
+
+    this.busy = true
+    this.actionError = ''
+    try {
+      await this.client.remove(iface.name)
+    } catch (error) {
+      this.actionError =
+        error instanceof Error ? error.message : String(error)
+    } finally {
+      this.busy = false
+      this.refresh()
+    }
+  }
+
   private renderSortButton(key: NetworkSortKey, label: string) {
     const active = this.sortKey === key
     const indicator = active ? (this.sortDirection === 'asc' ? '▲' : '▼') : ''
@@ -402,7 +551,187 @@ export class AnthNetworkMonitor extends LitElement {
               `,
             )}
       </div>
+      ${this.renderDetailActions(iface)}
     `
+  }
+
+  /**
+   * Edit, rename and delete for the selected interface.
+   *
+   * Every control carries its reason for being disabled in a `title`, so an
+   * operator sees why an action is unavailable instead of clicking a dead
+   * button.
+   */
+  private renderDetailActions(iface: NetworkRow) {
+    if (!this.manageEnabled) return nothing
+
+    const deleteBlocked = this.manageBlockReason(iface)
+    const renameBlocked = this.renameBlockReason(iface)
+    const kind = iface.kind === 'other' ? 'interface' : iface.kind
+
+    return html`
+      <div class="detail-actions">
+        <span class="muted kind">${kind}${iface.physical ? ' · physical' : ''}</span>
+        <span class="spacer"></span>
+        <button
+          type="button"
+          ?disabled=${this.busy}
+          @click=${() => this.editMtu(iface)}
+        >
+          Edit MTU
+        </button>
+        <button
+          type="button"
+          ?disabled=${this.busy || renameBlocked !== ''}
+          title=${renameBlocked}
+          @click=${() => this.renameInterface(iface)}
+        >
+          Rename
+        </button>
+        <button
+          type="button"
+          class="danger"
+          ?disabled=${this.busy || deleteBlocked !== ''}
+          title=${deleteBlocked}
+          @click=${() => this.deleteInterface(iface)}
+        >
+          Delete
+        </button>
+      </div>
+    `
+  }
+
+  private toggleCreateForm(): void {
+    this.form = this.form === 'create' ? undefined : 'create'
+  }
+
+  private renderCreateForm() {
+    return html`
+      <form class="create" part="create" @submit=${this.onCreateSubmit}>
+        <label class="field">
+          Name
+          <input
+            name="name"
+            required
+            maxlength="15"
+            placeholder="br0"
+            ?disabled=${this.busy}
+          />
+        </label>
+        <label class="field">
+          Kind
+          <select name="kind" ?disabled=${this.busy}>
+            ${(
+              [
+                ['bridge', 'bridge'],
+                ['bond', 'bond'],
+                ['dummy', 'dummy'],
+                ['veth', 'veth'],
+                ['vlan', 'vlan'],
+                ['tun_tap', 'tun/tap'],
+              ] as const
+            ).map(
+              ([value, label]) =>
+                html`<option value=${value}>${label}</option>`,
+            )}
+          </select>
+        </label>
+        <label class="field">
+          MTU
+          <input
+            name="mtu"
+            type="number"
+            min="68"
+            max="65535"
+            placeholder="1500"
+            ?disabled=${this.busy}
+          />
+        </label>
+        <label class="field">
+          Peer / parent
+          <input
+            name="link"
+            maxlength="15"
+            placeholder="for veth or vlan"
+            ?disabled=${this.busy}
+          />
+        </label>
+        <label class="field">
+          VLAN id
+          <input
+            name="vlan_id"
+            type="number"
+            min="1"
+            max="4094"
+            ?disabled=${this.busy}
+          />
+        </label>
+        <label class="field checkbox">
+          <input type="checkbox" name="up" ?disabled=${this.busy} />
+          Bring up
+        </label>
+        <span class="spacer"></span>
+        <button type="submit" ?disabled=${this.busy}>Create</button>
+        <button type="button" @click=${this.toggleCreateForm} ?disabled=${this.busy}>
+          Cancel
+        </button>
+      </form>
+      <p class="hint muted">
+        Only virtual interfaces can be created. Addresses are not assigned here.
+      </p>
+    `
+  }
+
+  private onCreateSubmit = (event: SubmitEvent): void => {
+    event.preventDefault()
+    const form = event.target as HTMLFormElement
+    const data = new FormData(form)
+    const name = String(data.get('name') ?? '').trim()
+    if (name === '') return
+
+    const kind = String(data.get('kind') ?? 'bridge') as NetworkInterfaceKind
+    const mtuText = String(data.get('mtu') ?? '').trim()
+    const linkText = String(data.get('link') ?? '').trim()
+    const vlanText = String(data.get('vlan_id') ?? '').trim()
+
+    const request: NetworkCreateForm = {
+      name,
+      kind,
+      up: data.get('up') === 'on',
+    }
+    if (mtuText !== '') request.mtu = Number(mtuText)
+    if (linkText !== '') {
+      // A veth calls it a peer, a vlan calls it a parent; the daemon wants the
+      // right field for each.
+      if (kind === 'veth') request.peer = linkText
+      else request.link = linkText
+    }
+    if (vlanText !== '') request.vlan_id = Number(vlanText)
+
+    void this.createInterface(request)
+  }
+
+  /** Asks for a new MTU, or returns `undefined` when the operator cancels. */
+  private async promptMtu(iface: NetworkRow): Promise<number | undefined> {
+    const raw = await promptText({
+      title: `MTU for ${iface.name}`,
+      label: 'MTU',
+      value: String(iface.mtu),
+      confirmLabel: 'Apply',
+      validate: (value) => {
+        const parsed = Number(value.trim())
+        if (!Number.isInteger(parsed)) return 'The MTU must be a whole number'
+        if (parsed < 68 || parsed > 65535) return 'The MTU must be 68-65535'
+        return undefined
+      },
+    })
+    return raw === undefined ? undefined : Number(raw.trim())
+  }
+
+  private async editMtu(iface: NetworkRow): Promise<void> {
+    const mtu = await this.promptMtu(iface)
+    if (mtu === undefined) return
+    await this.editInterface(iface, { mtu })
   }
 
   override render() {
@@ -436,6 +765,16 @@ export class AnthNetworkMonitor extends LitElement {
           </label>
           <button
             type="button"
+            @click=${this.toggleCreateForm}
+            ?disabled=${!this.client || !this.manageEnabled || this.busy}
+            title=${this.manageEnabled
+              ? 'Create a virtual interface'
+              : 'network management is disabled'}
+          >
+            Create
+          </button>
+          <button
+            type="button"
             @click=${this.refresh}
             ?disabled=${!this.client || this.busy}
           >
@@ -454,6 +793,7 @@ export class AnthNetworkMonitor extends LitElement {
           </button>
         </header>
 
+        ${this.form === 'create' ? this.renderCreateForm() : nothing}
         ${this.actionError === ''
           ? nothing
           : html`
@@ -918,6 +1258,56 @@ export class AnthNetworkMonitor extends LitElement {
       gap: 8px;
     }
 
+    .create {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 0.6rem;
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border, #24303f);
+      background: var(--surface-2, #131a24);
+    }
+
+    .create input {
+      width: 8rem;
+    }
+
+    .create .checkbox {
+      flex-direction: row;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .create .checkbox input {
+      width: auto;
+    }
+
+    .hint {
+      margin: 0;
+      padding: 0.4rem 0.75rem;
+      font-size: 12px;
+    }
+
+    .detail-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin-top: 0.6rem;
+      padding-top: 0.6rem;
+      border-top: 1px solid var(--border, #24303f);
+    }
+
+    .detail-actions .kind {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    button.danger {
+      border-color: var(--danger, #b4232a);
+      color: var(--danger-text, #ff9a9f);
+    }
+
     .detail-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
@@ -987,7 +1377,7 @@ export class AnthNetworkMonitor extends LitElement {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'anth-network-monitor': AnthNetworkMonitor
+    'anth-network-manager': AnthNetworkManager
   }
 
   interface HTMLElementEventMap {

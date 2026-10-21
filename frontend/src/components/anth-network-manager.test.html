@@ -3,7 +3,7 @@
   Dev-only harness for the network monitor component.
 
   Run `npm run dev` and open
-  http://localhost:5173/src/components/anth-network-monitor.test.html. Vite's
+  http://localhost:5173/src/components/anth-network-manager.test.html. Vite's
   build input is only index.html, so this file never reaches dist/.
 -->
 <html lang="en">
@@ -14,11 +14,11 @@
       name="description"
       content="Dev harness for the Anthracite Panel network monitor component."
     />
-    <title>anth-network-monitor · test harness</title>
+    <title>anth-network-manager · test harness</title>
     <link rel="stylesheet" href="/src/harness/harness.css" />
   </head>
   <body>
-    <anth-harness heading="anth-network-monitor" width="1400px">
+    <anth-harness heading="anth-network-manager" width="1400px">
       <p slot="description">
         Live network-interface monitor backed by <code>GET /api/network</code>
         and its <code>/watch</code> SSE endpoint. It shows state, addresses,
@@ -40,6 +40,13 @@
               With network control enabled, bring an interface up or down.
               Bringing <code>lo</code> down is refused by the daemon.
             </li>
+            <li>
+              With <code>[network] manage</code> enabled, create a virtual
+              interface, edit its MTU, rename it while it is down, or delete it.
+              Deleting a physical device warns first; the daemon still refuses
+              to delete the interface the request arrived on and the last
+              default-route carrier.
+            </li>
           </ul>
         </article>
         <article class="harness-note">
@@ -49,25 +56,25 @@
               <code>cargo run -p anth-panel -- run</code> from
               <code>backend/</code>.
             </li>
-            <li><code>npm run dev</code> from <code>frontend/</code>.</li>
+            <li><code>bun run dev</code> from <code>frontend/</code>.</li>
             <li>
-              Open <code>/src/components/anth-network-monitor.test.html</code>
+              Open <code>/src/components/anth-network-manager.test.html</code>
               on the Vite port.
             </li>
             <li>
-              Debug builds enable <code>[network] control</code>; release builds
-              keep it off.
+              Debug builds enable <code>[network] control</code> and
+              <code>[network] manage</code>; release builds keep both off.
             </li>
           </ul>
         </article>
       </section>
 
-      <anth-network-monitor id="network"></anth-network-monitor>
+      <anth-network-manager id="network"></anth-network-manager>
     </anth-harness>
 
     <script type="module">
       import '/src/harness/anth-harness.ts'
-      import '/src/components/anth-network-monitor.ts'
+      import '/src/components/anth-network-manager.ts'
       import { HttpNetworkClient } from '/src/lib/network/network-client.ts'
 
       document.querySelector('#network').client = new HttpNetworkClient()

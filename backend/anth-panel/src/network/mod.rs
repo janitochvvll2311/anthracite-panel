@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_proto::{
     MAX_LINE_LEN, NetworkAddress, NetworkAddressFamily, NetworkError, NetworkErrorKind,
-    NetworkInterface, NetworkSnapshot, Response,
+    NetworkInterface, NetworkInterfaceKind, NetworkSnapshot, Response,
 };
 
 use crate::text::read_trimmed;
@@ -48,14 +48,34 @@ struct Counters {
 
 /// Reads every interface on the host, including its IP addresses.
 pub fn collect(control_enabled: bool) -> NetworkSnapshot {
-    let mut snapshot = collect_from("/", control_enabled);
+    collect_with(Path::new("/"), control_enabled, false)
+}
+
+/// Reads every interface under `root`, resolving addresses only for the real
+/// filesystem: a fixture tree has no live interfaces to query.
+pub fn collect_with(
+    root: impl AsRef<Path>,
+    control_enabled: bool,
+    manage_enabled: bool,
+) -> NetworkSnapshot {
+    let root = root.as_ref();
+    let mut snapshot = collect_from(root, control_enabled);
+    if root != Path::new("/") {
+        return fit_snapshot(NetworkSnapshot {
+            manage_enabled,
+            ..snapshot
+        });
+    }
     let mut addresses = interface_addresses();
 
     for interface in &mut snapshot.interfaces {
         interface.addresses = addresses.remove(&interface.name).unwrap_or_default();
     }
 
-    fit_snapshot(snapshot)
+    fit_snapshot(NetworkSnapshot {
+        manage_enabled,
+        ..snapshot
+    })
 }
 
 /// Reads a snapshot from an alternative filesystem root. Addresses are not
@@ -74,6 +94,8 @@ pub fn collect_from(root: impl AsRef<Path>, control_enabled: bool) -> NetworkSna
         interfaces,
         timestamp_ms: timestamp_ms(),
         control_enabled,
+        // `collect_from` has no policy to read; `collect_with` fills this in.
+        manage_enabled: false,
         total,
         truncated,
         warning,
@@ -337,6 +359,7 @@ fn read_interfaces(
         }
 
         let base = entry.path();
+        let kind = interface_kind(&base);
         let flags = read_trimmed(base.join("flags"))
             .and_then(|text| parse_flags(&text))
             .unwrap_or(0);
@@ -370,10 +393,54 @@ fn read_interfaces(
             tx_errors: traffic.tx_errors,
             rx_dropped: traffic.rx_dropped,
             tx_dropped: traffic.tx_dropped,
+            kind,
+            physical: kind == NetworkInterfaceKind::Physical,
         });
     }
 
     interfaces
+}
+
+/// Classifies a device from its sysfs directory.
+///
+/// A `device` link is the reliable signal for real hardware: virtual devices
+/// have no parent device. Wireless is checked first because a wireless NIC also
+/// has a `device` link, and the operator needs the more specific label.
+fn interface_kind(base: &Path) -> NetworkInterfaceKind {
+    let wireless = base.join("wireless").is_dir() || base.join("phy80211").exists();
+    if wireless {
+        return NetworkInterfaceKind::Wireless;
+    }
+    if base.join("device").exists() {
+        return NetworkInterfaceKind::Physical;
+    }
+    if base.join("bridge").is_dir() {
+        return NetworkInterfaceKind::Bridge;
+    }
+    if base.join("bonding").is_dir() {
+        return NetworkInterfaceKind::Bond;
+    }
+    if base.join("vlan").exists() || base.join("upper").is_dir() && base.join("vlan_id").exists() {
+        return NetworkInterfaceKind::Vlan;
+    }
+    if base.join("tun_flags").exists() {
+        return NetworkInterfaceKind::TunTap;
+    }
+    // `iflink` differing from `ifindex` is how the kernel marks a veth peer.
+    let index = read_trimmed(base.join("ifindex")).and_then(|text| text.parse::<u32>().ok());
+    let link = read_trimmed(base.join("iflink")).and_then(|text| text.parse::<u32>().ok());
+    if let (Some(index), Some(link)) = (index, link)
+        && index != link
+        && base.join("type").is_file()
+        && read_trimmed(base.join("type")).as_deref() == Some("1")
+    {
+        return NetworkInterfaceKind::Veth;
+    }
+    if read_trimmed(base.join("type")).as_deref() == Some("772") {
+        return NetworkInterfaceKind::Dummy;
+    }
+
+    NetworkInterfaceKind::Other
 }
 
 fn parse_flags(text: &str) -> Option<u32> {
@@ -792,6 +859,7 @@ mod tests {
             interfaces,
             timestamp_ms: 1_700_000_000_000,
             control_enabled: true,
+            manage_enabled: true,
             total,
             truncated: false,
             warning: None,
@@ -909,3 +977,7 @@ mod tests {
         assert_eq!(parse_flags("nope"), None);
     }
 }
+
+pub mod manage;
+
+pub use manage::{NetworkState, default_route_interfaces, interface_for_peer};
