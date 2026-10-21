@@ -456,8 +456,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `anth_log`), and the four documented exports checked by name and signature
   before a request is written. `anth_exec` reads the frozen recipe from the
   **grant** and renders argv there; the manifest is never consulted for
-  authority. `install` and `load` both call `runtime::probe`, because a digest
-  proves the bytes were approved, not that they parse. `plugin call <ID>
+  authority. Fuel bounds guest instructions only, so the host adds three more
+  bounds: 32 capability calls per invocation, a 30 s deadline, and 64 KiB of
+  log. `install` and `load` both call `runtime::probe`, because a digest
+  proves the bytes were approved, not that they parse. `plugin call` honours
+  `[plugins] enabled` like every other path. `plugin call <ID>
   [REQUEST]` is the CLI anchor; tests drive a real `plugins/guest.wat`. Design
   and threat table: `docs/design/plugins.md`.
 - **Accounts**: `accounts.rs` reads `/etc/passwd` and `/etc/group` for what the
