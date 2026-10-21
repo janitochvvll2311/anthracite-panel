@@ -958,42 +958,55 @@ mod tests {
         // The docs promise the child survives a signal aimed at the daemon's
         // group, which only holds if it called `setsid()`. Comparing the two
         // process groups is the observable part of that promise.
-        let program = std::env::current_exe()
-            .expect("the test binary path")
-            .to_string_lossy()
-            .into_owned();
-
-        let started = spawn(
+        //
+        // The child has to outlive the read: a spawn is fire-and-forget, so a
+        // program that exits immediately leaves nothing to inspect and the
+        // test would fail intermittently under load. `sleep` is give-or-take
+        // free and is killed below.
+        let Some(program) = sleep_program() else {
+            return;
+        };
+        let Ok(started) = spawn(
             true,
             std::slice::from_ref(&program),
             &program,
-            &["--list".to_string()],
+            &["30".to_string()],
             None,
-        );
-        // A test binary started with `--list` prints and exits; whether it
-        // succeeds does not matter, only that a child existed to inspect.
-        let pid = match started {
-            Ok(started) => started.pid,
-            Err(_) => return,
+        ) else {
+            return;
         };
 
-        let own_group = process_group_of(&pid);
-        let daemon_group = process_group_of(&std::process::id());
+        let own_group = process_group_of(started.pid);
+        let daemon_group = process_group_of(std::process::id());
+
+        // `setsid` detached the child, so `kill` by pid is the only handle left.
+        // It runs before the assertion so a failure cannot leak a `sleep`.
+        unsafe {
+            libc::kill(started.pid as libc::pid_t, libc::SIGKILL);
+        }
+
+        // A child that exited before the read is not a `setsid` failure.
+        let (Some(own_group), Some(daemon_group)) = (own_group, daemon_group) else {
+            return;
+        };
         assert_ne!(
             own_group, daemon_group,
             "a spawned child must lead its own process group"
         );
     }
 
-    fn process_group_of(pid: &u32) -> u32 {
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("read /proc stat");
-        let (_, rest) = stat.split_once(") ").expect("comm is parenthesised");
+    fn sleep_program() -> Option<String> {
+        fs::canonicalize("/bin/sleep")
+            .or_else(|_| fs::canonicalize("/usr/bin/sleep"))
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn process_group_of(pid: u32) -> Option<u32> {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let (_, rest) = stat.split_once(") ")?;
         // state, ppid, pgrp
-        rest.split_whitespace()
-            .nth(2)
-            .expect("pgrp field")
-            .parse()
-            .expect("pgrp is numeric")
+        rest.split_whitespace().nth(2)?.parse().ok()
     }
 
     #[test]

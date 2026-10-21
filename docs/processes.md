@@ -50,8 +50,12 @@ The daemon validates each request:
 
 The daemon does not supervise what it starts. The child calls `setsid()` before
 `exec`, so it leads its own session and process group and keeps running if the
-daemon stops — including when the whole group is signalled or a service manager
-stops the daemon's cgroup.
+daemon stops, including when a signal is sent to the daemon's process group.
+
+`setsid()` changes the session and process group, not the cgroup, so a service
+manager that stops the daemon's cgroup still terminates the child. Nothing here
+moves the child out of that cgroup, and the panel ships no service unit that
+would.
 
 Debug builds (`cargo run`) bootstrap a missing config with `control = true` so
 signals can be tested locally. Release builds still generate `false`, and an
