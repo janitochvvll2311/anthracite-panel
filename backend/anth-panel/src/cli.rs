@@ -916,7 +916,7 @@ pub struct TerminalArgs {
     pub rows: Option<u16>,
 }
 
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, Clone)]
 pub struct EndpointArgs {
     #[arg(
         long,

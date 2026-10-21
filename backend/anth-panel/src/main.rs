@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::time::Duration;
 
 use anth_panel::cli::{
@@ -35,13 +37,20 @@ async fn serve_api(
     config: Config,
     config_path: &str,
     args: &EndpointArgs,
+    ready: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 ) -> Result<ExitCode, String> {
     let address = resolve_addr(args);
-    let listener = TcpListener::bind(&address)
-        .await
-        .map_err(|e| format!("Failed to bind to address {address}: {e}"))?;
+    let listener = match TcpListener::bind(&address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            let detail = format!("Failed to bind to address {address}: {error}");
+            notify_ready(ready, Err(detail.clone()));
+            return Err(detail);
+        }
+    };
 
     println!("Server is listening on {address}");
+    notify_ready(ready, Ok(()));
     let state = AppState::with_config_path(config, Path::new(config_path));
     axum::serve(
         listener,
@@ -52,27 +61,73 @@ async fn serve_api(
     Ok(ExitCode::SUCCESS)
 }
 
+/// Hands the bind outcome to a waiting [`dispatch`] without making the serving
+/// functions depend on it. A dropped receiver is not an error: a one-shot
+/// invocation passes `None`, and the interactive session is the only caller
+/// that waits.
+fn notify_ready(
+    ready: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+    outcome: Result<(), String>,
+) {
+    if let Some(ready) = ready {
+        let _ = ready.send(outcome);
+    }
+}
+
 /// Keeps the daemon task alive for as long as the API runs: binding the HTTP
 /// port first surfaces address-in-use errors before the socket is touched.
 async fn serve_run(
     config: Config,
     config_path: &str,
     args: &EndpointArgs,
+    ready: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 ) -> Result<ExitCode, String> {
     let address = resolve_addr(args);
-    let listener = TcpListener::bind(&address)
-        .await
-        .map_err(|e| format!("Failed to bind to address {address}: {e}"))?;
+    let listener = match TcpListener::bind(&address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            let detail = format!("Failed to bind to address {address}: {error}");
+            notify_ready(ready, Err(detail.clone()));
+            return Err(detail);
+        }
+    };
 
     let daemon_config = config.clone();
     let daemon_config_path = std::path::PathBuf::from(config_path);
+    let (daemon_ready, daemon_bound) = tokio::sync::oneshot::channel();
     let daemon = tokio::spawn(async move {
-        if let Err(e) = anth_panel::daemon::serve(&daemon_config, &daemon_config_path).await {
+        if let Err(e) = anth_panel::daemon::serve_with_ready(
+            &daemon_config,
+            &daemon_config_path,
+            Some(daemon_ready),
+        )
+        .await
+        {
             eprintln!("Daemon stopped: {e}");
         }
     });
 
+    // The HTTP port is bound, but `run` is not ready until the socket is too:
+    // an interactive session sends its first request as soon as this returns.
+    match daemon_bound.await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            daemon.abort();
+            let _ = daemon.await;
+            notify_ready(ready, Err(error.clone()));
+            return Err(error);
+        }
+        Err(_) => {
+            daemon.abort();
+            let _ = daemon.await;
+            let detail = "the daemon stopped before binding the socket".to_string();
+            notify_ready(ready, Err(detail.clone()));
+            return Err(detail);
+        }
+    }
+
     println!("Daemon and server are running (http://{address})");
+    notify_ready(ready, Ok(()));
     let state = AppState::with_config_path(config, Path::new(config_path));
     let result = axum::serve(
         listener,
@@ -1163,12 +1218,191 @@ fn run_config(config_path: &str, args: &ConfigArgs) -> ExitCode {
     }
 }
 
+/// Which services one detached session task serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServerRole {
+    Daemon,
+    Api,
+    Run,
+}
+
+impl ServerRole {
+    fn of(command: &Command) -> Option<Self> {
+        match command {
+            Command::Daemon => Some(Self::Daemon),
+            Command::Api(_) => Some(Self::Api),
+            Command::Run(_) => Some(Self::Run),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Daemon => "daemon",
+            Self::Api => "api",
+            Self::Run => "run",
+        }
+    }
+
+    /// Whether a running task in `self` already binds what `requested` needs.
+    ///
+    /// `run` owns both the socket and the HTTP port, so it conflicts with a
+    /// separate `daemon` or `api` in either direction. `daemon` and `api` do not
+    /// conflict with each other: starting both is the point of the session.
+    fn serves(self, requested: Self) -> bool {
+        self == requested || self == Self::Run || requested == Self::Run
+    }
+}
+
+struct BackgroundTask {
+    role: ServerRole,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+/// Server subcommands the interactive session left running behind the prompt.
+///
+/// The prompt keeps reading lines while these serve, so one terminal can run the
+/// daemon and the API and still send requests. A duplicate start is refused
+/// rather than detached: `daemon::serve` unlinks the socket before binding, so a
+/// second copy would steal the path from a live one and leave it unreachable.
+#[derive(Default)]
+struct BackgroundServers {
+    tasks: Vec<BackgroundTask>,
+}
+
+impl BackgroundServers {
+    /// Refuses a start that would collide with a server already detached.
+    ///
+    /// Kept separate from the spawning so no `RefCell` borrow is held across the
+    /// readiness await: this call only inspects the registry.
+    fn check(&mut self, command: &Command) -> Result<ServerRole, String> {
+        let role = ServerRole::of(command).ok_or("not a server subcommand")?;
+
+        // A task that already finished (a busy port, an unbindable socket) must
+        // not block a retry.
+        self.tasks.retain(|task| !task.handle.is_finished());
+        if let Some(running) = self.tasks.iter().find(|task| task.role.serves(role)) {
+            return Err(if running.role == role {
+                format!(
+                    "{} is already running in the background; quit the session to stop it",
+                    role.label()
+                )
+            } else {
+                format!(
+                    "cannot start `{}`: `{}` already owns what it would bind; quit the session to stop it",
+                    role.label(),
+                    running.role.label()
+                )
+            });
+        }
+        Ok(role)
+    }
+
+    fn register(&mut self, role: ServerRole, handle: tokio::task::JoinHandle<()>) {
+        self.tasks.push(BackgroundTask { role, handle });
+    }
+
+    /// Stops every detached server once the prompt closes.
+    ///
+    /// Aborting is enough: the session returns to `main` immediately, and
+    /// dropping the runtime finishes the cancellation.
+    fn shutdown(&mut self) {
+        for task in self.tasks.drain(..) {
+            task.handle.abort();
+        }
+    }
+}
+
+/// Spawns one serving subcommand and waits until it has bound its port.
+///
+/// The interactive session detaches a `daemon`, `api` or `run` and keeps its
+/// prompt, so the next typed line is already waiting: without this handshake a
+/// request could reach the socket before the listener exists.
+async fn start_server(
+    config_path: &str,
+    command: &Command,
+) -> Result<tokio::task::JoinHandle<()>, String> {
+    let config = Config::load_or_create(config_path);
+    let path = config_path.to_string();
+    let (ready, bound) = tokio::sync::oneshot::channel();
+    let handle = match command {
+        Command::Daemon => tokio::spawn(async move {
+            if let Err(error) =
+                anth_panel::daemon::serve_with_ready(&config, Path::new(&path), Some(ready)).await
+            {
+                eprintln!("[ERROR] daemon stopped: {error}");
+            }
+        }),
+        Command::Api(args) => {
+            let args = args.clone();
+            tokio::spawn(async move {
+                if let Err(error) = serve_api(config, &path, &args, Some(ready)).await {
+                    eprintln!("[ERROR] api stopped: {error}");
+                }
+            })
+        }
+        Command::Run(args) => {
+            let args = args.clone();
+            tokio::spawn(async move {
+                if let Err(error) = serve_run(config, &path, &args, Some(ready)).await {
+                    eprintln!("[ERROR] run stopped: {error}");
+                }
+            })
+        }
+        _ => unreachable!("only a server subcommand is detached"),
+    };
+
+    match bound.await {
+        Ok(Ok(())) => Ok(handle),
+        Ok(Err(_)) => {
+            let _ = handle.await;
+            Err("the service could not start; see the error above".to_string())
+        }
+        Err(_) => {
+            let _ = handle.await;
+            Err("the service stopped before it was listening".to_string())
+        }
+    }
+}
+
 /// Runs one command to completion and reports its exit code.
 ///
 /// This is the single dispatcher: `main` calls it once, and the interactive
 /// session calls it per line, so a typed command cannot drift from the
-/// one-shot invocation.
-async fn dispatch(config_path: &str, command: &Command) -> ExitCode {
+/// one-shot invocation. `background` is `Some` only in a session; there a
+/// serving subcommand is detached instead of awaited, which is what lets the
+/// prompt keep sending commands while the daemon and the API run.
+async fn dispatch(
+    config_path: &str,
+    command: &Command,
+    background: Option<&RefCell<BackgroundServers>>,
+) -> ExitCode {
+    if let Some(servers) = background
+        && ServerRole::of(command).is_some()
+    {
+        let role = match servers.borrow_mut().check(command) {
+            Ok(role) => role,
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        return match start_server(config_path, command).await {
+            Ok(handle) => {
+                servers.borrow_mut().register(role, handle);
+                println!(
+                    "[background] {} started; the prompt stays available, `quit` stops it",
+                    role.label()
+                );
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Command::Auth(args) = command {
         return run_auth(config_path, args);
     }
@@ -1189,10 +1423,10 @@ async fn dispatch(config_path: &str, command: &Command) -> ExitCode {
         .map(|()| ExitCode::SUCCESS)
         .map_err(|e| e.to_string()),
         Command::Api(args) => {
-            serve_api(Config::load_or_create(config_path), config_path, args).await
+            serve_api(Config::load_or_create(config_path), config_path, args, None).await
         }
         Command::Run(args) => {
-            serve_run(Config::load_or_create(config_path), config_path, args).await
+            serve_run(Config::load_or_create(config_path), config_path, args, None).await
         }
         Command::Terminal(args) => {
             let config = Config::load_or_default(config_path);
@@ -1225,21 +1459,28 @@ async fn dispatch(config_path: &str, command: &Command) -> ExitCode {
 ///
 /// The runner borrows the config path and calls the same [`dispatch`] a
 /// one-shot invocation uses; only the exit code is kept, because a session
-/// continues after a failure.
+/// continues after a failure. A serving subcommand is detached there, so the
+/// registry is shared with the dispatcher and stopped when the prompt closes.
 async fn run_interactive(config_path: &str, first: Option<Command>) -> ExitCode {
     let mut first = first;
     let path = config_path.to_string();
+    let servers = Rc::new(RefCell::new(BackgroundServers::default()));
+    let session_servers = Rc::clone(&servers);
     let mut runner: anth_panel::repl::Runner = Box::new(move |command| {
         let config_path = path.clone();
+        let servers = Rc::clone(&session_servers);
         Box::pin(async move {
-            let code = dispatch(&config_path, &command).await;
+            let code = dispatch(&config_path, &command, Some(servers.as_ref())).await;
             u8::from(code == ExitCode::FAILURE)
         })
     });
 
     let stdin = tokio::io::stdin();
     let mut lines = tokio::io::BufReader::new(stdin).lines();
-    if let Err(e) = anth_panel::repl::session(first.take(), &mut lines, true, &mut runner).await {
+    let outcome = anth_panel::repl::session(first.take(), &mut lines, true, &mut runner).await;
+    servers.borrow_mut().shutdown();
+
+    if let Err(e) = outcome {
         eprintln!("[ERROR] {e}");
         return ExitCode::FAILURE;
     }
@@ -1256,12 +1497,47 @@ async fn main() -> ExitCode {
     }
 
     match &cli.command {
-        Some(command) => dispatch(config_path, command).await,
+        Some(command) => dispatch(config_path, command, None).await,
         // A bare invocation has nothing to run; clap cannot require the
         // subcommand because `-i` alone is valid.
         None => {
             eprintln!("[ERROR] a command is required; run `anth-panel --help`");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_conflicts_with_both_services() {
+        assert!(ServerRole::Run.serves(ServerRole::Daemon));
+        assert!(ServerRole::Daemon.serves(ServerRole::Run));
+        assert!(ServerRole::Run.serves(ServerRole::Api));
+        assert!(ServerRole::Api.serves(ServerRole::Run));
+        assert!(!ServerRole::Daemon.serves(ServerRole::Api));
+        assert!(!ServerRole::Api.serves(ServerRole::Daemon));
+    }
+
+    #[tokio::test]
+    async fn a_daemon_leaves_the_api_free_but_blocks_a_second_daemon() {
+        let mut servers = BackgroundServers::default();
+        let role = servers.check(&Command::Daemon).unwrap();
+        servers.register(role, tokio::spawn(std::future::pending::<()>()));
+
+        assert!(
+            servers
+                .check(&Command::Api(EndpointArgs::default()))
+                .is_ok(),
+            "the API binds another port and must be allowed"
+        );
+        let error = servers.check(&Command::Daemon).unwrap_err();
+        assert!(error.contains("already running"), "{error}");
+        let error = servers
+            .check(&Command::Run(EndpointArgs::default()))
+            .unwrap_err();
+        assert!(error.contains("cannot start `run`"), "{error}");
     }
 }

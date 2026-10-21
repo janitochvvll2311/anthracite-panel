@@ -7,10 +7,11 @@
 //! prompts included, and a new subcommand needs no work here.
 //!
 //! Two modes share [`session`]. A client session (`anth-panel -i`) sends
-//! requests to a running daemon. `daemon -i` serves the socket and runs the
-//! session beside the accept loop, so a debugging operator needs one terminal;
-//! that mode refuses the subcommands that would start a second server, because
-//! the process already owns the socket.
+//! requests to a running daemon. A serving subcommand (`daemon`, `api`, `run`)
+//! typed in the session is detached by the dispatcher and keeps serving behind
+//! the prompt, so one terminal can run the daemon and the API and still send
+//! commands; a second start of the same service is refused there, because it
+//! would try to bind what the first one already owns.
 //!
 //! Execution is injected as a [`Runner`] rather than implemented here: the
 //! dispatcher lives in the binary because it owns the confirmation prompts and
@@ -56,7 +57,7 @@ where
         println!("{HINT}");
     }
     if let Some(command) = first {
-        run_once(command, run).await;
+        let _ = run(command).await;
     }
 
     loop {
@@ -82,7 +83,9 @@ where
             _ => {}
         }
         match parse_line(line) {
-            Ok(command) => run_once(command, run).await,
+            Ok(command) => {
+                let _ = run(command).await;
+            }
             Err(error) => {
                 eprintln!("[ERROR] {error}");
                 eprintln!("Type `help` for the command list.");
@@ -95,18 +98,6 @@ fn prompt() {
     use std::io::Write;
     print!("> ");
     let _ = std::io::stdout().flush();
-}
-
-/// Applies the session-only refusals, then runs the command.
-///
-/// A server subcommand never returns, so running one here would leave the
-/// prompt blocked forever with no way back: it is refused rather than started.
-async fn run_once(command: Command, run: &mut Runner) {
-    if matches!(command, Command::Daemon | Command::Api(_) | Command::Run(_)) {
-        eprintln!("[ERROR] this subcommand serves and never returns; run it outside the session");
-        return;
-    }
-    run(command).await;
 }
 
 /// Parses one typed line into a command.
@@ -175,7 +166,7 @@ pub enum Outcome {
     Request,
     /// Runs in this process (`auth`, `config`, chunked file transfers).
     Local,
-    /// Starts a server, which a session may not do while one already runs.
+    /// Starts a server, detached by the dispatcher so the prompt stays usable.
     Server,
     /// Needs the process's real stdin.
     Terminal,
@@ -347,7 +338,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_server_subcommand_is_refused() {
+    async fn a_server_subcommand_reaches_the_dispatcher() {
         let mut input = BufReader::new("".as_bytes()).lines();
         let ran = std::rc::Rc::new(std::cell::Cell::new(false));
         let flag = std::rc::Rc::clone(&ran);
@@ -360,8 +351,8 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !ran.get(),
-            "a nested daemon must be refused before dispatch"
+            ran.get(),
+            "the session hands a server subcommand to the dispatcher, which detaches it"
         );
     }
 

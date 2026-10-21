@@ -160,18 +160,32 @@ A watch flag is accepted but prints one frame: a stream would hold the prompt
 until interrupted, which a typed command should not do. A client session exits
 with `0` even after a failed command, because the session itself completed.
 
-Three subcommands are refused inside a session:
+`daemon`, `api` and `run` are detached instead of blocking the prompt, so one
+terminal can serve and still send requests:
 
-- `daemon`, `api` and `run` serve and never return, so running one would block
-  the prompt forever with no way back.
-- `terminal` needs the terminal's own stdin, which the line reader owns.
+```
+$ anth-panel -i
+Type a command without the `anth-panel` prefix, or `help`. Ctrl-D or `quit` exits.
+> daemon
+Listening on /var/tmp/anth.sock
+[background] daemon started; the prompt stays available, `quit` stops it
+> api
+Server is listening on 0.0.0.0:8080
+[background] api started; the prompt stays available, `quit` stops it
+> echo hola
+[OK] hola
+```
 
-Run those as separate invocations. `auth` and `config` do run in a session, but
-note that they edit the config file in this process rather than through the
-daemon.
+The session waits until the port is bound before reporting the start, so the
+next typed line cannot race the bind. `daemon` and `api` can run together;
+starting the same service twice is refused, and `run` conflicts with either
+because it binds both. `quit`, `exit` or Ctrl-D stops every detached server;
+a daemon started in another process is unaffected.
 
-The prompt never stops a server: `anth-panel -i` only reads, and the daemon is
-unaffected when the prompt exits.
+`terminal` is refused inside a session because it needs the terminal's own
+stdin, which the line reader owns; run it as a separate invocation,
+`anth-panel terminal`. `auth` and `config` do run in a session, but note that
+they edit the config file in this process rather than through the daemon.
 
 ### `api`
 

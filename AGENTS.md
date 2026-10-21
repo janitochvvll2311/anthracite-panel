@@ -581,8 +581,12 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   supplies one that calls `dispatch`, the same function a one-shot invocation
   runs, so a typed command cannot drift from the subcommand. `repl::session`
   takes a `Lines<R>` so tests drive it from a byte slice. `daemon`/`api`/`run`
-  and `terminal` are refused: the first three never return, and `terminal` needs
-  the stdin the line reader owns. A watch prints one frame instead of streaming.
+  are detached by the dispatcher on a background task (the session owns a
+  `BackgroundServers` registry of join handles) and awaited only until their
+  port is bound, so the prompt stays usable; starting the same service twice is
+  refused there because the second copy would steal the socket, and the registry
+  is aborted when the prompt closes. `terminal` is still refused: it needs the
+  stdin the line reader owns. A watch prints one frame instead of streaming.
 - **Env vars**: `ANTH_PANEL_ADDR` (panel bind address, default `0.0.0.0:8080`),
   `ANTH_CONFIG` (config path, used by the Docker entrypoint), `RUST_LOG`.
 
