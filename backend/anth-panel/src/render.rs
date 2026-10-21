@@ -545,6 +545,18 @@ pub fn render_response(response: &Response) -> String {
         Response::ProcessSignalled { pid, signal } => {
             format!("[OK] sent {signal} to process {pid}")
         }
+        Response::ProcessStarted(started) => {
+            let args = if started.args.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", started.args.join(" "))
+            };
+            format!(
+                "[OK] started {}{args} as pid {}",
+                started.program, started.pid
+            )
+        }
+        Response::ProcessSpawnError(error) => format!("[ERROR] {}", error.detail),
         Response::NetworkSnapshot(snapshot) => render_network_snapshot(snapshot),
         Response::NetworkStateChanged { name, up } => {
             let state = if *up { "up" } else { "down" };

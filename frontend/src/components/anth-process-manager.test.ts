@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import './anth-process-monitor'
-import type { AnthProcessMonitor } from './anth-process-monitor'
+import './anth-process-manager'
+import type { AnthProcessManager } from './anth-process-manager'
 import type { AnthProcessTable } from './anth-process-table'
 import type {
   ProcessClient,
@@ -8,6 +8,8 @@ import type {
   ProcessInfo,
   ProcessSignal,
   ProcessSnapshot,
+  SpawnRequest,
+  SpawnedProcess,
 } from '../lib/processes/process-client'
 import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 import { ANTH_TAB_SHOW_EVENT } from '../lib/ui/tab-visibility'
@@ -38,6 +40,8 @@ function snapshot(
     clock_ticks: 100,
     timestamp_ms: 1000,
     control_enabled: false,
+    spawn_enabled: false,
+    spawn_allow: [],
     total: processes.length,
     truncated: false,
     ...overrides,
@@ -54,6 +58,13 @@ class FakeClient implements ProcessClient {
   listError?: Error
   signalError?: Error
   signals: Array<{ pid: number; signal: ProcessSignal }> = []
+  spawns: SpawnRequest[] = []
+  spawnError?: Error
+  spawned: SpawnedProcess = {
+    pid: 4242,
+    program: '/bin/echo',
+    args: [],
+  }
 
   list = vi.fn(async () => {
     this.listCalls += 1
@@ -78,6 +89,18 @@ class FakeClient implements ProcessClient {
     if (this.signalError) throw this.signalError
   })
 
+  spawn = vi.fn(async (request: SpawnRequest) => {
+    this.spawns.push(request)
+    if (this.spawnError) throw this.spawnError
+    // Echo the request back the way the daemon does, so a test that checks the
+    // reported pid and arguments is checking the component, not the fixture.
+    return {
+      ...this.spawned,
+      program: request.program,
+      args: request.args ?? [],
+    }
+  })
+
   emit(next: ProcessSnapshot): void {
     this.current = next
     this.handlers?.onSnapshot(next)
@@ -96,7 +119,7 @@ interface UpdatableElement extends HTMLElement {
   updateComplete: Promise<boolean>
 }
 
-async function flush(element: AnthProcessMonitor): Promise<void> {
+async function flush(element: AnthProcessManager): Promise<void> {
   for (let i = 0; i < 4; i++) {
     await Promise.resolve()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -118,10 +141,10 @@ async function flush(element: AnthProcessMonitor): Promise<void> {
 async function mount(
   client = new FakeClient(),
   options: { autoStart?: boolean; refreshInterval?: number } = {},
-): Promise<{ element: AnthProcessMonitor; client: FakeClient }> {
+): Promise<{ element: AnthProcessManager; client: FakeClient }> {
   const element = document.createElement(
-    'anth-process-monitor',
-  ) as AnthProcessMonitor
+    'anth-process-manager',
+  ) as AnthProcessManager
   element.client = client
   if (options.autoStart !== undefined) element.autoStart = options.autoStart
   if (options.refreshInterval !== undefined) {
@@ -133,7 +156,7 @@ async function mount(
   return { element, client }
 }
 
-function table(element: AnthProcessMonitor): AnthProcessTable {
+function table(element: AnthProcessManager): AnthProcessTable {
   const child = element.shadowRoot?.querySelector(
     'anth-process-table',
   ) as AnthProcessTable | null
@@ -141,7 +164,7 @@ function table(element: AnthProcessMonitor): AnthProcessTable {
   return child
 }
 
-function flatRow(element: AnthProcessMonitor): HTMLElement | null {
+function flatRow(element: AnthProcessManager): HTMLElement | null {
   return (
     table(element)
       .shadowRoot?.querySelector('anth-process-flat-table')
@@ -162,7 +185,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('AnthProcessMonitor', () => {
+describe('AnthProcessManager', () => {
   it('restarts the stream when a tab panel shows it again', async () => {
     const { element, client } = await mount()
     expect(client.watchCalls).toHaveLength(1)
@@ -596,5 +619,168 @@ describe('AnthProcessMonitor', () => {
     expect(
       element.shadowRoot?.querySelector('[role="alert"]')?.textContent?.trim(),
     ).toBe('process stream disconnected')
+  })
+
+  it('offers no start button when the daemon denies every spawn', async () => {
+    // Enabling the switch without an allowlist opens nothing, so the form must
+    // not be reachable either: an operator should not fill in a form whose
+    // submission is certain to be refused.
+    const client = new FakeClient()
+    client.current = snapshot([processInfo()], {
+      spawn_enabled: false,
+      spawn_allow: [],
+    })
+    const { element } = await mount(client)
+
+    const start = button(element.shadowRoot!, 'Start process')
+    expect(start.disabled).toBe(true)
+    expect(start.title).toContain('disabled')
+  })
+
+  it('renders a snapshot from a daemon that omits the allowlist', async () => {
+    // A daemon predating `spawn_allow` sends no key at all. Reading `.length`
+    // on `undefined` used to throw during render and take the whole panel down
+    // with it, so absence has to mean "nothing allowed".
+    const client = new FakeClient()
+    const legacy = { ...snapshot(), spawn_enabled: true } as ProcessSnapshot
+    delete (legacy as { spawn_allow?: string[] }).spawn_allow
+    client.current = legacy
+
+    const { element } = await mount(client)
+
+    expect(element).toBeDefined()
+    const start = button(element.shadowRoot!, 'Start process')
+    expect(start.disabled).toBe(true)
+    expect(start.title).toContain('spawn_allow')
+  })
+
+  it('explains an empty allowlist on the start button', async () => {
+    const client = new FakeClient()
+    client.current = snapshot([processInfo()], {
+      spawn_enabled: true,
+      spawn_allow: [],
+    })
+    const { element } = await mount(client)
+
+    const start = button(element.shadowRoot!, 'Start process')
+    expect(start.disabled).toBe(true)
+    expect(start.title).toContain('spawn_allow')
+  })
+
+  it('spawns the typed command and reports the pid', async () => {
+    const client = new FakeClient()
+    client.current = snapshot([processInfo()], {
+      spawn_enabled: true,
+      spawn_allow: ['/bin/echo'],
+    })
+    const { element } = await mount(client)
+
+    const events: Array<{ pid: number; program: string }> = []
+    element.addEventListener('anth-process-spawned', (event) => {
+      events.push((event as CustomEvent).detail)
+    })
+
+    button(element.shadowRoot!, 'Start process').click()
+    await flush(element)
+
+    const modal = element.shadowRoot?.querySelector('anth-modal')
+    const command = modal?.querySelector<HTMLInputElement>('input[name="command"]')
+    command!.value = '/bin/echo "hello there"'
+    command!.dispatchEvent(new Event('input'))
+    await element.updateComplete
+
+    const form = modal?.querySelector('form')!
+    form.dispatchEvent(new Event('submit'))
+    await answerDialogs('confirm')
+    await flush(element)
+
+    expect(client.spawns).toHaveLength(1)
+    expect(client.spawns[0]).toEqual({
+      program: '/bin/echo',
+      args: ['hello there'],
+    })
+    expect(events).toEqual([
+      { pid: 4242, program: '/bin/echo', args: ['hello there'] },
+    ])
+  })
+
+  it('keeps the form open and shows the daemon refusal', async () => {
+    const client = new FakeClient()
+    client.current = snapshot([processInfo()], {
+      spawn_enabled: true,
+      spawn_allow: ['/bin/echo'],
+    })
+    client.spawnError = new Error('`/bin/echo` is not in the allowlist')
+    const { element } = await mount(client)
+
+    button(element.shadowRoot!, 'Start process').click()
+    await flush(element)
+
+    const modal = element.shadowRoot?.querySelector('anth-modal')
+    const command = modal?.querySelector<HTMLInputElement>('input[name="command"]')
+    command!.value = '/bin/echo'
+    command!.dispatchEvent(new Event('input'))
+    await element.updateComplete
+
+    modal?.querySelector('form')!.dispatchEvent(new Event('submit'))
+    await answerDialogs('confirm')
+    await flush(element)
+
+    expect(modal?.open).toBe(true)
+    expect(modal?.querySelector('[role="alert"]')?.textContent).toContain(
+      'not in the allowlist',
+    )
+  })
+
+  it('refuses a relative program before it reaches the daemon', async () => {
+    const client = new FakeClient()
+    client.current = snapshot([processInfo()], {
+      spawn_enabled: true,
+      spawn_allow: ['/bin/echo'],
+    })
+    const { element } = await mount(client)
+
+    button(element.shadowRoot!, 'Start process').click()
+    await flush(element)
+
+    const modal = element.shadowRoot?.querySelector('anth-modal')
+    const command = modal?.querySelector<HTMLInputElement>('input[name="command"]')
+    command!.value = 'echo hi'
+    command!.dispatchEvent(new Event('input'))
+    await element.updateComplete
+
+    modal?.querySelector('form')!.dispatchEvent(new Event('submit'))
+    await flush(element)
+
+    expect(client.spawns).toHaveLength(0)
+    expect(modal?.querySelector('[role="alert"]')?.textContent).toContain(
+      'absolute',
+    )
+  })
+
+  it('fills the program from an allowlist chip and keeps the arguments', async () => {
+    const client = new FakeClient()
+    client.current = snapshot([processInfo()], {
+      spawn_enabled: true,
+      spawn_allow: ['/bin/echo', '/usr/bin/uptime'],
+    })
+    const { element } = await mount(client)
+
+    button(element.shadowRoot!, 'Start process').click()
+    await flush(element)
+
+    const modal = element.shadowRoot?.querySelector('anth-modal')
+    const command = modal?.querySelector<HTMLInputElement>('input[name="command"]')
+    command!.value = '/bin/other --flag'
+    command!.dispatchEvent(new Event('input'))
+    await element.updateComplete
+
+    const chip = [...modal!.querySelectorAll('button.chip')].find(
+      (candidate) => candidate.textContent?.trim() === '/usr/bin/uptime',
+    ) as HTMLButtonElement
+    chip.click()
+    await element.updateComplete
+
+    expect(command!.value).toBe('/usr/bin/uptime --flag')
   })
 })

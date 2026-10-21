@@ -56,11 +56,52 @@ Additional decisions taken while planning:
 | 1 (point 5) | `anth-modal`, `anth-dialog`, `anth-tab-panel`, harness migration | done, merged in #16 |
 | 2 (point 7) | JWT auth, refresh rotation, login screen, config commands and settings harness | done, merged in #17 |
 | 3 (point 6) | Floating windows, minimize, standalone window | done, in review |
-| 4 (point 1) | `anth-process-manager` and process spawning | not started |
+| 4 (point 1) | `anth-process-manager` and process spawning | done, in review |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | not started |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/delete | not started |
 | 7 (point 4) | Partition create/edit/resize/delete and `mkfs` | not started |
 | 8 (point 8) | Plugin system and the WireGuard plugin | not started |
+
+## Phase 4 — process management (done)
+
+What changed:
+
+- `process.rs` replaced the `control: bool` threading with `ProcessPolicy`,
+  resolved once per request from `[process]`. `collect`, `collect_from`,
+  `send_signal` and `spawn` all read it, so a caller cannot pass the switches in
+  an inconsistent order.
+- Spawning is a second switch, `[process] spawn`, plus `spawn_allow`. The list,
+  not the switch, is the authority: an empty list denies every request even with
+  `spawn = true`.
+- Validation canonicalises before comparing. `/bin/echo` and `/usr/bin/echo` are
+  the same file on a merged-usr host, so a text compare would reject a program
+  the operator did list; canonicalising also means a symlink cannot point outside
+  the allowlist.
+- The child gets `Stdio::null()` on all three streams and is reaped by a thread
+  per child. Without the reap every short-lived spawn left a zombie; using a
+  thread avoids touching the global `SIGCHLD` disposition, which the PTY
+  sessions also depend on.
+- The protocol gained `ProcessSpawn`, `ProcessStarted` and `ProcessSpawnError`
+  with a machine-readable `ProcessSpawnErrorKind`, so a client branches on the
+  kind and never parses the message.
+- `POST /api/processes/spawn` maps the kind to a status: one `403` class for
+  every "not allowed" refusal, `404` for a missing program or directory, `400`
+  for a malformed body. The handler does not re-check the policy; asking twice
+  is how two copies drift apart.
+- The component was renamed `anth-process-monitor` → `anth-process-manager`
+  with no compatibility alias. It gained a spawn modal that only opens when the
+  snapshot says spawning is possible, an allowlist chip row, and the same
+  confirm-then-act flow the signal button already used.
+- `parseSpawnForm` validates before the request leaves the browser; the daemon
+  still decides.
+
+Bug found and fixed while doing this: `anth-settings` diffed its draft with
+`!==`, so the new `spawn_allow` array always looked edited and a save with no
+changes still sent a `PATCH`. Array fields now compare element by element.
+
+Verification: 156 + 57 + 62 + 27 + 31 + 25 + 18 + 11 + 7 backend tests,
+424 frontend tests, `tsc --noEmit`, `cargo fmt --check` and `cargo clippy
+--all-targets` clean.
 
 ## Phase 0 — foundation (done)
 

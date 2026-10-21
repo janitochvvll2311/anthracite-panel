@@ -255,6 +255,27 @@ when stdin is not a terminal. The daemon still enforces its own policy:
 `[process] control` must be `true`, the target must belong to the daemon user,
 and pid 1 or the daemon itself are rejected.
 
+#### `process spawn <PROGRAM> [ARGS...]`
+
+```bash
+anth-panel process spawn /bin/ls -la /tmp
+anth-panel process spawn --cwd /tmp --yes /usr/bin/uptime --pretty
+```
+
+`PROGRAM` must be an absolute path that appears in `[process] spawn_allow`, and
+`[process] spawn` must be `true`. Everything after `PROGRAM` is passed as an
+argument vector, not through a shell, so quoting on the command line is the
+shell's job and nothing is re-split. That also means `--cwd` and `--yes` must
+come **before** `PROGRAM`; after it they are arguments to the program. Use `--`
+to pass an argument that starts with a hyphen.
+
+`--cwd DIR` sets the working directory. The output of the started process is
+discarded and the daemon does not supervise it; the command prints the new pid
+and exits.
+
+Without `--yes` the command asks for confirmation on a TTY and refuses to run
+when stdin is not a terminal.
+
 ### `network`
 
 Inspects network interfaces and, when `[network] control = true`, brings one up

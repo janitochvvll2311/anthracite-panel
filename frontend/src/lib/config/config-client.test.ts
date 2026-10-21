@@ -8,7 +8,7 @@ function view(): ConfigView {
     socket_path: '/var/tmp/anth.sock',
     sudo: false,
     terminal: { shell: 'auto', max_sessions: 4, token_set: false },
-    process: { control: false },
+    process: { control: false, spawn: false, spawn_allow: [] },
     network: { control: false },
     firewall: { control: false },
     volumes: { control: false, mount_root: '/mnt' },

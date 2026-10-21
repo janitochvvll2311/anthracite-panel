@@ -93,9 +93,9 @@ fn handle_core(request: &Request, policy: &Policy, files: &FileService) -> Respo
             message: message.clone(),
         },
         Request::HostInfo => Response::HostInfo(Box::new(hostinfo::collect())),
-        Request::ProcessList => Response::ProcessSnapshot(process::collect(policy.process_control)),
+        Request::ProcessList => Response::ProcessSnapshot(process::collect(&policy.process)),
         Request::ProcessSignal { pid, signal } => {
-            match process::send_signal(*pid, *signal, policy.process_control) {
+            match process::send_signal(*pid, *signal, &policy.process) {
                 Ok(()) => Response::ProcessSignalled {
                     pid: *pid,
                     signal: *signal,
@@ -105,6 +105,16 @@ fn handle_core(request: &Request, policy: &Policy, files: &FileService) -> Respo
                 },
             }
         }
+        Request::ProcessSpawn { program, args, cwd } => match process::spawn(
+            policy.process.spawn,
+            &policy.process.spawn_allow,
+            program,
+            args,
+            cwd.as_deref(),
+        ) {
+            Ok(started) => Response::ProcessStarted(started),
+            Err(error) => Response::ProcessSpawnError(error),
+        },
         Request::NetworkList => Response::NetworkSnapshot(network::collect(policy.network_control)),
         Request::NetworkSetState { name, up } => {
             match network::set_state(policy.network_control, policy.sudo, name, *up) {

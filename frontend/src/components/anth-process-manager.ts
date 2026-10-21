@@ -2,22 +2,33 @@ import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import './anth-process-table'
+import './anth-modal'
 import type { AnthProcessSelectDetail, ProcessView } from './anth-process-table'
+import type { AnthModalCloseDetail } from './anth-modal'
 import type {
   ProcessClient,
   ProcessConnectionStatus,
   ProcessRow,
   ProcessSignal,
   ProcessSnapshot,
+  SpawnedProcess,
 } from '../lib/processes/process-client'
-import { confirmAction } from '../lib/ui/dialog'
+import { parseSpawnForm, spawnBlockReason } from '../lib/processes/display'
+import { confirmAction, showAlert } from '../lib/ui/dialog'
 import { onTabShow } from '../lib/ui/tab-visibility'
 
 export const ANTH_PROCESS_SIGNAL_EVENT = 'anth-process-signal'
+export const ANTH_PROCESS_SPAWNED_EVENT = 'anth-process-spawned'
 
 export interface AnthProcessSignalDetail {
   pid: number
   signal: ProcessSignal
+}
+
+export interface AnthProcessSpawnedDetail {
+  pid: number
+  program: string
+  args: string[]
 }
 
 const SIGNALS: ProcessSignal[] = [
@@ -38,8 +49,8 @@ const SIGNALS: ProcessSignal[] = [
  *
  * @fires anth-process-signal - `{ pid, signal }` after a successful signal.
  */
-@customElement('anth-process-monitor')
-export class AnthProcessMonitor extends LitElement {
+@customElement('anth-process-manager')
+export class AnthProcessManager extends LitElement {
   @property({ attribute: false })
   client?: ProcessClient
 
@@ -82,6 +93,27 @@ export class AnthProcessMonitor extends LitElement {
 
   @state()
   private total = 0
+
+  @state()
+  private spawnEnabled = false
+
+  @state()
+  private spawnAllow: string[] = []
+
+  @state()
+  private spawnOpen = false
+
+  @state()
+  private spawnCommand = ''
+
+  @state()
+  private spawnCwd = ''
+
+  @state()
+  private spawnError = ''
+
+  @state()
+  private spawning = false
 
   private previous?: ProcessSnapshot
   private unsubscribe?: () => void
@@ -225,6 +257,10 @@ export class AnthProcessMonitor extends LitElement {
     this.previous = snapshot
     this.total = snapshot.total
     this.controlEnabled = snapshot.control_enabled
+    this.spawnEnabled = snapshot.spawn_enabled
+    // `?? []` guards a daemon older than the field: an absent list must read as
+    // "nothing is allowed" rather than throw on `.length` during render.
+    this.spawnAllow = snapshot.spawn_allow ?? []
     this.warning =
       snapshot.warning ??
       (snapshot.processes.length < snapshot.total
@@ -322,6 +358,98 @@ export class AnthProcessMonitor extends LitElement {
     if (sent) this.refresh()
   }
 
+  private get spawnBlocked(): string | undefined {
+    return spawnBlockReason({
+      spawn_enabled: this.spawnEnabled,
+      spawn_allow: this.spawnAllow,
+    })
+  }
+
+  private openSpawn(): void {
+    if (this.spawnBlocked !== undefined) return
+    this.spawnCommand = ''
+    this.spawnCwd = ''
+    this.spawnError = ''
+    this.spawnOpen = true
+  }
+
+  private closeSpawn(): void {
+    // A request in flight owns the dialog; dismissing it would leave the
+    // operator without the outcome of a spawn the daemon may still run.
+    if (this.spawning) return
+    this.spawnOpen = false
+  }
+
+  private onSpawnClose(event: CustomEvent<AnthModalCloseDetail>): void {
+    event.stopPropagation()
+    this.closeSpawn()
+  }
+
+  private onSpawnCommandInput(event: Event): void {
+    this.spawnCommand = (event.target as HTMLInputElement).value
+    this.spawnError = ''
+  }
+
+  private onSpawnCwdInput(event: Event): void {
+    this.spawnCwd = (event.target as HTMLInputElement).value
+    this.spawnError = ''
+  }
+
+  private useAllowedProgram(program: string): void {
+    // Replaces the program word and keeps whatever arguments are already
+    // typed, which is what an operator picking from a short list expects.
+    const rest = this.spawnCommand.trim().split(/\s+/).slice(1).join(' ')
+    this.spawnCommand = rest === '' ? program : `${program} ${rest}`
+    this.spawnError = ''
+  }
+
+  private async submitSpawn(): Promise<void> {
+    if (!this.client || this.spawning || this.spawnBlocked !== undefined) return
+
+    const parsed = parseSpawnForm({
+      command: this.spawnCommand,
+      cwd: this.spawnCwd,
+    })
+    if ('error' in parsed) {
+      this.spawnError = parsed.error
+      return
+    }
+
+    const accepted = await confirmAction({
+      title: 'Start this process?',
+      message: [parsed.program, ...parsed.args].join(' '),
+      confirmLabel: 'Start',
+    })
+    if (!accepted) return
+
+    this.spawning = true
+    this.spawnError = ''
+    let started: SpawnedProcess | undefined
+    try {
+      started = await this.client.spawn(parsed)
+    } catch (error) {
+      this.spawnError = error instanceof Error ? error.message : String(error)
+    } finally {
+      this.spawning = false
+    }
+
+    if (!started) return
+
+    this.spawnOpen = false
+    this.dispatchEvent(
+      new CustomEvent<AnthProcessSpawnedDetail>(ANTH_PROCESS_SPAWNED_EVENT, {
+        detail: { pid: started.pid, program: started.program, args: started.args },
+        bubbles: true,
+        composed: true,
+      }),
+    )
+    await showAlert({
+      title: 'Process started',
+      message: `${started.program} is running as PID ${started.pid}.`,
+    })
+    this.refresh()
+  }
+
   override render() {
     const selected = this.selectedProcess
 
@@ -352,6 +480,14 @@ export class AnthProcessMonitor extends LitElement {
               Tree
             </button>
           </div>
+          <button
+            type="button"
+            ?disabled=${!this.client || this.spawnBlocked !== undefined}
+            title=${this.spawnBlocked ?? 'Start a program from the daemon allowlist'}
+            @click=${this.openSpawn}
+          >
+            Start process
+          </button>
           <button
             type="button"
             @click=${this.refresh}
@@ -442,6 +578,81 @@ export class AnthProcessMonitor extends LitElement {
                 </span>
               `}
         </footer>
+
+        <anth-modal
+          heading="Start process"
+          size="md"
+          ?open=${this.spawnOpen}
+          ?no-dismiss=${this.spawning}
+          @anth-modal-close=${this.onSpawnClose}
+        >
+          <form class="spawn" part="spawn" @submit=${(event: Event) => {
+            event.preventDefault()
+            void this.submitSpawn()
+          }}>
+            <p class="muted spawn-note">
+              The daemon only starts programs listed in
+              <code>[process] spawn_allow</code>.
+            </p>
+
+            <label>
+              Command
+              <input
+                name="command"
+                .value=${this.spawnCommand}
+                placeholder="/bin/ls -la /tmp"
+                autofocus
+                @input=${this.onSpawnCommandInput}
+              />
+            </label>
+
+            <label>
+              Working directory (optional)
+              <input
+                name="cwd"
+                .value=${this.spawnCwd}
+                placeholder="/home/operator"
+                @input=${this.onSpawnCwdInput}
+              />
+            </label>
+
+            ${this.spawnAllow.length === 0
+              ? nothing
+              : html`
+                  <div class="allowlist" part="allowlist">
+                    <span class="muted">Allowed programs</span>
+                    <div class="chips">
+                      ${this.spawnAllow.map(
+                        (program) => html`<button
+                          type="button"
+                          class="chip"
+                          @click=${() => this.useAllowedProgram(program)}
+                        >
+                          ${program}
+                        </button>`,
+                      )}
+                    </div>
+                  </div>
+                `}
+
+            ${this.spawnError === ''
+              ? nothing
+              : html`<p class="error" role="alert">${this.spawnError}</p>`}
+
+            <div class="spawn-actions">
+              <button
+                type="button"
+                @click=${this.closeSpawn}
+                ?disabled=${this.spawning}
+              >
+                Cancel
+              </button>
+              <button type="submit" ?disabled=${this.spawning}>
+                ${this.spawning ? 'Starting...' : 'Start'}
+              </button>
+            </div>
+          </form>
+        </anth-modal>
       </section>
     `
   }
@@ -465,6 +676,71 @@ export class AnthProcessMonitor extends LitElement {
 
     * {
       box-sizing: border-box;
+    }
+
+    .spawn {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 380px;
+    }
+
+    .spawn label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      color: var(--process-muted);
+      font-size: 12px;
+    }
+
+    .spawn input {
+      padding: 7px 9px;
+      border: 1px solid var(--process-border);
+      border-radius: 6px;
+      background: var(--process-bg);
+      color: var(--process-fg);
+      font: inherit;
+    }
+
+    .spawn input:focus-visible {
+      outline: 2px solid var(--process-accent);
+      outline-offset: -1px;
+    }
+
+    .spawn-note {
+      margin: 0;
+    }
+
+    .spawn-note code {
+      color: var(--process-accent);
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .chip {
+      padding: 3px 8px;
+      border: 1px solid var(--process-border);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--process-fg);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .chip:hover {
+      border-color: var(--process-accent);
+    }
+
+    .spawn-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
     }
 
     .monitor {
@@ -656,7 +932,7 @@ function processKey(pid: number, startTicks: number): string {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'anth-process-monitor': AnthProcessMonitor
+    'anth-process-manager': AnthProcessManager
   }
 
   interface HTMLElementEventMap {

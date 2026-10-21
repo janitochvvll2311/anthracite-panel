@@ -420,6 +420,8 @@ fn process_snapshot_and_signal_responses_roundtrip() {
         clock_ticks: 100,
         timestamp_ms: 1_700_000_000_000,
         control_enabled: false,
+        spawn_enabled: true,
+        spawn_allow: vec!["/bin/echo".to_string()],
         total: 1,
         truncated: false,
         warning: None,
@@ -441,6 +443,25 @@ fn process_snapshot_and_signal_responses_roundtrip() {
         }
         other => panic!("expected ProcessSignalled, got {other:?}"),
     }
+}
+
+#[test]
+fn an_empty_spawn_allowlist_is_still_serialised() {
+    // An empty list means "spawn is closed", which the panel must be able to
+    // read. Dropping the key made the browser see `undefined` and throw while
+    // rendering the process panel, so the deny-all state has to be on the wire.
+    let snapshot = anth_proto::ProcessSnapshot {
+        spawn_enabled: true,
+        spawn_allow: Vec::new(),
+        ..Default::default()
+    };
+
+    let json = Response::ProcessSnapshot(snapshot).to_json().unwrap();
+
+    assert!(
+        json.contains(r#""spawn_allow":[]"#),
+        "an empty allowlist must be serialised, got {json}"
+    );
 }
 
 #[test]

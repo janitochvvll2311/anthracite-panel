@@ -211,3 +211,51 @@ async fn follow_returns_failure_for_a_volume_error_response() {
     server.await.unwrap();
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn follow_returns_failure_for_a_spawn_error_response() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "anth-stream-spawn-error-{}-{nanos}.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut server = AnthServer::new(socket);
+        assert!(matches!(
+            server.receive_request().await,
+            Some(Ok(Request::ProcessSpawn { .. }))
+        ));
+        server
+            .send_response(&Response::ProcessSpawnError(
+                anth_proto::ProcessSpawnError {
+                    kind: anth_proto::ProcessSpawnErrorKind::NotAllowed,
+                    detail: "`/bin/sh` is not in the spawn allowlist".to_string(),
+                },
+            ))
+            .await
+            .unwrap();
+    });
+
+    let code = follow(
+        &path,
+        &Request::ProcessSpawn {
+            program: "/bin/sh".to_string(),
+            args: Vec::new(),
+            cwd: None,
+        },
+        None,
+        |_| String::new(),
+    )
+    .await;
+
+    assert_eq!(code, ExitCode::FAILURE);
+    server.await.unwrap();
+    let _ = std::fs::remove_file(&path);
+}

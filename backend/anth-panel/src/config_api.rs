@@ -44,6 +44,8 @@ pub struct TerminalView {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProcessView {
     pub control: bool,
+    pub spawn: bool,
+    pub spawn_allow: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +106,8 @@ impl ConfigView {
             },
             process: ProcessView {
                 control: config.process.control,
+                spawn: config.process.spawn,
+                spawn_allow: config.process.spawn_allow.clone(),
             },
             network: NetworkView {
                 control: config.network.control,
@@ -173,6 +177,8 @@ pub struct TerminalPatch {
 #[serde(default, deny_unknown_fields)]
 pub struct ProcessPatch {
     pub control: Option<bool>,
+    pub spawn: Option<bool>,
+    pub spawn_allow: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -277,8 +283,23 @@ fn apply_patch(config: &mut Config, patch: ConfigPatch) -> Result<(), String> {
             config.terminal.max_sessions = max_sessions;
         }
     }
-    if let Some(control) = patch.process.and_then(|process| process.control) {
-        config.process.control = control;
+    if let Some(process) = patch.process {
+        if let Some(control) = process.control {
+            config.process.control = control;
+        }
+        if let Some(spawn) = process.spawn {
+            config.process.spawn = spawn;
+        }
+        if let Some(spawn_allow) = process.spawn_allow {
+            // An entry that is not absolute can never match, so accepting it
+            // would store a list that silently denies part of itself.
+            if let Some(entry) = spawn_allow.iter().find(|entry| !entry.starts_with('/')) {
+                return Err(format!(
+                    "process.spawn_allow entries must be absolute paths, got `{entry}`"
+                ));
+            }
+            config.process.spawn_allow = spawn_allow;
+        }
     }
     if let Some(control) = patch.network.and_then(|network| network.control) {
         config.network.control = control;
@@ -422,6 +443,49 @@ mod tests {
         let error =
             apply_patch(&mut config, patch(r#"{"auth":{"enabled":false}}"#).unwrap()).unwrap_err();
         assert!(error.contains("auth enable --disable"));
+    }
+
+    #[test]
+    fn process_spawn_and_its_allowlist_are_patchable() {
+        let mut config = Config::default();
+
+        apply_patch(
+            &mut config,
+            patch(r#"{"process":{"spawn":true,"spawn_allow":["/bin/echo"]}}"#).unwrap(),
+        )
+        .unwrap();
+
+        assert!(config.process.spawn);
+        assert_eq!(config.process.spawn_allow, vec!["/bin/echo".to_string()]);
+        // The signal switch is a separate concern and keeps its value.
+        assert!(!config.process.control);
+    }
+
+    #[test]
+    fn a_relative_spawn_allow_entry_is_refused() {
+        // Accepting it would store a list that silently denies part of itself,
+        // because the check compares absolute paths.
+        let mut config = Config::default();
+        let error = apply_patch(
+            &mut config,
+            patch(r#"{"process":{"spawn_allow":["echo"]}}"#).unwrap(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("absolute"));
+        assert!(config.process.spawn_allow.is_empty());
+    }
+
+    #[test]
+    fn the_process_view_reports_the_spawn_settings() {
+        let mut config = Config::default();
+        config.process.spawn = true;
+        config.process.spawn_allow = vec!["/bin/echo".to_string()];
+
+        let view = ConfigView::from_config(&config);
+
+        assert!(view.process.spawn);
+        assert_eq!(view.process.spawn_allow, vec!["/bin/echo".to_string()]);
     }
 
     #[test]

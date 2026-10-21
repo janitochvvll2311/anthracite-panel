@@ -89,6 +89,14 @@ pub struct ProcessSnapshot {
     pub timestamp_ms: u64,
     /// Whether the daemon allows signalling processes.
     pub control_enabled: bool,
+    /// Whether the daemon allows starting processes.
+    #[serde(default)]
+    pub spawn_enabled: bool,
+    /// Programs the daemon is willing to start. Empty means spawn is closed,
+    /// which is a meaningful state, so it is always sent: an omitted key would
+    /// be indistinguishable from an older daemon that never had the field.
+    #[serde(default)]
+    pub spawn_allow: Vec<String>,
     /// Number of processes found before any truncation.
     pub total: usize,
     /// Whether `processes` was cut at the daemon's row cap.
@@ -96,4 +104,43 @@ pub struct ProcessSnapshot {
     /// Human-readable notice when rows or command lines were shortened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+}
+
+/// Why a spawn request was refused, or how it failed.
+///
+/// Carried on the wire so the CLI and the panel can say *why* rather than
+/// echoing an opaque string, and so the HTTP layer can pick a status code.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessSpawnErrorKind {
+    /// `[process] spawn` is off.
+    Disabled,
+    /// The program is not in `spawn_allow`.
+    NotAllowed,
+    /// The program is not an absolute path.
+    NotAbsolute,
+    /// The program or working directory does not exist.
+    NotFound,
+    /// The program exists but is not an executable file.
+    NotExecutable,
+    /// The daemon lacks the privilege to start it.
+    PermissionDenied,
+    /// The call itself failed.
+    Failed,
+}
+
+/// A refused or failed spawn.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProcessSpawnError {
+    pub kind: ProcessSpawnErrorKind,
+    pub detail: String,
+}
+
+/// A process that was started.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProcessSpawned {
+    pub pid: u32,
+    /// The program as resolved on disk, which may differ from the request.
+    pub program: String,
+    pub args: Vec<String>,
 }
