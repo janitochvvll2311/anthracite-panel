@@ -46,7 +46,7 @@ compiles without it. Build the frontend first:
 
 ```bash
 cd frontend
-npm install && npm run build      # or: bun install && bun run build
+bun install && bun run build
 cp -r dist/. ../backend/anth-panel/www/
 ```
 
@@ -68,8 +68,17 @@ anth-panel host-info --watch 2s
 still compiles and the API works, but `GET /` answers `404`: there is no UI to
 serve. Build the frontend once to get the panel.
 
-The workspace pins the `x86_64-unknown-linux-musl` target. If that target is not
-installed, pass `--target x86_64-unknown-linux-gnu` to `cargo`.
+## Toolchain
+
+Two choices are fixed, not preferences:
+
+- **Rust targets `x86_64-unknown-linux-musl`.** `.cargo/config.toml` pins it, so
+  build with a bare `cargo build`; the result is the static binary the
+  `Dockerfile` ships. Install the target once with
+  `rustup target add x86_64-unknown-linux-musl` and `musl-tools` for the C
+  dependencies. Do not pass `--target x86_64-unknown-linux-gnu`.
+- **`bun` is the only package manager.** `npm`, `npx` and `corepack` are not
+  installed and `bunx` is unavailable; use `bun run <script>`.
 
 ## Routes at a glance
 
@@ -91,13 +100,13 @@ including error shapes and SSE event fields.
 
 ```bash
 cd backend
-cargo test --workspace --target x86_64-unknown-linux-gnu
+cargo test --workspace
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu
+cargo clippy --workspace --all-targets
 
 cd ../frontend
-npm test
-npm run build
+bun run test
+bun run build
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture notes and repository conventions.

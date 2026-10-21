@@ -88,15 +88,26 @@ the protocol without depending on the panel. `anth-panel` depends on it.
 
 ## Build and test
 
-Run these from `backend/`. The workspace pins `x86_64-unknown-linux-musl` in
-`.cargo/config.toml`, so a bare `cargo build` needs that target installed. When it is
-not installed, override the target explicitly:
+Run these from `backend/`. The project targets **`x86_64-unknown-linux-musl`
+only**: `.cargo/config.toml` pins it, so a bare `cargo build` (no `--target`) is
+the supported invocation and produces the same static binary the Dockerfile
+ships. Do not add `--target x86_64-unknown-linux-gnu`; a glibc build diverges
+from production and needs a toolchain the project does not install.
+
+Prerequisites, once per machine:
 
 ```bash
-cargo build  --workspace --target x86_64-unknown-linux-gnu
-cargo test   --workspace --target x86_64-unknown-linux-gnu
+rustup target add x86_64-unknown-linux-musl
+sudo apt-get install musl-tools     # provides musl-gcc for the C dependencies
+```
+
+Then:
+
+```bash
+cargo build  --workspace
+cargo test   --workspace
 cargo fmt --check
-cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu
+cargo clippy --workspace --all-targets
 ```
 
 There is no CI configuration, no `rustfmt.toml` and no `clippy.toml` — defaults apply.
