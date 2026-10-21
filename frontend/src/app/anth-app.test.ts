@@ -138,6 +138,23 @@ describe('AnthApp', () => {
     )
   })
 
+  it('restores the arrangement after a visit to the home page', async () => {
+    const element = await mount()
+    await navigate('#/panel/host-info')
+    await navigate('#/panel/files')
+    await navigate('#/')
+
+    expect(element.shadowRoot?.querySelector('anth-desktop')).toBeNull()
+
+    await navigate('#/panel/host-info')
+    const windows = element.shadowRoot
+      ?.querySelector('anth-desktop')
+      ?.shadowRoot?.querySelectorAll('anth-window')
+    expect([...(windows ?? [])].map((w) => w.getAttribute('window-id'))).toEqual(
+      ['host-info', 'files'],
+    )
+  })
+
   it('opens the panel picked in the toolbar select', async () => {
     const element = await mount()
     await navigate('#/panel/host-info')
