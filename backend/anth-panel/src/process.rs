@@ -288,10 +288,10 @@ pub fn spawn(
         .stderr(Stdio::null());
 
     // `setsid()` puts the child in its own session and process group, so a
-    // signal aimed at the daemon's group — including a service manager's
-    // cgroup stop — does not take an intentionally long-running program down
-    // with it. Without it the child inherits the daemon's group and only
-    // survives a plain daemon-only exit.
+    // signal aimed at the daemon's group does not take an intentionally
+    // long-running program down with it. Without it the child inherits the
+    // daemon's group and only survives a plain daemon-only exit. A cgroup-wide
+    // stop still kills the child: `setsid` changes the session, not the cgroup.
     //
     // SAFETY: `setsid` is async-signal-safe and touches no memory in this
     // process; it is the documented shape for `pre_exec`. A failure is fatal to
