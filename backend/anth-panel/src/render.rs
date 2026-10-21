@@ -872,3 +872,59 @@ fn elide(text: &str, limit: usize) -> String {
     shortened.push('…');
     shortened
 }
+
+/// The installed plugins as a table, with any loading problem below it.
+///
+/// A plugin with no capabilities still appears: it is installed, and the admin
+/// needs to see that it can currently do nothing. A problem is printed rather
+/// than dropped, because a plugin that silently fails to load looks like a bug
+/// in the panel.
+pub fn render_plugin_listing(
+    plugins: &[crate::plugins::InstalledPlugin],
+    problems: &[String],
+) -> String {
+    let mut table = Table::new(vec![
+        "ID".to_string(),
+        "VERSION".to_string(),
+        "STATE".to_string(),
+        "CAPABILITIES".to_string(),
+        "UI".to_string(),
+    ]);
+
+    for plugin in plugins {
+        table.push(vec![
+            plugin.id.clone(),
+            plugin.version.clone(),
+            if plugin.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+            .to_string(),
+            if plugin.capabilities.is_empty() {
+                "-".to_string()
+            } else {
+                plugin.capabilities.join(", ")
+            },
+            if plugin.ui.is_empty() {
+                "-".to_string()
+            } else {
+                plugin
+                    .ui
+                    .iter()
+                    .map(|anchor| anchor.slot.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        ]);
+    }
+
+    let mut out = table.render();
+    if plugins.is_empty() {
+        out.push_str("No plugins are installed.\n");
+    }
+    for problem in problems {
+        out.push_str(&format!("[WARN] {problem}\n"));
+    }
+    out
+}

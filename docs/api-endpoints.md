@@ -1195,6 +1195,40 @@ of an unobservable close code.
 The same socket protocol and `TerminalSize` limits are documented in
 [socket-protocol.md](socket-protocol.md#terminal).
 
+## `GET /api/plugins`
+
+Read-only view of the installed plugin set. It does not travel over the socket:
+the daemon has no opinion about which plugins the panel shows, so the route
+reads the bundle directory and the grants directly.
+
+```json
+{
+  "enabled": true,
+  "install_from_web": false,
+  "plugins": [
+    {
+      "id": "org.anth.wireguard",
+      "version": "0.1.0",
+      "name": "WireGuard",
+      "enabled": true,
+      "capabilities": ["wg.status"],
+      "api": [{"method": "GET", "path": "/status"}],
+      "ui": [{"slot": "dashboard.widget", "tag": "anth-wg-card", "module": "web/card.js"}]
+    }
+  ],
+  "problems": []
+}
+```
+
+`problems` holds one line per plugin that could not load — a directory with no
+grant, or a module whose hash no longer matches. The view reports them instead
+of hiding them, because a plugin that silently fails to load looks like a bug in
+the panel. `enabled` reflects `[plugins] enabled`, so a UI can distinguish "no
+plugins installed" from "plugins turned off".
+
+Installing from the browser is gated by `[plugins] install_from_web`, which is
+off by default: installing means running code.
+
 ## Adding a route
 
 `POST /api/echo` rewrites to a body like this because each command maps to a

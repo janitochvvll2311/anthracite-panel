@@ -39,6 +39,7 @@ fn config_at(path: &Path) -> Config {
         accounts: anth_panel::config::AccountsConfig::default(),
         files: FilesConfig::default(),
         auth: anth_panel::config::AuthConfig::default(),
+        plugins: anth_panel::plugins::PluginsConfig::default(),
     }
 }
 

@@ -11,9 +11,10 @@ use anth_panel::cli::{
     AccountUserPasswordArgs, AuthArgs, AuthCommand, Cli, Command, ConfigArgs, ConfigCommand,
     EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
     FileWriteArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
-    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkKindArg, NetworkStateArgs, ProcessArgs,
-    ProcessCommand, ProcessSignalArgs, ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs,
-    TrashRestoreArgs, VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
+    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkKindArg, NetworkStateArgs, PluginArgs,
+    PluginCommand, ProcessArgs, ProcessCommand, ProcessSignalArgs, ProcessSpawnArgs,
+    TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs, VolumeArgs, VolumeCommand, VolumeMountArgs,
+    VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::read_password;
@@ -1218,6 +1219,154 @@ fn run_config(config_path: &str, args: &ConfigArgs) -> ExitCode {
     }
 }
 
+/// `plugin` acts on the bundle directory and the grants in the config, so it
+/// runs locally, like `auth` and `config`. A running server reads the grants at
+/// start, and the command says so when it changes anything.
+fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
+    let mut config = Config::load_or_create(config_path);
+    let plugins = config.plugins.clone();
+
+    match &args.command {
+        PluginCommand::List => {
+            let (installed, problems) =
+                anth_panel::plugins::bundle::list(&plugins.root_path(), &plugins.grants);
+            print!(
+                "{}",
+                anth_panel::render::render_plugin_listing(&installed, &problems)
+            );
+            if !problems.is_empty() && installed.is_empty() {
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
+        }
+        PluginCommand::Install(install) => {
+            let path = std::path::Path::new(&install.bundle);
+            let (installed, grant) = match anth_panel::plugins::install_bundle(path, &plugins) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            println!(
+                "Installed {} {} with {} capabilit{}",
+                installed.plugin.id,
+                installed.plugin.version,
+                grant.capabilities.len(),
+                if grant.capabilities.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            );
+            for capability in &grant.capabilities {
+                println!("  {capability}");
+            }
+            config.plugins.upsert_grant(grant);
+            finish_plugin_change(&config, config_path)
+        }
+        PluginCommand::Remove(remove) => {
+            if let Err(error) =
+                anth_panel::plugins::bundle::remove(&plugins.root_path(), &remove.id)
+            {
+                eprintln!("[ERROR] {error}");
+                return ExitCode::FAILURE;
+            }
+            match config.plugins.remove_grant(&remove.id) {
+                Some(_) => println!("Removed {}", remove.id),
+                None => {
+                    println!("Removed the directory of {}, which had no grant", remove.id);
+                }
+            }
+            finish_plugin_change(&config, config_path)
+        }
+        PluginCommand::Enable(toggle) => {
+            let Some(grant) = config.plugins.grant(&toggle.id).cloned() else {
+                eprintln!("[ERROR] plugin `{}` is not installed", toggle.id);
+                return ExitCode::FAILURE;
+            };
+            let mut updated = grant;
+            updated.enabled = !toggle.disable;
+            let state = if updated.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            config.plugins.upsert_grant(updated);
+            println!("{} is {state}", toggle.id);
+            finish_plugin_change(&config, config_path)
+        }
+        PluginCommand::Approve(approve) => {
+            if !approve.accept_capabilities {
+                eprintln!(
+                    "[ERROR] pass --accept-capabilities to confirm the capabilities of `{}`",
+                    approve.id
+                );
+                return ExitCode::FAILURE;
+            }
+            let root =
+                match anth_panel::plugins::bundle::plugin_dir(&plugins.root_path(), &approve.id) {
+                    Ok(root) => root,
+                    Err(error) => {
+                        eprintln!("[ERROR] {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+            let text = match std::fs::read_to_string(root.join("plugin.toml")) {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!("[ERROR] could not read the manifest: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let manifest = match anth_panel::plugins::Manifest::parse(&text) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            // Approving must not freeze a digest the file does not have: once
+            // `load` trusts the grant's hash, an unchecked approve would write a
+            // grant that makes the plugin permanently unloadable.
+            if let Err(error) = anth_panel::plugins::bundle::verify(&root, &manifest.wasm.sha256) {
+                eprintln!("[ERROR] {error}");
+                return ExitCode::FAILURE;
+            }
+            let grant = anth_panel::plugins::PluginGrant::from_manifest(&manifest);
+            println!(
+                "Approved {} {} with {} capabilit{}",
+                grant.id,
+                grant.version,
+                grant.capabilities.len(),
+                if grant.capabilities.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            );
+            for capability in &grant.capabilities {
+                println!("  {capability}");
+            }
+            config.plugins.upsert_grant(grant);
+            finish_plugin_change(&config, config_path)
+        }
+    }
+}
+
+fn finish_plugin_change(config: &Config, config_path: &str) -> ExitCode {
+    match config.save(config_path) {
+        Ok(()) => {
+            println!("Restart the server to load the change.");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Which services one detached session task serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ServerRole {
@@ -1409,6 +1558,9 @@ async fn dispatch(
     if let Command::Config(args) = command {
         return run_config(config_path, args);
     }
+    if let Command::Plugin(args) = command {
+        return run_plugin(config_path, args);
+    }
 
     if let Some(code) = send_command(config_path, command).await {
         return code;
@@ -1441,7 +1593,8 @@ async fn dispatch(
         | Command::Account(_)
         | Command::File(_)
         | Command::Auth(_)
-        | Command::Config(_) => {
+        | Command::Config(_)
+        | Command::Plugin(_) => {
             unreachable!("handled by send_command or run_auth/run_config")
         }
     };

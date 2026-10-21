@@ -202,6 +202,7 @@ pub fn request_for(command: &Command) -> Option<Request> {
         Command::Terminal(_)
         | Command::Auth(_)
         | Command::Config(_)
+        | Command::Plugin(_)
         | Command::Daemon
         | Command::Api(_)
         | Command::Run(_) => None,

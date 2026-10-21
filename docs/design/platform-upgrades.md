@@ -90,7 +90,11 @@ Additional decisions taken while planning:
 | 6 (point 3) | `anth-network-manager`: interface create/edit/rename/delete | done, merged in #23 |
 | 7a (point 4) | Partition create/edit/resize/delete | not started |
 | 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | not started |
-| 8 (point 8) | Plugin system, CLI and web-UI install, WireGuard plugin | not started |
+| 8a (point 8) | Plugin manifest, typed validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification | done, in review |
+| 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | not started |
+| 8c (point 8) | API anchors and namespacing | not started |
+| 8d (point 8) | UI anchors and asset serving | not started |
+| 8e (point 8) | WireGuard plugin: manifest, wasm, web components | not started |
 
 ## Phase 5 — file manager (done)
 
@@ -478,3 +482,59 @@ Lessons for later phases:
 - A controlled component that is also the drag surface must handle
   `pointercancel`, not only `pointerup`: a drag that ends outside the window
   otherwise stays "active" and follows the pointer on the next click.
+
+## Phase 8 — plugins
+
+Architecture is settled in [plugins.md](plugins.md): the daemon is the chef, the
+manifest is the recipe, the plugin is a helper that only supplies declarative
+values. The load-bearing rule is that a plugin never sends an argv; the host
+renders it from a template frozen at install, using validators the host owns.
+
+Runtime is `wasmi`, chosen over `wasmtime` because it is pure Rust: no JIT, no
+`unsafe`, no WASI, and the static musl build stays trivial. A module therefore
+has no filesystem, clock or randomness unless the host grants it. Cost is
+interpreted speed, which is irrelevant for business logic.
+
+Grants live in the config rather than a state file, because the admin already
+reads and edits the config, and `plugin list` can audit authority from one place.
+
+### 8a — authority boundary (done, in review)
+
+`plugins/manifest.rs` holds the schema and the validators, `plugins/bundle.rs`
+the archive side and the store, `plugins/mod.rs` the config and the registry.
+
+- `Manifest::parse` validates against host policy before anything is written:
+  reverse-DNS id, matching ABI, a 64-hex module hash, capabilities whose program
+  is on `PROGRAM_ALLOWLIST` or whose `job` is one the host implements, exactly
+  one of the two per capability, placeholders that each have a validator, and no
+  declared argument the template never uses.
+- `render_argv` is the only way a capability becomes an argument vector. It
+  refuses an undeclared argument, a value failing its validator, a missing
+  value, and free text for a capability that did not set `accepts_text`.
+- Every validator rejects a leading `-` in the shared prelude, because an
+  operand that looks like an option is read as one: `wg show --force` is the
+  flag a plugin was not granted. `plugin_dir` validates the id before joining,
+  so an id such as `../victim` cannot reach a recursive delete.
+- `install` extracts to a staging directory, validates, hashes, then renames.
+  Every member must be `plugin.toml`, `plugin.wasm` or under `web/`; the guard
+  reuses `files::archive::safe_member` and opens with `O_NOFOLLOW`. A failure
+  leaves nothing behind.
+- `load` hashes the module on every start and compares it against
+  **`grant.wasm_sha256`**, not against the manifest's own hash: a manifest can
+  be rewritten alongside a rewritten module, so comparing against it would keep
+  the pair consistent while the grant still names the old digest. It also
+  compares the version, and takes the advertised capability list from the grant
+  rather than the manifest. The module path is
+  pinned to `plugin.wasm` instead of being read from the manifest, so rewriting
+  the manifest cannot re-point the file a grant was hashed against.
+- `plugin list|install|remove|enable|approve` run locally, like `auth` and
+  `config`, and say a restart is needed. `approve` needs the explicit
+  `--accept-capabilities` flag: widening a grant is never implicit.
+- `GET /api/plugins` is read-only and served from the bundle directory, so the
+  daemon stays unaware of which plugins the panel shows.
+
+Tests: 59 unit cases (schema, validators, argv rendering, tampering, archive
+guards) and 7 integration cases driving the real binary.
+
+Next: 8b. The host may only ever call `render_argv` for a capability the frozen
+grant allows, and a wasm module gets exactly one import for that.

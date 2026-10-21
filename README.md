@@ -21,6 +21,7 @@ in the HTTP server.
 | [docs/accounts.md](docs/accounts.md) | Local users and groups, guard matrix, privileges and container limits |
 | [docs/files.md](docs/files.md) | Filesystem root, chunked transfers, write policy and web explorer |
 | [docs/design/platform-upgrades.md](docs/design/platform-upgrades.md) | Plan and progress for the platform upgrade series |
+| [docs/design/plugins.md](docs/design/plugins.md) | Plugin bundles: manifest schema, wasm sandbox, capability grants |
 
 ## Layout
 

@@ -2324,3 +2324,85 @@ async fn network_create_and_edit_routes_map_their_bodies() {
     server.abort();
     let _ = std::fs::remove_file(&path);
 }
+
+#[tokio::test]
+async fn plugins_route_lists_nothing_when_the_root_is_missing() {
+    let mut config = Config::default();
+    config.plugins.enabled = true;
+    config.plugins.root = "/nonexistent/anth-plugins".to_string();
+
+    let app = anth_panel::router(AppState::new(config));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["enabled"], true);
+    assert_eq!(value["install_from_web"], false);
+    assert_eq!(value["plugins"].as_array().unwrap().len(), 0);
+    assert_eq!(value["problems"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn plugins_route_reports_plugins_as_disabled_when_so_configured() {
+    let mut config = Config::default();
+    config.plugins.enabled = false;
+
+    let app = anth_panel::router(AppState::new(config));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["enabled"], false);
+    assert_eq!(value["plugins"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn plugins_route_reports_a_directory_without_a_grant() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("anth-api-plugins-{nanos}"));
+    std::fs::create_dir_all(root.join("org.anth.orphan")).unwrap();
+
+    let mut config = Config::default();
+    config.plugins.enabled = true;
+    config.plugins.root = root.to_string_lossy().into_owned();
+
+    let app = anth_panel::router(AppState::new(config));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let problems = value["problems"].as_array().unwrap();
+    assert_eq!(problems.len(), 1);
+    assert!(problems[0].as_str().unwrap().contains("org.anth.orphan"));
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
