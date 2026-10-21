@@ -155,6 +155,13 @@ pub enum Request {
         path: String,
         into: Option<String>,
     },
+    /// Save text over an existing file, optionally only when its mtime still
+    /// matches what the editor loaded.
+    FileWriteText {
+        path: String,
+        contents: String,
+        expected_modified_ms: Option<u64>,
+    },
     /// Begin an atomic upload. The reply is `FileWriteStarted`.
     FileWriteStart {
         path: String,
@@ -402,6 +409,13 @@ pub enum Response {
     FileArchiveExtracted {
         path: String,
         entries: usize,
+    },
+    /// Text was saved. `modified_ms` is the new mtime, which the editor uses as
+    /// the precondition for its next save.
+    FileTextWritten {
+        path: String,
+        size: u64,
+        modified_ms: u64,
     },
     FileRenamed {
         from: String,

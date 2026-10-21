@@ -7,6 +7,7 @@ import {
   fileListing,
   textResult,
 } from '../test/fake-file-client'
+
 import { answerDialogs, dialogText, resetDialogs } from '../test/dialogs'
 
 async function flush(element: AnthFileExplorer): Promise<void> {
@@ -206,6 +207,81 @@ describe('AnthFileExplorer', () => {
     expect(
       element.shadowRoot?.querySelector<HTMLAnchorElement>('.download')?.href,
     ).toContain('/api/files/download?path=%2Fnote.txt')
+  })
+
+  it('offers the editor for a writable text file and saves with the loaded mtime', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        entries: [
+          fileEntry({ name: 'note.txt', path: '/note.txt', modified_ms: 1234 }),
+        ],
+      }),
+    )
+    client.readResults.set('/note.txt', textResult('hello world'))
+
+    const element = await mount(client)
+    selectFile(element, 'note.txt')
+    await flush(element)
+
+    const toggle = element.shadowRoot?.querySelector<HTMLButtonElement>(
+      '.edit-toggle',
+    )
+    expect(toggle?.textContent?.trim()).toBe('Edit')
+    toggle?.click()
+    await flush(element)
+
+    const editor = element.shadowRoot?.querySelector('anth-file-editor')
+    expect(editor).not.toBeNull()
+    // The precondition is the mtime the listing reported, not the read time.
+    expect(
+      (editor as unknown as { save: unknown }).save,
+    ).toBeTypeOf('function')
+    await (
+      editor as unknown as { save: (c: string) => Promise<unknown> }
+    ).save('changed')
+    expect(client.writeCalls).toEqual([
+      { path: '/note.txt', contents: 'changed', expectedModifiedMs: 1234 },
+    ])
+  })
+
+  it('hides the editor when writes are disabled', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: false,
+        entries: [fileEntry({ name: 'note.txt', path: '/note.txt' })],
+      }),
+    )
+    client.readResults.set('/note.txt', textResult('hello'))
+
+    const element = await mount(client)
+    selectFile(element, 'note.txt')
+    await flush(element)
+
+    expect(element.shadowRoot?.querySelector('.edit-toggle')).toBeNull()
+  })
+
+  it('hides the editor for a binary format', async () => {
+    const client = new FakeFileClient()
+    client.listings.set(
+      '/',
+      fileListing({
+        write_enabled: true,
+        entries: [fileEntry({ name: 'archive.zip', path: '/archive.zip' })],
+      }),
+    )
+    // A zip whose first bytes happen to be printable still must not be edited.
+    client.readResults.set('/archive.zip', textResult('PK readable'))
+
+    const element = await mount(client)
+    selectFile(element, 'archive.zip')
+    await flush(element)
+
+    expect(element.shadowRoot?.querySelector('.edit-toggle')).toBeNull()
   })
 
   it('never renders SVG previews as active images', async () => {

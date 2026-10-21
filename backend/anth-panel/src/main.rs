@@ -8,10 +8,10 @@ use anth_panel::cli::{
     AccountGroupModifyArgs, AccountUserArgs, AccountUserCommand, AccountUserDeleteArgs,
     AccountUserPasswordArgs, AuthArgs, AuthCommand, Cli, Command, ConfigArgs, ConfigCommand,
     EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
-    FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs, FirewallFlushArgs,
-    NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand, ProcessSignalArgs,
-    ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs, VolumeArgs, VolumeCommand,
-    VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
+    FileWriteArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
+    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkStateArgs, ProcessArgs, ProcessCommand,
+    ProcessSignalArgs, ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs,
+    VolumeArgs, VolumeCommand, VolumeMountArgs, VolumeUnmountArgs, WatchArgs,
 };
 use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 use anth_panel::read_password;
@@ -853,6 +853,13 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         }
     }
 
+    if let Command::File(FileArgs {
+        command: FileCommand::Write(args),
+    }) = command
+    {
+        return Some(write_text_file(config_path, args).await);
+    }
+
     let request: Request = request_for(command)?;
     let interval = match watch_interval(command) {
         Ok(interval) => interval,
@@ -873,6 +880,41 @@ async fn send_command(config_path: &str, command: &Command) -> Option<ExitCode> 
         )
         .await,
     )
+}
+
+/// Replaces a remote text file with a local one.
+///
+/// The body travels in one request, so the size is bounded by the daemon's own
+/// `files.max_upload_bytes` and the socket line cap; that is the same ceiling
+/// the web editor obeys.
+async fn write_text_file(config_path: &str, args: &FileWriteArgs) -> ExitCode {
+    let mut contents = String::new();
+    let read = if args.source == "-" {
+        std::io::stdin().read_to_string(&mut contents)
+    } else {
+        std::fs::read_to_string(&args.source).map(|text| {
+            contents = text;
+            0
+        })
+    };
+    if let Err(error) = read {
+        eprintln!("[ERROR] cannot read `{}`: {error}", args.source);
+        return ExitCode::FAILURE;
+    }
+
+    let config = Config::load_or_default(config_path);
+    let request = Request::FileWriteText {
+        path: args.path.clone(),
+        contents,
+        expected_modified_ms: args.expected_modified_ms,
+    };
+    stream::follow(
+        Path::new(&config.socket_path),
+        &request,
+        None,
+        anth_panel::render_response,
+    )
+    .await
 }
 
 /// Runs one `auth` subcommand against the config file.

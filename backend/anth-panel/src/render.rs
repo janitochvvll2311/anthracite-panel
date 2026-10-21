@@ -625,6 +625,9 @@ pub fn render_response(response: &Response) -> String {
         }
         Response::ProcessSpawnError(error) => format!("[ERROR] {}", error.detail),
         Response::FileArchiveCreated { path } => format!("[OK] created {path}"),
+        Response::FileTextWritten { path, size, .. } => {
+            format!("[OK] saved {path} ({} bytes)", size)
+        }
         Response::ArchiveListing(listing) => render_archive_listing(listing),
         Response::FileArchiveExtracted { path, entries } => {
             let noun = if *entries == 1 { "entry" } else { "entries" };

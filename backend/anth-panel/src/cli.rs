@@ -568,6 +568,27 @@ pub enum FileCommand {
     Archive(FileArchiveArgs),
     /// Inspect or extract an archive.
     Unarchive(FileUnarchiveArgs),
+    /// Replace a text file with the contents of a local file.
+    Write(FileWriteArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct FileWriteArgs {
+    #[arg(value_name = "PATH", help = "File to overwrite")]
+    pub path: String,
+
+    #[arg(
+        value_name = "SOURCE",
+        help = "Local file to read; `-` reads standard input"
+    )]
+    pub source: String,
+
+    #[arg(
+        long,
+        value_name = "MILLIS",
+        help = "Only save when the file still has this modification time"
+    )]
+    pub expected_modified_ms: Option<u64>,
 }
 
 #[derive(Args, Debug)]

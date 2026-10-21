@@ -53,6 +53,7 @@ it into a stream becomes `/watch`.
 | `anth-panel file archive /a` | `POST /api/files/archive` with `{"path":"/a"}` |
 | `anth-panel file unarchive --list /a.zip` | `GET /api/files/archive/list?path=/a.zip` |
 | `anth-panel file unarchive /a.zip` | `POST /api/files/archive/extract` with `{"path":"/a.zip"}` |
+| `anth-panel file write /a.txt b.txt` | `POST /api/files/write` with `{"path":"/a.txt","contents":"…"}` |
 | `anth-panel file upload ./a /b` | `POST /api/files/upload?path=/b` with a raw body |
 
 **HTTP errors are always JSON.** Every HTTP response that fails, including a
@@ -101,6 +102,7 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `POST` | `/api/files/archive` | Compress one entry |
 | `GET` | `/api/files/archive/list` | List an archive's members |
 | `POST` | `/api/files/archive/extract` | Extract an archive |
+| `POST` | `/api/files/write` | Save text over an existing file |
 | `POST` | `/api/files/upload` | Upload a raw body |
 | `GET` | `/api/auth/session` | Whether the session is open |
 | `POST` | `/api/auth/login` | Exchange a password for the token pair |

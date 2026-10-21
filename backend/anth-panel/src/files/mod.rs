@@ -450,6 +450,91 @@ impl FileService {
         best
     }
 
+    /// Saves text over an existing file atomically.
+    ///
+    /// `expected_modified_ms` is the mtime the editor loaded. When it no longer
+    /// matches, the file changed under the editor and the save is refused: two
+    /// people editing the same file through this panel must not silently
+    /// overwrite each other. A `None` precondition means the caller accepts
+    /// whatever is on disk, which is what a deliberate "overwrite" does.
+    pub fn write_text(
+        &self,
+        path: &str,
+        contents: &str,
+        expected_modified_ms: Option<u64>,
+    ) -> Result<u64, FileError> {
+        self.require_write()?;
+        let path = normalize(path)?;
+        let host = self.host_existing(&path)?;
+        let metadata = fs::metadata(&host).map_err(|e| io_error(&path, e))?;
+        if metadata.is_dir() {
+            return Err(FileError::new(
+                FileErrorKind::IsADirectory,
+                format!("`{path}` is a directory"),
+            ));
+        }
+        if metadata.len() > self.max_upload_bytes {
+            return Err(FileError::new(
+                FileErrorKind::TooLarge,
+                format!(
+                    "`{path}` is larger than files.max_upload_bytes ({} bytes)",
+                    self.max_upload_bytes
+                ),
+            ));
+        }
+        if contents.len() as u64 > self.max_upload_bytes {
+            return Err(FileError::new(
+                FileErrorKind::TooLarge,
+                format!(
+                    "the new contents exceed files.max_upload_bytes ({} bytes)",
+                    self.max_upload_bytes
+                ),
+            ));
+        }
+        if contents.contains('\0') {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                "the editor only saves text; the contents contain a NUL byte".to_string(),
+            ));
+        }
+
+        if let Some(expected) = expected_modified_ms {
+            let current = modified_ms(&metadata).unwrap_or(0);
+            if current != expected {
+                return Err(FileError::new(
+                    FileErrorKind::Conflict,
+                    format!(
+                        "`{path}` changed on disk after it was opened; reload it before saving"
+                    ),
+                ));
+            }
+        }
+
+        // Write beside the target and rename, so a failed save cannot leave a
+        // half-written file behind.
+        let parent = host
+            .parent()
+            .ok_or_else(|| FileError::new(FileErrorKind::InvalidPath, "path has no parent"))?;
+        let temp_path = unique_temp_path(parent);
+        {
+            let mut temp = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+                .map_err(|e| io_error(&path, e))?;
+            temp.write_all(contents.as_bytes())
+                .map_err(|e| io_error(&path, e))?;
+            temp.sync_all().map_err(|e| io_error(&path, e))?;
+        }
+        if let Err(error) = fs::rename(&temp_path, &host) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(io_error(&path, error));
+        }
+
+        let saved = fs::metadata(&host).map_err(|e| io_error(&path, e))?;
+        Ok(modified_ms(&saved).unwrap_or(0))
+    }
+
     /// Creates an archive from one entry.
     pub fn create_archive(
         &self,

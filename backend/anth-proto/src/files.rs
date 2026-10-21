@@ -178,6 +178,8 @@ pub enum FileErrorKind {
     DirectoryNotEmpty,
     TooLarge,
     Disabled,
+    /// The caller's precondition no longer holds; the caller should reload.
+    Conflict,
     Io,
 }
 

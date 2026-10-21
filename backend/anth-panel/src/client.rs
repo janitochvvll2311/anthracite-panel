@@ -152,6 +152,9 @@ pub fn request_for(command: &Command) -> Option<Request> {
                     into: args.into.clone(),
                 }
             }),
+            // The body comes from a local file or stdin, so it cannot be built
+            // by `request_for`; `main` owns that loop.
+            FileCommand::Write(_) => None,
             FileCommand::Mkdir(args) => Some(Request::FileMkdir {
                 path: args.path.clone(),
                 recursive: args.parents,

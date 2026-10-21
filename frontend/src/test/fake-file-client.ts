@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import type {
+  FileTextWriteResult,
   FileClient,
   FileEntry,
   FileListing,
@@ -54,6 +55,12 @@ export class FakeFileClient implements FileClient {
   renameCalls: Array<{ from: string; to: string }> = []
   deleteCalls: Array<{ path: string; recursive: boolean }> = []
   uploadCalls: Array<{ path: string; file: Blob; overwrite: boolean }> = []
+  writeCalls: Array<{
+    path: string
+    contents: string
+    expectedModifiedMs: number | null
+  }> = []
+  writeError?: Error
 
   list = vi.fn(async (path: string): Promise<FileListing> => {
     if (this.listError) throw this.listError
@@ -64,6 +71,27 @@ export class FakeFileClient implements FileClient {
     if (this.readError) throw this.readError
     return this.readResults.get(path) ?? textResult('preview')
   })
+
+  writeText = vi.fn(
+    async (
+      path: string,
+      contents: string,
+      expectedModifiedMs?: number | null,
+    ): Promise<FileTextWriteResult> => {
+      if (this.writeError) throw this.writeError
+      this.writeCalls.push({
+        path,
+        contents,
+        expectedModifiedMs: expectedModifiedMs ?? null,
+      })
+      // A fresh mtime per save, so a test can assert the precondition moved.
+      return {
+        path,
+        size: new TextEncoder().encode(contents).length,
+        modified_ms: 1_700_000_000_000 + this.writeCalls.length,
+      }
+    },
+  )
 
   downloadUrl = vi.fn(
     (path: string) => `/api/files/download?path=${encodeURIComponent(path)}`,

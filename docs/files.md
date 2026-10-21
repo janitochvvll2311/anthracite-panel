@@ -207,6 +207,30 @@ permanently, with a message naming the directory. That is the deliberate
 difference from a desktop file manager: silently turning a reversible delete
 into an irreversible one is worse than an error.
 
+## Text editing
+
+The file explorer opens a text file in a CodeMirror editor with line numbers,
+syntax highlighting and word autocompletion. The grammar comes from the file
+name; formats without a grammar the panel ships (`shell`, `toml`, plain text)
+keep line numbers and bracket matching rather than pretending to highlight.
+
+`file write PATH SOURCE` (or `-` for stdin) and `POST /api/files/write` save the
+buffer. Both paths share one rule:
+
+- **Saving is atomic.** The new text goes to a temporary file in the same
+  directory and is renamed over the target, so a crash or a full disk leaves the
+  old file intact instead of a truncated one.
+- **A stale save is refused.** The editor sends the mtime it loaded. If the file
+  changed since, the daemon answers `409` with a `Conflict` and writes nothing,
+  because two people editing the same file must not silently overwrite each
+  other. Omitting the precondition is an explicit "overwrite".
+- **Saving never creates a file.** A deleted file stays deleted; creating one is
+  `upload`.
+- **Only text.** A NUL byte in the body is refused, and the size is bounded by
+  `[files] max_upload_bytes`.
+- **Symlinks are written through.** A path that resolves to a symlink updates
+  its target, so editing a linked config file does not detach the link.
+
 ## Archives
 
 `file archive PATH` compresses one entry; `file unarchive PATH` extracts it and

@@ -100,6 +100,7 @@ pub fn router(app: AppState) -> Router {
         .route("/api/files/archive", post(post_archive_create))
         .route("/api/files/archive/list", get(get_archive_listing))
         .route("/api/files/archive/extract", post(post_archive_extract))
+        .route("/api/files/write", post(post_file_write))
         .route("/api/files/upload", post(post_file_upload))
         .layer(DefaultBodyLimit::max(upload_limit))
         .fallback(static_handler)
@@ -946,6 +947,15 @@ pub struct ArchivePathQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FileWriteArgs {
+    pub path: String,
+    pub contents: String,
+    /// The mtime the editor loaded. Omitted means "overwrite regardless".
+    #[serde(default)]
+    pub expected_modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FileDeleteArgs {
     pub path: String,
     #[serde(default)]
@@ -1260,6 +1270,39 @@ pub async fn post_archive_extract(
     }
 }
 
+/// `POST /api/files/write` — save text over an existing file.
+pub async fn post_file_write(
+    State(state): State<AppState>,
+    payload: Result<Json<FileWriteArgs>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(args) = payload.map_err(|e| ApiError::bad_request(e.body_text()))?;
+    require_file_write(&state).await?;
+
+    match exchange(
+        &state,
+        &Request::FileWriteText {
+            path: args.path,
+            contents: args.contents,
+            expected_modified_ms: args.expected_modified_ms,
+        },
+    )
+    .await?
+    {
+        CommandResponse::FileTextWritten {
+            path,
+            size,
+            modified_ms,
+        } => Ok(Json(serde_json::json!({
+            "path": path,
+            "size": size,
+            "modified_ms": modified_ms,
+        }))),
+        CommandResponse::FileError(error) => Err(file_api_error(error)),
+        CommandResponse::Error { detail } => Err(gateway(detail)),
+        other => Err(unexpected_response(other)),
+    }
+}
+
 /// `POST /api/files/upload?path=/...` — raw request body, streamed to the daemon.
 pub async fn post_file_upload(
     State(state): State<AppState>,
@@ -1515,7 +1558,9 @@ fn file_api_error(error: FileError) -> ApiError {
     let status = match error.kind {
         FileErrorKind::NotFound => StatusCode::NOT_FOUND,
         FileErrorKind::PermissionDenied | FileErrorKind::Disabled => StatusCode::FORBIDDEN,
-        FileErrorKind::AlreadyExists | FileErrorKind::DirectoryNotEmpty => StatusCode::CONFLICT,
+        FileErrorKind::AlreadyExists
+        | FileErrorKind::DirectoryNotEmpty
+        | FileErrorKind::Conflict => StatusCode::CONFLICT,
         FileErrorKind::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         FileErrorKind::InvalidPath | FileErrorKind::NotADirectory | FileErrorKind::IsADirectory => {
             StatusCode::BAD_REQUEST

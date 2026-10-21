@@ -42,9 +42,25 @@ export interface FileWriteResult {
   size: number
 }
 
+export interface FileTextWriteResult {
+  path: string
+  size: number
+  modified_ms: number
+}
+
 export interface FileClient {
   list: (path: string) => Promise<FileListing>
   read: (path: string) => Promise<FileReadResult>
+  /**
+   * Saves text. `expectedModifiedMs` is the mtime the editor loaded; the
+   * daemon refuses the save when the file changed since, so two editors cannot
+   * silently overwrite each other.
+   */
+  writeText: (
+    path: string,
+    contents: string,
+    expectedModifiedMs?: number | null,
+  ) => Promise<FileTextWriteResult>
   downloadUrl: (path: string) => string
   mkdir: (path: string, recursive?: boolean) => Promise<void>
   rename: (from: string, to: string) => Promise<void>
@@ -90,6 +106,27 @@ export class HttpFileClient implements FileClient {
         response.headers.get('Content-Type') ??
         '',
     }
+  }
+
+  async writeText(
+    path: string,
+    contents: string,
+    expectedModifiedMs?: number | null,
+  ): Promise<FileTextWriteResult> {
+    const response = await this.fetchImpl(`${this.baseUrl}/write`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        path,
+        contents,
+        expected_modified_ms: expectedModifiedMs ?? undefined,
+      }),
+    })
+    if (!response.ok) throw await responseError(response)
+    return (await response.json()) as FileTextWriteResult
   }
 
   downloadUrl(path: string): string {
