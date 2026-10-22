@@ -41,4 +41,5 @@ backend/anth-panel/www/*
 
 # Dev artifacts
 backend/plugins
+backend/plugins.d
 backend/config.toml
