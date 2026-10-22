@@ -1,7 +1,8 @@
 # Volume manager: scope and architecture
 
-Status: approved. Scope decisions below are settled; implementation is in
-progress on `feat/volume-manager`.
+Status: implemented, including the partition work in 7a/7b. Decisions below are
+settled; the paragraphs that cite the panel's missing authentication describe
+the state the design was written against, not the current one.
 
 ## 1. What a "volume" means here
 
@@ -42,9 +43,10 @@ Two reasons, both concrete:
 
 1. Every one of those is **irreversible from the panel**. A mount mistake is
    undone with one command; a `mkfs` mistake is data loss.
-2. The panel still has **no authentication**. `docs/terminal.md` and
-   `docs/firewall.md` already carry that warning; adding `mkfs` would turn an
-   unauthenticated HTTP port into a destroyer of disks.
+2. The panel still had **no authentication at the time**. `docs/terminal.md`
+   and `docs/firewall.md` carried that warning; adding `mkfs` would have turned
+   an unauthenticated HTTP port into a destroyer of disks. The switch stays off
+   by default even now that the port needs a session.
 
 Mount/unmount are the only mutations because they are reversible and the
 damage is bounded by the guard list in §6.
@@ -338,4 +340,4 @@ and `cargo clippy`.
 5. **Naming**: `volume`, with `list`/`mount`/`unmount`, matching `file` and
    `network`.
 6. **Persistence**: no `/etc/fstab` writes. A bad entry can leave the host
-   unbootable, and the panel has no authentication.
+   unbootable, and the panel had no authentication when this was decided.

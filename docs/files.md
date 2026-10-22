@@ -305,11 +305,12 @@ eligible, so a mixed archive is never half-relocated.
 
 ## Security
 
-Authentication is still unimplemented, as with the terminal and process routes.
-`root` limits which paths the explorer can reach, but anyone who can reach the
-HTTP API can browse that tree. Keep `write = false` unless the panel is on a
-trusted network, and prefer a narrow `root` such as `/srv` or a user's home over
-`/`.
+With `[auth] enabled` every route below needs a panel session; see
+[api-endpoints.md](api-endpoints.md#authentication). `root` then bounds what an
+authenticated operator can reach, and `write` decides whether that operator can
+change anything. Neither is a substitute for the session: a host that sets
+`[auth] enabled = false` exposes this whole tree to anyone who can reach the
+port, so prefer a narrow `root` such as `/srv` or a user's home over `/`.
 
 Inline previews never execute active content on the panel origin: HTML, SVG and
 other non-image files are served as `text/plain` with

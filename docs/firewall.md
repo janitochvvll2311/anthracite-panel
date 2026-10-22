@@ -3,9 +3,13 @@
 The daemon can inspect and manage a dedicated nftables table. Monitoring is
 read-only; adding, deleting and flushing rules requires explicit control.
 
-The panel has no authentication yet, so keep the HTTP port on a trusted network
-or behind a proxy that authenticates users. Anyone who can reach the API can
-change firewall rules when control is enabled.
+With `[auth] enabled` — the default for a serving subcommand — every route
+below needs a panel session; see
+[api-endpoints.md](api-endpoints.md#authentication). A first run with no
+password bootstraps one and prints it once. Only a host with
+`[auth] enabled = false` leaves the API open; check it with
+`anth-panel auth status`. A signed-in operator can change firewall rules when
+control is enabled.
 
 ## Requirements
 

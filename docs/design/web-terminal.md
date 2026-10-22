@@ -1,36 +1,45 @@
 # Web terminal: design proposal
 
-Status: partially implemented on `feat/web-terminal`. The daemon already owns the
-PTY and carries it over the line protocol; `GET /api/terminal` bridges a browser
-WebSocket to one daemon connection, and the frontend uses an xterm-backed Lit
-component. Authentication, idle timeouts and automatic reconnect are still
-pending.
+Status: implemented. The daemon owns the PTY and carries it over the line
+protocol; `GET /api/terminal` bridges a browser WebSocket to one daemon
+connection, and the frontend uses an xterm-backed Lit component. Panel
+authentication landed afterwards, so the upgrade now needs the `anth_access`
+cookie; idle timeouts and automatic reconnect are still pending.
+
+> The sections that follow are the original proposal, kept for the reasoning.
+> Where they describe an open panel, read that as the state the design had to
+> work around, not as the current one: `[auth]` is on by default for a serving
+> subcommand today.
 
 The implemented shape is **B**, not the branch recommendation below: the daemon
 owns the PTY and the panel only upgrades the browser socket and translates
 frames. The existing line protocol already carries base64 bytes, so no
 `anth-proto` framing change was required.
 
-## The problem this has to solve before the rest
+## The problem this had to solve
 
-A web terminal is remote code execution behind an HTTP route. `anth-panel` today
-has **no authentication at all**, and `run`/`api` bind `0.0.0.0:8080` by default
-(`DEFAULT_ADDR` in `main.rs`). Every route that exists now is read-only or an
-echo, so the exposure is academic. Adding a PTY route turns it into a shell for
-anyone who can reach the port. That is the first design decision, not an
-afterthought.
+<!-- historical: written before the panel had a session layer -->
 
-Two things follow, and both are in scope:
+A web terminal is remote code execution behind an HTTP route. At the time
+`anth-panel` had **no authentication at all**, and `run`/`api` bound
+`0.0.0.0:8080` by default (`DEFAULT_ADDR` in `main.rs`). Every route that
+existed then was read-only or an echo, so the exposure was academic. Adding a
+PTY route turned it into a shell for anyone who could reach the port.
 
-1. The panel keeps no authentication of its own. It assumes a reverse proxy or a
-   private network is the boundary, and it must be explicit about that.
+Two options were weighed. Neither is the one that shipped:
+
+1. The panel keeps no authentication of its own, assuming a reverse proxy or a
+   private network is the boundary.
 2. The terminal gets a **separate, opt-in token gate** that no other route
-   requires, so existing deployments do not break and a terminal is never one
-   config mistake away from being open.
+   requires.
 
-The alternative — "add auth to the whole panel" — is a bigger product decision
-(sessions, login UI, password storage) and is not what was asked for. It stays
-out of scope, but the terminal must not be the reason that decision gets forced.
+The alternative — "add auth to the whole panel" — looked like a bigger product
+decision (sessions, login UI, password storage) than the terminal warranted. It
+was taken anyway in phase 2, which is why the opt-in token described below was
+never enforced and is now dead config; see the open item in
+[platform-upgrades.md](platform-upgrades.md).
+
+<!-- /historical -->
 
 ## Options considered
 
