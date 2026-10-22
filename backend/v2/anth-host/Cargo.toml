@@ -1,0 +1,7 @@
+[package]
+name = "anth-host"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anth-wire.workspace = true

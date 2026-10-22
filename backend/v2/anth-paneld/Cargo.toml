@@ -1,0 +1,17 @@
+[package]
+name = "anth-paneld"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "anth-panel"
+path = "src/main.rs"
+
+[dependencies]
+anth-wire.workspace = true
+anth-host.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+clap.workspace = true
+axum.workspace = true

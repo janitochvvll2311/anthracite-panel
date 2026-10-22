@@ -1,0 +1,47 @@
+name: v2
+
+# v0.1.0 had no CI at all: `cargo test` was a local habit, so a suite could be
+# green on a machine where `wasm32-unknown-unknown` happened to be installed and
+# fail on a fresh clone (see docs/design/v0.2.0.md, lesson 4).
+#
+# Scope: the v0.2.0 rewrite under backend/v2. The v0.1.0 tree keeps its own
+# status until phase E deletes it; adding it here would make this workflow red
+# for reasons unrelated to the rewrite.
+
+on:
+  push:
+    branches: [main, "v0.2.0"]
+    paths: ["backend/v2/**", ".github/workflows/v2.yml"]
+  pull_request:
+    paths: ["backend/v2/**", ".github/workflows/v2.yml"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/v2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the musl toolchain
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
