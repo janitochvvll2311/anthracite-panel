@@ -17,6 +17,8 @@ const catalogue: PluginsCatalogue = {
       name: 'Widget',
       version: '0.1.0',
       enabled: true,
+      capabilities: [],
+      api: [],
       ui: [{ slot: 'dashboard.widget', tag: 'anth-widget', module: 'web/js/widget.js' }],
     },
     {
@@ -24,6 +26,8 @@ const catalogue: PluginsCatalogue = {
       name: 'Off',
       version: '0.1.0',
       enabled: false,
+      capabilities: [],
+      api: [],
       ui: [{ slot: 'dashboard.widget', tag: 'anth-off', module: 'web/js/off.js' }],
     },
     {
@@ -31,6 +35,8 @@ const catalogue: PluginsCatalogue = {
       name: 'Panel',
       version: '0.1.0',
       enabled: true,
+      capabilities: [],
+      api: [],
       ui: [{ slot: 'panel.files.tab', tag: 'anth-extra', module: 'web/js/extra.js' }],
     },
   ],
@@ -68,6 +74,43 @@ describe('HttpPluginClient', () => {
     const fetchImpl = vi.fn(async () => new Response('nope', { status: 500 }))
     const client = new HttpPluginClient({ fetchImpl: fetchImpl as unknown as typeof fetch })
     await expect(client.list()).rejects.toThrow('500')
+  })
+
+  it('uploads a bundle as the raw body and returns the warning', async () => {
+    const result = {
+      id: 'org.anth.widget',
+      version: '0.1.0',
+      name: 'Widget',
+      warning: 'installed without a signature because `[plugins] require_signature = false`',
+    }
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(result)))
+    const client = new HttpPluginClient({ fetchImpl: fetchImpl as unknown as typeof fetch })
+    const file = new File([new Uint8Array([1, 2, 3])], 'widget.zip', {
+      type: 'application/zip',
+    })
+
+    await expect(client.install(file)).resolves.toEqual(result)
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/plugins/install')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(file)
+    expect((init.headers as Record<string, string>)['content-type']).toBe(
+      'application/zip',
+    )
+  })
+
+  it('reports the server detail when an install is refused', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'the bundle is not signed' }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        }),
+    )
+    const client = new HttpPluginClient({ fetchImpl: fetchImpl as unknown as typeof fetch })
+    const file = new File(['zip'], 'widget.zip')
+
+    await expect(client.install(file)).rejects.toThrow('the bundle is not signed')
   })
 
   it('builds an asset URL without duplicating the web prefix', () => {

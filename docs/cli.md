@@ -71,6 +71,13 @@ access_token_secs = 900
 refresh_token_secs = 43200
 cookie_secure = false
 
+[plugins]
+enabled = false
+root = "/var/lib/anth/plugins"
+install_from_web = false
+require_signature = true
+public_key = ""
+
 [files]
 root = "/"
 write = false
@@ -99,8 +106,11 @@ mode is set before the content is written and tightened again on every save.
 
 Debug builds bootstrap a missing file with global `sudo = true`,
 `[process] control = true`, `[network] control = true`,
-`[network] manage = true`, `[firewall] control = true` and
-`[files] write = true` so the whole UI is testable locally. Release builds keep the controls off. An existing file is
+`[network] manage = true`, `[firewall] control = true`,
+`[plugins] enabled = true`, `[plugins] install_from_web = true` and
+`[files] write = true` so the whole UI is testable locally. A debug build still
+requires a plugin signature; `[plugins] require_signature = false` is the
+deliberate bypass. Release builds keep the controls off. An existing file is
 never rewritten; remove it or edit it to change the generated defaults.
 
 ## Serving
@@ -627,10 +637,10 @@ reads the grants at start and the command prints a reminder to restart it.
 | `plugin approve <ID> --accept-capabilities` | Re-read a bundle and record its current capabilities. |
 | `plugin call <ID> [REQUEST]` | Run the plugin's wasm module with one JSON request envelope. |
 
-A bundle is a zip holding `plugin.toml`, `plugin.wasm` and an optional `web/`
-directory. Anything else is refused rather than skipped. The install validates
-the manifest against host policy, hashes the module and writes the *validated*
-capability list to the config:
+A bundle is a zip holding `plugin.toml`, `plugin.wasm`, an optional `plugin.sig`
+and an optional `web/` directory. Anything else is refused rather than skipped.
+The install validates the manifest against host policy, hashes the module,
+checks the signature and writes the *validated* capability list to the config:
 
 ```toml
 [[plugins.grants]]
@@ -653,6 +663,15 @@ optional = false
 The whole recipe is frozen, not only the id. Execution renders argv from the
 grant, so a grant holding ids alone would leave the program and the template to
 be read from the manifest — the file a local writer can rewrite.
+
+`plugin install` verifies `plugin.sig` (an Ed25519 signature over
+`plugin.wasm`) against `[plugins] public_key` before it records anything. Both
+defaults are strict: a missing key or signature refuses the install.
+`[plugins] require_signature = false` is the explicit bypass; the command then
+prints `[WARN] installed without a signature ...`. A signature that is present
+and does not match is still refused with the bypass on. `plugin approve` applies
+the same check, because widening a grant from a rewritten bundle would be the
+same mistake one step later.
 
 That grant is the authority. At every load the module is re-hashed and compared
 against the grant's digest — never against the manifest's, which a writer could
@@ -888,8 +907,8 @@ anth-panel terminal --cols 120 --rows 40
 | `--cols <COLS>` | Initial width in columns. Defaults to the local terminal width. |
 | `--rows <ROWS>` | Initial height in rows. Defaults to the local terminal height. |
 
-The token is reserved for the pending authentication layer and is not enforced
-yet; the daemon currently accepts terminal sessions regardless of it.
+The browser route is protected by the panel session; the CLI talks to the Unix
+socket, which relies on file permissions rather than a token.
 
 ```bash
 # In a terminal: Ctrl-C reaches the remote shell, not this command.

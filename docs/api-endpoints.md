@@ -119,6 +119,10 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `POST` | `/api/files/archive/extract` | Extract an archive |
 | `POST` | `/api/files/write` | Save text over an existing file (raw body) |
 | `POST` | `/api/files/upload` | Upload a raw body |
+| `GET` | `/api/plugins` | Installed plugin catalogue and load problems |
+| `POST` | `/api/plugins/install` | Install one bundle from a raw zip body |
+| `GET` | `/api/plugins/{id}/web/{*path}` | Plugin web assets |
+| `*` | `/api/plugins/{id}/{*path}` | Plugin API anchors |
 | `GET` | `/api/auth/session` | Whether the session is open |
 | `POST` | `/api/auth/login` | Exchange a password for the token pair |
 | `POST` | `/api/auth/refresh` | Rotate the access and refresh tokens |
@@ -1212,11 +1216,11 @@ the panel opens one PTY session per connection through the daemon. Closing the
 WebSocket closes the session and kills its process group.
 
 > With `[auth] enabled` this upgrade needs a session like every other `/api`
-> route, so a browser that has not signed in cannot open a PTY. The per-session
-> `terminal.token` is still **not enforced**; it is reserved for a capability
-> that outlives the panel session. The daemon socket itself stays
-> unauthenticated, so keep `anth-panel api`/`run` on loopback or behind a proxy
-> that authenticates users when the host is not trusted.
+> route, so a browser that has not signed in cannot open a PTY. There is no
+> separate terminal token; the panel session is the credential. The daemon
+> socket itself stays unauthenticated, so keep `anth-panel api`/`run` on
+> loopback or behind a proxy that authenticates users when the host is not
+> trusted.
 
 ### Query parameters
 
@@ -1315,6 +1319,39 @@ plugins installed" from "plugins turned off".
 
 Installing from the browser is gated by `[plugins] install_from_web`, which is
 off by default: installing means running code.
+
+## `POST /api/plugins/install`
+
+Installs one bundle. The request body is the zip itself, uploaded as
+`application/zip` (not a multipart form), capped at the bundle limit. The route
+is refused with `403` when `[plugins] install_from_web` or `[plugins] enabled`
+is off.
+
+The daemon writes the body to a temporary file, extracts and validates it on a
+blocking worker, verifies `plugin.sig` against `[plugins] public_key` unless
+`[plugins] require_signature = false`, and only then records the grant in the
+config and persists it. A refused bundle leaves the previous config untouched.
+
+```json
+{
+  "id": "org.anth.wireguard",
+  "version": "0.1.0",
+  "name": "WireGuard",
+  "warning": null
+}
+```
+
+`warning` is a string when the bundle was accepted without a verified signature
+(the `require_signature = false` bypass). A signature that is present but does
+not match is refused even with the bypass.
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Installed; the body carries the id, version and optional warning |
+| `400` | Not a zip, malformed manifest, or a hash that does not match `plugin.toml` |
+| `403` | Plugins disabled, browser install disabled, or the signature is missing, malformed or does not match |
+| `409` | A bundle with that id is already installed |
+| `413` | Body larger than the bundle limit |
 
 ## `/api/plugins/{id}/{*path}`
 
@@ -1523,8 +1560,8 @@ cookies. Two consequences follow, and both are deliberate:
 
 ### `GET /api/config` and `PATCH /api/config`
 
-The view is the TOML file without secrets: `[auth] password_hash` and
-`[terminal] token` are reported as `password_set` and `token_set` booleans.
+The view is the TOML file without secrets: `[auth] password_hash` is reported as
+`password_set` and the signing key only by its presence, never by value.
 
 A patch replaces only the fields it names; an absent key keeps its value. The
 result is serialized and re-parsed before it is stored, so a patch that would

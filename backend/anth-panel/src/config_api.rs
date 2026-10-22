@@ -37,8 +37,6 @@ pub struct ConfigView {
 pub struct TerminalView {
     pub shell: String,
     pub max_sessions: usize,
-    /// Whether a terminal token is configured; the token itself is never sent.
-    pub token_set: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,7 +100,6 @@ impl ConfigView {
             terminal: TerminalView {
                 shell: config.terminal.shell.clone(),
                 max_sessions: config.terminal.max_sessions,
-                token_set: !config.terminal.token.is_empty(),
             },
             process: ProcessView {
                 control: config.process.control,
@@ -411,12 +408,9 @@ mod tests {
     fn a_view_never_carries_a_secret() {
         let mut config = Config::default();
         config.auth.password_hash = "pbkdf2-sha256$1$a$b".to_string();
-        config.terminal.token = "super-secret".to_string();
 
         let text = serde_json::to_string(&ConfigView::from_config(&config)).unwrap();
-        assert!(!text.contains("super-secret"));
         assert!(!text.contains("pbkdf2-sha256"));
-        assert!(text.contains("\"token_set\":true"));
         assert!(text.contains("\"password_set\":true"));
     }
 

@@ -26,11 +26,13 @@ One zip:
 ```
 plugin.toml          manifest
 plugin.wasm          server module (sandboxed, no WASI)
+plugin.sig           detached Ed25519 signature of plugin.wasm (required by default)
 web/                 optional interface assets
 ```
 
 `plugin.wasm` and `plugin.toml` are required. `web/` is optional and served
-under the plugin's namespace only.
+under the plugin's namespace only. `plugin.sig` is required by default; see
+[Installation](#installation-freezes-the-recipe).
 
 ## Manifest
 
@@ -107,6 +109,29 @@ The second form has no rendering that both omits the value and keeps the
 element: it would produce `endpoint=` and reach the program as a malformed
 operand. A flag that takes a separate value therefore needs one capability per
 shape, which is how the reference plugin models `wg set ... endpoint <value>`.
+
+### Signatures
+
+`plugin.sig` is a detached Ed25519 signature over the raw bytes of
+`plugin.wasm`, written as 128 hex characters. The host stores the matching
+public key as 64 hex characters in the config:
+
+```toml
+[plugins]
+enabled = true
+install_from_web = false         # true in the generated debug config
+require_signature = true         # default
+public_key = "…64 hex…"
+```
+
+Install verifies the signature before the bundle is renamed into place. A
+missing key, a missing `plugin.sig` or a mismatch is refused. Setting
+`require_signature = false` allows an unsigned bundle and returns a warning that
+the CLI prints and the plugin manager displays; a signature that is present is
+still verified, so the bypass cannot turn a wrong signature into an accepted
+one. `plugin approve` applies the same check before it widens a grant. Signing
+is packaging work, not something the daemon does: the reference plugin's
+`package.sh` uses `openssl` when `ANTH_PLUGIN_SIGNING_KEY` is set.
 
 ### Installation freezes the recipe
 
@@ -305,9 +330,25 @@ Two more rules the reference bundle follows:
 The element is created from `module`. Assets share the panel's origin, so a
 plugin's JavaScript runs with the user's session and could call core `/api`
 routes directly. The wasm sandbox protects the daemon from the *server* half of
-a plugin, not the browser from the *client* half. Installing already requires
-root, and this is documented rather than papered over; a future version can
-move bundles to a sandboxed iframe with a message bridge.
+a plugin, not the browser from the *client* half. Installing requires an
+authenticated panel session and an enabled install switch, and this is
+documented rather than papered over; a future version can move bundles to a
+sandboxed iframe with a message bridge.
+
+## Browser install
+
+`POST /api/plugins/install` takes the zip as the raw request body and runs the
+same `install_bundle` as the CLI. It is gated by `[plugins] install_from_web`
+(off in release, on in the generated debug config) and by `[plugins] enabled`.
+The route installs on a blocking worker, writes the new grant through
+`AppState::replace_config` and persists the config; a refused bundle leaves the
+previous config untouched and the staged directory removed.
+
+`anth-plugin-manager` reads `GET /api/plugins`, lists the installed bundles and
+the problems the registry reported, and offers the install control only when
+both switches are on. The control is behind the same dangerous-action warning
+the CLI documents: the operator must confirm that the bundle runs code with the
+daemon's privileges. The warning is per action and never persisted.
 
 ## CLI anchors
 
@@ -323,6 +364,8 @@ values: that would expose the whole protocol and defeat the model.
 | Plugin runs a program the admin did not approve | capability allowlist frozen at install |
 | Plugin smuggles arguments | argv template with typed placeholders, filled by the host |
 | Plugin replaces its wasm to gain rights | module hashed on every load against the **grant**, never the manifest, so a rewritten module with a rewritten manifest hash is still caught |
+| A publisher is impersonated, or a module is swapped in transit | `plugin.sig` is verified against `[plugins] public_key` at install; the bypass prints a warning and still rejects a wrong signature |
+| A hostile bundle is installed from the browser | route gated by `install_from_web`, install has a confirmation naming the code-execution risk, and the same zip/manifest/signature checks as the CLI |
 | Plugin claims capabilities it was not granted | advertised set comes from the grant, not the manifest |
 | Plugin smuggles an option instead of an operand | every validator rejects a leading `-` |
 | An id with `..` reaches a recursive delete | ids are validated inside `plugin_dir`, before the join |
@@ -338,8 +381,9 @@ values: that would expose the whole protocol and defeat the model.
 
 | Phase | Scope |
 | --- | --- |
-| 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification |
+| 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification — done |
 | 8b | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest — done |
 | 8c | API anchors and namespacing — done |
 | 8d | UI anchors, asset serving — done |
-| 8e | WireGuard plugin: manifest, wasm, web components |
+| 8e | WireGuard plugin: manifest, wasm, web components — done |
+| 8f | Ed25519 signatures, the `require_signature` bypass, browser install and `anth-plugin-manager` — done |

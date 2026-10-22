@@ -41,6 +41,26 @@ The integration test `backend/anth-panel/tests/plugin_wireguard.rs` does the
 same substitution in a temporary directory, so the shipped manifest is validated
 by the real installer without a checked-in artifact.
 
+The script signs the module when `ANTH_PLUGIN_SIGNING_KEY` names an Ed25519
+private key. The host verifies `plugin.sig` unless
+`[plugins] require_signature = false`:
+
+```bash
+openssl genpkey -algorithm ED25519 -out plugin-signing.pem
+ANTH_PLUGIN_SIGNING_KEY=plugin-signing.pem ./package.sh
+```
+
+The matching public key goes in the host config as 64 hex characters:
+
+```bash
+openssl pkey -in plugin-signing.pem -pubout -outform DER \
+  | tail -c 32 | od -An -v -tx1 | tr -d ' \n'
+```
+
+Without the variable the script writes an unsigned bundle and says so. Installing
+it then requires the explicit `require_signature = false` bypass, which makes
+`plugin install` print a warning.
+
 ## Install
 
 ```bash
@@ -48,9 +68,11 @@ anth-panel plugin install dist/org.anth.wireguard.zip
 ```
 
 `install` validates every capability against the host allowlist, probes the ABI
-and freezes the recipes in the config. It warns that the bundle is unsigned.
-`wg.add_peer_endpoint` carries free text for the endpoint, so the installer
-warns about that field specifically.
+and freezes the recipes in the config. It checks `plugin.sig` against
+`[plugins] public_key`; a missing or mismatching signature is refused unless the
+operator set `[plugins] require_signature = false`, in which case the command
+prints which check was skipped. `wg.add_peer_endpoint` carries free text for the
+endpoint, which is why the capability sets `accepts_text = true`.
 
 ## Capabilities
 

@@ -86,6 +86,8 @@ socket_path = "/var/tmp/anth-plugin-test.sock"
 [plugins]
 enabled = true
 root = "{root}"
+# The CLI fixtures are unsigned. Signature enforcement has its own test below.
+require_signature = false
 "#
         ),
     )
@@ -121,6 +123,10 @@ fn installing_writes_a_grant_and_listing_shows_it() {
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(stdout.contains("org.anth.test"), "{stdout}");
     assert!(stdout.contains("wg.status"), "{stdout}");
+    assert!(
+        stderr.contains("[WARN]") && stderr.contains("require_signature"),
+        "the bypass must be reported: {stderr}"
+    );
 
     let text = fs::read_to_string(&config).unwrap();
     assert!(text.contains("[[plugins.grants]]"), "{text}");
@@ -327,6 +333,40 @@ fn approve_hashes_the_module_before_recording_a_grant() {
         ],
     );
     assert_eq!(code, 0, "an untouched module still approves: {stdout}");
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn approve_refuses_an_unsigned_bundle_when_a_signature_is_required() {
+    let dir = scratch("approve-unsigned");
+    let root = dir.join("plugins");
+    let config = config(&dir, &root);
+    let bundle = bundle(&dir, "");
+    assert_eq!(
+        run(&config, &["plugin", "install", &bundle.to_string_lossy()]).0,
+        0
+    );
+
+    // The bundle was installed through the bypass. Turning the requirement back
+    // on must stop `approve` from widening a grant on that same bundle.
+    let text = fs::read_to_string(&config).unwrap().replace(
+        "require_signature = false",
+        "require_signature = true\npublic_key = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+    );
+    fs::write(&config, text).unwrap();
+
+    let (code, _stdout, stderr) = run(
+        &config,
+        &[
+            "plugin",
+            "approve",
+            "org.anth.test",
+            "--accept-capabilities",
+        ],
+    );
+    assert_ne!(code, 0, "an unsigned approve must fail");
+    assert!(stderr.contains("not signed"), "{stderr}");
 
     fs::remove_dir_all(&dir).unwrap();
 }

@@ -29,7 +29,6 @@ fn config_at(path: &Path) -> Config {
         sudo: false,
         terminal: TerminalConfig {
             shell: "/bin/sh".to_string(),
-            token: String::new(),
             max_sessions: 1,
         },
         process: ProcessConfig::default(),

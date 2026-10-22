@@ -80,6 +80,15 @@ pub fn router(app: AppState) -> Router {
             post(post_account_group_delete),
         )
         .route("/api/plugins", get(get_plugins))
+        // A raw zip body, capped before it reaches the handler. The global
+        // limit is the file-upload ceiling, which may be larger than the
+        // bundle limit, so this route owns its own cap.
+        .route(
+            "/api/plugins/install",
+            post(post_plugin_install).layer(axum::extract::DefaultBodyLimit::max(
+                crate::plugins::MAX_BUNDLE_BYTES as usize,
+            )),
+        )
         // Static assets first: axum picks the most specific match, but the
         // intent is worth reading in order. Assets never reach a guest.
         .route(

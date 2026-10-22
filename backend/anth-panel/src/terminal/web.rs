@@ -1,9 +1,9 @@
 //! Browser-facing terminal protocol and the bridge to the daemon.
 //!
 //! The panel speaks JSON over a WebSocket; the daemon speaks the line protocol
-//! over a Unix socket. This module owns the translation and nothing else. It
-//! deliberately bypasses the config token gate: authentication is out of scope
-//! for this iteration and will be added at this boundary later.
+//! over a Unix socket. This module owns the translation and nothing else. The
+//! route sits behind the global JWT middleware like every other `/api` path, so
+//! there is no terminal-specific token here.
 
 use anth_proto::{
     AnthReader, AnthWriter, MAX_TERMINAL_INPUT, Request, Response, TerminalOpenArgs, TerminalSize,

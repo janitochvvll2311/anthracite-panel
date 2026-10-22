@@ -11,7 +11,7 @@ import { responseError } from '../http'
 export interface ConfigView {
   socket_path: string
   sudo: boolean
-  terminal: { shell: string; max_sessions: number; token_set: boolean }
+  terminal: { shell: string; max_sessions: number }
   process: { control: boolean; spawn: boolean; spawn_allow: string[] }
   network: { control: boolean }
   firewall: { control: boolean }

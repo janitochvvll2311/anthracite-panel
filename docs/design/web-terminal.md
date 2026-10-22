@@ -36,7 +36,7 @@ Two options were weighed. Neither is the one that shipped:
 The alternative — "add auth to the whole panel" — looked like a bigger product
 decision (sessions, login UI, password storage) than the terminal warranted. It
 was taken anyway in phase 2, which is why the opt-in token described below was
-never enforced and is now dead config; see the open item in
+never enforced and was removed in phase 8f along with the dead config key. See
 [platform-upgrades.md](platform-upgrades.md).
 
 <!-- /historical -->
@@ -88,7 +88,6 @@ frontend/                              backend/anth-panel/src/
   src/lib/terminal/websocket-transport.ts terminal/session.rs PTY spawn/read/write
   src/lib/ws/json-websocket.ts           terminal/registry.rs lifecycle + cap
                                          terminal/shell.rs line-editing detection
-                                         terminal/auth.rs token helper (not wired)
 ```
 
 ### Layers and who owns what
@@ -143,24 +142,14 @@ Decisions worth arguing about:
 
 ### Auth
 
-> Not implemented yet. The current route ignores `terminal.token` and accepts
-> any browser that can reach the port. The rest of this section is the intended
-> design.
+> Superseded. The whole `/api` router, including the terminal upgrade, is now
+> behind the JWT session middleware; there is no terminal-specific token. The
+> paragraphs below are kept as the original proposal, not as current behaviour.
 
-`terminal.token` in the config file. Empty or absent means the route is
-**disabled** and answers `404`, not `403`: a disabled feature should not
-advertise itself. When set, the token arrives as a query parameter on the
-upgrade (`?token=...`), because browsers cannot set headers on a WebSocket
-handshake. Consequences, all accepted:
-
-- The token can land in proxy access logs. Documented, and the proxy config in
-  the README is expected to redact the query string.
-- Comparison is constant-time.
-- No token in the frontend bundle. The user pastes it once; it lives in
-  `sessionStorage`, not `localStorage`.
-
-This is a lock, not a user system. It is proportionate to "one operator, one
-token, private network" and I would say so in the docs rather than imply more.
+The original proposal gave the terminal a separate, opt-in token in the config
+file. It was never enforced: phase 2 added authentication to the whole panel
+instead, and phase 8f removed the unused key so an operator cannot set a value
+that authorizes nothing.
 
 ### Session lifecycle
 
@@ -199,7 +188,6 @@ socket_path = "/var/tmp/anth.sock"
 
 [terminal]
 shell = "auto"
-token = ""               # reserved for the auth layer; not enforced yet
 max_sessions = 4
 ```
 
@@ -208,7 +196,7 @@ max_sessions = 4
 
 `Config` uses `#[serde(default, deny_unknown_fields)]`, so a new optional table
 keeps every existing config valid. An `enabled` flag and idle timeout remain
-proposals; only `shell`, `token` and `max_sessions` exist today.
+proposals; only `shell` and `max_sessions` exist today.
 
 ## Testing
 
@@ -243,8 +231,7 @@ Authentication, idle timeout and automatic reconnect are follow-ups.
 1. **Shell**: `/bin/sh` fixed, or configurable? Busybox alpine has no bash, and a
    configurable shell is a smaller step from "run a shell" to "run anything".
 2. **Working directory**: start at `/`, `$HOME`, or the daemon's cwd?
-3. **Should the token gate apply to the whole panel** in a follow-up? I have kept
-   it terminal-only to avoid forcing a bigger decision now, but you may prefer
-   one boundary for everything.
+3. **Should the token gate apply to the whole panel** in a follow-up? Resolved:
+   the whole panel has JWT auth, and the terminal-specific token was removed.
 4. **Multiple tabs / sessions per user**: the cap is global today. Per-IP would
    need care behind a proxy and is probably premature.

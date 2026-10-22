@@ -1,9 +1,9 @@
 # Platform upgrades
 
-Status: in progress. This document is the plan of record and the progress log
-for the multi-step upgrade of the panel. It is also the context handoff: a later
-conversation should be able to continue from here without re-reading the whole
-repository.
+Status: phases 0–8f are done. This document is the plan of record and the
+progress log for the multi-step upgrade of the panel. It is also the context
+handoff: a later conversation should be able to continue from here without
+re-reading the whole repository.
 
 ## Agreed decisions
 
@@ -27,8 +27,8 @@ repository.
 | 19 | Physical interfaces may be deleted. The confirmation says so explicitly ("this is a physical device; the host will lose this link") instead of hiding the action, and the delete still requires the typed interface name |
 | 20 | Delete is refused for the interface the request arrived on (resolved from `peer_addr`), for any interface carrying the default route, and for the last interface carrying it. The peer guard is skipped when the address is a proxy or loopback, where the peer says nothing about the path; `[network] manage` stays `false` in release |
 | 16 | Partitions support create, edit, resize and delete, plus `mkfs` behind its switch |
-| 17 | A plugin manifest requires a binary `sha256`; a signature is optional and its absence is warned about, not rejected |
-| 18 | Plugins can be installed from the web UI, not only from the CLI. The upload route is gated by `[plugins] install_from_web`, which defaults to `false` in release and `true` in the generated debug config, following the same rule as the other control switches. The UI must show a dangerous-action warning naming the code execution risk before the install button is enabled |
+| 17 | A plugin bundle requires a valid Ed25519 signature by default: `plugin.sig` covers `plugin.wasm` and `[plugins] public_key` is the trust anchor. `[plugins] require_signature = false` is the explicit bypass for a development host or a publisher that has not signed yet, and every install through it prints a warning naming the skipped check. A signature that is present is always verified, bypass or not |
+| 18 | Plugins can be installed from the web UI, not only from the CLI. The upload route is gated by `[plugins] install_from_web`, which defaults to `false` in release and `true` in the generated debug config, following the same rule as the other control switches. The UI must confirm a warning naming the code execution risk before it uploads the bundle |
 
 Additional decisions taken while planning:
 
@@ -40,36 +40,34 @@ Additional decisions taken while planning:
   starts on a branch stacked on the unreviewed one instead of waiting further.
 - Branches: `feat/<n>-<slug>` from `main`, one pull request per point, merged
   into `main` by the agent.
-- `terminal.token` is removed once the global JWT middleware lands; it stays as
-  an accepted-but-ignored key until then. **Still open:** the middleware landed
-  in #17 but the key remains in `TerminalConfig` and `GET /api/config` still
-  reports `token_set`, so an operator can set a value that authorizes nothing.
-  Removing it is a breaking config change (a `deny_unknown_fields` parse would
-  reject a file that still carries it) and needs its own migration note.
+- `terminal.token` was removed once the global JWT middleware landed. The
+  middleware protects `/api/terminal` like every other route, so the old token
+  authorized nothing. Removing the key is a breaking config change: a file that
+  still carries `[terminal] token` now fails `deny_unknown_fields`. Operators
+  upgrading must delete the line; `docs/terminal.md` carries the migration note.
 - Routing is hash based (`#/panel/<id>`).
 - `mkfs` types: `ext4`, `xfs`, `vfat`, `exfat`, `btrfs`, `swap`, each behind
   `[volumes] format = false`.
-- Plugins: `plugin.toml` manifest, one long-lived JSON-lines process per plugin
-  binary, one plugin per zip, binary must match the host architecture. Plugins
-  never extend the `anth-proto` enums; they receive `Request::Plugin`.
+- Plugins: `plugin.toml` manifest plus `plugin.wasm` and an optional
+  `plugin.sig`, one plugin per zip. The runtime is the in-process `wasmi` host
+  described in [plugins.md](plugins.md); there is no long-lived plugin process
+  and no `Request::Plugin` on the wire.
 - Plugin installation is reachable from two places: `plugin install PATH` on the
   CLI and `POST /api/plugins/install` from the web UI. Both end in the same
-  `plugins::install` function, so the zip checks, the manifest validation and
-  the `sha256` comparison exist once. The web route is gated by
-  `[plugins] install_from_web`: off in release, on in the generated debug
-  config, the same rule the process, network, firewall, volume and file
-  switches follow. The debug default is safe only because it is paired with a
-  signed-manifest requirement and the UI warning below; a debug build is a
-  developer's own machine, and leaving the switch off there would mean the only
-  untested path is the dangerous one.
-- The web UI treats installation as a dangerous action. The install control
-  stays disabled until the operator acknowledges a warning that names the
-  consequence, the panel says the plugin will run with the daemon's privileges,
-  and the acknowledgement is per session rather than persisted — a stored
-  "do not warn me again" would turn a deliberate confirmation into a default.
-  `anth-modal` renders the warning; the harness uses the same flow. The warning
-  is unconditional: it does not disappear because the switch happens to be on
-  in a debug build.
+  `plugins::install_bundle` function, so the zip checks, the manifest
+  validation, the hash and the signature verification exist once. The web route
+  is gated by `[plugins] install_from_web`: off in release, on in the generated
+  debug config, the same rule the process, network, firewall, volume and file
+  switches follow. The debug default is paired with the signature requirement and
+  the UI warning below; a debug build is a developer's own machine, and leaving
+  the switch off there would mean the only untested path is the dangerous one.
+- The web UI treats installation as a dangerous action. The install action is
+  behind a confirmation that names the consequence, the panel says the plugin
+  will run with the daemon's privileges, and the acknowledgement is per action
+  rather than persisted — a stored "do not warn me again" would turn a
+  deliberate confirmation into a default. `anth-modal` renders the warning; the
+  harness uses the same flow. The warning is unconditional: it does not
+  disappear because the switch happens to be on in a debug build.
 - Trash layout: freedesktop.org Trash specification 1.0 — `<files>/` and
   `<info>/<name>.trashinfo`, chosen per volume, with a configurable retention
   size.
@@ -97,14 +95,16 @@ Additional decisions taken while planning:
 | 8a (point 8) | Plugin manifest, typed validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification | done, merged in #24 |
 | 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | done, merged in #25 |
 | 8c (point 8) | API anchors and namespacing | done, merged in #26 |
-| 8d (point 8) | UI anchors and asset serving | done |
+| 8d (point 8) | UI anchors and asset serving | done, merged in #29 |
 | 8e (point 8) | WireGuard plugin: manifest, wasm, web components | done, merged in #30 |
+| 8f (point 8) | Ed25519 bundle signatures, the `require_signature` bypass, browser install and `anth-plugin-manager` | done |
 
 ## Phase 8 — plugins (done)
 
-The last phase closed with the reference bundle in #30. Its first review found
-four defects that the suite could not see, which is the useful lesson of the
-phase rather than the plugin itself:
+The reference bundle closed in #30; 8f then added signatures and the browser
+install path. The first review of the bundle found four defects that the suite
+could not see, which is the useful lesson of the phase rather than the plugin
+itself:
 
 - The guest read an anchor body as an object while the host forwards it as a
   JSON string, so the only mutating route answered `400` to every real request.
@@ -588,7 +588,7 @@ guest importing WASI.
 Next: 8c. API anchors under `/api/plugins/<id>/`, with the same `invoke` call
 behind an axum handler and namespacing enforced at install.
 
-### 8c — what the anchor route turned out to be (in review)
+### 8c — what the anchor route turned out to be (done, merged in #26)
 
 One wildcard, five methods, and a handler that never reads the manifest. That
 last part is the decision this phase forced. Declaring one axum route per anchor
@@ -615,3 +615,29 @@ Tests: 13 in `tests/anchors.rs` against real guests and a fake `wg` on `PATH`,
 including a request for a path the manifest never declared (it must reach the
 guest), an id of `%2e%2e`, an oversized body, the disabled switch, and a
 manifest rewritten on disk after install.
+
+## Phase 8f — signed bundles and browser install
+
+Signature verification is part of the install boundary, not a policy the daemon
+re-checks at run time. `plugin.sig` is a detached Ed25519 signature over
+`plugin.wasm`; `[plugins] public_key` is the only key the host trusts. The
+manifest's `sha256` is still checked, but it is not the trust anchor: an attacker
+who rewrites both `plugin.toml` and `plugin.wasm` can keep that pair consistent,
+while they cannot produce a signature without the private key. `load` continues
+to re-hash against the frozen grant, so a module replaced after install is still
+caught.
+
+`[plugins] require_signature` defaults to `true`. Turning it off is the escape
+hatch for a development host or an unsigned publisher; install then returns a
+warning instead of failing, and the CLI and the plugin manager both print it. A
+signature that *is* present is always verified, even with the bypass: the flag
+allows an unsigned bundle, not a wrong one. `plugin approve` applies the same
+rule, because approving is the other path that turns a bundle into authority.
+
+`POST /api/plugins/install` takes the zip as the raw request body, caps it at the
+bundle limit, installs on a blocking worker, writes the grant through
+`AppState::replace_config` and persists the config. `install_from_web` gates the
+route, `plugins.enabled` gates the rest, and a failed install keeps the previous
+config. `anth-plugin-manager` lists the catalogue and its problems, disables the
+form with the reason when either switch is off, and asks for confirmation with
+the code-execution consequence before uploading.

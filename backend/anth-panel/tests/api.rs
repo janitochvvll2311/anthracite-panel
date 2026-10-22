@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,6 +14,8 @@ use anth_proto::{
 };
 use axum::body::{Body, Bytes, to_bytes};
 use axum::http::{Request as HttpRequest, StatusCode};
+use ed25519_dalek::{Signer, SigningKey};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 fn unique_socket(name: &str) -> PathBuf {
@@ -2462,6 +2465,176 @@ async fn plugins_route_reports_a_directory_without_a_grant() {
     let problems = value["problems"].as_array().unwrap();
     assert_eq!(problems.len(), 1);
     assert!(problems[0].as_str().unwrap().contains("org.anth.orphan"));
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+fn plugin_bundle(signing_key: Option<&SigningKey>) -> Vec<u8> {
+    let wasm = b"\0asm\x01\0\0\0";
+    let digest = Sha256::digest(wasm)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let manifest = format!(
+        r#"[plugin]
+id = "org.anth.webtest"
+version = "0.1.0"
+name = "Web test"
+abi = 1
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "{digest}"
+"#
+    );
+
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    let mut zip = zip::ZipWriter::new(&mut bytes);
+    let options = zip::write::SimpleFileOptions::default();
+    zip.start_file("plugin.toml", options).unwrap();
+    zip.write_all(manifest.as_bytes()).unwrap();
+    zip.start_file("plugin.wasm", options).unwrap();
+    zip.write_all(wasm).unwrap();
+    if let Some(key) = signing_key {
+        zip.start_file("plugin.sig", options).unwrap();
+        let signature = key.sign(wasm);
+        let hex = signature
+            .to_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        zip.write_all(hex.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+    bytes.into_inner()
+}
+
+fn public_key(key: &SigningKey) -> String {
+    key.verifying_key()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn plugin_root(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("anth-api-plugins-{name}-{nanos}"))
+}
+
+#[tokio::test]
+async fn plugin_install_route_is_refused_when_the_web_switch_is_off() {
+    let mut config = Config::default();
+    config.plugins.enabled = true;
+    config.plugins.install_from_web = false;
+
+    let app = anth_panel::router(AppState::new(config));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugins/install")
+                .body(Body::from(plugin_bundle(None)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn plugin_install_route_accepts_an_unsigned_bundle_with_the_bypass() {
+    let root = plugin_root("unsigned");
+    let mut config = Config::default();
+    config.plugins.enabled = true;
+    config.plugins.install_from_web = true;
+    config.plugins.require_signature = false;
+    config.plugins.root = root.to_string_lossy().into_owned();
+
+    let app = anth_panel::router(AppState::new(config));
+    let response = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugins/install")
+                .body(Body::from(plugin_bundle(None)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["id"], "org.anth.webtest");
+    assert!(
+        value["warning"]
+            .as_str()
+            .unwrap()
+            .contains("without a signature"),
+        "{value}"
+    );
+
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["plugins"][0]["id"], "org.anth.webtest");
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[tokio::test]
+async fn plugin_install_route_requires_a_signature_when_so_configured() {
+    let root = plugin_root("required");
+    let key = SigningKey::from_bytes(&[23u8; 32]);
+    let mut config = Config::default();
+    config.plugins.enabled = true;
+    config.plugins.install_from_web = true;
+    config.plugins.require_signature = true;
+    config.plugins.public_key = public_key(&key);
+    config.plugins.root = root.to_string_lossy().into_owned();
+
+    let app = anth_panel::router(AppState::new(config.clone()));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugins/install")
+                .body(Body::from(plugin_bundle(None)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let app = anth_panel::router(AppState::new(config));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugins/install")
+                .body(Body::from(plugin_bundle(Some(&key))))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(value["warning"].is_null(), "{value}");
 
     std::fs::remove_dir_all(&root).unwrap();
 }

@@ -19,6 +19,8 @@ import type { NetworkClient } from '../lib/network/network-client'
 import { HttpNetworkClient } from '../lib/network/network-client'
 import type { ProcessClient } from '../lib/processes/process-client'
 import { HttpProcessClient } from '../lib/processes/process-client'
+import type { PluginClient } from '../lib/plugins/plugin-client'
+import { HttpPluginClient } from '../lib/plugins/plugin-client'
 import type { TerminalTransport } from '../lib/terminal/transport'
 import { WebSocketTerminalTransport } from '../lib/terminal/websocket-transport'
 import type { VolumeClient } from '../lib/volumes/volume-client'
@@ -31,6 +33,7 @@ import '../components/anth-file-manager'
 import '../components/anth-firewall'
 import '../components/anth-host-info'
 import '../components/anth-network-manager'
+import '../components/anth-plugin-manager'
 import '../components/anth-process-manager'
 import '../components/anth-terminal'
 import '../components/anth-volume-manager'
@@ -118,6 +121,15 @@ export const PANELS: PanelDefinition[] = [
     createClient: () => new HttpAccountClient({ fetchImpl: currentApiFetch() }),
   },
   {
+    id: 'plugins',
+    element: 'anth-plugin-manager',
+    icon: '🧩',
+    title: () => msg('Plugins'),
+    description: () =>
+      msg('Installed bundles, frozen capabilities and browser installation.'),
+    createClient: () => new HttpPluginClient({ fetchImpl: currentApiFetch() }),
+  },
+  {
     id: 'terminal',
     element: 'anth-terminal',
     icon: '⌨️',
@@ -145,4 +157,5 @@ export function findPanel(id: string): PanelDefinition | undefined {
 }
 
 export type { AccountClient, FileClient, FirewallClient, HostInfoClient }
-export type { NetworkClient, ProcessClient, TerminalTransport, VolumeClient }
+export type { NetworkClient, PluginClient, ProcessClient, TerminalTransport }
+export type { VolumeClient }

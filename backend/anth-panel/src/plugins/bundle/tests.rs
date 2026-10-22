@@ -5,6 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use ed25519_dalek::{Signer, SigningKey};
 use sha2::Sha256;
 
 use super::*;
@@ -103,6 +104,9 @@ fn config_at(root: &Path) -> PluginsConfig {
     PluginsConfig {
         enabled: true,
         root: root.to_string_lossy().into_owned(),
+        // The bundle fixtures are unsigned; the signature path has its own
+        // tests below, so every unrelated case stays focused on what it checks.
+        require_signature: false,
         ..PluginsConfig::default()
     }
 }
@@ -113,7 +117,9 @@ fn a_valid_bundle_installs_and_records_a_grant() {
     let bundle = valid_bundle(&dir, "");
     let config = config_at(&dir.join("plugins"));
 
-    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let result = install_bundle(&bundle, &config).unwrap();
+    let installed = result.installed;
+    let grant = result.grant;
 
     assert_eq!(installed.plugin.id, "org.anth.test");
     assert_eq!(grant.id, "org.anth.test");
@@ -302,7 +308,7 @@ fn web_assets_install_beside_the_module() {
     );
     let config = config_at(&dir.join("plugins"));
 
-    let (installed, _grant) = install_bundle(&bundle, &config).unwrap();
+    let installed = install_bundle(&bundle, &config).unwrap().installed;
     assert!(installed.root.join("web/card.js").exists());
     assert_eq!(installed.plugin.ui[0].tag, "anth-test");
     fs::remove_dir_all(&dir).unwrap();
@@ -341,7 +347,9 @@ fn a_rewritten_module_is_caught_on_load() {
     let dir = scratch("tamper");
     let bundle = valid_bundle(&dir, "");
     let config = config_at(&dir.join("plugins"));
-    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let result = install_bundle(&bundle, &config).unwrap();
+    let installed = result.installed;
+    let grant = result.grant;
 
     fs::write(installed.root.join("plugin.wasm"), b"\0asm\x01\0\0\0EVIL").unwrap();
 
@@ -357,7 +365,9 @@ fn a_rewritten_manifest_version_is_caught_on_load() {
     let dir = scratch("version");
     let bundle = valid_bundle(&dir, "");
     let config = config_at(&dir.join("plugins"));
-    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let result = install_bundle(&bundle, &config).unwrap();
+    let installed = result.installed;
+    let grant = result.grant;
 
     let text = fs::read_to_string(installed.root.join("plugin.toml")).unwrap();
     fs::write(
@@ -380,7 +390,9 @@ fn a_rewritten_module_with_a_matching_manifest_hash_is_caught() {
     let dir = scratch("rewrite-both");
     let bundle = valid_bundle(&dir, "");
     let config = config_at(&dir.join("plugins"));
-    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let result = install_bundle(&bundle, &config).unwrap();
+    let installed = result.installed;
+    let grant = result.grant;
 
     let evil = b"\0asm\x01\0\0\0EVIL".to_vec();
     fs::write(installed.root.join("plugin.wasm"), &evil).unwrap();
@@ -401,7 +413,9 @@ fn a_loaded_plugin_advertises_the_granted_capabilities_not_the_manifests() {
     let dir = scratch("claim");
     let bundle = valid_bundle(&dir, "");
     let config = config_at(&dir.join("plugins"));
-    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let result = install_bundle(&bundle, &config).unwrap();
+    let installed = result.installed;
+    let grant = result.grant;
 
     // The grant froze no capability; the manifest now claims one.
     assert!(grant.allowed_ids().is_empty());
@@ -430,7 +444,9 @@ fn the_advertised_state_follows_the_grant() {
     let dir = scratch("state");
     let bundle = valid_bundle(&dir, "");
     let config = config_at(&dir.join("plugins"));
-    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let result = install_bundle(&bundle, &config).unwrap();
+    let installed = result.installed;
+    let grant = result.grant;
 
     let mut disabled = grant;
     disabled.enabled = false;
@@ -463,7 +479,9 @@ fn loading_an_unchanged_bundle_succeeds() {
     let dir = scratch("reload");
     let bundle = valid_bundle(&dir, "");
     let config = config_at(&dir.join("plugins"));
-    let (installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let result = install_bundle(&bundle, &config).unwrap();
+    let installed = result.installed;
+    let grant = result.grant;
 
     assert_eq!(
         load(&installed.root, &grant).unwrap().plugin.id,
@@ -478,7 +496,7 @@ fn listing_reports_an_installed_plugin_and_an_orphan_directory() {
     let bundle = valid_bundle(&dir, "");
     let root = dir.join("plugins");
     let config = config_at(&root);
-    let (_installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let grant = install_bundle(&bundle, &config).unwrap().grant;
 
     fs::create_dir_all(root.join("org.anth.orphan")).unwrap();
 
@@ -507,7 +525,7 @@ fn removing_an_installed_plugin_deletes_its_directory() {
     let bundle = valid_bundle(&dir, "");
     let root = dir.join("plugins");
     let config = config_at(&root);
-    let (installed, _grant) = install_bundle(&bundle, &config).unwrap();
+    let installed = install_bundle(&bundle, &config).unwrap().installed;
 
     remove(&root, "org.anth.test").unwrap();
     assert!(!installed.root.exists());
@@ -524,7 +542,7 @@ fn the_registry_hides_everything_when_plugins_are_disabled() {
     let bundle = valid_bundle(&dir, "");
     let root = dir.join("plugins");
     let config = config_at(&root);
-    let (_installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let grant = install_bundle(&bundle, &config).unwrap().grant;
 
     let mut installed = config.clone();
     installed.upsert_grant(grant);
@@ -634,7 +652,7 @@ fn a_grant_freezes_the_program_and_the_template_not_only_the_id() {
          [capability.args.interface]\ntype = \"ifname\"\n",
     );
     let config = config_at(&dir.join("plugins"));
-    let (_, grant) = install_bundle(&bundle, &config).unwrap();
+    let grant = install_bundle(&bundle, &config).unwrap().grant;
 
     let recipe = grant.recipe("wg.status").expect("the recipe is frozen");
     assert_eq!(recipe.program.as_deref(), Some("wg"));
@@ -726,7 +744,7 @@ fn an_installed_plugin_advertises_its_anchors() {
     );
     let root = dir.join("plugins");
     let config = config_at(&root);
-    let (_installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let grant = install_bundle(&bundle, &config).unwrap().grant;
 
     let mut config = config;
     config.upsert_grant(grant);
@@ -766,7 +784,7 @@ fn a_capability_job_is_accepted_without_a_program() {
         ],
     );
     let config = config_at(&dir.join("plugins"));
-    let (_installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let grant = install_bundle(&bundle, &config).unwrap().grant;
     assert_eq!(grant.allowed_ids(), vec!["host.read".to_string()]);
     fs::remove_dir_all(&dir).unwrap();
 }
@@ -777,7 +795,7 @@ fn a_broken_plugin_does_not_stop_the_others_from_loading() {
     let bundle = valid_bundle(&dir, "");
     let root = dir.join("plugins");
     let config = config_at(&root);
-    let (_installed, grant) = install_bundle(&bundle, &config).unwrap();
+    let grant = install_bundle(&bundle, &config).unwrap().grant;
 
     let broken_root = root.join("org.anth.broken");
     fs::create_dir_all(&broken_root).unwrap();
@@ -812,7 +830,7 @@ fn load_refuses_a_module_that_hashes_right_but_cannot_be_loaded() {
     let dir = scratch("loadprobe");
     let config = config_at(&dir.join("plugins"));
     let bundle = valid_bundle(&dir, "");
-    let (_, grant) = install_bundle(&bundle, &config).unwrap();
+    let grant = install_bundle(&bundle, &config).unwrap().grant;
     let root = dir.join("plugins").join("org.anth.test");
 
     // Bytes the grant will approve and the parser will not accept: version 2 of
@@ -851,4 +869,126 @@ enabled = true
         error.contains("capabilities") || error.contains("unknown field"),
         "the error must name the stale key: {error}"
     );
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// A bundle signed by `key`, plus the public key a host would configure.
+fn signed_bundle(dir: &Path, key: &SigningKey) -> PathBuf {
+    let wasm = wasm_bytes();
+    let manifest = manifest_text(&sha_of(&wasm), "");
+    let signature = hex(&key.sign(&wasm).to_bytes());
+    write_bundle(
+        dir,
+        "signed",
+        &[
+            Member {
+                name: "plugin.toml",
+                bytes: manifest.into_bytes(),
+            },
+            Member {
+                name: "plugin.wasm",
+                bytes: wasm,
+            },
+            Member {
+                name: "plugin.sig",
+                bytes: signature.into_bytes(),
+            },
+        ],
+    )
+}
+
+fn key() -> SigningKey {
+    SigningKey::from_bytes(&[11u8; 32])
+}
+
+#[test]
+fn a_signed_bundle_installs_when_verification_is_required() {
+    let dir = scratch("signed");
+    let bundle = signed_bundle(&dir, &key());
+    let mut config = config_at(&dir.join("plugins"));
+    config.require_signature = true;
+    config.public_key = hex(key().verifying_key().as_bytes());
+
+    let result = install_bundle(&bundle, &config).unwrap();
+    assert_eq!(result.installed.plugin.id, "org.anth.test");
+    assert_eq!(result.warning, None);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn an_unsigned_bundle_is_refused_when_verification_is_required() {
+    let dir = scratch("unsigned");
+    let bundle = valid_bundle(&dir, "");
+    let mut config = config_at(&dir.join("plugins"));
+    config.require_signature = true;
+    config.public_key = hex(key().verifying_key().as_bytes());
+
+    let error = install_bundle(&bundle, &config).unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Denied);
+    assert!(error.detail.contains("not signed"), "{}", error.detail);
+    assert!(!dir.join("plugins/org.anth.test").exists());
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_missing_public_key_is_reported_before_the_signature_is_read() {
+    let dir = scratch("nokey");
+    let bundle = signed_bundle(&dir, &key());
+    let mut config = config_at(&dir.join("plugins"));
+    config.require_signature = true;
+    config.public_key.clear();
+
+    let error = install_bundle(&bundle, &config).unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Denied);
+    assert!(error.detail.contains("public_key"), "{}", error.detail);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_bypass_installs_an_unsigned_bundle_and_warns() {
+    let dir = scratch("bypass");
+    let bundle = valid_bundle(&dir, "");
+    let mut config = config_at(&dir.join("plugins"));
+    config.require_signature = false;
+
+    let result = install_bundle(&bundle, &config).unwrap();
+    let warning = result.warning.expect("an unverified install must warn");
+    assert!(warning.contains("without a signature"), "{warning}");
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_signature_that_does_not_match_is_refused_even_with_the_bypass() {
+    let dir = scratch("badsig");
+    let wasm = wasm_bytes();
+    let manifest = manifest_text(&sha_of(&wasm), "");
+    let bundle = write_bundle(
+        &dir,
+        "badsig",
+        &[
+            Member {
+                name: "plugin.toml",
+                bytes: manifest.into_bytes(),
+            },
+            Member {
+                name: "plugin.wasm",
+                bytes: wasm,
+            },
+            Member {
+                name: "plugin.sig",
+                bytes: hex(&key().sign(b"another module").to_bytes()).into_bytes(),
+            },
+        ],
+    );
+    let mut config = config_at(&dir.join("plugins"));
+    config.require_signature = false;
+    config.public_key = hex(key().verifying_key().as_bytes());
+
+    let error = install_bundle(&bundle, &config).unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Denied);
+    assert!(error.detail.contains("does not match"), "{}", error.detail);
+    fs::remove_dir_all(&dir).unwrap();
 }

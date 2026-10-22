@@ -31,7 +31,6 @@ fn config_at(path: &Path) -> Config {
         socket_path: path.to_string_lossy().into_owned(),
         terminal: TerminalConfig {
             shell: "/bin/sh".to_string(),
-            token: String::new(),
             max_sessions: 2,
         },
         ..Config::default()

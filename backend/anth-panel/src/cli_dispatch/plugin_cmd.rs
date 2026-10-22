@@ -28,13 +28,15 @@ pub fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
         }
         PluginCommand::Install(install) => {
             let path = std::path::Path::new(&install.bundle);
-            let (installed, grant) = match anth_panel::plugins::install_bundle(path, &plugins) {
+            let result = match anth_panel::plugins::install_bundle(path, &plugins) {
                 Ok(result) => result,
                 Err(error) => {
                     eprintln!("[ERROR] {error}");
                     return ExitCode::FAILURE;
                 }
             };
+            let installed = result.installed;
+            let grant = result.grant;
             println!(
                 "Installed {} {} with {} capabilit{}",
                 installed.plugin.id,
@@ -48,6 +50,9 @@ pub fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
             );
             for capability in grant.allowed_ids() {
                 println!("  {capability}");
+            }
+            if let Some(warning) = result.warning {
+                eprintln!("[WARN] {warning}");
             }
             config.plugins.upsert_grant(grant);
             finish_plugin_change(&config, config_path)
@@ -119,6 +124,22 @@ pub fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
             if let Err(error) = anth_panel::plugins::bundle::verify(&root, &manifest.wasm.sha256) {
                 eprintln!("[ERROR] {error}");
                 return ExitCode::FAILURE;
+            }
+            // The hash proves the manifest and the module agree; only the
+            // signature proves the pair came from the publisher the admin
+            // trusts. Approving widens authority, so it applies the same rule as
+            // install instead of trusting a rewritten bundle.
+            match anth_panel::plugins::bundle::verify_signature(
+                &root,
+                plugins.require_signature,
+                &plugins.public_key,
+            ) {
+                Ok(Some(warning)) => eprintln!("[WARN] {warning}"),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    return ExitCode::FAILURE;
+                }
             }
             let grant = anth_panel::plugins::PluginGrant::from_manifest(&manifest);
             println!(

@@ -61,15 +61,13 @@ impl AuthConfig {
     }
 }
 
-/// Web terminal settings. The token is reserved for the pending auth layer.
+/// Web terminal settings.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct TerminalConfig {
     /// Program to spawn for each session. `"auto"` uses `$SHELL` when it points
     /// at an existing file, then falls back to `/bin/sh`.
     pub shell: String,
-    /// Shared token reserved for the authentication layer. Not enforced yet.
-    pub token: String,
     /// Maximum number of concurrent sessions across the daemon.
     pub max_sessions: usize,
 }
@@ -78,9 +76,6 @@ impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             shell: "auto".to_string(),
-            // Reserved for the authentication layer. A terminal is remote code
-            // execution, so the token stays empty until that layer exists.
-            token: String::new(),
             max_sessions: 4,
         }
     }
@@ -363,6 +358,11 @@ impl Config {
         config.firewall.control = true;
         config.volumes.control = true;
         config.accounts.control = true;
+        // The plugin switch only advertises the bundle directory; installing
+        // from the browser is the dangerous half and gets its own switch, on in
+        // a debug build for the same reason the other controls are.
+        config.plugins.enabled = true;
+        config.plugins.install_from_web = true;
         // Deliberately not enabled even here: a debug build must not be able to
         // change a password by accident.
         config.files.write = true;
@@ -459,7 +459,7 @@ impl Config {
                 let config = Self::server_default();
                 if cfg!(debug_assertions) {
                     eprintln!(
-                        "Debug build: global sudo, process control, network control, firewall control, volume control and file writes are enabled in the generated config."
+                        "Debug build: global sudo, process control, network control, firewall control, volume control, plugin installation and file writes are enabled in the generated config."
                     );
                 }
                 config

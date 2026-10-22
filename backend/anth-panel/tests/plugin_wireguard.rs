@@ -25,6 +25,7 @@ use anth_panel::plugins::manifest::Manifest;
 use anth_panel::plugins::{PluginGrant, bundle, runtime};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -75,6 +76,18 @@ fn sha256_of(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Fixed Ed25519 key for the test bundle.
+///
+/// A real bundle is signed by its publisher; the test owns both halves so the
+/// install path can require a signature without shipping a private key.
+fn signing_key() -> SigningKey {
+    SigningKey::from_bytes(&[9u8; 32])
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// The bundle as shipped, with its `sha256` replaced by the real digest.
 ///
 /// The committed manifest deliberately carries a zero digest: a real one would
@@ -95,6 +108,11 @@ fn bundle_in(dir: &Path, wasm: &[u8]) -> PathBuf {
     manifest = manifest.replace(marker, &digest);
     fs::write(root.join("plugin.toml"), manifest).unwrap();
     fs::write(root.join("plugin.wasm"), wasm).unwrap();
+    fs::write(
+        root.join("plugin.sig"),
+        hex(&signing_key().sign(wasm).to_bytes()),
+    )
+    .unwrap();
     for entry in fs::read_dir(source.join("web")).unwrap() {
         let entry = entry.unwrap();
         let name = entry.file_name();
@@ -105,7 +123,7 @@ fn bundle_in(dir: &Path, wasm: &[u8]) -> PathBuf {
     let file = fs::File::create(&path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
-    for name in ["plugin.toml", "plugin.wasm"] {
+    for name in ["plugin.toml", "plugin.wasm", "plugin.sig"] {
         zip.start_file(name, options).unwrap();
         std::io::Write::write_all(&mut zip, &fs::read(root.join(name)).unwrap()).unwrap();
     }
@@ -253,8 +271,9 @@ fn installed() -> Option<(PathBuf, Vec<u8>)> {
             let archive = bundle_in(&dir, &wasm);
             let root = dir.join("plugins");
             fs::create_dir_all(&root).unwrap();
-            match bundle::install(&archive, &root) {
-                Ok((installed, _grant)) => Some((installed.root, wasm)),
+            let public_key = hex(signing_key().verifying_key().as_bytes());
+            match bundle::install(&archive, &root, true, &public_key) {
+                Ok(result) => Some((result.installed.root, wasm)),
                 Err(error) => panic!("the shipped bundle must install: {error}"),
             }
         })

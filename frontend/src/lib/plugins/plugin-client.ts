@@ -13,6 +13,8 @@
  * browser from its client half. See `docs/design/plugins.md`.
  */
 
+import { responseError } from '../http'
+
 export interface PluginUiAnchor {
   slot: string
   tag: string
@@ -24,6 +26,8 @@ export interface PluginSummary {
   name: string
   version: string
   enabled: boolean
+  capabilities: string[]
+  api: { method: string; path: string }[]
   ui: PluginUiAnchor[]
 }
 
@@ -34,6 +38,15 @@ export interface PluginsCatalogue {
   problems: string[]
 }
 
+/** Result of installing one bundle from the browser. */
+export interface PluginInstallResult {
+  id: string
+  version: string
+  name: string
+  /** Present when the bundle was accepted without a verified signature. */
+  warning?: string | null
+}
+
 export interface PluginClientOptions {
   baseUrl?: string
   fetchImpl?: typeof fetch
@@ -41,6 +54,8 @@ export interface PluginClientOptions {
 
 export interface PluginClient {
   list(): Promise<PluginsCatalogue>
+  /** Installs one zip bundle. Refused unless `install_from_web` is on. */
+  install(file: File): Promise<PluginInstallResult>
   /** URL an anchor's module is served from. */
   moduleUrl(pluginId: string, module: string): string
 }
@@ -56,8 +71,18 @@ export class HttpPluginClient implements PluginClient {
 
   async list(): Promise<PluginsCatalogue> {
     const response = await this.fetchImpl(`${this.baseUrl}/api/plugins`)
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
+    if (!response.ok) throw await responseError(response)
     return (await response.json()) as PluginsCatalogue
+  }
+
+  async install(file: File): Promise<PluginInstallResult> {
+    const response = await this.fetchImpl(`${this.baseUrl}/api/plugins/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/zip' },
+      body: file,
+    })
+    if (!response.ok) throw await responseError(response)
+    return (await response.json()) as PluginInstallResult
   }
 
   moduleUrl(pluginId: string, module: string): string {
@@ -100,7 +125,7 @@ export function anchorsBySlot(
  * plugin id attached so the operator can find it.
  */
 export async function loadSlot(
-  client: PluginClient,
+  client: Pick<PluginClient, 'moduleUrl'>,
   catalogue: PluginsCatalogue | undefined,
   slot: string,
 ): Promise<HTMLElement[]> {

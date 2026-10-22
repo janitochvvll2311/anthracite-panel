@@ -1,0 +1,82 @@
+<!doctype html>
+<!--
+  Dev-only harness for the plugin manager.
+
+  Run `bun run dev` and open
+  http://localhost:5173/src/components/anth-plugin-manager.test.html. Vite's
+  build input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel plugin manager."
+    />
+    <title>anth-plugin-manager · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-plugin-manager" width="1100px">
+      <p slot="description">
+        Installed plugin bundles from <code>GET /api/plugins</code>, their frozen
+        capabilities and the browser install path. Installation posts the zip to
+        <code>POST /api/plugins/install</code> and is disabled unless
+        <code>[plugins] install_from_web</code> is on. A signature is required
+        unless <code>[plugins] require_signature = false</code>, in which case
+        the install reports that it was not verified.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Open the panel from the shell or this harness.</li>
+            <li>
+              Choose a bundle and confirm the warning: the file is uploaded and
+              the catalogue refreshes.
+            </li>
+            <li>
+              Set <code>install_from_web = false</code> to see the read-only
+              state.
+            </li>
+            <li>
+              Install an unsigned bundle with
+              <code>require_signature = false</code> to see the warning.
+            </li>
+            <li>Break a granted module to see the problems list.</li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>bun run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open <code>/src/components/anth-plugin-manager.test.html</code> on
+              the Vite port.
+            </li>
+            <li>
+              Debug builds enable <code>[plugins] enabled</code> and
+              <code>install_from_web</code> in the generated config.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <anth-plugin-manager id="plugins"></anth-plugin-manager>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-plugin-manager.ts'
+      import { HttpPluginClient } from '/src/lib/plugins/plugin-client.ts'
+
+      document.querySelector('#plugins').client = new HttpPluginClient()
+    </script>
+  </body>
+</html>

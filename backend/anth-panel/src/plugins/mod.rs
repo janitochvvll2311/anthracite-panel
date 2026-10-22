@@ -16,13 +16,14 @@ pub mod api;
 pub mod bundle;
 pub mod manifest;
 pub mod runtime;
+pub mod signature;
 pub mod web;
 
 use std::path::{Path, PathBuf};
 
 use ::serde::{Deserialize, Serialize};
 
-pub use bundle::{Installed, MAX_BUNDLE_BYTES};
+pub use bundle::{BundleInstall, Installed, MAX_BUNDLE_BYTES};
 pub use manifest::{
     ApiAnchor, ArgSpec, ArgType, Capability, InstalledPlugin, Manifest, PluginError,
     PluginErrorKind, PluginGrant, UiAnchor,
@@ -43,6 +44,17 @@ pub struct PluginsConfig {
     /// Whether the HTTP API accepts a bundle upload. Gated like the other
     /// dangerous switches: installing means running code.
     pub install_from_web: bool,
+    /// Require a valid Ed25519 signature before a bundle is installed.
+    ///
+    /// On by default. Turning it off is the deliberate escape hatch for a
+    /// development build or a host that has not configured a key yet; every
+    /// install then reports that the signature was not verified.
+    pub require_signature: bool,
+    /// Hex-encoded Ed25519 public key that signs plugin bundles.
+    ///
+    /// Empty means no key is configured. With `require_signature` on, installs
+    /// are refused until both the key and a `plugin.sig` are present.
+    pub public_key: String,
     /// Instruction budget for one wasm invocation. Fuel is the only way to stop
     /// a module that loops, since wasm has no wall-clock interrupt.
     pub fuel: u64,
@@ -56,6 +68,8 @@ impl Default for PluginsConfig {
             enabled: false,
             root: DEFAULT_PLUGIN_ROOT.to_string(),
             install_from_web: false,
+            require_signature: true,
+            public_key: String::new(),
             fuel: 50_000_000,
             grants: Vec::new(),
         }
@@ -171,12 +185,17 @@ impl PluginRegistry {
 pub fn install_bundle(
     bundle_path: &Path,
     config: &PluginsConfig,
-) -> Result<(Installed, PluginGrant), PluginError> {
+) -> Result<BundleInstall, PluginError> {
     if !config.enabled {
         return Err(PluginError::new(
             PluginErrorKind::Denied,
             "plugins are disabled in the configuration",
         ));
     }
-    bundle::install(bundle_path, &config.root_path())
+    bundle::install(
+        bundle_path,
+        &config.root_path(),
+        config.require_signature,
+        &config.public_key,
+    )
 }

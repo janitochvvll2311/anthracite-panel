@@ -6,7 +6,7 @@ use std::io::Read;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anth_panel::config::{Config, TerminalConfig};
-use anth_panel::terminal::{OpenError, Output, PtySession, Session, Sessions, Verdict, auth};
+use anth_panel::terminal::{OpenError, Output, PtySession, Session, Sessions};
 use anth_proto::{AnthClient, Request, Response, TerminalSize};
 use tokio::net::UnixStream;
 
@@ -210,27 +210,6 @@ async fn a_bad_size_is_refused_by_the_registry_too() {
     }
 }
 
-#[test]
-fn the_token_gate_separates_disabled_from_denied() {
-    // Disabled must not look like "wrong token": a deployment that never
-    // enabled the terminal should not reveal that it exists.
-    assert_eq!(auth::check("", None), Verdict::Disabled);
-    assert_eq!(auth::check("", Some("anything")), Verdict::Disabled);
-
-    assert_eq!(auth::check("secret", None), Verdict::Denied);
-    assert_eq!(auth::check("secret", Some("wrong")), Verdict::Denied);
-    assert_eq!(auth::check("secret", Some("secret")), Verdict::Allowed);
-}
-
-#[test]
-fn constant_time_comparison_matches_equality() {
-    assert!(auth::constant_time_eq(b"abc", b"abc"));
-    assert!(!auth::constant_time_eq(b"abc", b"abd"));
-    assert!(!auth::constant_time_eq(b"abc", b"ab"));
-    assert!(!auth::constant_time_eq(b"", b"a"));
-    assert!(auth::constant_time_eq(b"", b""));
-}
-
 #[tokio::test]
 async fn a_terminal_session_runs_over_the_socket() {
     let path = unique_socket("session");
@@ -238,7 +217,6 @@ async fn a_terminal_session_runs_over_the_socket() {
         socket_path: path.to_string_lossy().into_owned(),
         terminal: TerminalConfig {
             shell: "/bin/sh".to_string(),
-            token: "secret".to_string(),
             max_sessions: 2,
         },
         ..Config::default()
@@ -335,7 +313,6 @@ async fn a_client_that_disappears_does_not_leave_a_shell_running() {
         socket_path: path.to_string_lossy().into_owned(),
         terminal: TerminalConfig {
             shell: "/bin/sh".to_string(),
-            token: "secret".to_string(),
             max_sessions: 2,
         },
         ..Config::default()

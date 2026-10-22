@@ -14,6 +14,8 @@ const catalogue: PluginsCatalogue = {
       name: 'Widget',
       version: '0.1.0',
       enabled: true,
+      capabilities: [],
+      api: [],
       ui: [{ slot: 'dashboard.widget', tag: 'anth-widget', module: 'web/js/widget.js' }],
     },
   ],

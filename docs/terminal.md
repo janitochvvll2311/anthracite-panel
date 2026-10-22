@@ -21,8 +21,7 @@ socket.
 Do not expose the socket to a network you do not control, and do not enable the
 panel over plain HTTP on an untrusted network: the session cookie travels on
 every request. Set `[auth] cookie_secure = true` once TLS terminates in front of
-the panel. `terminal.token` is still not enforced; it is reserved for a
-per-session capability, which the panel session does not replace.
+the panel.
 
 ## Enabling it
 
@@ -33,15 +32,19 @@ socket_path = "/var/tmp/anth.sock"
 
 [terminal]
 shell = "auto"           # $SHELL / login shell, then /bin/sh
-token = "a-long-random"  # reserved; not enforced yet
 max_sessions = 4         # concurrent sessions across the daemon
 ```
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `shell` | `"auto"` | Program spawned for each session. `"auto"` uses `$SHELL`, then the account's login shell from `/etc/passwd`, then `/bin/sh`. |
-| `token` | `""` | Reserved for the authentication layer; currently ignored. |
 | `max_sessions` | `4` | Concurrent sessions; further opens are refused, not queued. |
+
+The old `token` key was removed. A config that still carries
+`[terminal] token = "..."` is rejected, because `Config` denies unknown fields;
+delete the line. The browser route is protected by the panel session, and the
+Unix socket relies on file permissions. There is no separate terminal token to
+set.
 
 An existing config that explicitly says `shell = "/bin/sh"` keeps that choice;
 change it to `"auto"` or `/bin/bash` if that deployment should get shell-native
@@ -80,12 +83,11 @@ WebSocket and bridges it to the daemon. The CLI reaches them through
 
 ## What is not implemented yet
 
-- **Authentication.** The token is stored but not checked. The route is open to
-  anyone who can reach the HTTP port.
 - No idle timeout. A session with a connected client stays open until the
   client closes it or the daemon stops.
-- No `enabled` flag separate from the token: there is no way to keep the
-  terminal off while a token is configured.
+- There is no terminal-specific `enabled` flag: the route follows the panel
+  session, so turning `[auth]` off makes it reachable by anyone who can reach
+  the HTTP port.
 
 ## Testing it by hand
 

@@ -93,3 +93,14 @@ pub(crate) async fn require_file_write(state: &AppState) -> Result<(), ApiError>
         ))
     }
 }
+
+pub(crate) async fn require_plugin_install(state: &AppState) -> Result<(), ApiError> {
+    if state.config().await.plugins.install_from_web {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "plugin installation from the browser is disabled",
+        ))
+    }
+}

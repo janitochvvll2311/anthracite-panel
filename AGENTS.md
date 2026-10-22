@@ -53,6 +53,8 @@ backend/
       command.rs            #   sudo-capable command runner shared by nft, mount and umount
       firewall.rs           #   managed nftables table and rules
       volumes.rs            #   lsblk/mountinfo parsers, mount and unmount policy
+      plugins/              #   manifest, bundle store, Ed25519 signature, wasmi host,
+                            #   anchors and web assets
       files.rs              #   virtual paths, listings, chunked reads and atomic uploads
       render.rs             #   bordered table renderer for the CLI
       repl.rs               #   interactive session loop for `-i`
@@ -60,7 +62,7 @@ backend/
       poll.rs               #   repeat an async read on a period (shared timing)
       text.rs               #   shared trimmed-file read for the inspectors
       sse.rs                #   SSE framing: named events, ids, keep-alive
-      terminal/             #   PTY session, registry, shell detection, token helper, browser bridge
+      terminal/             #   PTY session, registry, shell detection, browser bridge
       terminal_client.rs    #   interactive terminal for the CLI
     www/                    #   rust-embed folder; holds only .gitkeep in the repo
     tests/                  #   api.rs, client.rs, config.rs, daemon.rs, files.rs, hostinfo.rs,
@@ -252,9 +254,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `/api/auth/{session,login,refresh,logout,password}`. The daemon socket itself
   is still unauthenticated — this layer covers HTTP only.
 - **Config API**: `config_api.rs` serves `GET`/`PATCH /api/config`. The view is a
-  projection of `Config` with secrets replaced by `password_set`/`token_set`
-  booleans. A patch replaces only the keys it names, is round-tripped through
-  TOML to prove it reloads, then applied in memory with
+  projection of `Config` with secrets replaced by presence booleans (for
+  example `password_set`). A patch replaces only the keys it names, is
+  round-tripped through TOML to prove it reloads, then applied in memory with
   `AppState::replace_config` (policy only, sessions untouched) and written with
   `AppState::persist`. Disabling auth from the panel is refused on purpose; that
   is a host-only decision. `AppState::replace_auth` is the other path: it swaps
@@ -265,14 +267,17 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `set_password` reuses `password::hash_password_with_iterations`; `set_key`
   validates before writing so a bad value leaves the file untouched.
 - **Config**: `anth_panel::config::Config` (`socket_path`, `[terminal]`, `[process]`,
-  `[network]`, `[firewall]`, `[volumes]` and `[files]`) is TOML with
+  `[network]`, `[firewall]`, `[volumes]`, `[plugins]` and `[files]`) is TOML with
   `#[serde(default, deny_unknown_fields)]`. Defaults: config at
   `/etc/anth/config.toml`, socket at `/var/tmp/anth.sock`, global `sudo = false`,
-  `terminal.shell = "auto"`, empty token, `max_sessions = 4`,
+  `terminal.shell = "auto"`, `max_sessions = 4`,
   `process.control = false` with `process.spawn = false` and an empty
   `spawn_allow`, `network.control = false`, `network.manage = false`,
   `firewall.control = false`, `volumes.control = false` with
-  `volumes.mount_root = "/mnt"`, legacy `network.sudo`/`firewall.sudo` and
+  `volumes.mount_root = "/mnt"`, `plugins.enabled = false`,
+  `plugins.install_from_web = false`, `plugins.require_signature = true`,
+  `plugins.public_key = ""` and `plugins.fuel = 50_000_000`, legacy
+  `network.sudo`/`firewall.sudo` and
   `firewall.sudo_password` are accepted and ignored,
   `files.root = "/"`, `files.write = false`, `max_entries = 5000`,
   `max_preview_bytes = 1 MiB` and
@@ -294,8 +299,10 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   The client subcommand uses `Config::load_or_default`, which never writes. `Config::server_default` returns
   `Config::dev_default` in debug builds, which sets global `sudo = true`,
   `process.control = true`, `network.control = true`,
-  `firewall.control = true` and `files.write = true`; release builds keep the
-  controls off.
+  `firewall.control = true`, `plugins.enabled = true`,
+  `plugins.install_from_web = true` and `files.write = true`; release builds
+  keep the controls off. A debug build still requires a signature: the bypass is
+  a deliberate `plugins.require_signature = false`, not a debug default.
 - **Panel routes**: `GET /healthz`, plus one route per command under `/api`:
   `GET /api/host-info`, `GET /api/host-info/watch?interval=2s` (SSE),
   `POST /api/echo`, `GET /api/terminal` (WebSocket),
@@ -314,7 +321,9 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   `POST /api/accounts/groups/{name}/delete`; the filesystem routes are
   `GET /api/files`, `GET /api/files/content`, `GET /api/files/download`,
   `POST /api/files/mkdir`, `POST /api/files/rename`, `POST /api/files/delete` and
-  `POST /api/files/upload`. The route names the command, so
+  `POST /api/files/upload`; the plugin routes are `GET /api/plugins`,
+  `POST /api/plugins/install`, `GET /api/plugins/{id}/web/{*path}` and the
+  `/api/plugins/{id}/{*path}` anchor wildcard. The route names the command, so
   bodies carry the command's arguments at the top level (`{"message":"hi"}`) with no
   `type`/`data` envelope; the envelope stays a `anth-proto` concern for socket clients
   only. See `docs/api-endpoints.md`. Every failure is `{"error": "..."}` via
@@ -453,15 +462,25 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   with an `ArgType` the host owns. Programs must be on `PROGRAM_ALLOWLIST`, or
   the capability names a `job` the host implements its own argv for. `bundle.rs`
   extracts to a staging directory, refuses any member that is not
-  `plugin.toml`, `plugin.wasm` or under `web/` (reusing
-  `files::archive::safe_member` plus `O_NOFOLLOW`), hashes the module and only
-  then renames. `load` re-hashes on every start and compares the version, so a
-  rewritten bundle is disabled rather than trusted; the module path is pinned to
-  `plugin.wasm` so a rewritten manifest cannot re-point it. `plugin
+  `plugin.toml`, `plugin.wasm`, `plugin.sig` or under `web/` (reusing
+  `files::archive::safe_member` plus `O_NOFOLLOW`), hashes the module, verifies
+  the signature and only then renames. `plugins/signature.rs` owns Ed25519
+  verification: `plugin.sig` is a detached signature over `plugin.wasm`, and
+  `[plugins] public_key` is the only trust anchor. `require_signature` defaults
+  to true; setting it false is the explicit bypass, every install through it
+  returns a warning, and a signature that is present is still checked. `plugin
+  approve` applies the same check before widening a grant. `load`
+  re-hashes on every start and compares the version, so a rewritten bundle is
+  disabled rather than trusted; the module path is pinned to `plugin.wasm` so a
+  rewritten manifest cannot re-point it. `plugin
   list|install|remove|enable|approve` run locally like `auth` and `config`, and
   `approve` requires `--accept-capabilities` because widening a grant is never
   implicit. `GET /api/plugins` is read-only and reads the bundle directory, so
   the daemon stays unaware of which plugins the panel shows.
+  `POST /api/plugins/install` takes a raw zip, is gated by
+  `[plugins] install_from_web`, installs on a blocking worker and persists the
+  grant; `anth-plugin-manager` is the browser front end, with the same
+  confirmation the CLI documents.
   `plugins/runtime.rs` is the `wasmi` host: one engine per call with
   `consume_fuel` and `StoreLimits`, exactly two imports (`anth_exec`,
   `anth_log`), and the four documented exports checked by name and signature
@@ -520,9 +539,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   cannot survive, the file is canonicalized before the containment check, the
   MIME type comes from a host-owned extension table, and every answer is
   `nosniff` and `no-store`. The frontend side is `lib/plugins/plugin-client.ts`
-  (catalogue read, `moduleUrl`, `anchorsBySlot`, `loadSlot`) and
+  (catalogue read, `install`, `moduleUrl`, `anchorsBySlot`, `loadSlot`) and
   `anth-plugin-slot`, which imports each declared module with a dynamic
-  `import()` and appends the tag. The shell never imports a plugin statically.
+  `import()` and appends the tag. `anth-plugin-manager` lists the catalogue,
+  reports load problems, and offers the install form only when both switches
+  are on; the upload is behind a confirmation naming the code-execution risk,
+  and the unverified-signature warning from the daemon is shown to the operator.
+  The shell never imports a plugin statically.
 - **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
   `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
   deletes/flushes. It only renders controls when `control_enabled` is true and
@@ -637,7 +660,8 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   An exited session is removed from the connection's `owned` list so the daemon returns
   to the socket-only path instead of polling an exhausted output stream;
   `tests/terminal_exit.rs` guards that CPU regression.
-  Authentication is deliberately unimplemented: `terminal.token` is not checked yet.
+  Authentication is the global JWT middleware: the upgrade is one more `/api`
+  route, and there is no terminal-specific token.
 - **Frontend terminal**: `anth-terminal` is an xterm-backed Lit element. It only
   depends on the `TerminalTransport` interface in `lib/terminal/transport.ts`;
   `lib/terminal/websocket-transport.ts` implements it for `/api/terminal`, and

@@ -26,6 +26,10 @@ use super::manifest::{
     WASM_FILE,
 };
 use super::runtime;
+use super::signature;
+
+/// Detached Ed25519 signature over `plugin.wasm`, hex encoded.
+const SIGNATURE_FILE: &str = "plugin.sig";
 
 /// Largest bundle accepted. A wasm module plus web assets; anything larger is a
 /// mistake or an attack, and the limit is applied while extracting.
@@ -40,6 +44,7 @@ pub const MAX_BUNDLE_ENTRIES: usize = 512;
 fn is_allowed_member(name: &str) -> bool {
     name == "plugin.toml"
         || name == "plugin.wasm"
+        || name == SIGNATURE_FILE
         || (name.starts_with("web/") && !name.ends_with('/'))
 }
 
@@ -61,15 +66,31 @@ impl Installed {
     }
 }
 
+/// The result of a successful install.
+///
+/// `warning` is `Some` only when the bundle was accepted without a verified
+/// signature, which happens when `[plugins] require_signature = false`. The CLI
+/// and the web UI both surface it; an unverified install must never look like a
+/// verified one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleInstall {
+    pub installed: Installed,
+    pub grant: PluginGrant,
+    pub warning: Option<String>,
+}
+
 /// Reads a bundle and installs it under `plugins_root/<id>`.
 ///
 /// The extraction goes to a temporary directory first, so a bundle that fails
 /// halfway — a bad hash, a refused member — leaves no half-installed plugin
-/// that a later load would try to run.
+/// that a later load would try to run. `require_signature` and `public_key`
+/// decide whether `plugin.sig` is mandatory and which key checks it.
 pub fn install(
     bundle: &Path,
     plugins_root: &Path,
-) -> Result<(Installed, PluginGrant), PluginError> {
+    require_signature: bool,
+    public_key: &str,
+) -> Result<BundleInstall, PluginError> {
     let staging = staging_dir(plugins_root)?;
 
     let result = extract_bundle(bundle, &staging).and_then(|()| {
@@ -116,11 +137,83 @@ pub fn install(
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
     }
+    // The digest proves the bytes match what the manifest names; the signature
+    // proves the author the admin trusts produced them. They answer different
+    // questions, so install checks both.
+    let warning = match verify_signature(&staging, require_signature, public_key) {
+        Ok(warning) => warning,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(error);
+        }
+    };
 
     fs::rename(&staging, &destination)
         .map_err(|error| io_error(format!("could not install the bundle: {error}")))?;
 
-    Ok((installed_view(&manifest, &grant, destination), grant))
+    Ok(BundleInstall {
+        installed: installed_view(&manifest, &grant, destination),
+        grant,
+        warning,
+    })
+}
+
+/// Checks `plugin.sig` against the configured key.
+///
+/// Returns the warning to show when the bundle was accepted without a verified
+/// signature. A signature that *is* present is always checked, even when the
+/// requirement is switched off: the flag exists to allow an unsigned bundle, not
+/// to accept a signature that does not match.
+pub fn verify_signature(
+    root: &Path,
+    require_signature: bool,
+    public_key: &str,
+) -> Result<Option<String>, PluginError> {
+    let wasm = root.join(WASM_FILE);
+    let wasm_bytes = fs::read(&wasm)
+        .map_err(|error| io_error(format!("could not read `{}`: {error}", wasm.display())))?;
+    let signature_path = root.join(SIGNATURE_FILE);
+    let signature = match fs::read_to_string(&signature_path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(io_error(format!(
+                "could not read `{SIGNATURE_FILE}`: {error}"
+            )));
+        }
+    };
+    let key = public_key.trim();
+
+    if require_signature {
+        if key.is_empty() {
+            return Err(PluginError::denied(
+                "no plugin signing key is configured; set `[plugins] public_key` or `require_signature = false`",
+            ));
+        }
+        let Some(signature) = signature else {
+            return Err(PluginError::denied(
+                "the bundle is not signed; it has no `plugin.sig`",
+            ));
+        };
+        signature::verify(key, &signature, &wasm_bytes).map_err(PluginError::denied)?;
+        return Ok(None);
+    }
+
+    let warning = match (signature, key.is_empty()) {
+        (Some(signature), false) => {
+            signature::verify(key, &signature, &wasm_bytes).map_err(PluginError::denied)?;
+            None
+        }
+        (Some(_), true) => Some(
+            "installed without verifying the signature: `[plugins] public_key` is empty"
+                .to_string(),
+        ),
+        (None, _) => Some(
+            "installed without a signature because `[plugins] require_signature = false`"
+                .to_string(),
+        ),
+    };
+    Ok(warning)
 }
 
 /// Re-reads an installed plugin and confirms its module still matches `grant`.
@@ -313,7 +406,7 @@ fn extract_bundle(bundle: &Path, destination: &Path) -> Result<(), PluginError> 
 
         if !is_allowed_member(&name) {
             return Err(PluginError::denied(format!(
-                "`{name}` is not part of a bundle; a bundle holds `plugin.toml`, `plugin.wasm` and `web/`"
+                "`{name}` is not part of a bundle; a bundle holds `plugin.toml`, `plugin.wasm`, `plugin.sig` and `web/`"
             )));
         }
         if name == "plugin.toml" && entry.size() > MAX_MANIFEST_BYTES as u64 {
