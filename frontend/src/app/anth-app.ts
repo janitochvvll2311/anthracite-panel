@@ -19,12 +19,15 @@ import { localized, msg } from '@lit/localize'
 import '../components/anth-desktop'
 import type { AnthDesktop } from '../components/anth-desktop'
 import '../components/anth-login'
+import '../components/anth-plugin-slot'
 
 import { AuthClient } from '../lib/auth/auth-client'
 import type { SessionInfo } from '../lib/auth/auth-client'
 import { changeLocale, currentLocale, setupLocalization } from './i18n'
 import type { PanelDefinition } from './panels'
-import { useApiFetch, withRetry } from '../lib/http'
+import { currentApiFetch, useApiFetch, withRetry } from '../lib/http'
+import type { PluginsCatalogue } from '../lib/plugins/plugin-client'
+import { HttpPluginClient } from '../lib/plugins/plugin-client'
 import { PANELS, findPanel } from './panels'
 import type { PanelLocale } from './i18n'
 import type { Route } from './router'
@@ -101,6 +104,13 @@ export class AnthApp extends LitElement {
       margin: 0;
       padding: 0;
       list-style: none;
+    }
+
+    .plugin-widgets {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
     }
 
     .card {
@@ -265,6 +275,22 @@ export class AnthApp extends LitElement {
 
   private auth = new AuthClient()
 
+  /** Injectable plugin client, so a test never reaches a real `/api/plugins`. */
+  @property({ attribute: false })
+  pluginClient?: HttpPluginClient
+
+  private plugins = new HttpPluginClient()
+
+  /**
+   * The plugin catalogue, read once per session.
+   *
+   * `undefined` means "not read yet", which is also "mount no anchors": an
+   * anchor whose module was never loaded is a `createElement` for an unknown
+   * tag, which renders nothing and logs nothing useful.
+   */
+  @state()
+  private catalogue?: PluginsCatalogue
+
   /** Swaps in the injected client before the first session read. */
   private adoptAuthClient(): void {
     if (this.authClient) this.auth = this.authClient
@@ -317,6 +343,7 @@ export class AnthApp extends LitElement {
       }
       this.session = session
       this.auth.scheduleRefresh(session)
+      void this.loadPlugins()
     } catch {
       this.session = null
     }
@@ -329,12 +356,30 @@ export class AnthApp extends LitElement {
   private async onAuthenticated(session: SessionInfo): Promise<void> {
     this.session = session
     this.mountedPanel = undefined
+    void this.loadPlugins()
+  }
+
+  /**
+   * Reads the plugin catalogue after the session is known.
+   *
+   * A failure leaves `catalogue` undefined rather than empty, so the shell
+   * renders its built-in panels and no plugin slots, and the operator is not
+   * told their dashboard is empty when the daemon merely failed a read.
+   */
+  private async loadPlugins(): Promise<void> {
+    this.plugins = this.pluginClient ?? new HttpPluginClient({ fetchImpl: currentApiFetch() })
+    try {
+      this.catalogue = await this.plugins.list()
+    } catch {
+      this.catalogue = undefined
+    }
   }
 
   private async onLogout(): Promise<void> {
     await this.auth.logout()
     this.session = null
     this.mountedPanel = undefined
+    this.catalogue = undefined
   }
 
   override render() {
@@ -414,6 +459,13 @@ export class AnthApp extends LitElement {
           `,
         )}
       </ul>
+      <section class="plugin-widgets" aria-label=${msg('Plugin widgets')}>
+        <anth-plugin-slot
+          slot-name="dashboard.widget"
+          .catalogue=${this.catalogue}
+          .client=${this.plugins}
+        ></anth-plugin-slot>
+      </section>
     `
   }
 

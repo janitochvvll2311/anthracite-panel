@@ -223,7 +223,27 @@ authority.
 The same rule covers web assets: `/api/plugins/<id>/web/*` is confined to the
 bundle's `web/` directory and served with a fixed MIME type and `nosniff`.
 
+That route is deliberately not an anchor. An anchor is a request forwarded to
+the guest, and answering one for a static file would mean running wasm to read a
+file it cannot read. So `plugins/web.rs` reads the file itself: the grant is the
+gate (a bundle directory without one serves nothing, and a disabled plugin is
+`403`), the requested path is rebuilt component by component so `..` in any
+spelling is refused, and the file is `canonicalize`d before the containment
+check so a symlink planted after install is resolved rather than followed. The
+content type comes from a host-owned extension table, `nosniff` is always sent,
+and the answer is `no-store` — a cached module would outlive an uninstall, and a
+reinstall reuses the same id.
+
 ## UI anchors
+
+The shell fills slots with `anth-plugin-slot`. The shell renders one wherever a
+plugin may appear and passes it the catalogue; the element asks
+`lib/plugins/plugin-client.ts` for the anchors matching its slot, imports each
+module with a dynamic `import()`, and appends the declared tag. The shell
+therefore holds no plugin tag and no plugin import: a plugin is data — an id, a
+slot, a tag, a module — until the slot element runs. A module that throws on
+import is logged with its plugin id and skipped, so one broken bundle cannot
+empty the dashboard.
 
 `slot` names a place the shell already knows how to fill:
 
@@ -273,5 +293,5 @@ values: that would expose the whole protocol and defeat the model.
 | 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification |
 | 8b | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest — done |
 | 8c | API anchors and namespacing — done |
-| 8d | UI anchors, asset serving |
+| 8d | UI anchors, asset serving — done |
 | 8e | WireGuard plugin: manifest, wasm, web components |

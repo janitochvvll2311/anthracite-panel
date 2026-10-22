@@ -88,12 +88,12 @@ Additional decisions taken while planning:
 | 4 (point 1) | `anth-process-manager` and process spawning | done, merged in #21 |
 | 5 (point 2) | `anth-file-manager`: CodeMirror editor, archives, recycle bin | done, merged in #22 |
 | 6 (point 3) | `anth-network-manager`: interface create/edit/rename/delete | done, merged in #23 |
-| 7a (point 4) | Partition create/edit/resize/delete | not started |
-| 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | not started |
+| 7a (point 4) | Partition create/edit/resize/delete | done, merged in #28 |
+| 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | done, merged in #28 |
 | 8a (point 8) | Plugin manifest, typed validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification | done, merged in #24 |
-| 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | done, in review |
-| 8c (point 8) | API anchors and namespacing | in review |
-| 8d (point 8) | UI anchors and asset serving | not started |
+| 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | done, merged in #25 |
+| 8c (point 8) | API anchors and namespacing | done, merged in #26 |
+| 8d (point 8) | UI anchors and asset serving | done |
 | 8e (point 8) | WireGuard plugin: manifest, wasm, web components | not started |
 
 ## Phase 5 — file manager (done)
