@@ -1373,6 +1373,40 @@ rule, and `install` and `load` both parse, so a manifest rewritten on disk after
 install is refused before its module is read. The refusal is a check on the
 manifest's honesty; it is not the routing rule.
 
+## `GET /api/plugins/{id}/web/{*path}`
+
+A plugin's interface assets, from its bundle's `web/` directory. More specific
+than the anchor wildcard, so an asset request never reaches the guest: the host
+reads the file itself, because running wasm to answer for a static file it cannot
+read would buy nothing.
+
+The response carries a fixed `content-type` from a host-owned extension table
+(`text/javascript`, `text/css`, `application/json`, `image/svg+xml`, the raster
+types, the font types and `application/wasm`; anything else is
+`application/octet-stream`), `x-content-type-options: nosniff`, and
+`cache-control: no-store`. The last one is deliberate: a cached module would
+outlive an uninstall, and a reinstall reuses the same id.
+
+A disabled plugin is `403` and a bundle without a grant is `404`, because the
+grant is what the admin approved and the directory is only content.
+
+Status codes:
+
+| Status | When |
+| --- | --- |
+| `200` | the asset was read |
+| `400` | the id is not a valid plugin id, or the path contains a `..` segment (encoded or not) |
+| `401` | no valid access token, when `[auth] enabled` |
+| `403` | the grant exists but `enabled = false` |
+| `404` | `[plugins] enabled = false`, no grant, no `web/` directory, no such file, or the path resolves outside `web/` |
+| `413` | the asset is larger than 4 MiB |
+
+The containment rule has three parts. The capture is rebuilt component by
+component, so `..` is refused after axum has already decoded `%2e%2e` and `a..b`
+stays a legal name. The resolved path is `canonicalize`d *before* the
+`starts_with` check, so a symlink planted after install is resolved rather than
+followed. And a directory is never a listing.
+
 ## Adding a route
 
 `POST /api/echo` rewrites to a body like this because each command maps to a

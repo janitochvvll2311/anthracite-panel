@@ -79,6 +79,19 @@ fn state(root: &Path, id: &str, grants: Vec<PluginGrant>) -> AppState {
     AppState::new(config)
 }
 
+/// A configured state for a bundle that is already on disk.
+fn state_for(root: &Path) -> AppState {
+    let grants = std::fs::read_dir(root)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let text = fs::read_to_string(entry.path().join("plugin.toml")).ok()?;
+            Some(PluginGrant::from_manifest(&Manifest::parse(&text).ok()?))
+        })
+        .collect::<Vec<_>>();
+    state(root, "", grants)
+}
+
 async fn fetch(state: AppState, uri: &str) -> (StatusCode, Option<String>, String) {
     let response = anth_panel::api::router(state)
         .oneshot(HttpRequest::builder().uri(uri).body(Body::empty()).unwrap())
@@ -167,6 +180,36 @@ async fn a_traversal_in_the_path_is_a_bad_request() {
         !body.contains("[plugin]"),
         "the manifest must not be echoed"
     );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn an_encoded_traversal_without_an_encoded_slash_is_still_refused() {
+    // The defence is specifically that axum hands the handler a *decoded*
+    // capture, so `%2e%2e` arrives as `..` before `relative_asset` sees it.
+    // This case isolates that: no `%2f`, only encoded dots, so a router that
+    // decoded late would pass `%2e%2e/plugin.toml` through as a plain name.
+    let root = unique_dir("encoded");
+    let grant = bundle(
+        &root,
+        "org.anth.widget",
+        &[("web/js/widget.js", "export {}")],
+    );
+    let state = state(&root, "org.anth.widget", vec![grant]);
+
+    let (status, _, body) =
+        fetch(state, "/api/plugins/org.anth.widget/web/%2e%2e/plugin.toml").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        !body.contains("[plugin]"),
+        "the manifest must not be echoed"
+    );
+
+    // The same path with a literal `..` behaves identically.
+    let state = state_for(&root);
+    let (status, _, _) = fetch(state, "/api/plugins/org.anth.widget/web/../plugin.toml").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     fs::remove_dir_all(&root).ok();
 }
 

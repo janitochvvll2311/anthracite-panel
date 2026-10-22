@@ -73,14 +73,24 @@ export class AnthPluginSlot extends LitElement {
     const elements = await loadSlot(client, this.catalogue, this.slotName)
     this.replaceChildren(...elements)
     this.mounted = elements.length
+    // `display: contents` on the host means the section's grid lays out the
+    // anchored elements directly; hiding the host when it has none is what
+    // keeps an empty dashboard from reserving a grid row.
+    this.hidden = elements.length === 0
   }
 
+  /**
+   * The anchored elements live in the light DOM, so the shadow root has to
+   * project them with `<slot>`; without it they are parsed, appended and never
+   * painted. The empty hint renders above the slot, and only when it is true.
+   */
   override render() {
-    // The children are managed imperatively, so the shadow root only needs the
-    // empty hint, and only when it is true.
-    return this.mounted === 0 && this.catalogue?.enabled
-      ? html`<p class="empty">${this.slotName}</p>`
-      : nothing
+    return html`
+      ${this.mounted === 0 && this.catalogue?.enabled
+        ? html`<p class="empty">${this.slotName}</p>`
+        : nothing}
+      <slot></slot>
+    `
   }
 }
 

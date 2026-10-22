@@ -106,7 +106,7 @@ export class AnthApp extends LitElement {
       list-style: none;
     }
 
-    .plugin-widgets:not(:empty) {
+    .plugin-widgets {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 1rem;

@@ -59,6 +59,13 @@ describe('anth-plugin-slot', () => {
     const child = slot.querySelector('anth-widget')
     expect(child).not.toBeNull()
     expect(child?.tagName.toLowerCase()).toBe('anth-widget')
+
+    // Light-DOM presence is not rendering: without a `<slot>` in the shadow
+    // root the element is appended and never painted. Assert projection, which
+    // is what the paint actually depends on.
+    const projection = slot.shadowRoot?.querySelector('slot')
+    expect(projection?.assignedElements()).toEqual([child])
+    expect(slot.hidden).toBe(false)
   })
 
   it('renders nothing for a slot no plugin declared', async () => {
@@ -71,6 +78,7 @@ describe('anth-plugin-slot', () => {
     await settle(slot)
 
     expect(slot.children).toHaveLength(0)
+    expect(slot.hidden).toBe(true)
   })
 
   it('does not mount a disabled plugin', async () => {
