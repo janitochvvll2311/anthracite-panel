@@ -204,11 +204,24 @@ A plugin may answer HTTP under its own namespace only:
 /api/plugins/<id>/<path>
 ```
 
-The installer refuses a path that is not relative, contains `..`, or would
-escape the namespace. Without this, a plugin could declare `/api/auth/login` and
-collect credentials. The same rule covers web assets:
-`/api/plugins/<id>/web/*` is confined to the bundle's `web/` directory and
-served with a fixed MIME type and `nosniff`.
+`anchor_route` resolves a declared path against the plugin id and refuses one
+that is not relative, contains `..` as a segment, or starts with a second slash.
+Without this, a plugin could declare `/api/auth/login` and collect credentials.
+`Manifest::parse` applies the rule, so `install` and `load` both apply it.
+
+It is worth being precise about what that check is and is not. It runs over the
+manifest even though the manifest is inside the bundle. It is **not** how the
+HTTP handler decides what a plugin may answer: the handler reads no anchors at
+all and forwards every method and path under `/api/plugins/<id>/` to the guest,
+which can only act through `anth_exec` against the frozen grant. The check
+therefore protects the operator's expectations and the UI's catalogue — a plugin
+that declares a core route is refused instead of being displayed as offering one
+— and does not pretend to be an authorization boundary. A real one would have to
+read the manifest on every request, which would make the untrusted file the
+authority.
+
+The same rule covers web assets: `/api/plugins/<id>/web/*` is confined to the
+bundle's `web/` directory and served with a fixed MIME type and `nosniff`.
 
 ## UI anchors
 
@@ -259,6 +272,6 @@ values: that would expose the whole protocol and defeat the model.
 | --- | --- |
 | 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification |
 | 8b | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest — done |
-| 8c | API anchors and namespacing |
+| 8c | API anchors and namespacing — done |
 | 8d | UI anchors, asset serving |
 | 8e | WireGuard plugin: manifest, wasm, web components |

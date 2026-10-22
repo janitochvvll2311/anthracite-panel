@@ -524,7 +524,7 @@ impl Manifest {
 
         let mut routes = BTreeSet::new();
         for anchor in &self.api {
-            validate_api_anchor(anchor)?;
+            anchor_route(&self.plugin.id, anchor)?;
             if !routes.insert((anchor.method.to_ascii_uppercase(), anchor.path.clone())) {
                 return Err(PluginError::invalid(format!(
                     "route `{} {}` is declared twice",
@@ -719,6 +719,57 @@ fn validate_api_anchor(anchor: &ApiAnchor) -> Result<(), PluginError> {
         )));
     }
     Ok(())
+}
+
+/// Resolves a declared anchor against its plugin id, and refuses one that would
+/// land outside the plugin's own prefix.
+///
+/// This is the namespacing rule, applied at install. It is *not* how the HTTP
+/// handler authorizes a request — it never reads the manifest — but a manifest
+/// that declares `/api/auth/login` is either a mistake or an attempt, and either
+/// way the operator should hear about it at install rather than find a route
+/// that silently does something else.
+///
+/// Two things it rejects that the schema-level check cannot see, because they
+/// depend on the id:
+///
+/// - a path that, once joined, still contains `..` as a *segment after
+///   normalization*, which a naive prefix check would wave through;
+/// - a path starting with a second slash, which some clients normalize
+///   differently from others.
+pub fn anchor_route(plugin_id: &str, anchor: &ApiAnchor) -> Result<String, PluginError> {
+    validate_api_anchor(anchor)?;
+    validate_id(plugin_id)?;
+
+    let path = anchor.path.trim();
+    if path.starts_with("//") {
+        return Err(PluginError::denied(format!(
+            "route `{path}` starts with a second slash"
+        )));
+    }
+
+    // Normalize segment by segment. An empty segment is a repeated slash and
+    // collapses; `..` is refused outright rather than resolved, because a route
+    // that needs traversal is not a route this host will construct.
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                return Err(PluginError::denied(format!(
+                    "route `{path}` escapes its namespace"
+                )));
+            }
+            other => parts.push(other),
+        }
+    }
+
+    let mut route = format!("/api/plugins/{plugin_id}");
+    for part in parts {
+        route.push('/');
+        route.push_str(part);
+    }
+    Ok(route)
 }
 
 /// Slots the shell knows how to fill. A plugin cannot invent one, because the

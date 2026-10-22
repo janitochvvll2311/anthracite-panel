@@ -92,7 +92,7 @@ Additional decisions taken while planning:
 | 7b (point 4) | `mkfs` for new and reshaped filesystems, behind `[volumes] format` | not started |
 | 8a (point 8) | Plugin manifest, typed validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification | done, merged in #24 |
 | 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | done, in review |
-| 8c (point 8) | API anchors and namespacing | not started |
+| 8c (point 8) | API anchors and namespacing | in review |
 | 8d (point 8) | UI anchors and asset serving | not started |
 | 8e (point 8) | WireGuard plugin: manifest, wasm, web components | not started |
 
@@ -563,3 +563,31 @@ guest importing WASI.
 
 Next: 8c. API anchors under `/api/plugins/<id>/`, with the same `invoke` call
 behind an axum handler and namespacing enforced at install.
+
+### 8c — what the anchor route turned out to be (in review)
+
+One wildcard, five methods, and a handler that never reads the manifest. That
+last part is the decision this phase forced. Declaring one axum route per anchor
+would have meant consulting `plugin.toml` on every request to decide whether a
+path is reachable — and `plugin.toml` lives inside the bundle, so the plugin
+would have been choosing which of its own routes exist. The grant is the only
+authority that survives a rewritten bundle, so the request goes to the guest and
+the guest reaches the host through `anth_exec`, which reads the grant.
+
+`anchor_route` still validates declared paths at parse, for a narrower reason: a
+manifest naming `/api/auth/login` is either a mistake or an attempt, and an
+operator should hear about it at install rather than see a plugin advertised as
+offering a route that does not exist. That check is honesty, not authorization,
+and the docs say so in both places a reader might look.
+
+The envelope carries `body` as a **string**, not as parsed JSON: an anchor is not
+required to speak JSON, and the guest knows its own shape. The guest answers with
+`{"status": n, "body": ...}`; anything else is passed through as `200
+text/plain` rather than guessed at. A guest failure is `502` — the plugin is
+broken — and only fuel or the deadline are `504`; blaming the caller for a
+decision it did not make would be the wrong signal.
+
+Tests: 13 in `tests/anchors.rs` against real guests and a fake `wg` on `PATH`,
+including a request for a path the manifest never declared (it must reach the
+guest), an id of `%2e%2e`, an oversized body, the disabled switch, and a
+manifest rewritten on disk after install.
