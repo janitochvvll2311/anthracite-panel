@@ -4,9 +4,13 @@ The daemon can inspect every network interface on the host it runs on, and when
 explicitly enabled bring one up or down or create, edit, rename and delete
 interfaces. Monitoring is read-only and works without any configuration.
 
-The panel has no authentication yet, so keep the HTTP port on a trusted network
-or behind a proxy that authenticates users. Interface names, MAC addresses and
-IP addresses are visible to anyone who can reach the API.
+With `[auth] enabled` — the default for a serving subcommand — every route
+below needs a panel session; see
+[api-endpoints.md](api-endpoints.md#authentication). A first run with no
+password bootstraps one and prints it once. Only a host with
+`[auth] enabled = false` leaves the API open; check it with
+`anth-panel auth status`. Interface names,
+MAC addresses and IP addresses are visible to anyone the API admits.
 
 ## Configuration
 

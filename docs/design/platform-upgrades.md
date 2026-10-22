@@ -41,7 +41,11 @@ Additional decisions taken while planning:
 - Branches: `feat/<n>-<slug>` from `main`, one pull request per point, merged
   into `main` by the agent.
 - `terminal.token` is removed once the global JWT middleware lands; it stays as
-  an accepted-but-ignored key until then.
+  an accepted-but-ignored key until then. **Still open:** the middleware landed
+  in #17 but the key remains in `TerminalConfig` and `GET /api/config` still
+  reports `token_set`, so an operator can set a value that authorizes nothing.
+  Removing it is a breaking config change (a `deny_unknown_fields` parse would
+  reject a file that still carries it) and needs its own migration note.
 - Routing is hash based (`#/panel/<id>`).
 - `mkfs` types: `ext4`, `xfs`, `vfat`, `exfat`, `btrfs`, `swap`, each behind
   `[volumes] format = false`.
@@ -94,7 +98,27 @@ Additional decisions taken while planning:
 | 8b (point 8) | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest | done, merged in #25 |
 | 8c (point 8) | API anchors and namespacing | done, merged in #26 |
 | 8d (point 8) | UI anchors and asset serving | done |
-| 8e (point 8) | WireGuard plugin: manifest, wasm, web components | not started |
+| 8e (point 8) | WireGuard plugin: manifest, wasm, web components | done, merged in #30 |
+
+## Phase 8 — plugins (done)
+
+The last phase closed with the reference bundle in #30. Its first review found
+four defects that the suite could not see, which is the useful lesson of the
+phase rather than the plugin itself:
+
+- The guest read an anchor body as an object while the host forwards it as a
+  JSON string, so the only mutating route answered `400` to every real request.
+  The suite stayed green because the test hand-built the envelope.
+- `fixture!` returned early when the guest was unbuilt, so on a fresh clone
+  seven tests asserted nothing while `cargo test` reported success.
+- `plugin.toml` declared `panel.network.tab` / `anth-wireguard-panel`, a tag no
+  module registered and a slot no component mounts.
+
+All three were shapes of the same failure: a test that encodes an assumption
+instead of the contract. The fixes drive the route through the real router,
+build the guest when it is missing or stale, and assert every declared tag is
+defined by the module it names. `docs/design/plugins.md` now states which slots
+are mounted instead of implying that declaring one is enough.
 
 ## Phase 5 — file manager (done)
 
