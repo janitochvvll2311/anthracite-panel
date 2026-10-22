@@ -51,8 +51,12 @@ pub const MAX_EXECS_PER_INVOCATION: u32 = 32;
 /// Wall-clock ceiling on one invocation, as a second backstop.
 ///
 /// Fuel stops a compute loop and the exec ceiling stops spawn amplification, but
-/// neither stops a guest that blocks inside a slow child process. A deadline
-/// checked between host calls turns "holds the thread forever" into a refusal.
+/// neither stops a guest that blocks inside a slow child process. This deadline
+/// is checked between host calls and **traps** the guest, so it ends the
+/// invocation rather than handing back a refusal the guest can retry. It still
+/// cannot interrupt a `run()` already in progress: `CommandRunner` takes no
+/// timeout, so a single slow child outlives the deadline and the invocation ends
+/// when that call returns.
 pub const MAX_INVOCATION: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A guest refused to do something, could not run, or ran out of fuel.
@@ -72,7 +76,19 @@ pub enum GuestErrorKind {
     /// The fuel budget ran out. Wasm has no wall-clock interrupt, so fuel is the
     /// only thing that stops a guest that loops.
     OutOfFuel,
+    /// The invocation outlived [`MAX_INVOCATION`]. Unlike a refusal returned as
+    /// a value, this traps the guest: a guest told "no" would just ask again.
+    Deadline,
 }
+
+/// Marker the deadline trap carries, matched by `classify_name`.
+///
+/// A host function can only return a value or trap. Returning a refusal was the
+/// bug: the guest looped, the check failed again cheaply, and the invocation ran
+/// for 110 s against a 30 s deadline. `wasmi` does not re-export `HostError`, so
+/// the trap is a plain `Error` carrying this marker and `classify_name` reads it
+/// back, the same way it already recognises a fuel exhaustion.
+const DEADLINE_MARKER: &str = "anthracite: deadline exceeded";
 
 impl GuestError {
     fn new(kind: GuestErrorKind, detail: impl Into<String>) -> Self {
@@ -100,6 +116,11 @@ pub struct GuestReply {
     /// guest that answered from its own data from one that asked the host
     /// something.
     pub execs: u32,
+    /// How many calls the host admitted, including the ones that then failed.
+    /// Separate from `execs` because the ceiling has to count attempts: a
+    /// failing program costs a spawn too, and it was the cheap way to bypass a
+    /// ceiling that only counted successes.
+    pub attempts: u32,
     /// Log lines refused once [`MAX_LOG_BYTES`] was reached. Non-zero means
     /// `log` is incomplete, which the caller must say rather than print as if
     /// the guest had said nothing more.
@@ -119,6 +140,7 @@ struct Host<'a> {
     /// discarded: a truncated log that looks complete is worse than a loud one.
     log_dropped: u32,
     execs: u32,
+    attempts: u32,
     deadline: std::time::Instant,
     limits: StoreLimits,
 }
@@ -161,6 +183,7 @@ pub fn invoke(
             log_bytes: 0,
             log_dropped: 0,
             execs: 0,
+            attempts: 0,
             deadline: std::time::Instant::now() + MAX_INVOCATION,
             limits,
         },
@@ -221,6 +244,7 @@ pub fn invoke(
         body,
         log: store.data().log.clone(),
         execs: store.data().execs,
+        attempts: store.data().attempts,
         log_dropped: store.data().log_dropped,
     })
 }
@@ -244,22 +268,38 @@ fn define_host_functions(linker: &mut Linker<Host<'_>>) -> Result<(), GuestError
              cap_len: i32,
              args_ptr: i32,
              args_len: i32|
-             -> i64 {
-                let reply = read_string(&mut caller, cap_ptr, cap_len)
-                    .and_then(|capability| {
+             -> Result<i64, wasmi::Error> {
+                // Every refusal below except the deadline becomes a value the
+                // guest can log and answer around. The deadline must trap: a
+                // guest told "no" simply asks again, which is exactly the loop
+                // the deadline exists to end.
+                let reply =
+                    match read_string(&mut caller, cap_ptr, cap_len).and_then(|capability| {
                         read_string(&mut caller, args_ptr, args_len)
                             .map(|arguments| (capability, arguments))
-                    })
-                    .and_then(|(capability, arguments)| {
-                        execute(&mut caller, &capability, &arguments)
-                    })
-                    .unwrap_or_else(|error| {
-                        serde_json::json!({"ok": false, "error": error}).to_string()
-                    });
+                    }) {
+                        Ok((capability, arguments)) => {
+                            match execute(&mut caller, &capability, &arguments) {
+                                Ok(reply) => reply,
+                                Err(ExecError::Refused(detail)) => {
+                                    serde_json::json!({"ok": false, "error": detail}).to_string()
+                                }
+                                Err(ExecError::Deadline) => {
+                                    return Err(wasmi::Error::new(format!(
+                                        "{DEADLINE_MARKER}: {}s",
+                                        MAX_INVOCATION.as_secs()
+                                    )));
+                                }
+                            }
+                        }
+                        Err(detail) => {
+                            serde_json::json!({"ok": false, "error": detail}).to_string()
+                        }
+                    };
                 // A refusal is a value, not a trap, so the guest can log it and
                 // answer anyway. It still has to travel through guest memory,
                 // because that is the only channel the ABI has back.
-                write_string(&mut caller, &reply).unwrap_or(0)
+                Ok(write_string(&mut caller, &reply).unwrap_or(0))
             },
         )
         .map_err(|error| {
@@ -299,21 +339,30 @@ fn define_host_functions(linker: &mut Linker<Host<'_>>) -> Result<(), GuestError
 /// Every refusal here is the boundary working: an id the grant does not carry, a
 /// host `job` (which exists precisely so a guest never names a program), an
 /// argument the recipe does not declare, a value that fails its validator.
+/// Why `execute` refused. A refusal is normally a value the guest can log and
+/// answer around; a deadline has to trap, or a guest simply asks again.
+enum ExecError {
+    Refused(String),
+    Deadline,
+}
+
+impl From<String> for ExecError {
+    fn from(value: String) -> Self {
+        Self::Refused(value)
+    }
+}
+
 fn execute(
     caller: &mut Caller<'_, Host<'_>>,
     capability: &str,
     arguments: &str,
-) -> Result<String, String> {
+) -> Result<String, ExecError> {
     let plugin = caller.data().plugin.clone();
     let Some(recipe) = caller.data().grant.recipe(capability).cloned() else {
-        return Err(format!(
-            "`{plugin}` is not granted the capability `{capability}`"
-        ));
+        return Err(format!("`{plugin}` is not granted the capability `{capability}`").into());
     };
     if recipe.job.is_some() {
-        return Err(format!(
-            "`{capability}` is a host job and cannot be called by a guest"
-        ));
+        return Err(format!("`{capability}` is a host job and cannot be called by a guest").into());
     }
     let program = recipe
         .program
@@ -323,21 +372,26 @@ fn execute(
     // Two bounds that fuel cannot provide. Fuel counts guest instructions, and
     // one `anth_exec` costs a handful of them for one subprocess, so without
     // these a loop is an amplifier rather than a cost.
-    if caller.data().execs >= MAX_EXECS_PER_INVOCATION {
+    // Counted when the call is admitted, not when it succeeds. A program that
+    // exits non-zero used to return before the increment, so a guest looping on
+    // a *failing* capability was bounded by nothing: measured at 502,795 spawns
+    // against a promised ceiling of 32. A failing program is also the cheapest
+    // one to drive, so the guard was missing where abuse is easiest.
+    if caller.data().attempts >= MAX_EXECS_PER_INVOCATION {
         return Err(format!(
             "`{plugin}` exceeded {MAX_EXECS_PER_INVOCATION} capability calls in one invocation"
-        ));
+        )
+        .into());
     }
     if std::time::Instant::now() > caller.data().deadline {
-        return Err(format!(
-            "`{plugin}` exceeded the {}s budget for one invocation",
-            MAX_INVOCATION.as_secs()
-        ));
+        return Err(ExecError::Deadline);
     }
+    caller.data_mut().attempts += 1;
 
     let values: BTreeMap<String, String> = serde_json::from_str(arguments)
         .map_err(|error| format!("arguments must be a JSON object: {error}"))?;
-    let argv = render_argv(&recipe.as_capability(), &values).map_err(|error| error.detail)?;
+    let argv = render_argv(&recipe.as_capability(), &values)
+        .map_err(|error| ExecError::Refused(error.detail))?;
     let borrowed = argv.iter().map(String::as_str).collect::<Vec<_>>();
 
     let output = caller
@@ -345,14 +399,15 @@ fn execute(
         .runner
         .run(&program, &borrowed)
         .map_err(|error| match error {
-            CommandError::Unavailable { program } => format!("`{program}` is not installed"),
-            CommandError::Failed { program, detail } => format!("`{program}` failed: {detail}"),
+            CommandError::Unavailable { program } => {
+                ExecError::Refused(format!("`{program}` is not installed"))
+            }
+            CommandError::Failed { program, detail } => {
+                ExecError::Refused(format!("`{program}` failed: {detail}"))
+            }
         })?;
     if !output.ok {
-        return Err(format!(
-            "`{program}` exited non-zero: {}",
-            output.stderr.trim()
-        ));
+        return Err(format!("`{program}` exited non-zero: {}", output.stderr.trim()).into());
     }
     caller.data_mut().execs += 1;
     Ok(serde_json::json!({
@@ -478,6 +533,15 @@ fn classify(store: &Store<Host<'_>>, error: wasmi::Error) -> GuestError {
 
 fn classify_name(plugin: &str, error: wasmi::Error) -> GuestError {
     let text = error.to_string();
+    if text.contains(DEADLINE_MARKER) {
+        return GuestError::new(
+            GuestErrorKind::Deadline,
+            format!(
+                "`{plugin}` exceeded the {}s budget for one invocation",
+                MAX_INVOCATION.as_secs()
+            ),
+        );
+    }
     if text.contains("fuel") {
         return GuestError::new(
             GuestErrorKind::OutOfFuel,

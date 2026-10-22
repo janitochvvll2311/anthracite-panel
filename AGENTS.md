@@ -278,9 +278,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   mode `0600` and tightens an existing file, because the signing key in it is
   enough to forge a token. `auto` resolves `$SHELL`, then the account's
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
-  it through `Config::load_or_create`, which writes a default file when the path cannot
-  be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
-  `Config::load_or_default`, which never writes. `Config::server_default` returns
+  it through `Config::load_or_create`, which returns `Result`: it writes a default
+  file when the path does not exist, so a first run bootstraps
+  `/etc/anth/config.toml`, but it **refuses** when a file exists and will not
+  parse. Answering a parse error with defaults used to overwrite the operator's
+  settings, which turned a stale plugin grant into a wiped `files.root` and a
+  new `jwt_secret`; the file is now left byte for byte and the server exits `1`.
+  The client subcommand uses `Config::load_or_default`, which never writes. `Config::server_default` returns
   `Config::dev_default` in debug builds, which sets global `sudo = true`,
   `process.control = true`, `network.control = true`,
   `firewall.control = true` and `files.write = true`; release builds keep the

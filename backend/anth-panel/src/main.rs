@@ -1148,7 +1148,13 @@ async fn write_text_file(config_path: &str, args: &FileWriteArgs) -> ExitCode {
 
 /// Runs one `auth` subcommand against the config file.
 fn run_auth(config_path: &str, args: &AuthArgs) -> ExitCode {
-    let config = Config::load_or_create(config_path);
+    let config = match Config::load_or_create(config_path) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let updated = match &args.command {
         AuthCommand::Status => {
@@ -1187,7 +1193,13 @@ fn run_auth(config_path: &str, args: &AuthArgs) -> ExitCode {
 fn run_config(config_path: &str, args: &ConfigArgs) -> ExitCode {
     match &args.command {
         ConfigCommand::Get => {
-            let config = Config::load_or_create(config_path);
+            let config = match Config::load_or_create(config_path) {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
             match config.to_toml() {
                 Ok(text) => {
                     print!("{text}");
@@ -1200,7 +1212,13 @@ fn run_config(config_path: &str, args: &ConfigArgs) -> ExitCode {
             }
         }
         ConfigCommand::Set(set) => {
-            let mut config = Config::load_or_create(config_path);
+            let mut config = match Config::load_or_create(config_path) {
+                Ok(config) => config,
+                Err(error) => {
+                    eprintln!("[ERROR] {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
             if let Err(error) = anth_panel::settings::set_key(&mut config, set) {
                 eprintln!("[ERROR] {error}");
                 return ExitCode::FAILURE;
@@ -1223,7 +1241,13 @@ fn run_config(config_path: &str, args: &ConfigArgs) -> ExitCode {
 /// runs locally, like `auth` and `config`. A running server reads the grants at
 /// start, and the command says so when it changes anything.
 fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
-    let mut config = Config::load_or_create(config_path);
+    let mut config = match Config::load_or_create(config_path) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let plugins = config.plugins.clone();
 
     match &args.command {
@@ -1562,11 +1586,32 @@ impl BackgroundServers {
 /// The interactive session detaches a `daemon`, `api` or `run` and keeps its
 /// prompt, so the next typed line is already waiting: without this handshake a
 /// request could reach the socket before the listener exists.
+/// Loads the config for a server subcommand, turning a refusal into the `String`
+/// error the dispatch already returns.
+///
+/// A config that exists but will not parse stops the server instead of being
+/// replaced: the alternative silently discards the operator's settings, which is
+/// how a stale plugin grant once turned into a wiped `files.root`.
+fn loaded_config(config_path: &str) -> Config {
+    match Config::load_or_create(config_path) {
+        Ok(config) => config,
+        Err(error) => {
+            // A parse error is fatal for a server: continuing with defaults
+            // would run the panel with settings nobody chose.
+            eprintln!("[ERROR] {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 async fn start_server(
     config_path: &str,
     command: &Command,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
-    let config = Config::load_or_create(config_path);
+    let config = match Config::load_or_create(config_path) {
+        Ok(config) => config,
+        Err(error) => return Err(error),
+    };
     let path = config_path.to_string();
     let (ready, bound) = tokio::sync::oneshot::channel();
     let handle = match command {
@@ -1663,18 +1708,14 @@ async fn dispatch(
 
     let result = match command {
         Command::Daemon => anth_panel::daemon::serve(
-            &Config::load_or_create(config_path),
+            &loaded_config(config_path),
             std::path::Path::new(config_path),
         )
         .await
         .map(|()| ExitCode::SUCCESS)
         .map_err(|e| e.to_string()),
-        Command::Api(args) => {
-            serve_api(Config::load_or_create(config_path), config_path, args, None).await
-        }
-        Command::Run(args) => {
-            serve_run(Config::load_or_create(config_path), config_path, args, None).await
-        }
+        Command::Api(args) => serve_api(loaded_config(config_path), config_path, args, None).await,
+        Command::Run(args) => serve_run(loaded_config(config_path), config_path, args, None).await,
         Command::Terminal(args) => {
             let config = Config::load_or_default(config_path);
             Ok(anth_panel::terminal_client::run(Path::new(&config.socket_path), args).await)

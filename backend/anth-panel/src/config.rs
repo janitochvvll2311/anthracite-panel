@@ -410,18 +410,38 @@ impl Config {
         })
     }
 
-    /// Loads the configuration at `path`, or writes a default one first when it
-    /// cannot be read, so a first server run bootstraps the configuration file.
+    /// Loads the configuration at `path`, refusing when it exists but will not
+    /// parse.
+    ///
+    /// "No config" and "config that will not parse" are different states and get
+    /// different answers. A missing file is bootstrapped with defaults; an
+    /// unreadable file is `Err`, because the alternative is writing defaults
+    /// over an operator's settings. That distinction matters more now that a
+    /// schema change can make an older file fail to parse: answering a parse
+    /// error by replacing the file turned a stale `capabilities` key into a
+    /// wiped `files.root`, a reset `auth.username` and a new `jwt_secret`.
+    ///
     /// Debug builds bootstrap with global sudo, process control, network
     /// control, firewall control, volume control and file writes enabled;
-    /// release builds keep them off. A failure to persist the default is reported but not fatal:
-    /// the freshly built defaults are still usable.
-    pub fn load_or_create(path: impl AsRef<Path>) -> Self {
+    /// release builds keep them off.
+    pub fn load_or_create(path: impl AsRef<Path>) -> Result<Self, String> {
+        let exists = path.as_ref().exists();
         let mut config = match Self::load(&path) {
             Ok(config) => config,
+            Err(e) if exists => {
+                // Never write here. The file is the operator's; a parse error is
+                // theirs to fix, and silently replacing it destroys the evidence
+                // along with the settings.
+                eprintln!(
+                    "[ERROR] the configuration at {} could not be loaded: {e}",
+                    path.as_ref().display()
+                );
+                eprintln!("[ERROR] refusing to overwrite it with defaults");
+                return Err(e);
+            }
             Err(e) => {
                 eprintln!("Failed to load config: {e}");
-                eprintln!("Using default config.");
+                eprintln!("Creating a default config.");
 
                 let config = Self::server_default();
                 if cfg!(debug_assertions) {
@@ -441,7 +461,7 @@ impl Config {
             eprintln!("{printed}");
         }
 
-        config
+        Ok(config)
     }
 
     /// Fills in the auth section the first time a server starts.

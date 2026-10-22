@@ -372,6 +372,7 @@ fn a_guest_cannot_amplify_one_call_into_unbounded_spawns() {
         MAX_EXECS_PER_INVOCATION as usize,
         "the host must stop spawning at the ceiling"
     );
+    assert_eq!(reply.attempts, MAX_EXECS_PER_INVOCATION);
     assert_eq!(reply.execs, MAX_EXECS_PER_INVOCATION);
 }
 
@@ -410,4 +411,92 @@ fn a_guest_that_floods_the_log_is_cut_off_and_told_so() {
         "the log held {bytes} bytes, past the {MAX_LOG_BYTES} cap"
     );
     assert!(reply.log_dropped > 0, "the truncation must be reported");
+}
+
+#[test]
+fn a_failing_program_still_counts_against_the_ceiling() {
+    // The counter used to move only after a success, so a guest looping on a
+    // capability whose program exits non-zero was bounded by nothing: measured
+    // at 502,795 spawns against a promised ceiling of 32. A failing program is
+    // also the cheapest thing for a guest to drive.
+    let runner = Recorder {
+        calls: RefCell::new(Vec::new()),
+        output: CommandOutput {
+            ok: false,
+            stdout: String::new(),
+            stderr: "nope".to_string(),
+        },
+    };
+
+    let reply = invoke(
+        &looping_guest(),
+        "org.anth.test",
+        &grant(),
+        &runner,
+        request(),
+        DEFAULT_FUEL,
+    )
+    .unwrap();
+
+    assert_eq!(
+        runner.calls().len(),
+        MAX_EXECS_PER_INVOCATION as usize,
+        "a failing program must not buy extra spawns"
+    );
+    assert_eq!(reply.attempts, MAX_EXECS_PER_INVOCATION);
+    assert_eq!(reply.execs, 0, "nothing succeeded, so nothing ran");
+}
+
+#[test]
+fn the_deadline_traps_the_guest_instead_of_answering_every_call() {
+    // A refusal is a value, and the guest answers a refusal by asking again.
+    // Returning `Err` here kept the invocation alive for 110 s against a 30 s
+    // deadline, spinning on refusals. The deadline has to end the invocation.
+    let expiry = std::time::Instant::now() - MAX_INVOCATION;
+    let mut engine_config = wasmi::Config::default();
+    engine_config.consume_fuel(true);
+    let engine = wasmi::Engine::new(&engine_config);
+    let module = wasmi::Module::new(&engine, looping_guest()).unwrap();
+
+    let limits = wasmi::StoreLimitsBuilder::new()
+        .memory_size(MAX_GUEST_MEMORY)
+        .build();
+    let runner = Recorder::ok("");
+    let grant = grant();
+    let mut store = wasmi::Store::new(
+        &engine,
+        Host {
+            plugin: "org.anth.test".to_string(),
+            grant: &grant,
+            runner: &runner,
+            log: Vec::new(),
+            log_bytes: 0,
+            log_dropped: 0,
+            execs: 0,
+            attempts: 0,
+            // Already past the deadline, so the first `anth_exec` traps.
+            deadline: expiry,
+            limits,
+        },
+    );
+    store.limiter(|host| &mut host.limits);
+    store.set_fuel(DEFAULT_FUEL).unwrap();
+    let mut linker = wasmi::Linker::new(&engine);
+    define_host_functions(&mut linker).unwrap();
+    let instance = linker.instantiate_and_start(&mut store, &module).unwrap();
+    let handle: wasmi::TypedFunc<(i32, i32), i64> =
+        instance.get_typed_func(&store, "anth_handle").unwrap();
+
+    let error = handle.call(&mut store, (0, 0)).unwrap_err();
+    let classified = classify_name("org.anth.test", error);
+    assert_eq!(
+        classified.kind,
+        GuestErrorKind::Deadline,
+        "{}",
+        classified.detail
+    );
+    assert!(
+        runner.calls().is_empty(),
+        "the deadline must stop the first spawn, not the second"
+    );
 }
