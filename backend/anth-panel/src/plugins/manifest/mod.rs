@@ -21,6 +21,8 @@ use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 /// Largest manifest accepted, in bytes. A recipe is small; a megabyte is
@@ -118,6 +120,14 @@ pub enum ArgType {
     Hex32,
     /// Exactly 64 hex characters, the shape of a SHA-256 digest.
     Hex64,
+    /// A 32-byte key in standard base64, which is what `wg` prints and takes.
+    ///
+    /// Distinct from `Hex32`: a Curve25519 key is 32 bytes, but `wg` speaks
+    /// base64, so a hex validator would refuse every real key and a `text`
+    /// validator would accept any string at all.
+    Base64Key,
+    /// One or more CIDR prefixes separated by commas, as `allowed-ips` takes.
+    CidrList,
     /// An absolute, normalized filesystem path.
     Path,
     /// A short printable string with no control characters.
@@ -212,6 +222,19 @@ impl ArgType {
             }
             ArgType::Hex32 => expect_hex(value, 32),
             ArgType::Hex64 => expect_hex(value, 64),
+            ArgType::Base64Key => expect_base64_key(value),
+            ArgType::CidrList => {
+                // `wg` splits on commas itself, so the list is validated one
+                // element at a time against the same rule as a single prefix.
+                // An empty list is legal: it clears a peer's allowed IPs.
+                for part in value.split(',') {
+                    if part.trim() != part {
+                        return Err("a prefix in the list has surrounding space".to_string());
+                    }
+                    ArgType::Cidr.validate(part)?;
+                }
+                Ok(())
+            }
             ArgType::Path => {
                 if !value.starts_with('/') {
                     return Err("a path must be absolute".to_string());
@@ -232,6 +255,30 @@ impl ArgType {
             }
         }
     }
+}
+
+/// A 32-byte key in standard base64, padding included.
+///
+/// Length is checked before decoding, and the decode has to produce exactly 32
+/// bytes: `wg` accepts nothing else, so a validator that only checked the
+/// alphabet would pass a truncated key and fail at the call.
+fn expect_base64_key(value: &str) -> Result<(), String> {
+    if value.len() != 44 || !value.ends_with('=') {
+        return Err("a key is 44 base64 characters ending in `=`".to_string());
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+    {
+        return Err("not base64".to_string());
+    }
+    let decoded = STANDARD
+        .decode(value)
+        .map_err(|_| "not valid base64".to_string())?;
+    if decoded.len() != 32 {
+        return Err("a key decodes to 32 bytes".to_string());
+    }
+    Ok(())
 }
 
 fn expect_hex(value: &str, len: usize) -> Result<(), String> {
@@ -361,7 +408,15 @@ pub fn render_argv(
     }
 
     for name in capability.placeholders()? {
-        if !values.contains_key(&name) {
+        if values.contains_key(&name) {
+            continue;
+        }
+        let optional = capability
+            .args
+            .get(&name)
+            .map(|spec| spec.optional)
+            .unwrap_or(false);
+        if !optional {
             return Err(PluginError::denied(format!(
                 "capability `{}` requires `{name}`",
                 capability.id
@@ -373,19 +428,45 @@ pub fn render_argv(
     for part in &capability.argv {
         let mut rendered = String::new();
         let mut rest = part.as_str();
+        // An element that is exactly one absent optional placeholder contributes
+        // nothing. The rule is deliberately narrow: `--endpoint={endpoint}`
+        // would render to `--endpoint=` and reach `wg` as a malformed operand,
+        // so an optional placeholder has to own its element. Validation enforces
+        // that shape before any render can depend on it.
+        let mut only_optional = None;
         while let Some(start) = rest.find('{') {
             rendered.push_str(&rest[..start]);
             let after = &rest[start + 1..];
             let end = after.find('}').unwrap_or(after.len());
             let name = &after[..end];
-            let value = values.get(name).ok_or_else(|| {
-                PluginError::denied(format!(
-                    "capability `{}` has no value for `{name}`",
-                    capability.id
-                ))
-            })?;
-            rendered.push_str(value);
+            match values.get(name) {
+                Some(value) => rendered.push_str(value),
+                None => {
+                    let optional = capability
+                        .args
+                        .get(name)
+                        .map(|spec| spec.optional)
+                        .unwrap_or(false);
+                    if optional {
+                        only_optional = Some(name);
+                        break;
+                    }
+                    return Err(PluginError::denied(format!(
+                        "capability `{}` has no value for `{name}`",
+                        capability.id
+                    )));
+                }
+            }
             rest = &after[end + 1..];
+        }
+        if let Some(name) = only_optional {
+            if part.trim() != format!("{{{name}}}") {
+                return Err(PluginError::invalid(format!(
+                    "optional `{name}` must be the whole argv element in capability `{}`",
+                    capability.id
+                )));
+            }
+            continue;
         }
         rendered.push_str(rest);
         argv.push(rendered);
@@ -645,6 +726,29 @@ fn validate_capability(capability: &Capability) -> Result<(), PluginError> {
     }
 
     let placeholders = capability.placeholders()?;
+    // An optional placeholder that is part of a larger element has no rendering
+    // that both omits it and keeps the element: it is refused at install time
+    // rather than left to fail on a request that omits the value.
+    for name in &placeholders {
+        let optional = capability
+            .args
+            .get(name)
+            .map(|spec| spec.optional)
+            .unwrap_or(false);
+        if !optional {
+            continue;
+        }
+        let owns_element = capability
+            .argv
+            .iter()
+            .any(|part| part.trim() == format!("{{{name}}}"));
+        if !owns_element {
+            return Err(PluginError::invalid(format!(
+                "optional `{name}` must be the whole argv element in capability `{}`",
+                capability.id
+            )));
+        }
+    }
     for name in capability.args.keys() {
         if !placeholders.contains(name) {
             return Err(PluginError::invalid(format!(

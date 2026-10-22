@@ -72,7 +72,9 @@ Every placeholder names a type. The host owns the set; a plugin cannot add one.
 | `hostname` | 1–253 bytes of letters, digits, `-` and `.`, no leading `-` |
 | `port` | 1–65535 |
 | `ipv4`, `ipv6`, `cidr` | a literal address or prefix, parsed |
-| `hex32`, `hex64` | exactly 32/64 hex characters, as WireGuard keys are |
+| `hex32`, `hex64` | exactly 32/64 hex characters |
+| `base64_key` | standard base64 that decodes to exactly 32 bytes, which is a WireGuard key |
+| `cidr_list` | one or more `cidr` values separated by commas, no spaces |
 | `path` | absolute, normalized, no `..` |
 | `enum` | one of a fixed list the host already knows |
 | `text` | printable, bounded, no control characters |
@@ -87,6 +89,24 @@ it instead of reopening the hole.
 for display values a capability can pass as an opaque argument only when the
 manifest's capability is marked `accepts_text = true`, which the installer
 warns about.
+
+### Optional arguments
+
+`optional = true` means the caller may omit the value. The element is then
+dropped from the argv entirely rather than rendered empty, because an empty
+element is itself an argument the program sees. The host only accepts this when
+the placeholder is the **whole** argv element:
+
+```toml
+argv = ["show", "{interface}", "{protocol}"]   # ok
+
+argv = ["show", "endpoint={endpoint}"]         # refused at install
+```
+
+The second form has no rendering that both omits the value and keeps the
+element: it would produce `endpoint=` and reach the program as a malformed
+operand. A flag that takes a separate value therefore needs one capability per
+shape, which is how the reference plugin models `wg set ... endpoint <value>`.
 
 ### Installation freezes the recipe
 
@@ -181,8 +201,19 @@ anchor never adds a new export:
 
 ```json
 {"kind": "http", "method": "GET", "path": "/status", "query": {}, "body": null}
+{"kind": "http", "method": "POST", "path": "/peers", "query": {}, "body": "{\"interface\":\"wg0\"}"}
 {"kind": "cli", "argv": ["status"]}
 ```
+
+A non-empty `body` arrives as a JSON **string** holding the raw request bytes,
+not as a parsed object. The host does not parse an anchor body because an anchor
+is not required to speak JSON: uploading or streaming a non-JSON payload is a
+legitimate use, and a host that parsed first would reject it before the guest
+could decide. A guest that wants an object parses the string itself; a guest
+that assumes an object sees `null`-like `as_object()` and refuses every real
+request. That mismatch is exactly what shipped in the first WireGuard bundle,
+which is why the reference plugin parses a string body and the integration test
+drives the route through the real router rather than a hand-built envelope.
 
 `anth_exec` takes a capability id and an object of arguments:
 
@@ -247,12 +278,29 @@ empty the dashboard.
 
 `slot` names a place the shell already knows how to fill:
 
-| Slot | Placement |
-| --- | --- |
-| `dashboard.widget` | a card in the dashboard grid |
-| `panel.<name>.tab` | an extra tab inside an existing panel |
-| `taskbar.item` | an item in the taskbar |
-| `page` | a top-level route |
+| Slot | Placement | Mounted today |
+| --- | --- | --- |
+| `dashboard.widget` | a card in the dashboard grid | yes |
+| `panel.<name>.tab` | an extra tab inside an existing panel | no |
+| `taskbar.item` | an item in the taskbar | no |
+| `page` | a top-level route | no |
+
+Only the slots marked as mounted have an `anth-plugin-slot` in the shell. A
+declared anchor in any other slot is accepted by the manifest and never
+rendered, which is silent: nothing logs, nothing fails, and the plugin simply
+does not appear. The reference bundle hit this with `panel.network.tab`, and
+`tests/plugin_wireguard.rs` now asserts that every declared tag is registered
+by the module it names. The row stays in the table because the naming scheme
+is the contract a future shell slot will use; it is not an invitation to
+declare one.
+
+Two more rules the reference bundle follows:
+
+- Every `tag` must be defined by the `module` it names, via
+  `customElements.define('<tag>', …)`. A declared tag nobody defines becomes an
+  `HTMLUnknownElement`: an empty box with no error.
+- The `module` is imported once per realm, so two anchors may share one module
+  but a module may not register two elements under the same name.
 
 The element is created from `module`. Assets share the panel's origin, so a
 plugin's JavaScript runs with the user's session and could call core `/api`

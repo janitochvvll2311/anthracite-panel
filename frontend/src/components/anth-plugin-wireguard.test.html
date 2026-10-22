@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WireGuard plugin harness</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <anth-plugin-harness eyebrow="Plugin" heading="WireGuard">
+      <p slot="description">
+        The reference plugin, loaded from a served bundle. The widget below is
+        the real <code>web/wireguard.js</code> talking to the plugin's own
+        anchors, so this page shows the same code path the dashboard uses.
+      </p>
+      <div slot="actions">
+        <button type="button" id="reload">Reload module</button>
+      </div>
+
+      <anth-plugin-slot slot-name="dashboard.widget"></anth-plugin-slot>
+
+      <pre id="log" aria-live="polite"></pre>
+    </anth-plugin-harness>
+
+    <script type="module">
+      import './../harness/anth-harness.ts'
+      import './anth-plugin-slot.ts'
+
+      const log = document.querySelector('#log')
+      const write = (message) => {
+        log.textContent = `${new Date().toISOString()} ${message}\n${log.textContent}`
+      }
+
+      // The harness runs from the Vite dev server, which proxies `/api`, so the
+      // slot loads the plugin exactly as it would in the panel.
+      const slot = document.querySelector('anth-plugin-slot')
+
+      document.querySelector('#reload').addEventListener('click', async () => {
+        const { HttpPluginClient } = await import('../lib/plugins/plugin-client.ts')
+        try {
+          const catalogue = await new HttpPluginClient().list()
+          slot.catalogue = catalogue
+          write(`catalogue: ${catalogue.plugins.length} plugin(s)`)
+        } catch (error) {
+          write(`catalogue failed: ${error}`)
+        }
+      })
+
+      write('ready — install the plugin bundle first if the slot is empty')
+    </script>
+  </body>
+</html>
