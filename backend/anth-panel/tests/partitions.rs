@@ -360,12 +360,8 @@ fn a_create_plans_the_script_on_stdin_not_in_argv() {
     assert_eq!(program, "sfdisk");
     assert_eq!(
         argv,
-        &vec![
-            "--no-reread".to_string(),
-            "--append".to_string(),
-            "/dev/sdb".to_string()
-        ],
-        "without --append sfdisk writes a fresh disklabel and the old table is gone"
+        &vec!["--no-reread".to_string(), "/dev/sdb".to_string()],
+        "this fixture disk has no partitions, so --append would be wrong here"
     );
     assert_eq!(stdin.as_deref(), Some("size=4096,type=linux"));
 }
@@ -379,6 +375,7 @@ fn a_size_that_is_not_a_whole_sector_is_refused() {
             start_bytes: 0,
             size_bytes: 1000,
         },
+        true,
     )
     .unwrap_err();
     assert_eq!(error.kind, VolumeErrorKind::Invalid);
@@ -394,6 +391,7 @@ fn a_zero_size_is_refused() {
             start_bytes: 0,
             size_bytes: 0,
         },
+        true,
     )
     .unwrap_err();
     assert!(error.detail.contains("needs a size"));
@@ -780,6 +778,7 @@ fn a_real_sfdisk_appends_instead_of_replacing_the_table() {
             start_bytes: 0,
             size_bytes: 1024 * 1024,
         },
+        true,
     )
     .unwrap();
     let output = run_real(&call, &path);
@@ -923,4 +922,120 @@ fn a_truncated_snapshot_cannot_hide_a_busy_disk() {
         .unwrap();
     let error = anth_panel::volumes::refuse_busy_disk(&snapshot, disk).unwrap_err();
     assert_eq!(error.kind, VolumeErrorKind::Busy);
+}
+
+#[test]
+fn a_blank_disk_gets_a_fresh_table_instead_of_append() {
+    // `--append` needs an existing disklabel and fails on a blank disk, which
+    // is the ordinary first use of the feature. The planner must drop the flag
+    // when the snapshot shows no partitions on the disk.
+    let call = plan_edit(
+        "/dev/sdb",
+        &TableEdit::Create {
+            kind: PartitionKind::Linux,
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        call.argv,
+        vec!["--no-reread".to_string(), "/dev/sdb".to_string()],
+        "a disk with no partitions must not pass --append"
+    );
+    assert_eq!(call.stdin.as_deref(), Some("size=2048,type=linux"));
+}
+
+#[test]
+fn creating_the_first_partition_is_driven_by_the_snapshot() {
+    // The same request must pick `--append` or not from the disk's children,
+    // so this asserts the decision, not just the planner.
+    let runner = FakeRunner::ok();
+    let empty = snapshot(vec![disk("sdb", "/dev/sdb")], Vec::new());
+    create_with(
+        &runner,
+        &empty,
+        &PartitionCreateArgs {
+            disk: "/dev/sdb".to_string(),
+            kind: "linux".to_string(),
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+    )
+    .expect("a blank disk must accept its first partition");
+    assert_eq!(
+        runner.calls()[0].1,
+        vec!["--no-reread".to_string(), "/dev/sdb".to_string()],
+        "a blank disk must not get --append"
+    );
+
+    let runner = FakeRunner::ok();
+    let populated = snapshot(
+        vec![disk("sdb", "/dev/sdb"), part("sdb1", "/dev/sdb1", "sdb")],
+        Vec::new(),
+    );
+    create_with(
+        &runner,
+        &populated,
+        &PartitionCreateArgs {
+            disk: "/dev/sdb".to_string(),
+            kind: "linux".to_string(),
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+    )
+    .expect("a populated disk must accept another partition");
+    assert_eq!(
+        runner.calls()[0].1,
+        vec![
+            "--no-reread".to_string(),
+            "--append".to_string(),
+            "/dev/sdb".to_string()
+        ],
+        "a populated disk must get --append or lose its table"
+    );
+}
+
+#[test]
+fn a_real_sfdisk_creates_the_first_partition_on_a_blank_disk() {
+    let path = path_with_sbin();
+    if !have("sfdisk") {
+        eprintln!("skipping: sfdisk is not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("anth-part-blank-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let image = dir.join("blank.img");
+    let file = std::fs::File::create(&image).unwrap();
+    file.set_len(64 * 1024 * 1024).unwrap();
+    assert_eq!(
+        partition_count(&image, &path),
+        0,
+        "the image must start blank"
+    );
+
+    let call = plan_edit(
+        &image.display().to_string(),
+        &TableEdit::Create {
+            kind: PartitionKind::Linux,
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        false,
+    )
+    .unwrap();
+    let output = run_real(&call, &path);
+    assert!(
+        output.status.success(),
+        "a blank disk must accept its first partition: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(partition_count(&image, &path), 1);
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -255,7 +255,18 @@ pub fn refuse_busy_disk(
 ///
 /// The script goes on stdin. In argv it would be visible in `/proc`, and a size
 /// field would become a place to smuggle text.
-pub fn plan_edit(disk: &str, edit: &TableEdit) -> Result<PlannedCall, PartitionError> {
+///
+/// `has_table` selects `--append`. The flag is required on a disk that already
+/// has a table — without it `sfdisk` writes a fresh disklabel and every
+/// existing partition is gone, with exit 0 — but it *fails* on a disk with no
+/// disklabel at all (`Failed to add #2 partition: Invalid argument`), which is
+/// the ordinary first use of this feature on a newly attached volume. A disk
+/// with a label and zero partitions works either way.
+pub fn plan_edit(
+    disk: &str,
+    edit: &TableEdit,
+    has_table: bool,
+) -> Result<PlannedCall, PartitionError> {
     let disk = validate_device_path(disk)?;
     let disk = disk
         .to_str()
@@ -287,15 +298,15 @@ pub fn plan_edit(disk: &str, edit: &TableEdit) -> Result<PlannedCall, PartitionE
         }
     };
 
-    // `--append` is not optional: without it `sfdisk` writes a fresh disklabel
-    // and the partitions already on the disk are gone, with exit 0.
+    let mut argv = vec!["--no-reread".to_string()];
+    if has_table {
+        argv.push("--append".to_string());
+    }
+    argv.push(disk.to_string());
+
     Ok(PlannedCall {
         program: "sfdisk",
-        argv: vec![
-            "--no-reread".to_string(),
-            "--append".to_string(),
-            disk.to_string(),
-        ],
+        argv,
         stdin: Some(script),
     })
 }
@@ -608,6 +619,14 @@ pub fn create_with(
 
     let kind = PartitionKind::parse(&args.kind)
         .ok_or_else(|| invalid(format!("`{}` is not a partition kind", args.kind)))?;
+    // A child partition is proof of a disklabel. Without one the table may
+    // still exist but empty, and `--append` would fail, so the conservative
+    // choice for an unpartitioned disk is a fresh table — which loses nothing,
+    // because `refuse_busy_disk` already refused a mounted one.
+    let has_table = snapshot
+        .devices
+        .iter()
+        .any(|child| child.parent.as_deref() == Some(device.name.as_str()));
     let call = plan_edit(
         &device.path,
         &TableEdit::Create {
@@ -615,6 +634,7 @@ pub fn create_with(
             start_bytes: args.start_bytes,
             size_bytes: args.size_bytes,
         },
+        has_table,
     )?;
     execute(runner, &call)?;
     Ok(format!(

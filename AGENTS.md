@@ -546,9 +546,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   string prefix of the disk path, so `/dev/sdaa` cannot be read as `/dev/sda`.
   Sizes are integers, so they cannot reach a shell; the plan is an argv plus an
   optional script on **stdin**, one invocation per operation because sfdisk's
-  input format cannot select a partition: `--append` for create (without it
-  sfdisk rewrites the disklabel and exits 0), `-N <n>` for resize, `--delete
-  <disk> <n>` for delete. `mkfs.fat` takes `-n` and caps labels at 11; the
+  input format cannot select a partition: `--append` for create, `-N <n>` for
+  resize, `--delete <disk> <n>` for delete. `--append` is conditional, not
+  blanket: without it sfdisk rewrites the disklabel and exits 0, but on a disk
+  with no disklabel it fails ("Failed to add #2 partition"), so it is passed
+  only when the snapshot already has a partition on that disk. `mkfs.fat` takes `-n` and caps labels at 11; the
   other tools take `-L` up to 32, so the planner picks both from the type.
   Mutations read `volumes::collect_for_mutation`, the unfitted snapshot, like
   `mount`/`umount`: a guard reading the fitted one could pass on a disk whose

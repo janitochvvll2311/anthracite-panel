@@ -156,7 +156,7 @@ plan is an argument vector plus an optional script on **stdin**:
 
 | Operation | Call |
 | --- | --- |
-| create | `sfdisk --no-reread --append <disk>` + `size=<sectors>,type=<kind>` |
+| create | `sfdisk --no-reread [--append] <disk>` + `size=<sectors>,type=<kind>` |
 | resize | `sfdisk --no-reread -N <n> <disk>` + `size=<sectors>` |
 | delete | `sfdisk --no-reread --delete <disk> <n>` |
 | format | `mkfs.<type> [-L \| -n] <label> <partition>` or `mkswap` |
@@ -164,8 +164,13 @@ plan is an argument vector plus an optional script on **stdin**:
 Each of these is a separate invocation because `sfdisk`'s input format cannot
 express a partition selection. Two details are load-bearing:
 
-- **`--append` on create.** Without it `sfdisk` writes a fresh disklabel, so
-  adding a fourth partition silently deletes the first three — and exits `0`.
+- **`--append` on create, but only when the disk has partitions.** Without it
+  `sfdisk` writes a fresh disklabel, so adding a fourth partition silently
+  deletes the first three — and exits `0`. But `--append` also *fails* on a disk
+  with no disklabel at all (`Failed to add #2 partition: Invalid argument`),
+  which is the ordinary first use of this feature on a newly attached volume.
+  The daemon passes it only when the snapshot shows a partition on the disk;
+  with none, a fresh table loses nothing.
 - **`-N` on resize, `--delete` on delete.** `<n>,size=` and `delete <n>` are not
   input-format lines; `sfdisk` answers "unsupported command" and exits `1`.
 
