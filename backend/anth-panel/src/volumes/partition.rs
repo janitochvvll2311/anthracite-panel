@@ -262,6 +262,25 @@ pub fn refuse_busy_disk(
     Ok(())
 }
 
+/// Refuses a device that is itself an active swap area.
+///
+/// Exact match, not `mount_covers`: formatting one partition must not be
+/// blocked because a sibling is swapped. `format` needs this because swap is
+/// absent from mountinfo and `mkfs` happily overwrites a live swap signature.
+pub fn refuse_active_swap(
+    snapshot: &VolumeSnapshot,
+    targets: &[&str],
+) -> Result<(), PartitionError> {
+    for target in targets {
+        if snapshot.swap_devices.iter().any(|swap| swap == target) {
+            return Err(busy(format!(
+                "`{target}` backs an active swap area; swapoff it first"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Refuses a disk that carries a filesystem of its own ("superfloppy").
 ///
 /// A USB stick formatted with `mkfs.vfat` and no partition table has no
@@ -586,6 +605,9 @@ pub fn edit_with(
                     mount.mountpoint
                 )));
             }
+            // The disk itself is checked too, so a whole-disk swap area cannot
+            // be formatted through one of its (nonexistent) partitions.
+            refuse_active_swap(snapshot, &[partition, &disk.path])?;
             let call = plan_format(partition, fs_type, label.as_deref())?;
             execute(runner, &call)?;
             Ok(format!("formatted {partition} as {fs_type}"))

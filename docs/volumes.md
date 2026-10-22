@@ -195,6 +195,11 @@ Partition edits resolve the disk, then refuse, in this order:
    `--no-reread` disables `sfdisk`'s own in-use check, so the mount scan cannot
    see it. The daemon reads `/proc/swaps` into `swap_devices`; an unreadable
    table is reported as a warning and treated as unknown, never as "no swap".
+   This covers `format` too, which reaches the swap check through
+   `refuse_active_swap`: `mkfs.fat` overwrites a live swap signature with exit
+   0, and a lost swap area is the least recoverable damage this feature can
+   do. That check matches the target exactly, so formatting a partition whose
+   sibling is swapped stays allowed.
 
 The guards read the **unfitted** snapshot (`collect_for_mutation`), like
 `mount`/`umount`. A guard reading the fitted one could pass on a disk whose

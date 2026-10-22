@@ -28,7 +28,7 @@ mod partition;
 pub use partition::{
     FORMAT_TYPES, PartitionKind, PlannedCall, TableEdit, allowed_disk, create_with, edit_with,
     execute, partition_number, partitions_on, perform, perform_create, plan_delete, plan_edit,
-    plan_format, plan_resize, refuse_busy_disk, refuse_protected_disk,
+    plan_format, plan_resize, refuse_active_swap, refuse_busy_disk, refuse_protected_disk,
     refuse_whole_disk_filesystem, snapshot_for, validate_device_path,
 };
 

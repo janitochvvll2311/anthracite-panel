@@ -558,7 +558,10 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   a disk whose own `fstype` is set, because a superfloppy has no children and
   would otherwise look blank while a new MBR overwrites its boot sector. Swap
   is in `VolumeSnapshot::swap_devices` from `/proc/swaps`, since mountinfo
-  never lists it and `--no-reread` disables sfdisk's own check. `mkfs`
+  never lists it and `--no-reread` disables sfdisk's own check. `format` does
+  not go through `refuse_busy_disk` (it resolves a partition, not a disk), so
+  it calls `refuse_active_swap` on the partition and its disk; that one is an
+  exact match, so a swapped sibling never blocks a format. `mkfs`
   derives from an allowlist (`FORMAT_TYPES`), so an unlisted type names no
   binary, and labels are restricted to a conservative character set. A mounted
   disk or partition is refused, not forced. `PartitionList` needs only

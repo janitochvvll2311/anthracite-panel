@@ -1207,3 +1207,78 @@ fn a_real_sfdisk_would_destroy_a_whole_disk_filesystem() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn formatting_an_active_swap_partition_is_refused() {
+    // Swap is not mounted, so the mount check cannot see it, and `mkfs.fat`
+    // overwrites a live swap signature with exit 0. Losing a swap area is the
+    // least recoverable damage this feature can do.
+    let mut snap = snapshot(
+        vec![disk("sdb", "/dev/sdb"), part("sdb1", "/dev/sdb1", "sdb")],
+        Vec::new(),
+    );
+    snap.swap_devices = vec!["/dev/sdb1".to_string()];
+    let runner = FakeRunner::ok();
+    let error = edit_with(
+        &runner,
+        &snap,
+        &PartitionTableAction::Format {
+            partition: "/dev/sdb1".to_string(),
+            fs_type: "vfat".to_string(),
+            label: None,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+        true,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, VolumeErrorKind::Busy);
+    assert!(error.detail.contains("swap"), "{}", error.detail);
+    assert!(
+        runner.calls().is_empty(),
+        "the guard must refuse before mkfs runs"
+    );
+}
+
+#[test]
+fn formatting_a_partition_whose_sibling_is_swap_is_allowed() {
+    // Exact match, not `mount_covers`: a swapped sibling must not block
+    // formatting this partition.
+    let mut snap = snapshot(
+        vec![
+            disk("sdb", "/dev/sdb"),
+            part("sdb1", "/dev/sdb1", "sdb"),
+            part("sdb2", "/dev/sdb2", "sdb"),
+        ],
+        Vec::new(),
+    );
+    snap.swap_devices = vec!["/dev/sdb2".to_string()];
+    let runner = FakeRunner::ok();
+    edit_with(
+        &runner,
+        &snap,
+        &PartitionTableAction::Format {
+            partition: "/dev/sdb1".to_string(),
+            fs_type: "vfat".to_string(),
+            label: None,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+        true,
+    )
+    .expect("a swap sibling must not block formatting another partition");
+    assert_eq!(runner.calls().len(), 1);
+}
+
+#[test]
+fn formatting_a_whole_disk_swap_area_is_refused() {
+    // A superfloppy signed by `mkswap` has no partitions, so a format request
+    // naming the disk as its own target must still be caught.
+    let mut snap = snapshot(vec![disk("sdb", "/dev/sdb")], Vec::new());
+    snap.swap_devices = vec!["/dev/sdb".to_string()];
+    let error =
+        anth_panel::volumes::refuse_active_swap(&snap, &["/dev/sdb1", "/dev/sdb"]).unwrap_err();
+    assert_eq!(error.kind, VolumeErrorKind::Busy);
+    assert!(error.detail.contains("/dev/sdb"), "{}", error.detail);
+}
