@@ -16,6 +16,7 @@ pub mod api;
 pub mod bundle;
 pub mod manifest;
 pub mod runtime;
+pub mod web;
 
 use std::path::{Path, PathBuf};
 

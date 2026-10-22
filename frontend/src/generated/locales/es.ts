@@ -9,7 +9,8 @@
     /* eslint-disable @typescript-eslint/no-explicit-any */
 
     export const templates = {
-      's086392fd79ccf57f': `Sistema operativo, CPU, carga media, memoria y swap.`,
+      's00d58915a3b8ce53': `Widgets de plugins`,
+'s086392fd79ccf57f': `Sistema operativo, CPU, carga media, memoria y swap.`,
 's08b35907b5589afa': `no`,
 's13bdf433c1894d5a': `Raíz de montaje`,
 's13c123f97668a70b': `Acceso`,

@@ -1,0 +1,159 @@
+<!doctype html>
+<!--
+  Dev-only harness for the plugin slot.
+
+  Run `bun run dev` and open
+  http://localhost:5173/src/components/anth-plugin-slot.test.html. Vite's build
+  input is only index.html, so this file never reaches dist/.
+
+  The catalogue and the client are stubbed here. The module URL is a `data:`
+  URL, so this page needs neither a daemon nor an installed plugin: what it
+  exercises is the loader contract — slot matching, the tag the plugin declared,
+  a disabled plugin being skipped, and a broken module not taking the slot down.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel plugin slot."
+    />
+    <title>anth-plugin-slot · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-plugin-slot" width="900px">
+      <p slot="description">
+        The shell renders one of these wherever a plugin may appear. It asks the
+        loader for the elements declared for its slot, imports each module and
+        appends the declared tag. Nothing here imports a plugin statically.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>
+              <strong>Good plugin</strong> registers <code>anth-widget</code>
+              and appears in the slot below.
+            </li>
+            <li>
+              <strong>Broken plugin</strong> throws on import. It is skipped and
+              logged; the good one still mounts.
+            </li>
+            <li>
+              <strong>Disabled plugin</strong> is not loaded at all, because the
+              asset route would refuse it.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Why the slot and not the shell</h2>
+          <p>
+            Keeping the loader behind an element means the shell contains no
+            plugin tag and no plugin import. A plugin is data — an id, a slot, a
+            tag, a module — until this element runs.
+          </p>
+        </article>
+      </section>
+
+      <h2>dashboard.widget</h2>
+      <div id="dashboard" class="harness-grid"></div>
+
+      <h2>panel.files.tab</h2>
+      <div id="files" class="harness-grid"></div>
+
+      <p slot="actions">
+        <button id="reload" type="button">Reload slots</button>
+      </p>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/components/anth-plugin-slot.ts'
+      import '/src/harness/anth-harness.ts'
+
+      const good = `
+        customElements.define('anth-widget', class extends HTMLElement {
+          connectedCallback() {
+            this.innerHTML =
+              '<div style="padding:1rem;border:1px solid #2a3b52;border-radius:8px">' +
+              '<strong>Plugin widget</strong><p>Loaded from a stub module.</p></div>'
+          }
+        })
+      `
+
+      const catalogue = {
+        enabled: true,
+        install_from_web: false,
+        problems: [],
+        plugins: [
+          {
+            id: 'org.anth.widget',
+            name: 'Widget',
+            version: '0.1.0',
+            enabled: true,
+            ui: [{ slot: 'dashboard.widget', tag: 'anth-widget', module: 'web/js/widget.js' }],
+          },
+          {
+            id: 'org.anth.broken',
+            name: 'Broken',
+            version: '0.1.0',
+            enabled: true,
+            ui: [{ slot: 'dashboard.widget', tag: 'anth-broken', module: 'web/js/broken.js' }],
+          },
+          {
+            id: 'org.anth.disabled',
+            name: 'Disabled',
+            version: '0.1.0',
+            enabled: false,
+            ui: [{ slot: 'dashboard.widget', tag: 'anth-disabled', module: 'web/js/x.js' }],
+          },
+          {
+            id: 'org.anth.tab',
+            name: 'Tab',
+            version: '0.1.0',
+            enabled: true,
+            ui: [{ slot: 'panel.files.tab', tag: 'anth-extra-tab', module: 'web/js/tab.js' }],
+          },
+        ],
+      }
+
+      const client = {
+        list: async () => catalogue,
+        moduleUrl: (id, module) => {
+          if (id === 'org.anth.broken') {
+            return 'data:text/javascript,' + encodeURIComponent('throw new Error("bad module")')
+          }
+          if (id === 'org.anth.tab') {
+            return (
+              'data:text/javascript,' +
+              encodeURIComponent(
+                "customElements.define('anth-extra-tab', class extends HTMLElement { connectedCallback() { this.textContent = 'Extra tab from a plugin' } })",
+              )
+            )
+          }
+          return 'data:text/javascript,' + encodeURIComponent(good)
+        },
+      }
+
+      function mount() {
+        for (const [id, slot] of [
+          ['dashboard', 'dashboard.widget'],
+          ['files', 'panel.files.tab'],
+        ]) {
+          const host = document.getElementById(id)
+          host.replaceChildren()
+          const element = document.createElement('anth-plugin-slot')
+          element.slotName = slot
+          element.catalogue = catalogue
+          element.client = client
+          host.append(element)
+        }
+      }
+
+      document.getElementById('reload').addEventListener('click', mount)
+      mount()
+    </script>
+  </body>
+</html>

@@ -513,6 +513,16 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   there is only one validation path. Tests live beside the component and
   `lib/accounts/`; the harness is
   `src/components/anth-account-manager.test.html`.
+- **Plugin UI**: `plugins/web.rs` serves `/api/plugins/<id>/web/*` from the
+  bundle's `web/` directory, gated by the grant (no grant is `404`, disabled is
+  `403`, the `[plugins] enabled` switch turns the route off). Style is enforced
+  there, not in the guest: the path is rebuilt component by component so `..`
+  cannot survive, the file is canonicalized before the containment check, the
+  MIME type comes from a host-owned extension table, and every answer is
+  `nosniff` and `no-store`. The frontend side is `lib/plugins/plugin-client.ts`
+  (catalogue read, `moduleUrl`, `anchorsBySlot`, `loadSlot`) and
+  `anth-plugin-slot`, which imports each declared module with a dynamic
+  `import()` and appends the tag. The shell never imports a plugin statically.
 - **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
   `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
   deletes/flushes. It only renders controls when `control_enabled` is true and

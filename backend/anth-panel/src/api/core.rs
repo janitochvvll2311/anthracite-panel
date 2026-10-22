@@ -80,6 +80,12 @@ pub fn router(app: AppState) -> Router {
             post(post_account_group_delete),
         )
         .route("/api/plugins", get(get_plugins))
+        // Static assets first: axum picks the most specific match, but the
+        // intent is worth reading in order. Assets never reach a guest.
+        .route(
+            "/api/plugins/{id}/web/{*path}",
+            get(crate::plugins::web::asset),
+        )
         // One wildcard, not one route per declared anchor: the manifest is a
         // file inside the bundle, so authorization reads the grant, never it.
         .route(

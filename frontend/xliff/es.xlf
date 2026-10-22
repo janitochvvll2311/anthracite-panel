@@ -275,6 +275,10 @@
   <source>Allowed programs, one absolute path per line</source>
   <target>Programas permitidos, una ruta absoluta por línea</target>
 </trans-unit>
+<trans-unit id="s00d58915a3b8ce53">
+  <source>Plugin widgets</source>
+  <target>Widgets de plugins</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
