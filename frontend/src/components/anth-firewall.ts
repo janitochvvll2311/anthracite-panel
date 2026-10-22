@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import type {
   FirewallAction,
   FirewallClient,
@@ -196,6 +197,15 @@ export class AnthFirewall extends LitElement {
     if (changed) await this.refresh()
   }
 
+  /** Brings the add-rule form into view from the portrait FAB. */
+  private readonly focusAddRule = (): void => {
+    const form = this.renderRoot.querySelector<HTMLElement>('.form-wrap')
+    form?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+    this.renderRoot
+      .querySelector<HTMLInputElement>('input[type="number"]')
+      ?.focus()
+  }
+
   private renderForm() {
     return html`
       <div class="form-wrap">
@@ -374,6 +384,17 @@ export class AnthFirewall extends LitElement {
                 <summary>nft ruleset</summary>
                 <pre>${snapshot.ruleset}</pre>
               </details>
+            `
+          : nothing}
+
+        ${this.canControl
+          ? html`
+              <anth-fab
+                icon="＋"
+                label="Add rule"
+                ?disabled=${this.busy}
+                @click=${this.focusAddRule}
+              ></anth-fab>
             `
           : nothing}
       </section>

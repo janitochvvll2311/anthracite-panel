@@ -339,12 +339,29 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   uploads and terminal sessions. A new command therefore touches the protocol,
   the client, the CLI and one handler arm.
 - **Web app shell**: `frontend/src/app/` holds the shell (`anth-app`), the panel
-  registry, a pure hash router (`#/panel/<id>`) and the `lit-localize` runtime.
-  The shell renders one card per registry entry and mounts the chosen custom
-  element itself, because a tag name is data rather than markup. Clients are
-  created by the registry and can be replaced through `clientFactory`, which is
-  how the shell tests mount every panel without a socket. `index.html` mounts the
-  shell; only `index.html` is a Vite build entry, so harnesses stay out of `dist/`.
+  and theme registry, a pure hash router (`#/` and `#/panel/<id>`) and the
+  `lit-localize` runtime. It is a fixed-height app frame: the header keeps its
+  natural height, `.shell` takes the rest, the landscape sidebar stretches to
+  the full column height, and `main` is the only scroll container.
+  The header is the original one; below it the landscape sidebar lists `Home`
+  and the themes (`System`, `Storage`, `Network`, `Access`, `Extensions`). A
+  theme page is an `anth-theme-page` with an `anth-tab-panel` whose tabs are the
+  panels in that theme. The shell caches one theme page per theme and detaches
+  it on a theme switch, so a hidden theme keeps its tab and panel state while
+  its streams are closed. `#/window/<id>` is deliberately unknown now; the
+  desktop and pop-out code remain as utilities. Clients are created by the
+  registry and can be replaced through `clientFactory`, which is how the shell
+  tests mount every panel without a socket. `lib/ui/theme-memory` remembers the
+  last panel per theme for the sidebar link.
+  There is no width breakpoint: `@media (orientation: portrait)` switches to the
+  mobile layout. `anth-nav-drawer` is a native `<dialog>` drawer with short theme
+  labels; the shell owns its `open` state and closes it on link, backdrop,
+  Escape, route change or rotation to landscape. `anth-fab` is a 56px action
+  button owned by each panel, hidden in landscape with a `mobile-only` rule;
+  each panel decides whether its primary action is available. Safe areas use
+  `viewport-fit=cover` and `env(safe-area-inset-*)`. `index.html` mounts the
+  shell; only `index.html` is a Vite build entry, so harnesses stay out of
+  `dist/`.
 - **Localization**: source strings are English and wrapped in `msg()`. `bun run
   i18n:extract` writes `frontend/xliff/es.xlf`, `bun run build` regenerates
   `src/generated/locales/es.ts` before type checking. The locale is stored in
@@ -630,18 +647,17 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   pause/resume, refresh and interval controls. `lib/hostinfo/display.ts` owns
   the pure formatting helpers; tests live beside both modules and the harness is
   `src/components/anth-host-info.test.html`.
-- **Frontend desktop**: `anth-desktop` owns the open windows for the whole
-  shell — one entry per panel, a global z order and the `localStorage`
-  arrangement (`lib/ui/windows` holds the pure geometry and storage helpers).
-  `anth-window` is controlled: it renders the `rect`, `z` and `minimized` it is
-  given and reports `move`, `resize`, `focus`, `minimize`, `popout` and
-  `close`. A minimized window is **detached** (`remove()`), not hidden, so its
-  SSE stream and terminal WebSocket close while its state survives; restoring
-  re-appends the same element. Opening a panel that is already open raises it
-  instead of building a second copy, which would start a second stream against
-  the same daemon. `#/window/<id>` is a route, so a pop-out is a URL behind the
-  same session gate. The shell renders one desktop for every route, so a window
-  outlives a navigation; the harness is `src/components/anth-desktop.test.html`.
+- **Frontend desktop (utility, not in the shell)**: `anth-desktop` owns a set of
+  floating windows — one entry per panel, a global z order and the
+  `localStorage` arrangement (`lib/ui/windows` holds the pure geometry and
+  storage helpers). `anth-window` is controlled: it renders the `rect`, `z` and
+  `minimized` it is given and reports `move`, `resize`, `focus`, `minimize`,
+  `popout` and `close`. A minimized window is **detached** (`remove()`), not
+  hidden, so its SSE stream and terminal WebSocket close while its state
+  survives; restoring re-appends the same element. Opening a panel that is
+  already open raises it instead of building a second copy. The tab-based shell
+  no longer imports either component and `#/window/<id>` is an unknown page;
+  the code, tests and harness stay in the tree for a later window mode.
 - **Shared web helpers**: `lib/http.ts` owns `responseError` and the common
   fetch/EventSource option types, `lib/stream.ts` owns the `EventSource`
   lifecycle and JSON event parsing, and `lib/format.ts` owns `formatBytes` and
@@ -719,6 +735,8 @@ sync with behaviour; they are the contract for people writing clients:
 - `docs/volumes.md` — storage inventory, mount and unmount policy, privileges.
 - `docs/accounts.md` — local user and group inventory, guard matrix, the
   `shadow-utils` dependency and the container's root requirement.
+- `docs/design/app-shell.md` — web shell layout, themes, tab workspace, routes
+  and the retained desktop utility.
 
 `docs/api-endpoints.md` also documents the session lifecycle and `PATCH
 /api/config`, and `docs/cli.md` the `auth` and `config` commands.

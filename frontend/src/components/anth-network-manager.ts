@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import type {
   NetworkClient,
   NetworkConnectionStatus,
@@ -899,6 +900,17 @@ export class AnthNetworkManager extends LitElement {
                 >Control is disabled by the daemon.</span
               >`}
         </footer>
+
+        ${this.manageEnabled
+          ? html`
+              <anth-fab
+                icon="＋"
+                label="Create interface"
+                ?disabled=${!this.client || this.busy}
+                @click=${this.toggleCreateForm}
+              ></anth-fab>
+            `
+          : nothing}
       </section>
     `
   }

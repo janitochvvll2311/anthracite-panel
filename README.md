@@ -22,6 +22,7 @@ in the HTTP server.
 | [docs/files.md](docs/files.md) | Filesystem root, chunked transfers, write policy and web explorer |
 | [docs/design/platform-upgrades.md](docs/design/platform-upgrades.md) | Plan and progress for the platform upgrade series |
 | [docs/design/plugins.md](docs/design/plugins.md) | Plugin bundles: manifest schema, wasm sandbox, capability grants |
+| [docs/design/app-shell.md](docs/design/app-shell.md) | Web shell: themed sidebar, tab workspace, routes and state |
 
 ## Layout
 

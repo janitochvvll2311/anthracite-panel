@@ -26,21 +26,9 @@
   <source>Go home</source>
   <target>Volver al inicio</target>
 </trans-unit>
-<trans-unit id="s977f2b612bbc07a8">
-  <source>Control panel</source>
-  <target>Panel de control</target>
-</trans-unit>
-<trans-unit id="s96334444c7de7fdb">
-  <source>Pick a feature. Every panel talks to the local daemon over the panel API.</source>
-  <target>Elige una función. Cada panel habla con el daemon local a través de la API del panel.</target>
-</trans-unit>
 <trans-unit id="se0f63a2010bbe3eb">
   <source>No such panel.</source>
   <target>No existe ese panel.</target>
-</trans-unit>
-<trans-unit id="s1b8f375c1729973b">
-  <source>All panels</source>
-  <target>Todos los paneles</target>
 </trans-unit>
 <trans-unit id="scfc74c13891def2d">
   <source>Host info</source>
@@ -128,7 +116,8 @@
 <target>No se pudo iniciar sesión</target></trans-unit>
 <trans-unit id="s13c123f97668a70b">
   <source>Access</source>
-<target>Acceso</target></trans-unit>
+  <target>Accesos</target>
+</trans-unit>
 <trans-unit id="s5f4044ea5484cf2f">
   <source>Run privileged commands through sudo</source>
 <target>Ejecutar comandos privilegiados con sudo</target></trans-unit>
@@ -255,14 +244,6 @@
   <source>Resize</source>
   <target>Redimensionar</target>
 </trans-unit>
-<trans-unit id="sbac9c007b11678b4">
-  <source>Open another panel</source>
-  <target>Abrir otro panel</target>
-</trans-unit>
-<trans-unit id="seef0ce71f86fbe92">
-  <source>Choose…</source>
-  <target>Elegir…</target>
-</trans-unit>
 <trans-unit id="sdbe246a8f55af98c">
   <source>Live process table with signals, tree view and spawning.</source>
   <target>Tabla de procesos en vivo con señales, vista de árbol y lanzamiento.</target>
@@ -286,6 +267,66 @@
 <trans-unit id="sb93a2fa64513b3bb">
   <source>Installed bundles, frozen capabilities and browser installation.</source>
   <target>Bundles instalados, capacidades congeladas e instalación desde el navegador.</target>
+</trans-unit>
+<trans-unit id="sd5e9b70ffb7a8b46">
+  <source>Skip to content</source>
+  <target>Saltar al contenido</target>
+</trans-unit>
+<trans-unit id="se757a0691e4629d3">
+  <source>Themes</source>
+  <target>Temas</target>
+</trans-unit>
+<trans-unit id="s6abb1cd87fe0114e">
+  <source>Home</source>
+  <target>Inicio</target>
+</trans-unit>
+<trans-unit id="sac72e745645e6013">
+  <source>Choose a theme from the sidebar or open one below.</source>
+  <target>Elige un tema en la barra lateral o abre uno abajo.</target>
+</trans-unit>
+<trans-unit id="sa81e2cdaf6921adc">
+  <source>System</source>
+  <target>Sistema</target>
+</trans-unit>
+<trans-unit id="s5b85c3f7aa015a77">
+  <source>Host identity, load average and running processes.</source>
+  <target>Identidad del host, carga media y procesos en ejecución.</target>
+</trans-unit>
+<trans-unit id="sd1c1f5d2f749225b">
+  <source>Files on disk and block devices with their mounts.</source>
+  <target>Archivos en disco y dispositivos de bloque con sus montajes.</target>
+</trans-unit>
+<trans-unit id="sb2a2a9b5ad056992">
+  <source>Interfaces, addresses, traffic and firewall rules.</source>
+  <target>Interfaces, direcciones, tráfico y reglas de firewall.</target>
+</trans-unit>
+<trans-unit id="s9698888cf053484b">
+  <source>Extensions</source>
+  <target>Extensiones</target>
+</trans-unit>
+<trans-unit id="s1e21c4080f5060f3">
+  <source>Plugin bundles and interactive terminals.</source>
+  <target>Bundles de plugins y terminales interactivas.</target>
+</trans-unit>
+<trans-unit id="sbd4d179564d6d31d">
+  <source>Open navigation</source>
+  <target>Abrir navegación</target>
+</trans-unit>
+<trans-unit id="sac8256732f2ee1e5">
+  <source>Data</source>
+  <target>Datos</target>
+</trans-unit>
+<trans-unit id="s8d0d76c9d14c5a0e">
+  <source>Extras</source>
+  <target>Extras</target>
+</trans-unit>
+<trans-unit id="s07e6118e838b2e23">
+  <source>Navigation</source>
+  <target>Navegación</target>
+</trans-unit>
+<trans-unit id="s5d5a228abdf71b27">
+  <source>Close navigation</source>
+  <target>Cerrar navegación</target>
 </trans-unit>
 </body>
 </file>

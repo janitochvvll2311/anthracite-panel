@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import type {
   AccountClient,
   AccountGroup,
@@ -1057,6 +1058,19 @@ export class AnthAccountManager extends LitElement {
             </p>`}
 
         ${this.renderUserEditor()} ${this.pane === 'users' ? this.renderUsers() : this.renderGroups()}
+
+        ${this.canControl
+          ? html`
+              <anth-fab
+                icon="＋"
+                label=${this.pane === 'users' ? 'New user' : 'New group'}
+                ?disabled=${this.busy}
+                @click=${this.pane === 'users'
+                  ? this.openCreateUser
+                  : this.openCreateGroup}
+              ></anth-fab>
+            `
+          : nothing}
       </section>
     `
   }

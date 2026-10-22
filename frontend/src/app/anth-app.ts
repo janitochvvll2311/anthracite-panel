@@ -1,37 +1,42 @@
 /**
- * The panel shell: a header, a home page of feature cards and a host for the
- * selected panel.
+ * The panel shell: the current header, a persistent themed sidebar and a
+ * workspace whose active theme is a tab strip of its panels.
  *
- * Navigation is hash based and each card is a real anchor, so a panel link can
- * be opened in a new tab, bookmarked, or later moved into a floating window
- * without the shell changing.
+ * Navigation is hash based. `#/panel/<id>` names the panel and therefore the
+ * theme; `#/` is Home. The sidebar only lists themes, and the tabs inside a
+ * theme list its panels. Each theme page is cached and detached, so switching
+ * themes does not throw away a tab's state.
  *
- * The shell does not import any feature component directly: it asks
- * `panels.ts` for an entry and appends that custom element. That keeps the shell
- * stable while features are added, renamed or wrapped.
+ * The floating desktop and its pop-out route are intentionally not used here.
+ * `anth-desktop`, `anth-window`, `windowUrl` and the router's `window` kind are
+ * still kept as utilities for a later window mode; the shell simply does not
+ * reach them, and `#/window/<id>` is an unknown page.
  */
 
-import { LitElement, css, html } from 'lit'
+import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
-import { customElement, property, query, state } from 'lit/decorators.js'
+import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
-import '../components/anth-desktop'
-import type { AnthDesktop } from '../components/anth-desktop'
 import '../components/anth-login'
+import '../components/anth-nav-drawer'
 import '../components/anth-plugin-slot'
+import '../components/anth-theme-page'
+import type { AnthThemePage } from '../components/anth-theme-page'
+import { ANTH_PANEL_SELECT_EVENT } from '../components/anth-theme-page'
 
 import { AuthClient } from '../lib/auth/auth-client'
 import type { SessionInfo } from '../lib/auth/auth-client'
 import { changeLocale, currentLocale, setupLocalization } from './i18n'
-import type { PanelDefinition } from './panels'
-import { currentApiFetch, useApiFetch, withRetry } from '../lib/http'
-import type { PluginsCatalogue } from '../lib/plugins/plugin-client'
-import { HttpPluginClient } from '../lib/plugins/plugin-client'
-import { PANELS, findPanel } from './panels'
 import type { PanelLocale } from './i18n'
+import type { PanelDefinition, ThemeDefinition } from './panels'
+import { THEMES, findPanel, findTheme, panelsIn, themeForPanel } from './panels'
+import { currentApiFetch, useApiFetch, withRetry } from '../lib/http'
+import type { PluginClient, PluginsCatalogue } from '../lib/plugins/plugin-client'
+import { HttpPluginClient } from '../lib/plugins/plugin-client'
 import type { Route } from './router'
-import { panelHash, parseRoute, windowUrl } from './router'
+import { panelHash, parseRoute } from './router'
+import { rememberedPanel, rememberPanel } from '../lib/ui/theme-memory'
 
 setupLocalization()
 
@@ -40,22 +45,75 @@ setupLocalization()
 export class AnthApp extends LitElement {
   static override styles = css`
     :host {
-      display: block;
-      min-height: 100svh;
+      display: flex;
+      flex-direction: column;
+      height: 100svh;
+      height: 100dvh;
+      overflow: hidden;
       color: var(--text, #dbe6f2);
       font: 15px/1.6 var(--sans, system-ui, sans-serif);
       background: var(--page-bg, #070a0f);
     }
 
+    .skip {
+      position: absolute;
+      top: -10rem;
+      left: 0.5rem;
+      z-index: 20;
+      padding: 0.5rem 0.75rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--accent, #7dd3fc);
+      border-radius: 7px;
+      background: var(--panel, #101721);
+      font: 600 12px/1.3 var(--mono, monospace);
+    }
+
+    .skip:focus {
+      top: 0.5rem;
+    }
+
     header {
       display: flex;
+      flex: 0 0 auto;
       flex-wrap: wrap;
       gap: 1rem;
       align-items: center;
       justify-content: space-between;
       padding: 1.1rem clamp(1rem, 4vw, 2.5rem);
+      padding-top: max(1.1rem, env(safe-area-inset-top));
       border-bottom: 1px solid var(--panel-border, #223041);
       background: rgba(16, 23, 33, 0.72);
+    }
+
+    .header-main {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      min-width: 0;
+    }
+
+    .menu {
+      display: none;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      padding: 0;
+      color: inherit;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 9px;
+      background: transparent;
+      font: 400 20px/1 var(--sans, sans-serif);
+      cursor: pointer;
+    }
+
+    .menu:hover,
+    .menu:focus-visible {
+      border-color: rgba(125, 211, 252, 0.55);
+      outline: none;
+    }
+
+    .menu:focus-visible {
+      box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.35);
     }
 
     .brand {
@@ -85,16 +143,123 @@ export class AnthApp extends LitElement {
       gap: 0.6rem;
     }
 
-    main {
-      width: min(1180px, 100%);
-      margin: 0 auto;
-      padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 4vw, 2.5rem) 4rem;
+    .shell {
+      display: grid;
+      grid-template-columns: clamp(210px, 18vw, 250px) minmax(0, 1fr);
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
     }
 
-    .lede {
-      max-width: 60ch;
-      margin: 0 0 2rem;
+    .sidebar {
+      align-self: stretch;
+      height: 100%;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 1.2rem 0.75rem;
+      padding-left: max(0.75rem, env(safe-area-inset-left));
+      border-right: 1px solid var(--panel-border, #223041);
+      background: rgba(12, 17, 24, 0.72);
+    }
+
+    .sidebar nav {
+      display: grid;
+      gap: 0.25rem;
+    }
+
+    .eyebrow {
+      margin: 1rem 0.65rem 0.35rem;
       color: var(--muted, #8b9bad);
+      font: 10px/1.3 var(--mono, monospace);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.55rem 0.65rem;
+      color: var(--muted, #8b9bad);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      border-radius: 0 8px 8px 0;
+      font: 600 12px/1.3 var(--mono, monospace);
+      letter-spacing: 0.02em;
+      transition:
+        color 100ms ease,
+        background-color 100ms ease,
+        border-color 100ms ease;
+    }
+
+    .nav-item:hover,
+    .nav-item:focus-visible {
+      color: var(--text, #dbe6f2);
+      background: rgba(125, 211, 252, 0.06);
+      outline: none;
+    }
+
+    .nav-item:focus-visible {
+      box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.45);
+    }
+
+    .nav-item[data-active] {
+      color: var(--accent, #7dd3fc);
+      border-left-color: var(--accent, #7dd3fc);
+      background: rgba(125, 211, 252, 0.1);
+    }
+
+    .nav-icon {
+      width: 1.4rem;
+      text-align: center;
+      font-size: 1.05rem;
+      line-height: 1;
+    }
+
+    .nav-label {
+      flex: 1;
+    }
+
+    .nav-count {
+      padding: 0.05rem 0.35rem;
+      color: var(--muted, #8b9bad);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 400;
+    }
+
+    main {
+      min-width: 0;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      padding: clamp(1.25rem, 3vw, 2.4rem);
+      padding-right: max(clamp(1.25rem, 3vw, 2.4rem), env(safe-area-inset-right));
+      padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+      padding-left: max(clamp(1.25rem, 3vw, 2.4rem), env(safe-area-inset-left));
+    }
+
+    main:focus {
+      outline: none;
+    }
+
+    .page-head {
+      margin-bottom: 1.5rem;
+    }
+
+    .page-title {
+      margin: 0;
+      font: 600 22px/1.25 var(--mono, ui-monospace, monospace);
+      letter-spacing: 0.01em;
+    }
+
+    .page-lede {
+      max-width: 70ch;
+      margin: 0.35rem 0 0;
+      color: var(--muted, #8b9bad);
+      font-size: 13px;
     }
 
     .cards {
@@ -106,18 +271,18 @@ export class AnthApp extends LitElement {
       list-style: none;
     }
 
-    .plugin-widgets {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 1rem;
-      margin-top: 1.5rem;
+    .cards > li {
+      display: flex;
+      min-width: 0;
     }
 
     .card {
-      display: grid;
-      grid-template-rows: auto auto 1fr;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
       gap: 0.35rem;
-      height: 100%;
+      width: 100%;
+      min-width: 0;
       padding: 1.1rem 1.15rem;
       color: inherit;
       text-decoration: none;
@@ -130,15 +295,18 @@ export class AnthApp extends LitElement {
         background-color 120ms ease;
     }
 
-    .card:hover,
-    .card:focus-visible {
-      border-color: rgba(125, 211, 252, 0.55);
-      background: #16202c;
-      transform: translateY(-1px);
-      outline: none;
+    @media (hover: hover) {
+      .card:hover {
+        border-color: rgba(125, 211, 252, 0.55);
+        background: #16202c;
+        transform: translateY(-1px);
+      }
     }
 
     .card:focus-visible {
+      border-color: rgba(125, 211, 252, 0.55);
+      background: #16202c;
+      outline: none;
       box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.35);
     }
 
@@ -148,44 +316,43 @@ export class AnthApp extends LitElement {
     }
 
     .card-title {
-      font: 600 14px/1.3 var(--mono, monospace);
       color: var(--accent, #7dd3fc);
+      font: 600 14px/1.3 var(--mono, monospace);
+      overflow-wrap: anywhere;
     }
 
     .card-description {
       margin: 0;
       color: var(--muted, #8b9bad);
       font-size: 13px;
+      overflow-wrap: anywhere;
     }
 
-    .toolbar-open {
-      display: inline-flex;
-      gap: 0.35rem;
-      align-items: center;
-    }
-
-    .toolbar-label {
+    .card-meta {
+      margin-top: auto;
       color: var(--muted, #8b9bad);
-      font: 11px/1.4 var(--mono, monospace);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
+      font: 10px/1.4 var(--mono, monospace);
+      letter-spacing: 0.02em;
+      overflow-wrap: anywhere;
     }
 
-    .toolbar-select {
-      padding: 0.25rem 0.45rem;
-      color: inherit;
-      font: 12px/1.2 var(--mono, monospace);
-      border: 1px solid var(--panel-border, #223041);
-      border-radius: 7px;
-      background: var(--panel, #101721);
+    .plugin-widgets {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
     }
 
-    .panel-toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.8rem;
-      align-items: center;
-      margin-bottom: 1.2rem;
+    .theme-host {
+      min-width: 0;
+    }
+
+    .unknown {
+      padding: 1rem 1.1rem;
+      color: var(--err, #f87171);
+      border: 1px solid var(--err, #f87171);
+      border-radius: 10px;
+      background: rgba(248, 113, 113, 0.08);
     }
 
     .back {
@@ -198,19 +365,6 @@ export class AnthApp extends LitElement {
 
     .back:hover {
       text-decoration: underline;
-    }
-
-    .panel-title {
-      margin: 0;
-      font: 600 18px/1.3 var(--mono, monospace);
-    }
-
-    .unknown {
-      padding: 1rem 1.1rem;
-      border: 1px solid var(--err, #f87171);
-      border-radius: 10px;
-      color: var(--err, #f87171);
-      background: rgba(248, 113, 113, 0.08);
     }
 
     .loading {
@@ -243,11 +397,97 @@ export class AnthApp extends LitElement {
       border-radius: 7px;
       background: var(--panel, #101721);
     }
+
+    .drawer-nav {
+      display: grid;
+      gap: 0.3rem;
+    }
+
+    .drawer-nav .nav-item {
+      min-height: 48px;
+      padding: 0.75rem;
+      border-left: 2px solid transparent;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .drawer-nav .nav-count {
+      display: none;
+    }
+
+    @media (orientation: portrait) {
+      .shell {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .menu {
+        display: grid;
+      }
+
+      header {
+        gap: 0.5rem;
+        padding:
+          0.7rem
+          max(0.8rem, env(safe-area-inset-right))
+          0.7rem
+          max(0.8rem, env(safe-area-inset-left));
+        padding-top: max(0.7rem, env(safe-area-inset-top));
+      }
+
+      .brand {
+        font-size: 15px;
+      }
+
+      .brand-tagline,
+      .language-label {
+        display: none;
+      }
+
+      .header-actions {
+        gap: 0.4rem;
+      }
+
+      main {
+        order: 1;
+        flex: 1 1 auto;
+        padding: 0.8rem;
+        padding-right: max(0.8rem, env(safe-area-inset-right));
+        padding-bottom: max(0.8rem, env(safe-area-inset-bottom));
+        padding-left: max(0.8rem, env(safe-area-inset-left));
+      }
+
+      .page-title {
+        font-size: 20px;
+      }
+
+      .page-head {
+        margin-bottom: 1rem;
+      }
+
+      .cards {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+      }
+
+      .card {
+        padding: 0.9rem;
+      }
+
+      .plugin-widgets {
+        grid-template-columns: 1fr;
+        margin-top: 1rem;
+      }
+    }
   `
 
   /**
-   * Builds the client for a panel. Tests and the future window manager replace
-   * it; the default is the panel's own factory.
+   * Builds the client for a panel. Tests replace it; the default is the
+   * panel's own factory.
    */
   @property({ attribute: false })
   clientFactory?: (panel: PanelDefinition) => unknown
@@ -258,6 +498,10 @@ export class AnthApp extends LitElement {
    */
   @property({ attribute: false })
   authClient?: AuthClient
+
+  /** Injectable plugin client, so a test never reaches a real `/api/plugins`. */
+  @property({ attribute: false })
+  pluginClient?: PluginClient
 
   @state()
   private route: Route = parseRoute(globalThis.location?.hash ?? '')
@@ -275,11 +519,7 @@ export class AnthApp extends LitElement {
 
   private auth = new AuthClient()
 
-  /** Injectable plugin client, so a test never reaches a real `/api/plugins`. */
-  @property({ attribute: false })
-  pluginClient?: HttpPluginClient
-
-  private plugins = new HttpPluginClient()
+  private plugins: PluginClient = new HttpPluginClient()
 
   /**
    * The plugin catalogue, read once per session.
@@ -291,27 +531,48 @@ export class AnthApp extends LitElement {
   @state()
   private catalogue?: PluginsCatalogue
 
+  /** Portrait-only navigation drawer. */
+  @state()
+  private drawerOpen = false
+
+  /**
+   * One theme page per sidebar group.
+   *
+   * A theme page is detached, not destroyed, when another theme opens. Its
+   * tab panel keeps the panel elements, so returning to a theme restores the
+   * tab and its state instead of starting a second stream against the daemon.
+   */
+  private readonly themePages = new Map<string, AnthThemePage>()
+
+  /** Tracks the portrait/landscape switch so a rotation closes the drawer. */
+  private portraitQuery?: MediaQueryList
+
   /** Swaps in the injected client before the first session read. */
   private adoptAuthClient(): void {
     if (this.authClient) this.auth = this.authClient
   }
 
-  /** Route whose panel was already opened, so an update does not raise it again. */
-  private syncedRoute = ''
-
-  /** Panel id currently mounted in the host, so a route change remounts once. */
-  private mountedPanel?: string
-
-  @query('anth-desktop')
-  private desktop?: AnthDesktop
-
   private readonly onHashChange = (): void => {
     this.route = parseRoute(globalThis.location?.hash ?? '')
+  }
+
+  private readonly onOrientationChange = (): void => {
+    if (!this.portraitQuery?.matches) this.drawerOpen = false
+  }
+
+  private readonly openDrawer = (): void => {
+    this.drawerOpen = true
+  }
+
+  private readonly onDrawerClose = (): void => {
+    this.drawerOpen = false
   }
 
   override connectedCallback(): void {
     super.connectedCallback()
     globalThis.addEventListener?.('hashchange', this.onHashChange)
+    this.portraitQuery = globalThis.matchMedia?.('(orientation: portrait)')
+    this.portraitQuery?.addEventListener?.('change', this.onOrientationChange)
     this.adoptAuthClient()
     // Every panel client shares one retrying fetch: a tab that outlives its
     // access token recovers on the next call instead of waiting for the timer.
@@ -322,6 +583,7 @@ export class AnthApp extends LitElement {
 
   override disconnectedCallback(): void {
     globalThis.removeEventListener?.('hashchange', this.onHashChange)
+    this.portraitQuery?.removeEventListener?.('change', this.onOrientationChange)
     this.auth.cancelRefresh()
     useApiFetch(undefined)
     super.disconnectedCallback()
@@ -351,11 +613,14 @@ export class AnthApp extends LitElement {
 
   private readonly onSessionExpired = (): void => {
     this.session = null
+    this.themePages.clear()
+    this.drawerOpen = false
   }
 
   private async onAuthenticated(session: SessionInfo): Promise<void> {
     this.session = session
-    this.mountedPanel = undefined
+    this.themePages.clear()
+    this.drawerOpen = false
     void this.loadPlugins()
   }
 
@@ -363,11 +628,12 @@ export class AnthApp extends LitElement {
    * Reads the plugin catalogue after the session is known.
    *
    * A failure leaves `catalogue` undefined rather than empty, so the shell
-   * renders its built-in panels and no plugin slots, and the operator is not
+   * renders its built-in themes and no plugin slots, and the operator is not
    * told their dashboard is empty when the daemon merely failed a read.
    */
   private async loadPlugins(): Promise<void> {
-    this.plugins = this.pluginClient ?? new HttpPluginClient({ fetchImpl: currentApiFetch() })
+    this.plugins =
+      this.pluginClient ?? new HttpPluginClient({ fetchImpl: currentApiFetch() })
     try {
       this.catalogue = await this.plugins.list()
     } catch {
@@ -378,8 +644,9 @@ export class AnthApp extends LitElement {
   private async onLogout(): Promise<void> {
     await this.auth.logout()
     this.session = null
-    this.mountedPanel = undefined
+    this.themePages.clear()
     this.catalogue = undefined
+    this.drawerOpen = false
   }
 
   override render() {
@@ -394,11 +661,26 @@ export class AnthApp extends LitElement {
     }
 
     return html`
+      <a class="skip" href="#main" @click=${this.skipToMain}>
+        ${msg('Skip to content')}
+      </a>
       <header>
-        <p class="brand">
-          <a href="#/">Anthracite Panel</a>
-          <span class="tagline">${msg('host control')}</span>
-        </p>
+        <div class="header-main">
+          <button
+            class="menu"
+            type="button"
+            aria-label=${msg('Open navigation')}
+            aria-controls="app-navigation"
+            aria-expanded=${this.drawerOpen ? 'true' : 'false'}
+            @click=${this.openDrawer}
+          >
+            ☰
+          </button>
+          <p class="brand">
+            <a href="#/">Anthracite Panel</a>
+            <span class="tagline brand-tagline">${msg('host control')}</span>
+          </p>
+        </div>
         <div class="header-actions">
           ${this.session.enabled
             ? html`<span class="tagline">${this.session.username}</span>
@@ -407,7 +689,7 @@ export class AnthApp extends LitElement {
                 </button>`
             : null}
           <label>
-            <span class="tagline">${msg('Language')}</span>
+            <span class="tagline language-label">${msg('Language')}</span>
             <select
               aria-label=${msg('Language')}
               .value=${this.locale}
@@ -419,7 +701,68 @@ export class AnthApp extends LitElement {
           </label>
         </div>
       </header>
-      <main>${this.renderRoute()}</main>
+      <div class="shell">
+        <aside class="sidebar">
+          <nav aria-label=${msg('Themes')}>
+            ${this.renderHomeLink()}
+            <p class="eyebrow">${msg('Themes')}</p>
+            ${THEMES.map((theme) => this.renderThemeLink(theme))}
+          </nav>
+        </aside>
+        <main id="main" tabindex="-1">${this.renderRoute()}</main>
+      </div>
+      <anth-nav-drawer
+        id="app-navigation"
+        .open=${this.drawerOpen}
+        @anth-drawer-close=${this.onDrawerClose}
+      >
+        <nav class="drawer-nav" aria-label=${msg('Themes')}>
+          ${this.renderHomeLink(true)}
+          ${THEMES.map((theme) => this.renderThemeLink(theme, true))}
+        </nav>
+      </anth-nav-drawer>
+    `
+  }
+
+  private renderHomeLink(short = false) {
+    return html`
+      <a
+        class="nav-item"
+        href="#/"
+        ?data-active=${this.route.kind === 'home'}
+        aria-current=${this.route.kind === 'home' ? 'page' : nothing}
+        title=${short ? msg('Home') : nothing}
+      >
+        <span class="nav-icon" aria-hidden="true">🏠</span>
+        <span class="nav-label">${msg('Home')}</span>
+      </a>
+    `
+  }
+
+  private renderThemeLink(theme: ThemeDefinition, short = false) {
+    const landing = this.landingPanel(theme)
+    if (!landing) return nothing
+    const active =
+      this.route.kind === 'panel' &&
+      themeForPanel(this.route.panel)?.id === theme.id
+    const count = panelsIn(theme.id).length
+
+    return html`
+      <a
+        class="nav-item"
+        href=${panelHash(landing.id)}
+        data-theme=${theme.id}
+        ?data-active=${active}
+        aria-current=${active ? 'page' : nothing}
+        aria-label=${short ? theme.title() : nothing}
+        title=${short ? theme.title() : nothing}
+      >
+        <span class="nav-icon" aria-hidden="true">${theme.icon}</span>
+        <span class="nav-label"
+          >${short ? theme.shortTitle() : theme.title()}</span
+        >
+        <span class="nav-count" aria-hidden="true">${count}</span>
+      </a>
     `
   }
 
@@ -430,198 +773,134 @@ export class AnthApp extends LitElement {
       case 'panel':
         return this.renderPanel(this.route.panel)
       case 'window':
-        return this.renderStandalone(this.route.panel)
+        // The pop-out route is deliberately not part of this shell anymore.
+        // The desktop and its parser remain as utilities for a later window
+        // mode; an old URL is treated as unknown rather than redirecting.
+        return this.renderUnknownPage()
       case 'unknown':
-        return html`<p class="unknown" role="alert">
-          ${msg('No such page.')} <a class="back" href="#/">${msg('Go home')}</a>
-        </p>`
+        return this.renderUnknownPage()
     }
   }
 
   private renderHome() {
     return html`
-      <h1 class="panel-title">${msg('Control panel')}</h1>
-      <p class="lede">
-        ${msg(
-          'Pick a feature. Every panel talks to the local daemon over the panel API.',
-        )}
-      </p>
-      <ul class="cards">
-        ${PANELS.map(
-          (panel) => html`
-            <li>
-              <a class="card" href=${panelHash(panel.id)}>
-                <span class="card-icon" aria-hidden="true">${panel.icon}</span>
-                <span class="card-title">${panel.title()}</span>
-                <span class="card-description">${panel.description()}</span>
-              </a>
-            </li>
-          `,
-        )}
-      </ul>
-      <section class="plugin-widgets" aria-label=${msg('Plugin widgets')}>
-        <anth-plugin-slot
-          slot-name="dashboard.widget"
-          .catalogue=${this.catalogue}
-          .client=${this.plugins}
-        ></anth-plugin-slot>
+      <section class="home">
+        <header class="page-head">
+          <h1 class="page-title">${msg('Home')}</h1>
+          <p class="page-lede">
+            ${msg('Choose a theme from the sidebar or open one below.')}
+          </p>
+        </header>
+        <ul class="cards">
+          ${THEMES.map((theme) => this.renderThemeCard(theme))}
+        </ul>
+        <section class="plugin-widgets" aria-label=${msg('Plugin widgets')}>
+          <anth-plugin-slot
+            slot-name="dashboard.widget"
+            .catalogue=${this.catalogue}
+            .client=${this.plugins}
+          ></anth-plugin-slot>
+        </section>
       </section>
+    `
+  }
+
+  private renderThemeCard(theme: ThemeDefinition) {
+    const landing = this.landingPanel(theme)
+    if (!landing) return nothing
+    const panels = panelsIn(theme.id)
+
+    return html`
+      <li>
+        <a class="card" href=${panelHash(landing.id)} data-theme=${theme.id}>
+          <span class="card-icon" aria-hidden="true">${theme.icon}</span>
+          <span class="card-title">${theme.title()}</span>
+          <span class="card-description">${theme.description()}</span>
+          <span class="card-meta">
+            ${panels.map((panel) => panel.title()).join(' · ')}
+          </span>
+        </a>
+      </li>
     `
   }
 
   private renderPanel(id: string) {
     const panel = findPanel(id)
-    if (!panel) {
+    const theme = panel ? findTheme(panel.theme) : undefined
+    if (!panel || !theme) {
       return html`<p class="unknown" role="alert">
         ${msg('No such panel.')} <a class="back" href="#/">${msg('Go home')}</a>
       </p>`
     }
+    return html`<div class="theme-host" data-theme=${theme.id}></div>`
+  }
 
-    return html`
-      <div class="panel-toolbar">
-        <a class="back" href="#/">← ${msg('All panels')}</a>
-        <h1 class="panel-title">${panel.title()}</h1>
-        <label class="toolbar-open">
-          <span class="toolbar-label">${msg('Open another panel')}</span>
-          <select
-            class="toolbar-select"
-            aria-label=${msg('Open another panel')}
-            @change=${this.onOpenPanel}
-          >
-            <option value="">${msg('Choose…')}</option>
-            ${PANELS.filter((entry) => entry.id !== panel.id).map(
-              (entry) => html`<option value=${entry.id}>${entry.title()}</option>`,
-            )}
-          </select>
-        </label>
-        <button
-          class="toolbar-action"
-          type="button"
-          @click=${() => this.popOut(panel.id)}
-        >
-          ${msg('Open in a separate window')}
-        </button>
-      </div>
-      <anth-desktop
-        storage-key="desktop"
-        .panels=${PANELS.map((entry) => ({
-          id: entry.id,
-          heading: entry.title(),
-        }))}
-        .createPanel=${(id: string) => {
-          const entry = findPanel(id)
-          return entry ? this.createFeatureElement(entry) : document.createElement('div')
-        }}
-        @anth-window-popout=${(event: CustomEvent<{ id: string }>) =>
-          this.popOut(event.detail.id)}
-      ></anth-desktop>
-    `
+  private renderUnknownPage() {
+    return html`<p class="unknown" role="alert">
+      ${msg('No such page.')} <a class="back" href="#/">${msg('Go home')}</a>
+    </p>`
+  }
+
+  /** The panel the sidebar and the Home card link to for a theme. */
+  private landingPanel(theme: ThemeDefinition): PanelDefinition | undefined {
+    const panels = panelsIn(theme.id)
+    const stored = rememberedPanel(theme.id)
+    return panels.find((panel) => panel.id === stored) ?? panels[0]
   }
 
   /**
-   * One panel and nothing else, for its own browser window.
+   * Keeps the routed theme's page in the host, creating it on first visit and
+   * reusing the cached one afterwards.
    *
-   * The shell still owns the session, so this view is behind the same gate:
-   * a pop-out is not a way to skip the login, and a session that expires there
-   * takes the operator back to the login screen like any other tab.
+   * Called from `updated` rather than `render` because the host is a DOM node
+   * Lit owns, while the theme page (and its tab panel) must survive updates.
    */
-  private renderStandalone(id: string) {
-    const panel = findPanel(id)
-    if (!panel) {
-      return html`<p class="unknown" role="alert">${msg('No such panel.')}</p>`
-    }
-    return html`
-      <div class="standalone">
-        <h1 class="panel-title">${panel.title()}</h1>
-        ${this.renderFeature(panel)}
-      </div>
-    `
-  }
+  private readonly syncThemePage = (): void => {
+    if (this.route.kind !== 'panel') return
+    const panel = findPanel(this.route.panel)
+    const theme = panel ? findTheme(panel.theme) : undefined
+    if (!panel || !theme) return
 
-  /** Opens the routed panel when navigation lands on it.
-   *
-   * Called from every update, not only a `route` change. The first render is
-   * the `Loading…` branch, so the desktop does not exist yet when a deep link
-   * arrives; the route only becomes openable once the session read renders the
-   * shell. `syncedRoute` keeps the call idempotent, because `open()` on an
-   * existing window raises it.
-   */
-  private readonly syncRouteWindow = (): void => {
-    if (this.route.kind !== 'panel') {
-      this.syncedRoute = ''
-      return
-    }
-    if (!this.desktop || this.syncedRoute === this.route.panel) return
-    this.desktop.open(this.route.panel)
-    this.syncedRoute = this.route.panel
-  }
-
-  /** Opens the panel an operator picked from the toolbar, in its own window. */
-  private readonly onOpenPanel = (event: Event): void => {
-    const select = event.target as HTMLSelectElement
-    const id = select.value
-    select.value = ''
-    if (id) this.desktop?.open(id)
-  }
-
-  /**
-   * Opens the panel in its own browser window.
-   *
-   * `noopener` cannot go in the feature string: the specification says a
-   * window opened with it has no opener, and `open` therefore returns `null`
-   * even when the pop-up succeeded. Treating that `null` as "blocked" is what
-   * used to open a duplicate in-page window, and with it a second stream
-   * against the same daemon. The opener is severed on the returned handle
-   * instead, which happens before the new document runs any script.
-   *
-   * A blocked popup still falls back to the in-page window, since the click
-   * otherwise looks ignored.
-   */
-  private popOut(id: string): void {
-    const url = windowUrl(id)
-    const opened = globalThis.open?.(url, `anth-window-${id}`, 'popup')
-    if (opened) {
-      opened.opener = null
-      return
-    }
-    this.desktop?.open(id)
-  }
-
-  private renderFeature(panel: PanelDefinition) {
-    return html`<div
-      class="panel-host"
-      data-panel=${panel.id}
-    ></div>`
-  }
-
-  /**
-   * Mounts the feature element after the route's markup exists.
-   *
-   * A custom element tag name is data, not markup, so `lit-html` cannot bind
-   * it. The host `div` is declared in the template and the element is appended
-   * here, which also means the element is rebuilt only when the panel changes:
-   * a locale switch re-renders the labels without dropping the live session.
-   */
-  protected override updated(changed: PropertyValues): void {
-    // Not gated on `route`: a deep link arrives with the route already set and
-    // the desktop only exists after the session read renders the shell.
-    this.syncRouteWindow()
-
-    if (!changed.has('route')) return
-
-    // A panel route hands mounting to `anth-desktop`, which keeps one element
-    // per window and detaches a minimized one. Only the standalone view has a
-    // host the shell owns, so only that route mounts here.
-    const id = this.route.kind === 'window' ? this.route.panel : undefined
-    if (id === this.mountedPanel) return
-    this.mountedPanel = id
-
-    const host = this.renderRoot.querySelector<HTMLElement>('.panel-host')
+    const host = this.renderRoot.querySelector<HTMLElement>('.theme-host')
     if (!host) return
-    host.replaceChildren()
 
-    const panel = id ? findPanel(id) : undefined
-    if (panel) host.append(this.createFeatureElement(panel))
+    rememberPanel(theme.id, panel.id)
+
+    let page = this.themePages.get(theme.id)
+    if (!page) {
+      page = document.createElement('anth-theme-page') as AnthThemePage
+      page.theme = theme
+      page.panels = panelsIn(theme.id)
+      page.createPanel = (entry) => this.createFeatureElement(entry)
+      page.addEventListener(ANTH_PANEL_SELECT_EVENT, this.onPanelSelect)
+      this.themePages.set(theme.id, page)
+    }
+
+    page.active = panel.id
+    if (host.firstElementChild !== page) host.replaceChildren(page)
+  }
+
+  /** A tab click becomes a hash, keeping the address bar the source of truth. */
+  private readonly onPanelSelect = (event: Event): void => {
+    const panel = (event as CustomEvent<{ panel?: string }>).detail?.panel
+    if (!panel) return
+
+    const entry = findPanel(panel)
+    const theme = entry ? findTheme(entry.theme) : undefined
+    if (theme) rememberPanel(theme.id, panel)
+
+    if (this.route.kind === 'panel' && this.route.panel === panel) return
+    globalThis.location.hash = panelHash(panel)
+  }
+
+  private readonly skipToMain = (event: Event): void => {
+    event.preventDefault()
+    this.renderRoot.querySelector<HTMLElement>('main')?.focus()
+  }
+
+  protected override updated(changed: PropertyValues): void {
+    if (changed.has('route')) this.drawerOpen = false
+    this.syncThemePage()
   }
 
   private createFeatureElement(panel: PanelDefinition): HTMLElement {
@@ -643,6 +922,11 @@ export class AnthApp extends LitElement {
     const locale = (event.target as HTMLSelectElement).value as PanelLocale
     await changeLocale(locale)
     this.locale = currentLocale()
+    // Theme titles and tab labels are captured when a tab panel is built.
+    // Dropping the cache rebuilds them from the new locale; the route and the
+    // active panel id decide which tab is shown again.
+    this.themePages.clear()
+    this.requestUpdate()
   }
 }
 

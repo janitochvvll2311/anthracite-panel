@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import './anth-process-table'
 import './anth-modal'
 import type { AnthProcessSelectDetail, ProcessView } from './anth-process-table'
@@ -653,6 +654,19 @@ export class AnthProcessManager extends LitElement {
             </div>
           </form>
         </anth-modal>
+
+        ${this.spawnEnabled
+          ? html`
+              <anth-fab
+                icon="＋"
+                label="Start process"
+                ?disabled=${!this.client ||
+                this.spawnBlocked !== undefined ||
+                this.spawning}
+                @click=${this.openSpawn}
+              ></anth-fab>
+            `
+          : nothing}
       </section>
     `
   }

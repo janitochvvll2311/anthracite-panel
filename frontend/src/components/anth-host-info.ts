@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import type {
   HostInfo,
   HostInfoClient,
@@ -374,6 +375,12 @@ export class AnthHostInfo extends LitElement {
           ? html`<div class="error" role="alert">${this.errorMessage}</div>`
           : nothing}
         ${this.renderOverview()}
+        <anth-fab
+          icon="↻"
+          label="Refresh now"
+          ?disabled=${this.loading}
+          @click=${this.refresh}
+        ></anth-fab>
       </section>
     `
   }

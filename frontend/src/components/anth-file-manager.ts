@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import type { FileClient, FileEntry, FileListing } from '../lib/files/file-client'
 import {
   breadcrumbs,
@@ -364,6 +365,11 @@ export class AnthFileManager extends LitElement {
     )
   }
 
+  /** The portrait FAB opens the same file picker the toolbar Upload label uses. */
+  private readonly triggerUpload = (): void => {
+    this.renderRoot.querySelector<HTMLInputElement>('input[type="file"]')?.click()
+  }
+
   private async onUpload(event: Event): Promise<void> {
     const input = event.currentTarget as HTMLInputElement
     const file = input.files?.[0]
@@ -593,6 +599,17 @@ export class AnthFileManager extends LitElement {
               : this.renderPreview()}
           </aside>
         </div>
+
+        ${writable
+          ? html`
+              <anth-fab
+                icon="↑"
+                label="Upload"
+                ?disabled=${this.busy}
+                @click=${this.triggerUpload}
+              ></anth-fab>
+            `
+          : nothing}
       </section>
     `
   }

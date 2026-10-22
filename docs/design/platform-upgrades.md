@@ -262,11 +262,12 @@ What changed:
 - Unknown paths under `/api` answer `404 {"error": ...}` instead of the SPA's
   `index.html`, so a route typo fails at the status code instead of at the JSON
   parse.
-- The frontend has an app shell: `src/app/anth-app.ts` (header, home page of
+- The frontend got its app shell: `src/app/anth-app.ts` (header, home page of
   cards, panel host, language selector), `src/app/panels.ts` (the registry the
   shell renders), `src/app/router.ts` (pure hash routing) and `src/app/i18n.ts`
-  (idempotent `lit-localize` runtime configuration). `index.html` now mounts the
-  shell; the Vite scaffold component is gone.
+  (idempotent `lit-localize` runtime configuration). `index.html` mounts the
+  shell; the Vite scaffold component is gone. The later tab-based layout is
+  described in [app-shell.md](app-shell.md).
 - The shell injects clients through a `clientFactory` property, so tests mount
   every panel against the existing fake clients and no test opens a socket.
 - `lit-localize` is wired: `bun run i18n:extract` writes `frontend/xliff/es.xlf`
@@ -489,6 +490,11 @@ What changed:
 - The deep-link case needed `firstUpdated`. A page loaded directly at
   `#/panel/<id>` arrives with the route already parsed, so no `route` change
   ever fires; without the first-render call the arrangement came back empty.
+
+> Superseded by the tab-based shell in [app-shell.md](app-shell.md): the shell
+> no longer renders `anth-desktop`, and `#/window/<id>` is an unknown page. The
+> component, route parser and tests remain in the tree as utilities for a
+> future window mode.
 
 Verification: 402 frontend tests, `tsc --noEmit`, `vite build`, and the
 `anth-desktop.test.html` harness in a real browser: open, drag, resize, minimize

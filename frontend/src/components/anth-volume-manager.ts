@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import type {
   VolumeClient,
   VolumeDevice,
@@ -580,6 +581,12 @@ export class AnthVolumeManager extends LitElement {
             </p>`}
 
         ${this.renderDevices()} ${this.renderMounts()}
+        <anth-fab
+          icon="↻"
+          label="Refresh"
+          ?disabled=${!this.client || this.loading || this.busy}
+          @click=${this.refresh}
+        ></anth-fab>
       </section>
     `
   }

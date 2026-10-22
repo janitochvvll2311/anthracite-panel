@@ -1,0 +1,85 @@
+<!doctype html>
+<!--
+  Dev-only harness for the portrait navigation drawer.
+
+  Open http://localhost:5173/src/components/anth-nav-drawer.test.html with
+  `bun run dev`. The drawer is hidden by CSS in landscape; use a portrait
+  viewport.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel navigation drawer."
+    />
+    <title>anth-nav-drawer · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-nav-drawer" width="900px">
+      <p slot="description">
+        A native <code>&lt;dialog&gt;</code> sliding in from the left. The
+        platform supplies the top layer, focus trap, Escape handling and focus
+        restoration. The shell owns <code>open</code> and closes the drawer in
+        response to <code>anth-drawer-close</code>.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Use a portrait viewport; landscape intentionally hides it.</li>
+            <li>Open the drawer, then press Escape or click the backdrop.</li>
+            <li>Click a link; the drawer reports the reason and closes.</li>
+            <li>Check that focus returns to the trigger after closing.</li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li><code>bun run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open <code>/src/components/anth-nav-drawer.test.html</code> on the
+              Vite port.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="harness-controls">
+        <button type="button" id="open">Open navigation</button>
+      </section>
+
+      <p id="result">No event yet.</p>
+
+      <anth-nav-drawer id="drawer">
+        <nav aria-label="Themes">
+          <a href="#/panel/host-info">Home</a>
+          <a href="#/panel/processes">System</a>
+          <a href="#/panel/files">Data</a>
+          <a href="#/panel/network">Network</a>
+          <a href="#/panel/accounts">Access</a>
+          <a href="#/panel/plugins">Extras</a>
+        </nav>
+      </anth-nav-drawer>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-nav-drawer.ts'
+
+      const drawer = document.querySelector('#drawer')
+      const result = document.querySelector('#result')
+
+      document.querySelector('#open').addEventListener('click', () => {
+        drawer.open = true
+      })
+      drawer.addEventListener('anth-drawer-close', (event) => {
+        result.textContent = `Closed by ${event.detail.reason}.`
+        drawer.open = false
+      })
+    </script>
+  </body>
+</html>

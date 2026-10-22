@@ -1,0 +1,106 @@
+<!doctype html>
+<!--
+  Dev-only harness for the per-theme tab page.
+
+  Run `bun run dev` and open
+  http://localhost:5173/src/components/anth-theme-page.test.html. Vite's
+  build input is only index.html, so this file never reaches dist/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Dev harness for the Anthracite Panel theme page and its tabs."
+    />
+    <title>anth-theme-page · test harness</title>
+    <link rel="stylesheet" href="/src/harness/harness.css" />
+  </head>
+  <body>
+    <anth-harness heading="anth-theme-page" width="1200px">
+      <p slot="description">
+        One theme and the tab strip of its panels. The shell caches one of these
+        per theme; the hidden tabs are detached by
+        <code>anth-tab-panel</code>, so switching back resumes where it left
+        off instead of keeping a second stream open.
+      </p>
+
+      <section class="harness-notes" aria-label="Harness notes">
+        <article class="harness-note">
+          <h2>Try it</h2>
+          <ul>
+            <li>Switch themes and panels to see the tab strip change.</li>
+            <li>
+              Notice that a hidden tab is removed from the DOM, not merely
+              hidden.
+            </li>
+            <li>
+              Open the browser inspector and check that a cached page keeps its
+              element while another theme is shown.
+            </li>
+          </ul>
+        </article>
+        <article class="harness-note">
+          <h2>Run it</h2>
+          <ul>
+            <li>
+              <code>cargo run -p anth-panel -- run</code> from
+              <code>backend/</code>.
+            </li>
+            <li><code>bun run dev</code> from <code>frontend/</code>.</li>
+            <li>
+              Open <code>/src/components/anth-theme-page.test.html</code> on the
+              Vite port.
+            </li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="harness-controls">
+        <label>
+          <span>Theme</span>
+          <select id="theme"></select>
+        </label>
+      </section>
+
+      <div id="host"></div>
+    </anth-harness>
+
+    <script type="module">
+      import '/src/harness/anth-harness.ts'
+      import '/src/components/anth-theme-page.ts'
+      import { THEMES, panelsIn } from '/src/app/panels.ts'
+
+      const host = document.querySelector('#host')
+      const select = document.querySelector('#theme')
+
+      function show(themeId) {
+        const theme = THEMES.find((entry) => entry.id === themeId) ?? THEMES[0]
+        const panels = panelsIn(theme.id)
+        const page = document.createElement('anth-theme-page')
+        page.theme = theme
+        page.panels = panels
+        page.active = panels[0]?.id ?? ''
+        page.createPanel = (panel) => {
+          const element = document.createElement(panel.element)
+          const client = panel.createClient?.()
+          if (client !== undefined) {
+            element[panel.clientProperty ?? 'client'] = client
+          }
+          return element
+        }
+        host.replaceChildren(page)
+      }
+
+      for (const theme of THEMES) {
+        const option = document.createElement('option')
+        option.value = theme.id
+        option.textContent = theme.title()
+        select.append(option)
+      }
+      select.addEventListener('change', () => show(select.value))
+      show(THEMES[0].id)
+    </script>
+  </body>
+</html>

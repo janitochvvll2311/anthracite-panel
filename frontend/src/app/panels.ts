@@ -2,9 +2,9 @@
  * The panel registry: one entry per feature the shell can open.
  *
  * A panel entry names the custom element, the client it needs and the text it
- * shows. The shell never imports a component directly, so a feature can be
- * added without touching the shell, and a later window manager can render the
- * same entry inside a floating window.
+ * shows, and the theme it belongs to. The shell never imports a component
+ * directly, so a feature can be added without touching the shell, and the
+ * sidebar and tab strip are both derived from this list.
  */
 
 import type { AccountClient } from '../lib/accounts/account-client'
@@ -38,9 +38,74 @@ import '../components/anth-process-manager'
 import '../components/anth-terminal'
 import '../components/anth-volume-manager'
 
+/** The stable id of one sidebar group. */
+export type ThemeId =
+  | 'system'
+  | 'storage'
+  | 'network'
+  | 'access'
+  | 'extensions'
+
+export interface ThemeDefinition {
+  id: ThemeId
+  icon: string
+  title: () => string
+  /** Compact label for the portrait drawer, where full titles do not fit. */
+  shortTitle: () => string
+  description: () => string
+}
+
+/**
+ * Sidebar groups, in display order.
+ *
+ * A theme owns the page, its tab strip and the panels listed in
+ * `panelsIn(theme.id)`. `Home` is not a theme; the shell renders it separately
+ * at `#/`.
+ */
+export const THEMES: ThemeDefinition[] = [
+  {
+    id: 'system',
+    icon: '🖥️',
+    title: () => msg('System'),
+    shortTitle: () => msg('System'),
+    description: () => msg('Host identity, load average and running processes.'),
+  },
+  {
+    id: 'storage',
+    icon: '💾',
+    title: () => msg('Storage'),
+    shortTitle: () => msg('Data'),
+    description: () => msg('Files on disk and block devices with their mounts.'),
+  },
+  {
+    id: 'network',
+    icon: '🌐',
+    title: () => msg('Network'),
+    shortTitle: () => msg('Network'),
+    description: () =>
+      msg('Interfaces, addresses, traffic and firewall rules.'),
+  },
+  {
+    id: 'access',
+    icon: '👤',
+    title: () => msg('Access'),
+    shortTitle: () => msg('Access'),
+    description: () => msg('Local users and groups, locks and passwords.'),
+  },
+  {
+    id: 'extensions',
+    icon: '🧩',
+    title: () => msg('Extensions'),
+    shortTitle: () => msg('Extras'),
+    description: () => msg('Plugin bundles and interactive terminals.'),
+  },
+]
+
 export interface PanelDefinition {
-  /** Stable id used in the route and, later, in a window title. */
+  /** Stable id used in the route and in the tab strip. */
   id: string
+  /** Sidebar group that owns this panel. */
+  theme: ThemeId
   /** Custom element tag the shell appends. */
   element: string
   icon: string
@@ -55,7 +120,7 @@ export interface PanelDefinition {
 }
 
 /**
- * Panels shown on the home page, in order.
+ * Panels shown in the shell, grouped by theme and in tab order.
  *
  * The terminal is the exception: it uses a transport rather than a JSON client
  * and opens a WebSocket, so its factory builds the transport.
@@ -63,6 +128,7 @@ export interface PanelDefinition {
 export const PANELS: PanelDefinition[] = [
   {
     id: 'host-info',
+    theme: 'system',
     element: 'anth-host-info',
     icon: '🖥️',
     title: () => msg('Host info'),
@@ -72,6 +138,7 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'processes',
+    theme: 'system',
     element: 'anth-process-manager',
     icon: '⚙️',
     title: () => msg('Processes'),
@@ -81,6 +148,7 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'files',
+    theme: 'storage',
     element: 'anth-file-manager',
     icon: '📁',
     title: () => msg('Files'),
@@ -89,7 +157,17 @@ export const PANELS: PanelDefinition[] = [
     createClient: () => new HttpFileClient({ fetchImpl: currentApiFetch() }),
   },
   {
+    id: 'volumes',
+    theme: 'storage',
+    element: 'anth-volume-manager',
+    icon: '💾',
+    title: () => msg('Storage'),
+    description: () => msg('Block devices, mounts, mounting and unmounting.'),
+    createClient: () => new HttpVolumeClient({ fetchImpl: currentApiFetch() }),
+  },
+  {
     id: 'network',
+    theme: 'network',
     element: 'anth-network-manager',
     icon: '🌐',
     title: () => msg('Network'),
@@ -98,6 +176,7 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'firewall',
+    theme: 'network',
     element: 'anth-firewall',
     icon: '🛡️',
     title: () => msg('Firewall'),
@@ -105,15 +184,8 @@ export const PANELS: PanelDefinition[] = [
     createClient: () => new HttpFirewallClient({ fetchImpl: currentApiFetch() }),
   },
   {
-    id: 'volumes',
-    element: 'anth-volume-manager',
-    icon: '💾',
-    title: () => msg('Storage'),
-    description: () => msg('Block devices, mounts, mounting and unmounting.'),
-    createClient: () => new HttpVolumeClient({ fetchImpl: currentApiFetch() }),
-  },
-  {
     id: 'accounts',
+    theme: 'access',
     element: 'anth-account-manager',
     icon: '👤',
     title: () => msg('Accounts'),
@@ -122,6 +194,7 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'plugins',
+    theme: 'extensions',
     element: 'anth-plugin-manager',
     icon: '🧩',
     title: () => msg('Plugins'),
@@ -131,6 +204,7 @@ export const PANELS: PanelDefinition[] = [
   },
   {
     id: 'terminal',
+    theme: 'extensions',
     element: 'anth-terminal',
     icon: '⌨️',
     title: () => msg('Terminal'),
@@ -154,6 +228,21 @@ function terminalUrl(): string {
 
 export function findPanel(id: string): PanelDefinition | undefined {
   return PANELS.find((panel) => panel.id === id)
+}
+
+export function findTheme(id: ThemeId): ThemeDefinition | undefined {
+  return THEMES.find((theme) => theme.id === id)
+}
+
+/** Panels owned by a theme, in registry (tab) order. */
+export function panelsIn(id: ThemeId): PanelDefinition[] {
+  return PANELS.filter((panel) => panel.theme === id)
+}
+
+/** The theme that owns a panel, or `undefined` for an unknown id. */
+export function themeForPanel(id: string): ThemeDefinition | undefined {
+  const panel = findPanel(id)
+  return panel ? findTheme(panel.theme) : undefined
 }
 
 export type { AccountClient, FileClient, FirewallClient, HostInfoClient }

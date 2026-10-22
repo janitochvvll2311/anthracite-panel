@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import type { PropertyValues } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import './anth-fab'
 import type {
   PluginClient,
   PluginInstallResult,
@@ -86,6 +87,11 @@ export class AnthPluginManager extends LitElement {
       return 'Browser installation is disabled by [plugins] install_from_web.'
     }
     return ''
+  }
+
+  /** The portrait FAB opens the same zip picker the install form uses. */
+  private readonly triggerInstall = (): void => {
+    this.renderRoot.querySelector<HTMLInputElement>('input[type="file"]')?.click()
   }
 
   private onFileChange(event: Event): void {
@@ -252,6 +258,17 @@ export class AnthPluginManager extends LitElement {
             )}
           </ul>
         </section>
+
+        ${this.canInstall
+          ? html`
+              <anth-fab
+                icon="＋"
+                label="Install plugin"
+                ?disabled=${this.busy}
+                @click=${this.triggerInstall}
+              ></anth-fab>
+            `
+          : nothing}
       </section>
     `
   }
