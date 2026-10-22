@@ -1646,6 +1646,35 @@ fn config_with_volume_control(path: &std::path::Path, control: bool) -> Config {
     config
 }
 
+fn partition_snapshot(disk: &str) -> anth_proto::PartitionSnapshot {
+    anth_proto::PartitionSnapshot {
+        disk: disk.to_string(),
+        partitions: vec![anth_proto::PartitionEntry {
+            number: 1,
+            path: format!("{disk}1"),
+            size_bytes: 1024 * 1024,
+            fstype: Some("ext4".to_string()),
+            mountpoints: Vec::new(),
+        }],
+        control_enabled: true,
+        format_enabled: false,
+        allowed_disks: vec![disk.to_string()],
+        format_types: anth_panel::volumes::FORMAT_TYPES
+            .iter()
+            .map(|kind| kind.to_string())
+            .collect(),
+        warning: None,
+    }
+}
+
+fn config_with_partition_control(path: &std::path::Path, disk_allow: &[&str]) -> Config {
+    let mut config = config_at(path);
+    config.volumes.control = true;
+    config.volumes.partition = true;
+    config.volumes.disk_allow = disk_allow.iter().map(|disk| disk.to_string()).collect();
+    config
+}
+
 fn spawn_volume_server(path: &std::path::Path) -> tokio::task::JoinHandle<()> {
     let listener = tokio::net::UnixListener::bind(path).unwrap();
     tokio::spawn(async move {
@@ -1663,6 +1692,35 @@ fn spawn_volume_server(path: &std::path::Path) -> tokio::task::JoinHandle<()> {
                             format!("{target} is busy"),
                         ))
                     }
+                    Request::PartitionList { disk } => {
+                        Response::PartitionSnapshot(partition_snapshot(&disk))
+                    }
+                    Request::PartitionCreate { args } => {
+                        if args.disk == "/dev/sda" {
+                            Response::PartitionError(anth_proto::PartitionError::new(
+                                anth_proto::VolumeErrorKind::Protected,
+                                "`/dev/sda` is not in `[volumes] disk_allow`",
+                            ))
+                        } else {
+                            Response::PartitionChanged {
+                                message: format!(
+                                    "created a partition of {} bytes on {}",
+                                    args.size_bytes, args.disk
+                                ),
+                            }
+                        }
+                    }
+                    Request::PartitionEdit { action } => match action {
+                        anth_proto::PartitionTableAction::Format { .. } => {
+                            Response::PartitionError(anth_proto::PartitionError::new(
+                                anth_proto::VolumeErrorKind::Disabled,
+                                "`mkfs` is disabled",
+                            ))
+                        }
+                        other => Response::PartitionChanged {
+                            message: format!("applied {other:?}"),
+                        },
+                    },
                     other => Response::Error {
                         detail: format!("unexpected request: {other:?}"),
                     },
@@ -2405,4 +2463,226 @@ async fn plugins_route_reports_a_directory_without_a_grant() {
     assert!(problems[0].as_str().unwrap().contains("org.anth.orphan"));
 
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[tokio::test]
+async fn partitions_route_returns_the_disk_table() {
+    let path = unique_socket("partitions-list");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_volume_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_partition_control(
+        &path,
+        &["/dev/sdb"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("GET")
+                .uri("/api/volumes/partitions?disk=/dev/sdb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["disk"], "/dev/sdb");
+    assert_eq!(value["partitions"][0]["number"], 1);
+    assert_eq!(value["partitions"][0]["path"], "/dev/sdb1");
+    assert_eq!(value["format_enabled"], false);
+    assert!(value.get("type").is_none(), "no tag envelope: {value}");
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn partitions_route_requires_control_to_be_enabled() {
+    let path = unique_socket("partitions-disabled");
+    let _ = std::fs::remove_file(&path);
+
+    let mut config = config_at(&path);
+    config.volumes.partition = false;
+    let app = anth_panel::router(AppState::new(config));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/partitions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"disk":"/dev/sdb","kind":"linux","start_bytes":0,"size_bytes":1048576}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "partition edits are disabled");
+}
+
+#[tokio::test]
+async fn creating_a_partition_returns_the_daemon_message() {
+    let path = unique_socket("partitions-create");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_volume_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_partition_control(
+        &path,
+        &["/dev/sdb"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/partitions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"disk":"/dev/sdb","kind":"linux","start_bytes":0,"size_bytes":1048576}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        value["message"],
+        "created a partition of 1048576 bytes on /dev/sdb"
+    );
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn a_protected_disk_maps_to_forbidden() {
+    let path = unique_socket("partitions-protected");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_volume_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_partition_control(
+        &path,
+        &["/dev/sdb"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/partitions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"disk":"/dev/sda","kind":"linux","start_bytes":0,"size_bytes":1048576}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["error"].as_str().unwrap().contains("disk_allow"));
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn a_format_is_refused_by_its_own_guard_before_the_daemon_is_asked() {
+    let path = unique_socket("partitions-format-guard");
+    let _ = std::fs::remove_file(&path);
+
+    // The fake daemon would answer `Disabled`; the route must not get that far
+    // when `[volumes] format` is off, because a client needs the switch name.
+    let app = anth_panel::router(AppState::new(config_with_partition_control(
+        &path,
+        &["/dev/sdb"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/partitions/edit")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"action":"format","partition":"/dev/sdb1","fs_type":"ext4"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["error"], "`mkfs` is disabled");
+}
+
+#[tokio::test]
+async fn resizing_a_partition_needs_no_format_switch() {
+    let path = unique_socket("partitions-resize");
+    let _ = std::fs::remove_file(&path);
+    let server = spawn_volume_server(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_partition_control(
+        &path,
+        &["/dev/sdb"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/partitions/edit")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"action":"resize","disk":"/dev/sdb","number":1,"size_bytes":2097152}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["message"].as_str().unwrap().contains("Resize"));
+
+    server.abort();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn an_unknown_partition_action_is_a_bad_request() {
+    let path = unique_socket("partitions-bad-action");
+    let _ = std::fs::remove_file(&path);
+
+    let app = anth_panel::router(AppState::new(config_with_partition_control(
+        &path,
+        &["/dev/sdb"],
+    )));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/volumes/partitions/edit")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"action":"shred","disk":"/dev/sdb"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(value["error"].is_string());
 }

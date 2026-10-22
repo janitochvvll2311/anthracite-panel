@@ -31,6 +31,25 @@ pub(crate) async fn require_volume_control(state: &AppState) -> Result<(), ApiEr
     }
 }
 
+pub(crate) async fn require_volume_partition(state: &AppState) -> Result<(), ApiError> {
+    if state.config().await.volumes.partition {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "partition edits are disabled",
+        ))
+    }
+}
+
+pub(crate) async fn require_volume_format(state: &AppState) -> Result<(), ApiError> {
+    if state.config().await.volumes.format {
+        Ok(())
+    } else {
+        Err(ApiError::new(StatusCode::FORBIDDEN, "`mkfs` is disabled"))
+    }
+}
+
 pub(crate) async fn require_network_manage(state: &AppState) -> Result<(), ApiError> {
     if state.config().await.network.manage {
         Ok(())

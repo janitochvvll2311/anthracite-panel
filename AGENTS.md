@@ -532,8 +532,27 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   argument vector, never a shell; stderr text is classified into
   `VolumeErrorKind`. `fit_snapshot` mirrors `process.rs`: it drops diagnostic
   fields first, then device and mount tails, setting `total`, `truncated` and
-  `warning`. Partitioning and `mkfs` are out of scope. Both mutations run on a
-  blocking worker.
+  `warning`. Both mutations run on a blocking worker.
+- **Partitions**: `volumes/partition.rs` owns partition planning; it holds the
+  guards, so they are testable without a disk. Three separate switches:
+  `[volumes] partition` (table edits), `[volumes] format` (`mkfs`) and
+  `[volumes] disk_allow`, which is the authority — an **empty allowlist denies
+  every disk**, so enabling `partition` alone changes nothing. Guards run
+  against a fresh snapshot: the path must be free of `.`/`..`/empty segments
+  (`Path::components()` normalises those away, so the raw segments are checked
+  too), the device must be a whole disk, it must match `disk_allow` by exact
+  path, and it must not carry `/`, a protected path or **any** mounted
+  partition. The mount check compares the mount's source device name, never a
+  string prefix of the disk path, so `/dev/sdaa` cannot be read as `/dev/sda`.
+  Sizes are integers, so they cannot reach a shell; the plan is an argv plus an
+  optional script on **stdin** (`sfdisk --no-reread <disk>` with
+  `size=<sectors>,type=<kind>`, `delete <n>`, `<n>,size=<sectors>`). `mkfs`
+  derives from an allowlist (`FORMAT_TYPES`), so an unlisted type names no
+  binary, and labels are restricted to a conservative character set. A mounted
+  disk or partition is refused, not forced. `PartitionList` needs only
+  `[volumes] control`, because reading a table changes nothing.
+  `tests/partitions.rs` asserts the exact argv and which guard fires first
+  against a fake runner.
 - **Frontend volume manager**: `anth-volume-manager` renders the device tree and
   the mount table through an injected `VolumeClient`
   (`lib/volumes/volume-client.ts`), with `lib/volumes/display.ts` owning the

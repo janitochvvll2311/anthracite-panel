@@ -463,6 +463,107 @@ pub enum VolumeCommand {
     /// Unmount a mounted directory.
     #[command(alias = "umount")]
     Unmount(VolumeUnmountArgs),
+    /// Show one disk's partition table.
+    Partitions(VolumePartitionsArgs),
+    /// Create, resize, delete or format a partition.
+    #[command(subcommand)]
+    Partition(PartitionCommand),
+}
+
+#[derive(Args, Debug)]
+pub struct VolumePartitionsArgs {
+    #[arg(value_name = "DISK", help = "Whole disk path, e.g. /dev/sdb")]
+    pub disk: String,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PartitionCommand {
+    /// Create a partition on an allowlisted disk.
+    Create(PartitionCreateCli),
+    /// Change the size of an existing partition.
+    Resize(PartitionResizeCli),
+    /// Delete a partition from the table.
+    Delete(PartitionDeleteCli),
+    /// Write a filesystem on an existing partition.
+    Format(PartitionFormatCli),
+}
+
+#[derive(Args, Debug)]
+pub struct PartitionCreateCli {
+    #[arg(value_name = "DISK", help = "Whole disk, e.g. /dev/sdb")]
+    pub disk: String,
+
+    #[arg(long, value_name = "BYTES", help = "Size in bytes, a multiple of 512")]
+    pub size: u64,
+
+    #[arg(
+        long,
+        value_name = "KIND",
+        default_value = "linux",
+        help = "Partition kind: linux, swap or efi"
+    )]
+    pub kind: String,
+
+    #[arg(
+        long,
+        value_name = "BYTES",
+        default_value_t = 0,
+        help = "Offset from the start of the disk; 0 lets sfdisk choose"
+    )]
+    pub start: u64,
+
+    #[arg(long, help = "Skip the confirmation prompt")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PartitionResizeCli {
+    #[arg(value_name = "DISK")]
+    pub disk: String,
+
+    #[arg(value_name = "NUMBER", help = "1-based partition number")]
+    pub number: u32,
+
+    #[arg(
+        long,
+        value_name = "BYTES",
+        help = "New size in bytes, a multiple of 512"
+    )]
+    pub size: u64,
+
+    #[arg(long, help = "Skip the confirmation prompt")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PartitionDeleteCli {
+    #[arg(value_name = "DISK")]
+    pub disk: String,
+
+    #[arg(value_name = "NUMBER", help = "1-based partition number")]
+    pub number: u32,
+
+    #[arg(long, help = "Skip the confirmation prompt")]
+    pub yes: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PartitionFormatCli {
+    #[arg(value_name = "PARTITION", help = "Partition path, e.g. /dev/sdb1")]
+    pub partition: String,
+
+    #[arg(
+        long = "type",
+        value_name = "FSTYPE",
+        help = "ext4, xfs, vfat, exfat, btrfs or swap"
+    )]
+    pub fs_type: String,
+
+    #[arg(long, value_name = "LABEL", help = "Filesystem label")]
+    pub label: Option<String>,
+
+    #[arg(long, help = "Skip the confirmation prompt")]
+    pub yes: bool,
 }
 
 #[derive(Args, Debug)]

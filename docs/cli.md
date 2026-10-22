@@ -527,6 +527,59 @@ daemon's socket, config, served root or executable are refused. A busy
 filesystem reports an error; there is no lazy or forced unmount. The command
 asks for confirmation unless `--yes` is given.
 
+#### `volume partitions <DISK>`
+
+```bash
+anth-panel volume partitions /dev/sdb
+```
+
+Prints one disk's partition table: number, device, size, filesystem and
+mountpoints. Needs `[volumes] control = true`; reading a table changes nothing,
+so `disk_allow` does not narrow it. The footer reports whether table edits and
+`mkfs` are enabled and, when edits are on, which disks `disk_allow` names.
+
+#### `volume partition create <DISK> --size <BYTES>`
+
+```bash
+anth-panel volume partition create /dev/sdb --size 1073741824 --kind linux
+```
+
+```text
+Create a linux partition of 1073741824 bytes on `/dev/sdb`? This rewrites the
+partition table. [y/N]
+```
+
+`--kind` is `linux` (default), `swap` or `efi`. `--size` is in bytes and must be
+a non-zero whole number of 512-byte sectors. `--start` pins the offset; `0`
+lets `sfdisk` place the partition. Needs `[volumes] partition = true` and the
+disk in `[volumes] disk_allow`.
+
+#### `volume partition resize <DISK> <NUMBER> --size <BYTES>`
+
+Changes one partition's size. The new size follows the same sector rule as
+`create`.
+
+#### `volume partition delete <DISK> <NUMBER>`
+
+Removes one partition from the table. Confirmed unless `--yes`, like every
+other partition mutation.
+
+#### `volume partition format <PARTITION> --type <FSTYPE>`
+
+```bash
+anth-panel volume partition format /dev/sdb1 --type ext4 --label data
+```
+
+`--type` is `ext4`, `xfs`, `vfat`, `exfat`, `btrfs` or `swap`; an unlisted type
+names no binary and is refused. `--label` is restricted to a conservative
+character set. The target must be a partition of an allowlisted disk and must be
+unmounted. Needs `[volumes] format = true` **in addition to**
+`[volumes] partition = true`: rewriting a table is recoverable, formatting is
+not.
+
+All four mutations exit `1` when the daemon refuses them, and name the reason on
+stderr.
+
 ### `auth`
 
 These edit the config file directly; they do not need a running daemon.

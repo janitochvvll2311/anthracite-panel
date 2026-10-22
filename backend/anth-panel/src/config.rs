@@ -237,6 +237,16 @@ pub struct VolumesConfig {
     /// Mount targets must resolve inside this directory. Empty disables the
     /// check and is the documented escape hatch.
     pub mount_root: String,
+    /// Whether the daemon accepts partition table edits. Off by default: a
+    /// table rewrite is the only operation here that no later request undoes.
+    pub partition: bool,
+    /// Whether `mkfs` is allowed. A second switch on purpose: reshaping a table
+    /// is recoverable while a formatted partition is not.
+    pub format: bool,
+    /// The only disks a partition edit may touch. Empty denies every disk, which
+    /// is the documented deny-all state; the list, not the switch, is the
+    /// authority.
+    pub disk_allow: Vec<String>,
 }
 
 impl Default for VolumesConfig {
@@ -244,6 +254,9 @@ impl Default for VolumesConfig {
         Self {
             control: false,
             mount_root: "/mnt".to_string(),
+            partition: false,
+            format: false,
+            disk_allow: Vec::new(),
         }
     }
 }

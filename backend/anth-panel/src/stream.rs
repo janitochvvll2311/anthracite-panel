@@ -165,6 +165,10 @@ where
                 eprintln!("[ERROR] {}", error.detail);
                 return ExitCode::FAILURE;
             }
+            Some(Ok(Response::PartitionError(error))) => {
+                eprintln!("[ERROR] {}", error.detail);
+                return ExitCode::FAILURE;
+            }
             Some(Ok(Response::ProcessSpawnError(error))) => {
                 eprintln!("[ERROR] {}", error.detail);
                 return ExitCode::FAILURE;

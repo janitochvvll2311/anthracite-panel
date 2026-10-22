@@ -307,3 +307,58 @@ pub fn confirm_volume_unmount(args: &VolumeUnmountArgs) -> Result<bool, String> 
         "refusing to unmount without --yes when stdin is not a terminal",
     )
 }
+
+/// A partition edit destroys data on a device the operator had to name, so the
+/// confirmation repeats the disk and the size rather than asking a yes/no that
+/// reads the same for every command.
+pub fn confirm_partition_create(args: &PartitionCreateCli) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || {
+            format!(
+                "Create a {} partition of {} bytes on `{}`? This rewrites the partition table. [y/N] ",
+                args.kind, args.size, args.disk
+            )
+        },
+        "refusing to create a partition without --yes when stdin is not a terminal",
+    )
+}
+
+pub fn confirm_partition_resize(args: &PartitionResizeCli) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || {
+            format!(
+                "Resize partition {} on `{}` to {} bytes? [y/N] ",
+                args.number, args.disk, args.size
+            )
+        },
+        "refusing to resize a partition without --yes when stdin is not a terminal",
+    )
+}
+
+pub fn confirm_partition_delete(args: &PartitionDeleteCli) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || {
+            format!(
+                "Delete partition {} on `{}`? [y/N] ",
+                args.number, args.disk
+            )
+        },
+        "refusing to delete a partition without --yes when stdin is not a terminal",
+    )
+}
+
+pub fn confirm_partition_format(args: &PartitionFormatCli) -> Result<bool, String> {
+    confirm_action(
+        args.yes,
+        || {
+            format!(
+                "Format `{}` as {}? Everything on it is lost. [y/N] ",
+                args.partition, args.fs_type
+            )
+        },
+        "refusing to format a partition without --yes when stdin is not a terminal",
+    )
+}

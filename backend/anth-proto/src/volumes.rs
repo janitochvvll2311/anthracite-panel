@@ -208,3 +208,106 @@ impl fmt::Display for VolumeError {
 }
 
 impl std::error::Error for VolumeError {}
+
+/// One entry in a disk's partition table, as the panel reports it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartitionEntry {
+    /// 1-based index in the table.
+    pub number: u32,
+    /// Device path, for example `/dev/sda1`.
+    pub path: String,
+    pub size_bytes: u64,
+    /// Filesystem currently on the partition, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fstype: Option<String>,
+    /// Every mountpoint currently using it; empty when unmounted.
+    #[serde(default)]
+    pub mountpoints: Vec<String>,
+}
+
+/// Request body for creating a partition.
+///
+/// Sizes are in bytes so a client never has to know the sector size; the daemon
+/// converts and refuses anything that is not a whole number of sectors.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartitionCreateArgs {
+    /// Whole disk to edit, for example `/dev/sda`. Must be in `disk_allow`.
+    pub disk: String,
+    /// `linux`, `swap` or `efi`.
+    pub kind: String,
+    /// Offset from the start of the disk. `0` lets `sfdisk` choose.
+    #[serde(default)]
+    pub start_bytes: u64,
+    pub size_bytes: u64,
+}
+
+/// Everything that edits a partition table.
+///
+/// One enum rather than three requests keeps the guard sequence in one match:
+/// each arm validates the disk, refuses the protected disk, refuses a busy
+/// table, and only then plans the call.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum PartitionTableAction {
+    Resize {
+        disk: String,
+        number: u32,
+        size_bytes: u64,
+    },
+    Delete {
+        disk: String,
+        number: u32,
+    },
+    /// `mkfs`. Gated by `[volumes] format` on top of `[volumes] control`.
+    Format {
+        partition: String,
+        fs_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+}
+
+/// The partition table of one disk plus the switches that govern edits.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartitionSnapshot {
+    pub disk: String,
+    pub partitions: Vec<PartitionEntry>,
+    /// Whether `[volumes] partition` allows edits.
+    pub control_enabled: bool,
+    /// Whether `[volumes] format` allows `mkfs`.
+    pub format_enabled: bool,
+    /// Disks the operator listed in `disk_allow`. Empty means every edit is
+    /// denied, which is the documented deny-all state.
+    #[serde(default)]
+    pub allowed_disks: Vec<String>,
+    /// Filesystem types `mkfs` may create.
+    #[serde(default)]
+    pub format_types: Vec<String>,
+    /// Notice when the host could not be read completely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// A partition edit that failed, with a machine-readable kind.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PartitionError {
+    pub kind: VolumeErrorKind,
+    pub detail: String,
+}
+
+impl PartitionError {
+    pub fn new(kind: VolumeErrorKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+        }
+    }
+}
+
+impl fmt::Display for PartitionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.kind, self.detail)
+    }
+}
+
+impl std::error::Error for PartitionError {}

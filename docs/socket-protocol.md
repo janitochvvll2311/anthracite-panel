@@ -340,6 +340,40 @@ Reply: `VolumeChanged { message }`, or `VolumeError`.
 Reply: `VolumeChanged { message }`, or `VolumeError`. A busy filesystem reports
 `busy`; there is no lazy or forced unmount.
 
+### `PartitionList`
+
+```json
+{"type":"PartitionList","data":{"disk":"/dev/sdb"}}
+```
+
+Reply: `PartitionSnapshot`, or `PartitionError`. `disk` must name a whole disk.
+The read is available whenever `[volumes] control` is on; `disk_allow` narrows
+mutations only, because reading a table changes nothing.
+
+### `PartitionCreate`
+
+```json
+{"type":"PartitionCreate","data":{"disk":"/dev/sdb","kind":"linux","start_bytes":0,"size_bytes":1073741824}}
+```
+
+Reply: `PartitionChanged { message }`, or `PartitionError`. `kind` is `linux`,
+`swap` or `efi`, and `size_bytes` must be a non-zero whole number of 512-byte
+sectors. Needs `[volumes] partition = true` and the disk in
+`[volumes] disk_allow`.
+
+### `PartitionEdit`
+
+```json
+{"type":"PartitionEdit","data":{"action":"resize","disk":"/dev/sdb","number":1,"size_bytes":2147483648}}
+{"type":"PartitionEdit","data":{"action":"delete","disk":"/dev/sdb","number":1}}
+{"type":"PartitionEdit","data":{"action":"format","partition":"/dev/sdb1","fs_type":"ext4","label":"data"}}
+```
+
+Reply: `PartitionChanged { message }`, or `PartitionError`. The `action` tag
+selects the arm. `format` additionally needs `[volumes] format = true`, and its
+target must be an unmounted partition of an allowlisted disk. `fs_type` is one
+of `ext4`, `xfs`, `vfat`, `exfat`, `btrfs`, `swap`.
+
 ### Filesystem requests
 
 Paths are virtual: `/` is the daemon's `[files] root`. `..` components are
@@ -821,6 +855,43 @@ drops the diagnostic fields first, then the device tail and finally the mount
 tail, sets `truncated` and adds a `warning`. The cap applies to the encoded
 response, envelope included. Mutations validate against the full inventory, so
 truncation never hides a device or mountpoint from a guard.
+
+### `PartitionSnapshot`
+
+Reply to `PartitionList`.
+
+```json
+{"type":"PartitionSnapshot","data":{
+  "disk":"/dev/sdb",
+  "partitions":[{"number":1,"path":"/dev/sdb1","size_bytes":1073741824,
+                 "fstype":"ext4","mountpoints":["/mnt/data"]}],
+  "control_enabled":true,
+  "format_enabled":false,
+  "format_types":["ext4","xfs","vfat","exfat","btrfs","swap"],
+  "allowed_disks":["/dev/sdb"],
+  "warning":null}}
+```
+
+`control_enabled` and `format_enabled` mirror the daemon's switches so a client
+can hide an action instead of offering one certain to fail. `allowed_disks`
+repeats the allowlist for the same reason; it is a hint, never the policy.
+
+### `PartitionChanged`
+
+Successful reply to `PartitionCreate` or `PartitionEdit`.
+
+```json
+{"type":"PartitionChanged","data":{"message":"created a linux partition of 1073741824 bytes on /dev/sdb"}}
+```
+
+### `PartitionError`
+
+A refused or failed partition operation. It carries the same shape and the same
+`kind` values as `VolumeError`, so a client needs one error path for both.
+
+```json
+{"type":"PartitionError","data":{"kind":"protected","detail":"`/dev/sda` is not in `[volumes] disk_allow`"}}
+```
 
 ### `VolumeChanged`
 

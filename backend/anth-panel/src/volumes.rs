@@ -23,6 +23,14 @@ use serde_json::Value;
 
 use crate::command::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 
+mod partition;
+
+pub use partition::{
+    FORMAT_TYPES, PartitionKind, PlannedCall, TableEdit, allowed_disk, create_with, edit_with,
+    execute, partition_number, partitions_on, perform, perform_create, plan_edit, plan_format,
+    refuse_busy_disk, refuse_protected_disk, snapshot_for, validate_device_path,
+};
+
 /// Filesystems with no block device behind them. They are reported but never
 /// unmountable through the panel.
 const VIRTUAL_FILESYSTEMS: &[&str] = &[

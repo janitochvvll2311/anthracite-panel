@@ -2,7 +2,8 @@
 
 use anth_proto::{
     AccountSnapshot, ArchiveListing, FileKind, FileListing, FirewallSnapshot, HostInfo,
-    NetworkSnapshot, ProcessSnapshot, Response, TrashListing, VolumeDevice, VolumeSnapshot,
+    NetworkSnapshot, PartitionSnapshot, ProcessSnapshot, Response, TrashListing, VolumeDevice,
+    VolumeSnapshot,
 };
 
 const TOP_LEFT: char = '┌';
@@ -348,6 +349,45 @@ pub fn render_network_snapshot(snapshot: &NetworkSnapshot) -> String {
 
 /// Renders the storage inventory. Block devices come first as a flat list with
 /// tree indentation, then the mounts as a second table.
+/// One disk's partition table, plus the switches that govern edits.
+///
+/// The switches are printed because a table with no controls is a different
+/// answer from a table the operator may edit, and the CLI has no other place to
+/// learn which one it is looking at.
+pub fn render_partition_snapshot(snapshot: &PartitionSnapshot) -> String {
+    let mut table = Table::new(
+        ["#", "DEVICE", "SIZE", "TYPE", "MOUNTED"]
+            .map(str::to_string)
+            .to_vec(),
+    );
+    for entry in &snapshot.partitions {
+        table.push(vec![
+            entry.number.to_string(),
+            entry.path.clone(),
+            format_bytes(entry.size_bytes),
+            entry.fstype.clone().unwrap_or_else(|| "-".to_string()),
+            if entry.mountpoints.is_empty() {
+                "-".to_string()
+            } else {
+                entry.mountpoints.join(", ")
+            },
+        ]);
+    }
+    let mut rendered = format!("{}\n{}", snapshot.disk, table.render());
+    if !snapshot.control_enabled {
+        rendered.push_str("\npartition edits are disabled");
+    } else if snapshot.allowed_disks.is_empty() {
+        rendered.push_str("\nno disk is listed in `[volumes] disk_allow`");
+    }
+    if !snapshot.format_enabled {
+        rendered.push_str("\nmkfs is disabled");
+    }
+    if let Some(warning) = &snapshot.warning {
+        rendered.push_str(&format!("\n{warning}"));
+    }
+    rendered
+}
+
 pub fn render_volume_snapshot(snapshot: &VolumeSnapshot) -> String {
     let mut devices = Table::new(vec![
         "DEVICE".to_string(),
@@ -643,6 +683,9 @@ pub fn render_response(response: &Response) -> String {
         Response::VolumeSnapshot(snapshot) => render_volume_snapshot(snapshot),
         Response::VolumeChanged { message } => format!("[OK] {message}"),
         Response::VolumeError(error) => format!("[ERROR] {}", error.detail),
+        Response::PartitionSnapshot(snapshot) => render_partition_snapshot(snapshot),
+        Response::PartitionChanged { message } => format!("[OK] {message}"),
+        Response::PartitionError(error) => format!("[ERROR] {}", error.detail),
         Response::FirewallSnapshot(snapshot) => render_firewall_snapshot(snapshot),
         Response::FirewallChanged { message } => format!("[OK] {message}"),
         Response::FirewallError(error) => format!("[ERROR] {}", error.detail),

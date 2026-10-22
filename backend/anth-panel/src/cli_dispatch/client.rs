@@ -342,6 +342,38 @@ pub async fn send_command(config_path: &str, command: &Command) -> Option<ExitCo
         return Some(code);
     }
 
+    if let Command::Volume(VolumeArgs {
+        command: VolumeCommand::Partition(PartitionCommand::Create(args)),
+    }) = command
+        && let Some(code) = gate(confirm_partition_create(args))
+    {
+        return Some(code);
+    }
+
+    if let Command::Volume(VolumeArgs {
+        command: VolumeCommand::Partition(PartitionCommand::Resize(args)),
+    }) = command
+        && let Some(code) = gate(confirm_partition_resize(args))
+    {
+        return Some(code);
+    }
+
+    if let Command::Volume(VolumeArgs {
+        command: VolumeCommand::Partition(PartitionCommand::Delete(args)),
+    }) = command
+        && let Some(code) = gate(confirm_partition_delete(args))
+    {
+        return Some(code);
+    }
+
+    if let Command::Volume(VolumeArgs {
+        command: VolumeCommand::Partition(PartitionCommand::Format(args)),
+    }) = command
+        && let Some(code) = gate(confirm_partition_format(args))
+    {
+        return Some(code);
+    }
+
     if let Command::Firewall(FirewallArgs {
         command: FirewallCommand::Allow(args),
     }) = command

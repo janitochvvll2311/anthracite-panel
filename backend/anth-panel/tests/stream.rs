@@ -169,6 +169,57 @@ async fn follow_returns_failure_for_a_file_error_response() {
 }
 
 #[tokio::test]
+async fn follow_returns_failure_for_a_partition_error_response() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "anth-stream-partition-error-{}-{nanos}.sock",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut server = AnthServer::new(socket);
+        assert!(matches!(
+            server.receive_request().await,
+            Some(Ok(Request::PartitionEdit { .. }))
+        ));
+        server
+            .send_response(&Response::PartitionError(anth_proto::PartitionError::new(
+                anth_proto::VolumeErrorKind::Protected,
+                "`/dev/sda` is not in `[volumes] disk_allow`",
+            )))
+            .await
+            .unwrap();
+    });
+
+    let code = follow(
+        &path,
+        &Request::PartitionEdit {
+            action: anth_proto::PartitionTableAction::Delete {
+                disk: "/dev/sda".to_string(),
+                number: 1,
+            },
+        },
+        None,
+        |_| String::new(),
+    )
+    .await;
+
+    assert_eq!(
+        code,
+        ExitCode::FAILURE,
+        "a refused partition edit must not exit 0"
+    );
+    server.await.unwrap();
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
 async fn follow_returns_failure_for_a_volume_error_response() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

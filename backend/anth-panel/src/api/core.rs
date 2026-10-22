@@ -93,6 +93,11 @@ pub fn router(app: AppState) -> Router {
         .route("/api/volumes", get(get_volumes))
         .route("/api/volumes/mount", post(post_volume_mount))
         .route("/api/volumes/unmount", post(post_volume_unmount))
+        .route(
+            "/api/volumes/partitions",
+            get(get_partitions).post(post_partition_create),
+        )
+        .route("/api/volumes/partitions/edit", post(post_partition_edit))
         .route("/api/files", get(get_files))
         .route("/api/files/content", get(get_file_content))
         .route("/api/files/download", get(download_file))
