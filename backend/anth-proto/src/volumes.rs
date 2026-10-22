@@ -148,6 +148,12 @@ pub struct VolumeSnapshot {
     /// Human-readable notice when the snapshot was shortened or degraded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// Devices backing an active swap area.
+    ///
+    /// Swap is never in `/proc/self/mountinfo`, so the mount list cannot
+    /// answer "is this in use". Kept out of `total`, which counts devices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub swap_devices: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]

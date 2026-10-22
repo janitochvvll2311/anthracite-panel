@@ -28,8 +28,8 @@ mod partition;
 pub use partition::{
     FORMAT_TYPES, PartitionKind, PlannedCall, TableEdit, allowed_disk, create_with, edit_with,
     execute, partition_number, partitions_on, perform, perform_create, plan_delete, plan_edit,
-    plan_format, plan_resize, refuse_busy_disk, refuse_protected_disk, snapshot_for,
-    validate_device_path,
+    plan_format, plan_resize, refuse_busy_disk, refuse_protected_disk,
+    refuse_whole_disk_filesystem, snapshot_for, validate_device_path,
 };
 
 /// Filesystems with no block device behind them. They are reported but never
@@ -73,6 +73,15 @@ pub trait Probe {
     fn lsblk(&self) -> Result<String, VolumeError>;
     fn mountinfo(&self) -> Result<String, VolumeError>;
     fn usage(&self, mountpoint: &str) -> Option<VolumeUsage>;
+
+    /// Device paths of the active swap areas, from `/proc/swaps`.
+    ///
+    /// A swap area is never in `/proc/self/mountinfo`, so a guard that only
+    /// reads mounts cannot see it. `None` means the probe could not tell, and
+    /// callers must treat that as "unknown", never as "nothing is swapped".
+    fn swaps(&self) -> Option<Vec<String>> {
+        None
+    }
 }
 
 pub struct SystemProbe {
@@ -114,6 +123,10 @@ impl Probe for SystemProbe {
     fn mountinfo(&self) -> Result<String, VolumeError> {
         std::fs::read_to_string("/proc/self/mountinfo")
             .map_err(|e| failed(format!("cannot read /proc/self/mountinfo: {e}")))
+    }
+
+    fn swaps(&self) -> Option<Vec<String>> {
+        swaps_from(&std::fs::read_to_string("/proc/swaps").ok()?)
     }
 
     fn usage(&self, mountpoint: &str) -> Option<VolumeUsage> {
@@ -198,6 +211,15 @@ fn collect_unfitted(control_enabled: bool, probe: &dyn Probe) -> (VolumeSnapshot
         }
     };
 
+    // An unreadable `/proc/swaps` is an unknown, not an empty list, and the
+    // warning says so: a guard that silently saw "no swap" would allow a
+    // delete on a live swap area.
+    let mut swap_devices = Vec::new();
+    match probe.swaps() {
+        Some(paths) => swap_devices = paths,
+        None => warnings.push("swap areas unavailable; in-use checks are incomplete".to_string()),
+    }
+
     let mounts = match probe.mountinfo() {
         Ok(text) => {
             let mut mounts = parse_mountinfo(&text);
@@ -220,6 +242,7 @@ fn collect_unfitted(control_enabled: bool, probe: &dyn Probe) -> (VolumeSnapshot
         total: 0,
         truncated: false,
         warning: None,
+        swap_devices,
     };
     (snapshot, warnings)
 }
@@ -377,6 +400,21 @@ fn as_bool(value: &Option<Value>) -> bool {
 
 /// Parses `/proc/self/mountinfo`. Usage is filled in later, so this stays a
 /// pure function over the file contents.
+/// Parses `/proc/swaps` into the device paths that are live swap areas.
+///
+/// The first line is a header. A file-backed swap area is reported by path,
+/// which is why the guard compares whole paths and not just names.
+pub fn swaps_from(text: &str) -> Option<Vec<String>> {
+    let mut paths = Vec::new();
+    for line in text.lines().skip(1) {
+        let mut fields = line.split_whitespace();
+        if let Some(path) = fields.next() {
+            paths.push(path.to_string());
+        }
+    }
+    Some(paths)
+}
+
 pub fn parse_mountinfo(text: &str) -> Vec<VolumeMount> {
     text.lines().filter_map(parse_mountinfo_line).collect()
 }

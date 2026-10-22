@@ -128,6 +128,7 @@ fn snapshot(devices: Vec<VolumeDevice>, mounts: Vec<VolumeMount>) -> VolumeSnaps
         total,
         truncated: false,
         warning: None,
+        swap_devices: Vec::new(),
     }
 }
 
@@ -1037,5 +1038,172 @@ fn a_real_sfdisk_creates_the_first_partition_on_a_blank_disk() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(partition_count(&image, &path), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_whole_disk_filesystem_is_refused() {
+    // A USB stick formatted with mkfs.vfat has no partition table and no
+    // children. Treating that as "blank" writes an MBR over the FAT boot
+    // sector: the filesystem's metadata is gone while blkid still reports it.
+    let mut usb = disk("sdb", "/dev/sdb");
+    usb.fstype = Some("vfat".to_string());
+    let snap = snapshot(vec![usb], Vec::new());
+    let runner = FakeRunner::ok();
+    let error = create_with(
+        &runner,
+        &snap,
+        &PartitionCreateArgs {
+            disk: "/dev/sdb".to_string(),
+            kind: "linux".to_string(),
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, VolumeErrorKind::Busy);
+    assert!(error.detail.contains("vfat"), "{}", error.detail);
+    assert!(error.detail.contains("destroy"), "{}", error.detail);
+    assert!(
+        runner.calls().is_empty(),
+        "the guard must refuse before any call is made"
+    );
+}
+
+#[test]
+fn a_disk_without_a_filesystem_is_still_accepted() {
+    let snap = snapshot(vec![disk("sdb", "/dev/sdb")], Vec::new());
+    let runner = FakeRunner::ok();
+    create_with(
+        &runner,
+        &snap,
+        &PartitionCreateArgs {
+            disk: "/dev/sdb".to_string(),
+            kind: "linux".to_string(),
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+    )
+    .expect("a truly blank disk must still accept a partition");
+    assert_eq!(runner.calls().len(), 1);
+}
+
+#[test]
+fn a_partitioned_disk_with_a_filesystem_is_not_mistaken_for_a_superfloppy() {
+    // lsblk reports the fstype on partitions, not on the parent disk. A disk
+    // whose child carries ext4 must still be editable.
+    let mut parent = disk("sdb", "/dev/sdb");
+    parent.fstype = None;
+    let snap = snapshot(vec![parent, part("sdb1", "/dev/sdb1", "sdb")], Vec::new());
+    let runner = FakeRunner::ok();
+    create_with(
+        &runner,
+        &snap,
+        &PartitionCreateArgs {
+            disk: "/dev/sdb".to_string(),
+            kind: "linux".to_string(),
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+    )
+    .expect("a partitioned disk must stay editable");
+    assert_eq!(
+        runner.calls()[0].1,
+        vec![
+            "--no-reread".to_string(),
+            "--append".to_string(),
+            "/dev/sdb".to_string()
+        ]
+    );
+}
+
+#[test]
+fn an_active_swap_area_is_refused() {
+    // Swap is never in /proc/self/mountinfo, and --no-reread disables sfdisk's
+    // own in-use check, so this guard is the only thing in the way.
+    let mut snap = snapshot(vec![disk("sdb", "/dev/sdb")], Vec::new());
+    snap.swap_devices = vec!["/dev/sdb2".to_string()];
+    let runner = FakeRunner::ok();
+    let error = create_with(
+        &runner,
+        &snap,
+        &PartitionCreateArgs {
+            disk: "/dev/sdb".to_string(),
+            kind: "linux".to_string(),
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        &allowed(&["/dev/sdb"]),
+        &[],
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, VolumeErrorKind::Busy);
+    assert!(error.detail.contains("swap"), "{}", error.detail);
+    assert!(runner.calls().is_empty());
+}
+
+#[test]
+fn a_real_sfdisk_would_destroy_a_whole_disk_filesystem() {
+    // Proves the guard is not defending against an imaginary hazard: writing a
+    // table over a vfat image with no --append really does rewrite sector 0.
+    let path = path_with_sbin();
+    if !have("sfdisk") || !have("mkfs.vfat") {
+        eprintln!("skipping: sfdisk or mkfs.vfat is not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("anth-part-superfloppy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let image = dir.join("usb.img");
+    let file = std::fs::File::create(&image).unwrap();
+    file.set_len(64 * 1024 * 1024).unwrap();
+    drop(file);
+
+    // No `-q`: mkfs.fat rejects it, and a rejected command would make this
+    // test skip itself and assert nothing.
+    let mkfs = std::process::Command::new("mkfs.vfat")
+        .arg(&image)
+        .env("PATH", &path)
+        .output()
+        .expect("mkfs.vfat is on the PATH built above");
+    assert!(
+        mkfs.status.success(),
+        "mkfs.vfat must succeed, or this test proves nothing: {}",
+        String::from_utf8_lossy(&mkfs.stderr)
+    );
+
+    let before = std::fs::read(&image).unwrap()[446..462].to_vec();
+    assert_eq!(before, vec![0u8; 16], "a fresh vfat image has no MBR entry");
+
+    let call = plan_edit(
+        &image.display().to_string(),
+        &TableEdit::Create {
+            kind: PartitionKind::Linux,
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+        false,
+    )
+    .unwrap();
+    let output = run_real(&call, &path);
+    assert!(
+        output.status.success(),
+        "sfdisk reports success while destroying it"
+    );
+
+    let after = std::fs::read(&image).unwrap()[446..462].to_vec();
+    assert_ne!(
+        after, before,
+        "writing a table over a superfloppy must change the MBR area, which is \
+         why the guard exists"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

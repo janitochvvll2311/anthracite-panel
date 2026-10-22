@@ -169,8 +169,7 @@ express a partition selection. Two details are load-bearing:
   deletes the first three — and exits `0`. But `--append` also *fails* on a disk
   with no disklabel at all (`Failed to add #2 partition: Invalid argument`),
   which is the ordinary first use of this feature on a newly attached volume.
-  The daemon passes it only when the snapshot shows a partition on the disk;
-  with none, a fresh table loses nothing.
+  The daemon passes it only when the snapshot shows a partition on the disk.
 - **`-N` on resize, `--delete` on delete.** `<n>,size=` and `delete <n>` are not
   input-format lines; `sfdisk` answers "unsupported command" and exits `1`.
 
@@ -181,7 +180,23 @@ type, so a label the tool would reject never reaches it.
 A filesystem label is restricted to a conservative character set because it is
 passed as an argument to a tool that would otherwise accept option-like text.
 
-The guard reads the **unfitted** snapshot (`collect_for_mutation`), like
+### What the guards refuse
+
+Partition edits resolve the disk, then refuse, in this order:
+
+1. **A protected disk** — `/`, a virtual filesystem, or an ancestor of the
+   socket, config, `files.root` or the executable.
+2. **A whole-disk filesystem.** A USB stick formatted with `mkfs.vfat` and no
+   partition table has no child partitions, so it looks blank. Writing a table
+   puts an MBR over the FAT boot sector: the filesystem is gone, and `blkid`
+   still reports `TYPE=vfat`, so nothing warns the operator. The guard refuses
+   a disk whose own `fstype` is set. `delete` is refused for the same reason.
+3. **An active swap area.** Swap is never in `/proc/self/mountinfo`, and
+   `--no-reread` disables `sfdisk`'s own in-use check, so the mount scan cannot
+   see it. The daemon reads `/proc/swaps` into `swap_devices`; an unreadable
+   table is reported as a warning and treated as unknown, never as "no swap".
+
+The guards read the **unfitted** snapshot (`collect_for_mutation`), like
 `mount`/`umount`. A guard reading the fitted one could pass on a disk whose
 mounted partition had been dropped to fit the line cap.
 

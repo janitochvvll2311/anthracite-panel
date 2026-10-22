@@ -248,6 +248,37 @@ pub fn refuse_busy_disk(
             )));
         }
     }
+    // Swap never appears in `/proc/self/mountinfo`, and `--no-reread` turns off
+    // sfdisk's own in-use check, so this is the only thing standing between a
+    // delete and a live swap area.
+    for swap in &snapshot.swap_devices {
+        if mount_covers(swap.as_str(), disk) {
+            return Err(busy(format!(
+                "`{}` backs an active swap area; swapoff it first",
+                disk.path
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a disk that carries a filesystem of its own ("superfloppy").
+///
+/// A USB stick formatted with `mkfs.vfat` and no partition table has no
+/// children, so `create` would read that as "blank" and write a fresh MBR over
+/// the FAT boot sector, orphaning the filesystem while `blkid` still reports
+/// it. There is no table to preserve here — the filesystem *is* the content.
+pub fn refuse_whole_disk_filesystem(disk: &VolumeDevice) -> Result<(), PartitionError> {
+    if let Some(fstype) = &disk.fstype
+        && !fstype.is_empty()
+        && fstype != "swap"
+    {
+        return Err(busy(format!(
+            "`{}` holds a {fstype} filesystem outside any partition table; \
+             writing a table would destroy it",
+            disk.path
+        )));
+    }
     Ok(())
 }
 
@@ -496,6 +527,7 @@ pub fn edit_with(
         } => {
             let device = allowed_disk(snapshot, allowed_disks, disk)?;
             refuse_protected_disk(snapshot, device, protected_paths)?;
+            refuse_whole_disk_filesystem(device)?;
             refuse_busy_disk(snapshot, device)?;
             let call = plan_resize(&device.path, *number, *size_bytes)?;
             execute(runner, &call)?;
@@ -504,6 +536,7 @@ pub fn edit_with(
         PartitionTableAction::Delete { disk, number } => {
             let device = allowed_disk(snapshot, allowed_disks, disk)?;
             refuse_protected_disk(snapshot, device, protected_paths)?;
+            refuse_whole_disk_filesystem(device)?;
             refuse_busy_disk(snapshot, device)?;
             let call = plan_delete(&device.path, *number)?;
             execute(runner, &call)?;
@@ -615,14 +648,15 @@ pub fn create_with(
 ) -> Result<String, PartitionError> {
     let device = allowed_disk(snapshot, allowed_disks, &args.disk)?;
     refuse_protected_disk(snapshot, device, protected_paths)?;
+    refuse_whole_disk_filesystem(device)?;
     refuse_busy_disk(snapshot, device)?;
 
     let kind = PartitionKind::parse(&args.kind)
         .ok_or_else(|| invalid(format!("`{}` is not a partition kind", args.kind)))?;
     // A child partition is proof of a disklabel. Without one the table may
-    // still exist but empty, and `--append` would fail, so the conservative
-    // choice for an unpartitioned disk is a fresh table — which loses nothing,
-    // because `refuse_busy_disk` already refused a mounted one.
+    // still exist but empty, and `--append` would fail, so a fresh table is
+    // correct — and it loses nothing, because `refuse_whole_disk_filesystem`
+    // and `refuse_busy_disk` already refused a disk with content of its own.
     let has_table = snapshot
         .devices
         .iter()

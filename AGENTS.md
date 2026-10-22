@@ -554,7 +554,11 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   other tools take `-L` up to 32, so the planner picks both from the type.
   Mutations read `volumes::collect_for_mutation`, the unfitted snapshot, like
   `mount`/`umount`: a guard reading the fitted one could pass on a disk whose
-  mounted partition truncation dropped. `mkfs`
+  mounted partition truncation dropped. `refuse_whole_disk_filesystem` refuses
+  a disk whose own `fstype` is set, because a superfloppy has no children and
+  would otherwise look blank while a new MBR overwrites its boot sector. Swap
+  is in `VolumeSnapshot::swap_devices` from `/proc/swaps`, since mountinfo
+  never lists it and `--no-reread` disables sfdisk's own check. `mkfs`
   derives from an allowlist (`FORMAT_TYPES`), so an unlisted type names no
   binary, and labels are restricted to a conservative character set. A mounted
   disk or partition is refused, not forced. `PartitionList` needs only

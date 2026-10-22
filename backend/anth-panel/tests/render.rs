@@ -548,6 +548,7 @@ fn volume_snapshot() -> VolumeSnapshot {
         total: 3,
         truncated: false,
         warning: None,
+        swap_devices: Vec::new(),
     }
 }
 

@@ -1637,6 +1637,7 @@ fn volume_snapshot() -> anth_proto::VolumeSnapshot {
         total: 1,
         truncated: false,
         warning: None,
+        swap_devices: Vec::new(),
     }
 }
 
