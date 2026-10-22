@@ -313,7 +313,7 @@ class AnthWireguardPanel extends HTMLElement {
             <input name="interface" required value="${value('interface')}" ${editing ? 'readonly' : ''} autocomplete="off" spellcheck="false" placeholder="wg0">
           </label>
           <label>Private key
-            <input name="private_key" value="${value('private_key')}" autocomplete="off" spellcheck="false" placeholder="${editing ? 'Leave blank to keep' : 'Generate on host'}">
+            <input name="private_key" type="password" value="${value('private_key')}" autocomplete="new-password" spellcheck="false" placeholder="${editing ? 'Leave blank to keep' : 'Generate on host'}">
           </label>
           <label>Listen port
             <input name="listen_port" type="number" min="1" max="65535" value="${value('listen_port')}" placeholder="51820">
@@ -415,8 +415,10 @@ class AnthWireguardPanel extends HTMLElement {
       <div data-role="body"></div>`
     this.shadowRoot.append(style, shell)
 
-    const body = shell.querySelector('[data-role="body"]')
-    body.addEventListener('click', (event) => {
+    // The header (with "New interface") and the body are both inside `shell`.
+    // Listening on `body` missed the header button because `#paint` only
+    // replaces the body's innerHTML; the shell is the stable common ancestor.
+    shell.addEventListener('click', (event) => {
       const button = event.target.closest('[data-action]')
       if (!button) return
       const action = button.dataset.action
@@ -441,7 +443,7 @@ class AnthWireguardPanel extends HTMLElement {
         this.#removePeer(button.dataset.interface ?? '', button.dataset.key ?? '')
       }
     })
-    body.addEventListener('submit', (event) => {
+    shell.addEventListener('submit', (event) => {
       const form = event.target
       if (!(form instanceof HTMLFormElement)) return
       event.preventDefault()
