@@ -1,0 +1,8 @@
+.git
+.vscode
+target
+**/target
+**/*.rs.bk
+**/mutants.out*
+frontend/node_modules
+frontend/dist

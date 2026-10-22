@@ -24,22 +24,17 @@ rustc-ice-*.txt
 #.idea/
 
 # Root-level scratch files only. Anchored so they cannot match a nested path:
-# backend/.cargo/config.toml is a tracked build setting, not a runtime config.
+# .cargo/config.toml is a tracked build setting, not a runtime config.
 /config.toml
 /request.json
 /request.http
 
-# Files copied from frontend/dist for rust-embed during packaging; only the
-# placeholder is tracked so a clean clone still compiles.
-backend/anth-panel/www/*
-!backend/anth-panel/www/.gitkeep
-
-# Cargo build settings. The `config.toml` rule above has matched this path
-# before, so keep an explicit negation: re-adding an unanchored rule must not
-# silently drop the file the Dockerfile copies in `COPY backend/.cargo .cargo`.
-!backend/.cargo/config.toml
+# v0.1.0 tree, frozen. Its generated and packaging paths follow it under v1/.
+v1/backend/anth-panel/www/*
+!v1/backend/anth-panel/www/.gitkeep
+!v1/backend/.cargo/config.toml
 
 # Dev artifacts
-backend/plugins
-backend/plugins.d
-backend/config.toml
+v1/backend/plugins
+v1/backend/plugins.d
+v1/backend/config.toml

@@ -4,16 +4,15 @@ name: v2
 # green on a machine where `wasm32-unknown-unknown` happened to be installed and
 # fail on a fresh clone (see docs/design/v0.2.0.md, lesson 4).
 #
-# Scope: the v0.2.0 rewrite under backend/v2. The v0.1.0 tree keeps its own
-# status until phase E deletes it; adding it here would make this workflow red
-# for reasons unrelated to the rewrite.
+# Scope: the v0.2.0 workspace, which lives at the repository root. The frozen
+# v0.1.0 tree under v1/ keeps its own status until phase E deletes it.
 
 on:
   push:
     branches: [main, "v0.2.0"]
-    paths: ["backend/v2/**", ".github/workflows/v2.yml"]
+    paths: ["anth-wire/**", "anth-host/**", "anth-paneld/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/v2.yml"]
   pull_request:
-    paths: ["backend/v2/**", ".github/workflows/v2.yml"]
+    paths: ["anth-wire/**", "anth-host/**", "anth-paneld/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/v2.yml"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,9 +20,6 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend/v2
     steps:
       - uses: actions/checkout@v4
 
@@ -34,8 +30,6 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: backend/v2
 
       - name: Format
         run: cargo fmt --check

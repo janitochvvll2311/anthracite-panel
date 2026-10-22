@@ -1,8 +1,11 @@
+# The v0.2.0 workspace lives at the repository root. The frozen v0.1.0 tree
+# under v1/ has its own Dockerfile and .dockerignore, built with that directory
+# as the context; excluding it here keeps it out of a root build.
 .git
+.github
 .vscode
+v1
 target
 **/target
 **/*.rs.bk
 **/mutants.out*
-frontend/node_modules
-frontend/dist

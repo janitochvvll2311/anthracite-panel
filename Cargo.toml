@@ -1,5 +1,9 @@
 [workspace]
 members = ["anth-wire", "anth-host", "anth-paneld"]
+# v1/ is the frozen v0.1.0 tree with its own workspace at v1/backend. Without
+# this, crates under it that are not workspace members (the WireGuard plugin)
+# walk up, find this manifest and refuse to build.
+exclude = ["v1"]
 resolver = "2"
 
 [workspace.package]
