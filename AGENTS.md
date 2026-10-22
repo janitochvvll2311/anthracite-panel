@@ -9,6 +9,13 @@ single binary, `anth-panel`, that serves the Unix-socket daemon, the CLI client 
 the HTTP panel with an embedded web UI. License is Apache-2.0. User-facing docs
 live in `docs/` and are indexed from `README.md`.
 
+**v0.2.0 is a live rewrite in `backend/v2/`.** `v0.1.0` is tagged and remains the
+shipped tree; the rewrite is not a bug-fix branch. It targets four structural
+lessons recorded with file evidence in `docs/design/v0.2.0.md`. Work on the
+rewrite goes in `backend/v2/`; do not port a feature there without reading that
+document first. The two trees build separately (`backend/Cargo.toml` and
+`backend/v2/Cargo.toml` are distinct workspaces, and CI covers only `backend/v2`).
+
 ## Layout
 
 ```
@@ -27,6 +34,11 @@ backend/
   Cargo.toml                # workspace root, resolver = "2"
   Cargo.lock
   .cargo/config.toml        # default build target = x86_64-unknown-linux-musl
+  v2/                       # v0.2.0 rewrite: its own workspace, see docs/design/v0.2.0.md
+    Cargo.toml
+    anth-wire/              #   length-prefixed frames, one WireError, messages
+    anth-host/              #   /proc and os-release parsing, std only
+    anth-paneld/            #   one dispatch match, socket daemon + CLI client
   anth-proto/               # wire protocol only: Request/Response + AnthServer/AnthClient
   anth-panel/               # everything else, one binary
     src/
@@ -98,6 +110,25 @@ the protocol without depending on the panel. `anth-panel` depends on it.
 
 ## Build and test
 
+### The v0.2.0 rewrite (`backend/v2/`)
+
+Its own workspace, and the same musl pin applies because `backend/.cargo/config.toml`
+is a parent of both. Run from `backend/v2/`:
+
+```bash
+cargo build  --workspace
+cargo test   --workspace
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+`.github/workflows/v2.yml` runs exactly those four steps, in that order, so a
+local pass means a CI pass. It does not cover the v0.1.0 tree. Every one of those
+gates must be green before a commit lands: clippy runs with `-D warnings`, so a
+redundant closure is a build failure, not a suggestion.
+
+### The v0.1.0 tree (`backend/`)
+
 Run these from `backend/`. The project targets **`x86_64-unknown-linux-musl`
 only**: `.cargo/config.toml` pins it, so a bare `cargo build` (no `--target`) is
 the supported invocation and produces the same static binary the Dockerfile
@@ -109,7 +140,15 @@ Prerequisites, once per machine:
 ```bash
 rustup target add x86_64-unknown-linux-musl
 sudo apt-get install musl-tools     # provides musl-gcc for the C dependencies
+rustup target add wasm32-unknown-unknown  # the WireGuard reference plugin
 ```
+
+`wasm32-unknown-unknown` is easy to miss because the backend builds without it:
+only `tests/plugin_wireguard.rs` needs it, and it fails on a fresh clone with
+`can't find crate for 'std'` if it is absent. v0.1.0 had no CI, so that gap
+reached `main` and a bare `cargo test` was red on any machine that had never
+built the plugin. The v2 workspace has no plugin yet, so its workflow does not
+need the target; add it there as part of the phase that ports plugins.
 
 Then:
 
