@@ -150,10 +150,22 @@ plugin is expected to contain behaviour only.
     `Reply`. The host sends an anchor body as a **string** and always sends
     `query`, so the types model that; `json_body()` parses the string for the
     common case and a body that is not JSON becomes a `400`, not a `500`.
+  - `command.rs` — `Command`, the single form both envelopes fold into, and
+    `Request::into_command`. This is the one rule a plugin must not break: an
+    HTTP anchor and a `plugin call` both arrive at `Guest::handle` as a
+    `Command`, so a plugin has **one** dispatch table and the CLI reaches every
+    route in the manifest. Converting a CLI `argv` into an `HttpRequest` to reuse
+    one handler is the mistake this module exists to prevent: it lies about the
+    transport and leaves the plugin with a single reachable path. `Guest` takes a
+    `Command` rather than a `Request` so the type system enforces it;
+    `into_command` refuses an `argv` that names no operation instead of guessing
+    one, and normalizes the leading slash so `plugin call <id> 'status'` and
+    `GET /status` are the same route.
   - `exec.rs` — the `Executor` trait (the capability seam; a test implements it
     over canned answers) and `Router`, which replaces the hand-written
-    `match` on method and path. Matching is exact, because the host has already
-    stripped its own prefix.
+    `match` on method and path. `Handler` receives the `Command`, so the same
+    function answers both transports. Matching is exact, because the host has
+    already stripped its own prefix.
   - `exec_bare` exists because the host decodes `anth_exec` arguments into a map
     of strings: `null` is a decode failure while `{}` succeeds. Passing
     `&Value::Null` is the mistake this method removes.
@@ -171,7 +183,10 @@ The contract is one-directional and stays that way. Neither library decides
 which capability may run, reads the filesystem or spawns a process: the manifest
 grant and the host's runtime keep that authority. A library a guest links must
 not be able to widen it. `plugins/hello` consumes both, and is the reference for
-a new plugin; it went from 130 to 41 lines of Rust and 128 to 58 of TypeScript.
+a new plugin: it declares two anchors (`/greeting`, `/status`) so that "the CLI
+covers what the plugin supports" is a claim a test can check, and its
+`tests/manifest.rs` compares the manifest's `[[api]]` paths against the router's
+both ways, so a route can be neither declared-but-404 nor reachable-but-undeclared.
 
 ## Environment
 

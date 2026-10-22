@@ -11,7 +11,8 @@ use alloc::vec::Vec;
 
 use serde_json::Value;
 
-use crate::envelope::{HttpRequest, Reply};
+use crate::command::Command;
+use crate::envelope::Reply;
 
 /// One capability call.
 ///
@@ -44,7 +45,11 @@ pub trait Executor {
 }
 
 /// One route a plugin answers.
-pub type Handler = fn(&mut dyn Executor, &HttpRequest) -> Reply;
+///
+/// The handler sees a [`Command`], so the same function serves an HTTP anchor and
+/// a `plugin call`: the transport is folded away before dispatch, and a plugin
+/// never writes a second table for the CLI.
+pub type Handler = fn(&mut dyn Executor, &Command) -> Reply;
 
 /// A set of routes, matched by method and path.
 ///
@@ -74,7 +79,11 @@ pub enum Method {
 }
 
 impl Method {
-    fn parse(text: &str) -> Option<Self> {
+    /// Parses a method word, case-insensitively.
+    ///
+    /// Public because a CLI call names its method in its first `argv` item, so
+    /// [`crate::Command`] has to recognise one to know whether it was given.
+    pub fn parse(text: &str) -> Option<Self> {
         match text.to_ascii_uppercase().as_str() {
             "GET" => Some(Self::Get),
             "POST" => Some(Self::Post),
@@ -87,6 +96,17 @@ impl Method {
 
     fn matches(self, text: &str) -> bool {
         Method::parse(text) == Some(self)
+    }
+
+    /// The wire spelling, for the `404` and for [`crate::Command`].
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Post => "POST",
+            Self::Put => "PUT",
+            Self::Patch => "PATCH",
+            Self::Delete => "DELETE",
+        }
     }
 }
 
@@ -117,21 +137,21 @@ impl Router {
         self.route(Method::Post, path, handler)
     }
 
-    /// Answers one request, or a `404` naming what was asked for.
+    /// Answers one command, or a `404` naming what was asked for.
     ///
     /// A `404` rather than a panic: an unknown route is a caller mistake the panel
-    /// should display. The path is echoed with the method uppercased so the
-    /// operator can see which anchor the manifest is missing.
-    pub fn dispatch(&self, executor: &mut dyn Executor, request: &HttpRequest) -> Reply {
+    /// should display. The command is echoed so the operator can see which anchor
+    /// the manifest is missing, and the same table answers both transports.
+    pub fn dispatch(&self, executor: &mut dyn Executor, command: &Command) -> Reply {
         for route in &self.routes {
-            if route.path == request.path && route.method.matches(&request.method) {
-                return (route.handler)(executor, request);
+            if route.path == command.path() && route.method.matches(command.method()) {
+                return (route.handler)(executor, command);
             }
         }
         Reply::not_found(alloc::format!(
             "no route for {} {}",
-            request.method.to_uppercase(),
-            request.path
+            command.method(),
+            command.path()
         ))
     }
 }

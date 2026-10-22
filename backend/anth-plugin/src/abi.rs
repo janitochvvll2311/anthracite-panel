@@ -15,7 +15,8 @@ use alloc::vec::Vec;
 
 use serde_json::Value;
 
-use crate::envelope::{Reply, Request};
+use crate::command::Command;
+use crate::envelope::Reply;
 use crate::exec::Executor;
 
 /// The ABI this crate implements.
@@ -25,13 +26,15 @@ use crate::exec::Executor;
 /// by name rather than trapping, which is what makes an upgrade diagnosable.
 pub const ABI_VERSION: i32 = 1;
 
-/// What a plugin implements: one function, envelope in, envelope out.
+/// What a plugin implements: one function, a command in, a reply out.
 ///
-/// Every request shape — an HTTP anchor, a CLI call — arrives here already
-/// decoded, so a plugin never parses its own envelope and never invents its own
-/// dispatch.
+/// Both transports arrive here already folded into [`Command`], so a plugin has
+/// one dispatch path. There is no `Request` in this trait on purpose: a plugin
+/// that matched on the envelope would need a second table for the CLI, and a
+/// route reachable from the browser but not from `plugin call` is a bug the
+/// types should not invite.
 pub trait Guest {
-    fn handle(&mut self, request: Request) -> Reply;
+    fn handle(&mut self, command: Command) -> Reply;
 }
 
 /// The host imports, as the guest sees them.
@@ -145,13 +148,14 @@ pub fn write_string(text: String) -> i64 {
     ((ptr as i64) << 32) | (len as i64)
 }
 
-/// Answers one envelope: decode, hand to the plugin, encode.
+/// Answers one envelope: decode, fold to a command, hand to the plugin, encode.
 ///
-/// A malformed envelope becomes a `400` reply rather than a trap, because the
-/// host reads a trap as a broken plugin and the caller sees nothing.
+/// A malformed envelope — including a CLI call that names no operation — becomes
+/// a `400` rather than a trap, because the host reads a trap as a broken plugin
+/// and the caller sees nothing.
 pub fn answer<G: Guest>(guest: &mut G, request: &str) -> String {
-    let reply = match crate::envelope::decode(request) {
-        Ok(request) => guest.handle(request),
+    let reply = match crate::envelope::decode(request).and_then(|request| request.into_command()) {
+        Ok(command) => guest.handle(command),
         Err(reply) => reply,
     };
     reply.to_envelope()
@@ -160,11 +164,14 @@ pub fn answer<G: Guest>(guest: &mut G, request: &str) -> String {
 /// Generates the four exports the host requires.
 ///
 /// ```ignore
-/// struct Hello;
+/// #[derive(Default)]
+/// struct Hello {
+///     router: anth_plugin::Router,
+/// }
 ///
 /// impl anth_plugin::Guest for Hello {
-///     fn handle(&mut self, request: anth_plugin::Request) -> anth_plugin::Reply {
-///         anth_plugin::Reply::message("hola")
+///     fn handle(&mut self, command: anth_plugin::Command) -> anth_plugin::Reply {
+///         self.router.dispatch(&mut anth_plugin::HostExecutor, &command)
 ///     }
 /// }
 ///

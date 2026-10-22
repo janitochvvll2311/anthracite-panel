@@ -23,9 +23,16 @@ sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 id = "host.hostname"
 program = "hostname"
 
+# Two anchors, so `plugin call <id> '/status'` has a route to reach that is not
+# the one the browser widget uses. A plugin's CLI surface is its manifest, not a
+# single default path.
 [[api]]
 method = "GET"
 path = "/greeting"
+
+[[api]]
+method = "GET"
+path = "/status"
 
 # The slot the shell mounts. `module` is served from `web/` inside the bundle;
 # the host rebuilds the path component by component, so `..` cannot survive.

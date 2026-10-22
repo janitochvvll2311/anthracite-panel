@@ -31,20 +31,43 @@ fn the_declared_abi_is_the_one_the_crate_implements() {
     );
 }
 
+/// Every `path = "..."` inside an `[[api]]` block, in order.
+fn declared_anchors(text: &str) -> Vec<String> {
+    let mut in_api = false;
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_api = line == "[[api]]";
+            continue;
+        }
+        if in_api && let Some(rest) = line.strip_prefix("path = ") {
+            paths.push(rest.trim().trim_matches('"').to_string());
+        }
+    }
+    paths
+}
+
+/// The manifest and the router must name the same anchors, both ways.
+///
+/// One-way would let a route exist in code and be unreachable through the host,
+/// or be declared and 404 — the v0.1.0 defect. A route the CLI cannot reach is a
+/// route that only half exists.
 #[test]
-fn the_declared_anchor_is_the_path_the_router_answers() {
-    let text = manifest();
-    let path = text
-        .lines()
-        .skip_while(|line| !line.trim().starts_with("[[api]]"))
-        .find_map(|line| line.trim().strip_prefix("path = "))
-        .map(|rest| rest.trim().trim_matches('"').to_string())
-        .expect("plugin.toml declares an [[api]] path");
+fn the_declared_anchors_are_the_routes_the_router_answers() {
+    let declared = declared_anchors(&manifest());
+    let implemented: Vec<String> = anth_plugin_hello::logic::ROUTES
+        .iter()
+        .map(|(_, path)| path.to_string())
+        .collect();
 
     assert_eq!(
-        path,
-        anth_plugin_hello::logic::GREETING_PATH,
-        "the manifest and the router must name the same anchor"
+        declared, implemented,
+        "plugin.toml and the router disagree about the anchors"
+    );
+    assert!(
+        declared.len() > 1,
+        "one anchor cannot show that the CLI reaches more than a default path"
     );
 }
 

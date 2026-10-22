@@ -6,31 +6,33 @@
 //! author writes behaviour and nothing else.
 //!
 //! ```
-//! use anth_plugin::{Guest, Reply, Request, Router, Method, HttpRequest};
+//! use anth_plugin::{Command, Guest, Reply, Router, HostExecutor};
 //!
-//! #[derive(Default)]
 //! struct Hello {
 //!     router: Router,
 //! }
 //!
-//! impl Hello {
-//!     fn greeting(executor: &mut dyn anth_plugin::Executor, _request: &HttpRequest) -> Reply {
-//!         match executor.exec_bare("host.hostname") {
-//!             Ok(reply) => {
-//!                 let name = reply.get("stdout").and_then(|v| v.as_str()).unwrap_or("unknown");
-//!                 Reply::message(format!("hola {name}"))
-//!             }
-//!             Err(detail) => Reply::failed(detail),
+//! fn greeting(executor: &mut dyn anth_plugin::Executor, _command: &Command) -> Reply {
+//!     match executor.exec_bare("host.hostname") {
+//!         Ok(reply) => {
+//!             let name = reply.get("stdout").and_then(|v| v.as_str()).unwrap_or("unknown");
+//!             Reply::message(format!("hola {name}"))
 //!         }
+//!         Err(detail) => Reply::failed(detail),
 //!     }
 //! }
 //!
+//! impl Default for Hello {
+//!     fn default() -> Self {
+//!         Self { router: Router::new().get("/greeting", greeting) }
+//!     }
+//! }
+//!
+//! // One path, whichever envelope arrived: an HTTP anchor and
+//! // `plugin call <id> '/greeting'` both land here as a `Command`.
 //! impl Guest for Hello {
-//!     fn handle(&mut self, request: Request) -> Reply {
-//!         match request {
-//!             Request::Http(_) => Reply::ok(serde_json::json!({})),
-//!             Request::Cli(_) => Reply::ok(serde_json::json!({})),
-//!         }
+//!     fn handle(&mut self, command: Command) -> Reply {
+//!         self.router.dispatch(&mut HostExecutor, &command)
 //!     }
 //! }
 //! ```
@@ -50,12 +52,14 @@ extern crate alloc;
 extern crate std;
 
 pub mod abi;
+pub mod command;
 pub mod envelope;
 pub mod exec;
 
 pub use abi::{
     ABI_VERSION, Guest, HostExecutor, alloc_string, answer, free_string, read_string, write_string,
 };
+pub use command::Command;
 pub use envelope::{CliRequest, HttpRequest, Reply, Request, decode};
 pub use exec::{Executor, Handler, Method, Router};
 

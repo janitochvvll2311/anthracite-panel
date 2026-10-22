@@ -9,6 +9,7 @@ use alloc::string::{String, ToString};
 
 use serde_json::{Value, json};
 
+use crate::command::Command;
 use crate::envelope::{HttpRequest, Reply, Request, decode};
 use crate::exec::{Executor, Router};
 
@@ -128,23 +129,23 @@ fn a_failure_body_is_an_error_key() {
     assert_eq!(reply.body()["error"], json!("the host refused"));
 }
 
+/// Builds a `Command` the way the HTTP transport does.
+fn http_command(method: &str, path: &str) -> Command {
+    Command::new(method, path, BTreeMap::new(), json!({}))
+}
+
 /// A route table answers by method and path, and `404`s the rest.
 #[test]
 fn the_router_matches_method_and_path_exactly() {
-    fn hit(_: &mut dyn Executor, _: &HttpRequest) -> Reply {
+    fn hit(_: &mut dyn Executor, _: &Command) -> Reply {
         Reply::message("hit")
     }
 
     let router = Router::new().get("/status", hit).post("/run", hit);
 
     let ask = |method: &str, path: &str| {
-        let request = HttpRequest {
-            method: method.to_string(),
-            path: path.to_string(),
-            query: BTreeMap::new(),
-            body: None,
-        };
-        router.dispatch(&mut Refusing, &request)
+        let command = http_command(method, path);
+        router.dispatch(&mut Refusing, &command)
     };
 
     assert_eq!(ask("GET", "/status").status(), 200);
@@ -175,13 +176,7 @@ fn the_router_matches_method_and_path_exactly() {
 #[test]
 fn a_missing_route_names_what_was_asked_for() {
     let router = Router::new();
-    let request = HttpRequest {
-        method: "delete".to_string(),
-        path: "/nope".to_string(),
-        query: BTreeMap::new(),
-        body: None,
-    };
-    let reply = router.dispatch(&mut Refusing, &request);
+    let reply = router.dispatch(&mut Refusing, &http_command("delete", "/nope"));
     let text = reply.body()["error"].as_str().unwrap();
     assert!(text.contains("/nope"), "got {text}");
     assert!(
@@ -267,12 +262,9 @@ fn answer_wraps_the_round_trip_and_short_circuits_a_bad_envelope() {
     }
 
     impl crate::Guest for Echo {
-        fn handle(&mut self, request: Request) -> Reply {
+        fn handle(&mut self, command: Command) -> Reply {
             self.calls += 1;
-            match request {
-                Request::Http(request) => Reply::message(request.path),
-                Request::Cli(call) => Reply::message(call.argv.join(" ")),
-            }
+            Reply::message(command.path())
         }
     }
 
@@ -291,5 +283,181 @@ fn answer_wraps_the_round_trip_and_short_circuits_a_bad_envelope() {
     assert_eq!(
         guest.calls, 1,
         "the guest is never called for a bad envelope"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// One command for both transports
+// ---------------------------------------------------------------------------
+
+/// An HTTP anchor folds into method, path, query and a parsed input.
+#[test]
+fn an_http_envelope_becomes_a_command() {
+    let text = r#"{"kind":"http","method":"get","path":"/run","query":{"page":"2"},
+        "body":"{\"job\":\"x\"}"}"#;
+    let command = decode(text)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+
+    assert_eq!(command.method(), "GET", "the method is uppercased");
+    assert_eq!(command.path(), "/run");
+    assert_eq!(command.query("page"), Some("2"));
+    assert_eq!(command.input()["job"], json!("x"), "a JSON body is parsed");
+    assert!(
+        command.args().is_empty(),
+        "an HTTP call has no positional arguments"
+    );
+}
+
+/// A body that is not JSON is kept as a string rather than refused: an anchor is
+/// not required to speak JSON, and only the plugin knows its own shape.
+#[test]
+fn a_non_json_anchor_body_is_kept_as_a_string() {
+    let text = r#"{"kind":"http","method":"POST","path":"/run","query":{},"body":"plain text"}"#;
+    let command = decode(text)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    assert_eq!(command.input(), &json!("plain text"));
+}
+
+/// No body is `{}`, so a handler never distinguishes "absent" from "empty".
+#[test]
+fn an_absent_body_is_an_empty_object() {
+    for body in [r#"null"#, r#""""#, r#""   ""#] {
+        let text = alloc::format!(
+            r#"{{"kind":"http","method":"GET","path":"/x","query":{{}},"body":{body}}}"#
+        );
+        let command = decode(&text)
+            .expect("decodes")
+            .into_command()
+            .expect("folds");
+        assert_eq!(command.input(), &json!({}), "body {body}");
+    }
+}
+
+/// The point of the fold: `plugin call <id> '/status'` is the same route the
+/// browser reaches, so the CLI extends to every anchor a plugin declares instead
+/// of a single default one.
+#[test]
+fn a_cli_path_reaches_the_same_route_as_an_anchor() {
+    fn status(_: &mut dyn Executor, _: &Command) -> Reply {
+        Reply::message("ok")
+    }
+    fn run(_: &mut dyn Executor, command: &Command) -> Reply {
+        Reply::message(command.args().join(","))
+    }
+
+    let router = Router::new().get("/status", status).post("/run", run);
+
+    let cli = decode(r#"{"kind":"cli","argv":["/status"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    assert_eq!(router.dispatch(&mut Refusing, &cli).status(), 200);
+    assert_eq!(
+        router.dispatch(&mut Refusing, &cli).body()["message"],
+        json!("ok")
+    );
+
+    let http = http_command("GET", "/status");
+    assert_eq!(router.dispatch(&mut Refusing, &http).status(), 200);
+
+    // A route that is not the default one is reachable too, which is what the
+    // old fake-`HttpRequest` approach could not do.
+    let post = decode(r#"{"kind":"cli","argv":["POST","/run","a","b"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    assert_eq!(post.method(), "POST");
+    assert_eq!(post.path(), "/run");
+    assert_eq!(
+        router.dispatch(&mut Refusing, &post).body()["message"],
+        json!("a,b")
+    );
+}
+
+/// `argv` without a method word is a `GET`, which is the common case.
+#[test]
+fn a_cli_path_without_a_method_is_a_get() {
+    let command = decode(r#"{"kind":"cli","argv":["/status"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    assert_eq!(command.method(), "GET");
+    assert_eq!(command.path(), "/status");
+}
+
+/// The leading slash is normalized, so the two transports cannot disagree about
+/// the same anchor.
+#[test]
+fn a_cli_path_gains_its_leading_slash() {
+    let command = decode(r#"{"kind":"cli","argv":["status"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    assert_eq!(command.path(), "/status");
+}
+
+/// A CLI call that names no operation is refused. Guessing which route the caller
+/// meant is how `plugin call` silently runs the wrong thing.
+#[test]
+fn a_cli_call_with_no_operation_is_a_400() {
+    let reply = decode(r#"{"kind":"cli","argv":[]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect_err("an empty argv names nothing");
+    assert_eq!(reply.status(), 400);
+
+    let method_only = decode(r#"{"kind":"cli","argv":["POST"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect_err("a method with no path names nothing");
+    assert_eq!(method_only.status(), 400);
+}
+
+/// Extra `argv` items become the input, so one handler can read them the same way
+/// it reads an HTTP body.
+#[test]
+fn cli_arguments_become_the_input() {
+    let command = decode(r#"{"kind":"cli","argv":["POST","/run","x","y"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    assert_eq!(command.args(), ["x", "y"]);
+    assert_eq!(command.input(), &json!({"args": ["x", "y"]}));
+}
+
+/// A CLI call has no query, and asking for one is `None` rather than a mistake.
+#[test]
+fn a_cli_command_has_no_query() {
+    let command = decode(r#"{"kind":"cli","argv":["/status"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    assert_eq!(command.query("page"), None);
+}
+
+/// `input_as` reports a shape mismatch as a `400`, naming what failed.
+#[test]
+fn a_wrong_input_shape_is_a_400() {
+    #[derive(Debug, serde::Deserialize)]
+    struct NeedsJob {
+        #[allow(dead_code)]
+        job: String,
+    }
+
+    let command = decode(r#"{"kind":"cli","argv":["/run"]}"#)
+        .expect("decodes")
+        .into_command()
+        .expect("folds");
+    let reply = command.input_as::<NeedsJob>().expect_err("no job was sent");
+    assert_eq!(reply.status(), 400);
+    assert!(
+        reply.body()["error"]
+            .as_str()
+            .unwrap()
+            .contains("wrong shape")
     );
 }

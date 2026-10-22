@@ -8,7 +8,7 @@
 
 pub mod logic;
 
-use anth_plugin::{Guest, Reply, Request, Router};
+use anth_plugin::{Command, Guest, Reply, Router};
 
 /// The guest the host calls.
 pub struct Hello {
@@ -18,23 +18,20 @@ pub struct Hello {
 impl Default for Hello {
     fn default() -> Self {
         Self {
-            router: Router::new().get(logic::GREETING_PATH, logic::greeting),
+            router: Router::new()
+                .get(logic::GREETING_PATH, logic::greeting)
+                .get(logic::STATUS_PATH, logic::status),
         }
     }
 }
 
 impl Guest for Hello {
-    fn handle(&mut self, request: Request) -> Reply {
-        match request {
-            Request::Http(request) => self
-                .router
-                .dispatch(&mut anth_plugin::HostExecutor, &request),
-            // `plugin call <id>` carries no method or path, so it answers the
-            // plugin's default anchor: the same greeting a browser gets.
-            Request::Cli(_) => self
-                .router
-                .dispatch(&mut anth_plugin::HostExecutor, &logic::greeting_request()),
-        }
+    fn handle(&mut self, command: Command) -> Reply {
+        // One path, whichever transport delivered the call: the crate has already
+        // folded an HTTP anchor and a `plugin call` into the same `Command`, so
+        // every route is reachable from the CLI without a second table here.
+        self.router
+            .dispatch(&mut anth_plugin::HostExecutor, &command)
     }
 }
 
