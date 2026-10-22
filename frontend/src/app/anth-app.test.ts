@@ -13,7 +13,11 @@ import { FakeFileClient } from '../test/fake-file-client'
 import { FakeFirewallClient } from '../test/fake-firewall-client'
 import { FakeHostInfoClient } from '../test/fake-host-info-client'
 import { FakeNetworkClient } from '../test/fake-network-client'
-import { FakePluginClient } from '../test/fake-plugin-client'
+import {
+  FakePluginClient,
+  pluginSummary,
+  pluginsCatalogue,
+} from '../test/fake-plugin-client'
 import { FakeProcessClient } from '../test/fake-process-client'
 import { FakeVolumeClient } from '../test/fake-volume-client'
 
@@ -126,11 +130,14 @@ async function settle(element: AnthApp): Promise<void> {
   }
 }
 
-async function mount(session: SessionInfo = openSession): Promise<AnthApp> {
+async function mount(
+  session: SessionInfo = openSession,
+  pluginClient: FakePluginClient = new FakePluginClient(),
+): Promise<AnthApp> {
   const element = document.createElement('anth-app') as AnthApp
   element.clientFactory = fakeClient
   element.authClient = authStub(session)
-  element.pluginClient = new FakePluginClient()
+  element.pluginClient = pluginClient
   document.body.append(element)
   await settle(element)
   return element
@@ -320,6 +327,49 @@ describe('AnthApp', () => {
       '.nav-item[data-theme="system"]',
     )
     expect(link?.getAttribute('href')).toBe('#/panel/host-info')
+  })
+
+  it('adds a plugin tab inside the Network theme and links to it', async () => {
+    const pluginClient = new FakePluginClient()
+    pluginClient.moduleUrl = () => 'data:text/javascript,export default 1'
+    pluginClient.current = pluginsCatalogue({
+      plugins: [
+        pluginSummary({
+          id: 'org.anth.wireguard',
+          name: 'WireGuard',
+          ui: [
+            {
+              slot: 'panel.network.tab',
+              tag: 'anth-wireguard-panel',
+              module: 'web/wireguard.js',
+              label: 'WireGuard',
+            },
+          ],
+        }),
+      ],
+    })
+
+    const element = await mount(openSession, pluginClient)
+    await navigate(element, '#/panel/network')
+
+    const tabs = tabPanel(element)
+    expect(
+      [...(tabs?.shadowRoot?.querySelectorAll('[role="tab"]') ?? [])].map(
+        (tab) => tab.textContent?.trim(),
+      ),
+    ).toEqual(['Network', 'Firewall', 'WireGuard'])
+
+    tabButton(element, 'plugin:org.anth.wireguard:anth-wireguard-panel')?.click()
+    await settle(element)
+    globalThis.dispatchEvent(new HashChangeEvent('hashchange'))
+    await settle(element)
+
+    expect(globalThis.location.hash).toBe(
+      '#/panel/plugin%3Aorg.anth.wireguard%3Aanth-wireguard-panel',
+    )
+    expect(tabPanel(element)?.active).toBe(
+      'plugin:org.anth.wireguard:anth-wireguard-panel',
+    )
   })
 
   it('keeps the theme page when switching away and back', async () => {

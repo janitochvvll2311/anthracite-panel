@@ -20,20 +20,27 @@ import { localized, msg } from '@lit/localize'
 
 import '../components/anth-login'
 import '../components/anth-nav-drawer'
+import '../components/anth-plugin-anchor'
 import '../components/anth-plugin-slot'
 import '../components/anth-theme-page'
-import type { AnthThemePage } from '../components/anth-theme-page'
+import type { AnthThemePage, ThemeTab } from '../components/anth-theme-page'
 import { ANTH_PANEL_SELECT_EVENT } from '../components/anth-theme-page'
+import type { AnthPluginAnchor } from '../components/anth-plugin-anchor'
+import { ANTH_PLUGINS_CHANGED_EVENT } from '../components/anth-plugin-manager'
 
 import { AuthClient } from '../lib/auth/auth-client'
 import type { SessionInfo } from '../lib/auth/auth-client'
 import { changeLocale, currentLocale, setupLocalization } from './i18n'
 import type { PanelLocale } from './i18n'
 import type { PanelDefinition, ThemeDefinition } from './panels'
-import { THEMES, findPanel, findTheme, panelsIn, themeForPanel } from './panels'
+import { THEMES, findPanel, findTheme, panelsIn } from './panels'
 import { currentApiFetch, useApiFetch, withRetry } from '../lib/http'
-import type { PluginClient, PluginsCatalogue } from '../lib/plugins/plugin-client'
-import { HttpPluginClient } from '../lib/plugins/plugin-client'
+import type {
+  PluginClient,
+  PluginUiAnchor,
+  PluginsCatalogue,
+} from '../lib/plugins/plugin-client'
+import { HttpPluginClient, anchorsBySlot } from '../lib/plugins/plugin-client'
 import type { Route } from './router'
 import { panelHash, parseRoute } from './router'
 import { rememberedPanel, rememberPanel } from '../lib/ui/theme-memory'
@@ -568,11 +575,16 @@ export class AnthApp extends LitElement {
     this.drawerOpen = false
   }
 
+  private readonly onPluginsChanged = (): void => {
+    void this.loadPlugins()
+  }
+
   override connectedCallback(): void {
     super.connectedCallback()
     globalThis.addEventListener?.('hashchange', this.onHashChange)
     this.portraitQuery = globalThis.matchMedia?.('(orientation: portrait)')
     this.portraitQuery?.addEventListener?.('change', this.onOrientationChange)
+    this.addEventListener(ANTH_PLUGINS_CHANGED_EVENT, this.onPluginsChanged)
     this.adoptAuthClient()
     // Every panel client shares one retrying fetch: a tab that outlives its
     // access token recovers on the next call instead of waiting for the timer.
@@ -584,6 +596,7 @@ export class AnthApp extends LitElement {
   override disconnectedCallback(): void {
     globalThis.removeEventListener?.('hashchange', this.onHashChange)
     this.portraitQuery?.removeEventListener?.('change', this.onOrientationChange)
+    this.removeEventListener(ANTH_PLUGINS_CHANGED_EVENT, this.onPluginsChanged)
     this.auth.cancelRefresh()
     useApiFetch(undefined)
     super.disconnectedCallback()
@@ -740,17 +753,17 @@ export class AnthApp extends LitElement {
   }
 
   private renderThemeLink(theme: ThemeDefinition, short = false) {
-    const landing = this.landingPanel(theme)
+    const landing = this.landingTab(theme)
     if (!landing) return nothing
     const active =
       this.route.kind === 'panel' &&
-      themeForPanel(this.route.panel)?.id === theme.id
-    const count = panelsIn(theme.id).length
+      this.themeForTab(this.route.panel)?.id === theme.id
+    const count = this.themeTabs(theme).length
 
     return html`
       <a
         class="nav-item"
-        href=${panelHash(landing.id)}
+        href=${panelHash(landing)}
         data-theme=${theme.id}
         ?data-active=${active}
         aria-current=${active ? 'page' : nothing}
@@ -806,18 +819,18 @@ export class AnthApp extends LitElement {
   }
 
   private renderThemeCard(theme: ThemeDefinition) {
-    const landing = this.landingPanel(theme)
+    const landing = this.landingTab(theme)
     if (!landing) return nothing
-    const panels = panelsIn(theme.id)
+    const tabs = this.themeTabs(theme)
 
     return html`
       <li>
-        <a class="card" href=${panelHash(landing.id)} data-theme=${theme.id}>
+        <a class="card" href=${panelHash(landing)} data-theme=${theme.id}>
           <span class="card-icon" aria-hidden="true">${theme.icon}</span>
           <span class="card-title">${theme.title()}</span>
           <span class="card-description">${theme.description()}</span>
           <span class="card-meta">
-            ${panels.map((panel) => panel.title()).join(' · ')}
+            ${tabs.map((tab) => tab.label).join(' · ')}
           </span>
         </a>
       </li>
@@ -825,9 +838,8 @@ export class AnthApp extends LitElement {
   }
 
   private renderPanel(id: string) {
-    const panel = findPanel(id)
-    const theme = panel ? findTheme(panel.theme) : undefined
-    if (!panel || !theme) {
+    const theme = this.themeForTab(id)
+    if (!theme) {
       return html`<p class="unknown" role="alert">
         ${msg('No such panel.')} <a class="back" href="#/">${msg('Go home')}</a>
       </p>`
@@ -841,11 +853,73 @@ export class AnthApp extends LitElement {
     </p>`
   }
 
-  /** The panel the sidebar and the Home card link to for a theme. */
-  private landingPanel(theme: ThemeDefinition): PanelDefinition | undefined {
-    const panels = panelsIn(theme.id)
+  /** Stable id for a plugin tab: plugin id plus the anchor's custom element. */
+  private pluginTabId(plugin: string, anchor: PluginUiAnchor): string {
+    return `plugin:${plugin}:${anchor.tag}`
+  }
+
+  private pluginName(plugin: string): string | undefined {
+    return this.catalogue?.plugins.find((entry) => entry.id === plugin)?.name
+  }
+
+  private pluginAnchors(theme: ThemeDefinition) {
+    if (!theme.pluginSlot) return []
+    return anchorsBySlot(this.catalogue, theme.pluginSlot)
+  }
+
+  /**
+   * Built-in panel tabs plus any plugin anchors declared for the theme.
+   *
+   * `create` is lazy: building the tab list for a sidebar link or a Home card
+   * must not create every panel element. The theme page calls it once per tab.
+   */
+  private themeTabs(theme: ThemeDefinition): ThemeTab[] {
+    const tabs: ThemeTab[] = panelsIn(theme.id).map((panel) => ({
+      id: panel.id,
+      label: panel.title(),
+      create: () => this.createFeatureElement(panel),
+    }))
+
+    for (const { plugin, anchor } of this.pluginAnchors(theme)) {
+      tabs.push({
+        id: this.pluginTabId(plugin, anchor),
+        label:
+          anchor.label?.trim() ||
+          this.pluginName(plugin) ||
+          plugin,
+        create: () => {
+          const element = document.createElement(
+            'anth-plugin-anchor',
+          ) as AnthPluginAnchor
+          element.plugin = plugin
+          element.anchor = anchor
+          element.client = this.plugins
+          return element
+        },
+      })
+    }
+    return tabs
+  }
+
+  /** The theme that owns a panel id, including a plugin tab id. */
+  private themeForTab(id: string): ThemeDefinition | undefined {
+    const panel = findPanel(id)
+    if (panel) return findTheme(panel.theme)
+    if (!id.startsWith('plugin:')) return undefined
+    for (const theme of THEMES) {
+      if (!theme.pluginSlot) continue
+      for (const { plugin, anchor } of this.pluginAnchors(theme)) {
+        if (this.pluginTabId(plugin, anchor) === id) return theme
+      }
+    }
+    return undefined
+  }
+
+  /** The tab the sidebar and the Home card link to for a theme. */
+  private landingTab(theme: ThemeDefinition): string | undefined {
+    const tabs = this.themeTabs(theme)
     const stored = rememberedPanel(theme.id)
-    return panels.find((panel) => panel.id === stored) ?? panels[0]
+    return tabs.find((tab) => tab.id === stored)?.id ?? tabs[0]?.id
   }
 
   /**
@@ -857,26 +931,23 @@ export class AnthApp extends LitElement {
    */
   private readonly syncThemePage = (): void => {
     if (this.route.kind !== 'panel') return
-    const panel = findPanel(this.route.panel)
-    const theme = panel ? findTheme(panel.theme) : undefined
-    if (!panel || !theme) return
+    const theme = this.themeForTab(this.route.panel)
+    if (!theme) return
 
     const host = this.renderRoot.querySelector<HTMLElement>('.theme-host')
     if (!host) return
 
-    rememberPanel(theme.id, panel.id)
+    rememberPanel(theme.id, this.route.panel)
 
     let page = this.themePages.get(theme.id)
     if (!page) {
       page = document.createElement('anth-theme-page') as AnthThemePage
-      page.theme = theme
-      page.panels = panelsIn(theme.id)
-      page.createPanel = (entry) => this.createFeatureElement(entry)
       page.addEventListener(ANTH_PANEL_SELECT_EVENT, this.onPanelSelect)
       this.themePages.set(theme.id, page)
     }
-
-    page.active = panel.id
+    page.theme = theme
+    page.tabs = this.themeTabs(theme)
+    page.active = this.route.panel
     if (host.firstElementChild !== page) host.replaceChildren(page)
   }
 
@@ -885,8 +956,7 @@ export class AnthApp extends LitElement {
     const panel = (event as CustomEvent<{ panel?: string }>).detail?.panel
     if (!panel) return
 
-    const entry = findPanel(panel)
-    const theme = entry ? findTheme(entry.theme) : undefined
+    const theme = this.themeForTab(panel)
     if (theme) rememberPanel(theme.id, panel)
 
     if (this.route.kind === 'panel' && this.route.panel === panel) return

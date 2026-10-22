@@ -14,16 +14,21 @@
 
 pub mod api;
 pub mod bundle;
+pub mod jobs;
 pub mod manifest;
 pub mod runtime;
 pub mod signature;
 pub mod web;
+pub mod wireguard;
 
+use std::collections::BTreeSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use ::serde::{Deserialize, Serialize};
 
 pub use bundle::{BundleInstall, Installed, MAX_BUNDLE_BYTES};
+pub use manifest::validate_id;
 pub use manifest::{
     ApiAnchor, ArgSpec, ArgType, Capability, InstalledPlugin, Manifest, PluginError,
     PluginErrorKind, PluginGrant, UiAnchor,
@@ -31,9 +36,10 @@ pub use manifest::{
 
 /// Where installed plugins live, and which of them may do anything.
 ///
-/// Grants live in the config (`plugins.grants`), not on disk next to the code,
-/// because authority belongs where the admin already looks and edits. The bundle
-/// directory is content; the config is policy.
+/// Grants live in `<config_dir>/plugins.d/<id>.toml`, not inside the bundle:
+/// the bundle is content, the grant file is policy. Keeping policy out of
+/// `plugin.root` means rewriting a bundle cannot also rewrite the authority
+/// that decides what the module may run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PluginsConfig {
@@ -58,8 +64,21 @@ pub struct PluginsConfig {
     /// Instruction budget for one wasm invocation. Fuel is the only way to stop
     /// a module that loops, since wasm has no wall-clock interrupt.
     pub fuel: u64,
-    /// Grants, one per installed plugin.
+    /// Optional directory for the per-plugin grant files. When absent, the
+    /// directory is derived from the config file path (`<config_dir>/plugins.d`).
+    #[serde(default)]
+    pub grants_dir: Option<String>,
+    /// Grants loaded from the grant directory. Not part of `config.toml`.
+    #[serde(skip)]
     pub grants: Vec<PluginGrant>,
+    /// The old inline `[[plugins.grants]]` block, read once for migration.
+    /// Serialization always omits it, so the next save drops the block.
+    #[serde(default, skip_serializing, rename = "grants")]
+    legacy_grants: Vec<PluginGrant>,
+    /// Set when a legacy block was found, so `load_or_create` knows to save the
+    /// migrated files and rewrite the main config without it.
+    #[serde(skip)]
+    needs_grant_save: bool,
 }
 
 impl Default for PluginsConfig {
@@ -71,7 +90,10 @@ impl Default for PluginsConfig {
             require_signature: true,
             public_key: String::new(),
             fuel: 50_000_000,
+            grants_dir: None,
             grants: Vec::new(),
+            legacy_grants: Vec::new(),
+            needs_grant_save: false,
         }
     }
 }
@@ -83,6 +105,146 @@ pub const DEFAULT_PLUGIN_ROOT: &str = "/var/lib/anth/plugins";
 impl PluginsConfig {
     pub fn root_path(&self) -> PathBuf {
         PathBuf::from(&self.root)
+    }
+
+    /// Directory that holds one `<id>.toml` grant file per plugin.
+    ///
+    /// An explicit `grants_dir` wins; otherwise the directory sits next to the
+    /// config file. Passing the config path rather than storing a resolved
+    /// value keeps a config that is moved (or a test with a temporary path)
+    /// pointing at its own directory.
+    pub fn grants_dir_for(&self, config_path: &Path) -> PathBuf {
+        match self.grants_dir.as_deref().map(str::trim) {
+            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => config_path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .join("plugins.d"),
+        }
+    }
+
+    /// Whether a legacy inline grant block still has to be dropped from the
+    /// main config. `Config::load_or_create` saves once when this is true.
+    pub fn needs_grant_save(&self) -> bool {
+        self.needs_grant_save
+    }
+
+    /// Loads `<id>.toml` grants from the directory next to `config_path`.
+    ///
+    /// A missing directory means "no plugins installed". A malformed file, a
+    /// filename that does not match its `id`, a symlink or a duplicate is a
+    /// load error: policy silently disappearing is worse than a refused start.
+    pub fn load_grants(&mut self, config_path: &Path) -> Result<(), String> {
+        let dir = self.grants_dir_for(config_path);
+        let mut loaded = Vec::new();
+        let mut read_error = None;
+
+        match fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry
+                        .map_err(|error| format!("could not read {}: {error}", dir.display()))?;
+                    let path = entry.path();
+                    if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+                        continue;
+                    }
+                    let stem = path
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .ok_or_else(|| format!("{} has no usable file name", path.display()))?;
+                    validate_id(stem)
+                        .map_err(|error| format!("{}: {}", path.display(), error.detail))?;
+                    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                        format!("could not inspect {}: {error}", path.display())
+                    })?;
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!(
+                            "{} is a symlink; grant files must be regular files",
+                            path.display()
+                        ));
+                    }
+                    let text = fs::read_to_string(&path)
+                        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+                    let grant: PluginGrant = toml::from_str(&text)
+                        .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
+                    if grant.id != stem {
+                        return Err(format!(
+                            "{} declares id `{}`; the file name must match",
+                            path.display(),
+                            grant.id
+                        ));
+                    }
+                    if loaded
+                        .iter()
+                        .any(|existing: &PluginGrant| existing.id == grant.id)
+                    {
+                        return Err(format!("duplicate grant for `{}`", grant.id));
+                    }
+                    loaded.push(grant);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                read_error = Some(format!("could not read {}: {error}", dir.display()));
+            }
+        }
+
+        if let Some(error) = read_error {
+            return Err(error);
+        }
+
+        let had_legacy = !self.legacy_grants.is_empty();
+        if !loaded.is_empty() {
+            if had_legacy {
+                eprintln!(
+                    "[WARN] {} also contains legacy [plugins.grants]; using the per-plugin files",
+                    config_path.display()
+                );
+            }
+            loaded.sort_by(|left, right| left.id.cmp(&right.id));
+            self.grants = loaded;
+        } else if had_legacy {
+            // One-time migration: keep the legacy grants in memory, then save
+            // them as files and rewrite the main config without the block.
+            self.grants = std::mem::take(&mut self.legacy_grants);
+            eprintln!(
+                "[WARN] migrating [plugins.grants] to {}/; the main config will be rewritten",
+                dir.display()
+            );
+        }
+        self.legacy_grants.clear();
+        self.needs_grant_save = had_legacy;
+        Ok(())
+    }
+
+    /// Writes one grant file per plugin and removes files for grants that no
+    /// longer exist.
+    pub fn save_grants(&self, config_path: &Path) -> Result<(), String> {
+        let dir = self.grants_dir_for(config_path);
+        if self.grants.is_empty() {
+            if dir.is_dir() {
+                remove_stale_grants(&dir, &BTreeSet::new())?;
+            }
+            return Ok(());
+        }
+
+        create_private_dir(&dir)?;
+        let mut keep = BTreeSet::new();
+        for grant in &self.grants {
+            validate_id(&grant.id).map_err(|error| error.detail)?;
+            let name = format!("{}.toml", grant.id);
+            let path = dir.join(&name);
+            let body = toml::to_string_pretty(grant)
+                .map_err(|error| format!("could not serialize `{}`: {error}", grant.id))?;
+            let body = format!(
+                "# Written by anth-panel. This is the frozen authority for the plugin.\n                 # Change it with `anth-panel plugin approve`, not by hand.\n{body}"
+            );
+            crate::config::write_private_atomic(&path, &body)
+                .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+            keep.insert(name);
+        }
+        remove_stale_grants(&dir, &keep)
     }
 
     pub fn grant(&self, id: &str) -> Option<&PluginGrant> {
@@ -109,6 +271,43 @@ impl PluginsConfig {
         let index = self.grants.iter().position(|grant| grant.id == id)?;
         Some(self.grants.remove(index))
     }
+}
+
+fn create_private_dir(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
+    // `mode` applies only on creation; tighten a directory made by an older
+    // build or by hand.
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("could not tighten {}: {error}", dir.display()))
+}
+
+fn remove_stale_grants(dir: &Path, keep: &BTreeSet<String>) -> Result<(), String> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("could not read {}: {error}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("could not read {}: {error}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if keep.contains(name) {
+            continue;
+        }
+        fs::remove_file(&path)
+            .map_err(|error| format!("could not remove {}: {error}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// The installed set, loaded once and refreshed when the config changes.

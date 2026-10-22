@@ -377,3 +377,116 @@ fn server_defaults_follow_the_build_profile() {
         assert_eq!(Config::server_default(), Config::default());
     }
 }
+
+#[test]
+fn legacy_grants_migrate_to_one_file_per_plugin() {
+    let dir = unique_dir("grant-migration");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    let text = r#"
+socket_path = "/tmp/migrate.sock"
+
+[plugins]
+enabled = true
+
+[[plugins.grants]]
+id = "org.anth.test"
+version = "0.1.0"
+wasm_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+enabled = true
+recipes = []
+"#;
+    std::fs::write(&path, text).unwrap();
+
+    let config = Config::load_or_create(&path).expect("migration should succeed");
+    assert_eq!(config.plugins.grants.len(), 1);
+    assert_eq!(config.plugins.grants[0].id, "org.anth.test");
+
+    let main = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !main.contains("[[plugins.grants]]"),
+        "the legacy block must be removed: {main}"
+    );
+    let grant_path = dir.join("plugins.d").join("org.anth.test.toml");
+    let grant = std::fs::read_to_string(&grant_path).expect("the grant file exists");
+    assert!(grant.contains("org.anth.test"), "{grant}");
+
+    let reloaded = Config::load(&path).expect("the files load again");
+    assert_eq!(reloaded.plugins.grants.len(), 1);
+    assert_eq!(reloaded.plugins.grants[0].id, "org.anth.test");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_malformed_grant_file_is_a_load_error() {
+    let dir = unique_dir("grant-malformed");
+    std::fs::create_dir_all(dir.join("plugins.d")).unwrap();
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "socket_path = \"/tmp/grant.sock\"\n").unwrap();
+    std::fs::write(
+        dir.join("plugins.d").join("org.anth.bad.toml"),
+        "not = toml = at all",
+    )
+    .unwrap();
+
+    let error = Config::load(&path).unwrap_err();
+    assert!(error.contains("org.anth.bad.toml"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_grant_file_name_must_match_its_id() {
+    let dir = unique_dir("grant-mismatch");
+    std::fs::create_dir_all(dir.join("plugins.d")).unwrap();
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "socket_path = \"/tmp/grant.sock\"\n").unwrap();
+    std::fs::write(
+        dir.join("plugins.d").join("org.anth.one.toml"),
+        r#"
+id = "org.anth.two"
+version = "0.1.0"
+wasm_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+recipes = []
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let error = Config::load(&path).unwrap_err();
+    assert!(error.contains("must match"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn grant_files_are_written_with_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_dir("grant-mode");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    let mut config = Config::default();
+    config
+        .plugins
+        .grants
+        .push(anth_panel::plugins::PluginGrant {
+            id: "org.anth.test".to_string(),
+            version: "0.1.0".to_string(),
+            wasm_sha256: "a".repeat(64),
+            recipes: Vec::new(),
+            enabled: true,
+        });
+    config.save(&path).unwrap();
+
+    let grant = dir.join("plugins.d").join("org.anth.test.toml");
+    let mode = std::fs::metadata(&grant).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    let dir_mode = std::fs::metadata(dir.join("plugins.d"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(dir_mode, 0o700);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -2597,6 +2597,37 @@ async fn plugin_install_route_accepts_an_unsigned_bundle_with_the_bypass() {
 }
 
 #[tokio::test]
+async fn plugin_install_route_persists_the_grant_file() {
+    let root = plugin_root("persist");
+    let mut config = Config::default();
+    config.plugins.enabled = true;
+    config.plugins.install_from_web = true;
+    config.plugins.require_signature = false;
+    config.plugins.root = root.to_string_lossy().into_owned();
+    let config_path = root.join("config.toml");
+
+    let app = anth_panel::router(AppState::with_config_path(config, config_path));
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugins/install")
+                .body(Body::from(plugin_bundle(None)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let grant = root.join("plugins.d").join("org.anth.webtest.toml");
+    assert!(grant.is_file(), "the grant file must be persisted");
+    let text = std::fs::read_to_string(&grant).unwrap();
+    assert!(text.contains("org.anth.webtest"), "{text}");
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[tokio::test]
 async fn plugin_install_route_requires_a_signature_when_so_configured() {
     let root = plugin_root("required");
     let key = SigningKey::from_bytes(&[23u8; 32]);

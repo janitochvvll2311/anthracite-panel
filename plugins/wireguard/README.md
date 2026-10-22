@@ -5,9 +5,10 @@ third-party plugin takes — a Rust guest compiled to `wasm32-unknown-unknown`, 
 manifest whose capabilities the host freezes at install, a web module served
 from the bundle, and the tests that pin all three.
 
-It manages interfaces and peers; it does not create tunnels. `wg-quick` and the
-`/etc/wireguard` files stay the operator's, which is why the plugin needs only
-`wg show` and `wg set`.
+It manages **persistent** WireGuard interfaces and peers: the panel can create,
+edit and delete `/etc/wireguard/<iface>.conf`, and every peer change is written
+back to that file. Interface creation, updates, deletion and peer changes are
+host-owned jobs; the guest never sends an argv or touches a path.
 
 ## Build
 
@@ -57,10 +58,6 @@ openssl pkey -in plugin-signing.pem -pubout -outform DER \
   | tail -c 32 | od -An -v -tx1 | tr -d ' \n'
 ```
 
-Without the variable the script writes an unsigned bundle and says so. Installing
-it then requires the explicit `require_signature = false` bypass, which makes
-`plugin install` print a warning.
-
 ## Install
 
 ```bash
@@ -68,71 +65,89 @@ anth-panel plugin install dist/org.anth.wireguard.zip
 ```
 
 `install` validates every capability against the host allowlist, probes the ABI
-and freezes the recipes in the config. It checks `plugin.sig` against
-`[plugins] public_key`; a missing or mismatching signature is refused unless the
-operator set `[plugins] require_signature = false`, in which case the command
-prints which check was skipped. `wg.add_peer_endpoint` carries free text for the
-endpoint, which is why the capability sets `accepts_text = true`.
+and writes the frozen grant to `<config_dir>/plugins.d/org.anth.wireguard.toml`.
+It checks `plugin.sig` against `[plugins] public_key`; a missing or mismatching
+signature is refused unless the operator set
+`[plugins] require_signature = false`, in which case the command prints which
+check was skipped.
+
+The plugin needs `wg`, `wg-quick` and `ip`, and permission to write
+`/etc/wireguard`. The daemon must run as root or have the relevant capabilities;
+release builds default `sudo = false`.
 
 ## Capabilities
+
+Read-only views:
 
 | Id | argv |
 | --- | --- |
 | `wg.interfaces` | `wg show interfaces` |
 | `wg.show` | `wg show {interface}` |
 | `wg.dump` | `wg show {interface} dump` |
-| `wg.add_peer` | `wg set {interface} peer {public_key} allowed-ips {allowed_ips}` |
-| `wg.add_peer_endpoint` | the same, plus `endpoint {endpoint}` |
-| `wg.remove_peer` | `wg set {interface} peer {public_key} remove` |
 
-The last two exist as separate recipes rather than one with an optional
-trailing argument. `wg` takes `endpoint` and its value as two argv elements, and
-the host drops whole elements, so an omitted value would leave a bare `endpoint`
-behind. One capability per shape keeps every approved command complete.
+Host jobs (the host owns the argv, paths and secret handling):
+
+| Id | Job | Purpose |
+| --- | --- | --- |
+| `wg.list` | `wireguard.list` | configured interfaces, addresses, MTU and peers |
+| `wg.create` | `wireguard.create` | write the config and bring the interface up |
+| `wg.update` | `wireguard.update` | edit interface fields and apply them |
+| `wg.delete` | `wireguard.delete` | bring it down and remove the config |
+| `wg.add_peer` | `wireguard.add_peer` | append a `[Peer]` block and apply it |
+| `wg.remove_peer` | `wireguard.remove_peer` | remove a `[Peer]` block and apply it |
+
+`wg.create` generates the private key with `wg genkey` when the request omits
+one. An imported key is written to the `0600` config and is never returned by
+the API. `wg.update` preserves the existing private key and peer sections when
+those fields are omitted.
 
 ## Anchors
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/interfaces` | every interface with its peers |
+| `GET` | `/interfaces` | configured interfaces with addresses, MTU and peers |
+| `POST` | `/interfaces` | create one persistent interface |
+| `PATCH` | `/interfaces/{interface}` | update one interface |
+| `DELETE` | `/interfaces/{interface}` | delete one interface |
 | `GET` | `/peers?interface=wg0` | one interface's peers |
-| `POST` | `/peers` | add a peer |
-| `GET` | `/status` | counts, for a dashboard badge |
+| `POST` | `/peers` | add and persist a peer |
+| `DELETE` | `/peers` | remove a peer from the config and runtime |
+| `GET` | `/status` | counts for a dashboard badge |
 
 They mount under `/api/plugins/org.anth.wireguard/`. The web module derives that
-prefix from `import.meta.url` instead of hardcoding it, so a different mount
-point does not need an edit.
+prefix from `import.meta.url` instead of hardcoding it.
 
-The browser gets a body as a JSON *string* (`plugins::api::anchor` does not
-parse an anchor body), so the guest parses it before reading fields. The
-integration test drives `POST /peers` through the real router for that reason.
-
-The bundle declares one UI anchor, `dashboard.widget` → `anth-wireguard`, which
-`web/wireguard.js` defines. It deliberately declares no `panel.network.tab`:
-the shell mounts only the dashboard slot today, so that anchor would resolve to
-an undefined tag and render nothing.
-
-`POST /peers` body:
+Create body:
 
 ```json
 {
   "interface": "wg0",
-  "public_key": "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
-  "allowed_ips": ["10.0.0.2/32"],
-  "endpoint": "vpn.example.net:51820"
+  "private_key": "optional; generated when omitted",
+  "listen_port": 51820,
+  "addresses": ["10.0.0.1/24"],
+  "mtu": 1420
 }
 ```
 
-`endpoint` is optional and selects the `wg.add_peer_endpoint` recipe.
+Update body accepts the same fields except `interface`, which comes from the
+path. `POST /peers` takes `interface`, `public_key`, `allowed_ips` and an
+optional `endpoint`; `DELETE /peers` takes `interface` and `public_key`.
+
+The bundle declares two UI anchors:
+
+- `dashboard.widget` → `anth-wireguard` (compact status)
+- `panel.network.tab` → `anth-wireguard-panel`, label `WireGuard`
+
+The second becomes a tab inside the Network theme.
 
 ## Security notes
 
 - The guest never sends an argv or a program name. It sends values; the host
-  renders the argv from the frozen recipe.
-- `public_key` is validated as base64 that decodes to 32 bytes, both by the host
-  and by the guest. `allowed_ips` is a comma-separated CIDR list with no spaces,
-  because a space would be passed to `wg` verbatim.
-- No capability can read a private key: the only `wg show` forms granted are the
-  human summary and the dump, and neither is filtered — so granting `wg.show`
-  grants what that command prints, which never includes a private key. Keep it
-  that way if you add capabilities.
+  renders the argv from the frozen recipe or the job.
+- Interface names, keys, ports, CIDRs and MTUs are validated by the host.
+- The config lives under `/etc/wireguard` with mode `0600`; the directory is
+  `0700`. Writes are atomic.
+- The private key is not in argv, not in logs and not in a job reply.
+- A failed create removes the config it just wrote.
+- Deleting an interface is confirmed in the UI and removes both the runtime
+  link and the config.

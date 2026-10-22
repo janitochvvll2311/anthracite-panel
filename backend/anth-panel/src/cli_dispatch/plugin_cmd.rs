@@ -1,6 +1,6 @@
 use super::super::main_prelude::*;
 
-/// `plugin` acts on the bundle directory and the grants in the config, so it
+/// `plugin` acts on the bundle directory and the per-plugin grant files, so it
 /// runs locally, like `auth` and `config`. A running server reads the grants at
 /// start, and the command says so when it changes anything.
 pub fn run_plugin(config_path: &str, args: &PluginArgs) -> ExitCode {
@@ -229,11 +229,12 @@ pub fn run_plugin_call(
     };
 
     let runner = anth_panel::command::SystemRunner::new(config.sudo);
-    match anth_panel::plugins::runtime::invoke(
+    match anth_panel::plugins::runtime::invoke_with_jobs(
         &wasm,
         &grant.id,
         &grant,
         &runner,
+        &anth_panel::plugins::jobs::SystemJobs::default(),
         &request,
         config.plugins.fuel,
     ) {

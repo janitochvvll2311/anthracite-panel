@@ -151,6 +151,46 @@ fn a_host_job_cannot_be_called_by_a_guest() {
     assert!(runner.calls().is_empty());
 }
 
+struct FixedJobs;
+
+impl PluginJobs for FixedJobs {
+    fn run(
+        &self,
+        job: &str,
+        args: &std::collections::BTreeMap<String, String>,
+        _runner: &dyn CommandRunner,
+    ) -> Result<String, String> {
+        Ok(format!(
+            "{{\"job\":\"{job}\",\"interface\":\"{}\"}}",
+            args["interface"]
+        ))
+    }
+}
+
+#[test]
+fn a_granted_host_job_reaches_the_job_table() {
+    let mut job = grant();
+    job.recipes[0].job = Some("wireguard.update".to_string());
+    job.recipes[0].program = None;
+    job.recipes[0].argv.clear();
+
+    let runner = Recorder::ok("");
+    let reply = invoke_with_jobs(
+        &guest(),
+        "org.anth.test",
+        &job,
+        &runner,
+        &FixedJobs,
+        request(),
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(reply.execs, 1);
+    assert!(runner.calls().is_empty(), "a job owns its argv");
+    assert!(reply.body.contains("\"status\":200"), "{}", reply.body);
+}
+
 #[test]
 fn a_narrowed_recipe_refuses_the_argument_it_no_longer_declares() {
     let runner = Recorder::ok("");
@@ -469,6 +509,7 @@ fn the_deadline_traps_the_guest_instead_of_answering_every_call() {
             plugin: "org.anth.test".to_string(),
             grant: &grant,
             runner: &runner,
+            jobs: &NoJobs,
             log: Vec::new(),
             log_bytes: 0,
             log_dropped: 0,

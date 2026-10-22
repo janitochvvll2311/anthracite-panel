@@ -481,3 +481,110 @@ fn a_cli_envelope_reaches_the_cli_half() {
     assert_eq!(parsed["status"], 200);
     assert_eq!(parsed["body"]["interfaces"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn the_list_job_supplies_configured_interfaces_and_addresses() {
+    let mut executor = Recorded::default();
+    executor.replies.insert(
+        "wg.list".to_string(),
+        json!({
+            "ok": true,
+            "stdout": "[{\"interface\":\"wg0\",\"up\":false,\"listen_port\":51820,\"addresses\":[\"10.0.0.1/24\"],\"mtu\":1420,\"peers\":[]}]",
+            "stderr": ""
+        }),
+    );
+
+    let body = route(&mut executor, &http("GET", "/interfaces"));
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+
+    assert_eq!(parsed["status"], 200);
+    let entry = &parsed["body"]["interfaces"][0];
+    assert_eq!(entry["interface"], "wg0");
+    assert_eq!(entry["addresses"][0], "10.0.0.1/24");
+    assert!(executor.called("wg.list"));
+    assert!(!executor.called("wg.interfaces"));
+}
+
+#[test]
+fn creating_an_interface_sends_the_typed_values_to_the_job() {
+    let mut executor = Recorded::default();
+    executor.replies.insert(
+        "wg.create".to_string(),
+        json!({"ok": true, "stdout": "{\"interface\":\"wg0\",\"up\":true,\"public_key\":\"pub\"}", "stderr": ""}),
+    );
+    let mut request = http("POST", "/interfaces");
+    request.body = Some(json!({
+        "interface": "wg0",
+        "private_key": "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
+        "listen_port": 51820,
+        "addresses": ["10.0.0.1/24"],
+        "mtu": 1420
+    }));
+
+    let body = route(&mut executor, &request);
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+
+    assert_eq!(parsed["status"], 201);
+    assert_eq!(parsed["body"]["interface"], "wg0");
+    let (capability, args) = executor
+        .calls
+        .iter()
+        .find(|(id, _)| id == "wg.create")
+        .expect("the create job is called");
+    assert_eq!(capability, "wg.create");
+    assert_eq!(args["interface"], "wg0");
+    assert_eq!(args["listen_port"], "51820");
+    assert_eq!(args["addresses"], "10.0.0.1/24");
+    assert_eq!(args["mtu"], "1420");
+}
+
+#[test]
+fn updating_an_interface_takes_the_name_from_the_path() {
+    let mut executor = Recorded::default();
+    executor.replies.insert(
+        "wg.update".to_string(),
+        json!({"ok": true, "stdout": "{\"interface\":\"wg0\",\"up\":true}", "stderr": ""}),
+    );
+    let mut request = http("PATCH", "/interfaces/wg0");
+    request.body = Some(json!({"listen_port": 51821, "mtu": 1400}));
+
+    let body = route(&mut executor, &request);
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["status"], 200);
+
+    let (_, args) = executor
+        .calls
+        .iter()
+        .find(|(id, _)| id == "wg.update")
+        .expect("the update job is called");
+    assert_eq!(args["interface"], "wg0");
+    assert_eq!(args["listen_port"], "51821");
+    assert_eq!(args["mtu"], "1400");
+}
+
+#[test]
+fn deleting_an_interface_and_removing_a_peer_use_their_jobs() {
+    let mut executor = Recorded::default();
+    executor.replies.insert(
+        "wg.delete".to_string(),
+        json!({"ok": true, "stdout": "{\"interface\":\"wg0\",\"removed\":true}", "stderr": ""}),
+    );
+    executor.replies.insert(
+        "wg.remove_peer".to_string(),
+        json!({"ok": true, "stdout": "{\"interface\":\"wg0\",\"up\":true}", "stderr": ""}),
+    );
+
+    let body = route(&mut executor, &http("DELETE", "/interfaces/wg0"));
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["status"], 200);
+
+    let mut request = http("DELETE", "/peers");
+    request.body = Some(json!({
+        "interface": "wg0",
+        "public_key": "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg="
+    }));
+    let body = route(&mut executor, &request);
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["status"], 200);
+
+    assert!(executor.called("wg.delete"));
+    assert!(executor.called("wg.remove_peer"));
+}

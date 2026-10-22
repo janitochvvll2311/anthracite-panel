@@ -662,20 +662,32 @@ fn a_grant_freezes_the_program_and_the_template_not_only_the_id() {
         "the validator must be frozen with the recipe, not re-read from the manifest"
     );
 
-    // And it survives a config round trip, which is what the daemon reads on the
-    // next start.
+    // And it survives a grant-file round trip, which is what the daemon reads
+    // on the next start.
     let mut config = config;
     config.upsert_grant(grant);
-    let text = toml::to_string(&config).unwrap();
-    let reloaded: PluginsConfig = toml::from_str(&text).unwrap();
+    let config_path = dir.join("config.toml");
+    config
+        .save_grants(&config_path)
+        .expect("the grant file is written");
+    let mut reloaded = PluginsConfig {
+        grants_dir: config.grants_dir.clone(),
+        ..PluginsConfig::default()
+    };
+    reloaded.load_grants(&config_path).unwrap();
     let recipe = reloaded.grants[0].recipe("wg.status").unwrap();
     assert_eq!(recipe.argv, vec!["show", "{interface}", "dump"]);
     assert!(recipe.args.contains_key("interface"));
 }
 
 #[test]
-fn grants_round_trip_through_toml_inside_the_config() {
-    let mut config = PluginsConfig::default();
+fn grants_round_trip_through_their_own_files() {
+    let dir = scratch("grant-files");
+    let config_path = dir.join("config.toml");
+    let mut config = PluginsConfig {
+        grants_dir: Some(dir.join("plugins.d").to_string_lossy().into_owned()),
+        ..PluginsConfig::default()
+    };
     config.upsert_grant(PluginGrant {
         id: "org.anth.test".to_string(),
         version: "0.1.0".to_string(),
@@ -688,9 +700,20 @@ fn grants_round_trip_through_toml_inside_the_config() {
         enabled: true,
     });
 
-    let text = toml::to_string(&config).unwrap();
-    let parsed: PluginsConfig = toml::from_str(&text).unwrap();
-    assert_eq!(parsed, config);
+    config.save_grants(&config_path).unwrap();
+    assert!(
+        !toml::to_string(&config).unwrap().contains("[[grants]]"),
+        "the main config must not serialize grants"
+    );
+
+    let mut parsed = PluginsConfig {
+        grants_dir: config.grants_dir.clone(),
+        ..PluginsConfig::default()
+    };
+    parsed.load_grants(&config_path).unwrap();
+    assert_eq!(parsed.grants, config.grants);
+
+    fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

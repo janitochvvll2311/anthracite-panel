@@ -120,6 +120,8 @@ pub enum ArgType {
     Hex32,
     /// Exactly 64 hex characters, the shape of a SHA-256 digest.
     Hex64,
+    /// A link MTU: an integer in the range WireGuard accepts.
+    Mtu,
     /// A 32-byte key in standard base64, which is what `wg` prints and takes.
     ///
     /// Distinct from `Hex32`: a Curve25519 key is 32 bytes, but `wg` speaks
@@ -222,6 +224,10 @@ impl ArgType {
             }
             ArgType::Hex32 => expect_hex(value, 32),
             ArgType::Hex64 => expect_hex(value, 64),
+            ArgType::Mtu => match value.parse::<u32>() {
+                Ok(mtu) if (1280..=65535).contains(&mtu) => Ok(()),
+                _ => Err("not an MTU between 1280 and 65535".to_string()),
+            },
             ArgType::Base64Key => expect_base64_key(value),
             ArgType::CidrList => {
                 // `wg` splits on commas itself, so the list is validated one
@@ -474,12 +480,43 @@ pub fn render_argv(
     Ok(argv)
 }
 
+/// Validates the argument map of a host job.
+///
+/// A job has no argv template, so `render_argv` never runs for it. The same
+/// closed validator set still applies: every supplied name must be declared by
+/// the frozen recipe, every required name must be present, and every value must
+/// pass its `ArgType`.
+pub fn validate_values(
+    args: &BTreeMap<String, ArgSpec>,
+    values: &BTreeMap<String, String>,
+) -> Result<(), PluginError> {
+    for (name, value) in values {
+        let spec = args
+            .get(name)
+            .ok_or_else(|| PluginError::invalid(format!("argument `{name}` is not declared")))?;
+        spec.kind
+            .validate(value)
+            .map_err(|error| PluginError::invalid(format!("`{name}` {error}")))?;
+    }
+    for (name, spec) in args {
+        if !spec.optional && !values.contains_key(name) {
+            return Err(PluginError::invalid(format!(
+                "required argument `{name}` is missing"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Where a plugin's interface attaches inside the shell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiAnchor {
     pub slot: String,
     pub tag: String,
     pub module: String,
+    /// Label for a tab the shell creates. Falls back to the plugin name.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// One HTTP anchor. `path` is always relative to the plugin's namespace.
@@ -542,6 +579,12 @@ pub const PROGRAM_ALLOWLIST: &[&str] = &[
 /// these supplies no program and no template, only argument values.
 pub const KNOWN_JOBS: &[&str] = &[
     "host.info",
+    "wireguard.list",
+    "wireguard.create",
+    "wireguard.update",
+    "wireguard.delete",
+    "wireguard.add_peer",
+    "wireguard.remove_peer",
     "network.list",
     "network.state",
     "process.list",
@@ -725,44 +768,49 @@ fn validate_capability(capability: &Capability) -> Result<(), PluginError> {
         }
     }
 
-    let placeholders = capability.placeholders()?;
-    // An optional placeholder that is part of a larger element has no rendering
-    // that both omits it and keeps the element: it is refused at install time
-    // rather than left to fail on a request that omits the value.
-    for name in &placeholders {
-        let optional = capability
-            .args
-            .get(name)
-            .map(|spec| spec.optional)
-            .unwrap_or(false);
-        if !optional {
-            continue;
+    // A job owns its argv, so its declared arguments are consumed by the host
+    // rather than by placeholders. The argv checks apply only to the general
+    // program form.
+    if capability.job.is_none() {
+        let placeholders = capability.placeholders()?;
+        // An optional placeholder that is part of a larger element has no
+        // rendering that both omits it and keeps the element: it is refused at
+        // install time rather than left to fail on a request that omits it.
+        for name in &placeholders {
+            let optional = capability
+                .args
+                .get(name)
+                .map(|spec| spec.optional)
+                .unwrap_or(false);
+            if !optional {
+                continue;
+            }
+            let owns_element = capability
+                .argv
+                .iter()
+                .any(|part| part.trim() == format!("{{{name}}}"));
+            if !owns_element {
+                return Err(PluginError::invalid(format!(
+                    "optional `{name}` must be the whole argv element in capability `{}`",
+                    capability.id
+                )));
+            }
         }
-        let owns_element = capability
-            .argv
-            .iter()
-            .any(|part| part.trim() == format!("{{{name}}}"));
-        if !owns_element {
-            return Err(PluginError::invalid(format!(
-                "optional `{name}` must be the whole argv element in capability `{}`",
-                capability.id
-            )));
+        for name in capability.args.keys() {
+            if !placeholders.contains(name) {
+                return Err(PluginError::invalid(format!(
+                    "capability `{}` declares `{name}` but its argv never uses it",
+                    capability.id
+                )));
+            }
         }
-    }
-    for name in capability.args.keys() {
-        if !placeholders.contains(name) {
-            return Err(PluginError::invalid(format!(
-                "capability `{}` declares `{name}` but its argv never uses it",
-                capability.id
-            )));
-        }
-    }
-    for name in &placeholders {
-        if !capability.args.contains_key(name) {
-            return Err(PluginError::invalid(format!(
-                "capability `{}` uses `{{{name}}}` but declares no validator",
-                capability.id
-            )));
+        for name in &placeholders {
+            if !capability.args.contains_key(name) {
+                return Err(PluginError::invalid(format!(
+                    "capability `{}` uses `{{{name}}}` but declares no validator",
+                    capability.id
+                )));
+            }
         }
     }
 
@@ -915,6 +963,15 @@ fn validate_ui_anchor(anchor: &UiAnchor) -> Result<(), PluginError> {
         return Err(PluginError::denied(format!(
             "`{module}` must live under the bundle's `web/`"
         )));
+    }
+    if let Some(label) = &anchor.label {
+        let label = label.trim();
+        if label.is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
+            return Err(PluginError::invalid(format!(
+                "`{}` has an invalid UI label",
+                anchor.tag
+            )));
+        }
     }
     Ok(())
 }

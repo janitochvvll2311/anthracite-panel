@@ -404,8 +404,18 @@ impl Config {
         let path = path.as_ref();
 
         match std::fs::read_to_string(path) {
-            Ok(text) => Self::from_toml(&text)
-                .map_err(|source| format!("Error parsing config at {}: {source}", path.display())),
+            Ok(text) => {
+                let mut config = Self::from_toml(&text).map_err(|source| {
+                    format!("Error parsing config at {}: {source}", path.display())
+                })?;
+                config.plugins.load_grants(path).map_err(|source| {
+                    format!(
+                        "Error loading plugin grants for {}: {source}",
+                        path.display()
+                    )
+                })?;
+                Ok(config)
+            }
             Err(source) => Err(format!(
                 "Error reading config at {}: {source}",
                 path.display()
@@ -465,6 +475,13 @@ impl Config {
                 config
             }
         };
+
+        if config.plugins.needs_grant_save()
+            && let Err(e) = config.save(&path)
+        {
+            eprintln!("[ERROR] could not migrate [plugins.grants] to files: {e}");
+            return Err(e);
+        }
 
         if config.bootstrap_auth() {
             let printed = config.print_bootstrap_password();
@@ -548,6 +565,8 @@ impl Config {
             })?;
         }
 
+        self.plugins.save_grants(path)?;
+
         let body = self.to_toml().map_err(|source| {
             format!("Error serializing config at {}: {source}", path.display())
         })?;
@@ -583,6 +602,46 @@ fn write_private(path: &Path, body: &str) -> std::io::Result<()> {
     }
     file.write_all(body.as_bytes())?;
     file.sync_all()
+}
+
+/// Writes `body` to a sibling temporary file and renames it over `path`.
+///
+/// A grant file is authority; a crash halfway through a truncated file would
+/// make the daemon refuse to start, and a reader could observe half a recipe.
+/// The temporary file is created with mode `0600` and `create_new`, then
+/// renamed, so the destination is either the old complete file or the new one.
+pub(crate) fn write_private_atomic(path: &Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        std::fs::create_dir_all(parent)?;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("plugin");
+    let temp = path.with_file_name(format!(".{name}.tmp-{}-{nanos}", std::process::id()));
+
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = options.mode(0o600).open(&temp)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(body.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temp, path)
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 #[cfg(test)]

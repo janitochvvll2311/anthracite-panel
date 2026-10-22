@@ -13,7 +13,8 @@ use wasmi::{
     TypedFunc,
 };
 
-use super::manifest::{PluginGrant, render_argv};
+use super::jobs::{NoJobs, PluginJobs};
+use super::manifest::{PluginGrant, render_argv, validate_values};
 use crate::command::{CommandError, CommandRunner};
 
 /// The manifest `abi` this host implements.
@@ -133,6 +134,7 @@ struct Host<'a> {
     plugin: String,
     grant: &'a PluginGrant,
     runner: &'a dyn CommandRunner,
+    jobs: &'a dyn PluginJobs,
     log: Vec<String>,
     /// Bytes already held by `log`, so the cap does not rescan the vector.
     log_bytes: usize,
@@ -161,6 +163,22 @@ pub fn invoke(
     request: &str,
     fuel: u64,
 ) -> Result<GuestReply, GuestError> {
+    invoke_with_jobs(wasm, plugin, grant, runner, &NoJobs, request, fuel)
+}
+
+/// Runs one guest invocation with an explicit host job table.
+///
+/// `invoke` uses [`NoJobs`] for tests and call sites that must not expose host
+/// operations. The HTTP anchor and `plugin call` use [`super::jobs::SystemJobs`].
+pub fn invoke_with_jobs(
+    wasm: &[u8],
+    plugin: &str,
+    grant: &PluginGrant,
+    runner: &dyn CommandRunner,
+    jobs: &dyn PluginJobs,
+    request: &str,
+    fuel: u64,
+) -> Result<GuestReply, GuestError> {
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
@@ -179,6 +197,7 @@ pub fn invoke(
             plugin: plugin.to_string(),
             grant,
             runner,
+            jobs,
             log: Vec::new(),
             log_bytes: 0,
             log_dropped: 0,
@@ -361,13 +380,10 @@ fn execute(
     let Some(recipe) = caller.data().grant.recipe(capability).cloned() else {
         return Err(format!("`{plugin}` is not granted the capability `{capability}`").into());
     };
-    if recipe.job.is_some() {
-        return Err(format!("`{capability}` is a host job and cannot be called by a guest").into());
+    let program = recipe.program.clone();
+    if program.is_none() && recipe.job.is_none() {
+        return Err(format!("`{capability}` names neither a program nor a job").into());
     }
-    let program = recipe
-        .program
-        .clone()
-        .ok_or_else(|| format!("`{capability}` names no program"))?;
 
     // Two bounds that fuel cannot provide. Fuel counts guest instructions, and
     // one `anth_exec` costs a handful of them for one subprocess, so without
@@ -390,6 +406,24 @@ fn execute(
 
     let values: BTreeMap<String, String> = serde_json::from_str(arguments)
         .map_err(|error| format!("arguments must be a JSON object: {error}"))?;
+
+    if let Some(job) = recipe.job.clone() {
+        validate_values(&recipe.args, &values).map_err(|error| ExecError::Refused(error.detail))?;
+        let result = caller
+            .data()
+            .jobs
+            .run(&job, &values, caller.data().runner)
+            .map_err(ExecError::Refused)?;
+        caller.data_mut().execs += 1;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "stdout": result,
+            "stderr": "",
+        })
+        .to_string());
+    }
+
+    let program = program.expect("checked above");
     let argv = render_argv(&recipe.as_capability(), &values)
         .map_err(|error| ExecError::Refused(error.detail))?;
     let borrowed = argv.iter().map(String::as_str).collect::<Vec<_>>();

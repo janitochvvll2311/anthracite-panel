@@ -456,6 +456,7 @@ fn no_validator_accepts_a_leading_dash() {
         ArgType::Cidr,
         ArgType::Hex32,
         ArgType::Hex64,
+        ArgType::Mtu,
         ArgType::Base64Key,
         ArgType::CidrList,
         ArgType::Path,
@@ -491,4 +492,29 @@ fn port_rejects_zero_and_wraparound() {
     assert!(ArgType::Port.validate("51820").is_ok());
     assert!(ArgType::Port.validate("0").is_err());
     assert!(ArgType::Port.validate("65536").is_err());
+}
+
+#[test]
+fn mtu_is_bounded_to_the_range_wireguard_accepts() {
+    assert!(ArgType::Mtu.validate("1280").is_ok());
+    assert!(ArgType::Mtu.validate("1420").is_ok());
+    assert!(ArgType::Mtu.validate("65535").is_ok());
+    assert!(ArgType::Mtu.validate("1279").is_err());
+    assert!(ArgType::Mtu.validate("65536").is_err());
+    assert!(ArgType::Mtu.validate("1500.5").is_err());
+}
+
+#[test]
+fn a_ui_label_is_optional_and_bounded() {
+    let text = format!(
+        "{MINIMAL}\n[[ui]]\nslot = \"panel.network.tab\"\ntag = \"anth-wireguard-panel\"\nmodule = \"web/wireguard.js\"\nlabel = \"WireGuard\"\n"
+    );
+    let parsed = manifest(&text).unwrap();
+    assert_eq!(parsed.ui[0].label.as_deref(), Some("WireGuard"));
+
+    let too_long = text.replace("WireGuard", &"x".repeat(65));
+    assert!(manifest(&too_long).is_err());
+
+    let control = text.replace("WireGuard", "bad\nlabel");
+    assert!(manifest(&control).is_err());
 }
