@@ -14,6 +14,7 @@
 
 pub mod bundle;
 pub mod manifest;
+pub mod runtime;
 
 use std::path::{Path, PathBuf};
 

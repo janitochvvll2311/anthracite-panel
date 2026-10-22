@@ -135,6 +135,12 @@ pub enum PluginCommand {
     Enable(PluginToggleArgs),
     /// Confirm the capabilities of a plugin whose version changed.
     Approve(PluginApproveArgs),
+    /// Run one capability of an installed plugin through its wasm module.
+    ///
+    /// This is the CLI anchor: a plugin answers a request here instead of the
+    /// core doing it, and the same frozen recipe and fuel budget that the HTTP
+    /// side would use are applied.
+    Call(PluginCallArgs),
 }
 
 /// `config` subcommands. `get` prints the whole file; `set` changes one key.
@@ -978,4 +984,19 @@ pub struct PluginApproveArgs {
     /// Re-read the bundle and record its current capabilities.
     #[arg(long)]
     pub accept_capabilities: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct PluginCallArgs {
+    /// Plugin id, for example `org.anth.wireguard`.
+    pub id: String,
+    /// JSON envelope to hand the plugin, as documented in the plugins design.
+    ///
+    /// Pass `-` to read it from stdin, which is how a caller with binary or
+    /// large payloads avoids argv limits.
+    #[arg(
+        value_name = "REQUEST",
+        default_value = "{\"kind\":\"cli\",\"argv\":[]}"
+    )]
+    pub request: String,
 }

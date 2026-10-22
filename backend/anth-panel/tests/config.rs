@@ -132,7 +132,7 @@ fn load_or_create_writes_the_default_when_the_file_is_missing() {
     let path = dir.join("config.toml");
     assert!(!path.exists());
 
-    let config = Config::load_or_create(&path);
+    let config = Config::load_or_create(&path).unwrap();
 
     assert_eq!(
         without_auth(&config),
@@ -153,7 +153,7 @@ fn the_first_start_creates_an_admin_account() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("config.toml");
 
-    let config = Config::load_or_create(&path);
+    let config = Config::load_or_create(&path).unwrap();
 
     assert!(
         config.auth.enabled,
@@ -199,8 +199,8 @@ fn a_second_start_does_not_replace_the_account() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("config.toml");
 
-    let first = Config::load_or_create(&path);
-    let second = Config::load_or_create(&path);
+    let first = Config::load_or_create(&path).unwrap();
+    let second = Config::load_or_create(&path).unwrap();
 
     assert_eq!(first.auth.password_hash, second.auth.password_hash);
     assert_eq!(first.auth.jwt_secret, second.auth.jwt_secret);
@@ -228,7 +228,7 @@ fn load_or_create_creates_missing_parent_directories() {
     let dir = unique_dir("create-nested");
     let path = dir.join("etc").join("anth").join("config.toml");
 
-    let config = Config::load_or_create(&path);
+    let config = Config::load_or_create(&path).unwrap();
 
     assert_eq!(
         without_auth(&config),
@@ -251,7 +251,7 @@ fn load_or_create_keeps_an_existing_file_untouched() {
     };
     custom.save(&path).unwrap();
 
-    let config = Config::load_or_create(&path);
+    let config = Config::load_or_create(&path).unwrap();
 
     assert_eq!(without_auth(&config), custom);
     assert_eq!(
@@ -263,29 +263,57 @@ fn load_or_create_keeps_an_existing_file_untouched() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An unreadable or malformed file is replaced by a freshly written default,
-/// matching what the pre-refactor `anthd` did: the error branch always saved.
+/// A malformed file is refused, not replaced.
+///
+/// The previous behaviour wrote defaults over it. That turns any schema change
+/// into data loss: a plugin grant written by an older version failed to parse
+/// and the operator's `files.root`, `auth.username` and `jwt_secret` were
+/// silently gone. "No config" bootstraps; "config that will not parse" stops.
 #[test]
-fn load_or_create_replaces_a_malformed_file_with_defaults() {
+fn load_or_create_refuses_a_malformed_file_and_leaves_it_alone() {
     let dir = unique_dir("malformed");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("config.toml");
-    std::fs::write(&path, "not = = toml\n").unwrap();
+    let original = "not = = toml\n";
+    std::fs::write(&path, original).unwrap();
 
-    let config = Config::load_or_create(&path);
+    let error = Config::load_or_create(&path).unwrap_err();
+    assert!(
+        error.contains("parsing") || error.contains("parse"),
+        "the error must say the file did not parse: {error}"
+    );
 
     assert_eq!(
-        without_auth(&config),
-        without_auth(&Config::server_default())
+        std::fs::read_to_string(&path).unwrap(),
+        original,
+        "the file is the operator's and must survive a failed load byte for byte"
     );
-    let written = Config::load(&path).unwrap();
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The case that motivated the split: a config that parses under no current
+/// schema but holds settings nobody can reconstruct.
+#[test]
+fn a_stale_plugin_grant_does_not_take_the_rest_of_the_config_with_it() {
+    let dir = unique_dir("stale-grant");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+
+    // Written by hand rather than by `save`, because the point is a file the
+    // current schema rejects: the settings below must survive regardless.
+    let text = "socket_path = \"/tmp/custom.sock\"\n\
+                \n[files]\nroot = \"/srv/data\"\n\
+                \n[auth]\nusername = \"operator\"\n\
+                \n[[plugins.grants]]\nid = \"org.anth.test\"\nversion = \"0.1.0\"\nwasm_sha256 = \"aa\"\ncapabilities = [\"wg.status\"]\nenabled = true\n";
+    std::fs::write(&path, text).unwrap();
+
+    let error = Config::load_or_create(&path).unwrap_err();
+    assert!(error.contains("capabilities"), "{error}");
     assert_eq!(
-        without_auth(&written),
-        without_auth(&Config::server_default())
-    );
-    assert_eq!(
-        written.auth.password_hash, config.auth.password_hash,
-        "the file must hold the account the server is using"
+        std::fs::read_to_string(&path).unwrap(),
+        text,
+        "the operator's settings, including the stale grant, stay on disk"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

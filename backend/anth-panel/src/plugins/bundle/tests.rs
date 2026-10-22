@@ -8,6 +8,19 @@ use std::path::{Path, PathBuf};
 use sha2::Sha256;
 
 use super::*;
+
+/// A minimal recipe, for the grant tests that only care about the id.
+fn capability(id: &str, program: &str, argv: &[&str]) -> Capability {
+    Capability {
+        id: id.to_string(),
+        job: None,
+        program: Some(program.to_string()),
+        argv: argv.iter().map(|part| (*part).to_string()).collect(),
+        args: Default::default(),
+        accepts_text: false,
+    }
+}
+use crate::plugins::manifest::{Capability, GrantedCapability};
 use crate::plugins::{PluginRegistry, PluginsConfig, install_bundle};
 
 struct Member {
@@ -16,7 +29,8 @@ struct Member {
 }
 
 fn wasm_bytes() -> Vec<u8> {
-    // The contents do not matter at this stage: the installer only hashes them.
+    // An empty but well-formed module: the installer hashes it and then parses
+    // it, so the fixture has to survive both.
     b"\0asm\x01\0\0\0".to_vec()
 }
 
@@ -390,7 +404,7 @@ fn a_loaded_plugin_advertises_the_granted_capabilities_not_the_manifests() {
     let (installed, grant) = install_bundle(&bundle, &config).unwrap();
 
     // The grant froze no capability; the manifest now claims one.
-    assert!(grant.capabilities.is_empty());
+    assert!(grant.allowed_ids().is_empty());
     let wasm = wasm_bytes();
     fs::write(
         installed.root.join("plugin.toml"),
@@ -534,7 +548,11 @@ fn a_capability_is_allowed_only_through_its_grant() {
         id: "org.anth.test".to_string(),
         version: "0.1.0".to_string(),
         wasm_sha256: "0".repeat(64),
-        capabilities: vec!["wg.status".to_string()],
+        recipes: vec![GrantedCapability::from(&capability(
+            "wg.status",
+            "wg",
+            &["show"],
+        ))],
         enabled: true,
     });
 
@@ -553,19 +571,88 @@ fn a_grant_is_replaced_rather_than_duplicated() {
         id: "org.anth.test".to_string(),
         version: "0.1.0".to_string(),
         wasm_sha256: "0".repeat(64),
-        capabilities: vec!["a".to_string()],
+        recipes: vec![GrantedCapability::from(&capability("a", "wg", &["show"]))],
         enabled: true,
     };
     config.upsert_grant(base.clone());
 
     let mut approved = base;
     approved.version = "0.2.0".to_string();
-    approved.capabilities.push("b".to_string());
+    approved
+        .recipes
+        .push(GrantedCapability::from(&capability("b", "wg", &["show"])));
     config.upsert_grant(approved);
 
     assert_eq!(config.grants.len(), 1);
     assert_eq!(config.grants[0].version, "0.2.0");
-    assert_eq!(config.grants[0].capabilities, vec!["a", "b"]);
+    assert_eq!(config.grants[0].allowed_ids(), vec!["a", "b"]);
+}
+
+#[test]
+fn an_install_refuses_a_module_the_host_cannot_load() {
+    let dir = scratch("notwasm");
+    let bytes = b"this is not wasm".to_vec();
+    let bundle = write_bundle(
+        &dir,
+        "notwasm",
+        &[
+            Member {
+                name: "plugin.toml",
+                bytes: manifest_text(&sha_of(&bytes), "").into_bytes(),
+            },
+            Member {
+                name: "plugin.wasm",
+                bytes,
+            },
+        ],
+    );
+    let config = config_at(&dir.join("plugins"));
+
+    let error = install_bundle(&bundle, &config).unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Invalid, "{}", error.detail);
+    assert!(
+        error.detail.contains("cannot be loaded"),
+        "{}",
+        error.detail
+    );
+    assert!(
+        !dir.join("plugins").join("org.anth.test").exists(),
+        "a refused bundle must leave nothing behind"
+    );
+}
+
+#[test]
+fn a_grant_freezes_the_program_and_the_template_not_only_the_id() {
+    // Phase 8a froze ids. Phase 8b needs the recipe itself, because `invoke`
+    // renders argv from the grant: if only the id were stored, the program and
+    // template would come from the manifest, which an attacker can rewrite.
+    let dir = scratch("recipe");
+    let bundle = valid_bundle(
+        &dir,
+        "\n[[capability]]\nid = \"wg.status\"\nprogram = \"wg\"\n\
+         argv = [\"show\", \"{interface}\", \"dump\"]\n\
+         [capability.args.interface]\ntype = \"ifname\"\n",
+    );
+    let config = config_at(&dir.join("plugins"));
+    let (_, grant) = install_bundle(&bundle, &config).unwrap();
+
+    let recipe = grant.recipe("wg.status").expect("the recipe is frozen");
+    assert_eq!(recipe.program.as_deref(), Some("wg"));
+    assert_eq!(recipe.argv, vec!["show", "{interface}", "dump"]);
+    assert!(
+        recipe.args.contains_key("interface"),
+        "the validator must be frozen with the recipe, not re-read from the manifest"
+    );
+
+    // And it survives a config round trip, which is what the daemon reads on the
+    // next start.
+    let mut config = config;
+    config.upsert_grant(grant);
+    let text = toml::to_string(&config).unwrap();
+    let reloaded: PluginsConfig = toml::from_str(&text).unwrap();
+    let recipe = reloaded.grants[0].recipe("wg.status").unwrap();
+    assert_eq!(recipe.argv, vec!["show", "{interface}", "dump"]);
+    assert!(recipe.args.contains_key("interface"));
 }
 
 #[test]
@@ -575,7 +662,11 @@ fn grants_round_trip_through_toml_inside_the_config() {
         id: "org.anth.test".to_string(),
         version: "0.1.0".to_string(),
         wasm_sha256: "a".repeat(64),
-        capabilities: vec!["wg.status".to_string()],
+        recipes: vec![GrantedCapability::from(&capability(
+            "wg.status",
+            "wg",
+            &["show"],
+        ))],
         enabled: true,
     });
 
@@ -591,14 +682,14 @@ fn grants_by_id_indexes_every_grant() {
             id: "org.anth.one".to_string(),
             version: "0.1.0".to_string(),
             wasm_sha256: "0".repeat(64),
-            capabilities: Vec::new(),
+            recipes: Vec::new(),
             enabled: true,
         },
         PluginGrant {
             id: "org.anth.two".to_string(),
             version: "0.1.0".to_string(),
             wasm_sha256: "1".repeat(64),
-            capabilities: Vec::new(),
+            recipes: Vec::new(),
             enabled: true,
         },
     ];
@@ -676,7 +767,7 @@ fn a_capability_job_is_accepted_without_a_program() {
     );
     let config = config_at(&dir.join("plugins"));
     let (_installed, grant) = install_bundle(&bundle, &config).unwrap();
-    assert_eq!(grant.capabilities, vec!["host.read".to_string()]);
+    assert_eq!(grant.allowed_ids(), vec!["host.read".to_string()]);
     fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -702,7 +793,7 @@ fn a_broken_plugin_does_not_stop_the_others_from_loading() {
         id: "org.anth.broken".to_string(),
         version: "0.1.0".to_string(),
         wasm_sha256: sha_of(&wasm),
-        capabilities: Vec::new(),
+        recipes: Vec::new(),
         enabled: true,
     };
 
@@ -711,4 +802,53 @@ fn a_broken_plugin_does_not_stop_the_others_from_loading() {
     assert_eq!(plugins[0].id, "org.anth.test");
     assert!(problems.iter().any(|p| p.contains("org.anth.broken")));
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn load_refuses_a_module_that_hashes_right_but_cannot_be_loaded() {
+    // The digest is checked first, so this is the case where the bytes are the
+    // approved ones and still unusable. `load` has to say so, or a daemon start
+    // and `plugin call` disagree about whether the plugin works.
+    let dir = scratch("loadprobe");
+    let config = config_at(&dir.join("plugins"));
+    let bundle = valid_bundle(&dir, "");
+    let (_, grant) = install_bundle(&bundle, &config).unwrap();
+    let root = dir.join("plugins").join("org.anth.test");
+
+    // Bytes the grant will approve and the parser will not accept: version 2 of
+    // the format does not exist.
+    let bytes = b"\0asm\x02\0\0\0";
+    fs::write(root.join("plugin.wasm"), bytes).unwrap();
+    let mut grant = grant;
+    grant.wasm_sha256 = sha_of(bytes);
+
+    let error = load(&root, &grant).unwrap_err();
+    assert_eq!(error.kind, PluginErrorKind::Invalid, "{}", error.detail);
+    assert!(
+        error.detail.contains("cannot be loaded"),
+        "{}",
+        error.detail
+    );
+}
+
+#[test]
+fn a_grant_written_before_the_recipes_existed_is_rejected_loudly() {
+    // Phase 8a wrote `capabilities = ["wg.status"]`. With `recipes` merely
+    // defaulted it deserialized into an empty list, so the plugin listed and ran
+    // nothing, silently. Rejecting the stale key turns that into an error at
+    // startup.
+    let stale = r#"
+id = "org.anth.test"
+version = "0.1.0"
+wasm_sha256 = "aa"
+capabilities = ["wg.status"]
+enabled = true
+"#;
+    let error = toml::from_str::<PluginGrant>(stale)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("capabilities") || error.contains("unknown field"),
+        "the error must name the stale key: {error}"
+    );
 }

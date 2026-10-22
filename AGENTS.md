@@ -278,9 +278,13 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   mode `0600` and tightens an existing file, because the signing key in it is
   enough to forge a token. `auto` resolves `$SHELL`, then the account's
   login shell from `/etc/passwd`, then `/bin/sh`. The server subcommands load
-  it through `Config::load_or_create`, which writes a default file when the path cannot
-  be read, so a first run bootstraps `/etc/anth/config.toml`; the client subcommand uses
-  `Config::load_or_default`, which never writes. `Config::server_default` returns
+  it through `Config::load_or_create`, which returns `Result`: it writes a default
+  file when the path does not exist, so a first run bootstraps
+  `/etc/anth/config.toml`, but it **refuses** when a file exists and will not
+  parse. Answering a parse error with defaults used to overwrite the operator's
+  settings, which turned a stale plugin grant into a wiped `files.root` and a
+  new `jwt_secret`; the file is now left byte for byte and the server exits `1`.
+  The client subcommand uses `Config::load_or_default`, which never writes. `Config::server_default` returns
   `Config::dev_default` in debug builds, which sets global `sudo = true`,
   `process.control = true`, `network.control = true`,
   `firewall.control = true` and `files.write = true`; release builds keep the
@@ -450,8 +454,19 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   list|install|remove|enable|approve` run locally like `auth` and `config`, and
   `approve` requires `--accept-capabilities` because widening a grant is never
   implicit. `GET /api/plugins` is read-only and reads the bundle directory, so
-  the daemon stays unaware of which plugins the panel shows. Design and threat
-  table: `docs/design/plugins.md`.
+  the daemon stays unaware of which plugins the panel shows.
+  `plugins/runtime.rs` is the `wasmi` host: one engine per call with
+  `consume_fuel` and `StoreLimits`, exactly two imports (`anth_exec`,
+  `anth_log`), and the four documented exports checked by name and signature
+  before a request is written. `anth_exec` reads the frozen recipe from the
+  **grant** and renders argv there; the manifest is never consulted for
+  authority. Fuel bounds guest instructions only, so the host adds three more
+  bounds: 32 capability calls per invocation, a 30 s deadline, and 64 KiB of
+  log. `install` and `load` both call `runtime::probe`, because a digest
+  proves the bytes were approved, not that they parse. `plugin call` honours
+  `[plugins] enabled` like every other path. `plugin call <ID>
+  [REQUEST]` is the CLI anchor; tests drive a real `plugins/guest.wat`. Design
+  and threat table: `docs/design/plugins.md`.
 - **Accounts**: `accounts.rs` reads `/etc/passwd` and `/etc/group` for what the
   panel can change, and `getent` for what the host actually resolves, tagging
   every entry `local` or `nss`; an `nss` entry is read-only. Lock state comes

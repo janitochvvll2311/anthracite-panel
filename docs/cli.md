@@ -572,6 +572,7 @@ reads the grants at start and the command prints a reminder to restart it.
 | `plugin enable <ID>` | Turn a disabled plugin back on. |
 | `plugin enable <ID> --disable` | Stop a plugin from loading, keeping it installed. |
 | `plugin approve <ID> --accept-capabilities` | Re-read a bundle and record its current capabilities. |
+| `plugin call <ID> [REQUEST]` | Run the plugin's wasm module with one JSON request envelope. |
 
 A bundle is a zip holding `plugin.toml`, `plugin.wasm` and an optional `web/`
 directory. Anything else is refused rather than skipped. The install validates
@@ -583,9 +584,22 @@ capability list to the config:
 id = "org.anth.wireguard"
 version = "0.1.0"
 wasm_sha256 = "..."
-capabilities = ["wg.status"]
 enabled = true
+
+[[plugins.grants.recipes]]
+id = "wg.status"
+program = "wg"
+argv = ["show", "{interface}", "dump"]
+accepts_text = false
+
+[plugins.grants.recipes.args.interface]
+type = "ifname"
+optional = false
 ```
+
+The whole recipe is frozen, not only the id. Execution renders argv from the
+grant, so a grant holding ids alone would leave the program and the template to
+be read from the manifest — the file a local writer can rewrite.
 
 That grant is the authority. At every load the module is re-hashed and compared
 against the grant's digest — never against the manifest's, which a writer could
@@ -598,6 +612,15 @@ A plugin never sends an argv. It names a capability, and the host renders the
 argv from the template frozen at install, validating each value with a
 validator the host owns. See [design/plugins.md](design/plugins.md) for the
 schema, the validators and the threat table.
+
+`plugin call` hands the module one JSON envelope and prints its reply. Pass `-`
+as the request to read it from stdin. It is the manual entry point for the same
+host the daemon uses: the frozen recipe, the fuel budget and the argument
+validators all apply, so a plugin cannot use it to reach further than its grant.
+
+```bash
+anth-panel plugin call org.anth.wireguard '{"kind":"cli","argv":["status"]}'
+```
 
 `plugin list` also prints a `[WARN]` line for a directory that has no grant or
 whose module no longer matches. A plugin that fails to load is reported, never
