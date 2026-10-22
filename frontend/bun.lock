@@ -19,6 +19,16 @@
         "vite": "^7.1.0",
       },
     },
+    "packages/plugin": {
+      "name": "@anth/plugin",
+      "version": "0.2.0",
+      "devDependencies": {
+        "@happy-dom/global-registrator": "^21.0.4",
+        "bun-types": "^1.4.4",
+        "happy-dom": "^21.0.4",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/shared": {
       "name": "@anth/shared",
       "version": "0.2.0",
@@ -30,6 +40,8 @@
   },
   "packages": {
     "@anth/app": ["@anth/app@workspace:packages/app"],
+
+    "@anth/plugin": ["@anth/plugin@workspace:packages/plugin"],
 
     "@anth/shared": ["@anth/shared@workspace:packages/shared"],
 

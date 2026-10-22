@@ -1,0 +1,20 @@
+{
+  "name": "@anth/plugin",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "The browser half of the plugin contract: anchors, requests and mounting",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bun run tsc --noEmit"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^21.0.4",
+    "bun-types": "^1.4.4",
+    "happy-dom": "^21.0.4",
+    "typescript": "^5.9.3"
+  }
+}

@@ -74,6 +74,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-plugin"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "anth-wire"
 version = "0.2.0"
 dependencies = [

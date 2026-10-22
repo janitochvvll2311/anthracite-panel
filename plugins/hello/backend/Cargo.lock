@@ -3,9 +3,18 @@
 version = 4
 
 [[package]]
+name = "anth-plugin"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "anth-plugin-hello"
 version = "0.2.0"
 dependencies = [
+ "anth-plugin",
  "serde",
  "serde_json",
 ]

@@ -33,6 +33,11 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
   anth-host/                # host inspection, standard library only
     src/lib.rs              #   collect() and collect_from(root)
     src/parse.rs            #   pure parsers over /proc and os-release contents
+  anth-plugin/              # the plugin contract a guest links: no_std
+    src/lib.rs              #   re-exports
+    src/abi.rs              #   anth_plugin! macro: the four wasm exports
+    src/envelope.rs         #   Request/Reply: the JSON the host speaks
+    src/exec.rs             #   Executor trait and the route table
   anth-paneld/              # the binary: daemon, HTTP API and CLI client
     src/main.rs             #   CLI parsing, exit-code policy, serve_all
     src/dispatch.rs         #   the single request match
@@ -42,6 +47,7 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
 
 frontend/                   # Bun workspace, bun.lock committed
   packages/shared/          # @anth/shared: wire types and formatting, no transport
+  packages/plugin/          # @anth/plugin: anchors, widget base, registration
   packages/app/             # @anth/app: the shell, Vite build, dist/ gitignored
   bunfig.toml               # test preload: happy-dom for component tests
 
@@ -79,8 +85,8 @@ From `frontend/`:
 
 ```bash
 bun install            # once, or after a package.json change
-bun run typecheck
-bun test
+bun run typecheck      # shared, plugin and app, in that order
+bun test               # happy-dom preloaded from bunfig.toml
 bun run build          # typechecks, then writes packages/app/dist
 ```
 
@@ -128,6 +134,44 @@ needs a stated reason in the commit message.
    panic when it is missing rather than returning an empty value that makes
    every assertion trivially pass. Prefer a real code path — a real listener, a
    real `/proc` fixture tree — over a mock.
+
+## The plugin contract
+
+Two libraries hold the contract a plugin must satisfy, one per half, and a
+plugin is expected to contain behaviour only.
+
+- **`backend/anth-plugin`** is what a guest links. It is `no_std` (a wasm guest
+  has no `std`) and owns four things:
+  - `abi.rs` — `ABI_VERSION = 1` and the `anth_plugin!` macro that generates the
+    four exports the host checks by name and signature (`anth_abi_version`,
+    `anth_alloc`, `anth_free`, `anth_handle`) plus the two imports it provides
+    (`anth_exec`, `anth_log`). A plugin writes none of that plumbing.
+  - `envelope.rs` — `Request` (`{"kind":"http"}` or `{"kind":"cli"}`) and
+    `Reply`. The host sends an anchor body as a **string** and always sends
+    `query`, so the types model that; `json_body()` parses the string for the
+    common case and a body that is not JSON becomes a `400`, not a `500`.
+  - `exec.rs` — the `Executor` trait (the capability seam; a test implements it
+    over canned answers) and `Router`, which replaces the hand-written
+    `match` on method and path. Matching is exact, because the host has already
+    stripped its own prefix.
+  - `exec_bare` exists because the host decodes `anth_exec` arguments into a map
+    of strings: `null` is a decode failure while `{}` succeeds. Passing
+    `&Value::Null` is the mistake this method removes.
+- **`frontend/packages/plugin`** (`@anth/plugin`) is what a web module imports.
+  `AnchorClient` derives the `/api/plugins/<id>/…` base — it deliberately refuses
+  an absolute URL, so a module cannot ship a second origin — and `PluginWidget`
+  owns the shadow root, the loading/ready/error states and the retry button.
+  `registerWidget` is idempotent, because the shell imports a module with
+  `import()` and the same module can be imported twice in one realm, where a
+  second `customElements.define` throws and the widget disappears. The base
+  class is plain DOM, not Lit: a plugin is bundled on its own and the panel's
+  Lit version is not part of the contract.
+
+The contract is one-directional and stays that way. Neither library decides
+which capability may run, reads the filesystem or spawns a process: the manifest
+grant and the host's runtime keep that authority. A library a guest links must
+not be able to widen it. `plugins/hello` consumes both, and is the reference for
+a new plugin; it went from 130 to 41 lines of Rust and 128 to 58 of TypeScript.
 
 ## Environment
 

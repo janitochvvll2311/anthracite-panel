@@ -1,0 +1,12 @@
+[package]
+name = "anth-plugin"
+version.workspace = true
+edition.workspace = true
+description = "The plugin contract for Anthracite Panel: request envelopes, replies and the wasm ABI"
+license = "Apache-2.0"
+
+# An ordinary library the guest links. It is deliberately *not* a cdylib: the
+# plugin crate owns the exports, this crate only provides the code behind them.
+[dependencies]
+serde = { workspace = true }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }

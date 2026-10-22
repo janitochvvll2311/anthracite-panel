@@ -12,6 +12,9 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# The ABI, the envelopes and the route table. Everything a plugin used to
+# reimplement per directory.
+anth-plugin = { path = "../../../backend/anth-plugin" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
