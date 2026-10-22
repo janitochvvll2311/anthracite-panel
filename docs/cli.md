@@ -572,7 +572,7 @@ anth-panel volume partition format /dev/sdb1 --type ext4 --label data
 
 `--type` is `ext4`, `xfs`, `vfat`, `exfat`, `btrfs` or `swap`; an unlisted type
 names no binary and is refused. `--label` is restricted to a conservative
-character set. The target must be a partition of an allowlisted disk and must be
+character set, and to 11 characters for `vfat` because `mkfs.fat` refuses more. The target must be a partition of an allowlisted disk and must be
 unmounted. Needs `[volumes] format = true` **in addition to**
 `[volumes] partition = true`: rewriting a table is recoverable, formatting is
 not.

@@ -27,8 +27,9 @@ mod partition;
 
 pub use partition::{
     FORMAT_TYPES, PartitionKind, PlannedCall, TableEdit, allowed_disk, create_with, edit_with,
-    execute, partition_number, partitions_on, perform, perform_create, plan_edit, plan_format,
-    refuse_busy_disk, refuse_protected_disk, snapshot_for, validate_device_path,
+    execute, partition_number, partitions_on, perform, perform_create, plan_delete, plan_edit,
+    plan_format, plan_resize, refuse_busy_disk, refuse_protected_disk, snapshot_for,
+    validate_device_path,
 };
 
 /// Filesystems with no block device behind them. They are reported but never
@@ -147,6 +148,17 @@ fn command_error(program: &str, error: CommandError) -> VolumeError {
 /// the panel usable in minimal containers.
 pub fn collect(control_enabled: bool) -> VolumeSnapshot {
     collect_with(control_enabled, &SystemProbe::new())
+}
+
+/// The full inventory with the warnings kept separate, for callers that must
+/// validate before anything is shortened. `collect_with` fits to the line cap
+/// first; a guard reading that one could pass on a device or mount that
+/// truncation dropped.
+pub fn collect_for_mutation(
+    control_enabled: bool,
+    probe: &dyn Probe,
+) -> (VolumeSnapshot, Vec<String>) {
+    collect_unfitted(control_enabled, probe)
 }
 
 pub fn collect_with(control_enabled: bool, probe: &dyn Probe) -> VolumeSnapshot {

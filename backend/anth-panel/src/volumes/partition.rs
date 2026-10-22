@@ -18,7 +18,7 @@ use anth_proto::{
 };
 
 use crate::command::{CommandError, CommandOutput, CommandRunner, SystemRunner};
-use crate::volumes::{SystemProbe, collect_with};
+use crate::volumes::{SystemProbe, collect_for_mutation};
 
 /// Filesystems `mkfs` may create. The type selects the program, so it is matched
 /// against this list and never interpolated into an argument.
@@ -280,27 +280,79 @@ pub fn plan_edit(disk: &str, edit: &TableEdit) -> Result<PlannedCall, PartitionE
                 format!("start={start},size={size},type={}", kind.script_type())
             }
         }
-        TableEdit::Resize { number, size_bytes } => {
-            if *number == 0 {
-                return Err(invalid("partition numbers start at 1"));
-            }
-            if *size_bytes == 0 {
-                return Err(invalid("resizing needs a size"));
-            }
-            format!("{number},size={}", sectors(*size_bytes)?)
-        }
-        TableEdit::Delete { number } => {
-            if *number == 0 {
-                return Err(invalid("partition numbers start at 1"));
-            }
-            format!("delete {number}")
+        // `resize` and `delete` select a partition, which the input format
+        // cannot express; they have their own planners.
+        TableEdit::Resize { .. } | TableEdit::Delete { .. } => {
+            return Err(invalid("this edit needs its own sfdisk invocation"));
         }
     };
 
+    // `--append` is not optional: without it `sfdisk` writes a fresh disklabel
+    // and the partitions already on the disk are gone, with exit 0.
     Ok(PlannedCall {
         program: "sfdisk",
-        argv: vec!["--no-reread".to_string(), disk.to_string()],
+        argv: vec![
+            "--no-reread".to_string(),
+            "--append".to_string(),
+            disk.to_string(),
+        ],
         stdin: Some(script),
+    })
+}
+
+/// Builds the call that resizes one existing partition.
+///
+/// The partition is selected with `-N`, not by a `<n>,size=` line: the input
+/// format has no such command, and `sfdisk` answers "unsupported command"
+/// while the request has already been accepted.
+pub fn plan_resize(
+    disk: &str,
+    number: u32,
+    size_bytes: u64,
+) -> Result<PlannedCall, PartitionError> {
+    let disk = validate_device_path(disk)?;
+    let disk = disk
+        .to_str()
+        .ok_or_else(|| invalid("the device path is not valid UTF-8"))?;
+    if number == 0 {
+        return Err(invalid("partition numbers start at 1"));
+    }
+    if size_bytes == 0 {
+        return Err(invalid("resizing needs a size"));
+    }
+    Ok(PlannedCall {
+        program: "sfdisk",
+        argv: vec![
+            "--no-reread".to_string(),
+            "-N".to_string(),
+            number.to_string(),
+            disk.to_string(),
+        ],
+        stdin: Some(format!("size={}", sectors(size_bytes)?)),
+    })
+}
+
+/// Builds the call that deletes one partition.
+///
+/// `delete` is a command-line verb, not an input-format line, so it belongs in
+/// argv and there is no script.
+pub fn plan_delete(disk: &str, number: u32) -> Result<PlannedCall, PartitionError> {
+    let disk = validate_device_path(disk)?;
+    let disk = disk
+        .to_str()
+        .ok_or_else(|| invalid("the device path is not valid UTF-8"))?;
+    if number == 0 {
+        return Err(invalid("partition numbers start at 1"));
+    }
+    Ok(PlannedCall {
+        program: "sfdisk",
+        argv: vec![
+            "--no-reread".to_string(),
+            "--delete".to_string(),
+            disk.to_string(),
+            number.to_string(),
+        ],
+        stdin: None,
     })
 }
 
@@ -334,9 +386,14 @@ pub fn plan_format(
             FORMAT_TYPES.join(", ")
         )));
     }
+    // vfat stores an 11-character label, and `mkfs.fat` refuses a longer one
+    // rather than shortening it, so the limit is per type.
+    let max_label = if fs_type == "vfat" { 11 } else { 32 };
     if let Some(label) = label {
-        if label.is_empty() || label.len() > 32 {
-            return Err(invalid("a label needs 1 to 32 characters"));
+        if label.is_empty() || label.len() > max_label {
+            return Err(invalid(format!(
+                "a {fs_type} label needs 1 to {max_label} characters"
+            )));
         }
         if !label
             .chars()
@@ -358,9 +415,11 @@ pub fn plan_format(
         other => return Err(invalid(format!("`{other}` has no mkfs program"))),
     };
 
+    // `mkfs.fat` takes `-n`; every other tool here takes `-L`.
+    let label_flag = if fs_type == "vfat" { "-n" } else { "-L" };
     let mut argv = Vec::new();
     if let Some(label) = label {
-        argv.push("-L".to_string());
+        argv.push(label_flag.to_string());
         argv.push(label.to_string());
     }
     argv.push(partition.to_string());
@@ -427,13 +486,7 @@ pub fn edit_with(
             let device = allowed_disk(snapshot, allowed_disks, disk)?;
             refuse_protected_disk(snapshot, device, protected_paths)?;
             refuse_busy_disk(snapshot, device)?;
-            let call = plan_edit(
-                &device.path,
-                &TableEdit::Resize {
-                    number: *number,
-                    size_bytes: *size_bytes,
-                },
-            )?;
+            let call = plan_resize(&device.path, *number, *size_bytes)?;
             execute(runner, &call)?;
             Ok(format!("resized partition {number} on {}", device.path))
         }
@@ -441,7 +494,7 @@ pub fn edit_with(
             let device = allowed_disk(snapshot, allowed_disks, disk)?;
             refuse_protected_disk(snapshot, device, protected_paths)?;
             refuse_busy_disk(snapshot, device)?;
-            let call = plan_edit(&device.path, &TableEdit::Delete { number: *number })?;
+            let call = plan_delete(&device.path, *number)?;
             execute(runner, &call)?;
             Ok(format!("deleted partition {number} on {}", device.path))
         }
@@ -509,7 +562,7 @@ pub fn perform(
         return Err(disabled("`[volumes] partition` is off"));
     }
     let probe = SystemProbe::new();
-    let snapshot = collect_with(partition_enabled, &probe);
+    let (snapshot, _) = collect_for_mutation(partition_enabled, &probe);
     let runner = SystemRunner::new(sudo_enabled);
     edit_with(
         &runner,
@@ -530,7 +583,7 @@ pub fn perform_create(
         return Err(disabled("`[volumes] partition` is off"));
     }
     let probe = SystemProbe::new();
-    let snapshot = collect_with(policy.volume_control, &probe);
+    let (snapshot, _) = collect_for_mutation(policy.volume_control, &probe);
     let runner = SystemRunner::new(policy.sudo);
     create_with(
         &runner,

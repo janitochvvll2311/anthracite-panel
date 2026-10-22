@@ -153,10 +153,32 @@ Every request is validated against a fresh snapshot before any tool runs:
 
 Sizes and offsets are numbers, never strings, so they cannot reach a shell. The
 plan is an argument vector plus an optional script on **stdin**:
-`sfdisk --no-reread <disk>` with `size=<sectors>,type=<kind>` or `delete <n>` /
-`<n>,size=<sectors>`, and `mkfs.<type>` / `mkswap` for formatting. A filesystem
-label is restricted to a conservative character set because it is passed as an
-argument to a tool that would otherwise accept option-like text.
+
+| Operation | Call |
+| --- | --- |
+| create | `sfdisk --no-reread --append <disk>` + `size=<sectors>,type=<kind>` |
+| resize | `sfdisk --no-reread -N <n> <disk>` + `size=<sectors>` |
+| delete | `sfdisk --no-reread --delete <disk> <n>` |
+| format | `mkfs.<type> [-L \| -n] <label> <partition>` or `mkswap` |
+
+Each of these is a separate invocation because `sfdisk`'s input format cannot
+express a partition selection. Two details are load-bearing:
+
+- **`--append` on create.** Without it `sfdisk` writes a fresh disklabel, so
+  adding a fourth partition silently deletes the first three — and exits `0`.
+- **`-N` on resize, `--delete` on delete.** `<n>,size=` and `delete <n>` are not
+  input-format lines; `sfdisk` answers "unsupported command" and exits `1`.
+
+`mkfs.fat` takes `-n` for a label, not `-L`, and caps it at 11 characters; the
+other tools take `-L` up to 32. The planner picks the flag and limit from the
+type, so a label the tool would reject never reaches it.
+
+A filesystem label is restricted to a conservative character set because it is
+passed as an argument to a tool that would otherwise accept option-like text.
+
+The guard reads the **unfitted** snapshot (`collect_for_mutation`), like
+`mount`/`umount`. A guard reading the fitted one could pass on a disk whose
+mounted partition had been dropped to fit the line cap.
 
 `mkfs.<type>` derives from an allowlist (`ext4`, `xfs`, `vfat`, `exfat`,
 `btrfs`, `swap`); an unlisted type names no binary. Partitioning a **mounted**

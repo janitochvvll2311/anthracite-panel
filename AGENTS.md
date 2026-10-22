@@ -545,14 +545,23 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   partition. The mount check compares the mount's source device name, never a
   string prefix of the disk path, so `/dev/sdaa` cannot be read as `/dev/sda`.
   Sizes are integers, so they cannot reach a shell; the plan is an argv plus an
-  optional script on **stdin** (`sfdisk --no-reread <disk>` with
-  `size=<sectors>,type=<kind>`, `delete <n>`, `<n>,size=<sectors>`). `mkfs`
+  optional script on **stdin**, one invocation per operation because sfdisk's
+  input format cannot select a partition: `--append` for create (without it
+  sfdisk rewrites the disklabel and exits 0), `-N <n>` for resize, `--delete
+  <disk> <n>` for delete. `mkfs.fat` takes `-n` and caps labels at 11; the
+  other tools take `-L` up to 32, so the planner picks both from the type.
+  Mutations read `volumes::collect_for_mutation`, the unfitted snapshot, like
+  `mount`/`umount`: a guard reading the fitted one could pass on a disk whose
+  mounted partition truncation dropped. `mkfs`
   derives from an allowlist (`FORMAT_TYPES`), so an unlisted type names no
   binary, and labels are restricted to a conservative character set. A mounted
   disk or partition is refused, not forced. `PartitionList` needs only
   `[volumes] control`, because reading a table changes nothing.
   `tests/partitions.rs` asserts the exact argv and which guard fires first
-  against a fake runner.
+  against a fake runner, and also runs the planned calls against the **real**
+  `sfdisk`/`mkfs.vfat` on a throwaway sparse image, skipping when the tool is
+  absent. The fake cannot catch a wrong invocation — it accepts any stdin —
+  which is how three broken `sfdisk` forms and a `-L` vfat label shipped green.
 - **Frontend volume manager**: `anth-volume-manager` renders the device tree and
   the mount table through an injected `VolumeClient`
   (`lib/volumes/volume-client.ts`), with `lib/volumes/display.ts` owning the

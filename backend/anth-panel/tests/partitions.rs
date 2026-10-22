@@ -14,7 +14,7 @@ use anth_proto::{
 use anth_panel::command::{CommandError, CommandOutput, CommandRunner};
 use anth_panel::volumes::{
     PartitionKind, PlannedCall, TableEdit, create_with, edit_with, partition_number, partitions_on,
-    plan_edit, plan_format, validate_device_path,
+    plan_delete, plan_edit, plan_format, plan_resize, validate_device_path,
 };
 
 /// One recorded call: program, argv and the script written to stdin.
@@ -360,7 +360,12 @@ fn a_create_plans_the_script_on_stdin_not_in_argv() {
     assert_eq!(program, "sfdisk");
     assert_eq!(
         argv,
-        &vec!["--no-reread".to_string(), "/dev/sdb".to_string()]
+        &vec![
+            "--no-reread".to_string(),
+            "--append".to_string(),
+            "/dev/sdb".to_string()
+        ],
+        "without --append sfdisk writes a fresh disklabel and the old table is gone"
     );
     assert_eq!(stdin.as_deref(), Some("size=4096,type=linux"));
 }
@@ -395,39 +400,73 @@ fn a_zero_size_is_refused() {
 }
 
 #[test]
-fn a_delete_uses_sfdisk_delete_syntax() {
-    let call = plan_edit("/dev/sdb", &TableEdit::Delete { number: 2 }).unwrap();
+fn a_delete_is_a_verb_in_argv_not_a_script_line() {
+    let call = plan_delete("/dev/sdb", 2).unwrap();
     assert_eq!(call.program, "sfdisk");
-    assert_eq!(call.stdin.as_deref(), Some("delete 2"));
+    assert_eq!(
+        call.argv,
+        vec![
+            "--no-reread".to_string(),
+            "--delete".to_string(),
+            "/dev/sdb".to_string(),
+            "2".to_string()
+        ]
+    );
+    assert!(
+        call.stdin.is_none(),
+        "`delete 2` is not input-format syntax and sfdisk rejects it"
+    );
 }
 
 #[test]
-fn a_resize_names_the_partition_and_the_size() {
-    let call = plan_edit(
-        "/dev/sdb",
-        &TableEdit::Resize {
-            number: 3,
-            size_bytes: 2048 * 512,
-        },
-    )
-    .unwrap();
-    assert_eq!(call.stdin.as_deref(), Some("3,size=2048"));
+fn a_resize_selects_the_partition_with_n() {
+    let call = plan_resize("/dev/sdb", 3, 2048 * 512).unwrap();
+    assert_eq!(
+        call.argv,
+        vec![
+            "--no-reread".to_string(),
+            "-N".to_string(),
+            "3".to_string(),
+            "/dev/sdb".to_string()
+        ]
+    );
+    assert_eq!(
+        call.stdin.as_deref(),
+        Some("size=2048"),
+        "a leading `<n>,` is not input-format syntax"
+    );
 }
 
 #[test]
 fn an_unknown_kind_is_refused() {
-    let error = plan_edit(
-        "/dev/sdb",
-        &TableEdit::Create {
-            kind: PartitionKind::parse("exfat").unwrap_or(PartitionKind::Linux),
-            start_bytes: 0,
-            size_bytes: 512,
-        },
-    );
-    // `PartitionKind::parse` returning `None` is what the daemon checks; this
-    // asserts the fallback in the test above did not silently allow a bad kind.
     assert!(PartitionKind::parse("exfat").is_none());
-    assert!(error.is_ok());
+    assert!(PartitionKind::parse("linux").is_some());
+}
+
+#[test]
+fn a_vfat_label_uses_n_and_is_capped_at_eleven() {
+    let call = plan_format("/dev/sdb1", "vfat", Some("DATA")).unwrap();
+    assert_eq!(
+        call.argv,
+        vec![
+            "-n".to_string(),
+            "DATA".to_string(),
+            "/dev/sdb1".to_string()
+        ],
+        "mkfs.fat rejects -L"
+    );
+    let error = plan_format("/dev/sdb1", "vfat", Some("TWELVE_CHARS")).unwrap_err();
+    assert_eq!(error.kind, VolumeErrorKind::Invalid);
+    assert!(error.detail.contains("11"));
+    // ext4 keeps the 32-character limit and `-L`.
+    let ext4 = plan_format("/dev/sdb1", "ext4", Some("a_rather_long_label_here_ok")).unwrap();
+    assert_eq!(ext4.argv[0], "-L");
+}
+
+#[test]
+fn a_resize_of_partition_zero_is_refused() {
+    assert!(plan_resize("/dev/sdb", 0, 512).is_err());
+    assert!(plan_delete("/dev/sdb", 0).is_err());
 }
 
 #[test]
@@ -624,4 +663,264 @@ fn a_planned_call_is_debug_printable_without_a_secret() {
     };
     let rendered = format!("{call:?}");
     assert!(rendered.contains("sfdisk"));
+}
+
+// ---------------------------------------------------------------------------
+// Real-binary tests.
+//
+// Everything above asserts the string the daemon *would* send; a fake accepts
+// any stdin, so it cannot tell working `sfdisk` syntax from broken. These run
+// the planned call against a real `sfdisk` and a throwaway image, and skip when
+// the tool is absent so a minimal CI image still passes.
+// ---------------------------------------------------------------------------
+
+/// PATH plus the sbin directories, where util-linux lives on Debian and Alpine.
+fn path_with_sbin() -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    format!("{current}:/sbin:/usr/sbin")
+}
+
+fn have(program: &str) -> bool {
+    if program.contains('/') {
+        return std::path::Path::new(program).exists();
+    }
+    path_with_sbin()
+        .split(':')
+        .any(|dir| std::path::Path::new(dir).join(program).exists())
+}
+
+/// Runs one planned call for real. The program is resolved through the first
+/// PATH entry that holds it, since `PlannedCall.program` is a bare name.
+fn run_real(call: &PlannedCall, path: &str) -> std::process::Output {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new(call.program);
+    command
+        .args(&call.argv)
+        .env("PATH", path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.stdin(if call.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+
+    let mut child = command.spawn().expect("the tool must start");
+    if let Some(script) = &call.stdin {
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin was piped")
+            .write_all(script.as_bytes())
+            .expect("the script must reach the tool");
+    }
+    child.wait_with_output().expect("the tool must finish")
+}
+
+/// A sparse image with three partitions, the state a create must preserve.
+fn three_partition_image(dir: &std::path::Path, path: &str) -> std::path::PathBuf {
+    let image = dir.join("disk.img");
+    let file = std::fs::File::create(&image).unwrap();
+    file.set_len(64 * 1024 * 1024).unwrap();
+    let script = "size=8192,type=linux\nsize=8192,type=linux\nsize=8192,type=linux\n";
+    let mut child = std::process::Command::new("sfdisk")
+        .arg(&image)
+        .env("PATH", path)
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    child.wait().unwrap();
+    image
+}
+
+fn partition_count(image: &std::path::Path, path: &str) -> usize {
+    let output = std::process::Command::new("sfdisk")
+        .arg("-l")
+        .arg(image)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.starts_with(&image.display().to_string()))
+        .count()
+}
+
+#[test]
+fn a_real_sfdisk_appends_instead_of_replacing_the_table() {
+    let path = path_with_sbin();
+    if !have("sfdisk") {
+        eprintln!("skipping: sfdisk is not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("anth-part-append-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let image = three_partition_image(&dir, &path);
+    assert_eq!(
+        partition_count(&image, &path),
+        3,
+        "the fixture must start at 3"
+    );
+
+    let call = plan_edit(
+        &image.display().to_string(),
+        &TableEdit::Create {
+            kind: PartitionKind::Linux,
+            start_bytes: 0,
+            size_bytes: 1024 * 1024,
+        },
+    )
+    .unwrap();
+    let output = run_real(&call, &path);
+    assert!(
+        output.status.success(),
+        "sfdisk failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        partition_count(&image, &path),
+        4,
+        "a create must add a partition, not rewrite the table"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_real_sfdisk_accepts_the_resize_script() {
+    let path = path_with_sbin();
+    if !have("sfdisk") {
+        eprintln!("skipping: sfdisk is not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("anth-part-resize-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let image = three_partition_image(&dir, &path);
+
+    let call = plan_resize(&image.display().to_string(), 3, 4096 * 512).unwrap();
+    let output = run_real(&call, &path);
+    assert!(
+        output.status.success(),
+        "sfdisk rejected the resize script: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let listing = std::process::Command::new("sfdisk")
+        .arg("-l")
+        .arg(&image)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+    let third = listing
+        .lines()
+        .find(|line| line.contains("img3"))
+        .expect("partition 3 must survive");
+    assert!(
+        third.contains("4096"),
+        "partition 3 must be 4096 sectors: {third}"
+    );
+    assert_eq!(
+        partition_count(&image, &path),
+        3,
+        "a resize must not drop rows"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_real_sfdisk_accepts_the_delete_verb() {
+    let path = path_with_sbin();
+    if !have("sfdisk") {
+        eprintln!("skipping: sfdisk is not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("anth-part-delete-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let image = three_partition_image(&dir, &path);
+
+    let call = plan_delete(&image.display().to_string(), 2).unwrap();
+    let output = run_real(&call, &path);
+    assert!(
+        output.status.success(),
+        "sfdisk rejected `delete`: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        partition_count(&image, &path),
+        2,
+        "only partition 2 must be removed"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_real_mkfs_vfat_accepts_the_label_flag_the_planner_emits() {
+    let path = path_with_sbin();
+    if !have("mkfs.vfat") {
+        eprintln!("skipping: mkfs.vfat is not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("anth-part-vfat-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let image = dir.join("vfat.img");
+    let file = std::fs::File::create(&image).unwrap();
+    file.set_len(16 * 1024 * 1024).unwrap();
+
+    let call = plan_format(&image.display().to_string(), "vfat", Some("DATA")).unwrap();
+    let output = run_real(&call, &path);
+    assert!(
+        output.status.success(),
+        "mkfs.vfat rejected the planned argv: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_truncated_snapshot_cannot_hide_a_busy_disk() {
+    // `fit_snapshot` drops device and mount tails to fit the line cap. A guard
+    // that read the fitted snapshot would then miss the mount that makes a
+    // disk busy, so the mutation path must use the unfitted collector. This
+    // asserts the fitting itself is lossy, which is why the distinction
+    // matters at all.
+    let mut snapshot = snapshot(vec![disk("sdb", "/dev/sdb")], Vec::new());
+    for index in 0..6000 {
+        snapshot.mounts.push(mount(
+            &format!("/dev/sdb{}", (index % 100) + 1),
+            &format!("/mnt/filler-{index}-{}", "x".repeat(160)),
+        ));
+    }
+    let fitted = anth_panel::volumes::fit_snapshot_for_test(snapshot.clone());
+    assert!(
+        fitted.mounts.len() < snapshot.mounts.len(),
+        "the fixture must be large enough to be shortened, or this proves nothing"
+    );
+    assert!(
+        fitted.warning.is_some(),
+        "a shortened snapshot reports the truncation"
+    );
+    // `refuse_busy_disk` still finds the mount in the unfitted snapshot, which
+    // is the one the mutation path now collects.
+    let disk = snapshot
+        .devices
+        .iter()
+        .find(|device| device.path == "/dev/sdb")
+        .unwrap();
+    let error = anth_panel::volumes::refuse_busy_disk(&snapshot, disk).unwrap_err();
+    assert_eq!(error.kind, VolumeErrorKind::Busy);
 }
