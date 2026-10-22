@@ -1,3 +1,5 @@
+use super::fit::warning;
+use super::parse::{parse_stat, truncate_chars};
 use super::*;
 
 #[test]
