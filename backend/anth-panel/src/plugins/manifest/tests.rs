@@ -321,6 +321,121 @@ fn cidr_checks_the_prefix_against_the_family() {
 }
 
 #[test]
+fn a_base64_key_must_decode_to_exactly_32_bytes() {
+    // The real shape `wg` prints.
+    assert!(
+        ArgType::Base64Key
+            .validate("yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=")
+            .is_ok()
+    );
+    // A base64 string whose alphabet is fine but whose payload is short: the
+    // length check alone would pass it and `wg` would reject it later.
+    assert!(ArgType::Base64Key.validate("aGVsbG8=").is_err());
+    // 44 characters, right alphabet, wrong byte count.
+    assert!(ArgType::Base64Key.validate(&"A".repeat(44)).is_err());
+    assert!(ArgType::Base64Key.validate(&"a".repeat(43)).is_err());
+    // Hex of 32 bytes is not what `wg` takes, even though it is 32 bytes.
+    assert!(ArgType::Base64Key.validate(&"a".repeat(64)).is_err());
+}
+
+#[test]
+fn a_cidr_list_validates_every_element() {
+    assert!(
+        ArgType::CidrList
+            .validate("10.0.0.2/32,10.0.0.3/32,fd00::/64")
+            .is_ok()
+    );
+    assert!(ArgType::CidrList.validate("10.0.0.2/32").is_ok());
+    // One bad element rejects the whole value: `wg` would take the rest and
+    // silently skip the typo.
+    assert!(ArgType::CidrList.validate("10.0.0.2/32,nonsense").is_err());
+    assert!(ArgType::CidrList.validate("10.0.0.2/33").is_err());
+    // A space around a comma would be passed through to `wg` verbatim.
+    assert!(
+        ArgType::CidrList
+            .validate("10.0.0.2/32, 10.0.0.3/32")
+            .is_err()
+    );
+}
+
+#[test]
+fn an_optional_argument_can_be_omitted_from_the_argv() {
+    let text = r#"
+[plugin]
+id = "org.anth.test"
+version = "0.1.0"
+name = "Test"
+abi = 1
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[capability]]
+id = "wg.show"
+program = "wg"
+accepts_text = true
+argv = ["show", "{interface}", "{protocol}"]
+
+[capability.args.interface]
+type = "ifname"
+
+[capability.args.protocol]
+type = "text"
+optional = true
+"#;
+    let manifest = Manifest::parse(text).unwrap();
+    let capability = &manifest.capabilities[0];
+
+    let mut values = BTreeMap::new();
+    values.insert("interface".to_string(), "wg0".to_string());
+    // Absent: the whole element disappears, rather than rendering empty.
+    assert_eq!(
+        render_argv(capability, &values).unwrap(),
+        vec!["show".to_string(), "wg0".to_string()]
+    );
+
+    values.insert("protocol".to_string(), "dump".to_string());
+    assert_eq!(
+        render_argv(capability, &values).unwrap(),
+        vec!["show".to_string(), "wg0".to_string(), "dump".to_string()]
+    );
+}
+
+#[test]
+fn an_optional_placeholder_that_shares_an_element_is_refused() {
+    // `--endpoint={endpoint}` cannot be honoured when the value is absent: it
+    // would render `--endpoint=` and reach the program as a malformed operand.
+    let text = r#"
+[plugin]
+id = "org.anth.test"
+version = "0.1.0"
+name = "Test"
+abi = 1
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[capability]]
+id = "wg.show"
+program = "wg"
+accepts_text = true
+argv = ["show", "endpoint={endpoint}"]
+
+[capability.args.endpoint]
+type = "text"
+optional = true
+"#;
+    let error = Manifest::parse(text).unwrap_err();
+    assert!(
+        error.detail.contains("whole argv element"),
+        "{}",
+        error.detail
+    );
+}
+
+#[test]
 fn hex_types_check_the_length_and_alphabet() {
     assert!(ArgType::Hex32.validate(&"a".repeat(32)).is_ok());
     assert!(ArgType::Hex32.validate(&"a".repeat(31)).is_err());
@@ -341,6 +456,8 @@ fn no_validator_accepts_a_leading_dash() {
         ArgType::Cidr,
         ArgType::Hex32,
         ArgType::Hex64,
+        ArgType::Base64Key,
+        ArgType::CidrList,
         ArgType::Path,
         ArgType::Text,
     ] {

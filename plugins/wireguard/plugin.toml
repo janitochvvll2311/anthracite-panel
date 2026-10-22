@@ -1,0 +1,127 @@
+# WireGuard plugin manifest.
+#
+# Every capability names `wg` and give it a template whose placeholders are
+# typed. The host freezes this into the grant at install time, so what the admin
+# approves is exactly what runs later — the module cannot add a flag, a program
+# or an argument that is not written here.
+#
+# `wg show <if> dump` and `wg show <if>` are separate capabilities on purpose:
+# `dump` is stable and machine readable, and the human form carries the labels
+# the interface view renders. The guest asks for whichever it is parsing.
+
+[plugin]
+id = "org.anth.wireguard"
+version = "0.1.0"
+name = "WireGuard"
+abi = 1
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+# List the interfaces WireGuard owns. `wg show interfaces` prints one line of
+# names, which is the only reliable way to tell a WireGuard device from any
+# other link.
+[[capability]]
+id = "wg.interfaces"
+program = "wg"
+argv = ["show", "interfaces"]
+
+# One interface in the human format, which the guest turns into peers.
+[[capability]]
+id = "wg.show"
+program = "wg"
+argv = ["show", "{interface}"]
+
+[capability.args.interface]
+type = "ifname"
+optional = false
+
+# One interface in the dump format, kept for clients that want stable fields.
+[[capability]]
+id = "wg.dump"
+program = "wg"
+argv = ["show", "{interface}", "dump"]
+
+[capability.args.interface]
+type = "ifname"
+optional = false
+
+# Add a peer without an endpoint.
+#
+# The endpoint is a separate capability rather than an optional argument on this
+# one: `wg` takes the flag and its value as two argv elements, and the host can
+# only drop a whole element, not a flag left without a value. Two recipes keep
+# every command the admin approves complete and readable.
+[[capability]]
+id = "wg.add_peer"
+program = "wg"
+argv = ["set", "{interface}", "peer", "{public_key}", "allowed-ips", "{allowed_ips}"]
+
+[capability.args.interface]
+type = "ifname"
+
+[capability.args.public_key]
+type = "base64_key"
+
+[capability.args.allowed_ips]
+type = "cidr_list"
+
+# Add a peer that also carries an endpoint.
+[[capability]]
+id = "wg.add_peer_endpoint"
+program = "wg"
+argv = ["set", "{interface}", "peer", "{public_key}", "allowed-ips", "{allowed_ips}", "endpoint", "{endpoint}"]
+accepts_text = true
+
+[capability.args.interface]
+type = "ifname"
+
+[capability.args.public_key]
+type = "base64_key"
+
+[capability.args.allowed_ips]
+type = "cidr_list"
+
+# A host:port pair. No host validator covers both halves, which is why this
+# capability declares `accepts_text` and the installer warns about it.
+[capability.args.endpoint]
+type = "text"
+
+# Remove a peer by public key.
+[[capability]]
+id = "wg.remove_peer"
+program = "wg"
+argv = ["set", "{interface}", "peer", "{public_key}", "remove"]
+
+[capability.args.interface]
+type = "ifname"
+
+[capability.args.public_key]
+type = "base64_key"
+
+[[api]]
+method = "GET"
+path = "/interfaces"
+
+[[api]]
+method = "GET"
+path = "/peers"
+
+[[api]]
+method = "POST"
+path = "/peers"
+
+[[api]]
+method = "GET"
+path = "/status"
+
+[[ui]]
+slot = "dashboard.widget"
+tag = "anth-wireguard"
+module = "web/wireguard.js"
+
+[[ui]]
+slot = "panel.network.tab"
+tag = "anth-wireguard-panel"
+module = "web/wireguard.js"

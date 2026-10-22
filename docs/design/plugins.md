@@ -72,7 +72,9 @@ Every placeholder names a type. The host owns the set; a plugin cannot add one.
 | `hostname` | 1–253 bytes of letters, digits, `-` and `.`, no leading `-` |
 | `port` | 1–65535 |
 | `ipv4`, `ipv6`, `cidr` | a literal address or prefix, parsed |
-| `hex32`, `hex64` | exactly 32/64 hex characters, as WireGuard keys are |
+| `hex32`, `hex64` | exactly 32/64 hex characters |
+| `base64_key` | standard base64 that decodes to exactly 32 bytes, which is a WireGuard key |
+| `cidr_list` | one or more `cidr` values separated by commas, no spaces |
 | `path` | absolute, normalized, no `..` |
 | `enum` | one of a fixed list the host already knows |
 | `text` | printable, bounded, no control characters |
@@ -87,6 +89,24 @@ it instead of reopening the hole.
 for display values a capability can pass as an opaque argument only when the
 manifest's capability is marked `accepts_text = true`, which the installer
 warns about.
+
+### Optional arguments
+
+`optional = true` means the caller may omit the value. The element is then
+dropped from the argv entirely rather than rendered empty, because an empty
+element is itself an argument the program sees. The host only accepts this when
+the placeholder is the **whole** argv element:
+
+```toml
+argv = ["show", "{interface}", "{protocol}"]   # ok
+
+argv = ["show", "endpoint={endpoint}"]         # refused at install
+```
+
+The second form has no rendering that both omits the value and keeps the
+element: it would produce `endpoint=` and reach the program as a malformed
+operand. A flag that takes a separate value therefore needs one capability per
+shape, which is how the reference plugin models `wg set ... endpoint <value>`.
 
 ### Installation freezes the recipe
 
