@@ -38,3 +38,7 @@ backend/anth-panel/www/*
 # before, so keep an explicit negation: re-adding an unanchored rule must not
 # silently drop the file the Dockerfile copies in `COPY backend/.cargo .cargo`.
 !backend/.cargo/config.toml
+
+# Dev artifacts
+backend/plugins
+backend/config.toml
