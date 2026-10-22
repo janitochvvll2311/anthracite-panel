@@ -1,25 +1,11 @@
 use super::super::main_prelude::*;
 
-pub fn fail_confirmation(error: String) -> ExitCode {
-    eprintln!("[ERROR] {error}");
-    ExitCode::FAILURE
-}
-
-/// Prints the cancellation notice once, for every account subcommand that asks.
-pub fn report_cancel(confirmed: bool) -> bool {
-    if !confirmed {
-        eprintln!("[cancelled]");
-    }
-    confirmed
-}
-
 pub fn confirm_account_password(args: &AccountUserPasswordArgs) -> Result<bool, String> {
     confirm_action(
         args.yes,
         || format!("Set the password for `{}`? [y/N] ", args.name),
         "refusing to change a password without --yes when stdin is not a terminal",
     )
-    .map(report_cancel)
 }
 
 pub fn confirm_account_user_delete(args: &AccountUserDeleteArgs) -> Result<bool, String> {
@@ -33,7 +19,6 @@ pub fn confirm_account_user_delete(args: &AccountUserDeleteArgs) -> Result<bool,
         || format!("Delete user `{}`{extra}? [y/N] ", args.name),
         "refusing to delete a user without --yes when stdin is not a terminal",
     )
-    .map(report_cancel)
 }
 
 pub fn confirm_account_group_delete(args: &AccountGroupDeleteArgs) -> Result<bool, String> {
@@ -42,7 +27,6 @@ pub fn confirm_account_group_delete(args: &AccountGroupDeleteArgs) -> Result<boo
         || format!("Delete group `{}`? [y/N] ", args.name),
         "refusing to delete a group without --yes when stdin is not a terminal",
     )
-    .map(report_cancel)
 }
 
 pub fn confirm_account_group_modify(args: &AccountGroupModifyArgs) -> Result<bool, String> {
@@ -51,7 +35,6 @@ pub fn confirm_account_group_modify(args: &AccountGroupModifyArgs) -> Result<boo
         || format!("Replace the members of `{}`? [y/N] ", args.name),
         "refusing to change group membership without --yes when stdin is not a terminal",
     )
-    .map(report_cancel)
 }
 
 /// Confirmation for every account subcommand that changes or removes data.
@@ -108,6 +91,25 @@ pub fn confirm_action(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
+}
+
+/// Turns a confirmation into the process exit code the CLI should return.
+///
+/// `None` means the action may proceed. A declined prompt exits `0` because the
+/// user chose it, and a refusal exits `1`. Every subcommand that asks goes
+/// through here so the two messages and the two codes stay in one place.
+pub fn gate(outcome: Result<bool, String>) -> Option<ExitCode> {
+    match outcome {
+        Ok(true) => None,
+        Ok(false) => {
+            eprintln!("[cancelled]");
+            Some(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            Some(ExitCode::FAILURE)
+        }
+    }
 }
 
 pub fn confirm_signal(args: &ProcessSignalArgs) -> Result<bool, String> {
@@ -185,17 +187,7 @@ pub fn confirm_network_manage(command: &NetworkCommand) -> Option<ExitCode> {
         }
     };
 
-    match outcome {
-        Ok(true) => None,
-        Ok(false) => {
-            eprintln!("[cancelled]");
-            Some(ExitCode::SUCCESS)
-        }
-        Err(error) => {
-            eprintln!("[ERROR] {error}");
-            Some(ExitCode::FAILURE)
-        }
-    }
+    gate(outcome)
 }
 
 pub fn kind_name(kind: NetworkKindArg) -> &'static str {

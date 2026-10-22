@@ -5,8 +5,8 @@ use super::dispatch::watch_interval;
 /// Sends `account user password`. The password is read here, never assembled
 /// from argv, and travels only in the request body.
 pub async fn send_account_password(config_path: &str, args: &AccountUserPasswordArgs) -> ExitCode {
-    if let Err(error) = confirm_account_password(args) {
-        return fail_confirmation(error);
+    if let Some(code) = gate(confirm_account_password(args)) {
+        return code;
     }
     let password = match read_password(args.stdin) {
         Ok(password) => password,
@@ -291,69 +291,33 @@ pub async fn send_command(config_path: &str, command: &Command) -> Option<ExitCo
     if let Command::Process(ProcessArgs {
         command: ProcessCommand::Spawn(args),
     }) = command
+        && let Some(code) = gate(confirm_spawn(args))
     {
-        match confirm_spawn(args) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Process(ProcessArgs {
         command: ProcessCommand::Signal(args),
     }) = command
+        && let Some(code) = gate(confirm_signal(args))
     {
-        match confirm_signal(args) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Network(NetworkArgs {
         command: NetworkCommand::Up(args),
     }) = command
+        && let Some(code) = gate(confirm_network_state(args, true))
     {
-        match confirm_network_state(args, true) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Network(NetworkArgs {
         command: NetworkCommand::Down(args),
     }) = command
+        && let Some(code) = gate(confirm_network_state(args, false))
     {
-        match confirm_network_state(args, false) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Network(NetworkArgs { command }) = command
@@ -365,120 +329,57 @@ pub async fn send_command(config_path: &str, command: &Command) -> Option<ExitCo
     if let Command::Volume(VolumeArgs {
         command: VolumeCommand::Mount(args),
     }) = command
+        && let Some(code) = gate(confirm_volume_mount(args))
     {
-        match confirm_volume_mount(args) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Volume(VolumeArgs {
         command: VolumeCommand::Unmount(args),
     }) = command
+        && let Some(code) = gate(confirm_volume_unmount(args))
     {
-        match confirm_volume_unmount(args) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Firewall(FirewallArgs {
         command: FirewallCommand::Allow(args),
     }) = command
+        && let Some(code) = gate(confirm_firewall_add(args, FirewallAction::Allow))
     {
-        match confirm_firewall_add(args, FirewallAction::Allow) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Firewall(FirewallArgs {
         command: FirewallCommand::Deny(args),
     }) = command
+        && let Some(code) = gate(confirm_firewall_add(args, FirewallAction::Deny))
     {
-        match confirm_firewall_add(args, FirewallAction::Deny) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Firewall(FirewallArgs {
         command: FirewallCommand::Delete(args),
     }) = command
+        && let Some(code) = gate(confirm_firewall_delete(args))
     {
-        match confirm_firewall_delete(args) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::Firewall(FirewallArgs {
         command: FirewallCommand::Flush(args),
     }) = command
+        && let Some(code) = gate(confirm_firewall_flush(args))
     {
-        match confirm_firewall_flush(args) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     if let Command::File(FileArgs {
         command: FileCommand::Delete(args),
     }) = command
+        && let Some(code) = gate(confirm_delete(args))
     {
-        match confirm_delete(args) {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+        return Some(code);
     }
 
     // Restoring over an existing entry and emptying the trash are the two
@@ -492,16 +393,8 @@ pub async fn send_command(config_path: &str, command: &Command) -> Option<ExitCo
             TrashBinCommand::Empty(args) => confirm_trash_empty(args),
             TrashBinCommand::List => Ok(true),
         };
-        match confirmed {
-            Ok(true) => {}
-            Ok(false) => {
-                eprintln!("[cancelled]");
-                return Some(ExitCode::SUCCESS);
-            }
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
+        if let Some(code) = gate(confirmed) {
+            return Some(code);
         }
     }
 
@@ -517,15 +410,10 @@ pub async fn send_command(config_path: &str, command: &Command) -> Option<ExitCo
         return Some(send_account_password(config_path, args).await);
     }
 
-    for confirmed in [account_confirmation(command)].into_iter().flatten() {
-        match confirmed {
-            Ok(true) => {}
-            Ok(false) => return Some(ExitCode::SUCCESS),
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                return Some(ExitCode::FAILURE);
-            }
-        }
+    if let Some(outcome) = account_confirmation(command)
+        && let Some(code) = gate(outcome)
+    {
+        return Some(code);
     }
 
     if let Command::File(FileArgs {

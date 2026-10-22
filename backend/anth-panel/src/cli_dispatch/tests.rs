@@ -1,4 +1,5 @@
 use super::super::main_prelude::*;
+use super::confirm::gate;
 use super::server::{BackgroundServers, ServerRole};
 
 #[test]
@@ -29,4 +30,14 @@ async fn a_daemon_leaves_the_api_free_but_blocks_a_second_daemon() {
         .check(&Command::Run(EndpointArgs::default()))
         .unwrap_err();
     assert!(error.contains("cannot start `run`"), "{error}");
+}
+
+#[test]
+fn a_declined_prompt_exits_zero_and_a_refusal_exits_one() {
+    assert_eq!(gate(Ok(true)), None);
+    assert_eq!(gate(Ok(false)), Some(ExitCode::SUCCESS));
+    assert_eq!(
+        gate(Err("no terminal".to_string())),
+        Some(ExitCode::FAILURE)
+    );
 }
