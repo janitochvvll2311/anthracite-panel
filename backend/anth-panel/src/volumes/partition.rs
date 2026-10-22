@@ -498,18 +498,18 @@ pub fn edit_with(
 
 /// Collects a snapshot and runs one edit against it.
 pub fn perform(
-    control_enabled: bool,
+    partition_enabled: bool,
     format_enabled: bool,
     sudo_enabled: bool,
     allowed_disks: &[String],
     protected_paths: &[PathBuf],
     action: &PartitionTableAction,
 ) -> Result<String, PartitionError> {
-    if !control_enabled {
+    if !partition_enabled {
         return Err(disabled("`[volumes] partition` is off"));
     }
     let probe = SystemProbe::new();
-    let snapshot = collect_with(control_enabled, &probe);
+    let snapshot = collect_with(partition_enabled, &probe);
     let runner = SystemRunner::new(sudo_enabled);
     edit_with(
         &runner,
