@@ -1229,6 +1229,63 @@ plugins installed" from "plugins turned off".
 Installing from the browser is gated by `[plugins] install_from_web`, which is
 off by default: installing means running code.
 
+## `/api/plugins/{id}/{*path}`
+
+Every anchor a plugin answers, under one wildcard route. `GET`, `POST`, `PUT`,
+`PATCH` and `DELETE` are all routed to the same handler, and the plugin answers
+from the envelope it receives.
+
+The handler never reads the manifest. That is the design, not an omission: a
+manifest is a file inside the bundle, so a rule that only consulted it would be
+the plugin deciding which of its own routes are reachable. What authorizes the
+call is the grant — the same `anth_exec` guard the CLI path uses — so a request
+for a path the manifest did not declare still reaches the guest, and still
+cannot run anything the grant does not freeze.
+
+The envelope is the one documented in
+[design/plugins.md](design/plugins.md#api-anchors):
+
+```json
+{"kind": "http", "method": "GET", "path": "/status", "query": {"peer": "wg1"}, "body": null}
+```
+
+`path` is always the anchor as the manifest writes it: `.../status` and
+`...//status` and `.../status/` all arrive as `/status`, and `.../wg/peers` as
+`/wg/peers`. axum hands a `{*path}` capture over with the leading slash stripped,
+so without this a guest dispatching on its declared anchors would match only the
+doubled-slash spelling — the one no client sends.
+
+The guest answers with an envelope carrying its own status and body:
+
+```json
+{"status": 200, "body": "ok"}
+```
+
+A body that is not an envelope is passed through as `200 text/plain`, because a
+plugin returning a plain string is valid and the host will not invent a status
+for it.
+
+Status codes:
+
+| Status | When |
+| --- | --- |
+| `200`, or the guest's own status | the guest answered |
+| `400` | the id is not a valid plugin id |
+| `401` | no valid access token, when `[auth] enabled` |
+| `403` | the grant exists but `enabled = false`; never a bundle on disk |
+| `404` | `[plugins] enabled = false`, or no grant for that id |
+| `405` | a method other than the five above |
+| `413` | the request body is larger than 1 MiB |
+| `422` | the bundle no longer matches its grant, no longer parses, or its module is invalid |
+| `502` | the guest failed; it is the plugin that is broken, not the caller |
+| `504` | the guest ran out of fuel or passed the 30 s deadline |
+
+A declared path is resolved through `anchor_route`, which normalizes it and
+refuses `..`, a leading `//` and an invalid id. `Manifest::parse` applies that
+rule, and `install` and `load` both parse, so a manifest rewritten on disk after
+install is refused before its module is read. The refusal is a check on the
+manifest's honesty; it is not the routing rule.
+
 ## Adding a route
 
 `POST /api/echo` rewrites to a body like this because each command maps to a

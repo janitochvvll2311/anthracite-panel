@@ -91,6 +91,16 @@ pub fn router(app: AppState) -> Router {
             post(post_account_group_delete),
         )
         .route("/api/plugins", get(get_plugins))
+        // One wildcard, not one route per declared anchor: the manifest is a
+        // file inside the bundle, so authorization reads the grant, never it.
+        .route(
+            "/api/plugins/{id}/{*path}",
+            get(crate::plugins::api::anchor)
+                .post(crate::plugins::api::anchor)
+                .put(crate::plugins::api::anchor)
+                .patch(crate::plugins::api::anchor)
+                .delete(crate::plugins::api::anchor),
+        )
         .route("/api/volumes", get(get_volumes))
         .route("/api/volumes/mount", post(post_volume_mount))
         .route("/api/volumes/unmount", post(post_volume_unmount))

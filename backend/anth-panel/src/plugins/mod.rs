@@ -12,6 +12,7 @@
 //! a validator the host owns, and renders the argv itself. See `manifest.rs` for
 //! the schema and `bundle.rs` for the archive side.
 
+pub mod api;
 pub mod bundle;
 pub mod manifest;
 pub mod runtime;
