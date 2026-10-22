@@ -1290,7 +1290,9 @@ The same socket protocol and `TerminalSize` limits are documented in
 
 Read-only view of the installed plugin set. It does not travel over the socket:
 the daemon has no opinion about which plugins the panel shows, so the route
-reads the bundle directory and the grants directly.
+reads the bundle directory and the per-plugin grant files directly. A UI anchor
+for a `panel.<theme>.tab` slot carries an optional `label`; the shell uses it as
+the tab title.
 
 ```json
 {
@@ -1299,12 +1301,15 @@ reads the bundle directory and the grants directly.
   "plugins": [
     {
       "id": "org.anth.wireguard",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "name": "WireGuard",
       "enabled": true,
-      "capabilities": ["wg.status"],
+      "capabilities": ["wg.list", "wg.create", "wg.update"],
       "api": [{"method": "GET", "path": "/status"}],
-      "ui": [{"slot": "dashboard.widget", "tag": "anth-wg-card", "module": "web/card.js"}]
+      "ui": [
+        {"slot": "dashboard.widget", "tag": "anth-wg-card", "module": "web/card.js"},
+        {"slot": "panel.network.tab", "tag": "anth-wireguard-panel", "module": "web/wireguard.js", "label": "WireGuard"}
+      ]
     }
   ],
   "problems": []
@@ -1329,13 +1334,14 @@ is off.
 
 The daemon writes the body to a temporary file, extracts and validates it on a
 blocking worker, verifies `plugin.sig` against `[plugins] public_key` unless
-`[plugins] require_signature = false`, and only then records the grant in the
-config and persists it. A refused bundle leaves the previous config untouched.
+`[plugins] require_signature = false`, and only then writes the grant to
+`plugins.d/<id>.toml` and persists the main config. A refused bundle leaves the
+previous policy untouched.
 
 ```json
 {
   "id": "org.anth.wireguard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "name": "WireGuard",
   "warning": null
 }

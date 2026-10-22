@@ -93,6 +93,7 @@ groups. A panel belongs to exactly one theme.
 | --- | --- |
 | `#/` | Home |
 | `#/panel/<id>` | The theme that owns `<id>`, with that panel's tab active |
+| `#/panel/plugin:<plugin-id>:<tag>` | A plugin tab inside the theme named by its anchor slot |
 | `#/window/<id>` | Unknown page, intentionally |
 | anything else | Unknown page |
 
@@ -116,6 +117,14 @@ window mode; keeping the parser and URL helper does not make the route work.
 - **`anth-theme-page`** owns one theme: its heading, its `anth-tab-panel` and the
   feature elements. It builds the tab panel once and then only changes `active`.
   A tab selection emits `anth-panel-select`; the shell turns that into a hash.
+- **Plugin tabs**: a theme may name a `pluginSlot` (`network` uses
+  `panel.network.tab`). The shell appends one tab per anchor returned by
+  `anchorsBySlot`; the anchor's `label` is the tab title, falling back to the
+  plugin name. `anth-plugin-anchor` imports that one module and appends its tag.
+  A tab id is `plugin:<plugin-id>:<tag>`, which makes the tab linkable at
+  `#/panel/plugin:<plugin-id>:<tag>` and keeps back/forward and theme memory
+  working. Installing a plugin emits `anth-plugins-changed`; the shell reloads
+  the catalogue, so the Network tab appears without a page reload.
 - **`anth-tab-panel`** parks a hidden tab by removing it from the light DOM, not
   by hiding it. A parked panel's SSE stream or terminal WebSocket closes, while
   the element and its state stay in the tab panel's registry.
@@ -170,8 +179,8 @@ not render a FAB at all.
 ## Testing
 
 - `frontend/src/app/anth-app.test.ts` covers the sidebar, Home, deep links, tab
-  navigation, theme memory, the theme-page cache, the drawer open/close paths,
-  the broken pop-out route, unknown routes, login and locale.
+  navigation, plugin tabs, theme memory, the theme-page cache, the drawer
+  open/close paths, the broken pop-out route, unknown routes, login and locale.
 - `frontend/src/components/anth-theme-page.test.ts` covers one tab per panel,
   detaching the inactive panel, the selection event, external `active` changes,
   building each panel once and the fallback for an unknown id.
@@ -184,7 +193,7 @@ not render a FAB at all.
 - `frontend/src/lib/ui/theme-memory.test.ts` covers the storage key and blocked
   storage.
 - `anth-theme-page`, `anth-nav-drawer` and `anth-fab` have dev harnesses linked
-  from `component-index.test.html`.
+  from `component-index.test.html`; the plugin anchor has a component test.
 
 CSS orientation is not evaluated by happy-dom, so the final visual check is
 manual: 390×844 for portrait and 844×390 for landscape.

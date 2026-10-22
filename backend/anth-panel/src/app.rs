@@ -9,6 +9,7 @@ use std::{
 
 use crate::auth::session::{AuthService, SharedAuth};
 use crate::config::Config;
+use crate::plugins::jobs::{PluginJobs, SystemJobs};
 use anth_proto::AnthClient;
 use tokio::net::UnixStream;
 use tokio::sync::RwLock;
@@ -19,7 +20,7 @@ use tokio::sync::RwLock;
 /// it: `PATCH /api/config` has to change the in-memory copy *and* the file in
 /// one step, and a request that read the config at boot would otherwise keep
 /// serving the old policy until a restart.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AppState {
     config: Arc<RwLock<Config>>,
     auth: Arc<RwLock<SharedAuth>>,
@@ -29,6 +30,10 @@ pub struct AppState {
     /// Where `save` writes. `None` when the caller built the state directly,
     /// which is what the tests do: they never touch `/etc`.
     config_path: Option<Arc<Path>>,
+    /// Optional host job table for plugin anchors. Production uses
+    /// `SystemJobs`; tests inject a fake so a WireGuard operation never touches
+    /// the real `/etc/wireguard` or `wg`.
+    plugin_jobs: Option<Arc<dyn PluginJobs + Send + Sync>>,
 }
 
 impl AppState {
@@ -41,6 +46,7 @@ impl AppState {
             auth: Arc::new(RwLock::new(auth)),
             max_upload_bytes,
             config_path: None,
+            plugin_jobs: None,
         }
     }
 
@@ -53,7 +59,21 @@ impl AppState {
             auth: Arc::new(RwLock::new(auth)),
             max_upload_bytes,
             config_path: Some(path.into()),
+            plugin_jobs: None,
         }
+    }
+
+    /// Swaps in a host job table, for a test that must not touch the host.
+    pub fn with_plugin_jobs(mut self, jobs: Arc<dyn PluginJobs + Send + Sync>) -> Self {
+        self.plugin_jobs = Some(jobs);
+        self
+    }
+
+    /// The job table an anchor should use. The default is the production table.
+    pub fn plugin_jobs(&self) -> Arc<dyn PluginJobs + Send + Sync> {
+        self.plugin_jobs
+            .clone()
+            .unwrap_or_else(|| Arc::new(SystemJobs::default()))
     }
 
     /// The upload ceiling, readable without awaiting.

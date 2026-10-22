@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import './anth-plugin-manager'
 import type { AnthPluginManager } from './anth-plugin-manager'
+import { ANTH_PLUGINS_CHANGED_EVENT } from './anth-plugin-manager'
 import {
   FakePluginClient,
   pluginSummary,
@@ -115,6 +116,8 @@ describe('AnthPluginManager', () => {
   it('warns before installing and uploads the selected bundle', async () => {
     const client = new FakePluginClient()
     const element = await mount(client)
+    const changed = vi.fn()
+    element.addEventListener(ANTH_PLUGINS_CHANGED_EVENT, changed)
     const file = new File([new Uint8Array([1, 2, 3])], 'widget.zip', {
       type: 'application/zip',
     })
@@ -129,6 +132,7 @@ describe('AnthPluginManager', () => {
     expect(client.installCalls).toEqual([file])
     expect(element.shadowRoot?.textContent).toContain('Installed Widget 0.1.0')
     expect(client.list).toHaveBeenCalledTimes(2)
+    expect(changed).toHaveBeenCalledTimes(1)
   })
 
   it('does not upload when the warning is cancelled', async () => {

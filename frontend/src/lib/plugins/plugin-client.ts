@@ -19,6 +19,8 @@ export interface PluginUiAnchor {
   slot: string
   tag: string
   module: string
+  /** Tab label for panel slots; falls back to the plugin name. */
+  label?: string
 }
 
 export interface PluginSummary {
@@ -118,6 +120,24 @@ export function anchorsBySlot(
 }
 
 /**
+ * Loads one anchor's module and returns the element it declares.
+ *
+ * The module is imported once per realm. `data-slot` lets a module that serves
+ * both a dashboard widget and a full panel pick the right presentation without
+ * a second file.
+ */
+export async function loadAnchor(
+  client: Pick<PluginClient, 'moduleUrl'>,
+  plugin: string,
+  anchor: PluginUiAnchor,
+): Promise<HTMLElement> {
+  await import(/* @vite-ignore */ client.moduleUrl(plugin, anchor.module))
+  const element = document.createElement(anchor.tag)
+  element.dataset.slot = anchor.slot
+  return element
+}
+
+/**
  * Loads every module for a slot and returns the elements to mount.
  *
  * An import or construction failure is reported and skipped. One broken plugin
@@ -132,8 +152,7 @@ export async function loadSlot(
   const elements: HTMLElement[] = []
   for (const { plugin, anchor } of anchorsBySlot(catalogue, slot)) {
     try {
-      await import(/* @vite-ignore */ client.moduleUrl(plugin, anchor.module))
-      elements.push(document.createElement(anchor.tag))
+      elements.push(await loadAnchor(client, plugin, anchor))
     } catch (error) {
       console.error(
         `[plugin] ${plugin} failed to load ${anchor.tag} for ${slot}:`,

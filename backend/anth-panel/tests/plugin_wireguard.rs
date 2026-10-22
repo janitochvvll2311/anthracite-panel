@@ -13,14 +13,16 @@
 //! suite go green while asserting nothing, which is how a broken `POST /peers`
 //! once survived a green run.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::app::AppState;
 use anth_panel::command::{CommandError, CommandOutput, CommandRunner};
 use anth_panel::config::Config;
+use anth_panel::plugins::jobs::PluginJobs;
 use anth_panel::plugins::manifest::Manifest;
 use anth_panel::plugins::{PluginGrant, bundle, runtime};
 use axum::body::Body;
@@ -307,59 +309,68 @@ fn invoke(
     serde_json::from_str(&reply.body).expect("the plugin answers with JSON")
 }
 
-/// Serializes the tests that point `PATH` at a fake `wg`.
-///
-/// The HTTP path builds its own `SystemRunner`, so a fake runner cannot be
-/// injected; `set_var` is process-wide and the harness runs these test
-/// functions in parallel, which is exactly the race that flakes once in a
-/// hundred runs.
-fn path_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+fn invoke_with_jobs(
+    grant: &anth_panel::plugins::PluginGrant,
+    wasm: &[u8],
+    jobs: &dyn PluginJobs,
+    request: Value,
+) -> Value {
+    let runner = Wg::new(&[]);
+    let reply = runtime::invoke_with_jobs(
+        wasm,
+        &grant.id,
+        grant,
+        &runner,
+        jobs,
+        &request.to_string(),
+        0,
+    )
+    .expect("the module must run");
+    serde_json::from_str(&reply.body).expect("the plugin answers with JSON")
 }
 
-/// A `wg` stand-in on `PATH` that prints `stdout` for every invocation.
-struct PathGuard {
-    _lock: MutexGuard<'static, ()>,
-    previous: Option<std::ffi::OsString>,
+#[derive(Default)]
+struct FakeJobs {
+    calls: Mutex<Vec<(String, BTreeMap<String, String>)>>,
 }
 
-impl PathGuard {
-    fn new(stdout: &str) -> Self {
-        let lock = path_lock();
-        let dir = unique_dir("fake-wg");
-        let script = dir.join("wg");
-        fs::write(
-            &script,
-            format!("#!/bin/sh\ncat <<'WG_EOF'\n{stdout}WG_EOF\n"),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).unwrap();
-
-        let previous = std::env::var_os("PATH");
-        // SAFETY: `_lock` serializes every `PATH` mutation in this binary and is
-        // held until `Drop` restores the original value.
-        unsafe { std::env::set_var("PATH", format!("{}:/usr/bin:/bin", dir.display())) };
-        Self {
-            _lock: lock,
-            previous,
-        }
+impl FakeJobs {
+    fn called(&self, id: &str) -> bool {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(called, _)| called == id)
     }
 }
 
-impl Drop for PathGuard {
-    fn drop(&mut self) {
-        // SAFETY: the lock is still held here; `_lock` drops after this body.
-        unsafe {
-            match &self.previous {
-                Some(value) => std::env::set_var("PATH", value),
-                None => std::env::remove_var("PATH"),
-            }
+impl PluginJobs for FakeJobs {
+    fn run(
+        &self,
+        job: &str,
+        args: &BTreeMap<String, String>,
+        _runner: &dyn CommandRunner,
+    ) -> Result<String, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((job.to_string(), args.clone()));
+        match job {
+            "wireguard.list" => Ok(serde_json::json!([{
+                "interface": "wg0",
+                "up": true,
+                "public_key": "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
+                "listen_port": 51820,
+                "addresses": ["10.0.0.1/24"],
+                "mtu": 1420,
+                "peers": [{
+                    "public_key": "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=",
+                    "allowed_ips": ["10.0.0.2/32"],
+                    "endpoint": "vpn.example.net:51820"
+                }]
+            }])
+            .to_string()),
+            _ => Ok("{}".to_string()),
         }
     }
 }
@@ -373,7 +384,7 @@ impl Drop for PathGuard {
 /// router, so this one does — real auth middleware, real `SystemRunner`, real
 /// envelope construction, real wasmi.
 #[tokio::test]
-async fn adding_a_peer_through_the_http_router_reaches_wg() {
+async fn adding_a_peer_through_the_http_router_reaches_the_job() {
     let (root, _wasm) = fixture!();
     let grant = PluginGrant::from_manifest(
         &Manifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap(),
@@ -387,9 +398,9 @@ async fn adding_a_peer_through_the_http_router_reaches_wg() {
         .to_string_lossy()
         .into_owned();
     config.plugins.grants = vec![grant];
-    let state = AppState::new(config);
+    let jobs = Arc::new(FakeJobs::default());
+    let state = AppState::new(config).with_plugin_jobs(jobs.clone());
 
-    let guard = PathGuard::new(SHOW);
     let response = anth_panel::api::router(state)
         .oneshot(
             HttpRequest::builder()
@@ -412,13 +423,60 @@ async fn adding_a_peer_through_the_http_router_reaches_wg() {
     let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .unwrap();
-    drop(guard);
 
     let body = String::from_utf8_lossy(&bytes).into_owned();
     assert_eq!(status, StatusCode::CREATED, "body: {body}");
     let parsed: Value = serde_json::from_str(&body).expect("the anchor answers JSON");
     assert_eq!(parsed["added"], true, "body: {body}");
     assert_eq!(parsed["interface"], "wg0");
+    assert!(jobs.called("wireguard.add_peer"), "the job must run");
+}
+
+#[tokio::test]
+async fn creating_an_interface_through_the_http_router_reaches_the_job() {
+    let (root, _wasm) = fixture!();
+    let grant = PluginGrant::from_manifest(
+        &Manifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap(),
+    );
+
+    let mut config = Config::default();
+    config.plugins.enabled = true;
+    config.plugins.root = root
+        .parent()
+        .expect("the bundle sits under the plugins root")
+        .to_string_lossy()
+        .into_owned();
+    config.plugins.grants = vec![grant];
+    let jobs = Arc::new(FakeJobs::default());
+    let state = AppState::new(config).with_plugin_jobs(jobs.clone());
+
+    let response = anth_panel::api::router(state)
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/plugins/org.anth.wireguard/interfaces")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "interface": "wg0",
+                        "listen_port": 51820,
+                        "addresses": ["10.0.0.1/24"],
+                        "mtu": 1420,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&bytes).into_owned();
+
+    assert_eq!(status, StatusCode::CREATED, "body: {body}");
+    assert!(jobs.called("wireguard.create"), "the create job must run");
 }
 
 /// The same route with a body that is not JSON must be the guest's `400`,
@@ -474,13 +532,21 @@ fn the_shipped_manifest_is_valid_and_inside_host_policy() {
         .collect();
     assert!(ids.contains(&"wg.interfaces"));
     assert!(ids.contains(&"wg.show"));
+    assert!(ids.contains(&"wg.list"));
+    assert!(ids.contains(&"wg.create"));
+    assert!(ids.contains(&"wg.update"));
+    assert!(ids.contains(&"wg.delete"));
     assert!(ids.contains(&"wg.add_peer"));
-    assert!(ids.contains(&"wg.add_peer_endpoint"));
-    // Every capability must run `wg` and nothing else: this plugin has no
-    // business reaching a second program.
+    assert!(ids.contains(&"wg.remove_peer"));
+    // Every capability is either the read-only `wg` view or one of the
+    // host-owned WireGuard jobs. No other program is reachable.
     for capability in &manifest.capabilities {
-        assert_eq!(capability.program.as_deref(), Some("wg"));
-        assert!(capability.job.is_none());
+        if let Some(job) = &capability.job {
+            assert!(job.starts_with("wireguard."), "{job}");
+            assert!(capability.program.is_none());
+        } else {
+            assert_eq!(capability.program.as_deref(), Some("wg"));
+        }
     }
     assert!(
         manifest
@@ -535,51 +601,41 @@ fn the_module_installs_and_implements_the_host_abi() {
 }
 
 #[test]
-fn the_http_anchor_lists_interfaces_through_the_grant() {
+fn the_http_anchor_lists_interfaces_through_the_list_job() {
     let (root, wasm) = fixture!();
     let grant = anth_panel::plugins::PluginGrant::from_manifest(
         &Manifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap(),
     );
-    let runner = Wg::new(&[(&["show", "interfaces"], "wg0\n"), (&["show", "wg0"], SHOW)]);
-
-    let body = invoke(
+    let jobs = FakeJobs::default();
+    let body = invoke_with_jobs(
         &grant,
         &wasm,
-        &runner,
+        &jobs,
         serde_json::json!({"kind": "http", "method": "GET", "path": "/interfaces"}),
     );
 
     assert_eq!(body["status"], 200, "body: {body}");
     let interface = &body["body"]["interfaces"][0];
-    assert_eq!(interface["name"], "wg0");
+    assert_eq!(interface["interface"], "wg0");
     assert_eq!(interface["listen_port"], 51820);
+    assert_eq!(interface["addresses"][0], "10.0.0.1/24");
     assert_eq!(interface["peers"].as_array().unwrap().len(), 1);
-
-    let calls = runner.calls.borrow();
-    assert_eq!(calls[0], vec!["show", "interfaces"]);
-    assert_eq!(calls[1], vec!["show", "wg0"]);
+    assert!(jobs.called("wireguard.list"));
 }
 
 #[test]
-fn adding_a_peer_renders_the_granted_argv_without_the_endpoint() {
+fn adding_a_peer_sends_typed_values_without_an_empty_endpoint() {
     let (root, wasm) = fixture!();
     let grant = anth_panel::plugins::PluginGrant::from_manifest(
         &Manifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap(),
     );
     let key = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=";
-    let runner = Wg::new(&[
-        (
-            &["set", "wg0", "peer", key, "allowed-ips", "10.0.0.2/32"],
-            "",
-        ),
-        (&["show", "interfaces"], "wg0\n"),
-        (&["show", "wg0"], SHOW),
-    ]);
+    let jobs = FakeJobs::default();
 
-    let body = invoke(
+    let body = invoke_with_jobs(
         &grant,
         &wasm,
-        &runner,
+        &jobs,
         serde_json::json!({
             "kind": "http",
             "method": "POST",
@@ -589,40 +645,30 @@ fn adding_a_peer_renders_the_granted_argv_without_the_endpoint() {
     );
 
     assert_eq!(body["status"], 201, "body: {body}");
-    let calls = runner.calls.borrow();
-    // The optional endpoint element is absent from the argv entirely: it did not
-    // render as an empty string after `endpoint`.
-    assert_eq!(
-        calls[0],
-        vec!["set", "wg0", "peer", key, "allowed-ips", "10.0.0.2/32"]
-    );
+    let calls = jobs.calls.lock().unwrap();
+    let (_, args) = calls
+        .iter()
+        .find(|(id, _)| id == "wireguard.add_peer")
+        .expect("the peer job must run");
+    assert_eq!(args["interface"], "wg0");
+    assert_eq!(args["public_key"], key);
+    assert_eq!(args["allowed_ips"], "10.0.0.2/32");
+    assert!(!args.contains_key("endpoint"));
 }
 
 #[test]
-fn an_endpoint_peer_uses_the_recipe_that_supplies_the_flag_pair() {
+fn an_endpoint_peer_reaches_the_job_with_its_endpoint() {
     let (root, wasm) = fixture!();
     let grant = anth_panel::plugins::PluginGrant::from_manifest(
         &Manifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap(),
     );
     let key = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=";
-    let runner = Wg::new(&[(
-        &[
-            "set",
-            "wg0",
-            "peer",
-            key,
-            "allowed-ips",
-            "10.0.0.2/32",
-            "endpoint",
-            "vpn.example.net:51820",
-        ],
-        "",
-    )]);
+    let jobs = FakeJobs::default();
 
-    let body = invoke(
+    let body = invoke_with_jobs(
         &grant,
         &wasm,
-        &runner,
+        &jobs,
         serde_json::json!({
             "kind": "http",
             "method": "POST",
@@ -638,19 +684,12 @@ fn an_endpoint_peer_uses_the_recipe_that_supplies_the_flag_pair() {
 
     assert_eq!(body["status"], 201, "body: {body}");
     assert_eq!(body["body"]["endpoint"], true);
-    assert_eq!(
-        runner.calls.borrow()[0],
-        vec![
-            "set",
-            "wg0",
-            "peer",
-            key,
-            "allowed-ips",
-            "10.0.0.2/32",
-            "endpoint",
-            "vpn.example.net:51820"
-        ]
-    );
+    let calls = jobs.calls.lock().unwrap();
+    let (_, args) = calls
+        .iter()
+        .find(|(id, _)| id == "wireguard.add_peer")
+        .expect("the peer job must run");
+    assert_eq!(args["endpoint"], "vpn.example.net:51820");
 }
 
 #[test]

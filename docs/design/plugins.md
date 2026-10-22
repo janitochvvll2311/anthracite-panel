@@ -60,6 +60,7 @@ path = "/status"                      # mounted at /api/plugins/org.anth.wiregua
 
 [[ui]]
 slot = "dashboard.widget"             # or panel.network.tab, taskbar.item, page
+label = "WireGuard"                   # tab label; falls back to the plugin name
 tag = "anth-wg-card"
 module = "web/wg-card.js"
 ```
@@ -137,30 +138,43 @@ is packaging work, not something the daemon does: the reference plugin's
 
 `install` reads the manifest, validates every capability against the host
 allowlist and the validator set, and writes the **normalized** capability list
-into the config together with the wasm hash:
+to one file per plugin:
+
+```
+/etc/anth/plugins.d/org.anth.wireguard.toml
+```
 
 ```toml
-[[plugins.grants]]
 id = "org.anth.wireguard"
-version = "0.1.0"
+version = "0.2.0"
 wasm_sha256 = "..."
 enabled = true
 
-[[plugins.grants.recipes]]
-id = "wg.status"
+[[recipes]]
+id = "wg.show"
 program = "wg"
 argv = ["show", "{interface}", "dump"]
 accepts_text = false
 
-[plugins.grants.recipes.args.interface]
+[recipes.args.interface]
 type = "ifname"
 optional = false
 ```
 
+The directory is `<config_dir>/plugins.d` by default; `[plugins] grants_dir`
+overrides it. Files are written with mode `0600`; the directory is `0700`.
+Keeping policy outside `plugins.root` matters: the bundle directory is mutable
+content, while rewriting a grant is how a local writer would widen authority.
+
+An existing `[[plugins.grants]]` block is migrated once: the server writes the
+same grants to `plugins.d`, rewrites `config.toml` without the block, and
+continues. A malformed grant file, a filename that does not match its `id`, or
+a symlink refuses the start instead of silently dropping policy.
+
 A grant written before the recipes existed carries `capabilities = ["..."]`.
-`PluginGrant` denies unknown fields, so that config fails to load with the stale
-key named, instead of deserializing into an empty recipe list and leaving the
-plugin installed, listed, and unable to run anything.
+`PluginGrant` denies unknown fields, so a stale grant file fails to load with the
+stale key named, instead of deserializing into an empty recipe list and leaving
+the plugin installed, listed, and unable to run anything.
 
 The grant freezes the whole **recipe** — program, argv template and typed
 arguments — not only the id. `invoke` renders argv from the grant, so a grant
@@ -179,6 +193,27 @@ the grant, never from the manifest, so a plugin that adds a capability to its ow
 manifest is not even *shown* as holding it. A version bump that declares new
 capabilities needs an explicit `plugin approve --accept-capabilities`, and
 `approve` hashes the module before recording anything.
+
+### Host jobs
+
+A capability may name a `job` instead of a `program`. A job is the strong form:
+the host owns the argv, the file paths and any secret handling, and the plugin
+supplies only values validated against the recipe's `ArgType`s. The WireGuard
+plugin uses this for persistent interface management:
+
+| Job | Purpose |
+| --- | --- |
+| `wireguard.list` | configured interfaces, addresses, MTU and peers, without private keys |
+| `wireguard.create` | write `/etc/wireguard/<iface>.conf`, bring it up |
+| `wireguard.update` | edit interface fields, apply with `wg syncconf`, preserve peers |
+| `wireguard.delete` | bring it down and remove the config |
+| `wireguard.add_peer` | add a `[Peer]` block and apply it |
+| `wireguard.remove_peer` | remove a `[Peer]` block and apply it |
+
+A job is callable only when the frozen grant carries it; an ungranted or
+unimplemented job is refused like any other capability. The job table is
+injected into `AppState` in tests, so a WireGuard test never touches
+`/etc/wireguard` or runs the host's `wg`.
 
 ## Sandbox
 
@@ -247,10 +282,11 @@ drives the route through the real router rather than a hand-built envelope.
 ```
 
 The host looks the capability up in the frozen grant, validates each argument
-against its declared type, substitutes the placeholders, and runs the program
-through `SystemRunner` with an argument vector — never a shell. The plugin
-cannot widen this call: an unknown capability id, an unknown argument name, or
-a value failing its validator is an error returned as JSON.
+against its declared type, and either substitutes the placeholders and runs the
+program through `SystemRunner` with an argument vector — never a shell — or
+dispatches the host-owned job named by the recipe. The plugin cannot widen this
+call: an unknown capability id, an unknown argument name, or a value failing its
+validator is an error returned as JSON.
 
 ## API anchors
 
@@ -292,32 +328,32 @@ reinstall reuses the same id.
 
 ## UI anchors
 
-The shell fills slots with `anth-plugin-slot`. The shell renders one wherever a
-plugin may appear and passes it the catalogue; the element asks
-`lib/plugins/plugin-client.ts` for the anchors matching its slot, imports each
-module with a dynamic `import()`, and appends the declared tag. The shell
-therefore holds no plugin tag and no plugin import: a plugin is data — an id, a
-slot, a tag, a module — until the slot element runs. A module that throws on
-import is logged with its plugin id and skipped, so one broken bundle cannot
-empty the dashboard.
+The shell uses `anth-plugin-slot` for multi-anchor slots and
+`anth-plugin-anchor` for one tab. Both ask `lib/plugins/plugin-client.ts` for
+the anchors matching a slot, import the module with a dynamic `import()`, and
+append the declared tag. The shell therefore holds no plugin tag and no plugin
+import: a plugin is data — an id, a slot, a tag, a module — until the loader
+runs. A module that throws on import is logged with its plugin id and skipped,
+so one broken bundle cannot empty the dashboard; a failed tab import renders a
+message in that tab.
 
 `slot` names a place the shell already knows how to fill:
 
 | Slot | Placement | Mounted today |
 | --- | --- | --- |
 | `dashboard.widget` | a card in the dashboard grid | yes |
-| `panel.<name>.tab` | an extra tab inside an existing panel | no |
+| `panel.network.tab` | an extra tab in the Network theme | yes |
+| `panel.<name>.tab` | an extra tab in another theme that declares a `pluginSlot` | only Network today |
 | `taskbar.item` | an item in the taskbar | no |
 | `page` | a top-level route | no |
 
-Only the slots marked as mounted have an `anth-plugin-slot` in the shell. A
-declared anchor in any other slot is accepted by the manifest and never
+A `panel.<name>.tab` anchor may carry `label`; the shell uses it as the tab
+title and falls back to the plugin name. The tab id is
+`plugin:<plugin-id>:<tag>`, so it is a normal linkable route. A declared anchor
+in a slot the shell does not mount is accepted by the manifest and never
 rendered, which is silent: nothing logs, nothing fails, and the plugin simply
-does not appear. The reference bundle hit this with `panel.network.tab`, and
-`tests/plugin_wireguard.rs` now asserts that every declared tag is registered
-by the module it names. The row stays in the table because the naming scheme
-is the contract a future shell slot will use; it is not an invitation to
-declare one.
+does not appear. `tests/plugin_wireguard.rs` asserts that every declared tag is
+registered by the module it names.
 
 Two more rules the reference bundle follows:
 
@@ -341,8 +377,8 @@ sandboxed iframe with a message bridge.
 same `install_bundle` as the CLI. It is gated by `[plugins] install_from_web`
 (off in release, on in the generated debug config) and by `[plugins] enabled`.
 The route installs on a blocking worker, writes the new grant through
-`AppState::replace_config` and persists the config; a refused bundle leaves the
-previous config untouched and the staged directory removed.
+`AppState::replace_config` and persists it to `plugins.d/<id>.toml`; a refused
+bundle leaves the previous policy untouched and the staged directory removed.
 
 `anth-plugin-manager` reads `GET /api/plugins`, lists the installed bundles and
 the problems the registry reported, and offers the install control only when
@@ -367,6 +403,8 @@ values: that would expose the whole protocol and defeat the model.
 | A publisher is impersonated, or a module is swapped in transit | `plugin.sig` is verified against `[plugins] public_key` at install; the bypass prints a warning and still rejects a wrong signature |
 | A hostile bundle is installed from the browser | route gated by `install_from_web`, install has a confirmation naming the code-execution risk, and the same zip/manifest/signature checks as the CLI |
 | Plugin claims capabilities it was not granted | advertised set comes from the grant, not the manifest |
+| A plugin job writes or reads an arbitrary path | jobs are host code with fixed paths; the plugin supplies only typed values |
+| A private key reaches argv or logs | the WireGuard job writes it to a `0600` config; job replies omit it |
 | Plugin smuggles an option instead of an operand | every validator rejects a leading `-` |
 | An id with `..` reaches a recursive delete | ids are validated inside `plugin_dir`, before the join |
 | Plugin hijacks a core route | namespace `/api/plugins/<id>/` enforced |
@@ -381,9 +419,10 @@ values: that would expose the whole protocol and defeat the model.
 
 | Phase | Scope |
 | --- | --- |
-| 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification — done |
+| 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants (moved to files in 8g), hash re-verification — done |
 | 8b | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest — done |
 | 8c | API anchors and namespacing — done |
 | 8d | UI anchors, asset serving — done |
 | 8e | WireGuard plugin: manifest, wasm, web components — done |
 | 8f | Ed25519 signatures, the `require_signature` bypass, browser install and `anth-plugin-manager` — done |
+| 8g | Grant files under `plugins.d`, dynamic Network plugin tabs, host jobs and persistent WireGuard management — done |

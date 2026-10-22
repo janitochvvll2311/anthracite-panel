@@ -5,10 +5,17 @@ import { customElement, property } from 'lit/decorators.js'
 import './anth-tab-panel'
 import type { AnthTabPanel } from './anth-tab-panel'
 import { ANTH_TAB_CHANGE_EVENT } from './anth-tab-panel'
-import type { PanelDefinition, ThemeDefinition } from '../app/panels'
+import type { ThemeDefinition } from '../app/panels'
 
-/** Fired when a tab is selected, with the panel id in `detail.panel`. */
+/** Fired when a tab is selected, with the tab id in `detail.panel`. */
 export const ANTH_PANEL_SELECT_EVENT = 'anth-panel-select'
+
+/** One tab in a theme. `create` runs once, when the tab panel is built. */
+export interface ThemeTab {
+  id: string
+  label: string
+  create: () => HTMLElement
+}
 
 /**
  * One sidebar theme and the tab strip of its panels.
@@ -29,15 +36,11 @@ export class AnthThemePage extends LitElement {
   theme?: ThemeDefinition
 
   @property({ attribute: false })
-  panels: PanelDefinition[] = []
+  tabs: ThemeTab[] = []
 
-  /** Panel id of the tab the route selected. */
+  /** Id of the tab the route selected. */
   @property({ attribute: false })
   active = ''
-
-  /** Builds the feature element for one panel. Called once per panel. */
-  @property({ attribute: false })
-  createPanel?: (panel: PanelDefinition) => HTMLElement
 
   private tabPanel?: AnthTabPanel
 
@@ -68,16 +71,16 @@ export class AnthThemePage extends LitElement {
       return
     }
 
-    const key = `${theme.id}|${this.panels.map((panel) => panel.id).join(',')}`
+    const key = `${theme.id}|${this.tabs.map((tab) => tab.id).join(',')}`
     if (!this.tabPanel || key !== this.builtKey) {
       this.build(theme, workspace, key)
     }
 
     // The route wins over any stale tab id. An empty or unknown id falls back
     // to the first panel so a hand-edited URL still shows something.
-    const next = this.panels.some((panel) => panel.id === this.active)
+    const next = this.tabs.some((tab) => tab.id === this.active)
       ? this.active
-      : (this.panels[0]?.id ?? '')
+      : (this.tabs[0]?.id ?? '')
     if (this.tabPanel && next && this.tabPanel.active !== next) {
       this.tabPanel.active = next
     }
@@ -93,21 +96,19 @@ export class AnthThemePage extends LitElement {
     const tabs = document.createElement('anth-tab-panel') as AnthTabPanel
     tabs.setAttribute('aria-label', theme.title())
 
-    for (const panel of this.panels) {
+    for (const tab of this.tabs) {
       const section = document.createElement('section')
-      section.dataset.tab = panel.id
-      section.setAttribute('label', panel.title())
-      section.append(
-        this.createPanel?.(panel) ?? document.createElement('div'),
-      )
+      section.dataset.tab = tab.id
+      section.setAttribute('label', tab.label)
+      section.append(tab.create())
       tabs.append(section)
     }
 
     // Set `active` before connecting: the tab panel selects the first tab on
     // connect, and switching afterwards would briefly mount the wrong panel.
-    const next = this.panels.some((panel) => panel.id === this.active)
+    const next = this.tabs.some((tab) => tab.id === this.active)
       ? this.active
-      : (this.panels[0]?.id ?? '')
+      : (this.tabs[0]?.id ?? '')
     if (next) tabs.active = next
 
     tabs.addEventListener(ANTH_TAB_CHANGE_EVENT, this.onTabChange)

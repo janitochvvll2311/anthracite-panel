@@ -74,6 +74,7 @@ cookie_secure = false
 [plugins]
 enabled = false
 root = "/var/lib/anth/plugins"
+# grants_dir = "/etc/anth/plugins.d"  # default: <config_dir>/plugins.d
 install_from_web = false
 require_signature = true
 public_key = ""
@@ -624,8 +625,9 @@ while the process runs; the CLI is for a host with no browser.
 ### `plugin`
 
 Installs and manages plugin bundles. The commands edit the bundle directory and
-the `[plugins] grants` in the config, so they run locally; a running server
-reads the grants at start and the command prints a reminder to restart it.
+one grant file per plugin under `<config_dir>/plugins.d/` (or
+`[plugins] grants_dir`), so they run locally; a running server reads the grants
+at start and the command prints a reminder to restart it.
 
 | Command | Description |
 | --- | --- |
@@ -640,25 +642,29 @@ reads the grants at start and the command prints a reminder to restart it.
 A bundle is a zip holding `plugin.toml`, `plugin.wasm`, an optional `plugin.sig`
 and an optional `web/` directory. Anything else is refused rather than skipped.
 The install validates the manifest against host policy, hashes the module,
-checks the signature and writes the *validated* capability list to the config:
+checks the signature and writes the *validated* capability list to
+`plugins.d/<id>.toml`:
 
 ```toml
-[[plugins.grants]]
+# /etc/anth/plugins.d/org.anth.wireguard.toml
 id = "org.anth.wireguard"
-version = "0.1.0"
+version = "0.2.0"
 wasm_sha256 = "..."
 enabled = true
 
-[[plugins.grants.recipes]]
+[[recipes]]
 id = "wg.status"
 program = "wg"
 argv = ["show", "{interface}", "dump"]
 accepts_text = false
 
-[plugins.grants.recipes.args.interface]
+[recipes.args.interface]
 type = "ifname"
 optional = false
 ```
+
+An existing `[[plugins.grants]]` block in `config.toml` is migrated on the next
+server or `plugin` command; the block is removed after the files are written.
 
 The whole recipe is frozen, not only the id. Execution renders argv from the
 grant, so a grant holding ids alone would leave the program and the template to

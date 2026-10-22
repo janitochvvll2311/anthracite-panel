@@ -9,6 +9,9 @@ import type {
 } from '../lib/plugins/plugin-client'
 import { confirmAction } from '../lib/ui/dialog'
 
+/** Fired after an install so the shell can reload the plugin catalogue. */
+export const ANTH_PLUGINS_CHANGED_EVENT = 'anth-plugins-changed'
+
 /**
  * Installed plugin bundles and the browser install path.
  *
@@ -139,7 +142,15 @@ export class AnthPluginManager extends LitElement {
     }
     // Refresh only after a success: a failed install must keep its error on
     // screen, and `refresh` clears the error before reading.
-    if (installed) await this.refresh()
+    if (installed) {
+      this.dispatchEvent(
+        new CustomEvent(ANTH_PLUGINS_CHANGED_EVENT, {
+          bubbles: true,
+          composed: true,
+        }),
+      )
+      await this.refresh()
+    }
   }
 
   override render() {

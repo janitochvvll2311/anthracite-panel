@@ -51,9 +51,12 @@ async function mount(
   const page = document.createElement('anth-theme-page') as AnthThemePage
   const createPanel = vi.fn((panel: PanelDefinition) => stubPanel(panel))
   page.theme = THEMES.find((theme) => theme.id === 'system')
-  page.panels = panelsIn('system')
+  page.tabs = panelsIn('system').map((panel) => ({
+    id: panel.id,
+    label: panel.title(),
+    create: () => createPanel(panel),
+  }))
   page.active = active
-  page.createPanel = createPanel
   document.body.append(page)
   await page.updateComplete
   const tabs = await settle(page)
@@ -137,8 +140,7 @@ describe('AnthThemePage', () => {
   it('renders an empty theme without tabs', async () => {
     const page = document.createElement('anth-theme-page') as AnthThemePage
     page.theme = THEMES.find((theme) => theme.id === 'system')
-    page.panels = []
-    page.createPanel = stubPanel
+    page.tabs = []
     document.body.append(page)
 
     const tabs = await settle(page)

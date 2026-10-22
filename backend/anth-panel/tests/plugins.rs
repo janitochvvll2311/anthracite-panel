@@ -128,8 +128,13 @@ fn installing_writes_a_grant_and_listing_shows_it() {
         "the bypass must be reported: {stderr}"
     );
 
-    let text = fs::read_to_string(&config).unwrap();
-    assert!(text.contains("[[plugins.grants]]"), "{text}");
+    let config_text = fs::read_to_string(&config).unwrap();
+    assert!(
+        !config_text.contains("[[plugins.grants]]"),
+        "grants must live in their own files: {config_text}"
+    );
+    let grant_path = dir.join("plugins.d").join("org.anth.test.toml");
+    let text = fs::read_to_string(&grant_path).unwrap();
     assert!(text.contains("wg.status"), "{text}");
 
     let (code, stdout, stderr) = run(&config, &["plugin", "list"]);
@@ -204,6 +209,7 @@ fn removing_forgets_the_grant_and_the_directory() {
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(stdout.contains("Removed"), "{stdout}");
     assert!(!root.join("org.anth.test").exists());
+    assert!(!dir.join("plugins.d").join("org.anth.test.toml").exists());
     assert!(
         !fs::read_to_string(&config)
             .unwrap()
@@ -350,10 +356,13 @@ fn approve_refuses_an_unsigned_bundle_when_a_signature_is_required() {
 
     // The bundle was installed through the bypass. Turning the requirement back
     // on must stop `approve` from widening a grant on that same bundle.
-    let text = fs::read_to_string(&config).unwrap().replace(
-        "require_signature = false",
-        "require_signature = true\npublic_key = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
-    );
+    let text = fs::read_to_string(&config)
+        .unwrap()
+        .replace("require_signature = false", "require_signature = true")
+        .replace(
+            "public_key = \"\"",
+            "public_key = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+        );
     fs::write(&config, text).unwrap();
 
     let (code, _stdout, stderr) = run(

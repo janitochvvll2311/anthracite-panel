@@ -96,14 +96,28 @@ fn failure(status: u16, error: String) -> String {
 pub fn route<E: Executor>(executor: &mut E, request: &HttpRequest) -> String {
     let method = request.method.to_ascii_uppercase();
     let path = request.path.trim_end_matches('/');
+
+    if method == "PATCH"
+        && let Some(interface) = path.strip_prefix("/interfaces/")
+    {
+        return update_interface(executor, request, interface);
+    }
+    if method == "DELETE"
+        && let Some(interface) = path.strip_prefix("/interfaces/")
+    {
+        return delete_interface(executor, interface);
+    }
+
     match (method.as_str(), path) {
         ("GET", "") | ("GET", "/") => {
             envelope(200, json!({"plugin": "org.anth.wireguard", "ok": true}))
         }
         ("GET", "/interfaces") => interfaces(executor),
+        ("POST", "/interfaces") => create_interface(executor, request),
         ("GET", "/status") => status(executor),
         ("GET", "/peers") => peers(executor, &request.query),
         ("POST", "/peers") => add_peer(executor, request),
+        ("DELETE", "/peers") => remove_peer(executor, request),
         _ => failure(404, format!("the plugin has no route for {method} {path}")),
     }
 }
@@ -127,6 +141,32 @@ pub fn cli<E: Executor>(executor: &mut E, argv: &[String]) -> String {
     }
 }
 
+/// Runs a host job and parses the JSON document it returns in `stdout`.
+fn job_json<E: Executor>(
+    executor: &mut E,
+    capability: &str,
+    args: &Value,
+) -> Result<Value, String> {
+    let reply = executor.exec(capability, args)?;
+    let stdout = reply
+        .get("stdout")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("`{capability}` returned no stdout"))?;
+    if stdout.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(stdout).map_err(|error| {
+        format!("`{capability}` returned invalid JSON: {error}")
+    })
+}
+
+fn listed_interfaces<E: Executor>(executor: &mut E) -> Option<Vec<Value>> {
+    match job_json(executor, "wg.list", &json!({})) {
+        Ok(Value::Array(entries)) => Some(entries),
+        _ => None,
+    }
+}
+
 /// The names `wg show interfaces` reports.
 ///
 /// `ip link` lists every device and says nothing about the driver, so this is
@@ -142,6 +182,14 @@ fn interface_names<E: Executor>(executor: &mut E) -> Result<Vec<String>, String>
 }
 
 fn interfaces<E: Executor>(executor: &mut E) -> String {
+    if let Some(entries) = listed_interfaces(executor) {
+        return envelope(200, json!({"interfaces": entries}));
+    }
+    runtime_interfaces(executor)
+}
+
+/// Compatibility path for a host whose grant predates the `wg.list` job.
+fn runtime_interfaces<E: Executor>(executor: &mut E) -> String {
     let names = match interface_names(executor) {
         Ok(names) => names,
         Err(error) => return failure(502, error),
@@ -168,6 +216,27 @@ fn interfaces<E: Executor>(executor: &mut E) -> String {
 }
 
 fn status<E: Executor>(executor: &mut E) -> String {
+    if let Some(entries) = listed_interfaces(executor) {
+        let peers = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("peers")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0)
+            })
+            .sum::<usize>();
+        let names: Vec<Value> = entries
+            .iter()
+            .filter_map(|entry| entry.get("interface").cloned())
+            .collect();
+        return envelope(
+            200,
+            json!({"interfaces": entries.len(), "peers": peers, "names": names}),
+        );
+    }
+
     let names = match interface_names(executor) {
         Ok(names) => names,
         Err(error) => return failure(502, error),
@@ -196,6 +265,22 @@ fn peers<E: Executor>(executor: &mut E, query: &Map<String, Value>) -> String {
     let Some(interface) = query.get("interface").and_then(Value::as_str) else {
         return failure(400, "`interface` is required".to_string());
     };
+    if let Some(entries) = listed_interfaces(executor) {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.get("interface").and_then(Value::as_str) == Some(interface));
+        return match entry {
+            Some(entry) => envelope(
+                200,
+                json!({
+                    "interface": interface,
+                    "peers": entry.get("peers").cloned().unwrap_or_else(|| json!([])),
+                }),
+            ),
+            None => failure(404, format!("interface `{interface}` is not configured")),
+        };
+    }
+
     match executor.exec("wg.show", &json!({"interface": interface})) {
         Ok(reply) => {
             let text = reply
@@ -215,21 +300,114 @@ fn peers<E: Executor>(executor: &mut E, query: &Map<String, Value>) -> String {
     }
 }
 
-/// Adds a peer.
-///
-/// The body is `{"interface": "wg0", "public_key": "...", "allowed_ips":
-/// [...], "endpoint": "host:51820"}`. Fields are checked here so the browser
-/// gets a specific message; the host validates them again, and only its verdict
-/// decides what runs.
+fn string_field(body: &Map<String, Value>, key: &str) -> Option<String> {
+    body.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn number_field(body: &Map<String, Value>, key: &str) -> Option<String> {
+    match body.get(key) {
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(Value::String(text)) if !text.trim().is_empty() => {
+            Some(text.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn addresses_field(body: &Map<String, Value>) -> Option<String> {
+    match body.get("addresses") {
+        Some(Value::Array(parts)) => {
+            let values: Vec<&str> = parts.iter().filter_map(Value::as_str).collect();
+            (!values.is_empty()).then(|| values.join(","))
+        }
+        Some(Value::String(text)) if !text.trim().is_empty() => {
+            Some(text.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn interface_args(body: &Map<String, Value>) -> Map<String, Value> {
+    let mut args = Map::new();
+    if let Some(interface) = string_field(body, "interface") {
+        args.insert("interface".to_string(), Value::from(interface));
+    }
+    if let Some(key) = string_field(body, "private_key") {
+        args.insert("private_key".to_string(), Value::from(key));
+    }
+    if let Some(port) = number_field(body, "listen_port") {
+        args.insert("listen_port".to_string(), Value::from(port));
+    }
+    if let Some(addresses) = addresses_field(body) {
+        args.insert("addresses".to_string(), Value::from(addresses));
+    }
+    if let Some(mtu) = number_field(body, "mtu") {
+        args.insert("mtu".to_string(), Value::from(mtu));
+    }
+    args
+}
+
+fn create_interface<E: Executor>(executor: &mut E, request: &HttpRequest) -> String {
+    let body = match request.json_body() {
+        Ok(body) => body,
+        Err(error) => return failure(400, error),
+    };
+    if string_field(&body, "interface").is_none() {
+        return failure(400, "`interface` is required".to_string());
+    }
+    match job_json(executor, "wg.create", &Value::Object(interface_args(&body))) {
+        Ok(summary) => envelope(201, summary),
+        Err(error) => failure(502, error),
+    }
+}
+
+fn update_interface<E: Executor>(
+    executor: &mut E,
+    request: &HttpRequest,
+    interface: &str,
+) -> String {
+    if interface.is_empty() || interface.contains('/') {
+        return failure(400, "`interface` is required in the path".to_string());
+    }
+    let body = match request.json_body() {
+        Ok(body) => body,
+        Err(error) => return failure(400, error),
+    };
+    let mut args = interface_args(&body);
+    args.insert("interface".to_string(), Value::from(interface));
+    match job_json(executor, "wg.update", &Value::Object(args)) {
+        Ok(summary) => envelope(200, summary),
+        Err(error) => failure(502, error),
+    }
+}
+
+fn delete_interface<E: Executor>(executor: &mut E, interface: &str) -> String {
+    if interface.is_empty() || interface.contains('/') {
+        return failure(400, "`interface` is required in the path".to_string());
+    }
+    match job_json(
+        executor,
+        "wg.delete",
+        &json!({"interface": interface}),
+    ) {
+        Ok(summary) => envelope(200, summary),
+        Err(error) => failure(502, error),
+    }
+}
+
 fn add_peer<E: Executor>(executor: &mut E, request: &HttpRequest) -> String {
     let body = match request.json_body() {
         Ok(body) => body,
         Err(error) => return failure(400, error),
     };
-    let Some(interface) = body.get("interface").and_then(Value::as_str) else {
+    let Some(interface) = string_field(&body, "interface") else {
         return failure(400, "`interface` is required".to_string());
     };
-    let Some(public_key) = body.get("public_key").and_then(Value::as_str) else {
+    let Some(public_key) = string_field(&body, "public_key") else {
         return failure(400, "`public_key` is required".to_string());
     };
     let allowed_ips = match body.get("allowed_ips") {
@@ -244,38 +422,61 @@ fn add_peer<E: Executor>(executor: &mut E, request: &HttpRequest) -> String {
     if allowed_ips.trim().is_empty() {
         return failure(400, "`allowed_ips` must not be empty".to_string());
     }
+    let endpoint = string_field(&body, "endpoint");
 
     let mut args = json!({
         "interface": interface,
         "public_key": public_key,
         "allowed_ips": allowed_ips,
     });
-    // The endpoint decides which recipe runs, not an optional argument on one:
-    // `wg` wants the flag and its value as two elements, and the host drops
-    // whole elements, so an omitted endpoint would otherwise leave a bare
-    // `endpoint` at the end of the argv.
-    let mut capability = "wg.add_peer";
-    if let Some(endpoint) = body.get("endpoint").and_then(Value::as_str)
-        && !endpoint.is_empty()
-    {
-        // A host:port pair no single validator covers, which is why the endpoint
-        // recipe declares `accepts_text` and the installer warns about it.
-        args["endpoint"] = Value::from(endpoint);
-        capability = "wg.add_peer_endpoint";
+    if let Some(endpoint) = &endpoint {
+        args["endpoint"] = Value::from(endpoint.as_str());
     }
 
-    match executor.exec(capability, &args) {
+    match executor.exec("wg.add_peer", &args) {
         Ok(_) => envelope(
             201,
-            json!({"added": true, "interface": interface, "endpoint": capability == "wg.add_peer_endpoint"}),
+            json!({"added": true, "interface": interface, "endpoint": endpoint.is_some()}),
         ),
-        Err(error) => failure(502, error),
+        Err(job_error) => {
+            // Compatibility with a grant from before peer persistence: the old
+            // recipe split endpoint/no-endpoint into two capability ids.
+            let legacy = if endpoint.is_some() {
+                "wg.add_peer_endpoint"
+            } else {
+                "wg.add_peer"
+            };
+            match executor.exec(legacy, &args) {
+                Ok(_) => envelope(
+                    201,
+                    json!({"added": true, "interface": interface, "endpoint": endpoint.is_some()}),
+                ),
+                Err(_) => failure(502, job_error),
+            }
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
+fn remove_peer<E: Executor>(executor: &mut E, request: &HttpRequest) -> String {
+    let body = match request.json_body() {
+        Ok(body) => body,
+        Err(error) => return failure(400, error),
+    };
+    let Some(interface) = string_field(&body, "interface") else {
+        return failure(400, "`interface` is required".to_string());
+    };
+    let Some(public_key) = string_field(&body, "public_key") else {
+        return failure(400, "`public_key` is required".to_string());
+    };
+    match job_json(
+        executor,
+        "wg.remove_peer",
+        &json!({"interface": interface, "public_key": public_key}),
+    ) {
+        Ok(summary) => envelope(200, summary),
+        Err(error) => failure(502, error),
+    }
+}
 
 /// One `wg show <interface>` block into JSON.
 ///

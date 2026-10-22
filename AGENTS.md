@@ -346,9 +346,12 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   The header is the original one; below it the landscape sidebar lists `Home`
   and the themes (`System`, `Storage`, `Network`, `Access`, `Extensions`). A
   theme page is an `anth-theme-page` with an `anth-tab-panel` whose tabs are the
-  panels in that theme. The shell caches one theme page per theme and detaches
-  it on a theme switch, so a hidden theme keeps its tab and panel state while
-  its streams are closed. `#/window/<id>` is deliberately unknown now; the
+  panels in that theme. A theme may also name a `pluginSlot`; Network uses
+  `panel.network.tab`, so plugin anchors with a `label` become extra tabs and a
+  tab id `plugin:<plugin-id>:<tag>` is a linkable route. The shell caches one
+  theme page per theme and detaches it on a theme switch, so a hidden theme
+  keeps its tab and panel state while its streams are closed. `#/window/<id>`
+  is deliberately unknown now; the
   desktop and pop-out code remain as utilities. Clients are created by the
   registry and can be replaced through `clientFactory`, which is how the shell
   tests mount every panel without a socket. `lib/ui/theme-memory` remembers the
@@ -475,9 +478,16 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   daemon runs programs (chef), the manifest declares which programs and with what
   shape (recipe), and the plugin only supplies declarative values (helper). A
   plugin **never** sends an argv — `manifest::render_argv` builds it from a
-  template frozen in the `[plugins] grants` at install, validating each value
-  with an `ArgType` the host owns. Programs must be on `PROGRAM_ALLOWLIST`, or
-  the capability names a `job` the host implements its own argv for. `bundle.rs`
+  template frozen in the per-plugin grant at install, validating each value
+  with an `ArgType` the host owns. The grant lives in
+  `<config_dir>/plugins.d/<id>.toml` (or `[plugins] grants_dir`), one file per
+  plugin, mode `0600`, with a one-time migration from the old inline
+  `[[plugins.grants]]` block. `Config::load` reads the files and `Config::save`
+  writes them, so the CLI, API and `AppState::persist` all share one path.
+  Programs must be on `PROGRAM_ALLOWLIST`, or the capability names a `job` the
+  host implements its own argv for. `plugins/jobs.rs` dispatches granted jobs;
+  `plugins/wireguard.rs` owns persistent interface config, `wg-quick`/`wg`/`ip`
+  argv and private-key handling. `bundle.rs`
   extracts to a staging directory, refuses any member that is not
   `plugin.toml`, `plugin.wasm`, `plugin.sig` or under `web/` (reusing
   `files::archive::safe_member` plus `O_NOFOLLOW`), hashes the module, verifies
@@ -492,12 +502,16 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   rewritten manifest cannot re-point it. `plugin
   list|install|remove|enable|approve` run locally like `auth` and `config`, and
   `approve` requires `--accept-capabilities` because widening a grant is never
-  implicit. `GET /api/plugins` is read-only and reads the bundle directory, so
-  the daemon stays unaware of which plugins the panel shows.
+  implicit. `GET /api/plugins` is read-only and reads the bundle directory and
+  grant files, so the daemon stays unaware of which plugins the panel shows.
+  A UI anchor may carry `label`; the shell adds each `panel.network.tab` anchor
+  as a tab inside the Network theme, with the id
+  `plugin:<plugin-id>:<tag>` in the route.
   `POST /api/plugins/install` takes a raw zip, is gated by
-  `[plugins] install_from_web`, installs on a blocking worker and persists the
+  `[plugins] install_from_web`, installs on a blocking worker and writes the
   grant; `anth-plugin-manager` is the browser front end, with the same
-  confirmation the CLI documents.
+  confirmation the CLI documents and an `anth-plugins-changed` event that makes
+  the shell reload the catalogue.
   `plugins/runtime.rs` is the `wasmi` host: one engine per call with
   `consume_fuel` and `StoreLimits`, exactly two imports (`anth_exec`,
   `anth_log`), and the four documented exports checked by name and signature
@@ -556,13 +570,17 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   cannot survive, the file is canonicalized before the containment check, the
   MIME type comes from a host-owned extension table, and every answer is
   `nosniff` and `no-store`. The frontend side is `lib/plugins/plugin-client.ts`
-  (catalogue read, `install`, `moduleUrl`, `anchorsBySlot`, `loadSlot`) and
-  `anth-plugin-slot`, which imports each declared module with a dynamic
-  `import()` and appends the tag. `anth-plugin-manager` lists the catalogue,
-  reports load problems, and offers the install form only when both switches
-  are on; the upload is behind a confirmation naming the code-execution risk,
-  and the unverified-signature warning from the daemon is shown to the operator.
-  The shell never imports a plugin statically.
+  (catalogue read, `install`, `moduleUrl`, `anchorsBySlot`, `loadSlot`,
+  `loadAnchor`) and `anth-plugin-slot`, which imports each declared module with
+  a dynamic `import()` and appends the tag. `anth-plugin-anchor` does the same
+  for one anchor, so a theme can add a plugin tab; `UiAnchor.label` names the
+  tab and the route id is `plugin:<plugin-id>:<tag>`. `anth-plugin-manager`
+  lists the catalogue, reports load problems, and offers the install form only
+  when both switches are on; the upload is behind a confirmation naming the
+  code-execution risk, and the unverified-signature warning from the daemon is
+  shown to the operator. A successful install emits `anth-plugins-changed`, so
+  the shell reloads the catalogue and the Network tab appears. The shell never
+  imports a plugin statically.
 - **Frontend firewall**: `anth-firewall` reads the snapshot through an injected
   `FirewallClient`, shows managed rules, adds allow/deny rules and confirms
   deletes/flushes. It only renders controls when `control_enabled` is true and

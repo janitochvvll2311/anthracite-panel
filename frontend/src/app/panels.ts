@@ -53,6 +53,8 @@ export interface ThemeDefinition {
   /** Compact label for the portrait drawer, where full titles do not fit. */
   shortTitle: () => string
   description: () => string
+  /** Slot whose plugin anchors become extra tabs on this theme's page. */
+  pluginSlot?: string
 }
 
 /**
@@ -84,6 +86,7 @@ export const THEMES: ThemeDefinition[] = [
     shortTitle: () => msg('Network'),
     description: () =>
       msg('Interfaces, addresses, traffic and firewall rules.'),
+    pluginSlot: 'panel.network.tab',
   },
   {
     id: 'access',

@@ -95,6 +95,7 @@ pub async fn anchor(
     let root = bundle::plugin_dir(&config.plugins.root_path(), &id).map_err(plugin_error)?;
     let plugins = config.plugins.clone();
     let fuel = plugins.fuel;
+    let jobs = state.plugin_jobs();
     let sudo = config.sudo;
     let query = query_map(uri.query());
     let body_text = if body.is_empty() {
@@ -126,8 +127,16 @@ pub async fn anchor(
         .to_string();
 
         let runner = crate::command::SystemRunner::new(sudo);
-        runtime::invoke(&wasm, &grant.id, &grant, &runner, &envelope, fuel)
-            .map_err(AnchorError::Guest)
+        runtime::invoke_with_jobs(
+            &wasm,
+            &grant.id,
+            &grant,
+            &runner,
+            jobs.as_ref(),
+            &envelope,
+            fuel,
+        )
+        .map_err(AnchorError::Guest)
     })
     .await
     .map_err(|error| ApiError::internal(format!("the anchor worker failed: {error}")))?;

@@ -1,6 +1,6 @@
 # Platform upgrades
 
-Status: phases 0–8f are done. This document is the plan of record and the
+Status: phases 0–8g are done. This document is the plan of record and the
 progress log for the multi-step upgrade of the panel. It is also the context
 handoff: a later conversation should be able to continue from here without
 re-reading the whole repository.
@@ -98,6 +98,7 @@ Additional decisions taken while planning:
 | 8d (point 8) | UI anchors and asset serving | done, merged in #29 |
 | 8e (point 8) | WireGuard plugin: manifest, wasm, web components | done, merged in #30 |
 | 8f (point 8) | Ed25519 bundle signatures, the `require_signature` bypass, browser install and `anth-plugin-manager` | done |
+| 8g (point 8) | Per-plugin grant files, dynamic Network plugin tabs, host jobs and persistent WireGuard | done |
 
 ## Phase 8 — plugins (done)
 
