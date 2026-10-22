@@ -45,6 +45,10 @@ it into a stream becomes `/watch`.
 | `anth-panel volume list` | `GET /api/volumes` |
 | `anth-panel volume mount /dev/sdb1 /mnt/data` | `POST /api/volumes/mount` with `{"device":"/dev/sdb1","target":"/mnt/data"}` |
 | `anth-panel volume unmount /mnt/data` | `POST /api/volumes/unmount` with `{"target":"/mnt/data"}` |
+| `anth-panel volume partitions /dev/sdb` | `GET /api/volumes/partitions?disk=/dev/sdb` |
+| `anth-panel volume partition create /dev/sdb --size 1G` | `POST /api/volumes/partitions` |
+| `anth-panel volume partition delete /dev/sdb 1` | `POST /api/volumes/partitions/edit` with `{"action":"delete",...}` |
+| `anth-panel volume partition format /dev/sdb1 --type ext4` | `POST /api/volumes/partitions/edit` with `{"action":"format",...}` |
 | `anth-panel file list /tmp` | `GET /api/files?path=/tmp` |
 | `anth-panel file read /tmp/a` | `GET /api/files/content?path=/tmp/a` |
 | `anth-panel file mkdir /tmp/a` | `POST /api/files/mkdir` with `{"path":"/tmp/a"}` |
@@ -97,6 +101,9 @@ failures are `error` frames instead. See `GET /api/terminal` below.
 | `GET` | `/api/volumes` | One storage-inventory snapshot |
 | `POST` | `/api/volumes/mount` | Mount a device on a directory |
 | `POST` | `/api/volumes/unmount` | Unmount a mounted directory |
+| `GET` | `/api/volumes/partitions` | One disk's partition table |
+| `POST` | `/api/volumes/partitions` | Create a partition |
+| `POST` | `/api/volumes/partitions/edit` | Resize, delete or format a partition |
 | `GET` | `/api/files` | One directory listing |
 | `GET` | `/api/files/content` | Inline file preview |
 | `GET` | `/api/files/download` | File download |
@@ -843,6 +850,86 @@ curl -s -X POST localhost:8080/api/volumes/unmount \
 | `404` | The target is not a mountpoint |
 | `409` | The filesystem is busy |
 | `500` | `umount` failed for any other reason |
+
+### `GET /api/volumes/partitions`
+
+```bash
+curl -s 'localhost:8080/api/volumes/partitions?disk=/dev/sdb'
+```
+
+```json
+{
+  "disk": "/dev/sdb",
+  "partitions": [
+    {"number": 1, "path": "/dev/sdb1", "size_bytes": 1073741824,
+     "fstype": "ext4", "mountpoints": ["/mnt/data"]}
+  ],
+  "control_enabled": true,
+  "format_enabled": false,
+  "format_types": ["ext4", "xfs", "vfat", "exfat", "btrfs", "swap"],
+  "allowed_disks": ["/dev/sdb"],
+  "warning": null
+}
+```
+
+`disk` must name a whole disk. Reading a table is allowed whenever
+`[volumes] control` is on; it is not narrowed by `disk_allow`, because it
+changes nothing. `control_enabled` and `format_enabled` let a client hide an
+action instead of offering one certain to fail.
+
+| Status | When |
+| --- | --- |
+| `200` | Table read |
+| `404` | `disk` is not a known whole disk |
+
+### `POST /api/volumes/partitions`
+
+```bash
+curl -s -X POST localhost:8080/api/volumes/partitions \
+  -H 'content-type: application/json' \
+  -d '{"disk":"/dev/sdb","kind":"linux","start_bytes":0,"size_bytes":1073741824}'
+```
+
+```json
+{"message":"created a linux partition of 1073741824 bytes on /dev/sdb"}
+```
+
+`kind` is `linux`, `swap` or `efi`. `size_bytes` must be a non-zero whole
+number of 512-byte sectors; `start_bytes` may be `0` to let `sfdisk` place the
+partition.
+
+| Status | When |
+| --- | --- |
+| `200` | Created |
+| `400` | Bad path, unknown kind, or a size that is not whole sectors |
+| `403` | `[volumes] partition` is off, the disk is not in `disk_allow`, or the disk carries a protected or any mounted partition |
+| `404` | The disk is not in the inventory |
+| `409` | The disk has a mounted partition |
+| `500` | `sfdisk` failed |
+
+### `POST /api/volumes/partitions/edit`
+
+One route for the three remaining actions, tagged by `action`:
+
+```json
+{"action":"resize","disk":"/dev/sdb","number":1,"size_bytes":2147483648}
+{"action":"delete","disk":"/dev/sdb","number":1}
+{"action":"format","partition":"/dev/sdb1","fs_type":"ext4","label":"data"}
+```
+
+`format` requires `[volumes] format` in addition to `[volumes] partition`; the
+guard runs before the daemon is asked, so the error names the switch. A
+`format` target must be a partition of an allowlisted disk and must be
+unmounted.
+
+| Status | When |
+| --- | --- |
+| `200` | Applied |
+| `400` | Unknown `action`, bad path, size not whole sectors, unsupported `fs_type`, or a label with an unsafe character |
+| `403` | `[volumes] partition` or `[volumes] format` is off, or the disk is not in `disk_allow` |
+| `404` | The disk or partition is not in the inventory |
+| `409` | The partition or its disk is mounted |
+| `500` | The tool failed |
 
 ## Files
 

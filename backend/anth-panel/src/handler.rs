@@ -11,7 +11,7 @@
 //! `/etc`, shells out or walks `/proc` is marked blocking where the handler that
 //! serves it lives, not in a separate list that drifts.
 
-use anth_proto::{Request, Response};
+use anth_proto::{PartitionError, Request, Response, VolumeErrorKind, VolumeKind};
 
 use crate::accounts;
 use crate::accounts_admin;
@@ -251,6 +251,44 @@ fn handle_core(request: &Request, policy: &Policy, files: &FileService) -> Respo
             Ok(message) => Response::VolumeChanged { message },
             Err(error) => Response::VolumeError(error),
         },
+        Request::PartitionList { disk } => {
+            let snapshot = volumes::collect(policy.volume_control);
+            let Some(device) = snapshot
+                .devices
+                .iter()
+                .find(|device| device.path == *disk && device.kind == VolumeKind::Disk)
+            else {
+                return Response::PartitionError(PartitionError::new(
+                    VolumeErrorKind::NotFound,
+                    format!("`{disk}` is not a known whole disk"),
+                ));
+            };
+            Response::PartitionSnapshot(volumes::snapshot_for(
+                &snapshot,
+                device,
+                policy.volume_partition,
+                policy.volume_format,
+                &policy.disk_allow,
+                snapshot.warning.clone(),
+            ))
+        }
+        Request::PartitionCreate { args } => match volumes::perform_create(policy, args) {
+            Ok(message) => Response::PartitionChanged { message },
+            Err(error) => Response::PartitionError(error),
+        },
+        Request::PartitionEdit { action } => {
+            match volumes::perform(
+                policy.volume_partition,
+                policy.volume_format,
+                policy.sudo,
+                &policy.disk_allow,
+                &policy.protected_paths,
+                action,
+            ) {
+                Ok(message) => Response::PartitionChanged { message },
+                Err(error) => Response::PartitionError(error),
+            }
+        }
         Request::AccountList => Response::AccountSnapshot(accounts::collect(&policy.accounts)),
         Request::AccountCreate {
             name,

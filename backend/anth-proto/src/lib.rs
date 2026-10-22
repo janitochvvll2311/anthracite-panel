@@ -41,6 +41,7 @@ pub use terminal::{
     MAX_TERMINAL_INPUT,
 };
 pub use volumes::{
+    PartitionCreateArgs, PartitionEntry, PartitionError, PartitionSnapshot, PartitionTableAction,
     VolumeDevice, VolumeError, VolumeErrorKind, VolumeKind, VolumeMount, VolumeSnapshot,
     VolumeUsage,
 };
@@ -223,6 +224,22 @@ pub enum Request {
     VolumeUnmount {
         target: String,
     },
+    /// Ask for one disk's partition table.
+    PartitionList {
+        disk: String,
+    },
+    /// Create a partition. Requires `[volumes] partition` and a disk in
+    /// `[volumes] disk_allow`.
+    PartitionCreate {
+        #[serde(flatten)]
+        args: PartitionCreateArgs,
+    },
+    /// Resize, delete or format. `format` additionally requires
+    /// `[volumes] format`.
+    PartitionEdit {
+        #[serde(flatten)]
+        action: PartitionTableAction,
+    },
     /// Ask the daemon for one snapshot of users and groups.
     AccountList,
     /// Create a local user. The account is created locked: setting a password is
@@ -389,6 +406,12 @@ pub enum Response {
     },
     /// A volume operation failed with a machine-readable reason.
     VolumeError(VolumeError),
+    PartitionSnapshot(PartitionSnapshot),
+    /// A partition edit succeeded; the message names what changed.
+    PartitionChanged {
+        message: String,
+    },
+    PartitionError(PartitionError),
     /// One user and group snapshot.
     AccountSnapshot(AccountSnapshot),
     /// An account change succeeded. The message is ready for the CLI.

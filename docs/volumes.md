@@ -125,10 +125,94 @@ unmount: a busy filesystem returns an error rather than losing writes.
 
 ## Partitioning
 
-Partitioning, formatting and filesystem creation are **out of scope** for this
-feature. The panel mounts and unmounts what already exists. `mkfs`, `parted` and
-similar destructive operations need their own design, with their own guards and
-their own confirmation flow.
+Partition edits are a separate feature with separate switches, because they are
+the only operations here that rewrite a device rather than its mount state.
+
+`[volumes] partition` enables table edits (`create`, `resize`, `delete`).
+`[volumes] format` enables `mkfs`, and is a second switch on purpose: replacing a
+partition table is recoverable, formatting a partition is not.
+
+`[volumes] disk_allow` is the authority, not the switches. It lists the whole
+disks a request may touch, by path (`"/dev/sdb"`). An **empty list denies every
+disk** — enabling `partition` without naming a disk changes nothing. The
+shipped default is empty.
+
+Every request is validated against a fresh snapshot before any tool runs:
+
+1. The disk must be absolute, free of `.`/`..`/empty segments, and present in
+   the inventory as a **whole disk**. A partition path is refused where a disk
+   is required, so `/dev/sdb1` cannot be mistaken for `/dev/sdb`.
+2. The disk must appear in `disk_allow`, matched by exact path. A prefix match
+   is not used: `/dev/sdaa` must never be validated as `/dev/sda`.
+3. The disk must not carry a mount this feature protects: `/`, a protected
+   path, or any mounted partition. The check reads the mount's **source device
+   name**, not a string prefix of the disk path, and reports the offending
+   mountpoint.
+4. A `create` size must be a non-zero whole number of 512-byte sectors.
+5. A `format` target must be a partition of an allowlisted disk and unmounted.
+
+Sizes and offsets are numbers, never strings, so they cannot reach a shell. The
+plan is an argument vector plus an optional script on **stdin**:
+
+| Operation | Call |
+| --- | --- |
+| create | `sfdisk --no-reread [--append] <disk>` + `size=<sectors>,type=<kind>` |
+| resize | `sfdisk --no-reread -N <n> <disk>` + `size=<sectors>` |
+| delete | `sfdisk --no-reread --delete <disk> <n>` |
+| format | `mkfs.<type> [-L \| -n] <label> <partition>` or `mkswap` |
+
+Each of these is a separate invocation because `sfdisk`'s input format cannot
+express a partition selection. Two details are load-bearing:
+
+- **`--append` on create, but only when the disk has partitions.** Without it
+  `sfdisk` writes a fresh disklabel, so adding a fourth partition silently
+  deletes the first three — and exits `0`. But `--append` also *fails* on a disk
+  with no disklabel at all (`Failed to add #2 partition: Invalid argument`),
+  which is the ordinary first use of this feature on a newly attached volume.
+  The daemon passes it only when the snapshot shows a partition on the disk.
+- **`-N` on resize, `--delete` on delete.** `<n>,size=` and `delete <n>` are not
+  input-format lines; `sfdisk` answers "unsupported command" and exits `1`.
+
+`mkfs.fat` takes `-n` for a label, not `-L`, and caps it at 11 characters; the
+other tools take `-L` up to 32. The planner picks the flag and limit from the
+type, so a label the tool would reject never reaches it.
+
+A filesystem label is restricted to a conservative character set because it is
+passed as an argument to a tool that would otherwise accept option-like text.
+
+### What the guards refuse
+
+Partition edits resolve the disk, then refuse, in this order:
+
+1. **A protected disk** — `/`, a virtual filesystem, or an ancestor of the
+   socket, config, `files.root` or the executable.
+2. **A whole-disk filesystem.** A USB stick formatted with `mkfs.vfat` and no
+   partition table has no child partitions, so it looks blank. Writing a table
+   puts an MBR over the FAT boot sector: the filesystem is gone, and `blkid`
+   still reports `TYPE=vfat`, so nothing warns the operator. The guard refuses
+   a disk whose own `fstype` is set. `delete` is refused for the same reason.
+3. **An active swap area.** Swap is never in `/proc/self/mountinfo`, and
+   `--no-reread` disables `sfdisk`'s own in-use check, so the mount scan cannot
+   see it. The daemon reads `/proc/swaps` into `swap_devices`; an unreadable
+   table is reported as a warning and treated as unknown, never as "no swap".
+   This covers `format` too, which reaches the swap check through
+   `refuse_active_swap`: `mkfs.fat` overwrites a live swap signature with exit
+   0, and a lost swap area is the least recoverable damage this feature can
+   do. That check matches the target exactly, so formatting a partition whose
+   sibling is swapped stays allowed.
+
+The guards read the **unfitted** snapshot (`collect_for_mutation`), like
+`mount`/`umount`. A guard reading the fitted one could pass on a disk whose
+mounted partition had been dropped to fit the line cap.
+
+`mkfs.<type>` derives from an allowlist (`ext4`, `xfs`, `vfat`, `exfat`,
+`btrfs`, `swap`); an unlisted type names no binary. Partitioning a **mounted**
+disk is refused rather than forced, matching the unmount policy: the operator
+unmounts first, and the panel never guesses.
+
+The read side, `PartitionList`, is available whenever `[volumes] control` is
+on, and reports the switches so a client can show which actions are possible.
+It is not gated by `disk_allow`, because reading a table changes nothing.
 
 ## Error kinds
 
@@ -140,7 +224,7 @@ Failures carry a machine-readable kind, which the HTTP layer maps to a status:
 | `protected` | Refused by a guard (root, virtual fs, mount root, panel paths, removable) | 403 |
 | `permission_denied` | The command could not elevate | 403 |
 | `not_found` | Unknown device, missing target, not a mountpoint | 404 |
-| `busy` | `umount` reported the target as busy | 409 |
+| `busy` | `umount` reported the target as busy, or the disk has a mounted partition | 409 |
 | `invalid` | Bad path, bad type, already mounted | 400 |
 | `failed` | Anything else | 500 |
 
@@ -156,10 +240,15 @@ stall the async connection loop.
 
 ## API and CLI
 
-The routes are `GET /api/volumes`, `POST /api/volumes/mount` and
-`POST /api/volumes/unmount`; see [api-endpoints.md](api-endpoints.md). The CLI
-mirrors them as `volume list`, `volume mount` and `volume unmount`; see
-[cli.md](cli.md).
+The routes are `GET /api/volumes`, `POST /api/volumes/mount`,
+`POST /api/volumes/unmount`, `GET /api/volumes/partitions`,
+`POST /api/volumes/partitions` and `POST /api/volumes/partitions/edit`; see
+[api-endpoints.md](api-endpoints.md). The CLI mirrors them as `volume list`,
+`volume mount`, `volume unmount`, `volume partitions` and the `volume partition`
+tree (`create`, `resize`, `delete`, `format`); see [cli.md](cli.md).
+
+Every mutating subcommand asks for confirmation unless `--yes` is given, and
+refuses to run when stdin is not a terminal without it.
 
 There is deliberately **no watch endpoint**. Mounts change when an operator
 changes them, not continuously, and a stream would add a polling load for a list
@@ -170,5 +259,8 @@ that only the panel itself mutates. The web component refreshes on demand.
 - Linux with `/proc/self/mountinfo` and `lsblk` from util-linux.
 - The `mount` and `umount` binaries for control, plus the privileges to run
   them.
+- `sfdisk` for partition edits and the `mkfs.*` utilities (or `mkswap`) for
+  formatting. A missing tool answers `failed` with the tool's own message
+  rather than guessing with different flags.
 - A `/mnt` (or whatever `mount_root` names) that exists before the first mount,
   since the panel does not create directories.

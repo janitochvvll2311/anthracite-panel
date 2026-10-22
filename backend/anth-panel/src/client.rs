@@ -1,9 +1,9 @@
-use anth_proto::{NetworkCreateArgs, NetworkEditArgs};
+use anth_proto::{NetworkCreateArgs, NetworkEditArgs, PartitionCreateArgs, PartitionTableAction};
 use anth_proto::{Request, Response};
 
 use crate::cli::{
     AccountCommand, AccountGroupCommand, AccountUserCommand, Command, FileCommand, FirewallCommand,
-    NetworkCommand, ProcessCommand, TrashBinCommand, VolumeCommand,
+    NetworkCommand, PartitionCommand, ProcessCommand, TrashBinCommand, VolumeCommand,
 };
 use crate::render;
 
@@ -99,6 +99,39 @@ pub fn request_for(command: &Command) -> Option<Request> {
             }),
             VolumeCommand::Unmount(args) => Some(Request::VolumeUnmount {
                 target: args.target.clone(),
+            }),
+            VolumeCommand::Partitions(args) => Some(Request::PartitionList {
+                disk: args.disk.clone(),
+            }),
+            VolumeCommand::Partition(command) => Some(match command {
+                PartitionCommand::Create(args) => Request::PartitionCreate {
+                    args: PartitionCreateArgs {
+                        disk: args.disk.clone(),
+                        kind: args.kind.clone(),
+                        start_bytes: args.start,
+                        size_bytes: args.size,
+                    },
+                },
+                PartitionCommand::Resize(args) => Request::PartitionEdit {
+                    action: PartitionTableAction::Resize {
+                        disk: args.disk.clone(),
+                        number: args.number,
+                        size_bytes: args.size,
+                    },
+                },
+                PartitionCommand::Delete(args) => Request::PartitionEdit {
+                    action: PartitionTableAction::Delete {
+                        disk: args.disk.clone(),
+                        number: args.number,
+                    },
+                },
+                PartitionCommand::Format(args) => Request::PartitionEdit {
+                    action: PartitionTableAction::Format {
+                        partition: args.partition.clone(),
+                        fs_type: args.fs_type.clone(),
+                        label: args.label.clone(),
+                    },
+                },
             }),
         },
         Command::Account(args) => match &args.command {

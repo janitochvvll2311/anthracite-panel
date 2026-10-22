@@ -85,6 +85,8 @@ const MOUNTINFO: &str = "\
 struct FakeProbe {
     lsblk: Result<String, Box<str>>,
     mountinfo: String,
+    /// `None` models an unreadable `/proc/swaps`; the default is "no swap".
+    swaps: Option<Vec<String>>,
 }
 
 impl FakeProbe {
@@ -92,6 +94,7 @@ impl FakeProbe {
         Self {
             lsblk: Ok(lsblk.to_string()),
             mountinfo: mountinfo.to_string(),
+            swaps: Some(Vec::new()),
         }
     }
 }
@@ -109,6 +112,10 @@ impl Probe for FakeProbe {
 
     fn mountinfo(&self) -> Result<String, anth_proto::VolumeError> {
         Ok(self.mountinfo.clone())
+    }
+
+    fn swaps(&self) -> Option<Vec<String>> {
+        self.swaps.clone()
     }
 
     fn usage(&self, _mountpoint: &str) -> Option<VolumeUsage> {
@@ -250,6 +257,7 @@ fn a_missing_lsblk_degrades_to_mounts_only() {
     let probe = FakeProbe {
         lsblk: Err("lsblk is not installed or is not on PATH".into()),
         mountinfo: MOUNTINFO.to_string(),
+        swaps: Some(Vec::new()),
     };
     let snapshot = collect_with(false, &probe);
 
@@ -727,6 +735,7 @@ fn a_large_snapshot_is_shortened_under_the_line_cap() {
         total: 0,
         truncated: false,
         warning: None,
+        swap_devices: Vec::new(),
     };
 
     let fitted = anth_panel::volumes::fit_snapshot_for_test(snapshot);
@@ -821,4 +830,35 @@ fn a_small_snapshot_is_not_marked_truncated() {
     assert!(!fitted.truncated);
     assert!(fitted.warning.is_none());
     assert_eq!(fitted.total, 3);
+}
+
+#[test]
+fn swaps_from_reads_the_header_and_every_path() {
+    let text = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
+                /dev/sda2                               partition\t8388604\t\t0\t\t-2\n\
+                /swapfile                               file\t\t1048572\t\t0\t\t-3\n";
+    let paths = anth_panel::volumes::swaps_from(text).expect("a readable table is Some");
+    assert_eq!(paths, vec!["/dev/sda2", "/swapfile"]);
+}
+
+#[test]
+fn swaps_from_an_empty_table_is_an_empty_list_not_an_unknown() {
+    // "No swap configured" is a fact. Only an unreadable file is unknown, and
+    // that difference is what stops a guard from silently allowing a delete.
+    let text = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n";
+    assert_eq!(anth_panel::volumes::swaps_from(text), Some(Vec::new()));
+}
+
+#[test]
+fn an_unreadable_swap_table_is_reported_as_a_warning() {
+    // The FakeProbe returns None, so the snapshot must say the check is
+    // incomplete rather than reporting "no swap" and passing the guard.
+    let mut probe = FakeProbe::new(r#"{"blockdevices":[]}"#, "");
+    probe.swaps = None;
+    let snapshot = collect_with(false, &probe);
+    let warning = snapshot.warning.unwrap_or_default();
+    assert!(
+        warning.contains("swap"),
+        "an unknown swap table must be visible, got: {warning}"
+    );
 }

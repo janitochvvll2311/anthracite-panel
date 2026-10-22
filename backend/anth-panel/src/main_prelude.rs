@@ -24,10 +24,11 @@ pub use anth_panel::cli::{
     AccountUserPasswordArgs, AuthArgs, AuthCommand, Cli, Command, ConfigArgs, ConfigCommand,
     EndpointArgs, FileArgs, FileCommand, FileDeleteArgs, FileReadArgs, FileUploadArgs,
     FileWriteArgs, FirewallAddArgs, FirewallArgs, FirewallCommand, FirewallDeleteArgs,
-    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkKindArg, NetworkStateArgs, PluginArgs,
-    PluginCommand, ProcessArgs, ProcessCommand, ProcessSignalArgs, ProcessSpawnArgs,
-    TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs, VolumeArgs, VolumeCommand, VolumeMountArgs,
-    VolumeUnmountArgs, WatchArgs,
+    FirewallFlushArgs, NetworkArgs, NetworkCommand, NetworkKindArg, NetworkStateArgs,
+    PartitionCommand, PartitionCreateCli, PartitionDeleteCli, PartitionFormatCli,
+    PartitionResizeCli, PluginArgs, PluginCommand, ProcessArgs, ProcessCommand, ProcessSignalArgs,
+    ProcessSpawnArgs, TrashBinCommand, TrashEmptyArgs, TrashRestoreArgs, VolumeArgs, VolumeCommand,
+    VolumeMountArgs, VolumePartitionsArgs, VolumeUnmountArgs, WatchArgs,
 };
 pub use anth_panel::config::{Config, DEFAULT_CONFIG_PATH};
 pub use anth_panel::read_password;

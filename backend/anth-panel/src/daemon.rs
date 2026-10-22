@@ -44,6 +44,10 @@ pub struct Policy {
     pub network_manage: bool,
     pub firewall_control: bool,
     pub volume_control: bool,
+    /// `[volumes] partition` and `[volumes] format`, plus the disk allowlist.
+    pub volume_partition: bool,
+    pub volume_format: bool,
+    pub disk_allow: Vec<String>,
     /// The `[accounts]` policy the guards and the snapshot read. The control
     /// switches live here too, so a snapshot can never disagree with the gate.
     pub accounts: crate::config::AccountsConfig,
@@ -429,6 +433,9 @@ pub fn policy_for(config: &Config, config_path: &Path) -> Policy {
         network_manage: config.network.manage,
         firewall_control: config.firewall.control,
         volume_control: config.volumes.control,
+        volume_partition: config.volumes.partition,
+        volume_format: config.volumes.format,
+        disk_allow: config.volumes.disk_allow.clone(),
         accounts: config.accounts.clone(),
         daemon_user: accounts_admin::daemon_user(),
         mount_root: mount_root(&config.volumes.mount_root),

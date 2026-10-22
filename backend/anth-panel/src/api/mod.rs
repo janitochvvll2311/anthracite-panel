@@ -29,7 +29,8 @@ pub(crate) mod prelude {
         DEFAULT_FILE_CHUNK, DEFAULT_TERMINAL_SIZE, FileChunk, FileError, FileErrorKind,
         FileListing, FileWritten, FirewallAction, FirewallError, FirewallErrorKind,
         FirewallProtocol, FirewallSnapshot, NetworkCreateArgs, NetworkEditArgs, NetworkError,
-        NetworkErrorKind, NetworkInterfaceKind, NetworkSnapshot, ProcessSignal, ProcessSnapshot,
+        NetworkErrorKind, NetworkInterfaceKind, NetworkSnapshot, PartitionCreateArgs,
+        PartitionError, PartitionSnapshot, PartitionTableAction, ProcessSignal, ProcessSnapshot,
         ProcessSpawnErrorKind, Request, Response as CommandResponse, TerminalSize, TrashListing,
         VolumeError, VolumeErrorKind, VolumeSnapshot,
     };

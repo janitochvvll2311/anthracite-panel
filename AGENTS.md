@@ -532,8 +532,45 @@ swap) as a bordered table. It deliberately excludes per-process inspection.
   argument vector, never a shell; stderr text is classified into
   `VolumeErrorKind`. `fit_snapshot` mirrors `process.rs`: it drops diagnostic
   fields first, then device and mount tails, setting `total`, `truncated` and
-  `warning`. Partitioning and `mkfs` are out of scope. Both mutations run on a
-  blocking worker.
+  `warning`. Both mutations run on a blocking worker.
+- **Partitions**: `volumes/partition.rs` owns partition planning; it holds the
+  guards, so they are testable without a disk. Three separate switches:
+  `[volumes] partition` (table edits), `[volumes] format` (`mkfs`) and
+  `[volumes] disk_allow`, which is the authority — an **empty allowlist denies
+  every disk**, so enabling `partition` alone changes nothing. Guards run
+  against a fresh snapshot: the path must be free of `.`/`..`/empty segments
+  (`Path::components()` normalises those away, so the raw segments are checked
+  too), the device must be a whole disk, it must match `disk_allow` by exact
+  path, and it must not carry `/`, a protected path or **any** mounted
+  partition. The mount check compares the mount's source device name, never a
+  string prefix of the disk path, so `/dev/sdaa` cannot be read as `/dev/sda`.
+  Sizes are integers, so they cannot reach a shell; the plan is an argv plus an
+  optional script on **stdin**, one invocation per operation because sfdisk's
+  input format cannot select a partition: `--append` for create, `-N <n>` for
+  resize, `--delete <disk> <n>` for delete. `--append` is conditional, not
+  blanket: without it sfdisk rewrites the disklabel and exits 0, but on a disk
+  with no disklabel it fails ("Failed to add #2 partition"), so it is passed
+  only when the snapshot already has a partition on that disk. `mkfs.fat` takes `-n` and caps labels at 11; the
+  other tools take `-L` up to 32, so the planner picks both from the type.
+  Mutations read `volumes::collect_for_mutation`, the unfitted snapshot, like
+  `mount`/`umount`: a guard reading the fitted one could pass on a disk whose
+  mounted partition truncation dropped. `refuse_whole_disk_filesystem` refuses
+  a disk whose own `fstype` is set, because a superfloppy has no children and
+  would otherwise look blank while a new MBR overwrites its boot sector. Swap
+  is in `VolumeSnapshot::swap_devices` from `/proc/swaps`, since mountinfo
+  never lists it and `--no-reread` disables sfdisk's own check. `format` does
+  not go through `refuse_busy_disk` (it resolves a partition, not a disk), so
+  it calls `refuse_active_swap` on the partition and its disk; that one is an
+  exact match, so a swapped sibling never blocks a format. `mkfs`
+  derives from an allowlist (`FORMAT_TYPES`), so an unlisted type names no
+  binary, and labels are restricted to a conservative character set. A mounted
+  disk or partition is refused, not forced. `PartitionList` needs only
+  `[volumes] control`, because reading a table changes nothing.
+  `tests/partitions.rs` asserts the exact argv and which guard fires first
+  against a fake runner, and also runs the planned calls against the **real**
+  `sfdisk`/`mkfs.vfat` on a throwaway sparse image, skipping when the tool is
+  absent. The fake cannot catch a wrong invocation — it accepts any stdin —
+  which is how three broken `sfdisk` forms and a `-L` vfat label shipped green.
 - **Frontend volume manager**: `anth-volume-manager` renders the device tree and
   the mount table through an injected `VolumeClient`
   (`lib/volumes/volume-client.ts`), with `lib/volumes/display.ts` owning the

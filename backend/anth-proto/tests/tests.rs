@@ -857,6 +857,7 @@ fn volume_snapshot_and_error_responses_roundtrip() {
         total: 1,
         truncated: false,
         warning: None,
+        swap_devices: Vec::new(),
     };
 
     let response = Response::VolumeSnapshot(snapshot.clone());
