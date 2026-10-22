@@ -30,18 +30,25 @@ backend/
   anth-proto/               # wire protocol only: Request/Response + AnthServer/AnthClient
   anth-panel/               # everything else, one binary
     src/
-      main.rs               #   subcommand dispatch: daemon / api / run / echo / host-info
+      main.rs               #   parse the CLI and hand off; no subcommand logic
+      main_prelude.rs       #   imports shared by the cli_dispatch modules
+      cli_dispatch/         #   dispatch.rs, client.rs, server.rs, confirm.rs,
+                            #   settings_cmd.rs, plugin_cmd.rs, tests.rs
       lib.rs                #   module re-exports
       cli.rs                #   clap definitions
       config.rs             #   Config struct, TOML load/save, default paths
       daemon.rs             #   Unix socket listener, sessions, uploads
       handler.rs            #   handler chain: request dispatch, blocking policy
       client.rs             #   CLI client: builds a Request, prints the Response
-      api.rs                #   axum HTTP API + WebSocket upgrade + rust-embed SPA
+      api/                  #   axum routes, one module per command family:
+                            #   core.rs (router), error.rs, guards.rs, shared.rs,
+                            #   prelude.rs, echo, terminal, process, network,
+                            #   firewall, volumes, accounts, files, archive, trash,
+                            #   plugins, host
       app.rs                #   AppState shared by the routes
       ws.rs                 #   generic JSON-over-WebSocket wrapper
       hostinfo.rs           #   host inspection from /proc and /etc/os-release
-      process.rs            #   process table from /proc and signal policy
+      process/              #   /proc parsing, signal policy, spawns, snapshot fitting
       network.rs            #   interfaces from sysfs/proc, addresses and up/down ioctl
       command.rs            #   sudo-capable command runner shared by nft, mount and umount
       firewall.rs           #   managed nftables table and rules
@@ -115,7 +122,7 @@ There is no CI configuration, no `rustfmt.toml` and no `clippy.toml` — default
 
 ### The backend compiles without a frontend build
 
-`anth-panel/src/api.rs` embeds `www/` with `#[derive(RustEmbed)]`. In development `www/`
+`anth-panel/src/api/core.rs` embeds `www/` with `#[derive(RustEmbed)]`. In development `www/`
 holds only a `.gitkeep` and Vite serves the UI, proxying the API routes itself — see
 `frontend/vite.config.ts`. To exercise the embedded UI, build the frontend and copy its
 output into `www/` first:
@@ -676,5 +683,10 @@ duplicate route tables here — point at the doc.
   real code paths — daemon tests spin up a real `UnixListener`, and API tests use a real
   in-process echo server.
 - The single crate and its manifest are `anth-panel`, version `0.1.0`, edition 2024.
+- Module layout is by concern, not by size. A file that grows past a few hundred
+  lines usually holds two jobs: split it into a directory with `mod.rs` and one
+  file per job, and move `#[cfg(test)]` blocks to `tests.rs` beside it, as
+  `process/`, `api/` and `cli_dispatch/` do. Cross-cutting imports belong in a
+  `prelude.rs` used with `use super::prelude::*;` rather than repeated per file.
 - Commit messages mix conventional prefixes (`feat:`, `chore:`) with plain
   capitalized sentences. Keep whichever style the surrounding history uses.
