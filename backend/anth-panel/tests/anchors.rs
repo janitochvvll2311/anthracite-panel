@@ -9,6 +9,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::app::AppState;
@@ -70,6 +71,39 @@ fn routed_guest() -> Vec<u8> {
     (drop (call $exec (i32.const 0) (i32.const 9) (i32.const 32) (i32.const 19)))
     (call $log (i32.const 0) (i32.const 9))
     (i64.or (i64.shl (i64.const 128) (i64.const 32)) (i64.const 32))))
+"#;
+    wat::parse_str(wat).unwrap()
+}
+
+/// A guest that answers with the envelope it was handed, verbatim.
+///
+/// The reply is not a `{"status":..}` envelope, so the handler passes it through
+/// as `200` and the test can parse the host's own envelope out of the body. That
+/// is the only way to see what the guest actually received rather than what the
+/// host meant to send.
+fn echo_guest() -> Vec<u8> {
+    let wat = r#"
+(module
+  (memory (export "memory") 1)
+  (global $bump (mut i32) (i32.const 8192))
+  (func (export "anth_alloc") (param $len i32) (result i32)
+    (local $ptr i32)
+    (local.set $ptr (global.get $bump))
+    (global.set $bump (i32.add (global.get $bump) (local.get $len)))
+    (local.get $ptr))
+  (func (export "anth_free") (param $ptr i32) (param $len i32) (drop (local.get $ptr)) (drop (local.get $len)))
+  (func (export "anth_abi_version") (result i32) (i32.const 1))
+  (func (export "anth_handle") (param $ptr i32) (param $len i32) (result i64)
+    (local $i i32)
+    (block $done
+      (loop $copy
+        (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+        (i32.store8
+          (i32.add (i32.const 4096) (local.get $i))
+          (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $copy)))
+    (i64.or (i64.shl (i64.const 4096) (i64.const 32)) (i64.extend_i32_u (local.get $len)))))
 "#;
     wat::parse_str(wat).unwrap()
 }
@@ -150,6 +184,57 @@ async fn get(state: AppState, uri: &str) -> (StatusCode, String) {
 
 /// A `wg` stand-in on `PATH` that records its argv and prints a marker, so a test
 /// can prove the spawn happened and with what arguments.
+/// Serializes tests that point `PATH` at a fake program.
+///
+/// `set_var` is process-wide and the test harness runs these functions on
+/// parallel threads, so two tests each setting `PATH` can see the other's
+/// directory. The window is narrow — between `set_var` and the handler's spawn —
+/// which makes it exactly the kind of flake that shows up once in a hundred CI
+/// runs. The HTTP path builds its own `SystemRunner`, so a fake runner cannot be
+/// injected; serializing is what is available.
+fn path_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Points `PATH` at `bin` for as long as the guard lives, then restores it.
+///
+/// Holding the lock and the value together is what makes the comment honest:
+/// the previous code restored nothing, so a later test in the same binary
+/// inherited the fake `wg` by accident.
+struct PathGuard {
+    _lock: MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl PathGuard {
+    fn new(bin: &Path) -> Self {
+        let lock = path_lock();
+        let previous = std::env::var_os("PATH");
+        // SAFETY: `_lock` serializes every mutation of `PATH` in this binary,
+        // and it is held until `Drop` restores the original value.
+        unsafe { std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display())) };
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
+}
+
+impl Drop for PathGuard {
+    fn drop(&mut self) {
+        // SAFETY: the lock is still held here; `_lock` drops after this body.
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+}
+
 fn fake_wg(dir: &Path, stdout: &str) -> PathBuf {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -261,8 +346,7 @@ async fn an_undeclared_route_still_reaches_the_guest() {
     let wasm = routed_guest();
     let grant = install(&dir, "org.anth.test", &wasm, &[("GET", "/status")]);
     let bin = fake_wg(&dir, "wg0 up");
-    // SAFETY: the test is single-threaded with respect to `PATH` mutations.
-    unsafe { std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display())) };
+    let _path = PathGuard::new(&bin);
 
     let (status, body) = get(state(&dir, grant), "/api/plugins/org.anth.test/other").await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -277,7 +361,7 @@ async fn the_guest_answers_with_the_envelope_it_was_given() {
     let wasm = routed_guest();
     let grant = install(&dir, "org.anth.test", &wasm, &[("GET", "/status")]);
     let bin = fake_wg(&dir, "wg0 up");
-    unsafe { std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display())) };
+    let _path = PathGuard::new(&bin);
 
     let state = state(&dir, grant);
     let response = anth_panel::api::router(state)
@@ -444,6 +528,57 @@ async fn an_anchor_requires_a_token_like_every_other_route() {
 
     let (status, body) = get(AppState::new(config), "/api/plugins/org.anth.test/status").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The guest must receive `/status`, which is how its manifest spells the anchor,
+/// however the request spelled it.
+///
+/// axum strips the leading slash from a `{*path}` capture, so the ordinary
+/// request arrives as `status` while `//status` arrives as `/status`. Before this
+/// was normalized, an anchor that dispatched on its declared paths matched only
+/// the doubled-slash spelling — the one nobody sends.
+#[tokio::test]
+async fn every_spelling_of_a_route_reaches_the_guest_as_the_declared_path() {
+    let dir = unique_dir("canonical");
+    let wasm = echo_guest();
+    let grant = install(&dir, "org.anth.test", &wasm, &[("GET", "/status")]);
+    let state = state(&dir, grant);
+
+    for (uri, expected) in [
+        ("/api/plugins/org.anth.test/status", "/status"),
+        ("/api/plugins/org.anth.test//status", "/status"),
+        ("/api/plugins/org.anth.test/status/", "/status"),
+        ("/api/plugins/org.anth.test/wg/peers", "/wg/peers"),
+    ] {
+        let (status, body) = get(state.clone(), uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        let envelope: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(envelope["kind"], "http", "{uri}: {body}");
+        assert_eq!(envelope["path"], expected, "{uri}: {body}");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A `plugin.toml` rewritten to escape its namespace is a broken bundle, not a
+/// forbidden caller. The documented answer is `422`; `403` would tell a client
+/// holding a valid token that it may not do something it never asked for.
+#[tokio::test]
+async fn a_rewritten_manifest_answers_422_not_403() {
+    let dir = unique_dir("rewritten");
+    let wasm = routed_guest();
+    let grant = install(&dir, "org.anth.test", &wasm, &[("GET", "/status")]);
+
+    let manifest = dir.join("org.anth.test/plugin.toml");
+    let mut text = fs::read_to_string(&manifest).unwrap();
+    text.push_str("\n[[api]]\nmethod = \"POST\"\npath = \"/../auth/login\"\n");
+    fs::write(&manifest, text).unwrap();
+
+    let (status, body) = get(state(&dir, grant), "/api/plugins/org.anth.test/status").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.contains("namespace"), "{body}");
 
     let _ = fs::remove_dir_all(&dir);
 }

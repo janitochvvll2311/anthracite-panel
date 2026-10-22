@@ -1249,6 +1249,12 @@ The envelope is the one documented in
 {"kind": "http", "method": "GET", "path": "/status", "query": {"peer": "wg1"}, "body": null}
 ```
 
+`path` is always the anchor as the manifest writes it: `.../status` and
+`...//status` and `.../status/` all arrive as `/status`, and `.../wg/peers` as
+`/wg/peers`. axum hands a `{*path}` capture over with the leading slash stripped,
+so without this a guest dispatching on its declared anchors would match only the
+doubled-slash spelling — the one no client sends.
+
 The guest answers with an envelope carrying its own status and body:
 
 ```json
@@ -1266,11 +1272,11 @@ Status codes:
 | `200`, or the guest's own status | the guest answered |
 | `400` | the id is not a valid plugin id |
 | `401` | no valid access token, when `[auth] enabled` |
-| `403` | the grant exists but `enabled = false` |
+| `403` | the grant exists but `enabled = false`; never a bundle on disk |
 | `404` | `[plugins] enabled = false`, or no grant for that id |
 | `405` | a method other than the five above |
 | `413` | the request body is larger than 1 MiB |
-| `422` | the bundle no longer matches its grant, or its module is invalid |
+| `422` | the bundle no longer matches its grant, no longer parses, or its module is invalid |
 | `502` | the guest failed; it is the plugin that is broken, not the caller |
 | `504` | the guest ran out of fuel or passed the 30 s deadline |
 

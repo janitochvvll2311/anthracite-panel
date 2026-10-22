@@ -108,7 +108,7 @@ pub async fn anchor(
     // Hashing, parsing and running are all blocking, and `invoke` may sit in a
     // subprocess for as long as the deadline allows.
     let reply = tokio::task::spawn_blocking(move || -> Result<runtime::GuestReply, AnchorError> {
-        let installed = bundle::load(&root, &grant).map_err(AnchorError::Plugin)?;
+        let installed = bundle::load(&root, &grant).map_err(AnchorError::Load)?;
         let wasm = std::fs::read(installed.wasm_path()).map_err(|error| {
             AnchorError::Plugin(PluginError::new(
                 PluginErrorKind::Io,
@@ -119,7 +119,7 @@ pub async fn anchor(
         let envelope = serde_json::json!({
             "kind": "http",
             "method": method.as_str(),
-            "path": path,
+            "path": canonical_path(&path),
             "query": query,
             "body": body_text,
         })
@@ -149,6 +149,9 @@ pub async fn anchor(
 }
 
 enum AnchorError {
+    /// The bundle on disk failed to load. Mapped separately: a `Denied` here is
+    /// the manifest lying about itself, not the caller overstepping.
+    Load(PluginError),
     Plugin(PluginError),
     Guest(GuestError),
 }
@@ -179,6 +182,26 @@ fn guest_response(body: &str) -> Response {
     };
     *response.status_mut() = status;
     response
+}
+
+/// Puts the wildcard capture into the one form the docs and the manifest use.
+///
+/// axum strips the leading slash from a `{*path}` capture, so `/status` arrives
+/// as `status`, while `//status` arrives as `/status` and `status/` keeps its
+/// trailing slash. A guest that compares `path` against the anchors its manifest
+/// declares — which are written `/status` — would never match the ordinary
+/// request, and would match the doubled-slash one. Prefixing and trimming makes
+/// every spelling of a route arrive as the same string.
+fn canonical_path(capture: &str) -> String {
+    let trimmed = capture.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
 }
 
 fn query_map(raw: Option<&str>) -> serde_json::Map<String, Value> {
@@ -233,6 +256,23 @@ fn percent_decode(raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Maps a failure to load the bundle the caller named.
+///
+/// Separate from [`plugin_error`] because the meaning differs. `Denied` from
+/// `Manifest::parse` during a request means the bundle on disk is lying about
+/// itself — a rewritten `plugin.toml` — not that the caller lacks authority.
+/// Answering `403` would tell a client with a valid token that it is not allowed
+/// to do something it never asked for. The bundle is broken either way, which is
+/// `422`, the same answer a hash mismatch gets.
+fn load_error(error: PluginError) -> ApiError {
+    let status = match error.kind {
+        PluginErrorKind::Missing => StatusCode::NOT_FOUND,
+        PluginErrorKind::Io => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::UNPROCESSABLE_ENTITY,
+    };
+    ApiError::new(status, error.detail)
+}
+
 fn plugin_error(error: PluginError) -> ApiError {
     let status = match error.kind {
         PluginErrorKind::Missing => StatusCode::NOT_FOUND,
@@ -252,6 +292,7 @@ fn plugin_error(error: PluginError) -> ApiError {
 /// caller for a decision the caller did not make.
 fn anchor_error(error: AnchorError) -> ApiError {
     match error {
+        AnchorError::Load(plugin) => load_error(plugin),
         AnchorError::Plugin(plugin) => plugin_error(plugin),
         AnchorError::Guest(guest) => {
             let status = match guest.kind {
