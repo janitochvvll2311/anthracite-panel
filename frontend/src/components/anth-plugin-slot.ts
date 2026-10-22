@@ -1,5 +1,5 @@
-import { LitElement, css, html, nothing } from 'lit'
-import { customElement, property, state } from 'lit/decorators.js'
+import { LitElement, css, html } from 'lit'
+import { customElement, property } from 'lit/decorators.js'
 
 import type { PluginsCatalogue } from '../lib/plugins/plugin-client'
 import { HttpPluginClient, loadSlot } from '../lib/plugins/plugin-client'
@@ -19,17 +19,17 @@ import { HttpPluginClient, loadSlot } from '../lib/plugins/plugin-client'
 @customElement('anth-plugin-slot')
 export class AnthPluginSlot extends LitElement {
   static override styles = css`
+    /* The host is a layout pass-through: the anchored element is laid out by
+       the surrounding grid, exactly as if it had been placed there directly. */
     :host {
-      display: block;
-    }
-
-    :host([slot-name='dashboard.widget']) {
       display: contents;
     }
 
-    .empty {
-      color: var(--muted, #8b9bb4);
-      font-size: 0.85rem;
+    /* display: contents outranks the user-agent [hidden] rule, so the empty
+       state needs its own rule; without it the attribute is inert and an empty
+       slot still occupies a grid track. */
+    :host([hidden]) {
+      display: none;
     }
   `
 
@@ -44,9 +44,6 @@ export class AnthPluginSlot extends LitElement {
   /** Injected in tests; the default talks to `/api/plugins`. */
   @property({ attribute: false })
   client?: HttpPluginClient
-
-  @state()
-  private mounted = 0
 
   private current?: PluginsCatalogue
 
@@ -72,7 +69,6 @@ export class AnthPluginSlot extends LitElement {
     const client = this.client ?? new HttpPluginClient()
     const elements = await loadSlot(client, this.catalogue, this.slotName)
     this.replaceChildren(...elements)
-    this.mounted = elements.length
     // `display: contents` on the host means the section's grid lays out the
     // anchored elements directly; hiding the host when it has none is what
     // keeps an empty dashboard from reserving a grid row.
@@ -82,15 +78,15 @@ export class AnthPluginSlot extends LitElement {
   /**
    * The anchored elements live in the light DOM, so the shadow root has to
    * project them with `<slot>`; without it they are parsed, appended and never
-   * painted. The empty hint renders above the slot, and only when it is true.
+   * painted.
+   *
+   * There is no placeholder text for an empty slot. Nothing installed is the
+   * normal state, and rendering the slot's own name would put an internal
+   * identifier on the dashboard; `hidden` keeps the empty host out of layout
+   * instead.
    */
   override render() {
-    return html`
-      ${this.mounted === 0 && this.catalogue?.enabled
-        ? html`<p class="empty">${this.slotName}</p>`
-        : nothing}
-      <slot></slot>
-    `
+    return html`<slot></slot>`
   }
 }
 

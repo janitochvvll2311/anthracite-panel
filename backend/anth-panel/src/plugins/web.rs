@@ -135,7 +135,12 @@ pub async fn asset(
     let read = tokio::task::spawn_blocking(move || read_asset(&web_root, &relative))
         .await
         .map_err(|error| ApiError::internal(format!("the asset worker failed: {error}")))?;
-    let bytes = read.map_err(|detail| ApiError::new(StatusCode::NOT_FOUND, detail))?;
+    let bytes = read.map_err(|error| match error {
+        // Oversize is the client's mistake, not a missing file: `413` is what
+        // the documented contract promises and what a client can act on.
+        AssetError::TooLarge => ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, error.detail()),
+        AssetError::Missing(_) => ApiError::new(StatusCode::NOT_FOUND, error.detail()),
+    })?;
 
     let body = Body::from(bytes);
     Ok((
@@ -152,37 +157,65 @@ pub async fn asset(
         .into_response())
 }
 
+/// Why an asset could not be served.
+///
+/// The kind exists so the handler does not have to read the message to pick a
+/// status: an oversize asset is `413` and everything else is `404`, and a
+/// `String` would make that distinction a string match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssetError {
+    /// No such file, no `web/` directory, or a path that resolves outside it.
+    Missing(String),
+    /// Larger than [`MAX_ASSET_BYTES`].
+    TooLarge,
+}
+
+impl AssetError {
+    fn detail(&self) -> String {
+        match self {
+            Self::Missing(detail) => detail.clone(),
+            Self::TooLarge => format!("an asset is at most {MAX_ASSET_BYTES} bytes"),
+        }
+    }
+}
+
 /// Reads one asset, refusing a symlink and anything outside `web/`.
-fn read_asset(web_root: &Path, relative: &Path) -> Result<Vec<u8>, String> {
+fn read_asset(web_root: &Path, relative: &Path) -> Result<Vec<u8>, AssetError> {
+    let missing = AssetError::Missing;
     // `canonicalize` resolves the whole chain in one step, so a symlink at any
     // component — including one planted after install — is resolved before the
     // containment check rather than after it.
     let root = web_root.canonicalize().map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
-            format!("`{}` has no `web` directory", web_root.display())
+            missing(format!("`{}` has no `web` directory", web_root.display()))
         } else {
-            format!("could not resolve `{}`: {error}", web_root.display())
+            missing(format!(
+                "could not resolve `{}`: {error}",
+                web_root.display()
+            ))
         }
     })?;
     let target = root.join(relative);
     let resolved = target.canonicalize().map_err(|error| match error.kind() {
-        io::ErrorKind::NotFound => "no such asset".to_string(),
-        _ => format!("could not resolve the asset: {error}"),
+        io::ErrorKind::NotFound => missing("no such asset".to_string()),
+        _ => missing(format!("could not resolve the asset: {error}")),
     })?;
     if !resolved.starts_with(&root) {
-        return Err("the asset resolves outside the plugin's `web` directory".to_string());
+        return Err(missing(
+            "the asset resolves outside the plugin's `web` directory".to_string(),
+        ));
     }
 
-    let metadata =
-        std::fs::metadata(&resolved).map_err(|error| format!("could not stat: {error}"))?;
+    let metadata = std::fs::metadata(&resolved)
+        .map_err(|error| missing(format!("could not stat: {error}")))?;
     if !metadata.is_file() {
-        return Err("no such asset".to_string());
+        return Err(missing("no such asset".to_string()));
     }
     if metadata.len() > MAX_ASSET_BYTES {
-        return Err(format!("an asset is at most {MAX_ASSET_BYTES} bytes"));
+        return Err(AssetError::TooLarge);
     }
     // Opened through the resolved path, which contains no symlink component.
-    std::fs::read(&resolved).map_err(|error| format!("could not read the asset: {error}"))
+    std::fs::read(&resolved).map_err(|error| missing(format!("could not read the asset: {error}")))
 }
 
 #[cfg(test)]
@@ -234,7 +267,10 @@ mod tests {
 
         assert!(read_asset(&web, Path::new("ok.js")).is_ok());
         let error = read_asset(&web, Path::new("leak.js")).unwrap_err();
-        assert!(error.contains("outside"), "{error}");
+        assert!(
+            matches!(&error, AssetError::Missing(detail) if detail.contains("outside")),
+            "{error:?}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -78,7 +78,13 @@ describe('anth-plugin-slot', () => {
     await settle(slot)
 
     expect(slot.children).toHaveLength(0)
+    // The outcome that matters is that the empty slot takes no space and puts
+    // no text on the page. `display: contents` would otherwise outrank the
+    // user-agent `[hidden]` rule and leave the attribute inert.
     expect(slot.hidden).toBe(true)
+    expect(getComputedStyle(slot).display).toBe('none')
+    expect(slot.shadowRoot?.textContent?.trim()).toBe('')
+    expect(slot.textContent?.trim()).toBe('')
   })
 
   it('does not mount a disabled plugin', async () => {

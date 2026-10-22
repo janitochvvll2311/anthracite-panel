@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::app::AppState;
 use anth_panel::config::Config;
+use anth_panel::plugins::web::MAX_ASSET_BYTES;
 use anth_panel::plugins::{PluginGrant, manifest::Manifest};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode, header};
@@ -180,6 +181,26 @@ async fn a_traversal_in_the_path_is_a_bad_request() {
         !body.contains("[plugin]"),
         "the manifest must not be echoed"
     );
+    fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn an_oversize_asset_is_reported_as_too_large() {
+    // The cap is documented as `413` in `docs/api-endpoints.md`. An asset one
+    // byte over the limit pins the mapping: reading the size as a `String` and
+    // collapsing every failure to `404` would still refuse the read, so only a
+    // status assertion catches a contract that drifted from the implementation.
+    let root = unique_dir("oversize");
+    let body = "x".repeat((MAX_ASSET_BYTES + 1) as usize);
+    let grant = bundle(&root, "org.anth.widget", &[("web/js/big.js", &body)]);
+    let state = state(&root, "org.anth.widget", vec![grant]);
+
+    let (status, content_type, _) =
+        fetch(state, "/api/plugins/org.anth.widget/web/js/big.js").await;
+
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+
     fs::remove_dir_all(&root).ok();
 }
 
