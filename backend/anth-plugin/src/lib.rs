@@ -1,67 +1,91 @@
 //! The plugin contract for Anthracite Panel.
 //!
-//! A plugin is two halves — a wasm module the daemon runs and a browser module
-//! the panel mounts — and each half had its contract written out by hand in every
-//! plugin. This crate is the daemon-facing half of that contract, so a plugin
-//! author writes behaviour and nothing else.
+//! A plugin declares its own vocabulary — [`Action`]s and the [`Response`]s they
+//! produce — and the crate keeps every transport out of it. There are three
+//! pipes and each has its own type:
 //!
 //! ```
-//! use anth_plugin::{Command, Guest, Reply, Router, HostExecutor};
+//! use anth_plugin::{
+//!     Action, CliRequest, Executor, HttpRequest, Plugin, Request, Response,
+//! };
+//! use serde_json::Value;
 //!
-//! struct Hello {
-//!     router: Router,
-//! }
+//! const GREETING: Action = Action::new("greeting");
+//! const COMMANDS: &[(&str, Action)] = &[("greet", GREETING)];
 //!
-//! fn greeting(executor: &mut dyn anth_plugin::Executor, _command: &Command) -> Reply {
-//!     match executor.exec_bare("host.hostname") {
-//!         Ok(reply) => {
-//!             let name = reply.get("stdout").and_then(|v| v.as_str()).unwrap_or("unknown");
-//!             Reply::message(format!("hola {name}"))
+//! #[derive(Default)]
+//! struct Hello;
+//!
+//! impl Plugin for Hello {
+//!     fn actions() -> &'static [Action] {
+//!         &[GREETING]
+//!     }
+//!
+//!     fn from_http(request: HttpRequest) -> Result<Request, Response> {
+//!         match (request.method()?, request.path().as_str()) {
+//!             (anth_plugin::Method::Get, "/greeting") => {
+//!                 Ok(Request::new(GREETING, Value::Null))
+//!             }
+//!             _ => Err(Response::not_found("no such anchor")),
 //!         }
-//!         Err(detail) => Reply::failed(detail),
+//!     }
+//!
+//!     fn from_cli(request: CliRequest) -> Result<Request, Response> {
+//!         request.args()?.into_request(COMMANDS)
+//!     }
+//!
+//!     fn handle(&mut self, _executor: &mut dyn Executor, request: Request) -> Response {
+//!         match request.action {
+//!             GREETING => Response::message("hola"),
+//!             _ => Response::not_found(request.action.as_str()),
+//!         }
 //!     }
 //! }
 //!
-//! impl Default for Hello {
-//!     fn default() -> Self {
-//!         Self { router: Router::new().get("/greeting", greeting) }
-//!     }
-//! }
+//! let response = Hello::from_http(HttpRequest {
+//!     method: "GET".to_string(),
+//!     path: "/greeting".to_string(),
+//!     query: Default::default(),
+//!     body: None,
+//! })
+//! .map(|request| Hello.handle(&mut NoHost, request));
+//! assert!(response.is_ok());
 //!
-//! // One path, whichever envelope arrived: an HTTP anchor and
-//! // `plugin call <id> '/greeting'` both land here as a `Command`.
-//! impl Guest for Hello {
-//!     fn handle(&mut self, command: Command) -> Reply {
-//!         self.router.dispatch(&mut HostExecutor, &command)
+//! /// A host that grants nothing, which is enough for a greeting.
+//! struct NoHost;
+//! impl Executor for NoHost {
+//!     fn exec(&mut self, _capability: &str, _args: &Value) -> Result<Value, String> {
+//!         Err("nothing is granted".to_string())
 //!     }
+//!     fn log(&mut self, _message: &str) {}
 //! }
 //! ```
 //!
-//! What the crate deliberately does *not* do: it never decides which capability a
-//! plugin may run (the manifest and the host's grant do), it never reads the
-//! filesystem, and it never executes a program. Those are the host's authority,
-//! and a library a guest links must not be able to widen it.
+//! Why three types instead of one envelope with a `kind` tag: a single envelope
+//! invites one `match` that fabricates the other transport to reuse a handler,
+//! and a fabricated request silently caps the CLI at whatever path it invented.
+//! With one type per pipe, the plugin's mappers are the only place a transport
+//! is read, and `Guest::handle` sees nothing but the plugin's own vocabulary.
+//!
+//! `plugin call` reaches the `direct` pipe, which has no mapper: the caller
+//! sends `{"action": "...", "value": ...}` and the plugin's `handle` takes it as
+//! is. That is what makes a plugin testable without either transport.
 
 #![no_std]
 
 extern crate alloc;
 
-// The library is `no_std` because it is linked into a wasm guest, but its tests
-// run on the host and use the standard library's test harness.
-#[cfg(test)]
-extern crate std;
-
 pub mod abi;
-pub mod command;
-pub mod envelope;
 pub mod exec;
+pub mod plugin;
+pub mod request;
+pub mod transport;
 
 pub use abi::{
-    ABI_VERSION, Guest, HostExecutor, alloc_string, answer, free_string, read_string, write_string,
+    ABI_VERSION, HostExecutor, alloc_string, answer_cli, answer_direct, answer_http, free_string,
+    read_string, write_string,
 };
-pub use command::Command;
-pub use envelope::{CliRequest, HttpRequest, Reply, Request, decode};
-pub use exec::{Executor, Handler, Method, Router};
-
-#[cfg(test)]
-mod tests;
+pub use exec::Executor;
+pub use plugin::Plugin;
+pub use request::{Action, Request, Response, Status};
+pub use transport::{CliArgs, CliRequest, HttpRequest, Method};

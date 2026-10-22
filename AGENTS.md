@@ -35,9 +35,11 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/parse.rs            #   pure parsers over /proc and os-release contents
   anth-plugin/              # the plugin contract a guest links: no_std
     src/lib.rs              #   re-exports
-    src/abi.rs              #   anth_plugin! macro: the four wasm exports
-    src/envelope.rs         #   Request/Reply: the JSON the host speaks
-    src/exec.rs             #   Executor trait and the route table
+    src/abi.rs              #   anth_plugin! macro: one export per transport
+    src/request.rs          #   Action, Request, Status, Response: no transport
+    src/transport.rs        #   HttpRequest, CliRequest, CliArgs, Method
+    src/plugin.rs           #   Plugin trait: actions + three mappers
+    src/exec.rs             #   Executor trait: the capability seam
   anth-paneld/              # the binary: daemon, HTTP API and CLI client
     src/main.rs             #   CLI parsing, exit-code policy, serve_all
     src/dispatch.rs         #   the single request match
@@ -142,76 +144,51 @@ plugin is expected to contain behaviour only.
 
 - **`backend/anth-plugin`** is what a guest links. It is `no_std` (a wasm guest
   has no `std`) and owns four things:
-  - `abi.rs` — `ABI_VERSION = 1` and the `anth_plugin!` macro that generates the
-    four exports the host checks by name and signature (`anth_abi_version`,
-    `anth_alloc`, `anth_free`, `anth_handle`) plus the two imports it provides
-    (`anth_exec`, `anth_log`). A plugin writes none of that plumbing.
-  - `envelope.rs` — `Request` (`{"kind":"http"}` or `{"kind":"cli"}`) and
-    `Reply`. The host sends an anchor body as a **string** and always sends
-    `query`, so the types model that; `json_body()` parses the string for the
-    common case and a body that is not JSON becomes a `400`, not a `500`.
-  - `command.rs` — `Command`, the single form both envelopes fold into, and
-    `Request::into_command`. This is the one rule a plugin must not break: an
-    HTTP anchor and a `plugin call` both arrive at `Guest::handle` as a
-    `Command`, so a plugin has **one** dispatch table and the CLI reaches every
-    route in the manifest. Converting a CLI `argv` into an `HttpRequest` to reuse
-    one handler is the mistake this module exists to prevent: it lies about the
-    transport and leaves the plugin with a single reachable path. `Guest` takes a
-    `Command` rather than a `Request` so the type system enforces it;
-    `into_command` refuses an `argv` that names no operation instead of guessing
-    one, and normalizes the leading slash so `plugin call <id> 'status'` and
-    `GET /status` are the same route.
+  - `abi.rs` — `ABI_VERSION = 2` and the `anth_plugin!` macro that generates the
+    six exports the host checks by name and signature: one entry per transport
+    (`anth_http`, `anth_cli`, `anth_direct`) plus the memory contract
+    (`anth_abi_version`, `anth_alloc`, `anth_free`). The two imports it provides
+    are `anth_exec` and `anth_log`, gated to `wasm32`; off wasm `HostExecutor`
+    refuses every capability by name, so a plugin crate still builds and tests
+    where no daemon exists. Version 2 replaced the single `anth_handle`, so an
+    `abi = 1` bundle has no `anth_http` to call and is refused rather than
+    silently broken.
+  - `request.rs` — the plugin's own vocabulary, and it names no transport.
+    `Action(&'static str)` is a validated const, never caller input: a name
+    arriving at run time can only become an `Action` by being found in
+    `Plugin::actions()`, so a payload cannot invent an operation.
+    `Request { action, value }` is what every pipe produces.
+    `Status` is an enum, not a `u16`: the plugin names an outcome, `code()` turns
+    it into an HTTP status and `exit_code()` into a CLI exit code (`BadRequest`
+    is `2`, everything else `1`, matching `anth-wire`). Both maps are exhaustive,
+    so a new variant without a mapping does not compile. `Response::to_envelope`
+    writes `{"status":..,"body":..}` and **omits** `body` for a null value,
+    because the host serves `204` only when the key is absent and serves a
+    present `null` as the literal text `null`.
+  - `transport.rs` — one type per pipe, each modelling only its own fields.
+    `HttpRequest` carries `body` as a raw **string** (the host never parses an
+    anchor body) and `path()` normalizes to exactly one leading slash, because
+    axum strips it from a `{*path}` capture. `CliRequest` holds `argv`;
+    `CliArgs` resolves the flag forms once — `-v`, `--verbose`, `--verbose=true`,
+    `--name value`, `-n value`, `--` ends the flags, `-` alone is positional, and
+    `-abc` stays one flag rather than being split. `into_request(commands)`
+    resolves the subcommand against the plugin's own alias table, so the routing
+    and the "try one of" message come from one source.
+  - `plugin.rs` — the `Plugin` trait: `actions()` plus three mappers
+    (`from_http`, `from_cli`, `handle`). The mappers have **no default**: a
+    default would let a plugin skip a transport and have the library choose for
+    it, which is exactly the reachability defect this contract removes. The
+    library owns `http`/`cli`/`direct`, which map then handle, so no plugin
+    rewrites the same `match` on a `Result`.
   - `exec.rs` — the `Executor` trait (the capability seam; a test implements it
-    over canned answers) and `Router`, which replaces the hand-written
-    `match` on method and path. `Handler` receives the `Command`, so the same
-    function answers both transports. Matching is exact, because the host has
-    already stripped its own prefix.
-  - `exec_bare` exists because the host decodes `anth_exec` arguments into a map
-    of strings: `null` is a decode failure while `{}` succeeds. Passing
-    `&Value::Null` is the mistake this method removes.
-- **`frontend/packages/plugin`** (`@anth/plugin`) is what a web module imports.
-  `AnchorClient` derives the `/api/plugins/<id>/…` base — it deliberately refuses
-  an absolute URL, so a module cannot ship a second origin — and `PluginWidget`
-  owns the shadow root, the loading/ready/error states and the retry button.
-  `registerWidget` is idempotent, because the shell imports a module with
-  `import()` and the same module can be imported twice in one realm, where a
-  second `customElements.define` throws and the widget disappears. The base
-  class is plain DOM, not Lit: a plugin is bundled on its own and the panel's
-  Lit version is not part of the contract.
+    over canned answers), plus `exec_bare` which sends `{}` because the host
+    decodes arguments into a map and refuses `null`.
 
-The contract is one-directional and stays that way. Neither library decides
-which capability may run, reads the filesystem or spawns a process: the manifest
-grant and the host's runtime keep that authority. A library a guest links must
-not be able to widen it. `plugins/hello` consumes both, and is the reference for
-a new plugin: it declares two anchors (`/greeting`, `/status`) so that "the CLI
-covers what the plugin supports" is a claim a test can check, and its
-`tests/manifest.rs` compares the manifest's `[[api]]` paths against the router's
-both ways, so a route can be neither declared-but-404 nor reachable-but-undeclared.
+  The rule the crate exists to enforce: **a transport is read only in its own
+  mapper**. A single envelope with a `kind` tag invites one `match` that
+  fabricates the other transport to reuse a handler, and a fabricated request
+  silently caps one pipe at whatever shape it invented. With one type per pipe,
+  `handle` sees nothing but `Request`, and `plugin call` reaches the `direct`
+  pipe with no mapper at all — the caller already speaks the plugin's vocabulary,
+  which is also what makes a plugin testable without either transport.
 
-## Environment
-
-- **Rust targets musl, always.** Never build this project for gnu.
-- **`bun` is the only package manager.** `npm`, `npx`, `corepack` and `bunx` do
-  not exist here. Run scripts as `bun run <script>`. The v0.2.0 frontend is
-  `frontend/`; the frozen v0.1.0 one is `v1/frontend/`.
-- **The wasm target is only needed for the plugin**, not for `backend/`:
-  `rustup target add wasm32-unknown-unknown`. The plugin's tests run natively.
-- Integration tests live at `anth-*/tests/<module>.rs`. Socket-based tests bind a
-  unique path in `std::env::temp_dir()` (pid + nanos) and remove it on drop, so
-  two tests never share a socket.
-- `ANTH_SOCKET` overrides the daemon and client socket path, which is what the
-  tests and the demo use; the default is `/var/tmp/anth.sock`, unchanged from
-  v0.1.0 so an upgraded host needs no migration.
-
-## Code style
-
-- Libraries return `WireError` for protocol and I/O failures; a pure parser
-  returns `Option` or a defaulted value and lets `collect_from` degrade a field
-  to `unknown` rather than failing the whole snapshot.
-- `anth-host` uses the standard library only, and no `unsafe`. It reads `/proc`
-  and `/etc/os-release`; it must not need a daemon or a mount namespace to test.
-- Module layout is by concern. A file that grows past a few hundred lines
-  usually holds two jobs: split it into a directory with `mod.rs` and one file
-  per job, and move `#[cfg(test)]` blocks to `tests.rs` beside it.
-- Commit messages mix conventional prefixes (`feat:`, `docs:`) with plain
-  capitalized sentences; keep whichever style the surrounding history uses.

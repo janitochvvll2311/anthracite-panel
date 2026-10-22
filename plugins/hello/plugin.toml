@@ -8,7 +8,7 @@
 id = "org.anth.hello"
 version = "0.2.0"
 name = "Hello"
-abi = 1
+abi = 2
 
 [wasm]
 path = "plugin.wasm"
