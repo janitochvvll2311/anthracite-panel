@@ -245,8 +245,6 @@ slot, a tag, a module — until the slot element runs. A module that throws on
 import is logged with its plugin id and skipped, so one broken bundle cannot
 empty the dashboard.
 
-## UI anchors
-
 `slot` names a place the shell already knows how to fill:
 
 | Slot | Placement |
@@ -295,5 +293,5 @@ values: that would expose the whole protocol and defeat the model.
 | 8a | manifest, validators, binary allowlist, install/list/remove/approve, grants in config, hash re-verification |
 | 8b | `wasmi` host, ABI, fuel and memory limits, blocking execution, WAT test guest — done |
 | 8c | API anchors and namespacing — done |
-| 8d | UI anchors, asset serving |
+| 8d | UI anchors, asset serving — done |
 | 8e | WireGuard plugin: manifest, wasm, web components |
