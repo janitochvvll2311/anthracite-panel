@@ -1,0 +1,24 @@
+{
+  "name": "@anth/app",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "The panel shell and its host-info panel",
+  "scripts": {
+    "dev": "vite",
+    "build": "bun run typecheck && vite build",
+    "preview": "vite preview",
+    "test": "bun test",
+    "typecheck": "bun run tsc --noEmit"
+  },
+  "dependencies": {
+    "@anth/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "^21.0.4",
+    "bun-types": "^1.4.4",
+    "happy-dom": "^21.0.4",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.0"
+  }
+}

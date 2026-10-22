@@ -1,0 +1,35 @@
+# Hello plugin manifest: the smallest bundle that exercises the whole path.
+#
+# One capability, one route, one UI slot. Worth copying when starting a new
+# plugin: the shape is what the host validates, and the comments say which part
+# is authority (the host owns it) and which is data (this file supplies it).
+
+[plugin]
+id = "org.anth.hello"
+version = "0.2.0"
+name = "Hello"
+abi = 1
+
+[wasm]
+path = "plugin.wasm"
+# Filled in by `package.sh`; the host re-hashes on every start and refuses a
+# module whose digest no longer matches the approved one.
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+# The only thing this plugin can do. `program` must be on the host allowlist and
+# the argv is frozen into the grant at install time, so the guest can ask for
+# `hostname` and cannot add a flag to it.
+[[capability]]
+id = "host.hostname"
+program = "hostname"
+
+[[api]]
+method = "GET"
+path = "/greeting"
+
+# The slot the shell mounts. `module` is served from `web/` inside the bundle;
+# the host rebuilds the path component by component, so `..` cannot survive.
+[[ui]]
+slot = "dashboard.widget"
+tag = "anth-hello"
+module = "web/hello.js"

@@ -4,22 +4,34 @@ name: v2
 # green on a machine where `wasm32-unknown-unknown` happened to be installed and
 # fail on a fresh clone (see docs/design/v0.2.0.md, lesson 4).
 #
-# Scope: the v0.2.0 workspace, which lives at the repository root. The frozen
-# v0.1.0 tree under v1/ keeps its own status until phase E deletes it.
+# Scope: the v0.2.0 tree. The frozen v0.1.0 tree under v1/ is not built here;
+# it lives until phase E deletes it.
 
 on:
   push:
     branches: [main, "v0.2.0"]
-    paths: ["anth-wire/**", "anth-host/**", "anth-paneld/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/v2.yml"]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "plugins/**"
+      - ".github/workflows/v2.yml"
   pull_request:
-    paths: ["anth-wire/**", "anth-host/**", "anth-paneld/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/v2.yml"]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "plugins/**"
+      - ".github/workflows/v2.yml"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  rust:
+    name: rust
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +42,8 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
 
       - name: Format
         run: cargo fmt --check
@@ -39,3 +53,75 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: frontend/packages/app/dist
+          if-no-files-found: error
+
+  plugin:
+    name: plugin hello
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/hello
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Backend tests
+        working-directory: plugins/hello/backend
+        run: cargo test
+
+      - name: Frontend install
+        working-directory: plugins/hello/frontend
+        run: bun install --frozen-lockfile
+
+      - name: Frontend tests
+        working-directory: plugins/hello/frontend
+        run: bun test
+
+      # Builds both halves and writes the manifest digest, which is the only
+      # way to prove the two projects still compose into one bundle.
+      - name: Package
+        run: |
+          sudo apt-get update && sudo apt-get install -y zip
+          ./package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-hello
+          path: plugins/hello/dist/*.zip
+          if-no-files-found: error

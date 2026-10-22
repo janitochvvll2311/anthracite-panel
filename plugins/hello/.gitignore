@@ -1,0 +1,8 @@
+# Each side of the plugin is its own project, so each keeps its own artifacts.
+backend/target/
+frontend/node_modules/
+frontend/dist/
+# The built bundle is produced by package.sh, never committed.
+plugin.wasm
+dist/
+*.zip

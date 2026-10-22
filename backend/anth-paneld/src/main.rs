@@ -4,6 +4,7 @@
 //! feature does not map outcomes to codes itself — v0.1.0 had that mapping in
 //! three places that could drift apart.
 
+mod api;
 mod dispatch;
 mod render;
 mod socket;
@@ -27,7 +28,11 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Run the daemon and the HTTP API.
-    Run,
+    Run {
+        /// HTTP bind address.
+        #[arg(long, default_value = "0.0.0.0:8080")]
+        addr: String,
+    },
     /// Serve the Unix socket only.
     Daemon,
     /// Print a snapshot of the host the daemon runs on.
@@ -43,7 +48,14 @@ async fn main() -> ExitCode {
         .unwrap_or_else(socket::default_socket_path);
 
     match cli.command {
-        Command::Daemon | Command::Run => match serve(&socket).await {
+        Command::Daemon => match serve(&socket).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("anth-panel: {error}");
+                ExitCode::from(error.kind.exit_code())
+            }
+        },
+        Command::Run { addr } => match serve_all(&socket, &addr).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("anth-panel: {error}");
@@ -60,6 +72,36 @@ async fn main() -> ExitCode {
                 ExitCode::from(kind.exit_code())
             }
         },
+    }
+}
+
+/// Serves the socket and the HTTP API together.
+///
+/// Both must be listening before either is awaited, so a port already in use
+/// fails at startup instead of leaving a daemon that only speaks one transport.
+/// When either loop ends the other is cancelled: a half-serving process is not
+/// a state an operator can act on.
+async fn serve_all(socket: &std::path::Path, addr: &str) -> Result<(), anth_wire::WireError> {
+    let listener = socket::bind(socket)?;
+    let http = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| anth_wire::WireError::internal(format!("binding {addr}: {e}")))?;
+
+    eprintln!(
+        "anth-panel: listening on {} and http://{addr}",
+        socket.display()
+    );
+
+    let socket_loop = socket::serve(listener);
+    let http_loop = async {
+        axum::serve(http, api::router())
+            .await
+            .map_err(|e| anth_wire::WireError::internal(format!("serving http: {e}")))
+    };
+
+    tokio::select! {
+        result = socket_loop => result.map_err(|e| anth_wire::WireError::internal(format!("serving: {e}"))),
+        result = http_loop => result,
     }
 }
 

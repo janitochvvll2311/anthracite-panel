@@ -12,7 +12,7 @@ Two trees live here:
 - **The repository root is the v0.2.0 rewrite**, in progress. This file describes it.
 - **`v1/` is the frozen v0.1.0 tree**, tagged and still buildable, with its own
   `v1/AGENTS.md` and `v1/docs/`. Do not edit `v1/` except to keep it building:
-  it is the reference the rewrite is measured against. Phase E deletes it.
+  it is the reference the rewrite is measured against. Phase F deletes it.
 
 `docs/design/v0.2.0.md` is the plan of record. Read it before porting a feature:
 it names the four structural problems the rewrite exists to fix, with the file
@@ -21,22 +21,33 @@ and line evidence behind each one.
 ## Layout
 
 ```
-Cargo.toml                  # v0.2.0 workspace root, resolver = "2"
-Cargo.lock
-.cargo/config.toml          # pins x86_64-unknown-linux-musl for this workspace
-anth-wire/                  # wire protocol only; no panel code
-  src/lib.rs                #   re-exports, PROTOCOL_VERSION
-  src/frame.rs              #   length-prefixed framing, MAX_FRAME_LEN
-  src/message.rs            #   Request, Response
-  src/error.rs              #   WireError, ErrorKind: status + exit code
-anth-host/                  # host inspection, standard library only
-  src/lib.rs                #   collect() and collect_from(root)
-  src/parse.rs              #   pure parsers over /proc and os-release contents
-anth-paneld/                # the binary: daemon and CLI client
-  src/main.rs               #   CLI parsing, exit-code policy
-  src/dispatch.rs           #   the single request match
-  src/socket.rs             #   Unix listener, connection loop, client
-  src/render.rs             #   bordered table for the CLI
+backend/                    # Rust workspace, resolver = "2", version 0.2.0
+  Cargo.toml
+  Cargo.lock
+  .cargo/config.toml        # pins x86_64-unknown-linux-musl for this workspace
+  anth-wire/                # wire protocol only; no panel code
+    src/lib.rs              #   re-exports, PROTOCOL_VERSION
+    src/frame.rs            #   length-prefixed framing, MAX_FRAME_LEN
+    src/message.rs          #   Request, Response
+    src/error.rs            #   WireError, ErrorKind: status + exit code
+  anth-host/                # host inspection, standard library only
+    src/lib.rs              #   collect() and collect_from(root)
+    src/parse.rs            #   pure parsers over /proc and os-release contents
+  anth-paneld/              # the binary: daemon, HTTP API and CLI client
+    src/main.rs             #   CLI parsing, exit-code policy, serve_all
+    src/dispatch.rs         #   the single request match
+    src/api.rs              #   axum router over dispatch; ApiError -> status
+    src/socket.rs           #   Unix listener, connection loop, client
+    src/render.rs           #   bordered table for the CLI
+
+frontend/                   # Bun workspace, bun.lock committed
+  packages/shared/          # @anth/shared: wire types and formatting, no transport
+  packages/app/             # @anth/app: the shell, Vite build, dist/ gitignored
+  bunfig.toml               # test preload: happy-dom for component tests
+
+plugins/                    # one directory per plugin
+  hello/                    # the example: manifest, backend/, frontend/, package.sh
+
 docs/design/v0.2.0.md       # why the rewrite exists, phases, what is done
 v1/                         # frozen v0.1.0: backend, frontend, plugins, docs
 ```
@@ -45,22 +56,45 @@ Crates are separated by authority, not size: `anth-wire` is the contract an
 alternative client could implement against, so it must never depend on panel
 internals, and `anth-host` is pure parsing so it can be tested without a daemon.
 
+`backend/`, `frontend/` and each plugin are **independent projects**, not one
+build. `backend/Cargo.toml` does not list the plugin crates, and `frontend/`
+does not install plugin dependencies. That is deliberate: a plugin ships to a
+third party, so it must build with nothing but its own directory.
+
 ## Build and test
 
-Run from the repository root. The musl target is pinned by `.cargo/config.toml`,
+Run from `backend/`. The musl target is pinned by `backend/.cargo/config.toml`,
 so a bare `cargo build` produces the same static binary production ships. Never
 pass `--target x86_64-unknown-linux-gnu`.
 
 ```bash
+cd backend
 cargo build  --workspace
 cargo test   --workspace
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`.github/workflows/v2.yml` runs the last three, so a local pass means a CI pass.
-Clippy runs with `-D warnings`: a redundant closure is a build failure, not a
-suggestion.
+From `frontend/`:
+
+```bash
+bun install            # once, or after a package.json change
+bun run typecheck
+bun test
+bun run build          # typechecks, then writes packages/app/dist
+```
+
+From `plugins/hello/`, which CI also runs:
+
+```bash
+(cd backend && cargo test)          # needs no wasm target
+(cd frontend && bun test)
+./package.sh                        # wasm + bun bundle + manifest digest
+```
+
+`.github/workflows/v2.yml` runs all of the above in a `rust`, a `web` and a
+`plugin` job, so a local pass means a CI pass. Clippy runs with `-D warnings`: a
+redundant closure is a build failure, not a suggestion.
 
 Prerequisites, once per machine:
 
@@ -87,7 +121,9 @@ needs a stated reason in the commit message.
    that it derives from the kind.
 3. **One dispatch site.** A new request adds an arm to `anth-paneld/src/dispatch.rs`
    and nowhere else. v0.1.0 repeated each variant across the handler, the client
-   and the daemon matches, and nothing tied them together at compile time.
+   and the daemon matches, and nothing tied them together at compile time. The
+   HTTP route in `api.rs` calls that same `dispatch`, so the two transports
+   cannot answer differently for the same command.
 4. **No vacuous tests.** A test must be able to fail. Fixtures that read a file
    panic when it is missing rather than returning an empty value that makes
    every assertion trivially pass. Prefer a real code path — a real listener, a
@@ -97,8 +133,10 @@ needs a stated reason in the commit message.
 
 - **Rust targets musl, always.** Never build this project for gnu.
 - **`bun` is the only package manager.** `npm`, `npx`, `corepack` and `bunx` do
-  not exist here. Run scripts as `bun run <script>`. There is no frontend at the
-  root yet; the v1 frontend is under `v1/frontend`.
+  not exist here. Run scripts as `bun run <script>`. The v0.2.0 frontend is
+  `frontend/`; the frozen v0.1.0 one is `v1/frontend/`.
+- **The wasm target is only needed for the plugin**, not for `backend/`:
+  `rustup target add wasm32-unknown-unknown`. The plugin's tests run natively.
 - Integration tests live at `anth-*/tests/<module>.rs`. Socket-based tests bind a
   unique path in `std::env::temp_dir()` (pid + nanos) and remove it on drop, so
   two tests never share a socket.

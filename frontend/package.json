@@ -1,0 +1,16 @@
+{
+  "name": "anth-panel-web",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Anthracite Panel web UI, a Bun workspace of packages",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "bun run --cwd packages/app dev",
+    "build": "bun run --cwd packages/app build",
+    "preview": "bun run --cwd packages/app preview",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "typecheck": "bun run --cwd packages/shared typecheck && bun run --cwd packages/app typecheck"
+  }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "anth-plugin-hello"
+version = "0.2.0"
+edition = "2024"
+description = "Minimal plugin: one capability, one UI slot"
+license = "Apache-2.0"
+publish = false
+
+# A plugin is a cdylib loaded by the daemon's wasm host, and an rlib so the
+# logic can be unit tested on the host without a wasm runtime.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

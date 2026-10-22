@@ -29,12 +29,26 @@ rustc-ice-*.txt
 /request.json
 /request.http
 
-# v0.1.0 tree, frozen. Its generated and packaging paths follow it under v1/.
+# v0.1.0 tree, frozen under v1/. Its generated and packaging paths follow it.
 v1/backend/anth-panel/www/*
 !v1/backend/anth-panel/www/.gitkeep
 !v1/backend/.cargo/config.toml
-
-# Dev artifacts
 v1/backend/plugins
 v1/backend/plugins.d
 v1/backend/config.toml
+
+# v0.2.0 dev artifacts: the daemon writes its plugin grants and config here
+# when run from backend/.
+backend/plugins
+backend/plugins.d
+backend/config.toml
+
+# Bun. The lockfile is committed; the store and module trees are not.
+node_modules
+frontend/.bun
+frontend/packages/*/dist
+plugins/*/frontend/dist
+plugins/*/dist
+
+# A plugin bundle is produced by plugins/*/package.sh, never committed.
+plugins/*/plugin.wasm

@@ -3,21 +3,32 @@
 A host inspection panel with a Unix-socket daemon at its core.
 
 A single Rust binary can run as a daemon, an HTTP API, or both, and can also
-act as a client that queries a running daemon. A Vite + Lit frontend is embedded
-in the HTTP server.
+act as a client that queries a running daemon. A Vite + Lit frontend reads that
+API from the browser.
 
 ## Two versions live here
 
 `v0.1.0` shipped and is tagged. `v0.2.0` is a rewrite in progress, and its code
 is what sits at the repository root.
 
+Everything is grouped by kind, and each group is an independent project:
+
 ```
-Cargo.toml            v0.2.0 workspace root
-anth-wire/            wire protocol: length-prefixed frames, one error type
-anth-host/            host inspection: /proc and os-release parsing, std only
-anth-paneld/          daemon, CLI client and (later) the HTTP API
-.cargo/config.toml    pins x86_64-unknown-linux-musl for this workspace
-docs/design/          v0.2.0 design notes
+backend/              Rust workspace (Cargo.toml, .cargo/config.toml)
+  anth-wire/          wire protocol: length-prefixed frames, one error type
+  anth-host/          host inspection: /proc and os-release parsing, std only
+  anth-paneld/        daemon, CLI client and the HTTP API
+
+frontend/             Bun workspace (package.json, bun.lock)
+  packages/shared/    wire types and formatting helpers, no transport
+  packages/app/       the panel shell, Vite build
+
+plugins/              one directory per plugin, each a pair of independent projects
+  hello/              the example plugin
+    plugin.toml       manifest: id, version, capabilities, module digest
+    backend/          Rust cdylib, built to wasm32-unknown-unknown
+    frontend/         Bun project, bundled to a single ES module
+    package.sh        builds both halves into dist/<id>.zip
 
 v1/                   the frozen v0.1.0 tree, untouched and still buildable
   backend/            workspace root: anth-proto + anth-panel
@@ -26,6 +37,12 @@ v1/                   the frozen v0.1.0 tree, untouched and still buildable
   docs/               the user documentation for v0.1.0
   Dockerfile          v1 image, built with v1/ as the build context
 ```
+
+`backend/`, `frontend/` and every plugin directory are separate projects, not
+members of one build: `backend/` does not build the plugin crates, and
+`frontend/` does not install their dependencies. A plugin stays buildable on its
+own, which is what makes a third-party plugin possible. See
+[plugins/hello/README.md](plugins/hello/README.md).
 
 `v1/` is a complete, self-contained v0.1.0 checkout: build it from `v1/backend`
 and read its docs in `v1/docs/`. Nothing at the root imports from it, and phase E
@@ -88,14 +105,34 @@ anth-panel host-info --watch 2s
 still compiles and the API works, but `GET /` answers `404`: there is no UI to
 serve. Build the frontend once to get the panel.
 
-### v0.2.0 (one feature so far)
+### v0.2.0 (host info, socket and HTTP)
 
-From the repository root:
+`run` serves both transports from one process:
 
 ```bash
-cargo run -p anth-paneld -- daemon &
-cargo run -p anth-paneld -- host-info
+cd backend
+cargo run -p anth-paneld -- run --addr 127.0.0.1:8080
 ```
+
+In another shell, against the same binary:
+
+```bash
+curl http://127.0.0.1:8080/healthz          # {"status":"ok"}
+curl http://127.0.0.1:8080/api/host-info
+cargo run -p anth-paneld -- host-info       # the socket client
+```
+
+The web UI is a separate dev server that proxies to that address:
+
+```bash
+cd frontend
+bun install
+bun run dev        # http://localhost:5173
+```
+
+`bun run build` writes `frontend/packages/app/dist`. Nothing embeds it into the
+binary yet, so `GET /` is a `404` until the embedding phase, and the dev server
+is how the panel is used today.
 
 The daemon speaks the new length-prefixed protocol; it is not wire-compatible
 with the v0.1.0 client.
@@ -105,7 +142,7 @@ with the v0.1.0 client.
 Two choices are fixed, not preferences:
 
 - **Rust targets `x86_64-unknown-linux-musl`.** Each workspace pins it in its own
-  `.cargo/config.toml` (root and `v1/backend/`), so build with a bare
+  `.cargo/config.toml` (`backend/` and `v1/backend/`), so build with a bare
   `cargo build` and the result is static. Install the target once with
   `rustup target add x86_64-unknown-linux-musl` and `musl-tools` for the C
   dependencies. Do not pass `--target x86_64-unknown-linux-gnu`.
@@ -117,7 +154,7 @@ The v0.1.0 plugin tests additionally need
 
 ## Development
 
-The v0.2.0 workspace, from the repository root:
+The v0.2.0 backend, from `backend/`:
 
 ```bash
 cargo test --workspace
@@ -125,8 +162,24 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Those three are what [.github/workflows/v2.yml](.github/workflows/v2.yml) runs,
-so a local pass means a CI pass.
+The v0.2.0 frontend, from `frontend/`:
+
+```bash
+bun run typecheck
+bun test
+bun run build
+```
+
+And the example plugin, from `plugins/hello/`:
+
+```bash
+(cd backend && cargo test)
+(cd frontend && bun test)
+./package.sh
+```
+
+Those are what [.github/workflows/v2.yml](.github/workflows/v2.yml) runs, split
+into a `rust`, a `web` and a `plugin` job, so a local pass means a CI pass.
 
 The v0.1.0 tree, from `v1/backend`:
 
