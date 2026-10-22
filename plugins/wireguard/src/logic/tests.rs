@@ -379,6 +379,75 @@ fn the_cli_peers_subcommand_takes_the_interface_from_argv() {
     assert_eq!(args["interface"], "wg0");
 }
 
+/// The host does not parse an anchor body: `plugins::api::anchor` forwards the
+/// raw bytes inside the envelope as a JSON string. Every real `POST /peers`
+/// arrives this way, so a guest that only accepts an object answers `400` to
+/// production traffic while its own tests stay green.
+#[test]
+fn a_peer_body_arrives_as_the_json_string_the_host_sends() {
+    let mut executor = Recorded::with("wg.add_peer", "");
+    let body = json!({
+        "interface": "wg0",
+        "public_key": "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
+        "allowed_ips": ["10.0.0.2/32"],
+    });
+    // `to_string()` on the body is exactly what `anchor` puts in the envelope:
+    // a string of JSON, escaped once more by the envelope's own serialization.
+    let request = json!({
+        "kind": "http",
+        "method": "POST",
+        "path": "/peers",
+        "body": body.to_string(),
+    })
+    .to_string();
+
+    let parsed: Value = serde_json::from_str(&handle(&mut executor, &request)).unwrap();
+    assert_eq!(parsed["status"], 201, "body: {parsed}");
+    assert_eq!(parsed["body"]["added"], true);
+    let (_, args) = executor
+        .calls
+        .iter()
+        .find(|(id, _)| id == "wg.add_peer")
+        .expect("the capability runs");
+    assert_eq!(args["allowed_ips"], "10.0.0.2/32");
+}
+
+#[test]
+fn a_string_body_that_is_not_json_is_refused_with_the_reason() {
+    let mut executor = Recorded::default();
+    let request = json!({
+        "kind": "http",
+        "method": "POST",
+        "path": "/peers",
+        "body": "not json at all",
+    })
+    .to_string();
+    let parsed: Value = serde_json::from_str(&handle(&mut executor, &request)).unwrap();
+    assert_eq!(parsed["status"], 400);
+    assert!(
+        parsed["body"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("not JSON")
+    );
+    assert!(executor.calls.is_empty(), "nothing may run on a bad body");
+}
+
+#[test]
+fn a_string_body_holding_a_non_object_is_refused() {
+    let mut executor = Recorded::default();
+    let request = json!({
+        "kind": "http",
+        "method": "POST",
+        "path": "/peers",
+        "body": "[1, 2, 3]",
+    })
+    .to_string();
+    let parsed: Value = serde_json::from_str(&handle(&mut executor, &request)).unwrap();
+    assert_eq!(parsed["status"], 400);
+    assert!(executor.calls.is_empty());
+}
+
 #[test]
 fn a_malformed_envelope_is_a_400_not_a_trap() {
     let mut executor = Recorded::default();

@@ -81,6 +81,15 @@ They mount under `/api/plugins/org.anth.wireguard/`. The web module derives that
 prefix from `import.meta.url` instead of hardcoding it, so a different mount
 point does not need an edit.
 
+The browser gets a body as a JSON *string* (`plugins::api::anchor` does not
+parse an anchor body), so the guest parses it before reading fields. The
+integration test drives `POST /peers` through the real router for that reason.
+
+The bundle declares one UI anchor, `dashboard.widget` → `anth-wireguard`, which
+`web/wireguard.js` defines. It deliberately declares no `panel.network.tab`:
+the shell mounts only the dashboard slot today, so that anchor would resolve to
+an undefined tag and render nothing.
+
 `POST /peers` body:
 
 ```json

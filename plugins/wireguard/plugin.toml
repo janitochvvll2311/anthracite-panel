@@ -120,8 +120,3 @@ path = "/status"
 slot = "dashboard.widget"
 tag = "anth-wireguard"
 module = "web/wireguard.js"
-
-[[ui]]
-slot = "panel.network.tab"
-tag = "anth-wireguard-panel"
-module = "web/wireguard.js"

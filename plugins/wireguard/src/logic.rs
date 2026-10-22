@@ -42,6 +42,29 @@ pub struct HttpRequest {
     pub body: Option<Value>,
 }
 
+impl HttpRequest {
+    /// The request body as an object, however the host delivered it.
+    ///
+    /// `plugins::api::anchor` forwards the raw bytes as a JSON *string*: an
+    /// anchor is not required to speak JSON, so the host does not parse it.
+    /// Accepting only an object would answer `400` to every real request, which
+    /// is what happened before this existed. A string is parsed here; an object
+    /// is taken as-is so a CLI caller and a future host that parses bodies both
+    /// work. The error text is the caller's, so it names the body, not the host.
+    fn json_body(&self) -> Result<Map<String, Value>, String> {
+        match self.body.as_ref() {
+            Some(Value::Object(map)) => Ok(map.clone()),
+            Some(Value::String(text)) => match serde_json::from_str::<Value>(text) {
+                Ok(Value::Object(map)) => Ok(map),
+                Ok(_) => Err("the request body must be a JSON object".to_string()),
+                Err(error) => Err(format!("the request body is not JSON: {error}")),
+            },
+            None => Err("a JSON object body is required".to_string()),
+            Some(_) => Err("the request body must be a JSON object".to_string()),
+        }
+    }
+}
+
 /// Parses an envelope and answers it.
 ///
 /// A malformed envelope is a `400` the browser can display, not a trap: a guest
@@ -80,7 +103,7 @@ pub fn route<E: Executor>(executor: &mut E, request: &HttpRequest) -> String {
         ("GET", "/interfaces") => interfaces(executor),
         ("GET", "/status") => status(executor),
         ("GET", "/peers") => peers(executor, &request.query),
-        ("POST", "/peers") => add_peer(executor, request.body.as_ref()),
+        ("POST", "/peers") => add_peer(executor, request),
         _ => failure(404, format!("the plugin has no route for {method} {path}")),
     }
 }
@@ -198,9 +221,10 @@ fn peers<E: Executor>(executor: &mut E, query: &Map<String, Value>) -> String {
 /// [...], "endpoint": "host:51820"}`. Fields are checked here so the browser
 /// gets a specific message; the host validates them again, and only its verdict
 /// decides what runs.
-fn add_peer<E: Executor>(executor: &mut E, body: Option<&Value>) -> String {
-    let Some(body) = body.and_then(Value::as_object) else {
-        return failure(400, "a JSON object body is required".to_string());
+fn add_peer<E: Executor>(executor: &mut E, request: &HttpRequest) -> String {
+    let body = match request.json_body() {
+        Ok(body) => body,
+        Err(error) => return failure(400, error),
     };
     let Some(interface) = body.get("interface").and_then(Value::as_str) else {
         return failure(400, "`interface` is required".to_string());
