@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Plugin widget harness</title>
+    <style>
+      body { font: 13px/1.5 system-ui, sans-serif; margin: 0; padding: 20px;
+             background: #f2f2f5; color: #1c1c1e; }
+      h1 { font-size: 15px; margin: 0 0 4px; }
+      p.note { margin: 0 0 18px; color: #6b6b70; }
+      section { background: #fff; border: 1px solid #dcdce1; border-radius: 10px;
+                padding: 14px 16px; margin-bottom: 14px; max-width: 520px; }
+      h2 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+           color: #6b6b70; margin: 0 0 10px; }
+      .reload { font: inherit; padding: 3px 11px; border-radius: 6px;
+                border: 1px solid #c8c8ce; background: #f7f7f9; cursor: pointer; }
+      .report { margin: 10px 0 0; font-family: ui-monospace, monospace;
+                font-size: 12px; white-space: pre-wrap; }
+      code { background: #f2f2f5; padding: 1px 4px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Plugin widget harness</h1>
+    <p class="note">
+      Both widgets read the same live anchor through the Vite proxy. Click inside
+      the Lit card, then press Reload: the counter keeps its value only because
+      the widget returns the same element instead of rebuilding markup.
+    </p>
+
+    <section>
+      <h2>view() → markup · replaced on every repaint</h2>
+      <anth-hello id="markup-widget"></anth-hello>
+    </section>
+
+    <section>
+      <h2>view() → element · kept across repaints</h2>
+      <anth-hello-lit id="kept-widget"></anth-hello-lit>
+      <p><button class="reload" type="button">Reload both</button></p>
+      <p class="report" id="report"></p>
+    </section>
+
+    <!-- Vite refuses to `import()` a file under `public/`, but a script tag is
+         exactly what it asks for instead. Module scripts run in document order,
+         so the inline one below sees both registrations. -->
+    <script type="module" src="/hello.js"></script>
+    <script type="module" src="/hello-lit.js"></script>
+
+    <script type="module">
+      const box = document.getElementById("report");
+      const markup = document.querySelector("anth-hello");
+      const kept = document.querySelector("anth-hello-lit");
+      const card = () => kept.shadowRoot?.querySelector("hello-card");
+
+      const report = (text) => (box.textContent = text);
+      addEventListener("error", (event) => report(`error: ${event.message ?? event.error}`));
+      addEventListener("unhandledrejection", (event) => report(`rejection: ${event.reason}`));
+
+      document.querySelector(".reload").addEventListener("click", async () => {
+        const before = card();
+        const clicks = before?.clicks ?? 0;
+        await Promise.all([markup.refresh(), kept.refresh()]);
+
+        const after = card();
+        report(
+          [
+            `markup state=${markup.state}`,
+            `kept state=${kept.state}`,
+            `card kept=${after === before}`,
+            `clicks ${clicks} -> ${after?.clicks}`,
+            `message=${JSON.stringify(after?.message)}`,
+          ].join("\n"),
+        );
+      });
+
+      // Loading the page proves the round trip; the button proves the counter.
+      await Promise.all([markup.refresh(), kept.refresh()]);
+      report(`loaded · markup=${markup.state} kept=${kept.state} message=${JSON.stringify(card()?.message)}`);
+    </script>
+  </body>
+</html>

@@ -9,12 +9,9 @@
 
 import { PluginWidget, escapeHtml, registerWidget } from "@anth/plugin";
 
-/** The anchor this module answers. Must match the `[[api]]` block it reads. */
-export const ANCHOR = "/greeting";
+import { ANCHOR, type Greeting } from "./anchor";
 
-export interface Greeting {
-  message: string;
-}
+export { ANCHOR, type Greeting };
 
 const TAG = "anth-hello";
 

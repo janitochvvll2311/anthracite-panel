@@ -54,3 +54,6 @@ plugins/*/dist
 
 # A plugin bundle is produced by plugins/*/package.sh, never committed.
 plugins/*/plugin.wasm
+
+# The plugin harness copies built modules here; `bun run harness` regenerates them.
+frontend/anth-webui/public

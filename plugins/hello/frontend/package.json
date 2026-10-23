@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Hello plugin UI: one custom element loaded into a dashboard slot",
   "scripts": {
-    "build": "bun build src/hello.ts --outfile dist/hello.js --format=esm --target=browser --minify",
+    "build": "bun build src/hello.ts --outfile dist/hello.js --format=esm --target=browser --minify && bun build src/hello-lit.ts --outfile dist/hello-lit.js --format=esm --target=browser --minify",
     "test": "bun test",
     "typecheck": "bun run tsc --noEmit"
   },
@@ -16,6 +16,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@anth/plugin": "file:../../../frontend/anth-plugin"
+    "@anth/plugin": "file:../../../frontend/anth-plugin",
+    "lit": "^3.3.3"
   }
 }

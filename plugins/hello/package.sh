@@ -31,6 +31,10 @@ trap 'rm -rf "$staging"' EXIT
 mkdir -p "$staging/web"
 cp "$wasm" "$staging/plugin.wasm"
 cp frontend/dist/hello.js "$staging/web/hello.js"
+# The Lit example ships beside the slot module. It is not mounted from the
+# manifest: it exists so the same bundle demonstrates both render paths, and a
+# panel that mounts it manually gets a stateful component that survives reloads.
+cp frontend/dist/hello-lit.js "$staging/web/hello-lit.js"
 sed "s/^sha256 = \".*\"/sha256 = \"$digest\"/" plugin.toml > "$staging/plugin.toml"
 
 mkdir -p dist

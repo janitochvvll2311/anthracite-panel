@@ -9,7 +9,8 @@
     "build": "bun run typecheck && vite build",
     "preview": "vite preview",
     "test": "bun test",
-    "typecheck": "bun run tsc --noEmit"
+    "typecheck": "bun run tsc --noEmit",
+    "harness": "(cd ../../plugins/hello/frontend && bun install --frozen-lockfile && bun run build) && mkdir -p public && cp ../../plugins/hello/frontend/dist/hello.js ../../plugins/hello/frontend/dist/hello-lit.js public/"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^21.0.4",

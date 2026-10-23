@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "vite";
 
 /**
@@ -20,8 +22,17 @@ export default defineConfig({
     port: 4173,
     proxy: { "/api": backend, "/healthz": backend, "/p": backend },
   },
+  // A harness page has to be an explicit input: Vite's dev server rewrites any
+  // unknown path to `index.html`, so a page dropped into `public/` is never
+  // reached. `index.html` stays the only production entry.
   build: {
     outDir: "dist",
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        harness: fileURLToPath(new URL("./harness.html", import.meta.url)),
+      },
+    },
     // The v0.1.0 tree embedded its build output through `rust-embed`; v0.2.0
     // has no embedder yet, so the output stays a plain folder.
     emptyOutDir: true,

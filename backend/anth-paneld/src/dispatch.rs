@@ -44,6 +44,36 @@ impl Daemon {
         self.plugins.anchor_owner(method, path)
     }
 
+    /// One plugin's own anchor, resolved by id rather than by scanning.
+    ///
+    /// Scoped because two plugins may legitimately declare the same path: the
+    /// unscoped lookup has to answer that as a conflict, but a caller that names
+    /// its plugin is never ambiguous, so this is the form the browser uses.
+    pub fn anchor_for(
+        &self,
+        id: &str,
+        method: &str,
+        path: &str,
+    ) -> Result<
+        Option<(
+            &crate::plugins::registry::Entry,
+            &crate::plugins::runtime::Loaded,
+        )>,
+        WireError,
+    > {
+        let Some(entry) = self.plugins.get(id) else {
+            return Ok(None);
+        };
+        let declared = entry
+            .anchors
+            .iter()
+            .any(|(m, p)| m.eq_ignore_ascii_case(method) && p == path);
+        if !declared {
+            return Ok(None);
+        }
+        Ok(Some((entry, entry.usable()?)))
+    }
+
     /// Handles one request.
     pub async fn handle(&self, request: Request) -> Response {
         match dispatch(self, request) {

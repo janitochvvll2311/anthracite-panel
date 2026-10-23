@@ -47,6 +47,9 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/api/plugins", get(plugins))
         .route("/api/plugins/{id}/call", axum::routing::post(plugin_call))
         .route("/p/{*path}", get(anchor))
+        // The browser's form: it names its plugin, so two plugins declaring one
+        // path are not a conflict here. `/p/` stays for a path-only caller.
+        .route("/api/plugins/{id}/{*path}", get(scoped_anchor))
         .with_state(AppState::new(daemon))
 }
 
@@ -86,6 +89,41 @@ async fn anchor(
             ApiError(WireError::new(
                 ErrorKind::NotFound,
                 format!("no anchor {path}"),
+            ))
+        })?;
+    let id = entry.id.clone();
+
+    let body = serde_json::json!({
+        "method": "GET",
+        "path": path,
+        "query": parse_query(query.as_deref()),
+        "body": serde_json::Value::Null,
+    });
+
+    forward(state, id, PluginPipe::Http, body.to_string()).await
+}
+
+/// Serves an anchor addressed by plugin id and path.
+///
+/// This is the route [`@anth/plugin`'s `AnchorClient`] builds, and it exists
+/// because the unscoped form cannot be used by a widget: two plugins may declare
+/// the same path, and a widget knows which plugin it belongs to. An id that is
+/// not installed and a path that plugin does not declare are both a `404`, so
+/// the route cannot be used to enumerate other plugins' anchors.
+async fn scoped_anchor(
+    State(state): State<AppState>,
+    axum::extract::Path((id, path)): axum::extract::Path<(String, String)>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Result<HttpResponse, ApiError> {
+    let path = format!("/{path}");
+    let (entry, _loaded) = state
+        .0
+        .anchor_for(&id, "GET", &path)
+        .map_err(ApiError)?
+        .ok_or_else(|| {
+            ApiError(WireError::new(
+                ErrorKind::NotFound,
+                format!("no anchor {path} in plugin `{id}`"),
             ))
         })?;
     let id = entry.id.clone();
@@ -277,6 +315,18 @@ mod tests {
 
         assert_eq!(status, 404);
         assert!(body["error"].as_str().unwrap().contains("no anchor"));
+    }
+
+    /// The browser builds `<prefix>/<id><path>`, so the id-scoped route has to
+    /// exist or every widget's first request is a 404.
+    #[tokio::test]
+    async fn an_unknown_plugin_anchor_is_a_404_that_names_the_plugin() {
+        let (status, body) = get_status_and_body("/api/plugins/org.anth.absent/greeting").await;
+
+        assert_eq!(status, 404);
+        let error = body["error"].as_str().unwrap();
+        assert!(error.contains("no anchor"), "{error}");
+        assert!(error.contains("org.anth.absent"), "{error}");
     }
 
     #[tokio::test]
