@@ -20,7 +20,8 @@ backend/              Rust workspace (Cargo.toml, .cargo/config.toml)
   anth-paneld/        daemon, CLI client and the HTTP API
 
 frontend/             Bun workspace (package.json, bun.lock)
-  anth-webui/         the panel shell, Vite build, wire types in src/wire.ts
+  anth-wire/          what crosses the browser boundary: messages, errors, one exchange
+  anth-webui/         the panel shell and its Vite build
   anth-plugin/        the browser half of the plugin contract
 
 plugins/              one directory per plugin, each a pair of independent projects

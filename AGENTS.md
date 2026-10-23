@@ -48,8 +48,12 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/render.rs           #   bordered table for the CLI
 
 frontend/                   # Bun workspace, bun.lock committed
+  anth-wire/                # @anth/wire: what crosses the boundary, no panel code
+    src/error.ts            #   ErrorKind + the one status map, mirrors anth-wire
+    src/message.ts          #   payload interfaces, no socket envelope
+    src/exchange.ts         #   one JSON exchange over fetch; WireError
   anth-webui/               # @anth/webui: the shell, Vite build, dist/ gitignored
-    src/wire.ts             #   wire types and formatting, no transport
+    src/wire.ts             #   presentation only: formatKib, formatUptime
   anth-plugin/              # @anth/plugin: anchors, widget base, registration
   bunfig.toml               # test preload: happy-dom for component tests
 
@@ -87,7 +91,7 @@ From `frontend/`:
 
 ```bash
 bun install            # once, or after a package.json change
-bun run typecheck      # webui, then plugin
+bun run typecheck      # wire, webui, then plugin
 bun test               # happy-dom preloaded from bunfig.toml
 bun run build          # typechecks, then writes anth-webui/dist
 ```

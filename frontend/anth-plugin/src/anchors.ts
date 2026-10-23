@@ -49,33 +49,17 @@ export interface PluginCatalogue {
 }
 
 /**
- * The shape of every failed anchor.
- *
- * The daemon answers `{"error": "..."}` and a guest is told to do the same, so
- * one reader covers both.
- */
-export interface AnchorErrorBody {
-  error: string;
-}
-
-/**
  * Reads an error from a response without throwing.
  *
- * Reporting a failure must not itself fail: a non-JSON body yields the status
- * line. This mirrors the panel's `responseError`, which is why a plugin can rely
- * on the same wording in the same places.
+ * Taken from `@anth/wire` rather than reimplemented: a guest and the daemon
+ * answer the same `{"error": "..."}` shape, so there is one reader for both and
+ * one fallback to get right. v0.1.0 had this function twice and the copies
+ * drifted. It is imported *and* re-exported, because the class below reads it
+ * too: `export ... from` would leave no local binding.
  */
-export async function anchorError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as Partial<AnchorErrorBody>;
-    if (typeof body.error === "string" && body.error.length > 0) {
-      return body.error;
-    }
-  } catch {
-    // A non-JSON body carries no detail worth a second error.
-  }
-  return `${response.status} ${response.statusText}`.trim();
-}
+import { responseError } from "@anth/wire";
+
+export { responseError as anchorError };
 
 export interface AnchorClientOptions {
   /** Plugin id, used to build the anchor prefix. */
@@ -154,7 +138,7 @@ export class AnchorClient {
 
   async #json<T>(response: Response): Promise<T> {
     if (!response.ok) {
-      throw new Error(await anchorError(response));
+      throw new Error(await responseError(response));
     }
     if (response.status === 204) {
       return undefined as T;

@@ -16,7 +16,7 @@
     },
   },
   "packages": {
-    "@anth/plugin": ["@anth/plugin@file:../../../frontend/anth-plugin", { "devDependencies": { "@happy-dom/global-registrator": "^21.0.4", "bun-types": "^1.4.4", "happy-dom": "^21.0.4", "typescript": "^5.9.3" } }],
+    "@anth/plugin": ["@anth/plugin@file:../../../frontend/anth-plugin", { "dependencies": { "@anth/wire": "file:../anth-wire" }, "devDependencies": { "@happy-dom/global-registrator": "^21.0.4", "bun-types": "^1.4.4", "happy-dom": "^21.0.4", "typescript": "^5.9.3" } }],
 
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@21.0.4", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^21.0.4" } }, "sha512-Bbr0hW9hhDhBf3Jp0EyDlkCbFgbr0z2jd3BMKYOYW+fOkPM4Nx195GMXyCtRCGEgoNn6i09FabXrSkNFm2ONzg=="],
 
@@ -41,5 +41,7 @@
     "whatwg-mimetype": ["whatwg-mimetype@3.0.0", "", {}, "sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q=="],
 
     "ws": ["ws@8.22.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg=="],
+
+    "@anth/plugin/@anth/wire": ["@anth/wire@file:../../../frontend/anth-wire", {}],
   }
 }

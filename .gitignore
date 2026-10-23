@@ -48,6 +48,7 @@ node_modules
 frontend/.bun
 frontend/anth-webui/dist
 frontend/anth-plugin/dist
+frontend/anth-wire/dist
 plugins/*/frontend/dist
 plugins/*/dist
 

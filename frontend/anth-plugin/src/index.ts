@@ -37,7 +37,6 @@ export {
   AnchorClient,
   anchorError,
   type AnchorClientOptions,
-  type AnchorErrorBody,
   type PluginAnchor,
   type PluginCatalogue,
   type PluginSummary,

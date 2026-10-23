@@ -11,6 +11,9 @@
     "test": "bun test",
     "typecheck": "bun run tsc --noEmit"
   },
+  "dependencies": {
+    "@anth/wire": "file:../anth-wire"
+  },
   "devDependencies": {
     "@happy-dom/global-registrator": "^21.0.4",
     "bun-types": "^1.4.4",

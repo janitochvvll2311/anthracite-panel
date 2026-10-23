@@ -8,6 +8,9 @@
     "anth-plugin": {
       "name": "@anth/plugin",
       "version": "0.2.0",
+      "dependencies": {
+        "@anth/wire": "file:../anth-wire",
+      },
       "devDependencies": {
         "@happy-dom/global-registrator": "^21.0.4",
         "bun-types": "^1.4.4",
@@ -18,6 +21,9 @@
     "anth-webui": {
       "name": "@anth/webui",
       "version": "0.2.0",
+      "dependencies": {
+        "@anth/wire": "workspace:*",
+      },
       "devDependencies": {
         "@happy-dom/global-registrator": "^21.0.4",
         "bun-types": "^1.4.4",
@@ -26,11 +32,21 @@
         "vite": "^7.1.0",
       },
     },
+    "anth-wire": {
+      "name": "@anth/wire",
+      "version": "0.2.0",
+      "devDependencies": {
+        "bun-types": "^1.4.4",
+        "typescript": "^5.9.3",
+      },
+    },
   },
   "packages": {
     "@anth/plugin": ["@anth/plugin@workspace:anth-plugin"],
 
     "@anth/webui": ["@anth/webui@workspace:anth-webui"],
+
+    "@anth/wire": ["@anth/wire@workspace:anth-wire"],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.28.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ=="],
 
@@ -183,5 +199,7 @@
     "whatwg-mimetype": ["whatwg-mimetype@3.0.0", "", {}, "sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q=="],
 
     "ws": ["ws@8.22.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg=="],
+
+    "@anth/plugin/@anth/wire": ["@anth/wire@file:anth-wire", { "devDependencies": { "bun-types": "^1.4.4", "typescript": "^5.9.3" } }],
   }
 }

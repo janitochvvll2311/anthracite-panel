@@ -2,10 +2,11 @@
  * The host-info client: the only place that knows the route.
  *
  * Injected into the panel so a test can pass a plain object and never bind a
- * port, which is what keeps the component's tests about rendering.
+ * port, which is what keeps the component's tests about rendering. The exchange
+ * itself is `@anth/wire`'s, so this file is the route and nothing else.
  */
 
-import { type HostInfo, responseError } from "./wire";
+import { type HostInfo, send } from "@anth/wire";
 
 export interface HostInfoClient {
   read(): Promise<HostInfo>;
@@ -14,14 +15,7 @@ export interface HostInfoClient {
 export class HttpHostInfoClient implements HostInfoClient {
   constructor(private readonly base = "") {}
 
-  async read(): Promise<HostInfo> {
-    const response = await fetch(`${this.base}/api/host-info`, {
-      credentials: "same-origin",
-      headers: { accept: "application/json" },
-    });
-    if (!response.ok) {
-      throw new Error(await responseError(response));
-    }
-    return (await response.json()) as HostInfo;
+  read(): Promise<HostInfo> {
+    return send<HostInfo>({ path: `${this.base}/api/host-info` });
   }
 }
