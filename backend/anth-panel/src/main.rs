@@ -5,7 +5,9 @@
 //! three places that could drift apart.
 //!
 //! `--interactive` runs the same dispatcher over stdin, so a typed command and
-//! a subcommand cannot disagree about what a command does.
+//! a subcommand cannot disagree about what a command does. With `run` or
+//! `daemon` it also serves: the daemon comes up on a task of its own and the
+//! prompt stays usable in front of it.
 
 mod api;
 mod dispatch;
@@ -13,11 +15,13 @@ mod plugins;
 mod render;
 mod socket;
 
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use anth_wire::{PluginPipe, Request, Response};
 use clap::{Parser, Subcommand};
+use tokio::net::{TcpListener, UnixListener};
 
 use dispatch::Daemon;
 
@@ -29,6 +33,8 @@ struct Cli {
     socket: Option<String>,
 
     /// Read commands from stdin instead of running one and exiting.
+    ///
+    /// With `run` or `daemon` the server keeps running behind the prompt.
     #[arg(long, short, global = true)]
     interactive: bool,
 
@@ -108,17 +114,7 @@ async fn main() -> ExitCode {
         .unwrap_or_else(socket::default_socket_path);
 
     if cli.interactive {
-        let Some(command) = cli.command else {
-            return repl::run(&socket).await;
-        };
-        // A command *and* `--interactive` one-shot the command, then keep the
-        // prompt: starting the daemon and then typing into it is the useful
-        // combination, so refusing it would help nobody.
-        let code = dispatch_command(&socket, Some(command)).await;
-        if code != ExitCode::SUCCESS {
-            eprintln!("anth-panel: the startup command failed, staying interactive");
-        }
-        return repl::run(&socket).await;
+        return interactive(&socket, cli.command).await;
     }
 
     match cli.command {
@@ -163,9 +159,9 @@ async fn serve_with(socket: &std::path::Path, addr: Option<String>) -> ExitCode 
         &plugins::registry::default_root(),
     )));
 
-    let result = match addr {
-        Some(addr) => serve_all(socket, &addr, daemon).await,
-        None => serve(socket, daemon).await,
+    let result = match bind(socket, addr.as_deref()).await {
+        Ok(listeners) => serve_bound(listeners, daemon).await,
+        Err(error) => Err(error),
     };
 
     match result {
@@ -177,28 +173,64 @@ async fn serve_with(socket: &std::path::Path, addr: Option<String>) -> ExitCode 
     }
 }
 
-/// Serves the socket and the HTTP API together.
+/// The listeners a server command owns, bound but not yet serving.
+///
+/// Binding is separate from serving so a caller can fail before it does
+/// anything else: an address already in use must not leave a prompt running
+/// against a daemon that never started.
+struct Listeners {
+    socket: UnixListener,
+    http: Option<TcpListener>,
+}
+
+async fn bind(socket: &Path, addr: Option<&str>) -> Result<Listeners, anth_wire::WireError> {
+    let listener = socket::bind(socket)?;
+    let http = match addr {
+        Some(addr) => Some(
+            TcpListener::bind(addr)
+                .await
+                .map_err(|e| anth_wire::WireError::internal(format!("binding {addr}: {e}")))?,
+        ),
+        None => None,
+    };
+
+    match addr {
+        Some(addr) => eprintln!(
+            "anth-panel: listening on {} and http://{addr}",
+            socket.display()
+        ),
+        None => eprintln!("anth-panel: listening on {}", socket.display()),
+    }
+
+    Ok(Listeners {
+        socket: listener,
+        http,
+    })
+}
+
+/// Serves the bound listeners until one of them fails.
 ///
 /// Both must be listening before either is awaited, so a port already in use
 /// fails at startup instead of leaving a daemon that only speaks one transport.
 /// When either loop ends the other is cancelled: a half-serving process is not
 /// a state an operator can act on.
-async fn serve_all(
-    socket: &std::path::Path,
-    addr: &str,
+async fn serve_bound(
+    listeners: Listeners,
     daemon: Arc<Daemon>,
 ) -> Result<(), anth_wire::WireError> {
-    let listener = socket::bind(socket)?;
-    let http = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| anth_wire::WireError::internal(format!("binding {addr}: {e}")))?;
+    let Some(http) = listeners.http else {
+        return socket::serve(listeners.socket, daemon)
+            .await
+            .map_err(|e| anth_wire::WireError::internal(format!("serving: {e}")));
+    };
 
-    eprintln!(
-        "anth-panel: listening on {} and http://{addr}",
-        socket.display()
-    );
+    let socket_daemon = Arc::clone(&daemon);
+    let socket_loop = async {
+        socket::serve(listeners.socket, socket_daemon)
+            .await
+            .map_err(|e| anth_wire::WireError::internal(format!("serving: {e}")))
+    };
 
-    let socket_loop = socket::serve(listener, Arc::clone(&daemon));
     let http_loop = async {
         axum::serve(http, api::router(daemon))
             .await
@@ -206,17 +238,75 @@ async fn serve_all(
     };
 
     tokio::select! {
-        result = socket_loop => result.map_err(|e| anth_wire::WireError::internal(format!("serving: {e}"))),
+        result = socket_loop => result,
         result = http_loop => result,
     }
 }
 
-async fn serve(socket: &std::path::Path, daemon: Arc<Daemon>) -> Result<(), anth_wire::WireError> {
-    let listener = socket::bind(socket)?;
-    eprintln!("anth-panel: listening on {}", socket.display());
-    socket::serve(listener, daemon)
-        .await
-        .map_err(|e| anth_wire::WireError::internal(format!("serving: {e}")))
+/// What an interactive session does before the prompt appears.
+///
+/// A pure decision, so a test asserts that `run -i` serves and keeps the prompt
+/// without binding a port or reading stdin.
+#[derive(Debug)]
+enum Startup {
+    /// Serve these listeners while the prompt runs.
+    Serve { addr: Option<String> },
+    /// Run this command first, then keep the prompt.
+    RunFirst(Box<Command>),
+    /// Nothing to start: just the prompt.
+    Prompt,
+}
+
+fn startup(command: Option<Command>) -> Startup {
+    match command {
+        Some(Command::Daemon) => Startup::Serve { addr: None },
+        Some(Command::Run { addr }) => Startup::Serve { addr: Some(addr) },
+        Some(command) => Startup::RunFirst(Box::new(command)),
+        None => Startup::Prompt,
+    }
+}
+
+/// Runs the prompt, with a server behind it when the command starts one.
+///
+/// `daemon` and `run` never return, so dispatching them and then starting the
+/// prompt — what this used to do — left the prompt unreachable and the flag
+/// silently ignored. They are bound here instead, served on a task of their own,
+/// and stopped when the prompt ends, which is what `run -i` promises: a daemon
+/// you can type at.
+async fn interactive(socket: &Path, command: Option<Command>) -> ExitCode {
+    let addr = match startup(command) {
+        Startup::Prompt => return repl::run(socket).await,
+        Startup::RunFirst(command) => {
+            // A client command still runs first and still keeps the prompt: a
+            // failed one is reported, not fatal, because the prompt is where the
+            // user fixes it.
+            let code = dispatch_command(socket, Some(*command)).await;
+            if code != ExitCode::SUCCESS {
+                eprintln!("anth-panel: the startup command failed, staying interactive");
+            }
+            return repl::run(socket).await;
+        }
+        Startup::Serve { addr } => addr,
+    };
+
+    let daemon = Arc::new(Daemon::new(plugins::registry::Registry::load(
+        &plugins::registry::default_root(),
+    )));
+
+    let listeners = match bind(socket, addr.as_deref()).await {
+        Ok(listeners) => listeners,
+        Err(error) => {
+            eprintln!("anth-panel: {error}");
+            return ExitCode::from(error.kind.exit_code());
+        }
+    };
+
+    let serving = tokio::spawn(serve_bound(listeners, daemon));
+    let code = repl::run(socket).await;
+    // The prompt owns the process; a listener outliving it would keep the
+    // terminal held by a daemon the operator thought they had quit.
+    serving.abort();
+    code
 }
 
 /// Sends one request and renders the answer, or reports why it failed.
@@ -385,11 +475,45 @@ mod tests {
             std::env::temp_dir().join(format!("anth-exit-{}-{nanos}.file", std::process::id()));
         std::fs::write(&path, b"not a socket").expect("writing the file");
 
-        let daemon = Arc::new(Daemon::new(plugins::registry::Registry::empty()));
-        let error = serve(&path, daemon).await.expect_err("must refuse");
+        let error = bind(&path, None).await.err().expect("must refuse");
         assert_eq!(ExitCode::from(error.kind.exit_code()), ExitCode::from(2));
         assert_eq!(error.kind, anth_wire::ErrorKind::Invalid);
 
         std::fs::remove_file(&path).expect("removing the file");
+    }
+
+    /// `run -i` and `daemon -i` must serve *and* keep the prompt. Dispatching
+    /// them instead started a loop that never returns, so the prompt was
+    /// unreachable and `-i` was silently ignored.
+    #[test]
+    fn a_server_command_under_interactive_serves_behind_the_prompt() {
+        let run = startup(Some(Command::Run {
+            addr: "127.0.0.1:0".into(),
+        }));
+        let Startup::Serve { addr } = run else {
+            panic!("`run -i` must serve, not run the daemon and block");
+        };
+        assert_eq!(addr.as_deref(), Some("127.0.0.1:0"));
+
+        let daemon = startup(Some(Command::Daemon));
+        let Startup::Serve { addr } = daemon else {
+            panic!("`daemon -i` must serve, not block");
+        };
+        assert!(addr.is_none());
+    }
+
+    /// A client command still runs first, so `-i host-info` prints a snapshot
+    /// and then keeps the prompt.
+    #[test]
+    fn a_client_command_under_interactive_runs_first_and_keeps_the_prompt() {
+        let Startup::RunFirst(command) = startup(Some(Command::HostInfo)) else {
+            panic!("a client command must run before the prompt");
+        };
+        assert!(matches!(*command, Command::HostInfo));
+    }
+
+    #[test]
+    fn interactive_alone_starts_nothing_but_the_prompt() {
+        assert!(matches!(startup(None), Startup::Prompt));
     }
 }

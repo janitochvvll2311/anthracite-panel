@@ -142,3 +142,16 @@ async fn a_failed_command_keeps_the_session() {
     assert_eq!(code, None);
     assert_eq!(history.entries(), ["host-info"]);
 }
+
+/// `run` and `daemon` never return, so accepting them inside the prompt froze
+/// the session. They are refused, the session survives, and Up reaches the line.
+#[tokio::test]
+async fn a_server_command_is_refused_instead_of_freezing_the_prompt() {
+    for line in ["run", "run --addr 127.0.0.1:0", "daemon"] {
+        let mut history = editor::History::new();
+        let socket = std::path::Path::new("/tmp/anth-unused.sock");
+
+        assert_eq!(run_words(socket, line, &mut history).await, None);
+        assert_eq!(history.entries(), [line]);
+    }
+}

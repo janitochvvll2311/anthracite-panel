@@ -201,6 +201,19 @@ async fn run_words(
             print_help();
             return None;
         }
+        // A prompt cannot host a server: the serve loop never returns, so
+        // accepting these froze the session with no way back except a signal.
+        // They are start-time commands — `run -i` binds the server and then gives
+        // you this same prompt — so the refusal names the spelling that works.
+        "daemon" | "run" => {
+            // Remembered like any other refused line, so Up reaches the typo.
+            history.push(line);
+            eprintln!(
+                "anth-panel: `{first}` starts a server and cannot be typed inside the prompt; \
+                 start the session with `anth-panel {first} -i` instead"
+            );
+            return None;
+        }
         _ => {}
     }
 
@@ -267,9 +280,11 @@ fn print_help() {
          plugin list                    every plugin the daemon found\n  \
          plugin call <id> [LINE] [--http] [--direct]\n                                 \
          run one plugin over its own pipe\n  \
-         daemon | run [--addr ADDR]     serve\n  \
          help                           this message\n  \
          quit | exit                    leave\n\
+         \n\
+         `run` and `daemon` start a server, so they are given on the command line\n\
+         (`anth-panel run -i`), not typed here.\n\
          \n\
          editing:\n  \
          Tab                            complete a command, subcommand or flag\n  \
