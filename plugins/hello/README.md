@@ -46,7 +46,18 @@ Needs `rustup target add wasm32-unknown-unknown` once, plus `zip`.
 
 That builds the wasm module, bundles the frontend, writes the module's sha256
 into a copy of `plugin.toml`, and produces `dist/org.anth.hello.zip` containing
-`plugin.toml`, `plugin.wasm` and `web/hello.js`. The digest is computed from the
+`plugin.toml`, `plugin.wasm` and `web/hello.js`. It then unpacks that zip into
+`plugins/bundles/org.anth.hello/`, which is what a daemon reads:
+
+```bash
+ANTH_PLUGINS=$(cd ../bundles && pwd) anth-panel run
+```
+
+Point it at `plugins/bundles`, not at `plugins`. The latter holds *sources*: a
+registry over it registers `hello/` too, and its manifest still carries the zero
+digest by design, so the entry is disabled — and because `resolve` matches an id
+before an alias, that disabled `hello` would answer in place of the bundle's
+`hello` alias. The digest is computed from the
 built module, never hand-written: the host re-hashes the bundle on every load and
 disables a plugin whose bytes no longer match, so a stale digest is a plugin that
 silently stops working.

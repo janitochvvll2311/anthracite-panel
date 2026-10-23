@@ -2,7 +2,9 @@
 backend/target/
 frontend/node_modules/
 frontend/dist/
-# The built bundle is produced by package.sh, never committed.
+# The built bundle is produced by package.sh, never committed. The unpacked copy
+# sits beside this directory, named by the plugin id, so a registry over
+# `plugins/` sees one directory of loadable bundles.
 plugin.wasm
 dist/
 *.zip

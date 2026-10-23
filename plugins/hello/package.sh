@@ -40,3 +40,20 @@ sed "s/^sha256 = \".*\"/sha256 = \"$digest\"/" plugin.toml > "$staging/plugin.to
 mkdir -p dist
 (cd "$staging" && zip -qr "$here/dist/$id.zip" .)
 echo "wrote dist/$id.zip (sha256 $digest)"
+
+# Unpacked into `plugins/bundles/<id>`, which is a registry root: the bundle
+# takes its id from the directory holding its manifest, and only an id can hold
+# a dot. Not beside the source, because `plugins/` holds sources: a registry
+# over it registers each source directory too, and a source directory whose name
+# equals another bundle's alias shadows it — `resolve` matches an id before an
+# alias, and does not care that the id is disabled.
+#
+# `plugin.toml` here keeps its zero digest on purpose, so the source tree can
+# never be mistaken for a bundle that loads.
+bundles="$here/../bundles"
+bundle="$bundles/$id"
+rm -rf "$bundle"
+mkdir -p "$bundle"
+unzip -q "$here/dist/$id.zip" -d "$bundle"
+echo "unpacked into $bundle"
+echo "run with ANTH_PLUGINS=$(cd "$bundles" && pwd)"
