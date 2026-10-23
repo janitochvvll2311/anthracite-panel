@@ -246,7 +246,7 @@ fn decode_request<P: Plugin>(payload: &str) -> Result<Request, Response> {
 ///     }
 ///
 ///     fn from_cli(request: anth_plugin::CliRequest) -> Result<anth_plugin::Request, anth_plugin::Response> {
-///         request.args()?.into_request(COMMANDS)
+///         request.into_request(COMMANDS)
 ///     }
 ///
 ///     fn handle(&mut self, executor: &mut dyn anth_plugin::Executor, request: anth_plugin::Request) -> anth_plugin::Response {

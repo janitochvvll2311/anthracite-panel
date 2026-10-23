@@ -31,7 +31,7 @@
 //!     }
 //!
 //!     fn from_cli(request: CliRequest) -> Result<Request, Response> {
-//!         request.args()?.into_request(COMMANDS)
+//!         request.into_request(COMMANDS)
 //!     }
 //!
 //!     fn handle(&mut self, _executor: &mut dyn Executor, request: Request) -> Response {
@@ -88,4 +88,4 @@ pub use abi::{
 pub use exec::Executor;
 pub use plugin::Plugin;
 pub use request::{Action, Request, Response, Status};
-pub use transport::{CliArgs, CliRequest, HttpRequest, Method};
+pub use transport::{CliRequest, HttpRequest, Method};

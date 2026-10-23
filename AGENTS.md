@@ -37,7 +37,7 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/lib.rs              #   re-exports
     src/abi.rs              #   anth_plugin! macro: one export per transport
     src/request.rs          #   Action, Request, Status, Response: no transport
-    src/transport.rs        #   HttpRequest, CliRequest, CliArgs, Method
+    src/transport.rs        #   HttpRequest, CliRequest (line), Method
     src/plugin.rs           #   Plugin trait: actions + three mappers
     src/exec.rs             #   Executor trait: the capability seam
   anth-paneld/              # the binary: daemon, HTTP API and CLI client
@@ -165,15 +165,23 @@ plugin is expected to contain behaviour only.
     writes `{"status":..,"body":..}` and **omits** `body` for a null value,
     because the host serves `204` only when the key is absent and serves a
     present `null` as the literal text `null`.
-  - `transport.rs` — one type per pipe, each modelling only its own fields.
-    `HttpRequest` carries `body` as a raw **string** (the host never parses an
-    anchor body) and `path()` normalizes to exactly one leading slash, because
-    axum strips it from a `{*path}` capture. `CliRequest` holds `argv`;
-    `CliArgs` resolves the flag forms once — `-v`, `--verbose`, `--verbose=true`,
-    `--name value`, `-n value`, `--` ends the flags, `-` alone is positional, and
-    `-abc` stays one flag rather than being split. `into_request(commands)`
-    resolves the subcommand against the plugin's own alias table, so the routing
-    and the "try one of" message come from one source.
+  - `transport.rs` — one type per pipe, each modelling only its own fields, and
+    **both entry types hold their payload as raw text**. `HttpRequest` carries
+    `body` as a `String` (the host never parses an anchor body) and `path()`
+    normalizes to exactly one leading slash, because axum strips it from a
+    `{*path}` capture. `CliRequest` carries the command **line** as a `String`
+    and the ABI payload is that line encoded as a JSON string; a plugin reads it
+    through accessors — `line()`, `words()`, `command()`, `positional()`,
+    `flag()`, `option()`, `value()`, `action()` — instead of receiving a shape it
+    did not ask for. The line is split on whitespace with `'...'`, `"..."` and
+    backslash escapes resolved, because the host joins an `argv` into this line:
+    a plain split would tear `--name "Ana Sol"` in two, so the quotes are the
+    only thing preserving a word boundary. Flag forms are `-v`, `--verbose`,
+    `--verbose=true`, `--name value`, `-n value`; `--` ends the flags, `-` alone
+    is positional, `-abc` stays one flag. `into_request(commands)` resolves the
+    subcommand against the plugin's own alias table, so the routing and the "try
+    one of" message come from one source. An object payload is a `400` naming the
+    expected shape rather than a command named `{"argv":...}`.
   - `plugin.rs` — the `Plugin` trait: `actions()` plus three mappers
     (`from_http`, `from_cli`, `handle`). The mappers have **no default**: a
     default would let a plugin skip a transport and have the library choose for

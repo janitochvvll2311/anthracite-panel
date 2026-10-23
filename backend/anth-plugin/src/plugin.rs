@@ -27,10 +27,11 @@ pub trait Plugin {
     /// `404` and a bad body a `400`, because only the plugin knows which.
     fn from_http(request: HttpRequest) -> Result<Request, Response>;
 
-    /// A CLI `argv` to the plugin's vocabulary.
+    /// A CLI command line to the plugin's vocabulary.
     ///
-    /// [`CliRequest::args`] resolves the flag forms; resolving the subcommand
-    /// against the plugin's own alias table is [`crate::transport::CliArgs::into_request`].
+    /// [`CliRequest`] holds the line as text; splitting it into words and
+    /// resolving the subcommand against the plugin's alias table is
+    /// [`CliRequest::into_request`] or the finer accessors around it.
     fn from_cli(request: CliRequest) -> Result<Request, Response>;
 
     /// The plugin's vocabulary, which is the plugin.

@@ -205,9 +205,7 @@ mod tests {
     /// The CLI alias reaches the same action the browser does.
     #[test]
     fn a_cli_subcommand_reaches_the_greeting() {
-        let request = CliRequest {
-            argv: vec!["greet".to_string()],
-        };
+        let request = CliRequest::new("greet");
         let mapped = crate::Hello::from_cli(request).expect("`greet` is declared");
         assert_eq!(mapped.action, crate::GREETING);
 
@@ -222,9 +220,7 @@ mod tests {
     /// its alias and its words without the plugin inventing them.
     #[test]
     fn the_cli_status_reports_the_words_it_received() {
-        let request = CliRequest {
-            argv: vec!["status".to_string(), "--verbose".to_string()],
-        };
+        let request = CliRequest::new("status --verbose");
         let mapped = crate::Hello::from_cli(request).expect("`status` is declared");
 
         let reply = status(&mapped.value);
@@ -242,9 +238,7 @@ mod tests {
     /// A subcommand outside the table is refused with the ones that are in it.
     #[test]
     fn an_unknown_cli_subcommand_lists_the_declared_ones() {
-        let request = CliRequest {
-            argv: vec!["frobnicate".to_string()],
-        };
+        let request = CliRequest::new("frobnicate");
 
         let refused = crate::Hello::from_cli(request).unwrap_err();
 

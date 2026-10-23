@@ -46,7 +46,7 @@ impl Plugin for Hello {
     }
 
     fn from_cli(request: CliRequest) -> Result<Request, Response> {
-        request.args()?.into_request(COMMANDS)
+        request.into_request(COMMANDS)
     }
 
     fn handle(&mut self, executor: &mut dyn Executor, request: Request) -> Response {
