@@ -1204,18 +1204,45 @@ mod www {
     /// looking like a missing page.
     #[tokio::test]
     async fn a_build_without_a_shell_says_so() {
-        if crate::www::available() {
-            // This machine has `www/` populated. The clean-checkout branch is
-            // what the assertions below cover.
-            return;
-        }
-
-        let (status, _, body) = ask("/").await;
-
-        assert_eq!(status, 404);
+        // Whether this machine has a shell is not the property under test: the
+        // message is. Asking the real build made this test return early on a
+        // machine with `www/` populated, which is every development machine.
+        let missing = crate::api::shell_missing(false, "index.html");
+        assert_eq!(missing.0.kind.http_status(), 404);
         assert!(
-            body.contains("bun run build"),
-            "the message must name the build step: {body}"
+            missing.0.message.contains("bun run build"),
+            "the message must name the build step: {}",
+            missing.0.message
         );
+    }
+
+    #[test]
+    fn a_built_shell_names_the_path_it_lacks() {
+        let missing = crate::api::shell_missing(true, "assets/app.js");
+        assert_eq!(missing.0.kind.http_status(), 404);
+        assert!(
+            missing.0.message.contains("assets/app.js"),
+            "the message must name the path: {}",
+            missing.0.message
+        );
+        assert!(
+            !missing.0.message.contains("bun run build"),
+            "a built shell must not be told to build: {}",
+            missing.0.message
+        );
+    }
+
+    /// A clean checkout has `www/` because `.gitkeep` is tracked, and no index
+    /// because the shell is not. Treating the directory as the answer reported
+    /// that state as a missing path.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn an_empty_tracked_shell_directory_is_not_a_shell() {
+        let dir = Shell::new("only-gitkeep");
+        dir.write(".gitkeep", "");
+
+        assert!(!crate::www::available_at(dir.path()));
+        dir.write("index.html", "<!doctype html>");
+        assert!(crate::www::available_at(dir.path()));
     }
 }

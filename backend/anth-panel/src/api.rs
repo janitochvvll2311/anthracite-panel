@@ -286,16 +286,26 @@ async fn asset(axum::extract::Path(path): axum::extract::Path<String>) -> HttpRe
 fn shell(path: &str) -> HttpResponse {
     match crate::www::get(path) {
         Some(file) => file_into_response(file),
-        None if !crate::www::available() => ApiError(WireError::new(
-            ErrorKind::NotFound,
-            "this build has no shell; run `bun run build` in frontend/".to_string(),
-        ))
-        .into_response(),
-        None => ApiError(WireError::new(
+        None => shell_missing(crate::www::available(), path).into_response(),
+    }
+}
+
+/// The error for a path under `www/` that answered nothing.
+///
+/// Pure, and so testable: the two causes need different advice, and a test that
+/// asked a real build to be in one of those states would pass or fail on the
+/// machine it ran on rather than on the code.
+pub(crate) fn shell_missing(shell_present: bool, path: &str) -> ApiError {
+    if shell_present {
+        ApiError(WireError::new(
             ErrorKind::NotFound,
             format!("the shell has no `{path}`"),
         ))
-        .into_response(),
+    } else {
+        ApiError(WireError::new(
+            ErrorKind::NotFound,
+            "this build has no shell; run `bun run build` in frontend/".to_string(),
+        ))
     }
 }
 

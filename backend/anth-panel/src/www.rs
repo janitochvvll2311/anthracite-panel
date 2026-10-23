@@ -36,21 +36,33 @@ pub struct Asset {
 #[folder = "www"]
 struct Shell;
 
-/// Whether a built shell is available at all.
+/// Whether a router built right now could serve the shell.
 ///
-/// A missing `www/` in a debug build is a developer who has not run the
-/// frontend build, not a visitor asking for a page that does not exist, and the
-/// two deserve different answers: a `404` would send them hunting for a typo in
-/// a path that is fine.
+/// A missing shell is a developer who has not run the frontend build, not a
+/// visitor asking for a page that does not exist, and the two deserve different
+/// answers: a `404` would send them hunting for a typo in a path that is fine.
+///
+/// `www/` is tracked in git, so a fresh checkout has the directory but not its
+/// contents: "the directory exists" is not "a shell was built", and answering
+/// the first as if it were the second reported a missing file as a missing
+/// build. The index is the file that has to be there.
+///
+/// Whether a build could serve the shell, as the route handler sees it.
+#[cfg(debug_assertions)]
 pub fn available() -> bool {
-    #[cfg(debug_assertions)]
-    {
-        root().is_dir()
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        Shell::iter().next().is_some()
-    }
+    available_at(&root())
+}
+
+/// Whether `root` holds a shell, so the decision can be tested over a fixture
+/// instead of over whatever this machine has staged.
+#[cfg(debug_assertions)]
+pub fn available_at(root: &Path) -> bool {
+    root.join("index.html").is_file()
+}
+
+#[cfg(not(debug_assertions))]
+pub fn available() -> bool {
+    Shell::get("index.html").is_some()
 }
 
 /// Where a debug build reads the shell from.
