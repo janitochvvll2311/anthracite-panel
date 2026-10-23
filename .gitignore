@@ -67,3 +67,8 @@ frontend/anth-webui/public
 # Agent scratch: plans and notes an assistant keeps while working. Not source,
 # so it must never be committed.
 .agents_tmp/
+
+# The shell the daemon serves. `frontend/build-shell.sh` fills it from the Vite
+# build, so the directory exists in a checkout but its contents are artifacts.
+backend/anth-panel/www/*
+!backend/anth-panel/www/.gitkeep

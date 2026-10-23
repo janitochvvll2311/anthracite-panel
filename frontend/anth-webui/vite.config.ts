@@ -9,32 +9,41 @@ import { defineConfig } from "vite";
  */
 const backend = process.env.ANTH_PANEL_ADDR ?? "http://127.0.0.1:8080";
 
-export default defineConfig({
-  // `/p` is where a plugin's declared anchors live, so the panel reaches them
-  // through the same origin as everything else.
-  server: {
-    port: 5173,
-    proxy: { "/api": backend, "/healthz": backend, "/p": backend },
-  },
-  // `preview` serves the built output, so it needs the same proxy to be a
-  // faithful check of what a deployment will do.
-  preview: {
-    port: 4173,
-    proxy: { "/api": backend, "/healthz": backend, "/p": backend },
-  },
-  // A harness page has to be an explicit input: Vite's dev server rewrites any
-  // unknown path to `index.html`, so a page dropped into `public/` is never
-  // reached. `index.html` stays the only production entry.
-  build: {
-    outDir: "dist",
-    rollupOptions: {
-      input: {
-        main: fileURLToPath(new URL("./index.html", import.meta.url)),
-        harness: fileURLToPath(new URL("./harness.html", import.meta.url)),
-      },
+export default defineConfig(({ command }) => {
+  // The harness is a development page: `public/` exists only so it can import a
+  // plugin bundle from this origin. Vite copies `public/` into every build, so
+  // leaving it on would ship plugin bundles inside the shell, where no page
+  // references them. `ANTH_HARNESS=1` builds the harness on purpose.
+  const harness = command === "serve" || Boolean(process.env.ANTH_HARNESS);
+
+  return {
+    // `/p` is where a plugin's declared anchors live, so the panel reaches them
+    // through the same origin as everything else.
+    server: {
+      port: 5173,
+      proxy: { "/api": backend, "/healthz": backend, "/p": backend },
     },
-    // The v0.1.0 tree embedded its build output through `rust-embed`; v0.2.0
-    // has no embedder yet, so the output stays a plain folder.
-    emptyOutDir: true,
-  },
+    // `preview` serves the built output, so it needs the same proxy to be a
+    // faithful check of what a deployment will do.
+    preview: {
+      port: 4173,
+      proxy: { "/api": backend, "/healthz": backend, "/p": backend },
+    },
+    publicDir: harness ? "public" : false,
+    // `index.html` is the only production entry. The harness is reachable in
+    // development, where Vite serves it from the project root, and a build that
+    // included it would ship a test page and the bundle behind it.
+    build: {
+      outDir: "dist",
+      rollupOptions: {
+        input: {
+          main: fileURLToPath(new URL("./index.html", import.meta.url)),
+          ...(harness
+            ? { harness: fileURLToPath(new URL("./harness.html", import.meta.url)) }
+            : {}),
+        },
+      },
+      emptyOutDir: true,
+    },
+  };
 });

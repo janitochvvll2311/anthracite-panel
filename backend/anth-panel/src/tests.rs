@@ -967,3 +967,254 @@ mod socket {
         );
     }
 }
+
+/// The shell: the lookup rules, and the routes built on them.
+///
+/// Every fixture is a real directory, because the rules worth testing here are
+/// about the filesystem — a path that escapes, a symlink out of the tree, a file
+/// that is not there — and a mock would simply agree with itself.
+mod www {
+    use crate::api::router;
+    use crate::dispatch::Daemon;
+    use crate::www::{EXCLUDED, content_type_for, normalise};
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    /// A fixture tree, removed on drop.
+    struct Shell(PathBuf);
+
+    impl Shell {
+        fn new(label: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let root = std::env::temp_dir()
+                .join(format!("anth-www-{label}-{}-{nanos}", std::process::id()));
+            std::fs::create_dir_all(&root).expect("creating the shell root");
+            Self(root)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        /// Writes one file, creating its parents, and returns its path.
+        fn write(&self, relative: &str, contents: &str) -> PathBuf {
+            let path = self.0.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("creating a fixture directory");
+            }
+            std::fs::write(&path, contents).expect("writing a fixture");
+            path
+        }
+
+        /// The bytes `relative` would answer with, through the same lookup a
+        /// request reaches.
+        ///
+        /// Debug-only, along with the tests below: a release build serves only
+        /// what it embedded and compiles no filesystem reader at all, so there
+        /// is no rule here to check.
+        #[cfg(debug_assertions)]
+        fn get(&self, relative: &str) -> Option<Vec<u8>> {
+            crate::www::lookup(&self.0, relative).map(|asset| asset.bytes.into_owned())
+        }
+    }
+
+    impl Drop for Shell {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_normal_path_is_kept() {
+        assert_eq!(normalise("assets/app.js").as_deref(), Some("assets/app.js"));
+    }
+
+    #[test]
+    fn redundant_separators_and_dots_collapse() {
+        assert_eq!(normalise("./a//b.js").as_deref(), Some("a/b.js"));
+        assert_eq!(normalise("a/b/./c.css").as_deref(), Some("a/b/c.css"));
+    }
+
+    /// The shell directory has no parent to clamp to, so a `..` is refused
+    /// rather than resolved: resolving it would answer a file the shell never
+    /// published.
+    #[test]
+    fn a_parent_component_is_refused() {
+        for path in ["../secret", "a/../../secret", "/etc/passwd"] {
+            assert_eq!(normalise(path), None, "{path} must be refused");
+        }
+    }
+
+    /// The shell directory is tracked in git, so a clean checkout holds
+    /// `.gitkeep`. Embedding it is harmless; serving it is not.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_dotfile_is_refused() {
+        let dir = Shell::new("dotfile");
+        dir.write(".gitkeep", "");
+        dir.write(".env", "TOKEN=secret");
+
+        assert_eq!(normalise(".gitkeep"), None);
+        assert!(dir.get(".gitkeep").is_none());
+        assert!(dir.get(".env").is_none());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn an_asset_is_read_with_its_type() {
+        let dir = Shell::new("asset");
+        dir.write("assets/app.js", "console.log(1)");
+
+        let bytes = dir.get("assets/app.js").expect("the asset exists");
+
+        assert_eq!(bytes, b"console.log(1)");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_missing_file_is_none() {
+        let dir = Shell::new("missing");
+        dir.write("index.html", "<h1>shell</h1>");
+
+        assert!(dir.get("assets/nope.js").is_none());
+    }
+
+    /// The development page is on disk in this fixture and still unreachable,
+    /// so a deployment that copied it cannot serve it by accident.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_harness_is_never_served() {
+        let dir = Shell::new("harness");
+        dir.write("harness.html", "<p>dev</p>");
+
+        assert!(EXCLUDED.contains(&"harness.html"));
+        assert!(
+            dir.get("harness.html").is_none(),
+            "the harness must not be reachable"
+        );
+    }
+
+    /// A symlink inside the tree that points outside it must not be followed:
+    /// the shell is a directory the daemon published, and this is what keeps
+    /// that true when the bundle is not.
+    #[cfg(all(unix, debug_assertions))]
+    #[test]
+    fn a_symlink_out_of_the_tree_is_refused() {
+        let dir = Shell::new("symlink");
+        // The target is outside the fixture root, which is the case that
+        // matters: a bundle shipping a link to a file the daemon can read.
+        let outside = dir.path().with_extension("outside.txt");
+        std::fs::write(&outside, "secret").expect("writing the target");
+        std::os::unix::fs::symlink(&outside, dir.path().join("escape.txt"))
+            .expect("creating the symlink");
+
+        assert!(
+            dir.get("escape.txt").is_none(),
+            "a symlink leaving the tree must not be served"
+        );
+    }
+
+    /// The table is short on purpose, and an unknown extension stays opaque
+    /// rather than being guessed at.
+    #[test]
+    fn the_content_type_table_guesses_nothing() {
+        assert_eq!(
+            content_type_for(Path::new("a.css")),
+            "text/css; charset=utf-8"
+        );
+        assert_eq!(content_type_for(Path::new("a.json")), "application/json");
+        assert_eq!(content_type_for(Path::new("a.woff2")), "font/woff2");
+        assert_eq!(
+            content_type_for(Path::new("a.unknown")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            content_type_for(Path::new("no-extension")),
+            "application/octet-stream"
+        );
+    }
+
+    fn shell_router() -> Router {
+        router(Arc::new(Daemon::new(
+            crate::plugins::registry::Registry::empty(),
+        )))
+    }
+
+    async fn ask(uri: &str) -> (u16, String, String) {
+        let response = shell_router()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("a request"),
+            )
+            .await
+            .expect("the router answers");
+
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        (
+            status,
+            content_type,
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
+    }
+
+    /// A typo in a client is a JSON `404`, never the index. Answering HTML here
+    /// makes a broken request look like a working route until the JSON parse
+    /// fails somewhere far away.
+    #[tokio::test]
+    async fn an_unknown_api_path_is_a_json_not_found() {
+        let (status, content_type, body) = ask("/api/typo").await;
+
+        assert_eq!(status, 404, "{body}");
+        assert_eq!(content_type, "application/json");
+        assert!(
+            body.contains("no such API route"),
+            "the body must say what is wrong: {body}"
+        );
+    }
+
+    /// The catch-all must not shadow the routes that already existed.
+    #[tokio::test]
+    async fn the_api_routes_still_answer_before_the_catch_all() {
+        let (status, _, body) = ask("/healthz").await;
+
+        assert_eq!(status, 200);
+        assert!(body.contains("ok"), "{body}");
+    }
+
+    /// With no shell built, the answer names the build step rather than
+    /// looking like a missing page.
+    #[tokio::test]
+    async fn a_build_without_a_shell_says_so() {
+        if crate::www::available() {
+            // This machine has `www/` populated. The clean-checkout branch is
+            // what the assertions below cover.
+            return;
+        }
+
+        let (status, _, body) = ask("/").await;
+
+        assert_eq!(status, 404);
+        assert!(
+            body.contains("bun run build"),
+            "the message must name the build step: {body}"
+        );
+    }
+}

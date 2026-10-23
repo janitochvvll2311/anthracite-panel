@@ -12,10 +12,15 @@
 //! A plugin's *own* failure is not an HTTP failure: the route answers the
 //! plugin's status and value, because a `404` from an anchor is the plugin
 //! saying "I have no such thing", not the panel saying "I have no such route".
+//!
+//! The shell is served from the same router, and an unknown `/api` path is a
+//! JSON `404` rather than the index: answering `200 text/html` for a typo makes
+//! a broken client look like a working route until the JSON parse fails.
 
 use std::sync::Arc;
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response as HttpResponse};
@@ -50,6 +55,11 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         // The browser's form: it names its plugin, so two plugins declaring one
         // path are not a conflict here. `/p/` stays for a path-only caller.
         .route("/api/plugins/{id}/{*path}", get(scoped_anchor))
+        // The shell. `/` is separate because a catch-all does not match a bare
+        // root, so leaving it out answers the front page with a `404` while
+        // every asset beside it loads.
+        .route("/", get(index))
+        .route("/{*path}", get(asset))
         .with_state(AppState::new(daemon))
 }
 
@@ -238,4 +248,60 @@ impl IntoResponse for ApiError {
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         (status, axum::Json(json!({"error": self.0.message}))).into_response()
     }
+}
+
+/// Answers the shell's index.
+async fn index() -> HttpResponse {
+    shell("index.html")
+}
+
+/// Serves `path`, falling back to the index for a browser route.
+///
+/// A path that looks like a file and is not there is a `404`: handing back the
+/// index would give a client HTML where it asked for a module, and the parse
+/// error would name the module rather than the missing request.
+async fn asset(axum::extract::Path(path): axum::extract::Path<String>) -> HttpResponse {
+    if path == "api" || path.starts_with("api/") {
+        return ApiError(WireError::new(
+            ErrorKind::NotFound,
+            "no such API route".to_string(),
+        ))
+        .into_response();
+    }
+    match crate::www::get(&path) {
+        Some(file) => file_into_response(file),
+        None if crate::www::looks_like_file(&path) => ApiError(WireError::new(
+            ErrorKind::NotFound,
+            format!("no such asset `{path}`"),
+        ))
+        .into_response(),
+        None => shell("index.html"),
+    }
+}
+
+/// One file, or the answer that names what is actually missing.
+///
+/// A build with no shell and a build whose index is missing are different
+/// faults, and both differ from a typo in a path, so the message says which.
+fn shell(path: &str) -> HttpResponse {
+    match crate::www::get(path) {
+        Some(file) => file_into_response(file),
+        None if !crate::www::available() => ApiError(WireError::new(
+            ErrorKind::NotFound,
+            "this build has no shell; run `bun run build` in frontend/".to_string(),
+        ))
+        .into_response(),
+        None => ApiError(WireError::new(
+            ErrorKind::NotFound,
+            format!("the shell has no `{path}`"),
+        ))
+        .into_response(),
+    }
+}
+
+fn file_into_response(file: crate::www::Asset) -> HttpResponse {
+    HttpResponse::builder()
+        .header("content-type", file.content_type)
+        .body(Body::from(file.bytes.into_owned()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

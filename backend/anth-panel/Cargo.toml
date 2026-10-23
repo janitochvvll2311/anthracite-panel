@@ -16,6 +16,9 @@ wasmi.workspace = true
 sha2.workspace = true
 wasmi_core.workspace = true
 libc.workspace = true
+# The shell is compiled into the binary. `debug-embed` makes a debug build read
+# `www/` from disk instead, so a frontend rebuild needs no Rust rebuild.
+rust-embed = { version = "8", features = ["debug-embed"] }
 
 [dev-dependencies]
 # The runtime tests compile a real guest from WAT, so the sandbox is proven

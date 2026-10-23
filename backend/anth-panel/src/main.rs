@@ -15,6 +15,7 @@ mod plugins;
 mod render;
 mod socket;
 mod table;
+mod www;
 
 #[cfg(test)]
 mod tests;

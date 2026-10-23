@@ -57,6 +57,8 @@ frontend/                   # Bun workspace, bun.lock committed
     src/exchange.ts         #   one JSON exchange over fetch; WireError
   anth-webui/               # @anth/webui: the shell, Vite build, dist/ gitignored
     src/wire.ts             #   presentation only: formatKib, formatUptime
+    harness.html            #   dev-only page that mounts one widget; never built
+  build-shell.sh            # fills backend/anth-panel/www from the Vite build
   anth-plugin/              # @anth/plugin: anchors, widget base, registration
   bunfig.toml               # test preload: happy-dom for component tests
 
@@ -97,7 +99,12 @@ bun install            # once, or after a package.json change
 bun run typecheck      # wire, webui, then plugin
 bun test               # happy-dom preloaded from bunfig.toml
 bun run build          # typechecks, then writes anth-webui/dist
+./build-shell.sh       # builds, then stages the shell into the daemon's www/
 ```
+
+The Rust binary serves `www/`, so `build-shell.sh` is what makes `cargo run` show
+a page. In a release build the same script has to run before `cargo build
+--release`, because `rust-embed` reads `www/` at compile time.
 
 From `plugins/hello/`, which CI also runs:
 
@@ -174,6 +181,41 @@ Do not add a `credential.helper` to `.git/config` that points at a script in
 interactive prompt that nobody could see and hung until it timed out. A helper
 that is not there fails worse than no helper at all: the failure looks like a
 network problem.
+
+## The shell
+
+`anth-panel` serves the built frontend at `/`. The bytes come from `www/`, which
+`frontend/build-shell.sh` fills from `frontend/anth-webui/dist`; `www/` is
+gitignored apart from `.gitkeep`, because it holds artifacts and not source.
+
+Which source answers depends on the build:
+
+| Build | Source | Why |
+| --- | --- | --- |
+| release | embedded with `rust-embed` | the binary runs with no `www/` beside it |
+| debug | `www/` on disk, read per request | rebuild the frontend, no Rust rebuild |
+
+Do not enable `rust-embed`'s `debug-embed` feature to "simplify" this: it means
+embed *always*, which takes away the one thing a debug build is for. And do not
+let it pick the debug path itself — rust-embed resolves a relative `folder`
+against the *current working directory*, so a daemon started from anywhere but
+`backend/` serves nothing. `www::root` uses `CARGO_MANIFEST_DIR`, and `ANTH_WEB`
+overrides it.
+
+Two routing facts, both learned by testing rather than reading:
+
+- `/{*path}` does not match `/` on axum 0.8, so `/` needs its own route. Miss it
+  and the front page 404s while every asset beside it loads.
+- A catch-all loses to a static route, so `/api/*` and `/p/*` still win. But an
+  unknown `/api` path must be answered as a JSON `404` by the catch-all: falling
+  back to `index.html` with `200` makes a typo look like a live route until the
+  JSON parse fails somewhere else.
+
+`harness.html` is a development page and is excluded three times over: Vite
+leaves it out of a production build (`ANTH_HARNESS=1` puts it back, with
+`public/`), `build-shell.sh` does not copy it, and `www::EXCLUDED` refuses to
+serve it. `www::normalise` also refuses any dotfile, because `www/` is tracked in
+git and so holds `.gitkeep`.
 
 ## Design rules
 
