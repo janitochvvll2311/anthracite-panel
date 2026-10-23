@@ -60,15 +60,29 @@ fn digest(wasm: &[u8]) -> String {
 
 /// Writes one bundle named `id` under `root`, with the digest the manifest says.
 fn write_bundle(root: &Path, id: &str, digest: &str, anchor: &str) -> PathBuf {
+    write_bundle_with_alias(root, id, None, digest, anchor)
+}
+
+/// The same, with the short handle the manifest may declare.
+fn write_bundle_with_alias(
+    root: &Path,
+    id: &str,
+    alias: Option<&str>,
+    digest: &str,
+    anchor: &str,
+) -> PathBuf {
     let dir = root.join(id);
     std::fs::create_dir_all(&dir).expect("creating the plugin directory");
     std::fs::write(dir.join("plugin.wasm"), wasm()).expect("writing the module");
+    let alias_line = alias
+        .map(|alias| format!("\nalias = \"{alias}\""))
+        .unwrap_or_default();
     std::fs::write(
         dir.join("plugin.toml"),
         format!(
             r#"
 [plugin]
-id = "{id}"
+id = "{id}"{alias_line}
 version = "0.2.0"
 name = "Test"
 abi = 2
@@ -96,7 +110,8 @@ fn a_bundle_with_the_approved_digest_loads() {
     let registry = Registry::load(root.path());
 
     let entry = registry
-        .get("org.test.good")
+        .resolve("org.test.good")
+        .expect("looking up")
         .expect("the plugin must be there");
     assert!(entry.enabled.is_ok(), "got: {:?}", entry.enabled);
     assert_eq!(entry.name, "Test");
@@ -119,7 +134,8 @@ fn a_rewritten_module_disables_the_plugin_and_says_so() {
     let registry = Registry::load(root.path());
 
     let entry = registry
-        .get("org.test.rewritten")
+        .resolve("org.test.rewritten")
+        .expect("looking up")
         .expect("the plugin is listed");
     assert!(entry.loaded().is_none(), "a rewritten module must not load");
     let reason = entry.enabled.as_ref().expect_err("a reason is required");
@@ -138,7 +154,8 @@ fn a_directory_without_a_manifest_is_listed_as_disabled() {
     let registry = Registry::load(root.path());
 
     let entry = registry
-        .get("org.test.empty")
+        .resolve("org.test.empty")
+        .expect("looking up")
         .expect("the plugin is listed");
     let reason = entry.enabled.as_ref().expect_err("a reason is required");
     assert!(reason.contains("plugin.toml"), "got: {reason}");
@@ -189,4 +206,82 @@ fn a_missing_root_yields_an_empty_registry() {
 
     assert!(registry.is_empty());
     assert_eq!(registry.entries().count(), 0);
+}
+
+/// The point of the alias: a caller types a short handle instead of the id.
+#[test]
+fn an_alias_resolves_to_its_plugin() {
+    let root = Bundle::new("alias");
+    let module = wasm();
+    write_bundle_with_alias(
+        root.path(),
+        "org.test.aliased",
+        Some("short"),
+        &digest(&module),
+        "/greeting",
+    );
+    let registry = Registry::load(root.path());
+
+    let entry = registry
+        .resolve("short")
+        .expect("looking up")
+        .expect("the alias must resolve");
+    assert_eq!(entry.id, "org.test.aliased");
+
+    // The id still works, and is what the entry reports either way.
+    assert_eq!(
+        registry.resolve("org.test.aliased").unwrap().unwrap().id,
+        "org.test.aliased"
+    );
+    assert!(registry.resolve("nope").expect("looking up").is_none());
+}
+
+/// Two bundles claiming one alias is the same hazard as two claiming one anchor:
+/// answering by directory order would make the result depend on the filesystem.
+#[test]
+fn two_plugins_claiming_one_alias_is_a_conflict() {
+    let root = Bundle::new("alias-conflict");
+    let module = wasm();
+    write_bundle_with_alias(
+        root.path(),
+        "org.test.a",
+        Some("dup"),
+        &digest(&module),
+        "/a",
+    );
+    write_bundle_with_alias(
+        root.path(),
+        "org.test.b",
+        Some("dup"),
+        &digest(&module),
+        "/b",
+    );
+    let registry = Registry::load(root.path());
+
+    let error = registry.resolve("dup").expect_err("must refuse");
+
+    assert_eq!(error.kind, ErrorKind::Conflict);
+    assert!(error.message.contains("both"), "got: {}", error.message);
+}
+
+/// An id that happens to equal another plugin's alias still finds its own
+/// plugin: an exact id is never ambiguous, so it wins before any scan.
+#[test]
+fn an_exact_id_wins_over_an_alias() {
+    let root = Bundle::new("alias-shadow");
+    let module = wasm();
+    write_bundle_with_alias(
+        root.path(),
+        "org.test.first",
+        Some("second"),
+        &digest(&module),
+        "/a",
+    );
+    // The directory name is the id, so this bundle is literally named `second`.
+    write_bundle_with_alias(root.path(), "second", None, &digest(&module), "/b");
+    let registry = Registry::load(root.path());
+
+    let entry = registry.resolve("second").expect("looking up").unwrap();
+
+    assert_eq!(entry.id, "second");
 }

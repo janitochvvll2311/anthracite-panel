@@ -23,6 +23,8 @@ use super::runtime::Loaded;
 #[derive(Debug)]
 pub struct Entry {
     pub id: String,
+    /// The short handle the manifest declared, if any. Resolved by [`Registry::get`].
+    pub alias: Option<String>,
     pub name: String,
     pub version: String,
     pub anchors: Vec<(String, String)>,
@@ -72,6 +74,36 @@ impl Registry {
         }
     }
 
+    /// One disabled entry, for tests that need a resolvable id without a module.
+    ///
+    /// A disabled plugin is enough to prove a lookup landed on the right one:
+    /// the refusal it produces names its own canonical id.
+    #[cfg(test)]
+    pub fn with_disabled(
+        id: &str,
+        alias: Option<&str>,
+        anchors: &[(&str, &str)],
+        reason: &str,
+    ) -> Self {
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            id.to_string(),
+            Entry {
+                id: id.to_string(),
+                alias: alias.map(str::to_string),
+                name: id.to_string(),
+                version: String::new(),
+                anchors: anchors
+                    .iter()
+                    .map(|(method, path)| (method.to_string(), path.to_string()))
+                    .collect(),
+                enabled: Err(reason.to_string()),
+                loaded: None,
+            },
+        );
+        Self { entries }
+    }
+
     /// Loads every bundle under `root`.
     ///
     /// A bundle that fails to load does not abort the daemon: it becomes a
@@ -98,8 +130,33 @@ impl Registry {
         self.entries.values()
     }
 
-    pub fn get(&self, id: &str) -> Option<&Entry> {
-        self.entries.get(id)
+    /// The plugin a caller named, by exact id first and then by alias.
+    ///
+    /// Two plugins may declare one alias, and picking by directory order would
+    /// make the answer depend on the filesystem. Following `anchor_owner`, an
+    /// ambiguous alias is a conflict the operator resolves, not a coin flip.
+    pub fn resolve(&self, id_or_alias: &str) -> Result<Option<&Entry>, WireError> {
+        if let Some(entry) = self.entries.get(id_or_alias) {
+            return Ok(Some(entry));
+        }
+
+        let mut matches = self
+            .entries
+            .values()
+            .filter(|entry| entry.alias.as_deref() == Some(id_or_alias));
+        let Some(first) = matches.next() else {
+            return Ok(None);
+        };
+        if let Some(second) = matches.next() {
+            return Err(WireError::new(
+                ErrorKind::Conflict,
+                format!(
+                    "both `{}` and `{}` declare the alias `{id_or_alias}`; use the full id",
+                    first.id, second.id
+                ),
+            ));
+        }
+        Ok(Some(first))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -162,6 +219,7 @@ fn load_one(dir: &Path) -> Entry {
 
     let mut entry = Entry {
         id: id.clone(),
+        alias: None,
         name: id.clone(),
         version: String::new(),
         anchors: Vec::new(),
@@ -171,6 +229,7 @@ fn load_one(dir: &Path) -> Entry {
 
     match try_load(dir) {
         Ok((manifest, loaded)) => {
+            entry.alias = manifest.plugin.alias.clone();
             entry.name = manifest.plugin.name;
             entry.version = manifest.plugin.version;
             entry.anchors = manifest

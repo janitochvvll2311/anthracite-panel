@@ -24,13 +24,14 @@ with nothing but its own directory.
 ## Layout
 
 ```
-plugin.toml        manifest the host reads: id, version, module digest, capabilities
+plugin.toml        manifest the host reads: id, alias, version, module digest, capabilities
 backend/
   Cargo.toml
   src/logic.rs     pure request handling, testable on the host
   src/lib.rs       the wasm ABI shim: exports anth_alloc, anth_free, anth_handle
 frontend/
-  src/hello.ts     the web module, exports a custom element
+  src/hello.ts     the web module: a widget implementing the @anth/plugin contract
+  src/hello-lit.ts the same, as a Lit element — the contract allows both
   src/hello.test.ts
 package.sh         builds both halves into dist/<id>.zip
 ```

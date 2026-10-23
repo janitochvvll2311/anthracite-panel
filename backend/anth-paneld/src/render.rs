@@ -141,11 +141,12 @@ pub fn render_plugin_list(plugins: &[anth_wire::PluginSummary]) -> String {
         return "no plugins installed".to_string();
     }
 
-    let rows: Vec<[String; 5]> = plugins
+    let rows: Vec<[String; 6]> = plugins
         .iter()
         .map(|plugin| {
             [
                 plugin.id.clone(),
+                plugin.alias.clone().unwrap_or_default(),
                 plugin.name.clone(),
                 plugin.version.clone(),
                 match plugin.disabled_reason {
@@ -157,8 +158,8 @@ pub fn render_plugin_list(plugins: &[anth_wire::PluginSummary]) -> String {
         })
         .collect();
 
-    let header = ["ID", "NAME", "VERSION", "STATE", "ANCHORS"];
-    let mut widths = [0usize; 5];
+    let header = ["ID", "ALIAS", "NAME", "VERSION", "STATE", "ANCHORS"];
+    let mut widths = [0usize; 6];
     for (index, column) in header.iter().enumerate() {
         widths[index] = width(column).max(
             rows.iter()
@@ -168,7 +169,7 @@ pub fn render_plugin_list(plugins: &[anth_wire::PluginSummary]) -> String {
         );
     }
 
-    let line = |cells: [&str; 5]| {
+    let line = |cells: [&str; 6]| {
         let padded: Vec<String> = cells
             .iter()
             .enumerate()
@@ -184,7 +185,9 @@ pub fn render_plugin_list(plugins: &[anth_wire::PluginSummary]) -> String {
     out.push_str(&line(header));
     for row in &rows {
         out.push('\n');
-        out.push_str(&line([&row[0], &row[1], &row[2], &row[3], &row[4]]));
+        out.push_str(&line([
+            &row[0], &row[1], &row[2], &row[3], &row[4], &row[5],
+        ]));
     }
 
     let disabled: Vec<(&str, &str)> = plugins
@@ -307,5 +310,45 @@ mod tests {
         assert!(rendered.contains("1d 1h 1m 1s"));
         assert!(rendered.contains("1.0 MiB used of 2.0 MiB"));
         assert!(rendered.contains("0 KiB used of 0 KiB"));
+    }
+
+    /// The alias is an accepted name, so a list that hid it would leave a caller
+    /// guessing which short handles exist. A plugin without one leaves the
+    /// column blank rather than shifting the row.
+    #[test]
+    fn the_plugin_list_shows_the_alias() {
+        let rendered = render_plugin_list(&[
+            anth_wire::PluginSummary {
+                id: "org.test.aliased".into(),
+                alias: Some("short".into()),
+                name: "Aliased".into(),
+                version: "0.2.0".into(),
+                anchors: vec!["GET /greeting".into()],
+                disabled_reason: None,
+            },
+            anth_wire::PluginSummary {
+                id: "org.test.plain".into(),
+                alias: None,
+                name: "Plain".into(),
+                version: "0.2.0".into(),
+                anchors: vec![],
+                disabled_reason: Some("the bundle was rewritten".into()),
+            },
+        ]);
+
+        assert!(rendered.contains("ALIAS"));
+        assert!(rendered.contains("short"));
+        // The second plugin has no alias, so its cell is blank: the state and
+        // anchors still line up under their headers.
+        assert!(rendered.contains("disabled"));
+        assert!(rendered.contains("the bundle was rewritten"));
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines[0].split_whitespace().next(), Some("ID"));
+        assert!(lines.iter().any(|line| line.contains("Plain")));
+    }
+
+    #[test]
+    fn an_empty_plugin_list_says_so() {
+        assert_eq!(render_plugin_list(&[]), "no plugins installed");
     }
 }

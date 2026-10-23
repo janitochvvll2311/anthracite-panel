@@ -176,3 +176,43 @@ fn an_empty_capability_accepts_nothing() {
 fn a_manifest_without_a_plugin_section_is_refused() {
     assert!(Manifest::parse("[wasm]\npath = \"plugin.wasm\"\n").is_err());
 }
+
+/// The alias is the short handle a caller types, so it is kept as written.
+#[test]
+fn an_alias_is_parsed_next_to_the_id() {
+    let text = GOOD.replace(
+        r#"id = "org.anth.hello""#,
+        "id = \"org.anth.hello\"\nalias = \"hello\"",
+    );
+
+    let manifest = Manifest::parse(&text).expect("parsing");
+    assert_eq!(manifest.plugin.alias.as_deref(), Some("hello"));
+}
+
+/// Most bundles need no alias, and demanding one would be a pointless tax.
+#[test]
+fn an_alias_is_optional() {
+    let manifest = Manifest::parse(GOOD).expect("parsing");
+
+    assert!(manifest.plugin.alias.is_none());
+}
+
+/// An alias is a name a caller types, so anything that is not a plain lowercase
+/// word is a typo. Dots are excluded on purpose: a dotted value would be
+/// indistinguishable from an id at the point of use.
+#[test]
+fn a_malformed_alias_is_refused() {
+    for bad in ["Hello", "org.anth.hello", "hello world", ""] {
+        let text = GOOD.replace(
+            r#"id = "org.anth.hello""#,
+            &format!("id = \"org.anth.hello\"\nalias = \"{bad}\""),
+        );
+
+        let error = refused(&text);
+        assert!(
+            error.message.contains("alias"),
+            "`{bad}` must be refused by name, got: {}",
+            error.message
+        );
+    }
+}

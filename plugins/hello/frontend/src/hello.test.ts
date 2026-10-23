@@ -42,8 +42,7 @@ describe("AnthHello", () => {
 
   test("asks its own anchor, not the panel's root", () => {
     const element = document.createElement("anth-hello") as AnthHello;
-    const client = (element as unknown as { client: { url(p: string): string } }).client;
-    expect(client.url(ANCHOR)).toBe(
+    expect(element.endpoints.url(ANCHOR)).toBe(
       `${location.origin}/api/plugins/org.anth.hello/greeting`,
     );
   });
@@ -52,15 +51,14 @@ describe("AnthHello", () => {
     const element = document.createElement("anth-hello") as AnthHello;
     const body = { message: "Hola desde turing" };
 
-    // The widget's own transport is the injected client's; replacing `get` on
-    // the prototype keeps the request path real and the answer controlled.
-    const client = (element as unknown as { client: { get: () => Promise<unknown> } }).client;
-    client.get = async () => body;
+    // The widget's own transport is its endpoint client's; replacing `get` keeps
+    // the request path real and the answer controlled.
+    element.endpoints.get = (async () => body) as typeof element.endpoints.get;
 
     document.body.append(element);
-    await element.refresh();
+    await element.handle.refresh();
 
-    expect(element.state).toBe("ready");
+    expect(element.handle.state).toBe("ready");
     expect(element.shadowRoot?.querySelector(".message")?.textContent).toBe(
       "Hola desde turing",
     );
@@ -68,15 +66,14 @@ describe("AnthHello", () => {
 
   test("shows a refused capability and offers a retry", async () => {
     const element = document.createElement("anth-hello") as AnthHello;
-    const client = (element as unknown as { client: { get: () => Promise<unknown> } }).client;
-    client.get = async () => {
+    element.endpoints.get = (async () => {
       throw new Error("the host refused `host.hostname`");
-    };
+    }) as typeof element.endpoints.get;
 
     document.body.append(element);
-    await element.refresh();
+    await element.handle.refresh();
 
-    expect(element.state).toBe("error");
+    expect(element.handle.state).toBe("error");
     expect(element.shadowRoot?.textContent).toContain("the host refused");
     expect(element.shadowRoot?.querySelector(".anth-plugin-retry")).not.toBeNull();
   });

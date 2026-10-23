@@ -61,7 +61,7 @@ impl Daemon {
         )>,
         WireError,
     > {
-        let Some(entry) = self.plugins.get(id) else {
+        let Some(entry) = self.plugins.resolve(id)? else {
             return Ok(None);
         };
         let declared = entry
@@ -93,6 +93,7 @@ fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
                 .entries()
                 .map(|entry| PluginSummary {
                     id: entry.id.clone(),
+                    alias: entry.alias.clone(),
                     name: entry.name.clone(),
                     version: entry.version.clone(),
                     anchors: entry
@@ -105,10 +106,14 @@ fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
                 .collect(),
         }),
         Request::PluginCall { id, pipe, payload } => {
+            // Resolved by id or alias, but reported back by canonical id: a
+            // caller that typed `hello` should still see `org.anth.hello` in the
+            // reply, so a script that logs it records something unambiguous.
             let entry = daemon
                 .plugins
-                .get(&id)
+                .resolve(&id)?
                 .ok_or_else(|| WireError::new(ErrorKind::NotFound, format!("no plugin `{id}`")))?;
+            let canonical = entry.id.clone();
             let loaded = entry.usable()?;
             let reply = loaded.call(pipe.entry(), &encode_payload(pipe, &payload))?;
 
@@ -117,7 +122,7 @@ fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
             // transport failure — no such plugin, disabled, trapped, out of
             // budget — becomes a `Response::Error`.
             Ok(Response::PluginReply {
-                id,
+                id: canonical,
                 status: reply.status,
                 value: reply.value,
             })
@@ -183,6 +188,90 @@ mod tests {
         let error = response.error().expect("must be an error");
         assert_eq!(error.kind, ErrorKind::NotFound);
         assert!(error.message.contains("org.nobody"));
+    }
+
+    /// The alias is a way to *name* a plugin, not a second identity: a call that
+    /// used it must land on the same plugin, and the refusal it produces names
+    /// the canonical id so a caller can tell which one it reached.
+    #[tokio::test]
+    async fn a_call_by_alias_reaches_the_plugin_that_declared_it() {
+        let daemon = Daemon::new(Registry::with_disabled(
+            "org.test.aliased",
+            Some("short"),
+            &[],
+            "the bundle was rewritten",
+        ));
+
+        let response = daemon
+            .handle(Request::PluginCall {
+                id: "short".to_string(),
+                pipe: PluginPipe::Cli,
+                payload: "greet".to_string(),
+            })
+            .await;
+
+        let error = response.error().expect("a disabled plugin must refuse");
+        assert_eq!(error.kind, ErrorKind::Forbidden);
+        assert!(
+            error.message.contains("org.test.aliased"),
+            "the canonical id must be named, got: {}",
+            error.message
+        );
+    }
+
+    /// An alias resolves a *plugin*, so an anchor lookup scoped to it must find
+    /// the same one its id would.
+    #[tokio::test]
+    async fn an_anchor_lookup_accepts_the_alias() {
+        let daemon = Daemon::new(Registry::with_disabled(
+            "org.test.aliased",
+            Some("short"),
+            &[("GET", "/greeting")],
+            "disabled",
+        ));
+
+        // Both forms must reach the same plugin. This entry is disabled, so both
+        // report the same refusal naming the canonical id: an alias is a way to
+        // name a plugin, not a separate lookup path with its own rules.
+        let by_alias = daemon.anchor_for("short", "GET", "/greeting").unwrap_err();
+        let by_id = daemon
+            .anchor_for("org.test.aliased", "GET", "/greeting")
+            .unwrap_err();
+        assert_eq!(by_alias.kind, by_id.kind);
+        assert_eq!(by_alias.message, by_id.message);
+        assert!(
+            by_alias.message.contains("org.test.aliased"),
+            "{}",
+            by_alias.message
+        );
+
+        // A path the plugin does not declare is still `None` rather than a
+        // refusal, so the alias does not change which paths a plugin owns.
+        assert!(
+            daemon
+                .anchor_for("short", "GET", "/other")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// An alias is discoverable from the list, or nobody would know to type it.
+    #[tokio::test]
+    async fn the_list_reports_the_alias() {
+        let daemon = Daemon::new(Registry::with_disabled(
+            "org.test.aliased",
+            Some("short"),
+            &[],
+            "disabled",
+        ));
+
+        match daemon.handle(Request::PluginList).await {
+            Response::PluginList { plugins } => {
+                assert_eq!(plugins.len(), 1);
+                assert_eq!(plugins[0].alias.as_deref(), Some("short"));
+            }
+            other => panic!("expected a list, got {other:?}"),
+        }
     }
 
     /// Every pipe names its own ABI entry. A wrong mapping would silently send a

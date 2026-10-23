@@ -40,6 +40,14 @@ pub struct Manifest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PluginSection {
     pub id: String,
+    /// A short name for this plugin, usable wherever an id is.
+    ///
+    /// Typing `plugin call org.anth.hello greet` is a mouthful, and the id has to
+    /// stay globally unique, so a bundle may declare one short handle. It is
+    /// resolved by the registry and never reaches a path, which is why it is
+    /// validated separately from the id.
+    #[serde(default)]
+    pub alias: Option<String>,
     pub version: String,
     pub name: String,
     pub abi: u32,
@@ -114,6 +122,9 @@ impl Manifest {
 
     fn validate(&self) -> Result<(), WireError> {
         validate_id(&self.plugin.id)?;
+        if let Some(alias) = &self.plugin.alias {
+            validate_alias(alias)?;
+        }
         if self.plugin.version.trim().is_empty() {
             return Err(WireError::invalid("the manifest declares no version"));
         }
@@ -218,6 +229,29 @@ fn validate_id(id: &str) -> Result<(), WireError> {
     if !well_formed || !id.contains('.') {
         return Err(WireError::invalid(format!(
             "`{id}` is not a plugin id: use lowercase dot-separated parts, like org.example.thing"
+        )));
+    }
+    Ok(())
+}
+
+/// A short handle for a plugin, usable wherever an id is.
+///
+/// Deliberately stricter than the id: lowercase, no dots, and it must not look
+/// like an id the registry could confuse it with. It never reaches a filesystem
+/// path or a URL, but a short lowercase word is the whole point, so anything
+/// else is a typo rather than a name.
+fn validate_alias(alias: &str) -> Result<(), WireError> {
+    if alias.is_empty() {
+        return Err(WireError::invalid(
+            "the manifest declares an empty alias; omit the field instead",
+        ));
+    }
+    let well_formed = alias
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !well_formed {
+        return Err(WireError::invalid(format!(
+            "`{alias}` is not a plugin alias: use lowercase letters, digits, `-` and `_`"
         )));
     }
     Ok(())

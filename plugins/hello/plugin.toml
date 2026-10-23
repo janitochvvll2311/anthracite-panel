@@ -6,6 +6,10 @@
 
 [plugin]
 id = "org.anth.hello"
+# A short handle, accepted wherever `id` is: `plugin call hello greet` and
+# `GET /api/plugins/hello/call` reach the same plugin. Optional, and refused if
+# it is empty or not lowercase, so a typo cannot become a second name.
+alias = "hello"
 version = "0.2.0"
 name = "Hello"
 abi = 2

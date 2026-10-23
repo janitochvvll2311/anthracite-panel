@@ -107,6 +107,13 @@ pub enum Response {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginSummary {
     pub id: String,
+    /// The short handle the bundle declared, if any.
+    ///
+    /// Present so a client can show what to type instead of the full id, and so
+    /// `plugin call <alias>` is discoverable rather than folklore. Omitted from
+    /// the wire when a plugin declares none, which keeps the common case small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub name: String,
     pub version: String,
     /// The anchors it declares, as `["GET /greeting"]`.

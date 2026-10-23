@@ -23,18 +23,20 @@
   <body>
     <h1>Plugin widget harness</h1>
     <p class="note">
-      Both widgets read the same live anchor through the Vite proxy. Click inside
-      the Lit card, then press Reload: the counter keeps its value only because
-      the widget returns the same element instead of rebuilding markup.
+      Both widgets implement the same <code>PluginWidget</code> interface and read
+      the same live anchor through the Vite proxy, but only one of them calls
+      <code>mountWidget</code>. Click a counter, then press Reload: both keep their
+      value, and for opposite reasons — <code>mountWidget</code> retains the node it
+      built, and Lit never replaced the element at all.
     </p>
 
     <section>
-      <h2>view() → markup · replaced on every repaint</h2>
+      <h2>PluginWidget → markup · mountWidget owns the shadow root</h2>
       <anth-hello id="markup-widget"></anth-hello>
     </section>
 
     <section>
-      <h2>view() → element · kept across repaints</h2>
+      <h2>PluginWidget → LitElement · the element renders itself</h2>
       <anth-hello-lit id="kept-widget"></anth-hello-lit>
       <p><button class="reload" type="button">Reload both</button></p>
       <p class="report" id="report"></p>
@@ -50,32 +52,34 @@
       const box = document.getElementById("report");
       const markup = document.querySelector("anth-hello");
       const kept = document.querySelector("anth-hello-lit");
-      const card = () => kept.shadowRoot?.querySelector("hello-card");
 
       const report = (text) => (box.textContent = text);
       addEventListener("error", (event) => report(`error: ${event.message ?? event.error}`));
       addEventListener("unhandledrejection", (event) => report(`rejection: ${event.reason}`));
 
-      document.querySelector(".reload").addEventListener("click", async () => {
-        const before = card();
-        const clicks = before?.clicks ?? 0;
-        await Promise.all([markup.refresh(), kept.refresh()]);
+      // The counter the Lit widget owns, read off its own shadow root: there is
+      // no inner card any more, because the widget *is* the component.
+      const clicks = () =>
+        kept.shadowRoot?.querySelector("button")?.textContent?.trim() ?? "";
 
-        const after = card();
+      document.querySelector(".reload").addEventListener("click", async () => {
+        const before = clicks();
+        await Promise.all([markup.refresh(), kept.refresh()]);
         report(
           [
             `markup state=${markup.state}`,
-            `kept state=${kept.state}`,
-            `card kept=${after === before}`,
-            `clicks ${clicks} -> ${after?.clicks}`,
-            `message=${JSON.stringify(after?.message)}`,
+            `lit state=${kept.state}`,
+            `lit counter ${JSON.stringify(before)} -> ${JSON.stringify(clicks())}`,
+            `message=${JSON.stringify(kept.message)}`,
           ].join("\n"),
         );
       });
 
       // Loading the page proves the round trip; the button proves the counter.
       await Promise.all([markup.refresh(), kept.refresh()]);
-      report(`loaded · markup=${markup.state} kept=${kept.state} message=${JSON.stringify(card()?.message)}`);
+      report(
+        `loaded · markup=${markup.state} lit=${kept.state} message=${JSON.stringify(kept.message)}`,
+      );
     </script>
   </body>
 </html>

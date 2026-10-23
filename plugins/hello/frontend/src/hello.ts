@@ -2,12 +2,22 @@
  * The hello plugin's UI.
  *
  * A plugin module is loaded with a dynamic `import()` by the shell and expected
- * to register its custom element as a side effect. The registration, the anchor
- * URL, the load states and the escaping come from `@anth/plugin`; what is left
+ * to register its custom element as a side effect. The contract, the endpoint
+ * client, the load states and the escaping come from `@anth/plugin`; what is left
  * here is this plugin's behaviour.
+ *
+ * Written as a plain HTMLElement implementing `PluginWidget`, rather than a
+ * subclass: the contract is an interface, so the element's own inheritance is
+ * free. Here it is `HTMLElement`; `hello-lit.ts` spends it on `LitElement`.
  */
 
-import { PluginWidget, escapeHtml, registerWidget } from "@anth/plugin";
+import {
+  PluginEndpoints,
+  escapeHtml,
+  mountWidget,
+  registerWidget,
+  type MarkupWidget,
+} from "@anth/plugin";
 
 import { ANCHOR, type Greeting } from "./anchor";
 
@@ -15,18 +25,22 @@ export { ANCHOR, type Greeting };
 
 const TAG = "anth-hello";
 
-export class AnthHello extends PluginWidget<Greeting> {
-  protected static override pluginId = "org.anth.hello";
+export class AnthHello extends HTMLElement implements MarkupWidget<Greeting> {
+  /** The plugin's own client. `pluginId` may be the alias the manifest declares. */
+  readonly endpoints = new PluginEndpoints({ pluginId: "org.anth.hello" });
 
-  protected load(): Promise<Greeting> {
-    return this.client.get<Greeting>(ANCHOR);
+  /** The plumbing: shadow root, load states, retry. */
+  readonly handle = mountWidget(this, this);
+
+  load(): Promise<Greeting> {
+    return this.endpoints.get<Greeting>(ANCHOR);
   }
 
-  protected override loading(): string {
+  loading(): string {
     return `<p class="label">Reading the host…</p>`;
   }
 
-  protected view(data: Greeting): string {
+  view(data: Greeting): string {
     return `
       <div class="card">
         <div class="label">Hello plugin</div>
@@ -35,14 +49,14 @@ export class AnthHello extends PluginWidget<Greeting> {
     `;
   }
 
-  /** The widget's own chrome; the states and the retry are the base class's. */
-  protected override body(): string {
+  /** The widget's own chrome; the states and the retry are `mountWidget`'s. */
+  body(markup: string): string {
     return `<style>
       .card { border: 1px solid #d6d6db; border-radius: 8px; padding: 12px 14px; }
       .label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #6b6b70; }
       .message { margin-top: 6px; font-size: 15px; }
     </style>
-    ${super.body()}`;
+    ${markup}`;
   }
 }
 

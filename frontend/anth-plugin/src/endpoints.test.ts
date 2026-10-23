@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { AnchorClient, anchorError } from "./anchors";
+import { PluginEndpoints, anchorError } from "./endpoints";
 
 /** A `fetch` that records calls and answers with a scripted response. */
 function recorder(answer: () => Response) {
@@ -13,10 +13,10 @@ function recorder(answer: () => Response) {
 }
 
 function client(fetchImpl: typeof fetch, pluginId = "org.anth.hello") {
-  return new AnchorClient({ pluginId, origin: "http://panel.test", fetchImpl });
+  return new PluginEndpoints({ pluginId, origin: "http://panel.test", fetchImpl });
 }
 
-describe("AnchorClient.url", () => {
+describe("PluginEndpoints.url", () => {
   test("builds the path the host serves", () => {
     const { fetchImpl } = recorder(() => new Response("{}"));
     const anchors = client(fetchImpl);
@@ -51,11 +51,11 @@ describe("AnchorClient.url", () => {
   });
 
   test("refuses to exist without a plugin id", () => {
-    expect(() => new AnchorClient({ pluginId: "" })).toThrow(/plugin id/);
+    expect(() => new PluginEndpoints({ pluginId: "" })).toThrow(/plugin id or alias/);
   });
 });
 
-describe("AnchorClient requests", () => {
+describe("PluginEndpoints requests", () => {
   test("get parses JSON from the anchor", async () => {
     const { calls, fetchImpl } = recorder(
       () => new Response(JSON.stringify({ message: "hola" }), { status: 200 }),
@@ -110,5 +110,106 @@ describe("anchorError", () => {
       statusText: "Bad Gateway",
     });
     expect(await anchorError(response)).toBe("502 Bad Gateway");
+  });
+});
+
+describe("an alias as the plugin id", () => {
+  test("is used verbatim, because the daemon resolves it", () => {
+    const { fetchImpl } = recorder(() => new Response("{}"));
+    const endpoints = new PluginEndpoints({
+      pluginId: "hello",
+      origin: "http://panel.test",
+      fetchImpl,
+    });
+
+    expect(endpoints.url("/greeting")).toBe("http://panel.test/api/plugins/hello/greeting");
+  });
+});
+
+describe("configured headers", () => {
+  test("are sent on every request", async () => {
+    const { calls, fetchImpl } = recorder(() => new Response("{}"));
+    const endpoints = new PluginEndpoints({
+      pluginId: "org.anth.hello",
+      origin: "http://panel.test",
+      headers: { "x-anth-trace": "abc" },
+      fetchImpl,
+    });
+
+    await endpoints.get("/greeting");
+
+    const headers = calls[0]?.init?.headers as Record<string, string>;
+    expect(headers["x-anth-trace"]).toBe("abc");
+    expect(headers.accept).toBe("application/json");
+  });
+
+  test("a per-call header wins over the configured one", async () => {
+    const { calls, fetchImpl } = recorder(() => new Response("{}"));
+    const endpoints = new PluginEndpoints({
+      pluginId: "org.anth.hello",
+      origin: "http://panel.test",
+      headers: { accept: "text/plain" },
+      fetchImpl,
+    });
+
+    await endpoints.get("/greeting", undefined, { headers: { accept: "application/json" } });
+
+    expect((calls[0]?.init?.headers as Record<string, string>).accept).toBe(
+      "application/json",
+    );
+  });
+
+  test("the content type is set even when headers are configured", async () => {
+    const { calls, fetchImpl } = recorder(() => new Response("{}"));
+    const endpoints = new PluginEndpoints({
+      pluginId: "org.anth.hello",
+      origin: "http://panel.test",
+      headers: { "x-anth-trace": "abc" },
+      fetchImpl,
+    });
+
+    await endpoints.send("POST", "/run", { job: "x" });
+
+    expect((calls[0]?.init?.headers as Record<string, string>)["content-type"]).toBe(
+      "application/json",
+    );
+  });
+});
+
+describe("delete", () => {
+  test("sends DELETE with no body", async () => {
+    const { calls, fetchImpl } = recorder(() => new Response(JSON.stringify({ ok: true })));
+    await client(fetchImpl).delete("/item/7");
+
+    expect(calls[0]?.init?.method).toBe("DELETE");
+    expect(calls[0]?.init?.body).toBeUndefined();
+    expect(calls[0]?.url).toBe("http://panel.test/api/plugins/org.anth.hello/item/7");
+  });
+});
+
+describe("an aborted request", () => {
+  test("passes the signal through, so a torn-down widget can cancel", async () => {
+    const { calls, fetchImpl } = recorder(() => new Response("{}"));
+    const controller = new AbortController();
+    await client(fetchImpl).get("/greeting", undefined, { signal: controller.signal });
+
+    expect(calls[0]?.init?.signal).toBe(controller.signal);
+  });
+});
+
+describe("forPlugin", () => {
+  test("reuses the origin and headers for another plugin", async () => {
+    const { calls, fetchImpl } = recorder(() => new Response("{}"));
+    const endpoints = new PluginEndpoints({
+      pluginId: "org.anth.one",
+      origin: "http://panel.test",
+      headers: { "x-anth-trace": "abc" },
+      fetchImpl,
+    });
+
+    await endpoints.forPlugin("org.anth.two").get("/greeting");
+
+    expect(calls[0]?.url).toBe("http://panel.test/api/plugins/org.anth.two/greeting");
+    expect((calls[0]?.init?.headers as Record<string, string>)["x-anth-trace"]).toBe("abc");
   });
 });

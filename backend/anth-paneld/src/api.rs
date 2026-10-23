@@ -105,11 +105,13 @@ async fn anchor(
 
 /// Serves an anchor addressed by plugin id and path.
 ///
-/// This is the route [`@anth/plugin`'s `AnchorClient`] builds, and it exists
+/// This is the route [`@anth/plugin`'s `PluginEndpoints`] builds, and it exists
 /// because the unscoped form cannot be used by a widget: two plugins may declare
-/// the same path, and a widget knows which plugin it belongs to. An id that is
-/// not installed and a path that plugin does not declare are both a `404`, so
-/// the route cannot be used to enumerate other plugins' anchors.
+/// the same path, and a widget knows which plugin it belongs to. `{id}` accepts
+/// the plugin's alias too — the registry resolves it, and the response is the
+/// canonical plugin's. An id that is not installed and a path that plugin does
+/// not declare are both a `404`, so the route cannot be used to enumerate other
+/// plugins' anchors.
 async fn scoped_anchor(
     State(state): State<AppState>,
     axum::extract::Path((id, path)): axum::extract::Path<(String, String)>,
@@ -199,6 +201,8 @@ async fn plugins(State(state): State<AppState>) -> Result<impl IntoResponse, Api
 /// The body carries the command's arguments at the top level, like every other
 /// route here, and `pipe` defaults to `direct` because that is the one that
 /// needs no translation: the caller already speaks the plugin's vocabulary.
+/// `{id}` is the plugin's id or the alias it declared; the daemon resolves
+/// either before forwarding, so the plugin never learns which was used.
 async fn plugin_call(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -249,8 +253,24 @@ mod tests {
         )))
     }
 
+    /// A router with one disabled plugin, which is enough to prove a lookup.
+    fn aliased_router() -> Router {
+        router(Arc::new(Daemon::new(
+            crate::plugins::registry::Registry::with_disabled(
+                "org.test.aliased",
+                Some("short"),
+                &[("GET", "/greeting")],
+                "the bundle was rewritten",
+            ),
+        )))
+    }
+
     async fn get_status_and_body(uri: &str) -> (u16, serde_json::Value) {
-        let response = test_router()
+        ask(test_router(), uri).await
+    }
+
+    async fn ask(router: Router, uri: &str) -> (u16, serde_json::Value) {
+        let response = router
             .oneshot(
                 HttpRequest::builder()
                     .uri(uri)
@@ -327,6 +347,46 @@ mod tests {
         let error = body["error"].as_str().unwrap();
         assert!(error.contains("no anchor"), "{error}");
         assert!(error.contains("org.anth.absent"), "{error}");
+    }
+
+    /// `{id}` accepts the alias, so a widget built with the short handle reaches
+    /// the same plugin. The disabled entry refuses on its *canonical* id, which
+    /// is what proves the alias resolved rather than being echoed back.
+    #[tokio::test]
+    async fn a_scoped_anchor_accepts_the_plugin_alias() {
+        let (status, body) = ask(aliased_router(), "/api/plugins/short/greeting").await;
+
+        assert_eq!(status, 403);
+        let error = body["error"].as_str().unwrap();
+        assert!(error.contains("org.test.aliased"), "{error}");
+    }
+
+    /// The call route resolves the same way, because both go through the daemon.
+    #[tokio::test]
+    async fn a_plugin_call_accepts_the_plugin_alias() {
+        let response = aliased_router()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/plugins/short/call")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"payload":"greet"}"#))
+                    .expect("a valid request"),
+            )
+            .await
+            .expect("the router must answer");
+
+        assert_eq!(response.status().as_u16(), 403);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("a readable body");
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("the body must be JSON");
+        assert!(
+            body["error"].as_str().unwrap().contains("org.test.aliased"),
+            "{}",
+            body["error"]
+        );
     }
 
     #[tokio::test]

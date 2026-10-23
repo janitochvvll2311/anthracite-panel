@@ -1,44 +1,145 @@
 /**
- * A widget that keeps a Lit component instead of re-rendering markup.
+ * A widget that is already a Lit component.
  *
- * Compare with `hello.ts`, which returns a string and is replaced wholesale on
- * every repaint. Here `view` returns the *same* element instance every time, so
- * the base leaves it mounted and calls `update` with the new data. The card's
- * own `clicks` state therefore survives a reload.
+ * This is what the interface buys over a base class. `PluginWidget` is a shape,
+ * not a superclass, so this element extends `LitElement` and still *is* a widget:
+ * it keeps Lit's own `render()` and its reactive properties instead of fighting a
+ * base class for them. `mountWidget` is not involved — Lit already owns the
+ * shadow root — the element just loads through `PluginEndpoints` and lets its
+ * properties drive the template.
+ *
+ * Compare with `hello.ts`, which hands off the plumbing and returns markup.
  */
 
-import { PluginWidget, registerWidget } from "@anth/plugin";
+import { LitElement, html, css } from "lit";
+import { PluginEndpoints, registerWidget, type PluginWidget } from "@anth/plugin";
 
 // Imports the shared anchor, never `./hello`: that module registers a tag as a
 // side effect, and importing it here would register it a second time.
 import { ANCHOR, type Greeting } from "./anchor";
-import { HelloCard } from "./lit-card";
 
 const TAG = "anth-hello-lit";
 
-export class AnthHelloLit extends PluginWidget<Greeting> {
-  protected static override pluginId = "org.anth.hello";
+export class AnthHelloLit extends LitElement implements PluginWidget<Greeting> {
+  static override properties = {
+    message: { type: String },
+    detail: { type: String },
+    state: { type: String },
+  };
 
   /**
-   * Built once, owned by this widget.
+   * The greeting the endpoint answered; Lit re-renders when it changes.
    *
-   * Not in `view`: a fresh card per call would be a *different* instance, and
-   * the base would correctly treat it as a swap — losing exactly the state this
-   * example is about.
+   * `accessor` rather than a plain field: at `target: ES2022` a class field is
+   * defined with `Object.defineProperty`, which shadows the accessor Lit installs
+   * for `static properties` and silently stops updates.
    */
-  readonly #card = new HelloCard();
+  accessor message = "";
 
-  protected load(): Promise<Greeting> {
-    return this.client.get<Greeting>(ANCHOR);
+  /** The refusal's text, or empty when there is nothing to report. */
+  accessor detail = "";
+
+  /** The load state. Lit drives the template from it, so no extra repaint. */
+  accessor state: "loading" | "ready" | "error" = "loading";
+
+  readonly endpoints = new PluginEndpoints({ pluginId: "org.anth.hello" });
+
+  /**
+   * The whole contract a Lit widget owes.
+   *
+   * `PluginWidget` is one method precisely so this class can satisfy it without
+   * a stub `view` it never renders: Lit's own template is the presentation.
+   */
+  load(): Promise<Greeting> {
+    return this.endpoints.get<Greeting>(ANCHOR);
   }
 
-  protected view(): HTMLElement {
-    return this.#card;
+  override async connectedCallback(): Promise<void> {
+    super.connectedCallback();
+    await this.refresh();
   }
 
-  protected override update(card: HTMLElement, data: Greeting): void {
-    (card as HelloCard).message = data.message;
+  /** Fetches, then lets the properties re-render. */
+  async refresh(): Promise<void> {
+    this.state = "loading";
+    this.detail = "";
+    try {
+      const data = await this.load();
+      this.message = data.message;
+      this.state = "ready";
+    } catch (error) {
+      this.detail = error instanceof Error ? error.message : String(error);
+      this.state = "error";
+    }
   }
+
+  static override styles = css`
+    :host {
+      display: block;
+      border: 1px solid #d6d6db;
+      border-radius: 8px;
+      padding: 12px 14px;
+      font: 13px/1.5 system-ui, sans-serif;
+    }
+    .label {
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #6b6b70;
+    }
+    .message {
+      margin-top: 6px;
+      font-size: 15px;
+    }
+    .error {
+      margin-top: 6px;
+      color: #b3261e;
+    }
+    button {
+      margin-top: 10px;
+      font: inherit;
+      padding: 3px 10px;
+      border-radius: 6px;
+      border: 1px solid #c4c4c9;
+      background: #f6f6f8;
+      cursor: pointer;
+    }
+  `;
+
+  override render() {
+    if (this.state === "loading") {
+      return html`<div class="label">Hello plugin · Lit</div>
+        <div class="message">Cargando…</div>`;
+    }
+    if (this.state === "error") {
+      return html`<div class="label">Hello plugin · Lit</div>
+        <div class="error" role="alert">${this.detail}</div>
+        <button type="button" @click=${this.#retry}>Reintentar</button>`;
+    }
+    return html`
+      <div class="label">Hello plugin · Lit</div>
+      <div class="message">${this.message}</div>
+      <button type="button" @click=${this.#count}>
+        Clicked ${this.clicks} time${this.clicks === 1 ? "" : "s"}
+      </button>
+    `;
+  }
+
+  /**
+   * State no reload can reset.
+   *
+   * This is the whole point of the example. The widget re-renders from its
+   * properties, so a reload updates `message` and leaves this counter alone: the
+   * element is never re-created, because nothing replaces it.
+   */
+  clicks = 0;
+
+  #count = (): void => {
+    this.clicks += 1;
+    this.requestUpdate();
+  };
+
+  #retry = (): void => void this.refresh();
 }
 
 registerWidget(TAG, AnthHelloLit);
