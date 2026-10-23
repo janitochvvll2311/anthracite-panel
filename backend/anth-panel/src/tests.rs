@@ -1108,10 +1108,11 @@ mod www {
     #[test]
     fn a_symlink_out_of_the_tree_is_refused() {
         let dir = Shell::new("symlink");
-        // The target is outside the fixture root, which is the case that
-        // matters: a bundle shipping a link to a file the daemon can read.
-        let outside = dir.path().with_extension("outside.txt");
-        std::fs::write(&outside, "secret").expect("writing the target");
+        // A second fixture root is the target: outside the served tree, which
+        // is the case that matters, and owned by a `Drop` of its own, so the
+        // test leaves nothing behind in the scratch directory.
+        let target = Shell::new("symlink-target");
+        let outside = target.write("secret.txt", "secret");
         std::os::unix::fs::symlink(&outside, dir.path().join("escape.txt"))
             .expect("creating the symlink");
 
