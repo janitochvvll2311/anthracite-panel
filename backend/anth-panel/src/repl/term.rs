@@ -23,7 +23,7 @@ use std::io::{self, IsTerminal};
 pub struct RawMode {
     /// The settings that were in place before, or `None` when stdin is not a
     /// terminal and nothing had to change.
-    original: Option<libc::termios>,
+    pub(crate) original: Option<libc::termios>,
 }
 
 impl RawMode {
@@ -41,7 +41,7 @@ impl RawMode {
     /// The decision is a parameter so a test can cover the pipe path without
     /// depending on whether the harness happened to give it a terminal, and
     /// without switching the real one to raw mode by accident.
-    fn enable_if(interactive: bool) -> io::Result<Self> {
+    pub(crate) fn enable_if(interactive: bool) -> io::Result<Self> {
         if !interactive {
             return Ok(Self { original: None });
         }
@@ -91,26 +91,5 @@ impl Drop for RawMode {
         unsafe {
             libc::tcsetattr(libc::STDIN_FILENO, libc::TCSADRAIN, &original);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A pipe is not a terminal, so enabling is a no-op rather than the failure
-    /// `tcsetattr` would give on a pipe.
-    #[test]
-    fn a_pipe_needs_no_raw_mode() {
-        let mode = RawMode::enable_if(false).expect("enabling on a pipe must not fail");
-
-        assert!(mode.original.is_none());
-    }
-
-    /// Dropping a no-op guard must not try to write to a pipe.
-    #[test]
-    fn dropping_a_no_op_guard_is_safe() {
-        let mode = RawMode::enable_if(false).expect("enabling");
-        drop(mode);
     }
 }
