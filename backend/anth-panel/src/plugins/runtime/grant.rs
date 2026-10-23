@@ -120,6 +120,3 @@ pub fn argv(capability: &Capability, args: &Value) -> Result<Vec<String>, String
 
     Ok(argv)
 }
-
-#[cfg(test)]
-mod tests;

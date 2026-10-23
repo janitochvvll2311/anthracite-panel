@@ -296,6 +296,3 @@ fn validate_sha256(digest: &str) -> Result<(), WireError> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

@@ -20,3 +20,6 @@ pub use message::{
     HostInfo, LoadAverage, MemoryInfo, OsInfo, PROTOCOL_VERSION, PluginPipe, PluginSummary,
     Request, Response,
 };
+
+#[cfg(test)]
+mod tests;

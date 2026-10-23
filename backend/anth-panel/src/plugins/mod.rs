@@ -7,3 +7,6 @@
 pub mod manifest;
 pub mod registry;
 pub mod runtime;
+
+#[cfg(test)]
+mod tests;

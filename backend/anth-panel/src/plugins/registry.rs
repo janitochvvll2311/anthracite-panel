@@ -269,7 +269,7 @@ fn try_load(dir: &Path) -> Result<(Manifest, Loaded), String> {
     Ok((manifest, loaded))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::new(), |mut out, byte| {
         let _ = write!(out, "{byte:02x}");
@@ -284,6 +284,3 @@ pub fn default_root() -> PathBuf {
         _ => PathBuf::from("/var/lib/anth/plugins"),
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -45,8 +45,9 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/dispatch.rs         #   the single request match
     src/api.rs              #   axum router over dispatch; ApiError -> status
     src/socket.rs           #   Unix listener, connection loop, client
-    src/render.rs           #   bordered table for the CLI
-    src/plugins/            #   manifest, bundle, registry, wasmi runtime
+    src/table.rs            #   the one bordered-grid renderer
+    src/render.rs           #   rows for host-info and plugin list, into Table
+    src/plugins/            #   manifest, registry, and runtime/ (wasmi, grants)
     src/repl/               #   the stdin REPL: prompt, editor, keys, history
 
 frontend/                   # Bun workspace, bun.lock committed
@@ -186,6 +187,40 @@ needs a stated reason in the commit message.
    panic when it is missing rather than returning an empty value that makes
    every assertion trivially pass. Prefer a real code path — a real listener, a
    real `/proc` fixture tree — over a mock.
+
+## Test layout
+
+**One `tests.rs` per module level.** Tests for `lib.rs`, `parse.rs` and the
+other files in a directory live in that directory's single `tests.rs`, in one
+inner module per source file (`mod frame { .. }`). Do not hang a `tests.rs`
+under a directory created only to hold it: `plugins/manifest/mod.rs` plus
+`plugins/manifest/tests.rs` is a file and its test, not a module and its
+submodule, and the extra level makes the tree lie about the code shape.
+
+`plugins/runtime/` is a real level — it has `mod.rs`, `guest.rs` and `grant.rs`
+— so it keeps its own `tests.rs`. A module that is a single file gets no
+directory at all.
+
+A sibling `tests.rs` cannot see private items the way an inline `mod tests`
+could. Either move the item to `pub(crate)` when production also reads it
+(`parse_query`, `encode_payload`, `hex`), or gate the constructor with
+`#[cfg(test)]` when only tests build it (`Registry::empty`,
+`with_disabled`). That is deliberate: it makes the test-visible surface of a
+module explicit.
+
+`anth-panel` is a binary crate, so `tests.rs` under `src/` reaches its
+siblings through `crate::`, not `super::*` — `super` there is the `tests`
+module itself. Its submodules therefore name what they use
+(`use crate::dispatch::Daemon;`) instead of glob-importing the whole crate,
+which would also drag in `main`'s items and invite a test to reach past the
+module it is meant to cover.
+
+Two exceptions, both because they test something the inline form cannot:
+
+- `anth-plugin/tests/pipes.rs` links the crate as a dependency, which is the
+  only way to check the exports a wasm guest actually sees.
+- `frontend/**/src/*.test.ts` sits next to its source; that is Bun's
+  convention and the typechecker relies on it.
 
 ## The plugin contract
 

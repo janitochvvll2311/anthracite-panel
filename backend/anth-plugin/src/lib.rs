@@ -89,3 +89,6 @@ pub use exec::Executor;
 pub use message::{Action, Request, Response, Status};
 pub use plugin::Plugin;
 pub use transport::{CliRequest, HttpRequest, Method};
+
+#[cfg(test)]
+mod tests;

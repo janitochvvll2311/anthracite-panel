@@ -16,11 +16,8 @@
 use anth_wire::{ErrorKind, WireError};
 use wasmi::{Config, Engine, Instance, Linker, Module, ResourceLimiter, Store};
 
-mod grant;
+pub(crate) mod grant;
 mod guest;
-
-#[cfg(test)]
-mod tests;
 
 pub use guest::Reply;
 
@@ -209,3 +206,6 @@ pub(crate) fn trap_kind(id: &str, error: &wasmi::Error) -> WireError {
         _ => WireError::internal(format!("plugin `{id}` trapped: {error}")),
     }
 }
+
+#[cfg(test)]
+mod tests;
