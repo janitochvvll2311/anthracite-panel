@@ -162,6 +162,19 @@ rustup target add x86_64-unknown-linux-musl
 sudo apt-get install musl-tools     # musl-gcc, for the C dependencies
 ```
 
+### Git credentials come from `gh`, never from the repo
+
+`git fetch` and `git push` get their credentials from `gh auth git-credential`,
+set up once with `gh auth setup-git`. That helper asks `gh` for the token, so no
+token lives in `.git/config`, in the remote URL or in any file in the tree.
+
+Do not add a `credential.helper` to `.git/config` that points at a script in
+`$HOME`. This repository had one — `!$HOME/.local/bin/github-credential-helper`
+— and the script did not exist, so every `git fetch` fell back to an
+interactive prompt that nobody could see and hung until it timed out. A helper
+that is not there fails worse than no helper at all: the failure looks like a
+network problem.
+
 ## Design rules
 
 These are the four lessons the rewrite exists for. A change that violates one
