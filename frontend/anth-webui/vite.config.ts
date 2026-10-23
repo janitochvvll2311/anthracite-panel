@@ -8,10 +8,18 @@ import { defineConfig } from "vite";
 const backend = process.env.ANTH_PANEL_ADDR ?? "http://127.0.0.1:8080";
 
 export default defineConfig({
-  server: { port: 5173, proxy: { "/api": backend, "/healthz": backend } },
+  // `/p` is where a plugin's declared anchors live, so the panel reaches them
+  // through the same origin as everything else.
+  server: {
+    port: 5173,
+    proxy: { "/api": backend, "/healthz": backend, "/p": backend },
+  },
   // `preview` serves the built output, so it needs the same proxy to be a
   // faithful check of what a deployment will do.
-  preview: { port: 4173, proxy: { "/api": backend, "/healthz": backend } },
+  preview: {
+    port: 4173,
+    proxy: { "/api": backend, "/healthz": backend, "/p": backend },
+  },
   build: {
     outDir: "dist",
     // The v0.1.0 tree embedded its build output through `rust-embed`; v0.2.0

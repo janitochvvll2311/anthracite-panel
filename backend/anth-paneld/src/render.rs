@@ -128,6 +128,95 @@ pub fn render_host_info(info: &HostInfo) -> String {
     out
 }
 
+/// The plugin list, aligned, with the reasons a plugin is disabled listed after
+/// it.
+///
+/// A disabled plugin stays visible on purpose: one that vanished from the list
+/// would look like it was never installed, and the operator would have nothing
+/// to fix. The reason goes on its own line rather than in the table because a
+/// digest mismatch is a sentence, and a sentence in a column pushes every other
+/// column off the screen.
+pub fn render_plugin_list(plugins: &[anth_wire::PluginSummary]) -> String {
+    if plugins.is_empty() {
+        return "no plugins installed".to_string();
+    }
+
+    let rows: Vec<[String; 5]> = plugins
+        .iter()
+        .map(|plugin| {
+            [
+                plugin.id.clone(),
+                plugin.name.clone(),
+                plugin.version.clone(),
+                match plugin.disabled_reason {
+                    None => "enabled".to_string(),
+                    Some(_) => "disabled".to_string(),
+                },
+                plugin.anchors.join(", "),
+            ]
+        })
+        .collect();
+
+    let header = ["ID", "NAME", "VERSION", "STATE", "ANCHORS"];
+    let mut widths = [0usize; 5];
+    for (index, column) in header.iter().enumerate() {
+        widths[index] = width(column).max(
+            rows.iter()
+                .map(|row| width(&row[index]))
+                .max()
+                .unwrap_or_default(),
+        );
+    }
+
+    let line = |cells: [&str; 5]| {
+        let padded: Vec<String> = cells
+            .iter()
+            .enumerate()
+            .map(|(index, cell)| {
+                let padding = widths[index].saturating_sub(width(cell));
+                format!("{cell}{}", " ".repeat(padding))
+            })
+            .collect();
+        format!("  {}", padded.join("  ")).trim_end().to_string()
+    };
+
+    let mut out = String::new();
+    out.push_str(&line(header));
+    for row in &rows {
+        out.push('\n');
+        out.push_str(&line([&row[0], &row[1], &row[2], &row[3], &row[4]]));
+    }
+
+    let disabled: Vec<(&str, &str)> = plugins
+        .iter()
+        .filter_map(|plugin| {
+            plugin
+                .disabled_reason
+                .as_deref()
+                .map(|reason| (plugin.id.as_str(), reason))
+        })
+        .collect();
+    if !disabled.is_empty() {
+        out.push('\n');
+        for (id, reason) in disabled {
+            out.push_str(&format!("\n  {id}: {reason}"));
+        }
+    }
+    out
+}
+
+/// A plugin's value as text: the string it answered, or its JSON.
+///
+/// A plugin usually answers a string, and printing it with the wire's quotes
+/// would leak the encoding into the terminal.
+pub fn render_plugin_reply(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Null => String::new(),
+        other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

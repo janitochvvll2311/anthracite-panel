@@ -16,4 +16,7 @@ mod message;
 
 pub use error::{ErrorKind, WireError};
 pub use frame::{MAX_FRAME_LEN, read_frame, read_frame_limited, write_frame, write_frame_limited};
-pub use message::{HostInfo, LoadAverage, MemoryInfo, OsInfo, PROTOCOL_VERSION, Request, Response};
+pub use message::{
+    HostInfo, LoadAverage, MemoryInfo, OsInfo, PROTOCOL_VERSION, PluginPipe, PluginSummary,
+    Request, Response,
+};

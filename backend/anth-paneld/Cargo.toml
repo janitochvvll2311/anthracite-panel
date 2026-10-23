@@ -15,8 +15,15 @@ serde_json.workspace = true
 tokio.workspace = true
 clap.workspace = true
 axum.workspace = true
+toml.workspace = true
+wasmi.workspace = true
+sha2.workspace = true
+wasmi_core.workspace = true
 
 [dev-dependencies]
+# The runtime tests compile a real guest from WAT, so the sandbox is proven
+# against wasm rather than a mock of it.
+wat = "1"
 # The API tests drive the router with `oneshot`, so they exercise the real
 # handlers without binding a port.
 tower = { version = "0.5", features = ["util"] }

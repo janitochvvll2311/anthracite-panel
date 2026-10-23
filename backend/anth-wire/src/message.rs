@@ -22,6 +22,55 @@ pub enum Request {
     Hello { protocol_version: u16 },
     /// One snapshot of the host the daemon runs on.
     HostInfo,
+    /// Every plugin the daemon found, including the disabled ones and why.
+    PluginList,
+    /// Run one pipe of one plugin.
+    ///
+    /// `pipe` names the transport: `cli`, `http` or `direct`. It is a field
+    /// rather than a separate request per pipe because the *host* chooses the
+    /// entry, and the caller has to say which one it is standing in for.
+    PluginCall {
+        id: String,
+        pipe: PluginPipe,
+        /// The payload, already in the shape that pipe carries: a command line
+        /// for `cli`, a JSON body for `http`, a `{"action":..,"value":..}` for
+        /// `direct`.
+        payload: String,
+    },
+}
+
+/// The transport a plugin call stands in for.
+///
+/// One variant per ABI entry, so an unknown pipe is a parse failure rather than
+/// a string the host has to match at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginPipe {
+    /// A command line, as `plugin call` would type it.
+    Cli,
+    /// An HTTP anchor: the payload is the JSON body.
+    Http,
+    /// A `Request` in the plugin's own vocabulary, skipping both mappers.
+    ///
+    /// The default because it is the only pipe that needs no translation: a
+    /// caller that does not say which pipe it stands in for has already decided
+    /// to speak the plugin's own vocabulary.
+    #[default]
+    Direct,
+}
+
+impl PluginPipe {
+    /// The ABI entry this pipe is served by.
+    ///
+    /// The mapping lives here, next to the enum, so a new variant cannot be
+    /// added without naming an entry the host will call.
+    pub const fn entry(self) -> &'static str {
+        match self {
+            PluginPipe::Cli => "anth_cli",
+            PluginPipe::Http => "anth_http",
+            PluginPipe::Direct => "anth_direct",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,7 +81,43 @@ pub enum Response {
         protocol_version: u16,
     },
     HostInfo(HostInfo),
+    /// Every plugin the daemon found, sorted by id.
+    PluginList {
+        plugins: Vec<PluginSummary>,
+    },
+    /// One plugin's answer, already parsed out of its envelope.
+    ///
+    /// The status travels as a number rather than as an `ErrorKind` because a
+    /// plugin may answer `201` or `204`, which no kind carries. A non-2xx status
+    /// is still a successful *call*; it is the plugin's outcome, not a transport
+    /// failure.
+    PluginReply {
+        id: String,
+        status: u16,
+        value: serde_json::Value,
+    },
     Error(WireError),
+}
+
+/// One plugin as the daemon sees it.
+///
+/// `disabled_reason` is present only when the plugin could not be loaded, and it
+/// is what makes a broken bundle diagnosable from `plugin list` instead of
+/// invisible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSummary {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    /// The anchors it declares, as `["GET /greeting"]`.
+    pub anchors: Vec<String>,
+    pub disabled_reason: Option<String>,
+}
+
+impl PluginSummary {
+    pub fn is_enabled(&self) -> bool {
+        self.disabled_reason.is_none()
+    }
 }
 
 impl Response {

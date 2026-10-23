@@ -5,30 +5,34 @@
 //! `anth_wire::frame`.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anth_wire::{Request, Response, WireError, read_frame, write_frame};
 use tokio::net::{UnixListener, UnixStream};
+
+use crate::dispatch::Daemon;
 
 /// Serves requests until the listener fails.
 ///
 /// Each connection is its own task, so a slow request cannot stall another
 /// client. A request that cannot be parsed is answered with an error and the
 /// connection stays open, because a client typo is not a reason to hang up.
-pub async fn serve(listener: UnixListener) -> std::io::Result<()> {
+pub async fn serve(listener: UnixListener, daemon: Arc<Daemon>) -> std::io::Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
+        let daemon = Arc::clone(&daemon);
         tokio::spawn(async move {
-            if let Err(error) = serve_connection(stream).await {
+            if let Err(error) = serve_connection(stream, &daemon).await {
                 eprintln!("connection ended: {error}");
             }
         });
     }
 }
 
-async fn serve_connection(mut stream: UnixStream) -> Result<(), WireError> {
+async fn serve_connection(mut stream: UnixStream, daemon: &Daemon) -> Result<(), WireError> {
     while let Some(payload) = read_frame(&mut stream).await? {
         let response = match serde_json::from_slice::<Request>(&payload) {
-            Ok(request) => crate::dispatch::handle(request).await,
+            Ok(request) => daemon.handle(request).await,
             Err(e) => Response::Error(WireError::invalid(format!("unreadable request: {e}"))),
         };
         let encoded = serde_json::to_vec(&response)
@@ -135,8 +139,9 @@ mod tests {
     async fn spawn_daemon(label: &str) -> SocketPath {
         let path = SocketPath::new(label);
         let listener = bind(&path.0).expect("binding the test socket");
+        let daemon = Arc::new(Daemon::new(crate::plugins::registry::Registry::empty()));
         tokio::spawn(async move {
-            let _ = serve(listener).await;
+            let _ = serve(listener, daemon).await;
         });
         path
     }
