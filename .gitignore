@@ -63,3 +63,7 @@ frontend/anth-webui/public
 # Test scratch space. Suites run with TMPDIR=.tmp so a fixture bug cannot reach
 # the system temp directory, which other processes use for running state.
 .tmp/
+
+# Agent scratch: plans and notes an assistant keeps while working. Not source,
+# so it must never be committed.
+.agents_tmp/

@@ -341,7 +341,7 @@ mod dispatch {
 
 /// CLI parsing, and the exit code each outcome produces.
 mod main {
-    use crate::{Cli, Command, Startup, bind, startup};
+    use crate::{Cli, Command, PluginAction, Startup, bind, startup};
     use anth_wire::PluginPipe;
     use clap::Parser;
     use std::process::ExitCode;
@@ -436,6 +436,116 @@ mod main {
             panic!("expected a plugin command");
         };
         assert_eq!(action.pipe(), PluginPipe::Http);
+    }
+
+    /// The plugin owns its flags, so the panel must not claim them. Without
+    /// `--` clap tried to parse `--name` itself and exited 2, which made the
+    /// documented `plugin call <id> <line>` form unusable for any plugin that
+    /// takes an option. `--` is the standard way to say where the panel's
+    /// arguments stop; the panel's own flags must still work after the payload.
+    #[test]
+    fn a_plugin_flag_after_the_separator_reaches_the_plugin() {
+        let cli = Cli::try_parse_from([
+            "anth-panel",
+            "plugin",
+            "call",
+            "org.anth.hello",
+            "--",
+            "greet",
+            "--name",
+            "Ana",
+        ])
+        .expect("parsing");
+
+        let Some(Command::Plugin { action }) = cli.command else {
+            panic!("expected a plugin command");
+        };
+        let PluginAction::Call { line, .. } = &action else {
+            panic!("expected a call");
+        };
+        assert_eq!(crate::payload(line, action.pipe()), "greet --name Ana");
+    }
+
+    /// A word with a space in it arrives as one argument because the shell
+    /// quoted it. Rejoining with a bare space would hand the plugin two words
+    /// and the name would be torn in half, so the payload has to quote it back.
+    #[test]
+    fn a_quoted_word_survives_the_rejoin() {
+        let cli = Cli::try_parse_from([
+            "anth-panel",
+            "plugin",
+            "call",
+            "org.anth.hello",
+            "--",
+            "greet",
+            "--name",
+            "Ana Sol",
+        ])
+        .expect("parsing");
+
+        let Some(Command::Plugin { action }) = cli.command else {
+            panic!("expected a plugin command");
+        };
+        let PluginAction::Call { line, .. } = &action else {
+            panic!("expected a call");
+        };
+
+        // The panel's own splitter is the oracle: it must read the name back as
+        // the single word the caller typed.
+        assert_eq!(
+            crate::payload(line, action.pipe()),
+            "greet --name 'Ana Sol'"
+        );
+        assert_eq!(
+            crate::repl::split(&crate::payload(line, action.pipe())),
+            vec!["greet", "--name", "Ana Sol"]
+        );
+    }
+
+    /// A single argument is already a line: the caller quoted it, so re-quoting
+    /// would make the plugin see one giant word and no subcommand. This is the
+    /// form `plugin call <id> "<line>"` has always accepted and it must not
+    /// regress when the argv form gains quoting.
+    #[test]
+    fn a_pre_quoted_line_is_passed_through_untouched() {
+        let cli = Cli::try_parse_from([
+            "anth-panel",
+            "plugin",
+            "call",
+            "org.anth.hello",
+            "greet --name 'Ana Sol'",
+        ])
+        .expect("parsing");
+
+        let Some(Command::Plugin { action }) = cli.command else {
+            panic!("expected a plugin command");
+        };
+        let PluginAction::Call { line, .. } = &action else {
+            panic!("expected a call");
+        };
+        assert_eq!(
+            crate::payload(line, action.pipe()),
+            "greet --name 'Ana Sol'"
+        );
+        assert_eq!(
+            crate::repl::split(&crate::payload(line, action.pipe())),
+            vec!["greet", "--name", "Ana Sol"]
+        );
+    }
+
+    /// The HTTP and direct pipes take a JSON body the host never parses, so the
+    /// words are joined verbatim: quoting there would corrupt the JSON.
+    #[test]
+    fn a_json_payload_is_joined_but_not_quoted() {
+        let words = vec!["{\"who\":\"Ana Sol\"}".to_string()];
+        assert_eq!(
+            crate::payload(&words, PluginPipe::Http),
+            "{\"who\":\"Ana Sol\"}"
+        );
+        assert_eq!(
+            crate::payload(&words, PluginPipe::Direct),
+            "{\"who\":\"Ana Sol\"}"
+        );
     }
 
     #[tokio::test]

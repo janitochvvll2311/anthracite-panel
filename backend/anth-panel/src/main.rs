@@ -79,8 +79,16 @@ enum PluginAction {
         ///
         /// Defaults to empty, which asks for whatever the plugin does with
         /// nothing, and that is usually its default action.
+        ///
+        /// Everything after `--` belongs to the plugin, hyphens included, so
+        /// `plugin call hello -- greet --name Ana` passes `--name` through.
+        /// Without the separator clap reads a hyphenated word as the panel's
+        /// own flag, which is why the panel's `--http` and `--direct` keep
+        /// working after the payload. The words are rejoined into one line,
+        /// quoting any word that needs it, so `--name "Ana Sol"` stays a single
+        /// word for the plugin.
         #[arg(default_value = "")]
-        line: String,
+        line: Vec<String>,
 
         /// Stand in for the HTTP pipe instead: `line` is then a JSON body.
         #[arg(long, conflicts_with = "direct")]
@@ -107,6 +115,41 @@ impl PluginAction {
             PluginAction::List => PluginPipe::Cli,
         }
     }
+}
+
+/// The payload for a `plugin call`, from the words clap left after `id`.
+///
+/// One word is already the line, so it is passed through untouched: someone who
+/// typed `plugin call hello "greet --name 'Ana Sol'"` has done the quoting and
+/// re-quoting it would hand the plugin one giant word. Several words are an
+/// argv that has to be serialized back into a line, so each word is quoted when
+/// leaving it bare would change how it splits.
+///
+/// The HTTP and direct pipes take a JSON body the host never parses, so there
+/// the words are always joined with a single space and nothing is quoted.
+fn payload(words: &[String], pipe: PluginPipe) -> String {
+    match pipe {
+        PluginPipe::Cli if words.len() > 1 => words
+            .iter()
+            .map(|word| quote(word))
+            .collect::<Vec<_>>()
+            .join(" "),
+        PluginPipe::Cli | PluginPipe::Http | PluginPipe::Direct => words.join(" "),
+    }
+}
+
+/// One word, quoted only when leaving it bare would change how it splits.
+fn quote(word: &str) -> String {
+    let bare = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| !c.is_whitespace() && !matches!(c, '\'' | '"' | '\\'));
+    if bare {
+        return word.to_string();
+    }
+    // Single quotes make everything but a single quote literal, so a word that
+    // contains one gets the shell's own answer: close, escape, reopen.
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 #[tokio::main]
@@ -148,7 +191,7 @@ async fn dispatch_command(socket: &std::path::Path, command: Option<Command>) ->
                     Request::PluginCall {
                         id: id.clone(),
                         pipe: action.pipe(),
-                        payload: line.clone(),
+                        payload: payload(line, action.pipe()),
                     },
                 )
                 .await
