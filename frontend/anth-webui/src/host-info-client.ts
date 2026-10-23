@@ -5,8 +5,7 @@
  * port, which is what keeps the component's tests about rendering.
  */
 
-import type { HostInfo } from "@anth/shared";
-import { responseError } from "@anth/shared";
+import { type HostInfo, responseError } from "./wire";
 
 export interface HostInfoClient {
   read(): Promise<HostInfo>;

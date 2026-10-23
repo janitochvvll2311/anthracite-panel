@@ -1,9 +1,15 @@
 /**
- * Wire types and helpers shared by the panel and its plugins.
+ * The wire types, and the pure helpers that read them.
  *
- * These mirror `anth_wire` on the Rust side. They are types plus pure
- * formatting, never a transport: a client decides how it fetches, so the same
- * helpers serve the panel, a plugin and a test.
+ * Named after `anth-wire` on the Rust side, which is what these mirror: one
+ * module holding the shapes that cross the boundary, never a transport. A client
+ * decides how it fetches, so the same helpers serve the shell, a panel and a
+ * test without any of them binding a port.
+ *
+ * They live here rather than in a package of their own because there is exactly
+ * one consumer — this one. A `shared` package with a single dependant is a
+ * folder, a manifest and an install step for nothing, and it has to be moved
+ * again the moment the second consumer appears.
  */
 
 /** `GET /api/host-info`, and `Response::HostInfo` on the socket. */

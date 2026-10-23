@@ -48,9 +48,9 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/render.rs           #   bordered table for the CLI
 
 frontend/                   # Bun workspace, bun.lock committed
-  packages/shared/          # @anth/shared: wire types and formatting, no transport
-  packages/plugin/          # @anth/plugin: anchors, widget base, registration
-  packages/app/             # @anth/app: the shell, Vite build, dist/ gitignored
+  anth-webui/               # @anth/webui: the shell, Vite build, dist/ gitignored
+    src/wire.ts             #   wire types and formatting, no transport
+  anth-plugin/              # @anth/plugin: anchors, widget base, registration
   bunfig.toml               # test preload: happy-dom for component tests
 
 plugins/                    # one directory per plugin
@@ -87,9 +87,9 @@ From `frontend/`:
 
 ```bash
 bun install            # once, or after a package.json change
-bun run typecheck      # shared, plugin and app, in that order
+bun run typecheck      # webui, then plugin
 bun test               # happy-dom preloaded from bunfig.toml
-bun run build          # typechecks, then writes packages/app/dist
+bun run build          # typechecks, then writes anth-webui/dist
 ```
 
 From `plugins/hello/`, which CI also runs:

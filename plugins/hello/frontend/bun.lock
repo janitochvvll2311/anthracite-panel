@@ -5,7 +5,7 @@
     "": {
       "name": "anth-plugin-hello-web",
       "dependencies": {
-        "@anth/plugin": "file:../../../frontend/packages/plugin",
+        "@anth/plugin": "file:../../../frontend/anth-plugin",
       },
       "devDependencies": {
         "@happy-dom/global-registrator": "^21.0.4",
@@ -16,7 +16,7 @@
     },
   },
   "packages": {
-    "@anth/plugin": ["@anth/plugin@file:../../../frontend/packages/plugin", { "devDependencies": { "@happy-dom/global-registrator": "^21.0.4", "bun-types": "^1.4.4", "happy-dom": "^21.0.4", "typescript": "^5.9.3" } }],
+    "@anth/plugin": ["@anth/plugin@file:../../../frontend/anth-plugin", { "devDependencies": { "@happy-dom/global-registrator": "^21.0.4", "bun-types": "^1.4.4", "happy-dom": "^21.0.4", "typescript": "^5.9.3" } }],
 
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@21.0.4", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^21.0.4" } }, "sha512-Bbr0hW9hhDhBf3Jp0EyDlkCbFgbr0z2jd3BMKYOYW+fOkPM4Nx195GMXyCtRCGEgoNn6i09FabXrSkNFm2ONzg=="],
 

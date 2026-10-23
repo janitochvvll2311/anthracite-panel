@@ -46,7 +46,8 @@ backend/config.toml
 # Bun. The lockfile is committed; the store and module trees are not.
 node_modules
 frontend/.bun
-frontend/packages/*/dist
+frontend/anth-webui/dist
+frontend/anth-plugin/dist
 plugins/*/frontend/dist
 plugins/*/dist
 

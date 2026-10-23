@@ -20,8 +20,8 @@ backend/              Rust workspace (Cargo.toml, .cargo/config.toml)
   anth-paneld/        daemon, CLI client and the HTTP API
 
 frontend/             Bun workspace (package.json, bun.lock)
-  packages/shared/    wire types and formatting helpers, no transport
-  packages/app/       the panel shell, Vite build
+  anth-webui/         the panel shell, Vite build, wire types in src/wire.ts
+  anth-plugin/        the browser half of the plugin contract
 
 plugins/              one directory per plugin, each a pair of independent projects
   hello/              the example plugin
@@ -130,7 +130,7 @@ bun install
 bun run dev        # http://localhost:5173
 ```
 
-`bun run build` writes `frontend/packages/app/dist`. Nothing embeds it into the
+`bun run build` writes `frontend/anth-webui/dist`. Nothing embeds it into the
 binary yet, so `GET /` is a `404` until the embedding phase, and the dev server
 is how the panel is used today.
 

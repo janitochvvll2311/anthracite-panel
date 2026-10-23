@@ -1,4 +1,4 @@
 [test]
 # The panel's components need a DOM. Running `bun test` from the workspace root
-# makes this the only preload: a per-package bunfig is not read from above.
-preload = ["./packages/app/src/test-setup.ts"]
+# makes this the only preload: a per-directory bunfig is not read from above.
+preload = ["./anth-webui/src/test-setup.ts"]

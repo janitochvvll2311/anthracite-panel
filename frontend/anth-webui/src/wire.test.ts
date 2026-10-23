@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatKib, formatUptime, responseError } from "./index";
+import { formatKib, formatUptime, responseError } from "./wire";
 
 describe("responseError", () => {
   test("uses the documented error field", async () => {

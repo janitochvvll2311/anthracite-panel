@@ -1,18 +1,15 @@
 {
-  "name": "@anth/app",
+  "name": "@anth/webui",
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "The panel shell and its host-info panel",
+  "description": "The panel shell, its host-info panel and the wire types they share",
   "scripts": {
     "dev": "vite",
     "build": "bun run typecheck && vite build",
     "preview": "vite preview",
     "test": "bun test",
     "typecheck": "bun run tsc --noEmit"
-  },
-  "dependencies": {
-    "@anth/shared": "workspace:*"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^21.0.4",

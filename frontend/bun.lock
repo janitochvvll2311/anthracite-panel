@@ -5,21 +5,7 @@
     "": {
       "name": "anth-panel-web",
     },
-    "packages/app": {
-      "name": "@anth/app",
-      "version": "0.2.0",
-      "dependencies": {
-        "@anth/shared": "workspace:*",
-      },
-      "devDependencies": {
-        "@happy-dom/global-registrator": "^21.0.4",
-        "bun-types": "^1.4.4",
-        "happy-dom": "^21.0.4",
-        "typescript": "^5.9.3",
-        "vite": "^7.1.0",
-      },
-    },
-    "packages/plugin": {
+    "anth-plugin": {
       "name": "@anth/plugin",
       "version": "0.2.0",
       "devDependencies": {
@@ -29,21 +15,22 @@
         "typescript": "^5.9.3",
       },
     },
-    "packages/shared": {
-      "name": "@anth/shared",
+    "anth-webui": {
+      "name": "@anth/webui",
       "version": "0.2.0",
       "devDependencies": {
+        "@happy-dom/global-registrator": "^21.0.4",
         "bun-types": "^1.4.4",
+        "happy-dom": "^21.0.4",
         "typescript": "^5.9.3",
+        "vite": "^7.1.0",
       },
     },
   },
   "packages": {
-    "@anth/app": ["@anth/app@workspace:packages/app"],
+    "@anth/plugin": ["@anth/plugin@workspace:anth-plugin"],
 
-    "@anth/plugin": ["@anth/plugin@workspace:packages/plugin"],
-
-    "@anth/shared": ["@anth/shared@workspace:packages/shared"],
+    "@anth/webui": ["@anth/webui@workspace:anth-webui"],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.28.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ=="],
 

@@ -6,7 +6,7 @@
  * and a registry without a second panel would be an empty abstraction.
  */
 
-import { formatKib, formatUptime, type HostInfo } from "@anth/shared";
+import { formatKib, formatUptime, type HostInfo } from "./wire";
 
 import type { HostInfoClient } from "./host-info-client";
 

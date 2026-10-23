@@ -16,6 +16,6 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@anth/plugin": "file:../../../frontend/packages/plugin"
+    "@anth/plugin": "file:../../../frontend/anth-plugin"
   }
 }

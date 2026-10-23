@@ -3,16 +3,17 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Anthracite Panel web UI, a Bun workspace of packages",
+  "description": "Anthracite Panel web UI: the shell and the plugin contract, side by side",
   "workspaces": [
-    "packages/*"
+    "anth-webui",
+    "anth-plugin"
   ],
   "scripts": {
-    "dev": "bun run --cwd packages/app dev",
-    "build": "bun run --cwd packages/app build",
-    "preview": "bun run --cwd packages/app preview",
+    "dev": "bun run --cwd anth-webui dev",
+    "build": "bun run --cwd anth-webui build",
+    "preview": "bun run --cwd anth-webui preview",
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "typecheck": "bun run --cwd packages/shared typecheck && bun run --cwd packages/plugin typecheck && bun run --cwd packages/app typecheck"
+    "typecheck": "bun run --cwd anth-webui typecheck && bun run --cwd anth-plugin typecheck"
   }
 }

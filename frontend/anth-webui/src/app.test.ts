@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import type { HostInfo } from "@anth/shared";
+import type { HostInfo } from "./wire";
 
 import { AnthApp } from "./app";
 import type { HostInfoClient } from "./host-info-client";
