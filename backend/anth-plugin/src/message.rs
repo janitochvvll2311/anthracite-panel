@@ -1,4 +1,9 @@
-//! What a plugin talks in: its own actions, its own answers.
+//! The messages a plugin talks in: its own actions, its own answers.
+//!
+//! Named `message` for the same reason `anth-wire`'s module is: it holds both
+//! directions of one exchange, so a file named after only the request would be
+//! half the truth. The module is private and the types are re-exported, matching
+//! the wire crate — a plugin names `anth_plugin::Request`, never a path.
 //!
 //! Neither type mentions a transport. An HTTP anchor, a CLI subcommand and a
 //! direct `plugin call` all arrive as a [`Request`], because each of those pipes

@@ -17,8 +17,8 @@ use alloc::vec::Vec;
 
 use serde_json::Value;
 
+use crate::message::{Request, Response};
 use crate::plugin::Plugin;
-use crate::request::{Request, Response};
 use crate::transport::{CliRequest, HttpRequest};
 #[cfg(target_arch = "wasm32")]
 use alloc::string::ToString;

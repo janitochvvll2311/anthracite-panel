@@ -9,7 +9,7 @@
 //! library owns, so no plugin has to rewrite the same `match` on a `Result`.
 
 use crate::exec::Executor;
-use crate::request::{Request, Response};
+use crate::message::{Request, Response};
 use crate::transport::{CliRequest, HttpRequest};
 
 pub trait Plugin {
@@ -19,7 +19,7 @@ pub trait Plugin {
     /// `direct` pipe name an action in JSON: an `Action` is a `&'static str`, so
     /// a name arriving at run time can only become an `Action` by being found
     /// here. A name outside this table is a `404`, never an invented action.
-    fn actions() -> &'static [crate::request::Action];
+    fn actions() -> &'static [crate::message::Action];
 
     /// HTTP anchor to the plugin's vocabulary.
     ///

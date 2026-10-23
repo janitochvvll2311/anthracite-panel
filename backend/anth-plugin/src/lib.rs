@@ -77,8 +77,8 @@ extern crate alloc;
 
 pub mod abi;
 pub mod exec;
+mod message;
 pub mod plugin;
-pub mod request;
 pub mod transport;
 
 pub use abi::{
@@ -86,6 +86,6 @@ pub use abi::{
     read_string, write_string,
 };
 pub use exec::Executor;
+pub use message::{Action, Request, Response, Status};
 pub use plugin::Plugin;
-pub use request::{Action, Request, Response, Status};
 pub use transport::{CliRequest, HttpRequest, Method};

@@ -17,7 +17,7 @@ use alloc::vec::Vec;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::request::{Action, Request, Response, Status};
+use crate::message::{Action, Request, Response, Status};
 
 /// The HTTP method, typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

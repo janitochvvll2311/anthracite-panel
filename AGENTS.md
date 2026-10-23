@@ -36,7 +36,7 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
   anth-plugin/              # the plugin contract a guest links: no_std
     src/lib.rs              #   re-exports
     src/abi.rs              #   anth_plugin! macro: one export per transport
-    src/request.rs          #   Action, Request, Status, Response: no transport
+    src/message.rs          #   Action, Request, Status, Response: no transport
     src/transport.rs        #   HttpRequest, CliRequest (line), Method
     src/plugin.rs           #   Plugin trait: actions + three mappers
     src/exec.rs             #   Executor trait: the capability seam
@@ -153,7 +153,10 @@ plugin is expected to contain behaviour only.
     where no daemon exists. Version 2 replaced the single `anth_handle`, so an
     `abi = 1` bundle has no `anth_http` to call and is refused rather than
     silently broken.
-  - `request.rs` — the plugin's own vocabulary, and it names no transport.
+  - `message.rs` — the plugin's own vocabulary, and it names no transport. Named
+    after `anth-wire`'s `message` module and private for the same reason: it holds
+    both directions of one exchange, and the types are re-exported so a plugin
+    writes `anth_plugin::Request` rather than a module path.
     `Action(&'static str)` is a validated const, never caller input: a name
     arriving at run time can only become an `Action` by being found in
     `Plugin::actions()`, so a payload cannot invent an operation.
