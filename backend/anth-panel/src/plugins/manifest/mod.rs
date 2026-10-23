@@ -204,11 +204,27 @@ impl Manifest {
                     slot.tag
                 )));
             }
+            // The slot is an anchor name the shell looks up, so it follows the
+            // same dotted lowercase shape as a plugin id.
+            if validate_id(&slot.slot).is_err() {
+                return Err(WireError::invalid(format!(
+                    "the ui slot `{}` must be a dotted lowercase name",
+                    slot.slot
+                )));
+            }
+            if slot
+                .label
+                .as_ref()
+                .is_some_and(|label| label.trim().is_empty())
+            {
+                return Err(WireError::invalid("a ui label cannot be blank"));
+            }
         }
         Ok(())
     }
 
     /// The capability a guest may run, if the manifest froze one under that id.
+    #[cfg(test)]
     pub fn capability(&self, id: &str) -> Option<&Capability> {
         self.capability.iter().find(|c| c.id == id)
     }

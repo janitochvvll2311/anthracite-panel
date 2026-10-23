@@ -57,3 +57,9 @@ plugins/*/plugin.wasm
 
 # The plugin harness copies built modules here; `bun run harness` regenerates them.
 frontend/anth-webui/public
+
+*.zip
+
+# Test scratch space. Suites run with TMPDIR=.tmp so a fixture bug cannot reach
+# the system temp directory, which other processes use for running state.
+.tmp/

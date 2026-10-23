@@ -60,13 +60,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "anth-paneld"
+name = "anth-panel"
 version = "0.2.0"
 dependencies = [
  "anth-host",
  "anth-wire",
  "axum",
  "clap",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

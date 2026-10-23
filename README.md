@@ -17,7 +17,7 @@ Everything is grouped by kind, and each group is an independent project:
 backend/              Rust workspace (Cargo.toml, .cargo/config.toml)
   anth-wire/          wire protocol: length-prefixed frames, one error type
   anth-host/          host inspection: /proc and os-release parsing, std only
-  anth-paneld/        daemon, CLI client and the HTTP API
+  anth-panel/         daemon, CLI client and the HTTP API
 
 frontend/             Bun workspace (package.json, bun.lock)
   anth-wire/          what crosses the browser boundary: messages, errors, one exchange
@@ -112,7 +112,7 @@ serve. Build the frontend once to get the panel.
 
 ```bash
 cd backend
-cargo run -p anth-paneld -- run --addr 127.0.0.1:8080
+cargo run -p anth-panel -- run --addr 127.0.0.1:8080
 ```
 
 In another shell, against the same binary:
@@ -120,7 +120,7 @@ In another shell, against the same binary:
 ```bash
 curl http://127.0.0.1:8080/healthz          # {"status":"ok"}
 curl http://127.0.0.1:8080/api/host-info
-cargo run -p anth-paneld -- host-info       # the socket client
+cargo run -p anth-panel -- host-info        # the socket client
 ```
 
 The web UI is a separate dev server that proxies to that address:

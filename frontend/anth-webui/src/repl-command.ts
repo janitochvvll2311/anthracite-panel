@@ -1,7 +1,7 @@
 /**
  * The REPL's command vocabulary, parsed without touching the network.
  *
- * This mirrors `backend/anth-paneld/src/repl.rs`, and mirrors it in the same
+ * This mirrors `backend/anth-panel/src/repl/mod.rs`, and mirrors it in the same
  * way `@anth/wire` mirrors `anth-wire`: the same commands, resolved to the same
  * routes. The reason it is a separate pure module is that a parser is the part
  * that goes wrong — quoting, empty lines, an unknown verb — and a test can check

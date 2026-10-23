@@ -40,12 +40,14 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/transport.rs        #   HttpRequest, CliRequest (line), Method
     src/plugin.rs           #   Plugin trait: actions + three mappers
     src/exec.rs             #   Executor trait: the capability seam
-  anth-paneld/              # the binary: daemon, HTTP API and CLI client
+  anth-panel/               # the binary: daemon, HTTP API and CLI client
     src/main.rs             #   CLI parsing, exit-code policy, serve_all
     src/dispatch.rs         #   the single request match
     src/api.rs              #   axum router over dispatch; ApiError -> status
     src/socket.rs           #   Unix listener, connection loop, client
     src/render.rs           #   bordered table for the CLI
+    src/plugins/            #   manifest, bundle, registry, wasmi runtime
+    src/repl/               #   the stdin REPL: prompt, editor, keys, history
 
 frontend/                   # Bun workspace, bun.lock committed
   anth-wire/                # @anth/wire: what crosses the boundary, no panel code
@@ -104,6 +106,50 @@ From `plugins/hello/`, which CI also runs:
 ./package.sh                        # wasm + bun bundle + manifest digest
 ```
 
+### Keep test scratch files inside the project
+
+Run every suite with `TMPDIR` pointing at `.tmp/` in the repo, not at the
+system temp directory:
+
+```bash
+export TMPDIR="$PWD/.tmp" && mkdir -p "$TMPDIR"   # from the repo root
+```
+
+Tests create their fixtures under `std::env::temp_dir()`, which honours
+`TMPDIR`. Isolating them keeps a fixture bug that deletes "the temp directory"
+from reaching `/tmp`, where other processes keep running state: the daemon's
+socket, VS Code IPC sockets, the Python `_MEI*` extraction directory. `.tmp/`
+is gitignored and safe to delete at any time.
+
+### A test may not read the environment it runs in
+
+A suite that asserts on `io::stdin().is_terminal()` or on `/proc` contents
+passes on one machine and fails on the next, and the failure says nothing about
+the code. Where production branches on the environment, take the decision as a
+parameter and expose a thin caller that reads it:
+
+```rust
+pub fn enable() -> io::Result<Self> { Self::enable_if(io::stdin().is_terminal()) }
+fn enable_if(interactive: bool) -> io::Result<Self> { .. }   // what the tests call
+```
+
+Do not "fix" such a test by asserting a tautology (`assert!(x || !x)`) or by
+making the test itself take the branch: that is the vacuous test rule 4 forbids.
+
+### A failure is either the code or the test, never the docstring
+
+When a test and the doc comment above it disagree, one of them is wrong and the
+docstring is the specification. Read the prose first: it records what the
+behaviour is for. `kill_word`'s comment said one press after `plugin call ` gives
+`plugin `, the test expected `plugin call `, and the code matched the test — the
+code was wrong. Rewriting the assertion to match the code would have preserved
+the bug and made the suite agree with it.
+
+The same rule resolved `word()`: its docstring said "the word under the cursor",
+the code returned only the part before the cursor, so Tab could not complete a
+word the cursor sat inside. The fix added `prefix()` for the pre-cursor slice and
+made `word()` return the whole token, which is what the name promised.
+
 `.github/workflows/v2.yml` runs all of the above in a `rust`, a `web` and a
 `plugin` job, so a local pass means a CI pass. Clippy runs with `-D warnings`: a
 redundant closure is a build failure, not a suggestion.
@@ -131,7 +177,7 @@ needs a stated reason in the commit message.
    CLI exit code in `error.rs`. Do not hand-write a status or an exit code at a
    call site: `serve` used to hardcode `ExitCode::from(1)`, and a test now pins
    that it derives from the kind.
-3. **One dispatch site.** A new request adds an arm to `anth-paneld/src/dispatch.rs`
+3. **One dispatch site.** A new request adds an arm to `anth-panel/src/dispatch.rs`
    and nowhere else. v0.1.0 repeated each variant across the handler, the client
    and the daemon matches, and nothing tied them together at compile time. The
    HTTP route in `api.rs` calls that same `dispatch`, so the two transports

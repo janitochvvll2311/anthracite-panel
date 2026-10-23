@@ -1,7 +1,7 @@
 /**
  * The browser REPL: the same commands as the CLI prompt, over HTTP.
  *
- * The symmetry is the point. `backend/anth-paneld/src/repl.rs` types into the
+ * The symmetry is the point. `backend/anth-panel/src/repl/mod.rs` types into the
  * socket; this types into `/api`, and both reach `Daemon::handle`. What differs
  * is only what has to: a browser cannot hold a socket, so the exchange goes
  * through `@anth/wire`'s `send` and the route names the command.

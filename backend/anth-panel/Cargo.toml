@@ -1,11 +1,7 @@
 [package]
-name = "anth-paneld"
+name = "anth-panel"
 version.workspace = true
 edition.workspace = true
-
-[[bin]]
-name = "anth-panel"
-path = "src/main.rs"
 
 [dependencies]
 anth-wire.workspace = true
@@ -19,6 +15,7 @@ toml.workspace = true
 wasmi.workspace = true
 sha2.workspace = true
 wasmi_core.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 # The runtime tests compile a real guest from WAT, so the sandbox is proven

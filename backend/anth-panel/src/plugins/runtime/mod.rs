@@ -101,12 +101,6 @@ impl Loaded {
         &self.manifest.plugin.id
     }
 
-    /// The anchors this plugin declares, which is also the only set of routes
-    /// the host will route to it.
-    pub fn anchors(&self) -> &[crate::plugins::manifest::Anchor] {
-        &self.manifest.api
-    }
-
     /// Runs one entry with one payload.
     ///
     /// `entry` is the transport the host is serving, chosen by the caller and

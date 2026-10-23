@@ -3,7 +3,7 @@
 //! One `Request` and one `Response` enum, and a failure is always
 //! `Response::Error(WireError)` rather than a per-feature error type. v0.1.0
 //! added a request variant, a response variant and three hand-written match arms
-//! for every operation; the dispatch trait in `anth-paneld` exists so a feature
+//! for every operation; the dispatch trait in `anth-panel` exists so a feature
 //! answers one method instead.
 
 use serde::{Deserialize, Serialize};

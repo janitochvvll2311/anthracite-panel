@@ -148,6 +148,26 @@ fn a_ui_tag_must_be_a_custom_element_name() {
 }
 
 #[test]
+fn a_ui_slot_must_be_a_dotted_lowercase_name() {
+    let text = GOOD.replace(
+        r#"slot = "dashboard.widget""#,
+        r#"slot = "Dashboard Widget""#,
+    );
+
+    assert!(refused(&text).message.contains("dotted lowercase"));
+}
+
+#[test]
+fn a_blank_ui_label_is_refused() {
+    let text = GOOD.replace(
+        r#"tag = "anth-hello""#,
+        "tag = \"anth-hello\"\nlabel = \"   \"",
+    );
+
+    assert!(refused(&text).message.contains("cannot be blank"));
+}
+
+#[test]
 fn a_duplicate_capability_is_refused() {
     let text = GOOD.replace(
         "[[api]]",
