@@ -44,6 +44,25 @@ impl Daemon {
         self.plugins.anchor_owner(method, path)
     }
 
+    /// Whether any plugin answers to this id or alias.
+    ///
+    /// Separate from [`Self::ui_module`] so a `404` can say which of the two
+    /// things is missing. One message for both would tell a caller who typed
+    /// `/p/greeting/x` that a plugin called `greeting` declares no such
+    /// module, when no plugin called `greeting` exists at all.
+    pub fn has_plugin(&self, id_or_alias: &str) -> Result<bool, WireError> {
+        Ok(self.plugins.resolve(id_or_alias)?.is_some())
+    }
+
+    /// One plugin's declared UI module, resolved by id or alias.
+    pub fn ui_module(
+        &self,
+        id_or_alias: &str,
+        module: &str,
+    ) -> Result<Option<&crate::plugins::registry::Entry>, WireError> {
+        self.plugins.ui_module(id_or_alias, module)
+    }
+
     /// One plugin's own anchor, resolved by id rather than by scanning.
     ///
     /// Scoped because two plugins may legitimately declare the same path: the
@@ -101,6 +120,7 @@ fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
                         .iter()
                         .map(|(method, path)| format!("{method} {path}"))
                         .collect(),
+                    ui: entry.ui.clone(),
                     disabled_reason: entry.enabled.as_ref().err().cloned(),
                 })
                 .collect(),

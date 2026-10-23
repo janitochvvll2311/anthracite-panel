@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anth_wire::{ErrorKind, WireError};
+use anth_wire::{ErrorKind, UiSlotSummary, WireError};
 use sha2::{Digest, Sha256};
 
 use super::manifest::Manifest;
@@ -28,6 +28,16 @@ pub struct Entry {
     pub name: String,
     pub version: String,
     pub anchors: Vec<(String, String)>,
+    /// What the bundle asks the shell to mount, and where its module lives.
+    ///
+    /// Empty for a disabled plugin: the manifest did not survive validation, so
+    /// what it asked to mount is not something the daemon should repeat as if it
+    /// were verified. The anchors above are kept for the opposite reason — they
+    /// explain why the entry exists at all.
+    pub ui: Vec<UiSlotSummary>,
+    /// The directory the bundle was read from, so a declared module can be
+    /// resolved to a file inside it.
+    pub dir: PathBuf,
     pub enabled: Result<(), String>,
     loaded: Option<Loaded>,
 }
@@ -97,6 +107,8 @@ impl Registry {
                     .iter()
                     .map(|(method, path)| (method.to_string(), path.to_string()))
                     .collect(),
+                ui: Vec::new(),
+                dir: PathBuf::new(),
                 enabled: Err(reason.to_string()),
                 loaded: None,
             },
@@ -157,6 +169,40 @@ impl Registry {
             ));
         }
         Ok(Some(first))
+    }
+
+    /// The file a bundle declared as a UI module.
+    ///
+    /// Resolved against `ui[].module` rather than against the bundle
+    /// directory, so the only files a request can reach are the ones the
+    /// manifest named. A bundle holds `plugin.wasm` and `plugin.toml` beside
+    /// its web assets, and serving "whatever is under the bundle" would hand
+    /// both to any caller that guessed the name. An exact allowlist makes that
+    /// unreachable by construction rather than by filtering afterwards.
+    ///
+    /// Both sides are normalised to the same shape first, so a redundant but
+    /// harmless spelling still matches what the manifest declared. A path that
+    /// cannot be normalised matches nothing: `normalise` refuses `..` outright
+    /// rather than resolving it, and the same goes for an absolute path or a
+    /// dotfile, so `web/../plugin.wasm` is `None` before the allowlist is even
+    /// consulted.
+    pub fn ui_module(&self, id_or_alias: &str, path: &str) -> Result<Option<&Entry>, WireError> {
+        let Some(entry) = self.resolve(id_or_alias)? else {
+            return Ok(None);
+        };
+        // A disabled bundle never got as far as a validated manifest, so it has
+        // no declared modules to check against. Answering `404` would say the
+        // module is not declared, when the truth is that nothing in the bundle
+        // could be trusted — the reason the entry carries is the useful answer.
+        entry.usable()?;
+        let Some(wanted) = crate::www::normalise(path) else {
+            return Ok(None);
+        };
+        let declared = entry
+            .ui
+            .iter()
+            .any(|slot| crate::www::normalise(&slot.module).as_deref() == Some(wanted.as_str()));
+        Ok(declared.then_some(entry))
     }
 
     #[cfg(test)]
@@ -224,6 +270,8 @@ fn load_one(dir: &Path) -> Entry {
         name: id.clone(),
         version: String::new(),
         anchors: Vec::new(),
+        ui: Vec::new(),
+        dir: dir.to_path_buf(),
         enabled: Ok(()),
         loaded: None,
     };
@@ -237,6 +285,16 @@ fn load_one(dir: &Path) -> Entry {
                 .api
                 .iter()
                 .map(|anchor| (anchor.method.to_uppercase(), anchor.path.clone()))
+                .collect();
+            entry.ui = manifest
+                .ui
+                .iter()
+                .map(|slot| UiSlotSummary {
+                    slot: slot.slot.clone(),
+                    tag: slot.tag.clone(),
+                    module: slot.module.clone(),
+                    label: slot.label.clone(),
+                })
                 .collect();
             entry.loaded = Some(loaded);
         }
@@ -275,6 +333,22 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
         out
     })
+}
+
+/// Reads one declared UI module out of its bundle.
+///
+/// The allowlist in [`Registry::ui_module`] decides *which* file may be read;
+/// this decides *where*, and re-checks the answer. A bundle could ship a
+/// symlink for the path its manifest declares, and canonicalising both sides
+/// then catches it escaping: the allowlist names a path inside the bundle, not
+/// a file, and the two are only the same thing if the link does not move.
+pub fn read_ui_module(entry: &Entry, module: &str) -> Option<Vec<u8>> {
+    let base = entry.dir.canonicalize().ok()?;
+    let resolved = entry.dir.join(module).canonicalize().ok()?;
+    if !resolved.starts_with(&base) || !resolved.is_file() {
+        return None;
+    }
+    std::fs::read(resolved).ok()
 }
 
 /// The directory the daemon reads plugins from.

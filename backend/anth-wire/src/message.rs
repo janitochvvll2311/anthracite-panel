@@ -118,7 +118,29 @@ pub struct PluginSummary {
     pub version: String,
     /// The anchors it declares, as `["GET /greeting"]`.
     pub anchors: Vec<String>,
+    /// The places the bundle asks to be mounted, and the module to mount there.
+    ///
+    /// Empty for a disabled plugin: the manifest did not survive validation, so
+    /// it is not a claim the daemon repeats as if it had been checked. The
+    /// anchors are kept for the opposite reason — they say why the plugin was
+    /// wanted in the first place.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ui: Vec<UiSlotSummary>,
     pub disabled_reason: Option<String>,
+}
+
+/// One mount point a bundle declares.
+///
+/// A slot is a name, not a URL: `dashboard.widget` says *where in the shell*,
+/// and the shell decides what that means. The module is a path inside the
+/// bundle, served by the daemon at `/p/<id>/<module>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiSlotSummary {
+    pub slot: String,
+    pub tag: String,
+    pub module: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl PluginSummary {

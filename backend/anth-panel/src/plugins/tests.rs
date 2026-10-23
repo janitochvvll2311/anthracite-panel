@@ -291,7 +291,7 @@ mod registry {
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 2048))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64)
-    (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 23)))
+    (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 27)))
 )
 "#;
 
@@ -529,5 +529,188 @@ path = "{anchor}"
         let entry = registry.resolve("second").expect("looking up").unwrap();
 
         assert_eq!(entry.id, "second");
+    }
+
+    /// A bundle with a web module on disk, so the allowlist has a real file to
+    /// name. The module is written where the manifest says it is.
+    fn write_ui_bundle(root: &Path, id: &str, module: &str) -> PathBuf {
+        let dir = write_bundle(root, id, &digest(&wasm()), "/greeting");
+        let file = dir.join(module);
+        std::fs::create_dir_all(file.parent().expect("a module has a parent"))
+            .expect("creating the web directory");
+        std::fs::write(&file, "export const hello = 1;").expect("writing the module");
+        let manifest = std::fs::read_to_string(dir.join("plugin.toml")).expect("reading");
+        std::fs::write(
+            dir.join("plugin.toml"),
+            format!(
+                "{manifest}\n[[ui]]\nslot = \"dashboard.widget\"\ntag = \"anth-test\"\nmodule = \"{module}\"\n"
+            ),
+        )
+        .expect("writing the manifest");
+        dir
+    }
+
+    #[test]
+    fn a_declared_ui_module_is_reachable() {
+        let root = Bundle::new("ui-declared");
+        write_ui_bundle(root.path(), "org.test.ui", "web/widget.js");
+        let registry = Registry::load(root.path());
+
+        let entry = registry
+            .ui_module("org.test.ui", "web/widget.js")
+            .expect("looking up")
+            .expect("a declared module must resolve");
+
+        assert_eq!(entry.id, "org.test.ui");
+        assert_eq!(entry.ui.len(), 1);
+        assert_eq!(entry.ui[0].module, "web/widget.js");
+        assert_eq!(entry.ui[0].slot, "dashboard.widget");
+    }
+
+    /// The reason the module is looked up by declaration instead of by path:
+    /// a bundle's own wasm and manifest sit beside its web assets, and neither
+    /// is something a request may read.
+    #[test]
+    fn an_undeclared_file_in_a_bundle_is_not_reachable() {
+        let root = Bundle::new("ui-undeclared");
+        write_ui_bundle(root.path(), "org.test.ui", "web/widget.js");
+        let registry = Registry::load(root.path());
+
+        for path in ["plugin.wasm", "plugin.toml", "web/other.js"] {
+            assert!(
+                registry
+                    .ui_module("org.test.ui", path)
+                    .expect("looking up")
+                    .is_none(),
+                "`{path}` must not be reachable"
+            );
+        }
+    }
+
+    /// A traversal never reaches the allowlist at all: `normalise` refuses `..`
+    /// rather than resolving it, so these paths are `None` before any
+    /// comparison. That is a different guarantee from the allowlist, and this
+    /// test pins the one it names — emptying the allowlist does not change the
+    /// answer here, and rewriting `normalise` to resolve `..` would.
+    #[test]
+    fn a_traversal_is_refused_before_the_allowlist_is_consulted() {
+        let root = Bundle::new("ui-traversal");
+        write_ui_bundle(root.path(), "org.test.ui", "web/widget.js");
+        let registry = Registry::load(root.path());
+
+        for path in [
+            "web/../plugin.wasm",
+            "../plugin.toml",
+            "web/../../org.test.ui/plugin.wasm",
+            "/etc/passwd",
+            "web/.env",
+        ] {
+            assert!(
+                registry
+                    .ui_module("org.test.ui", path)
+                    .expect("looking up")
+                    .is_none(),
+                "`{path}` must not be reachable"
+            );
+        }
+    }
+
+    /// Normalisation is applied to the request, not used as a filter: a
+    /// redundant but harmless spelling still names the declared module. This
+    /// is the case that fails if `normalise` starts rejecting anything it does
+    /// not spell identically, which would make a correct URL stop working.
+    #[test]
+    fn a_redundant_spelling_of_a_declared_module_still_resolves() {
+        let root = Bundle::new("ui-spelling");
+        write_ui_bundle(root.path(), "org.test.ui", "web/widget.js");
+        let registry = Registry::load(root.path());
+
+        for path in ["./web/widget.js", "web//widget.js", "web/./widget.js"] {
+            assert!(
+                registry
+                    .ui_module("org.test.ui", path)
+                    .expect("looking up")
+                    .is_some(),
+                "`{path}` names a declared module"
+            );
+        }
+    }
+
+    /// A declared module whose file is a symlink out of the bundle is refused
+    /// by the read, even though the manifest names it.
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_module_that_links_out_of_the_bundle_is_not_read() {
+        let root = Bundle::new("ui-symlink");
+        let outside = root.path().join("outside.js");
+        std::fs::write(&outside, "secret").expect("writing the target");
+        let dir = write_ui_bundle(root.path(), "org.test.ui", "web/widget.js");
+        std::fs::remove_file(dir.join("web/widget.js")).expect("removing the module");
+        std::os::unix::fs::symlink(&outside, dir.join("web/widget.js")).expect("linking");
+
+        let registry = Registry::load(root.path());
+        let entry = registry
+            .ui_module("org.test.ui", "web/widget.js")
+            .expect("looking up")
+            .expect("the manifest still declares it");
+
+        assert!(
+            read_ui_module(entry, "web/widget.js").is_none(),
+            "a link out of the bundle must not be read"
+        );
+    }
+
+    #[test]
+    fn a_declared_module_the_bundle_lacks_is_a_missing_read() {
+        let root = Bundle::new("ui-absent");
+        let dir = write_ui_bundle(root.path(), "org.test.ui", "web/widget.js");
+        std::fs::remove_file(dir.join("web/widget.js")).expect("removing the module");
+        let registry = Registry::load(root.path());
+        let entry = registry
+            .ui_module("org.test.ui", "web/widget.js")
+            .expect("looking up")
+            .expect("declared");
+
+        assert!(read_ui_module(entry, "web/widget.js").is_none());
+    }
+
+    #[test]
+    fn a_real_module_is_read_back() {
+        let root = Bundle::new("ui-read");
+        write_ui_bundle(root.path(), "org.test.ui", "web/widget.js");
+        let registry = Registry::load(root.path());
+        let entry = registry
+            .ui_module("org.test.ui", "web/widget.js")
+            .expect("looking up")
+            .expect("declared");
+
+        assert_eq!(
+            read_ui_module(entry, "web/widget.js").expect("the bytes"),
+            b"export const hello = 1;"
+        );
+    }
+
+    #[test]
+    fn an_alias_finds_the_ui_module_too() {
+        let root = Bundle::new("ui-alias");
+        let dir = write_bundle_with_alias(
+            root.path(),
+            "org.test.aliased",
+            Some("short"),
+            &digest(&wasm()),
+            "/greeting",
+        );
+        std::fs::create_dir_all(dir.join("web")).expect("creating");
+        std::fs::write(dir.join("web/w.js"), "x").expect("writing");
+        let manifest = std::fs::read_to_string(dir.join("plugin.toml")).expect("reading");
+        std::fs::write(
+            dir.join("plugin.toml"),
+            format!("{manifest}\n[[ui]]\nslot = \"dashboard.widget\"\ntag = \"anth-test\"\nmodule = \"web/w.js\"\n"),
+        )
+        .expect("writing");
+
+        let registry = Registry::load(root.path());
+
+        assert!(registry.ui_module("short", "web/w.js").unwrap().is_some());
     }
 }

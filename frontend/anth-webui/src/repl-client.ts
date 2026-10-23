@@ -24,8 +24,24 @@ export interface PluginSummary {
   name: string;
   version: string;
   anchors: string[];
+  /**
+   * Where the bundle asks to be mounted, when it asks at all.
+   *
+   * Absent rather than empty for a plugin that declares no UI, so a caller can
+   * tell "no slots" from "the field was not sent" by the same rule the daemon
+   * uses. `module` is a path inside the bundle, served at `/p/<id>/<module>`.
+   */
+  ui?: UiSlot[];
   /** `null` when the plugin loaded; the reason when it did not. */
   disabled_reason: string | null;
+}
+
+/** One mount point a bundle declares. */
+export interface UiSlot {
+  slot: string;
+  tag: string;
+  module: string;
+  label?: string;
 }
 
 export function readHostInfo(base = ""): Promise<HostInfo> {

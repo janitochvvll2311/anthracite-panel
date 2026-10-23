@@ -30,6 +30,7 @@ use serde_json::json;
 use anth_wire::{ErrorKind, PluginPipe, Request, Response, WireError};
 
 use crate::dispatch::Daemon;
+use crate::plugins::registry::read_ui_module;
 
 /// The router, with the daemon it answers from.
 ///
@@ -85,22 +86,53 @@ async fn host_info(State(state): State<AppState>) -> Result<impl IntoResponse, A
 /// conflict the operator has to resolve. The query string becomes the anchor's
 /// query, so a plugin that reads `?name=Ana` gets it without the panel knowing
 /// what a name is.
+/// `/p/<id>/<module>`, split into its parts.
+///
+/// Hand-parsed rather than routed because axum refuses to register a nested
+/// route under a catch-all: `/p/{id}/{*module}` beside `/p/{*path}` is a
+/// startup panic, not a routing preference. So the catch-all keeps the whole
+/// path and asks this whether it names a plugin file.
+///
+/// The module part is kept exactly as the URL spelled it, because it is
+/// compared against the manifest's own `module` string. Anything that rewrote
+/// it on the way through — dropping a `web/` prefix, say — would have the URL
+/// and the declaration disagree about the same file, and the allowlist would
+/// then have to guess which spelling it is checking.
+struct PluginFile<'a> {
+    id: &'a str,
+    module: &'a str,
+}
+
+fn split_plugin_file(path: &str) -> Option<PluginFile<'_>> {
+    let (id, module) = path.strip_prefix('/')?.split_once('/')?;
+    let (id, module) = (id.trim(), module.trim());
+    (!id.is_empty() && !module.is_empty()).then_some(PluginFile { id, module })
+}
+
 async fn anchor(
     State(state): State<AppState>,
     axum::extract::Path(path): axum::extract::Path<String>,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> Result<HttpResponse, ApiError> {
     let path = format!("/{path}");
-    let (entry, _loaded) = state
-        .0
-        .anchor_owner("GET", &path)
-        .map_err(ApiError)?
-        .ok_or_else(|| {
-            ApiError(WireError::new(
-                ErrorKind::NotFound,
-                format!("no anchor {path}"),
-            ))
-        })?;
+    // Anchors first. They are the older contract and a plugin that declares
+    // both an anchor and a file at one path means the anchor: a UI module is
+    // served so a browser can load it, while an anchor is an operation the
+    // plugin asked to expose. Only when no plugin claims the path does it get
+    // read as a file, which is also why an unknown `/p/a/b` reports "no anchor"
+    // rather than pretending a file was meant.
+    let owner = state.0.anchor_owner("GET", &path).map_err(ApiError)?;
+    if owner.is_none()
+        && let Some(file) = split_plugin_file(&path)
+    {
+        return web_module(state, file).await;
+    }
+    let (entry, _loaded) = owner.ok_or_else(|| {
+        ApiError(WireError::new(
+            ErrorKind::NotFound,
+            format!("no anchor {path}"),
+        ))
+    })?;
     let id = entry.id.clone();
 
     let body = serde_json::json!({
@@ -122,6 +154,46 @@ async fn anchor(
 /// canonical plugin's. An id that is not installed and a path that plugin does
 /// not declare are both a `404`, so the route cannot be used to enumerate other
 /// plugins' anchors.
+/// Serves one UI module a bundle declared.
+///
+/// The answer is the file's bytes with a type by extension, not a plugin call:
+/// a module is an asset the daemon reads, not something the guest runs, so it
+/// needs no sandbox and no transport. It is still gated on the plugin being
+/// usable: a disabled bundle never produced a validated manifest, so it has no
+/// declaration to serve and no claim worth trusting.
+async fn web_module(state: AppState, web: PluginFile<'_>) -> Result<HttpResponse, ApiError> {
+    let known = state.0.has_plugin(web.id).map_err(ApiError)?;
+    let entry = state
+        .0
+        .ui_module(web.id, web.module)
+        .map_err(ApiError)?
+        .ok_or_else(|| {
+            let message = if known {
+                format!("plugin `{}` declares no ui module `{}`", web.id, web.module)
+            } else {
+                // `/p/greeting/x` names no plugin at all; answering "declares
+                // no module" would blame a plugin that does not exist.
+                format!("no plugin `{}`", web.id)
+            };
+            ApiError(WireError::new(ErrorKind::NotFound, message))
+        })?;
+
+    let bytes = read_ui_module(entry, web.module).ok_or_else(|| {
+        ApiError(WireError::new(
+            ErrorKind::NotFound,
+            format!(
+                "plugin `{}` declares `{}` but the bundle does not hold it",
+                entry.id, web.module
+            ),
+        ))
+    })?;
+
+    Ok(file_into_response(crate::www::Asset {
+        bytes: std::borrow::Cow::Owned(bytes),
+        content_type: crate::www::content_type_for(std::path::Path::new(web.module)),
+    }))
+}
+
 async fn scoped_anchor(
     State(state): State<AppState>,
     axum::extract::Path((id, path)): axum::extract::Path<(String, String)>,

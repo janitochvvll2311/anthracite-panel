@@ -716,6 +716,7 @@ mod render {
                 name: "Aliased".into(),
                 version: "0.2.0".into(),
                 anchors: vec!["GET /greeting".into()],
+                ui: vec![],
                 disabled_reason: None,
             },
             PluginSummary {
@@ -724,6 +725,7 @@ mod render {
                 name: "Plain".into(),
                 version: "0.2.0".into(),
                 anchors: vec![],
+                ui: vec![],
                 disabled_reason: Some("the bundle was rewritten".into()),
             },
         ]);
@@ -1255,5 +1257,240 @@ mod www {
         assert!(!crate::www::available_at(dir.path()));
         dir.write("index.html", "<!doctype html>");
         assert!(crate::www::available_at(dir.path()));
+    }
+}
+
+/// Serving a plugin's web assets: `/p/<id>/web/<module>`.
+///
+/// Driven through the real router and a real bundle on disk, because the part
+/// worth testing is the decision about *which files may be read*, and a mocked
+/// registry would let a broken allowlist pass.
+mod plugin_web {
+    use crate::api::router;
+    use crate::dispatch::Daemon;
+    use crate::plugins::registry::Registry;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use sha2::{Digest, Sha256};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    const GUEST: &str = r#"
+(module
+  (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
+  (import "env" "anth_log" (func $log (param i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 1024) "\7b\22status\22:200,\22value\22:null\7d")
+  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_alloc") (param i32) (result i32) (i32.const 2048))
+  (func (export "anth_free") (param i32 i32))
+  (func (export "anth_http") (param i32 i32) (result i64)
+    (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 27)))
+)
+"#;
+
+    struct Root(PathBuf);
+
+    impl Root {
+        fn new(label: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir()
+                .join(format!("anth-web-{label}-{}-{nanos}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("creating the root");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Writes a loadable bundle with one web module declared.
+    fn bundle(root: &Path, id: &str, module: &str) -> PathBuf {
+        let wasm = wat::parse_str(GUEST).expect("the guest compiles");
+        let digest = hex(&Sha256::digest(&wasm));
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).expect("creating the bundle");
+        std::fs::write(dir.join("plugin.wasm"), &wasm).expect("writing the module");
+        std::fs::write(
+            dir.join("plugin.toml"),
+            format!(
+                r#"
+[plugin]
+id = "{id}"
+version = "0.2.0"
+name = "Web"
+abi = 2
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "{digest}"
+
+[[api]]
+method = "GET"
+path = "/greeting"
+
+[[ui]]
+slot = "dashboard.widget"
+tag = "anth-web"
+module = "{module}"
+"#
+            ),
+        )
+        .expect("writing the manifest");
+        let file = dir.join(module);
+        std::fs::create_dir_all(file.parent().expect("a parent")).expect("creating web");
+        std::fs::write(&file, "export const widget = 1;").expect("writing the asset");
+        dir
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    async fn get(root: &Path, uri: &str) -> (u16, String, String) {
+        let router = router(Arc::new(Daemon::new(Registry::load(root))));
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("a request"),
+            )
+            .await
+            .expect("the router answers");
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        (
+            status,
+            content_type,
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_declared_module_is_served_as_javascript() {
+        let root = Root::new("served");
+        bundle(root.path(), "org.test.web", "web/widget.js");
+
+        let (status, content_type, body) = get(root.path(), "/p/org.test.web/web/widget.js").await;
+
+        assert_eq!(status, 200, "body: {body}");
+        assert_eq!(content_type, "text/javascript; charset=utf-8");
+        assert_eq!(body, "export const widget = 1;");
+    }
+
+    /// The whole point of the allowlist: the wasm and the manifest sit in the
+    /// same directory, and neither may be downloaded.
+    #[tokio::test]
+    async fn a_bundles_wasm_and_manifest_are_not_downloadable() {
+        let root = Root::new("private");
+        bundle(root.path(), "org.test.web", "web/widget.js");
+        let router = router(Arc::new(Daemon::new(Registry::load(root.path()))));
+
+        for uri in [
+            "/p/org.test.web/web/plugin.wasm",
+            "/p/org.test.web/web/plugin.toml",
+            "/p/org.test.web/web/../plugin.wasm",
+            "/p/org.test.web/web/../plugin.toml",
+            "/p/org.test.web/web/other.js",
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    HttpRequest::builder()
+                        .uri(uri)
+                        .body(Body::empty())
+                        .expect("a request"),
+                )
+                .await
+                .expect("the router answers");
+            assert_eq!(
+                response.status().as_u16(),
+                404,
+                "`{uri}` must not be served"
+            );
+        }
+    }
+
+    /// Two different `404`s. A caller who typed the wrong plugin id must not be
+    /// told that some other, real plugin fails to declare the module: the
+    /// message is the only thing that says which half of `/p/<id>/<module>` was
+    /// wrong, and it names an id the caller never used if it guesses.
+    #[tokio::test]
+    async fn the_two_not_found_reasons_do_not_get_confused() {
+        let root = Root::new("reasons");
+        bundle(root.path(), "org.test.web", "web/widget.js");
+
+        let (status, _, unknown_plugin) = get(root.path(), "/p/org.test.nope/web/widget.js").await;
+        assert_eq!(status, 404);
+        assert!(
+            !unknown_plugin.contains("declares no ui module"),
+            "blamed a plugin that does not exist: {unknown_plugin}"
+        );
+        assert!(unknown_plugin.contains("org.test.nope"), "{unknown_plugin}");
+
+        let (status, _, unknown_module) = get(root.path(), "/p/org.test.web/web/nope.js").await;
+        assert_eq!(status, 404);
+        assert!(
+            unknown_module.contains("declares no ui module"),
+            "{unknown_module}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_undeclared_plugin_is_a_not_found_that_names_it() {
+        let root = Root::new("unknown");
+        bundle(root.path(), "org.test.web", "web/widget.js");
+
+        let (status, _, body) = get(root.path(), "/p/org.test.nope/web/widget.js").await;
+
+        assert_eq!(status, 404);
+        assert!(body.contains("org.test.nope"), "got: {body}");
+    }
+
+    /// A disabled bundle has no validated manifest, so it has nothing to
+    /// declare. It must not read as "no such module": the reason is the answer.
+    #[tokio::test]
+    async fn a_disabled_plugin_explains_instead_of_serving() {
+        let root = Root::new("disabled");
+        let dir = bundle(root.path(), "org.test.web", "web/widget.js");
+        std::fs::write(dir.join("plugin.wasm"), b"not the approved bytes")
+            .expect("rewriting the module");
+
+        let (status, _, body) = get(root.path(), "/p/org.test.web/web/widget.js").await;
+
+        assert_eq!(status, 403);
+        assert!(body.contains("disabled"), "got: {body}");
+    }
+
+    /// The web dispatch lives in the anchor catch-all, so the anchors it shares
+    /// that route with must keep working.
+    #[tokio::test]
+    async fn an_anchor_still_answers_beside_the_web_route() {
+        let root = Root::new("anchor");
+        bundle(root.path(), "org.test.web", "web/widget.js");
+
+        let (status, _, body) = get(root.path(), "/p/greeting").await;
+
+        assert_eq!(status, 200, "body: {body}");
     }
 }
