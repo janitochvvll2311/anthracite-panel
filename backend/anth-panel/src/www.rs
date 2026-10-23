@@ -25,6 +25,17 @@ use std::path::{Component, Path};
 /// frontend's build output.
 pub const EXCLUDED: &[&str] = &["harness.html"];
 
+/// Whether `path` names a file the shell refuses to serve.
+///
+/// Separate from the lookup so the guarantee is one pure decision, checked the
+/// same way whatever the source is. Release embeds its files at compile time,
+/// so a test there cannot put `harness.html` in front of [`get`] to watch it be
+/// refused — the only way to test that build's exclusion would be to ship the
+/// file it exists to hide.
+pub fn denied(path: &str) -> bool {
+    EXCLUDED.contains(&path)
+}
+
 /// One file the shell answers with.
 pub struct Asset {
     pub bytes: Cow<'static, [u8]>,
@@ -85,7 +96,7 @@ pub fn root() -> PathBuf {
 /// and `"/"` both mean the index.
 pub fn get(path: &str) -> Option<Asset> {
     let path = normalise(path)?;
-    if EXCLUDED.iter().any(|excluded| excluded == &path) {
+    if denied(&path) {
         return None;
     }
     if path.is_empty() {
@@ -114,7 +125,7 @@ pub fn get(path: &str) -> Option<Asset> {
 #[cfg(debug_assertions)]
 pub fn lookup(root: &Path, path: &str) -> Option<Asset> {
     let path = normalise(path)?;
-    if EXCLUDED.iter().any(|excluded| excluded == &path) {
+    if denied(&path) {
         return None;
     }
     let resolved = root.join(&path).canonicalize().ok()?;

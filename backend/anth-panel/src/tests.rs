@@ -976,7 +976,7 @@ mod socket {
 mod www {
     use crate::api::router;
     use crate::dispatch::Daemon;
-    use crate::www::{EXCLUDED, content_type_for, normalise};
+    use crate::www::{content_type_for, denied, normalise};
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
@@ -1094,11 +1094,22 @@ mod www {
         let dir = Shell::new("harness");
         dir.write("harness.html", "<p>dev</p>");
 
-        assert!(EXCLUDED.contains(&"harness.html"));
+        assert!(denied("harness.html"));
         assert!(
             dir.get("harness.html").is_none(),
             "the harness must not be reachable"
         );
+    }
+
+    /// The same guarantee, in a build whose files were embedded at compile
+    /// time. `denied` is what both sources consult, and it needs no fixture,
+    /// so the exclusion is checked in the profile that ships.
+    #[test]
+    fn the_harness_is_denied_by_name_in_every_profile() {
+        assert!(denied("harness.html"));
+        assert!(!denied("index.html"));
+        assert!(!denied("assets/harness.html.js"));
+        assert!(!denied(""));
     }
 
     /// A symlink inside the tree that points outside it must not be followed:

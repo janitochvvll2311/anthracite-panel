@@ -54,6 +54,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # The binary that ships is a release build, and release is not the same
+      # code: `www` embeds its files instead of reading them, so its whole
+      # lookup is a different branch that a debug run never enters. Testing one
+      # profile and shipping the other is how a green suite misses a broken
+      # deployed build.
+      - name: Test (release)
+        run: cargo test --workspace --release
+
   web:
     name: web
     runs-on: ubuntu-latest
