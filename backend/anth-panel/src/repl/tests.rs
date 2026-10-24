@@ -597,7 +597,10 @@ mod completion {
 
     #[test]
     fn a_deeper_prefix_reaches_the_nested_subcommands() {
-        assert_eq!(texts(&["plugin", ""]), vec!["call", "list"]);
+        assert_eq!(
+            texts(&["plugin", ""]),
+            vec!["call", "install", "list", "remove"]
+        );
         assert_eq!(texts(&["plugin", "ca"]), vec!["call"]);
     }
 
@@ -816,7 +819,7 @@ mod prompt {
             .expect("a list of candidates");
 
         let names: Vec<String> = offered.into_iter().map(|c| c.text).collect();
-        assert_eq!(names, vec!["call", "list"]);
+        assert_eq!(names, vec!["call", "install", "list", "remove"]);
     }
 
     /// A second Tab with nothing typed between inserts the shared prefix rather

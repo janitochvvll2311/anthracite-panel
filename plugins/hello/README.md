@@ -46,8 +46,20 @@ Needs `rustup target add wasm32-unknown-unknown` once, plus `zip`.
 
 That builds the wasm module, bundles the frontend, writes the module's sha256
 into a copy of `plugin.toml`, and produces `dist/org.anth.hello.zip` containing
-`plugin.toml`, `plugin.wasm` and `web/hello.js`. It then unpacks that zip into
-`plugins/bundles/org.anth.hello/`, which is what a daemon reads:
+`plugin.toml`, `plugin.wasm` and `web/hello.js`.
+
+The panel can install that zip itself, which is the same unpacking with the
+checks the daemon would apply at load time — digest, manifest, module — done
+before anything lands in the registry:
+
+```bash
+ANTH_PLUGINS=$(cd ../bundles && pwd) anth-panel plugin install dist/org.anth.hello.zip
+```
+
+It refuses an id that is already installed unless `--force` is passed, and it
+does not need a running daemon: the registry is read at startup, so start or
+restart one afterwards. `package.sh` still unpacks the zip into
+`plugins/bundles/org.anth.hello/` on its own, which is what a daemon reads:
 
 ```bash
 ANTH_PLUGINS=$(cd ../bundles && pwd) anth-panel run

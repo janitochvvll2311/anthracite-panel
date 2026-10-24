@@ -47,7 +47,7 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/socket.rs           #   Unix listener, connection loop, client
     src/table.rs            #   the one bordered-grid renderer
     src/render.rs           #   rows for host-info and plugin list, into Table
-    src/plugins/            #   manifest, registry, and runtime/ (wasmi, grants)
+    src/plugins/            #   manifest, registry, install, runtime/ (wasmi, grants)
     src/repl/               #   the stdin REPL: prompt, editor, keys, history
 
 frontend/                   # Bun workspace, bun.lock committed
@@ -357,3 +357,53 @@ plugin is expected to contain behaviour only.
   pipe with no mapper at all — the caller already speaks the plugin's vocabulary,
   which is also what makes a plugin testable without either transport.
 
+
+## Installing a bundle
+
+`plugin install <bundle.zip>` is the only command that puts new code on disk,
+and it is deliberately **not** a daemon request. The socket may run a plugin —
+but only one the operator already installed, whose digest the host re-checks on
+every load. A request that installed would turn "may talk to the daemon" into
+"may run anything as the daemon", which is a far larger grant than anything else
+in `Request`. So `plugin install` is local: it needs the same write access to
+`ANTH_PLUGINS` that copying a directory there by hand would need.
+
+`plugins/install.rs` is ordered so a refusal leaves nothing behind:
+
+1. open the zip and reject more than `MAX_ENTRIES` entries;
+2. plan every member — refuse `..`, absolute paths, `./`, backslashes, symlink
+   entries, names outside `plugin.toml` / `plugin.wasm` / `web/`, and names that
+   appear twice — before creating a single directory;
+3. extract into a hidden `.staging-*` directory, counting bytes as they are
+   written rather than trusting the size the archive declares;
+4. parse the manifest, compare the digest, then **compile** the module, because a
+   digest proves these are the approved bytes and says nothing about whether they
+   parse; a bundle that installs and traps on every call is worse than one that
+   never installs;
+5. rename into `ANTH_PLUGINS/<id>`, moving an existing bundle aside first and
+   putting it back if that rename fails.
+
+The `Staging` guard removes the directory on every early return, `?` included.
+`--force` is opt-in: installing the same id twice is a `Conflict`, not a silent
+overwrite of what the operator approved. The daemon reads its registry at
+startup, so an install takes effect on the next start — the CLI says so rather
+than implying the running daemon noticed.
+
+Two refusals can answer the same question — `safe_member` rejects `..` and the
+member allowlist would reject `../x` anyway. Each rule is pinned where it lives:
+a test that only drove the archive passed while `safe_member` accepted `..`,
+which made it useless as a guard on that function.
+
+`plugin remove <id>` is local for the same reason. The id is validated inside
+`plugin_dir` rather than at the call site, because the result feeds
+`remove_dir_all`: `plugin remove ../victim` would otherwise delete a sibling of
+the registry. Two further guards keep removal narrow — the target must be a
+directory, not a symlink, and it must hold a `plugin.toml`, so a registry root
+that also holds something else is not pruned entry by entry. A test that only
+planted a plain directory would pass with the id validation deleted, because the
+manifest guard refuses it too; the escaping-id test therefore plants a *valid*
+plugin outside the root, so it fails on the validation and nothing else.
+
+Removing a bundle does not unload it: a running daemon already has the module in
+memory and keeps answering until it restarts. That is the same startup-read
+model as `install`, and it is why the command says nothing about the daemon.

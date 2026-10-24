@@ -232,7 +232,7 @@ impl Manifest {
 
 /// A plugin id is a dotted lowercase name, which is also what `package.sh`
 /// writes. Restricting it here means a path built from an id cannot escape.
-fn validate_id(id: &str) -> Result<(), WireError> {
+pub(crate) fn validate_id(id: &str) -> Result<(), WireError> {
     if id.is_empty() {
         return Err(WireError::invalid("the manifest declares no id"));
     }

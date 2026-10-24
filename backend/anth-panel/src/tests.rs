@@ -382,9 +382,45 @@ mod main {
         assert!(!cli.interactive);
     }
 
-    /// A caller typing a line is standing where the plugin's CLI stands, so that
-    /// is the pipe it gets without asking. Defaulting to `direct` made every
-    /// `plugin call <id> greet` fail as "not a request".
+    /// `plugin install` is not a plugin call, so it has no pipe to stand in for.
+    ///
+    /// The daemon never sees it — installing is local — so the arm had to answer
+    /// `None` rather than pick one, which would have made a filesystem action
+    /// look like something the socket could ask for.
+    #[test]
+    fn an_install_is_not_a_pipe() {
+        let cli = Cli::try_parse_from([
+            "anth-panel",
+            "plugin",
+            "install",
+            "plugins/hello/dist/org.anth.hello.zip",
+        ])
+        .expect("parsing");
+
+        let Some(Command::Plugin { action }) = cli.command else {
+            panic!("expected a plugin command");
+        };
+        assert_eq!(action.pipe(), None);
+        assert!(!action.force());
+    }
+
+    #[test]
+    fn install_force_replaces_and_defaults_to_refusing() {
+        let plain =
+            Cli::try_parse_from(["anth-panel", "plugin", "install", "a.zip"]).expect("parsing");
+        let forced = Cli::try_parse_from(["anth-panel", "plugin", "install", "a.zip", "--force"])
+            .expect("parsing");
+
+        let bundle = |cli: Cli| match cli.command {
+            Some(Command::Plugin {
+                action: PluginAction::Install { bundle, force },
+            }) => (bundle, force),
+            other => panic!("expected an install, got {other:?}"),
+        };
+        assert_eq!(bundle(plain), ("a.zip".to_string(), false));
+        assert_eq!(bundle(forced), ("a.zip".to_string(), true));
+    }
+
     #[test]
     fn a_plugin_call_defaults_to_the_cli_pipe() {
         let cli = Cli::try_parse_from([
@@ -399,7 +435,7 @@ mod main {
         let Some(Command::Plugin { action }) = cli.command else {
             panic!("expected a plugin command");
         };
-        assert_eq!(action.pipe(), PluginPipe::Cli);
+        assert_eq!(action.pipe(), Some(PluginPipe::Cli));
     }
 
     #[test]
@@ -417,7 +453,7 @@ mod main {
         let Some(Command::Plugin { action }) = cli.command else {
             panic!("expected a plugin command");
         };
-        assert_eq!(action.pipe(), PluginPipe::Direct);
+        assert_eq!(action.pipe(), Some(PluginPipe::Direct));
     }
 
     #[test]
@@ -435,7 +471,7 @@ mod main {
         let Some(Command::Plugin { action }) = cli.command else {
             panic!("expected a plugin command");
         };
-        assert_eq!(action.pipe(), PluginPipe::Http);
+        assert_eq!(action.pipe(), Some(PluginPipe::Http));
     }
 
     /// The plugin owns its flags, so the panel must not claim them. Without
@@ -463,7 +499,10 @@ mod main {
         let PluginAction::Call { line, .. } = &action else {
             panic!("expected a call");
         };
-        assert_eq!(crate::payload(line, action.pipe()), "greet --name Ana");
+        assert_eq!(
+            crate::payload(line, action.pipe().expect("a call has a pipe")),
+            "greet --name Ana"
+        );
     }
 
     /// A word with a space in it arrives as one argument because the shell
@@ -493,11 +532,14 @@ mod main {
         // The panel's own splitter is the oracle: it must read the name back as
         // the single word the caller typed.
         assert_eq!(
-            crate::payload(line, action.pipe()),
+            crate::payload(line, action.pipe().expect("a call has a pipe")),
             "greet --name 'Ana Sol'"
         );
         assert_eq!(
-            crate::repl::split(&crate::payload(line, action.pipe())),
+            crate::repl::split(&crate::payload(
+                line,
+                action.pipe().expect("a call has a pipe")
+            )),
             vec!["greet", "--name", "Ana Sol"]
         );
     }
@@ -524,11 +566,14 @@ mod main {
             panic!("expected a call");
         };
         assert_eq!(
-            crate::payload(line, action.pipe()),
+            crate::payload(line, action.pipe().expect("a call has a pipe")),
             "greet --name 'Ana Sol'"
         );
         assert_eq!(
-            crate::repl::split(&crate::payload(line, action.pipe())),
+            crate::repl::split(&crate::payload(
+                line,
+                action.pipe().expect("a call has a pipe")
+            )),
             vec!["greet", "--name", "Ana Sol"]
         );
     }

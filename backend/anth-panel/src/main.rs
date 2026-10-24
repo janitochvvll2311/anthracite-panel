@@ -99,6 +99,30 @@ enum PluginAction {
         #[arg(long)]
         direct: bool,
     },
+    /// Install a bundle produced by `package.sh`.
+    ///
+    /// Local, not a daemon request: see `plugins::install` for why the socket is
+    /// not allowed to add code. The daemon reads its registry at startup, so a
+    /// running one does not see the change until it restarts.
+    Install {
+        /// Path to the `.zip` `package.sh` wrote.
+        bundle: String,
+
+        /// Replace a bundle already installed under the same id.
+        ///
+        /// Off by default so installing the same file twice is a refusal rather
+        /// than a silent overwrite of what the operator approved.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove an installed bundle.
+    ///
+    /// Local, like `install`. The directory must hold a `plugin.toml`, so a
+    /// registry root that also holds something else is not pruned by accident.
+    Remove {
+        /// The plugin's id, as `plugin list` shows it.
+        id: String,
+    },
 }
 
 impl PluginAction {
@@ -108,13 +132,21 @@ impl PluginAction {
     /// typing `plugin call org.anth.hello greet` is standing where the plugin's
     /// own CLI would stand. `--direct` is the escape hatch for the plugin's own
     /// vocabulary, and `--http` for an anchor body.
-    fn pipe(&self) -> PluginPipe {
+    fn pipe(&self) -> Option<PluginPipe> {
         match self {
-            PluginAction::Call { http: true, .. } => PluginPipe::Http,
-            PluginAction::Call { direct: true, .. } => PluginPipe::Direct,
-            PluginAction::Call { .. } => PluginPipe::Cli,
-            PluginAction::List => PluginPipe::Cli,
+            PluginAction::Call { http: true, .. } => Some(PluginPipe::Http),
+            PluginAction::Call { direct: true, .. } => Some(PluginPipe::Direct),
+            PluginAction::Call { .. } => Some(PluginPipe::Cli),
+            // An install never reaches the daemon. `None` rather than a default
+            // keeps that visible in the type instead of pretending a filesystem
+            // action has a transport.
+            PluginAction::Install { .. } | PluginAction::Remove { .. } | PluginAction::List => None,
         }
+    }
+
+    /// Whether the install path may replace an existing bundle.
+    fn force(&self) -> bool {
+        matches!(self, PluginAction::Install { force: true, .. })
     }
 }
 
@@ -186,18 +218,75 @@ async fn dispatch_command(socket: &std::path::Path, command: Option<Command>) ->
         Command::HostInfo => client(socket, Request::HostInfo).await,
         Command::Plugin { action } => match &action {
             PluginAction::List => client(socket, Request::PluginList).await,
+            PluginAction::Install { bundle, .. } => {
+                install(std::path::Path::new(bundle), action.force())
+            }
+            PluginAction::Remove { id } => remove(id),
             PluginAction::Call { id, line, .. } => {
+                // `pipe` is `None` only for the arms matched above, so a call
+                // always has one; the fallback keeps that out of a panic.
+                let Some(pipe) = action.pipe() else {
+                    eprintln!("anth-panel: internal: a plugin call without a transport");
+                    return ExitCode::from(2);
+                };
                 client(
                     socket,
                     Request::PluginCall {
                         id: id.clone(),
-                        pipe: action.pipe(),
-                        payload: payload(line, action.pipe()),
+                        pipe,
+                        payload: payload(line, pipe),
                     },
                 )
                 .await
             }
         },
+    }
+}
+
+/// Installs a bundle and says where it went.
+///
+/// Local, so it ignores `--socket`: there is no daemon to ask. The message names
+/// the restart because a running daemon read its registry at startup and will
+/// not show the new plugin until it is started again.
+fn install(bundle: &std::path::Path, force: bool) -> ExitCode {
+    let root = plugins::registry::default_root();
+    match plugins::install::install(bundle, &root, force) {
+        Ok(installed) => {
+            println!(
+                "installed {} {} into {}",
+                installed.id,
+                installed.version,
+                installed.dir.display()
+            );
+            println!(
+                "  {} anchor(s), {} ui slot(s)",
+                installed.anchors, installed.slots
+            );
+            println!("restart the daemon to load it");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("anth-panel: {}", error.message);
+            ExitCode::from(error.kind.exit_code())
+        }
+    }
+}
+
+/// Removes an installed bundle.
+///
+/// Local, so it ignores `--socket`. The path goes to stdout and everything else
+/// to stderr, so a script can capture what was removed without parsing prose.
+fn remove(id: &str) -> ExitCode {
+    let root = plugins::registry::default_root();
+    match plugins::install::remove(&root, id) {
+        Ok(dir) => {
+            println!("{}", dir.display());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("anth-panel: {}", error.message);
+            ExitCode::from(error.kind.exit_code())
+        }
     }
 }
 
