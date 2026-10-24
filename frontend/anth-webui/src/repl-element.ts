@@ -7,6 +7,7 @@
  * `AnthApp.client` provides for host info.
  */
 
+import { completeLine } from "./repl-completion";
 import type { ReplBackend, ReplLine } from "./repl";
 import { helpText, runLine } from "./repl";
 
@@ -131,6 +132,17 @@ export class AnthRepl extends HTMLElement {
           const value = input.value;
           input.value = "";
           void this.submit(value);
+        } else if (key === "Tab") {
+          // Tab would otherwise move focus out of the prompt, which reads as
+          // the console losing the keystroke.
+          event.preventDefault();
+          const done = completeLine(input.value);
+          input.value = done.line;
+          input.setSelectionRange(done.line.length, done.line.length);
+          if (done.matches.length > 0) {
+            this.#push({ kind: "output", text: done.matches.join("  ") });
+            this.render();
+          }
         } else if (key === "ArrowUp") {
           event.preventDefault();
           const previous = this.previous();

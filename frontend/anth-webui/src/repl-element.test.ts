@@ -103,3 +103,84 @@ describe("anth-repl", () => {
     });
   });
 });
+
+describe("anth-repl keys", () => {
+  /** Types `text` into the prompt's input, as a user would before a key. */
+  function type(element: AnthRepl, text: string): HTMLInputElement {
+    const input = element.shadowRoot?.querySelector("input");
+    if (!input) {
+      throw new Error("the prompt rendered no input");
+    }
+    input.value = text;
+    return input;
+  }
+
+  function press(input: HTMLInputElement, key: string): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    input.dispatchEvent(event);
+    return event;
+  }
+
+  test("Tab completes the word and keeps the cursor at the end", () => {
+    const input = type(mount(), "pl");
+    press(input, "Tab");
+
+    expect(input.value).toBe("plugin ");
+    expect(input.selectionStart).toBe(input.value.length);
+  });
+
+  test("Tab prevents the browser from moving focus out of the prompt", () => {
+    const input = type(mount(), "pl");
+    const event = press(input, "Tab");
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  test("Tab with several matches lists them in the transcript", () => {
+    const element = mount();
+    const input = type(element, "");
+    press(input, "Tab");
+
+    expect(input.value).toBe("");
+    const last = element.lines.at(-1);
+    expect(last?.kind).toBe("output");
+    expect(last?.text).toContain("host-info");
+    expect(last?.text).toContain("plugin");
+  });
+
+  test("Enter submits the typed line and clears the input", async () => {
+    const element = mount();
+    const input = type(element, "host-info");
+    press(input, "Enter");
+
+    // The listener calls `submit`, which awaits the backend, so the transcript
+    // is only complete after a turn of the microtask queue.
+    await Bun.sleep(0);
+
+    expect(input.value).toBe("");
+    expect(
+      element.lines.some(
+        (line) => line.kind === "input" && line.text === "host-info",
+      ),
+    ).toBe(true);
+  });
+
+  test("ArrowUp recalls the previous line and ArrowDown clears past the end", async () => {
+    const element = mount();
+    await element.submit("host-info");
+
+    const input = type(element, "");
+    press(input, "ArrowUp");
+    expect(input.value).toBe("host-info");
+
+    press(input, "ArrowDown");
+    expect(input.value).toBe("");
+  });
+
+  test("ArrowUp on an empty history leaves the input alone", () => {
+    const input = type(mount(), "half a command");
+    press(input, "ArrowUp");
+
+    expect(input.value).toBe("half a command");
+  });
+});

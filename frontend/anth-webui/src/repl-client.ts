@@ -21,6 +21,11 @@ export interface PluginCall {
 /** One plugin as `GET /api/plugins` lists it. */
 export interface PluginSummary {
   id: string;
+  /**
+   * The short handle the bundle declared, if any. The daemon omits the field
+   * rather than sending an empty string, so its presence is the whole answer.
+   */
+  alias?: string;
   name: string;
   version: string;
   anchors: string[];
@@ -41,6 +46,7 @@ export interface UiSlot {
   slot: string;
   tag: string;
   module: string;
+  /** An optional caption the bundle supplies; absent when it supplied none. */
   label?: string;
 }
 

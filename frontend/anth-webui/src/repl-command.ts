@@ -78,24 +78,38 @@ function parsePlugin(words: string[]): ReplCommand {
     );
   }
 
-  const [id, ...tail] = rest;
-  if (id === undefined) {
-    throw new CommandError("`plugin call` needs a plugin id");
-  }
-
-  // The flags can appear anywhere after the id, so they are pulled out and the
+  // The flags can appear anywhere after `call`, so they are pulled out and the
   // remaining words are the line. Stripping them from the tail instead would
   // make the line depend on where they were typed.
+  //
+  // They are pulled out of the words *before* the id too: clap reads a flag
+  // wherever it appears, so `plugin call --http hello` reaches the HTTP pipe in
+  // the CLI. Taking the first word as the id would have sent `--http` as a
+  // plugin id instead, which is a different command wearing the same text.
+  //
+  // `--` ends the panel's own flags, as it does in the CLI: everything after it
+  // belongs to the plugin, so `plugin call hello -- greet --http` passes
+  // `--http` through instead of standing in for the HTTP pipe.
   let pipe: "cli" | "http" | "direct" = "cli";
-  const line: string[] = [];
-  for (const word of tail) {
-    if (word === "--http") {
+  const operands: string[] = [];
+  let passthrough = false;
+  for (const word of rest) {
+    if (passthrough) {
+      operands.push(word);
+    } else if (word === "--") {
+      passthrough = true;
+    } else if (word === "--http") {
       pipe = "http";
     } else if (word === "--direct") {
       pipe = "direct";
     } else {
-      line.push(word);
+      operands.push(word);
     }
+  }
+
+  const [id, ...line] = operands;
+  if (id === undefined) {
+    throw new CommandError("`plugin call` needs a plugin id");
   }
 
   return { kind: "plugin-call", id, line: line.join(" "), pipe };

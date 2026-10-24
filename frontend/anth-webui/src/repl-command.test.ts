@@ -111,6 +111,24 @@ describe("parseCommand", () => {
     });
   });
 
+  test("a flag before the id selects the pipe, as clap reads it", () => {
+    expect(parseCommand("plugin call --http hello")).toEqual({
+      kind: "plugin-call",
+      id: "hello",
+      line: "",
+      pipe: "http",
+    });
+  });
+
+  test("`--` hands the rest to the plugin, hyphenated words included", () => {
+    expect(parseCommand("plugin call hello -- greet --http")).toEqual({
+      kind: "plugin-call",
+      id: "hello",
+      line: "greet --http",
+      pipe: "cli",
+    });
+  });
+
   test("quit and exit both leave", () => {
     expect(parseCommand("quit")).toEqual({ kind: "quit" });
     expect(parseCommand("exit")).toEqual({ kind: "quit" });
