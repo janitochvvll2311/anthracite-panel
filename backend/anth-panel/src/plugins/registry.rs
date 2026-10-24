@@ -39,12 +39,37 @@ pub struct Entry {
     /// resolved to a file inside it.
     pub dir: PathBuf,
     pub enabled: Result<(), String>,
+    /// Whether the operator switched this plugin off, as opposed to the bundle
+    /// failing to load.
+    ///
+    /// The two are different answers and deserve different words: a digest
+    /// mismatch is a bundle to reinstall, an operator switch is a decision to
+    /// undo with `plugin enable`. Only this flag tells them apart once both have
+    /// become an `Err` in `enabled`.
+    pub switched_off: bool,
     loaded: Option<Loaded>,
 }
 
 impl Entry {
     pub fn loaded(&self) -> Option<&Loaded> {
         self.loaded.as_ref()
+    }
+
+    /// Marks the entry off at the operator's request, keeping what still holds.
+    ///
+    /// The bundle is intact, so the name, version and UI slots it declares are
+    /// still true and stay visible in `plugin list`. The anchors are dropped on
+    /// purpose: `anchor_owner` treats two plugins declaring one route as a
+    /// conflict, and a route this daemon will refuse to serve must not make
+    /// another plugin's route ambiguous. A load failure already recorded is left
+    /// in place, because switching a broken bundle back on would not make it run.
+    fn switch_off(&mut self) {
+        self.loaded = None;
+        self.switched_off = true;
+        self.anchors.clear();
+        if self.enabled.is_ok() {
+            self.enabled = Err(operator_reason(&self.id));
+        }
     }
 
     pub fn usable(&self) -> Result<&Loaded, WireError> {
@@ -110,6 +135,7 @@ impl Registry {
                 ui: Vec::new(),
                 dir: PathBuf::new(),
                 enabled: Err(reason.to_string()),
+                switched_off: false,
                 loaded: None,
             },
         );
@@ -123,6 +149,10 @@ impl Registry {
     /// panel from serving the rest, but it must also never be silently skipped.
     pub fn load(root: &Path) -> Self {
         let mut entries = BTreeMap::new();
+        // Read before the directory so a plugin the operator switched off
+        // between the two reads is reported by the state that exists now, and a
+        // file that cannot be read leaves every plugin judged by its manifest.
+        let state = super::state::State::load(root);
         let Ok(read) = std::fs::read_dir(root) else {
             return Self { entries };
         };
@@ -132,7 +162,10 @@ impl Registry {
             if !path.is_dir() {
                 continue;
             }
-            let entry = load_one(&path);
+            let mut entry = load_one(&path);
+            if state.is_disabled(&entry.id) {
+                entry.switch_off();
+            }
             entries.insert(entry.id.clone(), entry);
         }
         Self { entries }
@@ -273,6 +306,7 @@ fn load_one(dir: &Path) -> Entry {
         ui: Vec::new(),
         dir: dir.to_path_buf(),
         enabled: Ok(()),
+        switched_off: false,
         loaded: None,
     };
 
@@ -349,6 +383,32 @@ pub fn read_ui_module(entry: &Entry, module: &str) -> Option<Vec<u8>> {
         return None;
     }
     std::fs::read(resolved).ok()
+}
+
+/// Why an entry is off when the operator said so rather than the bundle failing.
+///
+/// Names the command that undoes it: a reason an operator cannot act on is only
+/// marginally better than no reason at all.
+fn operator_reason(id: &str) -> String {
+    format!("the operator switched it off; `anth-panel plugin enable {id}` switches it back on")
+}
+
+/// Switches one installed plugin off or on, and says whether that changed anything.
+///
+/// Free rather than a method on `Registry` because it changes the file the next
+/// daemon start reads, not the registry a running process holds. The two are not
+/// the same object, and pretending otherwise would suggest this takes effect
+/// immediately.
+pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<bool, WireError> {
+    let dir = super::install::plugin_dir(root, id)?;
+    if !dir.join("plugin.toml").is_file() {
+        return Err(WireError::new(
+            ErrorKind::NotFound,
+            format!("plugin `{id}` is not installed"),
+        ));
+    }
+    let mut state = super::state::State::load(root);
+    state.set(root, id, !enabled)
 }
 
 /// The directory the daemon reads plugins from.

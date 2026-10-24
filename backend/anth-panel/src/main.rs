@@ -43,6 +43,15 @@ struct Cli {
     #[arg(long, short, global = true)]
     interactive: bool,
 
+    /// The plugin directory. Falls back to $ANTH_PLUGINS, then
+    /// /var/lib/anth/plugins.
+    ///
+    /// Read by the daemon and by every command that edits the registry, so
+    /// `install`, `remove`, `enable` and `disable` act on the same directory
+    /// instead of requiring an environment variable that is easy to forget.
+    #[arg(long, global = true)]
+    plugins: Option<String>,
+
     /// The command. Optional because `--interactive` alone is valid.
     #[command(subcommand)]
     command: Option<Command>,
@@ -123,6 +132,23 @@ enum PluginAction {
         /// The plugin's id, as `plugin list` shows it.
         id: String,
     },
+    /// Switch an installed plugin off without removing it.
+    ///
+    /// Local, like `install`: it records a decision in the registry's
+    /// `state.toml`, which the daemon reads at startup. The bundle stays on disk
+    /// and `enable` switches it back on.
+    Disable {
+        /// The plugin's id, as `plugin list` shows it.
+        id: String,
+    },
+    /// Switch a disabled plugin back on.
+    ///
+    /// Does not make a broken bundle work: a plugin whose digest does not match
+    /// its manifest stays disabled and says why.
+    Enable {
+        /// The plugin's id, as `plugin list` shows it.
+        id: String,
+    },
 }
 
 impl PluginAction {
@@ -140,7 +166,11 @@ impl PluginAction {
             // An install never reaches the daemon. `None` rather than a default
             // keeps that visible in the type instead of pretending a filesystem
             // action has a transport.
-            PluginAction::Install { .. } | PluginAction::Remove { .. } | PluginAction::List => None,
+            PluginAction::Install { .. }
+            | PluginAction::Remove { .. }
+            | PluginAction::Disable { .. }
+            | PluginAction::Enable { .. }
+            | PluginAction::List => None,
         }
     }
 
@@ -193,12 +223,19 @@ async fn main() -> ExitCode {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(socket::default_socket_path);
 
+    // Resolved once, here, so the daemon and every editing command agree on the
+    // directory without each re-reading the environment.
+    let root = cli
+        .plugins
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(plugins::registry::default_root);
+
     if cli.interactive {
-        return interactive(&socket, cli.command).await;
+        return interactive(&socket, &root, cli.command).await;
     }
 
     match cli.command {
-        Some(command) => dispatch_command(&socket, Some(command)).await,
+        Some(command) => dispatch_command(&socket, &root, Some(command)).await,
         None => {
             eprintln!("anth-panel: a command is required unless --interactive is given");
             ExitCode::from(2)
@@ -207,21 +244,27 @@ async fn main() -> ExitCode {
 }
 
 /// Runs one subcommand, which is also what the REPL runs per line.
-async fn dispatch_command(socket: &std::path::Path, command: Option<Command>) -> ExitCode {
+async fn dispatch_command(
+    socket: &std::path::Path,
+    root: &std::path::Path,
+    command: Option<Command>,
+) -> ExitCode {
     let Some(command) = command else {
         return ExitCode::from(2);
     };
 
     match command {
-        Command::Daemon => serve_with(socket, None).await,
-        Command::Run { addr } => serve_with(socket, Some(addr)).await,
+        Command::Daemon => serve_with(socket, root, None).await,
+        Command::Run { addr } => serve_with(socket, root, Some(addr)).await,
         Command::HostInfo => client(socket, Request::HostInfo).await,
         Command::Plugin { action } => match &action {
             PluginAction::List => client(socket, Request::PluginList).await,
             PluginAction::Install { bundle, .. } => {
-                install(std::path::Path::new(bundle), action.force())
+                install(root, std::path::Path::new(bundle), action.force())
             }
-            PluginAction::Remove { id } => remove(id),
+            PluginAction::Remove { id } => remove(root, id),
+            PluginAction::Disable { id } => switch(root, id, false),
+            PluginAction::Enable { id } => switch(root, id, true),
             PluginAction::Call { id, line, .. } => {
                 // `pipe` is `None` only for the arms matched above, so a call
                 // always has one; the fallback keeps that out of a panic.
@@ -248,9 +291,8 @@ async fn dispatch_command(socket: &std::path::Path, command: Option<Command>) ->
 /// Local, so it ignores `--socket`: there is no daemon to ask. The message names
 /// the restart because a running daemon read its registry at startup and will
 /// not show the new plugin until it is started again.
-fn install(bundle: &std::path::Path, force: bool) -> ExitCode {
-    let root = plugins::registry::default_root();
-    match plugins::install::install(bundle, &root, force) {
+fn install(root: &std::path::Path, bundle: &std::path::Path, force: bool) -> ExitCode {
+    match plugins::install::install(bundle, root, force) {
         Ok(installed) => {
             println!(
                 "installed {} {} into {}",
@@ -276,9 +318,8 @@ fn install(bundle: &std::path::Path, force: bool) -> ExitCode {
 ///
 /// Local, so it ignores `--socket`. The path goes to stdout and everything else
 /// to stderr, so a script can capture what was removed without parsing prose.
-fn remove(id: &str) -> ExitCode {
-    let root = plugins::registry::default_root();
-    match plugins::install::remove(&root, id) {
+fn remove(root: &std::path::Path, id: &str) -> ExitCode {
+    match plugins::install::remove(root, id) {
         Ok(dir) => {
             println!("{}", dir.display());
             ExitCode::SUCCESS
@@ -290,11 +331,43 @@ fn remove(id: &str) -> ExitCode {
     }
 }
 
+/// Switches one plugin off or on, and says what the next start will do.
+///
+/// The message is explicit about the restart because this writes a file the
+/// daemon read at startup: a running one keeps serving whatever it loaded.
+fn switch(root: &std::path::Path, id: &str, enabled: bool) -> ExitCode {
+    match plugins::registry::set_enabled(root, id, enabled) {
+        Ok(true) => {
+            println!(
+                "{} {id} in {}; restart the daemon to apply",
+                if enabled { "enabled" } else { "disabled" },
+                root.display()
+            );
+            ExitCode::SUCCESS
+        }
+        // Already in that state is success: the operator asked for an outcome,
+        // not for a write, and a script that re-runs this should not fail.
+        Ok(false) => {
+            println!(
+                "{id} was already {}",
+                if enabled { "enabled" } else { "disabled" }
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("anth-panel: {}", error.message);
+            ExitCode::from(error.kind.exit_code())
+        }
+    }
+}
+
 /// Serves the socket, and the HTTP API too when an address is given.
-async fn serve_with(socket: &std::path::Path, addr: Option<String>) -> ExitCode {
-    let daemon = Arc::new(Daemon::new(plugins::registry::Registry::load(
-        &plugins::registry::default_root(),
-    )));
+async fn serve_with(
+    socket: &std::path::Path,
+    root: &std::path::Path,
+    addr: Option<String>,
+) -> ExitCode {
+    let daemon = Arc::new(Daemon::new(plugins::registry::Registry::load(root)));
 
     let result = match bind(socket, addr.as_deref()).await {
         Ok(listeners) => serve_bound(listeners, daemon).await,
@@ -410,25 +483,23 @@ fn startup(command: Option<Command>) -> Startup {
 /// silently ignored. They are bound here instead, served on a task of their own,
 /// and stopped when the prompt ends, which is what `run -i` promises: a daemon
 /// you can type at.
-async fn interactive(socket: &Path, command: Option<Command>) -> ExitCode {
+async fn interactive(socket: &Path, root: &Path, command: Option<Command>) -> ExitCode {
     let addr = match startup(command) {
-        Startup::Prompt => return repl::run(socket).await,
+        Startup::Prompt => return repl::run(socket, root).await,
         Startup::RunFirst(command) => {
             // A client command still runs first and still keeps the prompt: a
             // failed one is reported, not fatal, because the prompt is where the
             // user fixes it.
-            let code = dispatch_command(socket, Some(*command)).await;
+            let code = dispatch_command(socket, root, Some(*command)).await;
             if code != ExitCode::SUCCESS {
                 eprintln!("anth-panel: the startup command failed, staying interactive");
             }
-            return repl::run(socket).await;
+            return repl::run(socket, root).await;
         }
         Startup::Serve { addr } => addr,
     };
 
-    let daemon = Arc::new(Daemon::new(plugins::registry::Registry::load(
-        &plugins::registry::default_root(),
-    )));
+    let daemon = Arc::new(Daemon::new(plugins::registry::Registry::load(root)));
 
     let listeners = match bind(socket, addr.as_deref()).await {
         Ok(listeners) => listeners,
@@ -439,7 +510,7 @@ async fn interactive(socket: &Path, command: Option<Command>) -> ExitCode {
     };
 
     let serving = tokio::spawn(serve_bound(listeners, daemon));
-    let code = repl::run(socket).await;
+    let code = repl::run(socket, root).await;
     // The prompt owns the process; a listener outliving it would keep the
     // terminal held by a daemon the operator thought they had quit.
     serving.abort();

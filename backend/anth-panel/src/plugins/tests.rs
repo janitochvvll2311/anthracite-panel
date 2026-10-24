@@ -253,10 +253,10 @@ mod registry {
     use std::path::{Path, PathBuf};
 
     /// A directory that cleans itself up.
-    struct Bundle(PathBuf);
+    pub(super) struct Bundle(PathBuf);
 
     impl Bundle {
-        fn new(label: &str) -> Self {
+        pub(super) fn new(label: &str) -> Self {
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
@@ -269,7 +269,7 @@ mod registry {
             Self(root)
         }
 
-        fn path(&self) -> &Path {
+        pub(super) fn path(&self) -> &Path {
             &self.0
         }
     }
@@ -295,16 +295,16 @@ mod registry {
 )
 "#;
 
-    fn wasm() -> Vec<u8> {
+    pub(super) fn wasm() -> Vec<u8> {
         wat::parse_str(GUEST).expect("the test guest must compile")
     }
 
-    fn digest(wasm: &[u8]) -> String {
+    pub(super) fn digest(wasm: &[u8]) -> String {
         hex(&Sha256::digest(wasm))
     }
 
     /// Writes one bundle named `id` under `root`, with the digest the manifest says.
-    fn write_bundle(root: &Path, id: &str, digest: &str, anchor: &str) -> PathBuf {
+    pub(super) fn write_bundle(root: &Path, id: &str, digest: &str, anchor: &str) -> PathBuf {
         write_bundle_with_alias(root, id, None, digest, anchor)
     }
 
@@ -1318,6 +1318,313 @@ mod remove {
         assert!(
             elsewhere.join("plugin.toml").is_file(),
             "the symlink target must survive"
+        );
+    }
+}
+
+/// `phase E`-adjacent: switching a plugin off has to survive a restart.
+///
+/// The daemon reads the registry once at startup, so the only way "disabled"
+/// means anything is if it is written down. These tests therefore reload a
+/// registry from the same root instead of inspecting the state struct, which
+/// would pass even if `Registry::load` never consulted it.
+mod enable_disable {
+    use super::registry::{Bundle, digest, wasm, write_bundle};
+    use crate::plugins::registry::{Registry, set_enabled};
+    use anth_wire::ErrorKind;
+    use std::path::Path;
+
+    /// One installed, loadable plugin in a fresh root.
+    fn installed(label: &str) -> (Bundle, String) {
+        let scratch = Bundle::new(label);
+        let id = "org.test.on";
+        let digest = digest(&wasm());
+        write_bundle(scratch.path(), id, &digest, "/on");
+        (scratch, id.to_string())
+    }
+
+    #[test]
+    fn a_fresh_bundle_is_on() {
+        let (scratch, id) = installed("fresh");
+        let registry = Registry::load(scratch.path());
+
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+        assert!(entry.enabled.is_ok());
+        assert!(entry.loaded().is_some());
+        assert!(!entry.switched_off);
+    }
+
+    /// The whole point: the decision outlives the process, because the next
+    /// start reads it from the registry root rather than from memory.
+    #[test]
+    fn a_disabled_plugin_is_still_disabled_after_a_reload() {
+        let (scratch, id) = installed("reload");
+        assert!(set_enabled(scratch.path(), &id, false).expect("disabling"));
+
+        let registry = Registry::load(scratch.path());
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+
+        assert!(entry.loaded().is_none(), "a disabled plugin must not load");
+        assert!(entry.switched_off, "the reason must say who turned it off");
+        assert!(
+            entry
+                .enabled
+                .as_ref()
+                .unwrap_err()
+                .contains("`anth-panel plugin enable"),
+            "the reason must name the command that undoes it, got {:?}",
+            entry.enabled
+        );
+    }
+
+    #[test]
+    fn enabling_brings_it_back_after_a_reload() {
+        let (scratch, id) = installed("enable-again");
+        set_enabled(scratch.path(), &id, false).expect("disabling");
+        assert!(set_enabled(scratch.path(), &id, true).expect("enabling"));
+
+        let registry = Registry::load(scratch.path());
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+
+        assert!(entry.enabled.is_ok(), "got {:?}", entry.enabled);
+        assert!(entry.loaded().is_some());
+        assert!(!entry.switched_off);
+    }
+
+    #[test]
+    fn repeating_the_same_switch_reports_no_change() {
+        let (scratch, id) = installed("idempotent");
+        assert!(set_enabled(scratch.path(), &id, false).expect("disabling"));
+        assert!(
+            !set_enabled(scratch.path(), &id, false).expect("disabling again"),
+            "a second disable must not rewrite the file"
+        );
+    }
+
+    /// An installed bundle that does not load keeps its real reason: switching it
+    /// back on would not make it run, so the operator needs to see the digest
+    /// mismatch rather than "the operator switched it off".
+    #[test]
+    fn a_broken_bundle_keeps_its_own_reason() {
+        let scratch = Bundle::new("broken-reason");
+        let id = "org.test.broken";
+        // Well formed but not the digest of the bytes, so the bundle parses and
+        // then fails the check this test is about.
+        let wrong = "1".repeat(64);
+        write_bundle(scratch.path(), id, &wrong, "/broken");
+        set_enabled(scratch.path(), id, false).expect("disabling");
+
+        let registry = Registry::load(scratch.path());
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+
+        assert!(entry.switched_off);
+        assert!(
+            entry.enabled.as_ref().unwrap_err().contains("digest"),
+            "the load failure is the useful answer, got {:?}",
+            entry.enabled
+        );
+    }
+
+    /// A disabled plugin's route must leave the namespace, or another plugin
+    /// declaring it would be reported as a conflict with a plugin that will never
+    /// serve it.
+    #[test]
+    fn a_disabled_plugin_releases_its_anchors() {
+        let (scratch, id) = installed("anchors");
+        set_enabled(scratch.path(), &id, false).expect("disabling");
+
+        let registry = Registry::load(scratch.path());
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+        assert!(entry.anchors.is_empty());
+        assert!(
+            registry
+                .anchor_owner("GET", "/on")
+                .expect("lookup")
+                .is_none(),
+            "the route must not resolve to a plugin that cannot answer"
+        );
+    }
+
+    /// The metadata of a bundle that loaded and was then switched off is still
+    /// true, so it stays visible; only the anchors are withdrawn.
+    #[test]
+    fn a_disabled_plugin_keeps_its_manifest_facts() {
+        let (scratch, id) = installed("facts");
+        set_enabled(scratch.path(), &id, false).expect("disabling");
+
+        let registry = Registry::load(scratch.path());
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+        assert_eq!(entry.name, "Test");
+        assert_eq!(entry.version, "0.2.0");
+    }
+
+    #[test]
+    fn an_unknown_id_is_not_found() {
+        let scratch = Bundle::new("unknown");
+        let refused =
+            set_enabled(scratch.path(), "org.test.absent", false).expect_err("must refuse");
+
+        assert_eq!(refused.kind, ErrorKind::NotFound);
+    }
+
+    /// A directory that is not a plugin is not something to hold a preference
+    /// about, and the refusal must not create the state file.
+    #[test]
+    fn a_plain_directory_is_not_a_plugin() {
+        let scratch = Bundle::new("plain");
+        std::fs::create_dir_all(scratch.path().join("org.test.junk")).expect("creating");
+
+        let refused = set_enabled(scratch.path(), "org.test.junk", false).expect_err("must refuse");
+
+        assert_eq!(refused.kind, ErrorKind::NotFound);
+        assert!(!scratch.path().join(".state.toml").exists());
+    }
+
+    /// The id is interpolated into the state file, so an escaping id has to be
+    /// refused before it can be written or used as a path.
+    #[test]
+    fn an_escaping_id_is_refused() {
+        let scratch = Bundle::new("escape");
+        std::fs::create_dir_all(scratch.path().join("victim")).expect("creating");
+
+        let refused = set_enabled(scratch.path(), "../victim", false).expect_err("must refuse");
+
+        assert_eq!(refused.kind, ErrorKind::Invalid);
+    }
+
+    /// An id that no longer has a directory is dropped from the file on the next
+    /// write, so reinstalling the same id does not start it disabled.
+    #[test]
+    fn a_stale_entry_does_not_outlive_its_bundle() {
+        let (scratch, id) = installed("stale");
+        set_enabled(scratch.path(), &id, false).expect("disabling");
+        std::fs::remove_dir_all(scratch.path().join(&id)).expect("removing the bundle");
+
+        // A second plugin to write the file again.
+        let other = "org.test.other";
+        write_bundle(scratch.path(), other, &digest(&wasm()), "/other");
+        set_enabled(scratch.path(), other, false).expect("disabling the other");
+
+        let text = std::fs::read_to_string(scratch.path().join(".state.toml")).expect("state");
+        assert!(
+            !text.contains(&id),
+            "the removed bundle's entry must be pruned, got {text:?}"
+        );
+
+        // Reinstalling that id must therefore start enabled.
+        write_bundle(scratch.path(), &id, &digest(&wasm()), "/on");
+        let registry = Registry::load(scratch.path());
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+        assert!(entry.enabled.is_ok(), "got {:?}", entry.enabled);
+    }
+
+    /// A corrupt state file must not stop the daemon: every plugin is then judged
+    /// by its manifest, which is the conservative reading.
+    #[test]
+    fn a_corrupt_state_file_leaves_everything_on() {
+        let (scratch, id) = installed("corrupt");
+        std::fs::write(scratch.path().join(".state.toml"), b"not = [valid").expect("writing");
+
+        let registry = Registry::load(scratch.path());
+        let entry = registry
+            .entries()
+            .find(|entry| entry.id == id)
+            .expect("entry");
+
+        assert!(entry.enabled.is_ok(), "got {:?}", entry.enabled);
+    }
+
+    /// `set_enabled` refuses an escaping id through `plugin_dir` before the state
+    /// file is touched, which is one guard. The state module has a second one
+    /// because `State::set` is what interpolates the id into TOML, and a future
+    /// caller that skipped `plugin_dir` would otherwise be able to write a file
+    /// it cannot read back. This test calls `State::set` directly so removing
+    /// that guard fails here and nowhere else.
+    #[test]
+    fn the_state_module_refuses_an_escaping_id_on_its_own() {
+        use crate::plugins::state::State;
+
+        let scratch = Bundle::new("state-escape");
+        let mut state = State::default();
+
+        let refused = state
+            .set(scratch.path(), "../victim", true)
+            .expect_err("must refuse");
+
+        assert_eq!(refused.kind, ErrorKind::Invalid);
+        assert!(!scratch.path().join(".state.toml").exists());
+    }
+
+    /// A write must not leave its temporary file in the registry, or the next
+    /// `plugin list` would be reading a directory that gained garbage, and a
+    /// second write would race with the leftover.
+    #[test]
+    fn a_switch_leaves_no_temporary_file() {
+        let (scratch, id) = installed("no-temp");
+        set_enabled(scratch.path(), &id, false).expect("disabling");
+
+        let leftovers: Vec<_> = std::fs::read_dir(scratch.path())
+            .expect("reading the root")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    /// A failed rename must take its temporary file with it.
+    ///
+    /// The target is made a directory, which is the one way to make the rename
+    /// fail on a writable root without touching permissions. Leaving the temp
+    /// file behind would litter the registry and hand the next write a name that
+    /// already exists.
+    #[test]
+    fn a_failed_write_leaves_no_temporary_file() {
+        let (scratch, id) = installed("rename-fails");
+        std::fs::create_dir_all(scratch.path().join(".state.toml")).expect("blocking the target");
+
+        let _ = set_enabled(scratch.path(), &id, false);
+
+        let leftovers: Vec<_> = std::fs::read_dir(scratch.path())
+            .expect("reading the root")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    /// `plugin_dir` is what guards the delete path, so the same escaping id must
+    /// not reach the state file either.
+    #[test]
+    fn the_state_file_is_not_created_by_a_refusal() {
+        let scratch = Bundle::new("no-file");
+        let _ = set_enabled(scratch.path(), "../victim", false);
+        assert!(
+            !Path::new(&scratch.path().join(".state.toml")).exists(),
+            "a refused switch must leave no file behind"
         );
     }
 }

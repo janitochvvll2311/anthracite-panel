@@ -11,7 +11,7 @@
 //! rather than glob-importing it; a module named `editor` inside this file would
 //! otherwise shadow the one being tested.
 
-use super::{run_words, split};
+use super::{Target, run_words, split};
 
 use std::process::ExitCode;
 
@@ -80,6 +80,18 @@ fn a_single_quoted_value_with_a_space_stays_one_word() {
     );
 }
 
+/// A [`Target`] for the commands that never touch the plugin directory.
+///
+/// These tests are about parsing, `quit` and `help`: naming a root that does not
+/// exist is the point, because a command that reached it would fail loudly
+/// instead of quietly passing.
+fn target<'a>(socket: &'a std::path::Path) -> Target<'a> {
+    Target {
+        socket,
+        root: std::path::Path::new("/tmp/anth-unused-plugins"),
+    }
+}
+
 /// A bare `quit` and a `quit` typed through the editor must both end the
 /// session, which is what sharing `run_words` guarantees.
 #[tokio::test]
@@ -87,7 +99,7 @@ async fn quit_ends_the_session() {
     let mut history = History::new();
     let socket = std::path::Path::new("/tmp/anth-unused.sock");
 
-    let code = run_words(socket, "quit", &mut history).await;
+    let code = run_words(target(socket), "quit", &mut history).await;
 
     assert_eq!(code, Some(ExitCode::SUCCESS));
 }
@@ -98,7 +110,7 @@ async fn exit_ends_the_session() {
     let socket = std::path::Path::new("/tmp/anth-unused.sock");
 
     assert_eq!(
-        run_words(socket, "exit", &mut history).await,
+        run_words(target(socket), "exit", &mut history).await,
         Some(ExitCode::SUCCESS)
     );
 }
@@ -110,7 +122,7 @@ async fn help_does_not_end_the_session_and_is_not_history() {
     let mut history = History::new();
     let socket = std::path::Path::new("/tmp/anth-unused.sock");
 
-    let code = run_words(socket, "help", &mut history).await;
+    let code = run_words(target(socket), "help", &mut history).await;
 
     assert_eq!(code, None);
     assert!(history.entries().is_empty());
@@ -122,7 +134,7 @@ async fn a_blank_line_does_nothing() {
     let mut history = History::new();
     let socket = std::path::Path::new("/tmp/anth-unused.sock");
 
-    assert_eq!(run_words(socket, "   ", &mut history).await, None);
+    assert_eq!(run_words(target(socket), "   ", &mut history).await, None);
     assert!(history.entries().is_empty());
 }
 
@@ -133,7 +145,7 @@ async fn a_refused_line_is_remembered() {
     let mut history = History::new();
     let socket = std::path::Path::new("/tmp/anth-unused.sock");
 
-    let code = run_words(socket, "nonsense-command", &mut history).await;
+    let code = run_words(target(socket), "nonsense-command", &mut history).await;
 
     assert_eq!(code, None);
     assert_eq!(history.entries(), ["nonsense-command"]);
@@ -146,7 +158,7 @@ async fn a_failed_command_keeps_the_session() {
     // Nothing listens here, so the client reports a connection failure.
     let socket = std::path::Path::new("/tmp/anth-absent-for-the-test.sock");
 
-    let code = run_words(socket, "host-info", &mut history).await;
+    let code = run_words(target(socket), "host-info", &mut history).await;
 
     assert_eq!(code, None);
     assert_eq!(history.entries(), ["host-info"]);
@@ -160,7 +172,7 @@ async fn a_server_command_is_refused_instead_of_freezing_the_prompt() {
         let mut history = History::new();
         let socket = std::path::Path::new("/tmp/anth-unused.sock");
 
-        assert_eq!(run_words(socket, line, &mut history).await, None);
+        assert_eq!(run_words(target(socket), line, &mut history).await, None);
         assert_eq!(history.entries(), [line]);
     }
 }
@@ -599,7 +611,7 @@ mod completion {
     fn a_deeper_prefix_reaches_the_nested_subcommands() {
         assert_eq!(
             texts(&["plugin", ""]),
-            vec!["call", "install", "list", "remove"]
+            vec!["call", "disable", "enable", "install", "list", "remove"]
         );
         assert_eq!(texts(&["plugin", "ca"]), vec!["call"]);
     }
@@ -819,7 +831,10 @@ mod prompt {
             .expect("a list of candidates");
 
         let names: Vec<String> = offered.into_iter().map(|c| c.text).collect();
-        assert_eq!(names, vec!["call", "install", "list", "remove"]);
+        assert_eq!(
+            names,
+            vec!["call", "disable", "enable", "install", "list", "remove"]
+        );
     }
 
     /// A second Tab with nothing typed between inserts the shared prefix rather

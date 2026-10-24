@@ -8,6 +8,7 @@ pub mod install;
 pub mod manifest;
 pub mod registry;
 pub mod runtime;
+pub mod state;
 
 #[cfg(test)]
 mod tests;

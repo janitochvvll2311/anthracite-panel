@@ -407,3 +407,35 @@ plugin outside the root, so it fails on the validation and nothing else.
 Removing a bundle does not unload it: a running daemon already has the module in
 memory and keeps answering until it restarts. That is the same startup-read
 model as `install`, and it is why the command says nothing about the daemon.
+
+### Switching a plugin off is written down
+
+`plugin disable` and `plugin enable` are local like `install`, and they exist
+because a load failure and an operator decision are different answers that would
+otherwise both arrive as an empty row. The preference lives in one file per
+registry, `<root>/.state.toml`, never inside a bundle: a bundle's contents are
+approved by digest, so a setting stored there would either have to be excluded
+from that approval or would let an archive arrive already disabled. One file
+also gives `remove` nothing to clean up and the daemon one place to read.
+
+The file records only the negative. A plugin absent from it is on, so a new
+install is enabled and a registry nobody has changed needs no file at all. An id
+in the file with no directory on disk is ignored on read and pruned on the next
+write, which is what stops an uninstall from leaving a tombstone that a later
+reinstall would silently inherit.
+
+`Entry::switched_off` is what keeps the two reasons apart, because both end up
+as an `Err` in `Entry::enabled`. The operator's reason names the command that
+undoes it; a digest mismatch keeps its own text, since switching a broken bundle
+back on would not make it run. `Entry::switch_off` drops the module *and the
+anchors*: `anchor_owner` treats two plugins claiming one route as a conflict, so
+a route this daemon will refuse to serve must not make another plugin's route
+ambiguous. Name, version and UI slots stay, because a bundle that loaded and was
+then switched off still declares them truthfully.
+
+Tests reload a registry from the same root rather than inspecting `State`, and
+the state module is tested directly for id validation: `set_enabled` already
+refuses an escaping id through `plugin_dir`, so a test that only went through it
+would pass with the guard inside `State::set` deleted. A mutation battery of
+eleven edits confirmed that; the one survivor is the `sync_all` before the
+rename, which no test can observe without injecting a disk failure.

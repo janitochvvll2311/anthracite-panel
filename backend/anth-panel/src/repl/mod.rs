@@ -36,7 +36,19 @@ use prompt::{Effect, Prompt};
 use crate::{Cli, dispatch_command};
 
 /// Runs the prompt until end of input, `quit`, or `exit`.
-pub async fn run(socket: &std::path::Path) -> ExitCode {
+/// The daemon socket and the plugin directory a session works against.
+///
+/// Carried as one value because the two travel together through every level of
+/// the prompt, and because a line may override either one: a session started
+/// against one registry can edit another without being restarted.
+#[derive(Clone, Copy)]
+pub struct Target<'a> {
+    pub socket: &'a std::path::Path,
+    pub root: &'a std::path::Path,
+}
+
+pub async fn run(socket: &std::path::Path, root: &std::path::Path) -> ExitCode {
+    let target = Target { socket, root };
     let history_path = history::path();
     let mut history = history_path
         .as_deref()
@@ -45,10 +57,10 @@ pub async fn run(socket: &std::path::Path) -> ExitCode {
 
     let code = if term::RawMode::is_interactive() {
         eprintln!("anth-panel interactive: Tab completes, Up recalls, `help` lists.");
-        session(socket, &mut history).await
+        session(target, &mut history).await
     } else {
         eprintln!("anth-panel interactive: `help`, `quit`, or a subcommand.");
-        plain_session(socket, &mut history).await
+        plain_session(target, &mut history).await
     };
 
     // A history that cannot be written is worth one line, not a failed session:
@@ -63,14 +75,14 @@ pub async fn run(socket: &std::path::Path) -> ExitCode {
 }
 
 /// The editor path, for a real terminal.
-async fn session(socket: &std::path::Path, history: &mut editor::History) -> ExitCode {
+async fn session(target: Target<'_>, history: &mut editor::History) -> ExitCode {
     // The guard restores the terminal however this function returns, including
     // through a panic. A terminal stuck in raw mode is worse than no prompt.
     let raw = match term::RawMode::enable() {
         Ok(raw) => raw,
         Err(error) => {
             eprintln!("anth-panel: using plain input: {error}");
-            return plain_session(socket, history).await;
+            return plain_session(target, history).await;
         }
     };
 
@@ -78,7 +90,7 @@ async fn session(socket: &std::path::Path, history: &mut editor::History) -> Exi
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
-    let code = editor_session(socket, &mut prompt, &mut out).await;
+    let code = editor_session(target, &mut prompt, &mut out).await;
 
     // Leave the cursor on a clean line for whatever writes next.
     let _ = out.write_all(b"\r\n");
@@ -90,11 +102,7 @@ async fn session(socket: &std::path::Path, history: &mut editor::History) -> Exi
 }
 
 /// The byte-at-a-time loop.
-async fn editor_session(
-    socket: &std::path::Path,
-    prompt: &mut Prompt,
-    out: &mut impl Write,
-) -> ExitCode {
+async fn editor_session(target: Target<'_>, prompt: &mut Prompt, out: &mut impl Write) -> ExitCode {
     use std::io::Read;
 
     let stdin = std::io::stdin();
@@ -108,7 +116,7 @@ async fn editor_session(
         let read = match input.read(&mut buffer) {
             Ok(0) => {
                 let effects = prompt.finish();
-                return apply(socket, effects, prompt, out)
+                return apply(target, effects, prompt, out)
                     .await
                     .unwrap_or(ExitCode::SUCCESS);
             }
@@ -121,7 +129,7 @@ async fn editor_session(
         };
 
         let effects = prompt.feed(&buffer[..read]);
-        if let Some(code) = apply(socket, effects, prompt, out).await {
+        if let Some(code) = apply(target, effects, prompt, out).await {
             return code;
         }
     }
@@ -132,7 +140,7 @@ async fn editor_session(
 /// Bytes are buffered and flushed once per batch, so a fast typist does not
 /// cause a flush per keystroke.
 async fn apply(
-    socket: &std::path::Path,
+    target: Target<'_>,
     effects: Vec<Effect>,
     prompt: &mut Prompt,
     out: &mut impl Write,
@@ -158,7 +166,7 @@ async fn apply(
                 let _ = out.write_all(b"\r\n");
                 let _ = out.flush();
 
-                if run_line(socket, &line, prompt).await.is_some() {
+                if run_line(target, &line, prompt).await.is_some() {
                     return Some(ExitCode::SUCCESS);
                 }
 
@@ -179,14 +187,14 @@ async fn apply(
 /// This is the original REPL body: the same `split`, the same
 /// `Cli::try_parse_from`, the same `dispatch_command`. The editor only decides
 /// *which* line arrives here.
-async fn run_line(socket: &std::path::Path, line: &str, prompt: &mut Prompt) -> Option<ExitCode> {
-    run_words(socket, line, prompt.history_mut()).await
+async fn run_line(target: Target<'_>, line: &str, prompt: &mut Prompt) -> Option<ExitCode> {
+    run_words(target, line, prompt.history_mut()).await
 }
 
 /// The shared body of both sessions, so a typed line behaves identically
 /// whether it came from the editor or a pipe.
 async fn run_words(
-    socket: &std::path::Path,
+    target: Target<'_>,
     line: &str,
     history: &mut editor::History,
 ) -> Option<ExitCode> {
@@ -237,20 +245,25 @@ async fn run_words(
     };
 
     // `--socket` on a line wins over the one the prompt started with, so a
-    // session can be pointed at another daemon without restarting.
-    let target = cli
+    // session can be pointed at another daemon without restarting; `--plugins`
+    // wins the same way for the directory.
+    let socket = cli
         .socket
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| socket.to_path_buf());
+        .unwrap_or_else(|| target.socket.to_path_buf());
+    let root = cli
+        .plugins
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| target.root.to_path_buf());
 
     // A failed command does not end the session: the reason is already on
     // stderr, and a prompt that vanished on a typo would lose it.
-    dispatch_command(&target, cli.command).await;
+    dispatch_command(&socket, &root, cli.command).await;
     None
 }
 
 /// The pipe path: whole lines, no editor and no escape sequences in the output.
-async fn plain_session(socket: &std::path::Path, history: &mut editor::History) -> ExitCode {
+async fn plain_session(target: Target<'_>, history: &mut editor::History) -> ExitCode {
     let stdin = std::io::stdin();
     let mut line = String::new();
 
@@ -266,7 +279,7 @@ async fn plain_session(socket: &std::path::Path, history: &mut editor::History) 
             }
         }
 
-        if let Some(code) = run_words(socket, &line, history).await {
+        if let Some(code) = run_words(target, &line, history).await {
             return code;
         }
     }
@@ -278,6 +291,10 @@ fn print_help() {
         "commands:\n  \
          host-info                      one snapshot of the host\n  \
          plugin list                    every plugin the daemon found\n  \
+         plugin install <bundle.zip>    add a bundle to the registry\n  \
+         plugin remove <id>             delete an installed bundle\n  \
+         plugin disable <id>            switch a plugin off for the next start\n  \
+         plugin enable <id>             switch it back on\n  \
          plugin call <id> [LINE] [--http] [--direct]\n                                 \
          run one plugin over its own pipe\n  \
          help                           this message\n  \
