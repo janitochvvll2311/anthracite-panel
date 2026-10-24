@@ -12,7 +12,7 @@ id = "org.anth.hello"
 alias = "hello"
 version = "0.2.0"
 name = "Hello"
-abi = 2
+abi = 3
 
 [wasm]
 path = "plugin.wasm"

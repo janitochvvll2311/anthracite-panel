@@ -80,6 +80,13 @@ fn a_single_quoted_value_with_a_space_stays_one_word() {
     );
 }
 
+/// A logger that keeps nothing: these tests are about the prompt, not the log.
+fn silent() -> &'static std::sync::Arc<crate::log::Logger> {
+    use std::sync::OnceLock;
+    static LOG: OnceLock<std::sync::Arc<crate::log::Logger>> = OnceLock::new();
+    LOG.get_or_init(|| std::sync::Arc::new(crate::log::Logger::silent()))
+}
+
 /// A [`Target`] for the commands that never touch the plugin directory.
 ///
 /// These tests are about parsing, `quit` and `help`: naming a root that does not
@@ -89,6 +96,7 @@ fn target<'a>(socket: &'a std::path::Path) -> Target<'a> {
     Target {
         socket,
         root: std::path::Path::new("/tmp/anth-unused-plugins"),
+        log: silent(),
     }
 }
 
@@ -1265,5 +1273,242 @@ mod history {
             resolved,
             Some(PathBuf::from("/tmp/state-home/anth-panel/history"))
         );
+    }
+}
+
+/// A log line arriving while the operator is mid-word.
+///
+/// The requirement is "logs in the prompt without cutting what I am typing", and
+/// the only honest test of that is the byte sequence: the line goes above, the
+/// prompt is repainted under it, and the cursor comes back to where it was.
+mod above_the_prompt {
+    use crate::repl::render::{Frame, PROMPT, paint, paint_above};
+
+    #[test]
+    fn a_log_line_lands_above_and_the_prompt_is_repainted_below() {
+        let width = 80;
+        let typed = "plugin ca";
+        // The frame the screen is in before the line arrives.
+        let (_, frame) = paint(typed, typed.len(), width, Frame::default());
+
+        let (bytes, _after) = paint_above(
+            "2026-10-23T18:42:11.038Z  INFO  daemon: x",
+            typed,
+            typed.len(),
+            frame,
+            width,
+        );
+
+        // The shape is: climb and erase, the line, a newline, then the same bytes
+        // a normal repaint would have written.
+        let (repaint, _) = paint(typed, typed.len(), width, Frame::default());
+        let log_and_repaint = format!("2026-10-23T18:42:11.038Z  INFO  daemon: x\r\n{repaint}");
+        assert!(
+            bytes.ends_with(&log_and_repaint),
+            "the line is followed by an identical repaint: {bytes:?}"
+        );
+        assert!(
+            bytes.starts_with("\r\x1b[J"),
+            "it erases the old frame: {bytes:?}"
+        );
+    }
+
+    /// Writing in the middle of a word is the case a naive repaint breaks: it
+    /// would put the cursor at the end and the next letter would land wrong.
+    #[test]
+    fn the_cursor_returns_to_the_middle_of_the_line() {
+        let width = 80;
+        let typed = "plugin call hello";
+        let cursor = "plugin".len();
+        let (_, frame) = paint(typed, cursor, width, Frame::default());
+
+        let (bytes, after) = paint_above("a log line", typed, cursor, frame, width);
+
+        let (expected_bytes, expected_frame) = paint(typed, cursor, width, Frame::default());
+        assert!(
+            bytes.ends_with(&expected_bytes),
+            "the repaint must be the same bytes as a normal one: {bytes:?}"
+        );
+        assert_eq!(after.cursor_column, expected_frame.cursor_column);
+        assert_eq!(after.cursor_row, expected_frame.cursor_row);
+    }
+
+    #[test]
+    fn an_empty_prompt_is_repainted_without_any_typed_text() {
+        let (bytes, _frame) = paint_above("a log line", "", 0, Frame::default(), 80);
+
+        assert!(bytes.contains("a log line\r\n"), "got {bytes:?}");
+        // The prompt is back at the bottom, with the cursor after it.
+        let (repaint, _) = paint("", 0, 80, Frame::default());
+        assert!(
+            bytes.ends_with(&repaint),
+            "the empty prompt is left painted: {bytes:?}"
+        );
+        assert!(
+            repaint.contains(PROMPT),
+            "the repaint is the prompt: {repaint:?}"
+        );
+    }
+
+    /// A multi-row prompt (a completion list is not part of the frame, but a
+    /// wrapped line is) must be climbed over, not written through.
+    #[test]
+    fn a_wrapped_prompt_is_climbed_over() {
+        let width = 20;
+        let typed = "a".repeat(40);
+        let (_, frame) = paint(&typed, typed.len(), width, Frame::default());
+        assert!(frame.rows > 1, "the fixture must actually wrap");
+
+        let (bytes, after) = paint_above("a log line", &typed, typed.len(), frame, width);
+
+        assert!(
+            bytes.starts_with(&format!("\x1b[{}A", frame.cursor_row)),
+            "it must climb over every row it used: {bytes:?}"
+        );
+        assert_eq!(
+            after.rows, frame.rows,
+            "the prompt still occupies the same rows"
+        );
+    }
+}
+
+/// The session loop itself, driven by scripted keys.
+mod session_ordering {
+    use super::*;
+    use crate::log::Queue;
+    use crate::repl::prompt::Prompt;
+    use std::sync::Arc;
+
+    /// Keys from a script, with a hook that pushes a log line between them.
+    ///
+    /// On the third step it queues the line and then sleeps *before* yielding the
+    /// key, so the loop's `select!` sees a ready log and a pending key. The
+    /// interleaving is then the one under test, not whichever branch the
+    /// scheduler happens to pick.
+    struct Scripted {
+        steps: std::collections::VecDeque<Vec<u8>>,
+        logs: Arc<Queue>,
+    }
+
+    impl super::super::KeySource for Scripted {
+        async fn next(&mut self) -> Option<Vec<u8>> {
+            let step = self.steps.pop_front()?;
+            // Two keys have been echoed by now; the line arrives before the third.
+            if step == b"\r".to_vec() {
+                self.logs.push("a line from the daemon");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Some(step)
+        }
+    }
+
+    impl Queue {
+        fn push(&self, text: &str) {
+            use crate::log::Sink;
+            self.line(text);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_log_between_two_keys_is_written_before_the_next_repaint() {
+        let (queue, mut logs) = Queue::new();
+        let logs_sender = Arc::new(queue);
+        let mut keys = Scripted {
+            steps: [
+                b"he".to_vec(),
+                b"lp".to_vec(),
+                b"\r".to_vec(),
+                b"quit\r".to_vec(),
+            ]
+            .into_iter()
+            .collect(),
+            logs: logs_sender,
+        };
+
+        let socket = std::path::Path::new("/tmp/anth-unused.sock");
+        let target = target(socket);
+        let mut prompt = Prompt::new(History::new());
+        let mut out: Vec<u8> = Vec::new();
+
+        let code =
+            super::super::editor_session(target, &mut prompt, &mut out, &mut keys, &mut logs).await;
+
+        assert_eq!(
+            format!("{code:?}"),
+            format!("{:?}", std::process::ExitCode::SUCCESS)
+        );
+
+        let text = String::from_utf8(out).expect("the terminal bytes are UTF-8");
+        let log_at = text
+            .find("a line from the daemon")
+            .expect("the log was written");
+        // Everything typed before the log is above it, and the repaint that
+        // follows it is the last thing before the next keystroke is drawn.
+        assert!(
+            log_at > text.find("anth> he").expect("the first keys were echoed"),
+            "the log lands after what was already typed: {text:?}"
+        );
+        let after_log = &text[log_at..];
+        assert!(
+            after_log.contains("anth> "),
+            "the prompt is repainted right after the log: {text:?}"
+        );
+        // The rest of the word arrives after that repaint, so it is completed in
+        // place instead of being drawn over the log line.
+        let rest_at = text.rfind("anth> help").expect("the word was completed");
+        assert!(
+            rest_at > log_at,
+            "the last keys are drawn after the log: {text:?}"
+        );
+    }
+}
+
+/// The sharing that `run -i` depends on.
+mod shared_queue {
+    use crate::log::{Format, Level, Logger, Sink};
+    use crate::repl::Wired;
+    use std::sync::Arc;
+
+    /// The bug this guards against: a daemon built with `logger()` writes to
+    /// stdout and lands on top of the prompt. Building the daemon's logger from
+    /// [`Wired`] is what stops that, so the queue must receive its lines.
+    #[test]
+    fn a_line_written_through_the_wired_logger_arrives_on_the_queue() {
+        let base = Arc::new(Logger::new(Level::Info, Format::Human, Arc::new(Discard)));
+        let mut wired = Wired::from(&base);
+
+        wired
+            .logger
+            .info("daemon", "listening")
+            .field("socket", "/run/x")
+            .emit();
+
+        let line = wired
+            .lines
+            .try_recv()
+            .expect("the line must be queued for the prompt, not written to stdout");
+        assert!(line.contains("listening"), "got {line:?}");
+        assert!(line.contains("socket=/run/x"), "got {line:?}");
+    }
+
+    /// `off` is the operator's decision about output, not about the sink, so it
+    /// must survive being rewired.
+    #[test]
+    fn an_off_logger_stays_silent_when_wired() {
+        let base = Arc::new(Logger::new(Level::Info, Format::Off, Arc::new(Discard)));
+        let mut wired = Wired::from(&base);
+
+        wired.logger.info("daemon", "listening").emit();
+
+        assert!(
+            wired.lines.try_recv().is_err(),
+            "nothing may be queued when logging is off"
+        );
+    }
+
+    struct Discard;
+
+    impl Sink for Discard {
+        fn line(&self, _text: &str) {}
     }
 }

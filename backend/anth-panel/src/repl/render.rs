@@ -39,6 +39,37 @@ impl Frame {
     }
 }
 
+/// Writes `line` above the prompt and puts the prompt back under it.
+///
+/// The prompt owns the terminal, so a log line cannot be written straight to it:
+/// it would land on top of the text being typed. This climbs over the current
+/// frame, erases it, prints the line, and returns the bytes that repaint the
+/// prompt below — leaving the cursor exactly where it was, with the typed text
+/// untouched.
+pub fn paint_above(
+    line: &str,
+    text: &str,
+    cursor: usize,
+    previous: Frame,
+    width: usize,
+) -> (String, Frame) {
+    let mut bytes = previous.climb_back();
+    // `climb_back` has already returned to column 0 of the frame's first row, so
+    // this erases the old frame and nothing above it.
+    bytes.push_str("\x1b[J");
+    bytes.push_str(line);
+    // The `\r` is not cosmetic. A terminal in raw mode needs an explicit carriage
+    // return, and without it a line one column too wide leaves the cursor on the
+    // next row, where the repaint would climb over the wrong row count and the
+    // old frame would stay on screen.
+    bytes.push_str("\r\n");
+    // The cursor is put back where it was, not at the end: a log line arriving
+    // while the operator types in the middle of a word must not move the caret.
+    let (painted, frame) = paint(text, cursor, width, Frame::default());
+    bytes.push_str(&painted);
+    (bytes, frame)
+}
+
 /// Builds the repaint for `text` with the cursor at `cursor` (a byte offset).
 ///
 /// `previous` is the frame the caller painted last. Repainting climbs to its

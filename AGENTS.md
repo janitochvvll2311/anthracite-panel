@@ -47,6 +47,7 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/socket.rs           #   Unix listener, connection loop, client
     src/table.rs            #   the one bordered-grid renderer
     src/render.rs           #   rows for host-info and plugin list, into Table
+    src/log.rs              #   Level, Format, Settings, Logger, Sink, Queue, Nowhere
     src/plugins/            #   manifest, registry, install, runtime/ (wasmi, grants)
     src/repl/               #   the stdin REPL: prompt, editor, keys, history
 
@@ -298,7 +299,7 @@ plugin is expected to contain behaviour only.
 
 - **`backend/anth-plugin`** is what a guest links. It is `no_std` (a wasm guest
   has no `std`) and owns four things:
-  - `abi.rs` — `ABI_VERSION = 2` and the `anth_plugin!` macro that generates the
+  - `abi.rs` — `ABI_VERSION = 3` and the `anth_plugin!` macro that generates the
     six exports the host checks by name and signature: one entry per transport
     (`anth_http`, `anth_cli`, `anth_direct`) plus the memory contract
     (`anth_abi_version`, `anth_alloc`, `anth_free`). The two imports it provides
@@ -306,7 +307,13 @@ plugin is expected to contain behaviour only.
     refuses every capability by name, so a plugin crate still builds and tests
     where no daemon exists. Version 2 replaced the single `anth_handle`, so an
     `abi = 1` bundle has no `anth_http` to call and is refused rather than
-    silently broken.
+    silently broken. Version 3 added the level argument to `anth_log`, so a
+    guest asks for `error`, `warn`, `info`, `debug` or `trace` instead of having
+    every line printed; a number the host has no name for becomes `info`, never
+    `error`, because otherwise a guest could raise its own priority. The level is
+    relative to the daemon's: the guest cannot make itself heard when the
+    operator asked for quiet. An `abi = 2` bundle is refused by number for the
+    same reason as `abi = 1` — its `anth_log` has the wrong arity.
   - `message.rs` — the plugin's own vocabulary, and it names no transport. Named
     after `anth-wire`'s `message` module and private for the same reason: it holds
     both directions of one exchange, and the types are re-exported so a plugin
@@ -357,6 +364,61 @@ plugin is expected to contain behaviour only.
   pipe with no mapper at all — the caller already speaks the plugin's vocabulary,
   which is also what makes a plugin testable without either transport.
 
+
+## Logging
+
+`anth-panel/src/log.rs` is hand-rolled — 706 lines, 372 more of tests — and adds
+no dependency. That is a decision, not an accident: `tracing` would bring a
+subscriber, a filter grammar and a macro layer for one process that writes lines
+to one stream, and the REPL has to repaint around its prompt, which a generic
+subscriber does not know how to do.
+
+Three settings, and the flag beats the variable beats the default:
+
+```
+--log-format human|json|off    ANTH_LOG_FORMAT   (default human)
+--log-level  error|warn|info|debug|trace         ANTH_LOG_LEVEL (default info)
+--log-out    stdout|stderr     ANTH_LOG_OUT      (default stdout)
+```
+
+[`Settings::resolve`] takes the environment as a closure rather than reading it,
+so the fallback order and the rejection of a typo are a pure function a test can
+call; [`Settings::from_flags`] is the thin caller that reads the real thing. A
+bad value is reported and the run continues on the default — an operator who
+typed `--log-format jsom` must not spend an hour reading `human` output.
+
+- **`Format::Human`** is `STAMP  LEVEL  target: message`, then one `key=value`
+  per field. The stamp is UTC RFC 3339 with milliseconds, computed from
+  `SystemTime`: `chrono` does not enter the tree for this.
+- **`Format::Json`** is one object per line with `ts`, `level`, `target`, `msg`
+  and then the fields. `serde_json` escapes a newline for free, so the injection
+  a guest could attempt disappears without a sanitiser. A field is a typed
+  [`Field`], not a `String`, because `json` must print `3` and not `"3"`.
+- **`Format::Off`** prints nothing, not even the startup line. It exists for a
+  daemon under a supervisor that already captures output.
+
+**Escaping is the security property.** A guest can send any bytes through
+`anth_log`, including a forged newline; without escaping it writes a second log
+line that looks like the daemon's own — a guest printed
+`anth-panel: listening on /run/anth.sock` as its own line before
+`log::escape` existed. `escape` keeps `\n`, `\r` and `\t` visible and turns
+every other control character into `\xNN`. Mutation testing found three dead
+mutations here, which is why the tests pin the escaping of each class.
+
+**A `Sink` is the stream**, and `Queue` is the one that matters: in `run -i` the
+daemon and the REPL share a process, so a daemon holding a stdout sink would
+overwrite the prompt. `interactive()` gives the daemon a `Queue` sink; the REPL
+drains it above the prompt between keystrokes, using `render::paint_above`. In
+the non-TTY path there is no prompt to protect, so the queue is drained straight
+to stdout — and the prompt goes to stderr, which is the one split a caller
+piping `run -i` needs to know about.
+
+The guest half is [`ABI_VERSION = 3`]: `anth_log` takes a level, so a plugin says
+`debug` and the daemon decides whether that survives its own filter. The mapping
+is total and the fallback is `info`, never `error`, because a guest that sends
+garbage must not be able to raise its own priority. A level the host does not
+know is a number a hand-written guest can send; treating it as `info` keeps the
+line visible without letting the guest claim urgency.
 
 ## Installing a bundle
 

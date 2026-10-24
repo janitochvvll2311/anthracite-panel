@@ -11,6 +11,7 @@
 
 mod api;
 mod dispatch;
+mod log;
 mod plugins;
 mod render;
 mod socket;
@@ -51,6 +52,30 @@ struct Cli {
     /// instead of requiring an environment variable that is easy to forget.
     #[arg(long, global = true)]
     plugins: Option<String>,
+
+    /// How a log line is written: `human`, `json`, or `off`.
+    ///
+    /// Falls back to $ANTH_LOG_FORMAT, then `human`. `off` silences the daemon
+    /// completely, including its startup line, which is what a supervisor that
+    /// already logs wants.
+    #[arg(long, global = true)]
+    log_format: Option<String>,
+
+    /// The least important level to print: `error`, `warn`, `info`, `debug` or
+    /// `trace`. Falls back to $ANTH_LOG_LEVEL, then `info`.
+    ///
+    /// A plugin's own messages are filtered by this same threshold, so
+    /// `--log-level warn` is the one switch that silences a chatty guest.
+    #[arg(long, global = true)]
+    log_level: Option<String>,
+
+    /// Which stream log lines go to: `stdout` or `stderr`.
+    ///
+    /// Logs go to stdout by default, next to a command's output. A caller that
+    /// pipes the command's output and wants it clean sets `stderr`: a log line
+    /// mixed into `| jq` is a parse error, not a warning.
+    #[arg(long, global = true)]
+    log_out: Option<String>,
 
     /// The command. Optional because `--interactive` alone is valid.
     #[command(subcommand)]
@@ -230,12 +255,25 @@ async fn main() -> ExitCode {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(plugins::registry::default_root);
 
+    // Resolved before anything runs, so a mistyped flag fails the command instead
+    // of producing output in the wrong shape for its whole life.
+    let (settings, problem) = log::Settings::from_flags(
+        cli.log_format.as_deref(),
+        cli.log_level.as_deref(),
+        cli.log_out.as_deref(),
+    );
+    if let Some(problem) = problem {
+        eprintln!("anth-panel: {problem}");
+        return ExitCode::from(2);
+    }
+    let logger = Arc::new(settings.logger());
+
     if cli.interactive {
-        return interactive(&socket, &root, cli.command).await;
+        return interactive(&socket, &root, cli.command, logger).await;
     }
 
     match cli.command {
-        Some(command) => dispatch_command(&socket, &root, Some(command)).await,
+        Some(command) => dispatch_command(&socket, &root, Some(command), logger).await,
         None => {
             eprintln!("anth-panel: a command is required unless --interactive is given");
             ExitCode::from(2)
@@ -248,14 +286,15 @@ async fn dispatch_command(
     socket: &std::path::Path,
     root: &std::path::Path,
     command: Option<Command>,
+    logger: Arc<log::Logger>,
 ) -> ExitCode {
     let Some(command) = command else {
         return ExitCode::from(2);
     };
 
     match command {
-        Command::Daemon => serve_with(socket, root, None).await,
-        Command::Run { addr } => serve_with(socket, root, Some(addr)).await,
+        Command::Daemon => serve_with(socket, root, None, logger).await,
+        Command::Run { addr } => serve_with(socket, root, Some(addr), logger).await,
         Command::HostInfo => client(socket, Request::HostInfo).await,
         Command::Plugin { action } => match &action {
             PluginAction::List => client(socket, Request::PluginList).await,
@@ -366,11 +405,18 @@ async fn serve_with(
     socket: &std::path::Path,
     root: &std::path::Path,
     addr: Option<String>,
+    logger: Arc<log::Logger>,
 ) -> ExitCode {
-    let daemon = Arc::new(Daemon::new(plugins::registry::Registry::load(root)));
+    let daemon = Arc::new(Daemon::new(
+        plugins::registry::Registry::load(root),
+        logger.clone(),
+    ));
 
     let result = match bind(socket, addr.as_deref()).await {
-        Ok(listeners) => serve_bound(listeners, daemon).await,
+        Ok(listeners) => {
+            announce(&logger, socket, &listeners);
+            serve_bound(listeners, daemon).await
+        }
         Err(error) => Err(error),
     };
 
@@ -404,18 +450,32 @@ async fn bind(socket: &Path, addr: Option<&str>) -> Result<Listeners, anth_wire:
         None => None,
     };
 
-    match addr {
-        Some(addr) => eprintln!(
-            "anth-panel: listening on {} and http://{addr}",
-            socket.display()
-        ),
-        None => eprintln!("anth-panel: listening on {}", socket.display()),
-    }
-
     Ok(Listeners {
         socket: listener,
         http,
     })
+}
+
+/// Says where the daemon is listening, once the ports are known to be bound.
+///
+/// A line here rather than inside [`bind`], so a refused bind logs nothing: the
+/// error the caller prints is the whole story, and a "listening" line above it
+/// would be a lie.
+fn announce(logger: &log::Logger, socket: &Path, listeners: &Listeners) {
+    // The local address once bound, so a `:0` port reports the one the kernel
+    // chose instead of the one that was asked for.
+    let http = listeners
+        .http
+        .as_ref()
+        .and_then(|l| l.local_addr().ok())
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|| "?".to_string());
+
+    logger
+        .info("daemon", "listening")
+        .field("socket", socket.display().to_string().as_str())
+        .field_if(listeners.http.is_some(), "http", http.as_str())
+        .emit();
 }
 
 /// Serves the bound listeners until one of them fails.
@@ -483,23 +543,35 @@ fn startup(command: Option<Command>) -> Startup {
 /// silently ignored. They are bound here instead, served on a task of their own,
 /// and stopped when the prompt ends, which is what `run -i` promises: a daemon
 /// you can type at.
-async fn interactive(socket: &Path, root: &Path, command: Option<Command>) -> ExitCode {
+async fn interactive(
+    socket: &Path,
+    root: &Path,
+    command: Option<Command>,
+    logger: Arc<log::Logger>,
+) -> ExitCode {
     let addr = match startup(command) {
-        Startup::Prompt => return repl::run(socket, root).await,
+        Startup::Prompt => return repl::run(socket, root, logger, None).await,
         Startup::RunFirst(command) => {
             // A client command still runs first and still keeps the prompt: a
             // failed one is reported, not fatal, because the prompt is where the
             // user fixes it.
-            let code = dispatch_command(socket, root, Some(*command)).await;
+            let code = dispatch_command(socket, root, Some(*command), logger.clone()).await;
             if code != ExitCode::SUCCESS {
                 eprintln!("anth-panel: the startup command failed, staying interactive");
             }
-            return repl::run(socket, root).await;
+            return repl::run(socket, root, logger, None).await;
         }
         Startup::Serve { addr } => addr,
     };
 
-    let daemon = Arc::new(Daemon::new(plugins::registry::Registry::load(root)));
+    // Built before the daemon so both share one queue: every line the daemon
+    // writes — the startup announcement included — is painted by the prompt
+    // instead of being written straight to a terminal the prompt owns.
+    let wired = repl::Wired::from(&logger);
+    let daemon = Arc::new(Daemon::new(
+        plugins::registry::Registry::load(root),
+        wired.logger.clone(),
+    ));
 
     let listeners = match bind(socket, addr.as_deref()).await {
         Ok(listeners) => listeners,
@@ -508,9 +580,10 @@ async fn interactive(socket: &Path, root: &Path, command: Option<Command>) -> Ex
             return ExitCode::from(error.kind.exit_code());
         }
     };
+    announce(&wired.logger, socket, &listeners);
 
     let serving = tokio::spawn(serve_bound(listeners, daemon));
-    let code = repl::run(socket, root).await;
+    let code = repl::run(socket, root, logger, Some(wired)).await;
     // The prompt owns the process; a listener outliving it would keep the
     // terminal held by a daemon the operator thought they had quit.
     serving.abort();

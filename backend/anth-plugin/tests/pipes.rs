@@ -21,7 +21,7 @@ impl Executor for Fake {
         Ok(json!({ "stdout": "turing\n" }))
     }
 
-    fn log(&mut self, _message: &str) {}
+    fn log_at(&mut self, _level: anth_plugin::LogLevel, _message: &str) {}
 }
 
 #[derive(Default)]
@@ -331,7 +331,7 @@ fn a_refused_capability_is_a_500() {
             Err("`hostname` is not installed".to_string())
         }
 
-        fn log(&mut self, _message: &str) {}
+        fn log_at(&mut self, _level: anth_plugin::LogLevel, _message: &str) {}
     }
 
     let response = Hello.handle(&mut Refusing, Request::new(GREETING, Value::Null));

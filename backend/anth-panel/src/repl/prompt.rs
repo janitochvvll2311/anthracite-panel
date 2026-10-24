@@ -73,6 +73,25 @@ impl Prompt {
         self.repaint_bytes()
     }
 
+    /// Redraws the prompt below `line`, which arrives from a log.
+    ///
+    /// The prompt is the only writer of the terminal, so a log line goes through
+    /// here rather than straight to stdout: the bytes climb over the current
+    /// frame, print the line, and paint the prompt back underneath with the
+    /// cursor where the operator left it.
+    pub fn paint_above(&mut self, line: &str) -> String {
+        let width = super::render::terminal_width();
+        let (bytes, frame) = super::render::paint_above(
+            line,
+            self.line.text(),
+            self.line.cursor(),
+            self.frame,
+            width,
+        );
+        self.frame = frame;
+        bytes
+    }
+
     /// Feeds raw bytes and returns everything that should happen.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Effect> {
         let keys = self.decoder.feed(bytes);

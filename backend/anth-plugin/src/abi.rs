@@ -32,7 +32,29 @@ use alloc::string::ToString;
 /// Version 2 replaced the single `anth_handle` with one entry per transport, so
 /// an `abi = 1` bundle has no `anth_http` for the host to call and is refused
 /// rather than silently broken.
-pub const ABI_VERSION: i32 = 2;
+pub const ABI_VERSION: i32 = 3;
+
+/// The level a guest attaches to a log line.
+///
+/// A bare number crosses the ABI; this mirror exists so a plugin names `Debug`
+/// rather than `3`. It is exhaustive, so a plugin cannot write a level the host
+/// has no name for. The host still has to cope with a hand-written guest that
+/// sends something else, and treats an unknown number as `info`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LogLevel {
+    Error = 0,
+    Warn = 1,
+    Info = 2,
+    Debug = 3,
+    Trace = 4,
+}
+
+impl LogLevel {
+    /// The number that crosses the ABI.
+    pub fn as_i32(self) -> i32 {
+        self as i32
+    }
+}
 
 /// The host imports, as the guest sees them.
 ///
@@ -45,8 +67,8 @@ mod host {
     unsafe extern "C" {
         /// Runs one frozen capability. JSON in, `(ptr << 32) | len` out.
         pub fn anth_exec(cap_ptr: i32, cap_len: i32, args_ptr: i32, args_len: i32) -> i64;
-        /// Appends one line to the daemon log.
-        pub fn anth_log(ptr: i32, len: i32);
+        /// Appends one line to the daemon log at `level` (0 error … 4 trace).
+        pub fn anth_log(level: i32, ptr: i32, len: i32);
     }
 }
 
@@ -70,8 +92,8 @@ impl crate::exec::Executor for HostExecutor {
         ))
     }
 
-    fn log(&mut self, message: &str) {
-        let _ = message;
+    fn log_at(&mut self, level: crate::abi::LogLevel, message: &str) {
+        let _ = (level, message);
     }
 }
 
@@ -105,9 +127,13 @@ impl crate::exec::Executor for HostExecutor {
             .map_err(|error| alloc::format!("the host answered with invalid JSON: {error}"))
     }
 
-    fn log(&mut self, message: &str) {
+    fn log_at(&mut self, level: crate::abi::LogLevel, message: &str) {
         unsafe {
-            host::anth_log(message.as_ptr() as i32, message.len() as i32);
+            host::anth_log(
+                level.as_i32(),
+                message.as_ptr() as i32,
+                message.len() as i32,
+            );
         }
     }
 }

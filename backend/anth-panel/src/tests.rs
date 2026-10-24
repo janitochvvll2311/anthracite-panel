@@ -4,6 +4,15 @@
 //! the socket are siblings in `src/`, so their tests are siblings here. The
 //! `plugins/` subtree keeps its own `tests.rs`, one per level.
 
+/// A logger that writes nothing, for tests about something else.
+///
+/// Shared because these are crate-wide tests of the dispatcher, the router and
+/// the socket: none of them asserts on a log line, and a test that did would
+/// build its own sink to read.
+pub(crate) fn quiet() -> std::sync::Arc<crate::log::Logger> {
+    std::sync::Arc::new(crate::log::Logger::silent())
+}
+
 /// The HTTP transport, which must answer exactly what the socket does.
 mod api {
     use crate::api::{ApiError, parse_query, router};
@@ -20,6 +29,7 @@ mod api {
     fn test_router() -> Router {
         router(Arc::new(Daemon::new(
             crate::plugins::registry::Registry::empty(),
+            crate::tests::quiet(),
         )))
     }
 
@@ -32,6 +42,7 @@ mod api {
                 &[("GET", "/greeting")],
                 "the bundle was rewritten",
             ),
+            crate::tests::quiet(),
         )))
     }
 
@@ -197,7 +208,7 @@ mod dispatch {
     use anth_wire::{ErrorKind, PluginPipe, Request, Response};
 
     fn daemon_without_plugins() -> Daemon {
-        Daemon::new(Registry::empty())
+        Daemon::new(Registry::empty(), crate::tests::quiet())
     }
 
     #[tokio::test]
@@ -230,12 +241,15 @@ mod dispatch {
     /// the canonical id so a caller can tell which one it reached.
     #[tokio::test]
     async fn a_call_by_alias_reaches_the_plugin_that_declared_it() {
-        let daemon = Daemon::new(Registry::with_disabled(
-            "org.test.aliased",
-            Some("short"),
-            &[],
-            "the bundle was rewritten",
-        ));
+        let daemon = Daemon::new(
+            Registry::with_disabled(
+                "org.test.aliased",
+                Some("short"),
+                &[],
+                "the bundle was rewritten",
+            ),
+            crate::tests::quiet(),
+        );
 
         let response = daemon
             .handle(Request::PluginCall {
@@ -258,12 +272,15 @@ mod dispatch {
     /// the same one its id would.
     #[tokio::test]
     async fn an_anchor_lookup_accepts_the_alias() {
-        let daemon = Daemon::new(Registry::with_disabled(
-            "org.test.aliased",
-            Some("short"),
-            &[("GET", "/greeting")],
-            "disabled",
-        ));
+        let daemon = Daemon::new(
+            Registry::with_disabled(
+                "org.test.aliased",
+                Some("short"),
+                &[("GET", "/greeting")],
+                "disabled",
+            ),
+            crate::tests::quiet(),
+        );
 
         // Both forms must reach the same plugin. This entry is disabled, so both
         // report the same refusal naming the canonical id: an alias is a way to
@@ -293,12 +310,10 @@ mod dispatch {
     /// An alias is discoverable from the list, or nobody would know to type it.
     #[tokio::test]
     async fn the_list_reports_the_alias() {
-        let daemon = Daemon::new(Registry::with_disabled(
-            "org.test.aliased",
-            Some("short"),
-            &[],
-            "disabled",
-        ));
+        let daemon = Daemon::new(
+            Registry::with_disabled("org.test.aliased", Some("short"), &[], "disabled"),
+            crate::tests::quiet(),
+        );
 
         match daemon.handle(Request::PluginList).await {
             Response::PluginList { plugins } => {
@@ -913,7 +928,10 @@ mod socket {
     async fn spawn_daemon(label: &str) -> SocketPath {
         let path = SocketPath::new(label);
         let listener = bind(&path.0).expect("binding the test socket");
-        let daemon = Arc::new(Daemon::new(crate::plugins::registry::Registry::empty()));
+        let daemon = Arc::new(Daemon::new(
+            crate::plugins::registry::Registry::empty(),
+            crate::tests::quiet(),
+        ));
         tokio::spawn(async move {
             let _ = serve(listener, daemon).await;
         });
@@ -1212,6 +1230,7 @@ mod www {
     fn shell_router() -> Router {
         router(Arc::new(Daemon::new(
             crate::plugins::registry::Registry::empty(),
+            crate::tests::quiet(),
         )))
     }
 
@@ -1353,10 +1372,10 @@ mod plugin_web {
     const GUEST: &str = r#"
 (module
   (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
-  (import "env" "anth_log" (func $log (param i32 i32)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
   (memory (export "memory") 1)
   (data (i32.const 1024) "\7b\22status\22:200,\22value\22:null\7d")
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 2048))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64)
@@ -1404,7 +1423,7 @@ mod plugin_web {
 id = "{id}"
 version = "0.2.0"
 name = "Web"
-abi = 2
+abi = 3
 
 [wasm]
 path = "plugin.wasm"
@@ -1433,7 +1452,10 @@ module = "{module}"
     }
 
     async fn get(root: &Path, uri: &str) -> (u16, String, String) {
-        let router = router(Arc::new(Daemon::new(Registry::load(root))));
+        let router = router(Arc::new(Daemon::new(
+            Registry::load(root),
+            crate::tests::quiet(),
+        )));
         let response = router
             .oneshot(
                 HttpRequest::builder()
@@ -1478,7 +1500,10 @@ module = "{module}"
     async fn a_bundles_wasm_and_manifest_are_not_downloadable() {
         let root = Root::new("private");
         bundle(root.path(), "org.test.web", "web/widget.js");
-        let router = router(Arc::new(Daemon::new(Registry::load(root.path()))));
+        let router = router(Arc::new(Daemon::new(
+            Registry::load(root.path()),
+            crate::tests::quiet(),
+        )));
 
         for uri in [
             "/p/org.test.web/web/plugin.wasm",
@@ -1566,5 +1591,118 @@ module = "{module}"
         let (status, _, body) = get(root.path(), "/p/greeting").await;
 
         assert_eq!(status, 200, "body: {body}");
+    }
+}
+
+/// One line per request, which is the gap the log analysis found: four real
+/// requests used to leave a single startup line behind.
+mod request_log {
+    use crate::dispatch::Daemon;
+    use crate::log::{Capture, Format, Level, Logger};
+    use crate::plugins::registry::Registry;
+    use anth_wire::{Request, Response};
+    use std::sync::Arc;
+
+    fn daemon_at(level: Level) -> (Daemon, Capture) {
+        let sink = Capture::default();
+        let logger = Arc::new(Logger::new(level, Format::Json, Arc::new(sink.clone())));
+        (Daemon::new(Registry::empty(), logger), sink)
+    }
+
+    #[tokio::test]
+    async fn a_successful_request_leaves_one_line_with_status_and_duration() {
+        let (daemon, sink) = daemon_at(Level::Info);
+
+        let response = daemon.handle(Request::HostInfo).await;
+        assert!(matches!(response, Response::HostInfo(_)));
+
+        let lines = sink.lines();
+        assert_eq!(lines.len(), 1, "one line per request, got {lines:?}");
+        let parsed: serde_json::Value = serde_json::from_str(&lines[0]).expect("a JSON line");
+        assert_eq!(parsed["target"], "request");
+        assert_eq!(parsed["op"], "host-info");
+        assert_eq!(parsed["status"], 200);
+        assert_eq!(parsed["level"], "info");
+        assert!(parsed["ms"].is_number(), "a duration is recorded: {parsed}");
+    }
+
+    /// A refused request is the one an operator goes looking for, so it has to be
+    /// there, at `warn`, with the status the client actually receives.
+    #[tokio::test]
+    async fn a_refused_request_is_logged_at_warn_with_its_status() {
+        let (daemon, sink) = daemon_at(Level::Info);
+
+        let response = daemon
+            .handle(Request::PluginCall {
+                id: "org.absent".to_string(),
+                pipe: anth_wire::PluginPipe::Direct,
+                payload: "{}".to_string(),
+            })
+            .await;
+
+        let status = match response {
+            Response::Error(error) => error.kind.http_status(),
+            other => panic!("expected a refusal, got {other:?}"),
+        };
+        let lines = sink.lines();
+        assert_eq!(lines.len(), 1, "got {lines:?}");
+        let parsed: serde_json::Value = serde_json::from_str(&lines[0]).expect("JSON");
+        assert_eq!(parsed["level"], "warn", "a failure is not buried at info");
+        assert_eq!(parsed["status"], status);
+        assert_eq!(parsed["op"], "plugin-call");
+    }
+
+    /// The payload is the guest's text. Printing it would let a plugin write its
+    /// own words into the host's request line.
+    #[tokio::test]
+    async fn the_plugin_payload_is_not_quoted_into_the_line() {
+        let (daemon, sink) = daemon_at(Level::Info);
+
+        daemon
+            .handle(Request::PluginCall {
+                id: "org.absent".to_string(),
+                pipe: anth_wire::PluginPipe::Cli,
+                payload: "anth-panel: forged line".to_string(),
+            })
+            .await;
+
+        let lines = sink.lines();
+        assert_eq!(lines.len(), 1, "got {lines:?}");
+        assert!(
+            !lines[0].contains("forged line"),
+            "the payload must not reach the log: {lines:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn debug_adds_a_receipt_line_before_the_answer() {
+        let (daemon, sink) = daemon_at(Level::Debug);
+
+        daemon.handle(Request::PluginList).await;
+
+        let lines = sink.lines();
+        assert_eq!(lines.len(), 2, "got {lines:?}");
+        let first: serde_json::Value = serde_json::from_str(&lines[0]).expect("JSON");
+        let second: serde_json::Value = serde_json::from_str(&lines[1]).expect("JSON");
+        assert_eq!(first["msg"], "received");
+        assert_eq!(first["level"], "debug");
+        assert_eq!(second["msg"], "answered");
+    }
+
+    #[tokio::test]
+    async fn a_warn_threshold_keeps_the_refusal_and_drops_the_success() {
+        let (daemon, sink) = daemon_at(Level::Warn);
+
+        daemon.handle(Request::HostInfo).await;
+        assert!(sink.lines().is_empty(), "info is below warn");
+
+        daemon
+            .handle(Request::PluginCall {
+                id: "org.absent".to_string(),
+                pipe: anth_wire::PluginPipe::Direct,
+                payload: "{}".to_string(),
+            })
+            .await;
+        assert_eq!(sink.lines().len(), 1, "a refusal survives");
     }
 }

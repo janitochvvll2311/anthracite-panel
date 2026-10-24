@@ -45,10 +45,45 @@ use crate::{Cli, dispatch_command};
 pub struct Target<'a> {
     pub socket: &'a std::path::Path,
     pub root: &'a std::path::Path,
+    /// What the commands run from the prompt log to. Borrowed rather than owned,
+    /// so `Target` stays `Copy` and every helper can take it by value.
+    pub log: &'a std::sync::Arc<crate::log::Logger>,
 }
 
-pub async fn run(socket: &std::path::Path, root: &std::path::Path) -> ExitCode {
-    let target = Target { socket, root };
+/// The logger the prompt writes through, and the queue it drains.
+///
+/// A daemon sharing the process (`run -i`) builds this first and hands the same
+/// logger to its `Daemon`, so its lines arrive here instead of on stdout: there
+/// is one terminal and one writer, and it is the prompt.
+pub struct Wired {
+    pub logger: std::sync::Arc<crate::log::Logger>,
+    pub lines: tokio::sync::mpsc::UnboundedReceiver<String>,
+}
+
+impl Wired {
+    /// A queue-backed logger with `base`'s level and format.
+    ///
+    /// `off` still wins: the settings are the operator's, only the sink changes.
+    pub fn from(base: &crate::log::Logger) -> Self {
+        let (sink, lines) = crate::log::Queue::new();
+        Self {
+            logger: std::sync::Arc::new(base.settings().logger_via(std::sync::Arc::new(sink))),
+            lines,
+        }
+    }
+}
+
+pub async fn run(
+    socket: &std::path::Path,
+    root: &std::path::Path,
+    log: std::sync::Arc<crate::log::Logger>,
+    wired: Option<Wired>,
+) -> ExitCode {
+    let target = Target {
+        socket,
+        root,
+        log: &log,
+    };
     let history_path = history::path();
     let mut history = history_path
         .as_deref()
@@ -57,10 +92,17 @@ pub async fn run(socket: &std::path::Path, root: &std::path::Path) -> ExitCode {
 
     let code = if term::RawMode::is_interactive() {
         eprintln!("anth-panel interactive: Tab completes, Up recalls, `help` lists.");
-        session(target, &mut history).await
+        session(target, &mut history, wired).await
     } else {
         eprintln!("anth-panel interactive: `help`, `quit`, or a subcommand.");
-        plain_session(target, &mut history).await
+        // A daemon in this process still queues its lines; without this task they
+        // would pile up unread and the operator would see nothing.
+        let writer = wired.map(|wired| tokio::spawn(print_lines(wired.lines)));
+        let code = plain_session(target, &mut history).await;
+        if let Some(writer) = writer {
+            writer.abort();
+        }
+        code
     };
 
     // A history that cannot be written is worth one line, not a failed session:
@@ -75,14 +117,23 @@ pub async fn run(socket: &std::path::Path, root: &std::path::Path) -> ExitCode {
 }
 
 /// The editor path, for a real terminal.
-async fn session(target: Target<'_>, history: &mut editor::History) -> ExitCode {
+async fn session(
+    target: Target<'_>,
+    history: &mut editor::History,
+    wired: Option<Wired>,
+) -> ExitCode {
     // The guard restores the terminal however this function returns, including
     // through a panic. A terminal stuck in raw mode is worse than no prompt.
     let raw = match term::RawMode::enable() {
         Ok(raw) => raw,
         Err(error) => {
             eprintln!("anth-panel: using plain input: {error}");
-            return plain_session(target, history).await;
+            let writer = wired.map(|wired| tokio::spawn(print_lines(wired.lines)));
+            let code = plain_session(target, history).await;
+            if let Some(writer) = writer {
+                writer.abort();
+            }
+            return code;
         }
     };
 
@@ -90,7 +141,20 @@ async fn session(target: Target<'_>, history: &mut editor::History) -> ExitCode 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
-    let code = editor_session(target, &mut prompt, &mut out).await;
+    // The prompt, not the logger, owns the terminal: the sink queues and this
+    // loop paints. A daemon in this process was given the same logger, so its
+    // lines arrive here too instead of landing on top of the prompt.
+    let wired = wired.unwrap_or_else(|| Wired::from(target.log));
+    let logger = wired.logger;
+    let mut logs = wired.lines;
+    let target = Target {
+        socket: target.socket,
+        root: target.root,
+        log: &logger,
+    };
+
+    let mut keys = Reader::spawn();
+    let code = editor_session(target, &mut prompt, &mut out, &mut keys, &mut logs).await;
 
     // Leave the cursor on a clean line for whatever writes next.
     let _ = out.write_all(b"\r\n");
@@ -101,34 +165,53 @@ async fn session(target: Target<'_>, history: &mut editor::History) -> ExitCode 
     code
 }
 
-/// The byte-at-a-time loop.
-async fn editor_session(target: Target<'_>, prompt: &mut Prompt, out: &mut impl Write) -> ExitCode {
-    use std::io::Read;
-
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let mut buffer = [0u8; 256];
-
+/// The byte-at-a-time loop, with log lines painted above the prompt.
+///
+/// Two inputs, one owner of the terminal. Keys come from a blocking reader on a
+/// thread of its own, logs come from the logger's queue, and this loop is the
+/// only thing that writes: it paints a log line above the prompt and repaints the
+/// prompt under it, so an arriving line never lands in the middle of a word.
+///
+/// Reading stdin on a thread rather than in this function is also a fix of its
+/// own: `input.read()` blocks, and blocking inside an async task holds a runtime
+/// worker hostage for as long as the operator thinks.
+async fn editor_session(
+    target: Target<'_>,
+    prompt: &mut Prompt,
+    out: &mut impl Write,
+    keys: &mut impl KeySource,
+    logs: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
+) -> ExitCode {
     let _ = out.write_all(prompt.paint_line().as_bytes());
     let _ = out.flush();
 
     loop {
-        let read = match input.read(&mut buffer) {
-            Ok(0) => {
-                let effects = prompt.finish();
-                return apply(target, effects, prompt, out)
-                    .await
-                    .unwrap_or(ExitCode::SUCCESS);
-            }
-            Ok(read) => read,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => {
-                eprintln!("anth-panel: reading stdin: {error}");
-                return ExitCode::from(1);
+        // `select!` rather than draining between keystrokes: a line that arrives
+        // while the operator is idle must appear at once, not at the next Enter.
+        let batch = tokio::select! {
+            key = keys.next() => match key {
+                Some(bytes) => Some(bytes),
+                // The input ended. Whatever is half-typed is still submitted, so a
+                // piped last line without a newline is not lost.
+                None => {
+                    let effects = prompt.finish();
+                    return apply(target, effects, prompt, out)
+                        .await
+                        .unwrap_or(ExitCode::SUCCESS);
+                }
+            },
+            line = logs.recv() => {
+                if let Some(line) = line {
+                    let bytes = prompt.paint_above(&line);
+                    let _ = out.write_all(bytes.as_bytes());
+                    let _ = out.flush();
+                }
+                // A closed queue means nothing will log again; keys keep working.
+                continue;
             }
         };
 
-        let effects = prompt.feed(&buffer[..read]);
+        let effects = prompt.feed(&batch.expect("a key batch or an exit"));
         if let Some(code) = apply(target, effects, prompt, out).await {
             return code;
         }
@@ -258,11 +341,89 @@ async fn run_words(
 
     // A failed command does not end the session: the reason is already on
     // stderr, and a prompt that vanished on a typo would lose it.
-    dispatch_command(&socket, &root, cli.command).await;
+    dispatch_command(
+        &socket,
+        &root,
+        cli.command,
+        std::sync::Arc::clone(target.log),
+    )
+    .await;
     None
 }
 
+/// Where a key batch comes from.
+///
+/// An interface rather than a concrete stdin, so the session loop can be driven
+/// by a test that supplies keys and a log line in a known order. Nothing here
+/// reads the environment.
+pub trait KeySource {
+    /// The next bytes, or `None` at end of input.
+    fn next(&mut self) -> impl std::future::Future<Output = Option<Vec<u8>>> + Send;
+}
+
+/// Keys from stdin, read on a thread of its own.
+///
+/// `read` blocks, and blocking inside an async task would stall a runtime worker
+/// until the operator types something. A dedicated thread never does that, and
+/// the channel is what lets the session `select!` between keys and log lines.
+pub struct Reader {
+    lines: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+}
+
+impl Reader {
+    pub fn spawn() -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::Builder::new()
+            .name("anth-stdin".to_string())
+            // A thread that cannot start is reported by the read path seeing a
+            // closed channel, which ends the session rather than hanging it.
+            .spawn(move || {
+                use std::io::Read;
+                let stdin = std::io::stdin();
+                let mut input = stdin.lock();
+                let mut buffer = [0u8; 256];
+                loop {
+                    match input.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(read) => {
+                            if tx.send(buffer[..read].to_vec()).is_err() {
+                                break;
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }
+            })
+            .ok();
+        Self { lines: rx }
+    }
+}
+
+impl KeySource for Reader {
+    async fn next(&mut self) -> Option<Vec<u8>> {
+        self.lines.recv().await
+    }
+}
+
+/// Writes queued log lines to stdout, for the session that has no prompt to
+/// protect.
+async fn print_lines(mut lines: tokio::sync::mpsc::UnboundedReceiver<String>) {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    while let Some(line) = lines.recv().await {
+        let mut out = stdout.lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    }
+}
+
 /// The pipe path: whole lines, no editor and no escape sequences in the output.
+///
+/// The prompt goes to stderr and log lines to stdout. Kept apart on purpose: a
+/// caller redirecting the two gets a clean transcript on each, and only a caller
+/// merging them into one pipe sees them interleave — where there is no cursor to
+/// protect, so there is nothing the queue could do about it anyway.
 async fn plain_session(target: Target<'_>, history: &mut editor::History) -> ExitCode {
     let stdin = std::io::stdin();
     let mut line = String::new();

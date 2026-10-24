@@ -23,10 +23,10 @@ mod sandbox {
             r#"
 (module
   (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
-  (import "env" "anth_log" (func $log (param i32 i32)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
   (memory (export "memory") 1)
   (data (i32.const 1024) "{escaped}")
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param $len i32) (result i32)
     ;; A real allocator bumps a pointer; the reply lives at a fixed address, so
     ;; any allocation past it is enough to prove the host reads what it wrote.
@@ -48,7 +48,7 @@ mod sandbox {
 id = "org.test.guest"
 version = "0.2.0"
 name = "Guest"
-abi = 2
+abi = 3
 
 [wasm]
 path = "plugin.wasm"
@@ -72,7 +72,9 @@ program = "hostname"
     fn the_reply_envelope_uses_body_not_value() {
         let plugin = load(&guest(r#"{"status":200,"body":{"greeting":"hello"}}"#));
 
-        let reply = plugin.call("anth_http", "{}").expect("calling");
+        let reply = plugin
+            .call("anth_http", "{}", crate::tests::quiet())
+            .expect("calling");
 
         assert_eq!(reply.status, 200);
         assert_eq!(reply.value["greeting"], "hello");
@@ -84,7 +86,9 @@ program = "hostname"
     fn a_reply_without_a_body_is_null() {
         let plugin = load(&guest(r#"{"status":204}"#));
 
-        let reply = plugin.call("anth_http", "{}").expect("calling");
+        let reply = plugin
+            .call("anth_http", "{}", crate::tests::quiet())
+            .expect("calling");
 
         assert_eq!(reply.status, 204);
         assert_eq!(reply.value, serde_json::Value::Null);
@@ -94,7 +98,9 @@ program = "hostname"
     fn a_reply_reaches_the_host() {
         let plugin = load(&guest(r#"{"status":200,"body":{"greeting":"hello"}}"#));
 
-        let reply = plugin.call("anth_http", "{}").expect("calling");
+        let reply = plugin
+            .call("anth_http", "{}", crate::tests::quiet())
+            .expect("calling");
 
         assert_eq!(reply.status, 200);
         assert_eq!(reply.value["greeting"], "hello");
@@ -107,7 +113,7 @@ program = "hostname"
 
         for entry in ["anth_http", "anth_cli", "anth_direct"] {
             let reply = plugin
-                .call(entry, "\"hostname\"")
+                .call(entry, "\"hostname\"", crate::tests::quiet())
                 .unwrap_or_else(|e| panic!("{entry}: {}", e.message));
             assert_eq!(reply.status, 200);
         }
@@ -120,7 +126,7 @@ program = "hostname"
         let plugin = load(&guest("not json at all"));
 
         let reply = plugin
-            .call("anth_http", "{}")
+            .call("anth_http", "{}", crate::tests::quiet())
             .expect("the call itself works");
 
         assert_eq!(reply.status, 500);
@@ -139,9 +145,9 @@ program = "hostname"
         let wat = r#"
 (module
   (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
-  (import "env" "anth_log" (func $log (param i32 i32)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
   (memory (export "memory") 1)
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 4096))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64)
@@ -151,7 +157,9 @@ program = "hostname"
 "#;
         let plugin = load(wat);
 
-        let error = plugin.call("anth_http", "{}").expect_err("must be stopped");
+        let error = plugin
+            .call("anth_http", "{}", crate::tests::quiet())
+            .expect_err("must be stopped");
 
         assert_eq!(error.kind, anth_error_kind_too_large());
         assert!(
@@ -172,9 +180,9 @@ program = "hostname"
         let wat = r#"
 (module
   (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
-  (import "env" "anth_log" (func $log (param i32 i32)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
   (memory (export "memory") 1)
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 4096))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64)
@@ -186,7 +194,9 @@ program = "hostname"
 "#;
         let plugin = load(wat);
 
-        let error = plugin.call("anth_http", "{}").expect_err("must be refused");
+        let error = plugin
+            .call("anth_http", "{}", crate::tests::quiet())
+            .expect_err("must be refused");
 
         assert_eq!(error.kind, anth_wire::ErrorKind::Forbidden);
         assert!(
@@ -202,7 +212,7 @@ program = "hostname"
 (module
   (import "env" "anth_http_post" (func $nope (param i32 i32) (result i64)))
   (memory (export "memory") 1)
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 0))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64) (i64.const 0))
@@ -226,7 +236,7 @@ program = "hostname"
         let wat = r#"
 (module
   (memory (export "memory") 1)
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 0))
   (func (export "anth_free") (param i32 i32))
 )
@@ -279,9 +289,9 @@ program = "hostname"
         let wat = r#"
 (module
   (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
-  (import "env" "anth_log" (func $log (param i32 i32)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
   (memory (export "memory") 1)
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 8192))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64)
@@ -300,7 +310,7 @@ program = "hostname"
         }
 
         let reply = plugin
-            .call("anth_http", "{}")
+            .call("anth_http", "{}", crate::tests::quiet())
             .expect("the call itself works");
 
         let quoted = reply.value["error"].as_str().unwrap_or_default();
@@ -432,4 +442,181 @@ mod grant {
 
         assert!(!output.trim().is_empty(), "hostname printed nothing");
     }
+}
+
+/// A guest's log lines, which is the one thing a plugin can say to an operator.
+mod guest_logging {
+    use crate::log::{Capture, Format, Level, Logger};
+    use crate::plugins::manifest::Manifest;
+    use crate::plugins::runtime::*;
+    use std::sync::Arc;
+
+    /// A guest that logs one line at `level` from its direct entry, then answers.
+    fn guest_logging_at(level: i32) -> String {
+        format!(
+            r#"
+(module
+  (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 1024) "{{\"status\":200,\"body\":null}}")
+  (data (i32.const 2048) "from the guest")
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
+  (func (export "anth_alloc") (param $len i32) (result i32) (i32.const 4096))
+  (func (export "anth_free") (param i32 i32))
+  (func (export "anth_http") (param i32 i32) (result i64) (call $answer))
+  (func (export "anth_cli") (param i32 i32) (result i64) (call $answer))
+  (func (export "anth_direct") (param i32 i32) (result i64)
+    (call $log (i32.const {level}) (i32.const 2048) (i32.const 14))
+    (call $answer))
+  (func $answer (result i64)
+    (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 21)))
+)
+"#
+        )
+    }
+
+    fn manifest() -> Manifest {
+        Manifest::parse(
+            r#"
+[plugin]
+id = "org.test.loud"
+version = "0.2.0"
+name = "Loud"
+abi = 3
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "0337900b20e3240510dfedb1152912063ce5f679e162324124832d3325d201b0"
+"#,
+        )
+        .expect("the manifest must parse")
+    }
+
+    fn run_at(level: i32, daemon_level: Level) -> Vec<String> {
+        let sink = Capture::default();
+        let log = Arc::new(Logger::new(
+            daemon_level,
+            Format::Human,
+            Arc::new(sink.clone()),
+        ));
+        let wasm = wat::parse_str(guest_logging_at(level)).expect("the guest must compile");
+        let plugin = Loaded::load(manifest(), &wasm).expect("the guest must load");
+
+        plugin.call("anth_direct", "{}", log).expect("calling");
+
+        sink.lines()
+    }
+
+    /// The point of the level argument: a plugin cannot make itself heard when
+    /// the operator asked for quiet.
+    #[test]
+    fn a_guest_debug_line_is_hidden_at_info_and_shown_at_debug() {
+        assert!(
+            run_at(3, Level::Info).is_empty(),
+            "a debug line must not survive an info daemon"
+        );
+
+        let shown = run_at(3, Level::Debug);
+        assert_eq!(shown.len(), 1, "got {shown:?}");
+        assert!(shown[0].contains("DEBUG"), "got {shown:?}");
+    }
+
+    /// The other direction, so the filter is a filter and not a mute.
+    #[test]
+    fn an_guest_error_line_survives_a_quiet_daemon() {
+        let shown = run_at(0, Level::Error);
+
+        assert_eq!(shown.len(), 1, "got {shown:?}");
+        assert!(shown[0].contains("ERROR"), "got {shown:?}");
+    }
+
+    /// The plugin id is what tells two plugins' lines apart, so it belongs on
+    /// the target rather than inside the message the guest chose.
+    #[test]
+    fn a_guest_line_names_the_plugin_that_wrote_it() {
+        let shown = run_at(2, Level::Info);
+
+        assert_eq!(shown.len(), 1, "got {shown:?}");
+        assert!(
+            shown[0].contains("plugin org.test.loud"),
+            "the target must name the plugin, got {shown:?}"
+        );
+        assert!(shown[0].contains("from the guest"), "got {shown:?}");
+    }
+
+    /// The five numbers the guest crate writes into its import call. `anth-panel`
+    /// does not depend on `anth-plugin`, so the table is duplicated; this is the
+    /// only thing stopping the two copies drifting apart and relabelling every
+    /// plugin line.
+    #[test]
+    fn the_level_numbers_match_the_abi() {
+        use crate::log::Level;
+        use crate::plugins::runtime::guest::level_of;
+
+        assert_eq!(level_of(0), Level::Error);
+        assert_eq!(level_of(1), Level::Warn);
+        assert_eq!(level_of(2), Level::Info);
+        assert_eq!(level_of(3), Level::Debug);
+        assert_eq!(level_of(4), Level::Trace);
+        assert_eq!(level_of(99), Level::Info, "garbage must not become urgent");
+        assert_eq!(level_of(-1), Level::Info);
+    }
+
+    /// A hand-written guest can send any number. Hiding the line would leave the
+    /// plugin's confusion invisible, and promoting it to `error` would let a guest
+    /// raise its own priority, so an unknown level lands on the default.
+    #[test]
+    fn an_unknown_level_is_shown_rather_than_dropped() {
+        let shown = run_at(99, Level::Info);
+
+        assert_eq!(shown.len(), 1, "got {shown:?}");
+        assert!(shown[0].contains("from the guest"), "got {shown:?}");
+    }
+
+    /// A guest that forges a newline must not be able to write two log lines.
+    #[test]
+    fn a_newline_in_a_guest_message_stays_on_one_line() {
+        let sink = Capture::default();
+        let log = Arc::new(Logger::new(
+            Level::Info,
+            Format::Human,
+            Arc::new(sink.clone()),
+        ));
+        let wasm = wat::parse_str(FORGED).expect("the guest must compile");
+        let plugin = Loaded::load(manifest(), &wasm).expect("the guest must load");
+
+        plugin.call("anth_direct", "{}", log).expect("calling");
+
+        let lines = sink.lines();
+        assert_eq!(
+            lines.len(),
+            1,
+            "the newline forged a second line: {lines:?}"
+        );
+        assert!(
+            lines[0].contains("\\n"),
+            "the newline must be escaped: {lines:?}"
+        );
+    }
+
+    const FORGED: &str = r#"
+(module
+  (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 1024) "{\"status\":200,\"body\":null}")
+  (data (i32.const 2048) "first\0aINFO daemon: listening")
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
+  (func (export "anth_alloc") (param $len i32) (result i32) (i32.const 4096))
+  (func (export "anth_free") (param i32 i32))
+  (func (export "anth_http") (param i32 i32) (result i64) (call $answer))
+  (func (export "anth_cli") (param i32 i32) (result i64) (call $answer))
+  (func (export "anth_direct") (param i32 i32) (result i64)
+    (call $log (i32.const 2) (i32.const 2048) (i32.const 32))
+    (call $answer))
+  (func $answer (result i64)
+    (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 21)))
+)
+"#;
 }

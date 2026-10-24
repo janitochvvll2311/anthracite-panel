@@ -12,6 +12,7 @@ use anth_wire::{ErrorKind, WireError};
 use wasmi::{Caller, Extern, Instance, Memory, Store, Val};
 
 use super::{DEADLINE, trap_kind};
+use crate::log::{Level, Logger};
 use crate::plugins::manifest::{Capability, Manifest};
 
 /// Capabilities one invocation may run.
@@ -84,6 +85,10 @@ impl Reply {
 /// The store's data: everything the imports may touch.
 pub(crate) struct Host {
     capabilities: Vec<Capability>,
+    /// Where `anth_log` lines go, and at what level. The plugin id is added to
+    /// the target so a refusal names the plugin that asked for it.
+    log: std::sync::Arc<Logger>,
+    id: String,
     calls: u32,
     log_bytes: usize,
     started: Instant,
@@ -128,9 +133,11 @@ impl wasmi::ResourceLimiter for Host {
 }
 
 impl Host {
-    pub(crate) fn new(manifest: &Manifest) -> Self {
+    pub(crate) fn new(manifest: &Manifest, log: std::sync::Arc<Logger>) -> Self {
         Self {
             capabilities: manifest.capability.clone(),
+            log,
+            id: manifest.plugin.id.clone(),
             calls: 0,
             log_bytes: 0,
             started: Instant::now(),
@@ -223,7 +230,29 @@ pub(crate) fn exec(
 }
 
 /// Appends one line to the daemon log, within a budget.
-pub(crate) fn log(caller: &mut Caller<'_, Host>, ptr: i32, len: i32) {
+///
+/// The guest names a level; the daemon decides whether to print it.
+///
+/// A number the host has no name for becomes `info` rather than an error: the
+/// line is diagnostic, and a plugin that is already confused should not also be
+/// silent. `info` specifically, because it is the default the operator sees —
+/// mapping garbage to `error` would let a guest raise its own priority.
+/// The number a guest sends to the level the daemon filters on.
+///
+/// These five numbers are `anth_plugin::LogLevel`'s discriminants, written out
+/// here because the two crates do not depend on each other. A test pins the
+/// table, since a silent drift would relabel every plugin line.
+pub(crate) fn level_of(number: i32) -> Level {
+    match number {
+        0 => Level::Error,
+        1 => Level::Warn,
+        3 => Level::Debug,
+        4 => Level::Trace,
+        _ => Level::Info,
+    }
+}
+
+pub(crate) fn log(caller: &mut Caller<'_, Host>, level: i32, ptr: i32, len: i32) {
     let Ok(message) = read_guest_string(caller, ptr, len) else {
         return;
     };
@@ -232,12 +261,19 @@ pub(crate) fn log(caller: &mut Caller<'_, Host>, ptr: i32, len: i32) {
     if host.log_bytes > MAX_LOG_BYTES {
         return;
     }
-    eprintln!("plugin: {}", message.trim_end());
+    let level = level_of(level);
+    let target = format!("plugin {}", host.id);
+    host.log.event(level, &target, message.trim_end()).emit();
 }
 
 /// Runs one entry and reads its reply.
-pub(crate) fn run(loaded: &super::Loaded, entry: &str, payload: &str) -> Result<Reply, WireError> {
-    let mut store = loaded.new_store();
+pub(crate) fn run(
+    loaded: &super::Loaded,
+    entry: &str,
+    payload: &str,
+    log: std::sync::Arc<Logger>,
+) -> Result<Reply, WireError> {
+    let mut store = loaded.new_store(log);
     let instance = loaded.instantiate(&mut store)?;
 
     let func = instance

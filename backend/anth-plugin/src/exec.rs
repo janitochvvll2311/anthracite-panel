@@ -18,8 +18,18 @@ pub trait Executor {
     /// a refused capability served as `200` is an operator who cannot debug it.
     fn exec(&mut self, capability: &str, args: &Value) -> Result<Value, String>;
 
-    /// Writes one line to the daemon log.
-    fn log(&mut self, message: &str);
+    /// Writes one line to the daemon log, at `info`.
+    fn log(&mut self, message: &str) {
+        self.log_at(crate::abi::LogLevel::Info, message);
+    }
+
+    /// Writes one line at a level of the plugin's choosing.
+    ///
+    /// The level is **relative to the daemon's**: a `debug` line is shown when
+    /// the operator asked for `debug`, not before. A plugin that logged at an
+    /// absolute level could raise the daemon's verbosity by itself, which is the
+    /// wrong direction for a guest to be trusted with.
+    fn log_at(&mut self, level: crate::abi::LogLevel, message: &str);
 
     /// Runs a capability that takes no arguments.
     ///

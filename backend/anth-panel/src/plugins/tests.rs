@@ -12,7 +12,7 @@ mod manifest {
 id = "org.anth.hello"
 version = "0.2.0"
 name = "Hello"
-abi = 2
+abi = 3
 
 [wasm]
 path = "plugin.wasm"
@@ -51,10 +51,18 @@ module = "web/hello.js"
 
     #[test]
     fn another_abi_is_refused_by_number() {
-        let error = refused(&GOOD.replace("abi = 2", "abi = 1"));
+        // Derived from the constant, not written out: this test is about a
+        // mismatch being refused, so it must not need an edit whenever the
+        // current version moves.
+        let old = crate::plugins::manifest::ABI_VERSION - 1;
+        let error = refused(&GOOD.replace("abi = 3", &format!("abi = {old}")));
 
         assert_eq!(error.kind, anth_wire::ErrorKind::Invalid);
-        assert!(error.message.contains("ABI 1"), "got: {}", error.message);
+        assert!(
+            error.message.contains(&format!("ABI {old}")),
+            "got: {}",
+            error.message
+        );
     }
 
     /// The module path is the one thing a rewritten manifest must not be able to
@@ -284,10 +292,10 @@ mod registry {
     const GUEST: &str = r#"
 (module
   (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
-  (import "env" "anth_log" (func $log (param i32 i32)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
   (memory (export "memory") 1)
   (data (i32.const 1024) "\7b\22status\22:200,\22value\22:null\7d")
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 2048))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64)
@@ -330,7 +338,7 @@ mod registry {
 id = "{id}"{alias_line}
 version = "0.2.0"
 name = "Test"
-abi = 2
+abi = 3
 
 [wasm]
 path = "plugin.wasm"
@@ -730,10 +738,10 @@ mod install {
     const GUEST: &str = r#"
 (module
   (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
-  (import "env" "anth_log" (func $log (param i32 i32)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
   (memory (export "memory") 1)
   (data (i32.const 1024) "\7b\22status\22:200,\22value\22:null\7d")
-  (func (export "anth_abi_version") (result i32) (i32.const 2))
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
   (func (export "anth_alloc") (param i32) (result i32) (i32.const 2048))
   (func (export "anth_free") (param i32 i32))
   (func (export "anth_http") (param i32 i32) (result i64)
@@ -758,7 +766,7 @@ mod install {
 id = "{id}"
 version = "0.1.0"
 name = "Test"
-abi = 2
+abi = 3
 
 [wasm]
 path = "plugin.wasm"

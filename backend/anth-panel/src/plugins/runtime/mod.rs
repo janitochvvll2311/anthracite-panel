@@ -102,8 +102,13 @@ impl Loaded {
     ///
     /// `entry` is the transport the host is serving, chosen by the caller and
     /// never by the guest, so a payload cannot be read as the wrong pipe.
-    pub fn call(&self, entry: &str, payload: &str) -> Result<Reply, WireError> {
-        guest::run(self, entry, payload)
+    pub fn call(
+        &self,
+        entry: &str,
+        payload: &str,
+        log: std::sync::Arc<crate::log::Logger>,
+    ) -> Result<Reply, WireError> {
+        guest::run(self, entry, payload, log)
     }
 
     /// Instantiates once and asks the guest which ABI it speaks.
@@ -113,7 +118,10 @@ impl Loaded {
     /// what keeps "a plugin never gets a host handle" true by construction
     /// rather than by review.
     fn verify_abi(&self) -> Result<(), WireError> {
-        let mut store = self.new_store();
+        // Nothing the guest logs here is meant for an operator: this runs at
+        // load, to read a version number.
+        let log = std::sync::Arc::new(crate::log::Logger::silent());
+        let mut store = self.new_store(log);
         let instance = self.instantiate(&mut store)?;
         let version = instance
             .get_typed_func::<(), i32>(&store, "anth_abi_version")
@@ -133,8 +141,8 @@ impl Loaded {
         Ok(())
     }
 
-    pub(crate) fn new_store(&self) -> Store<Host> {
-        let mut store = Store::new(&self.engine, Host::new(&self.manifest));
+    pub(crate) fn new_store(&self, log: std::sync::Arc<crate::log::Logger>) -> Store<Host> {
+        let mut store = Store::new(&self.engine, Host::new(&self.manifest, log));
         store.limiter(|host| host as &mut dyn ResourceLimiter);
         // A store without fuel would let every instruction run unmeasured, so
         // this is a hard expectation rather than a best effort.
@@ -167,8 +175,8 @@ impl Loaded {
                 linker.func_wrap(
                     "env",
                     "anth_log",
-                    |mut caller: wasmi::Caller<'_, Host>, ptr: i32, len: i32| {
-                        guest::log(&mut caller, ptr, len);
+                    |mut caller: wasmi::Caller<'_, Host>, level: i32, ptr: i32, len: i32| {
+                        guest::log(&mut caller, level, ptr, len);
                     },
                 )
             })

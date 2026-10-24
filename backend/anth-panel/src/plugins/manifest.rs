@@ -16,7 +16,7 @@ use serde::Deserialize;
 /// Must equal `anth_plugin::ABI_VERSION`. A bundle declaring another version is
 /// refused by name rather than trapped at the first call, so an upgrade is
 /// diagnosable from the error alone.
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 /// Programs a capability may name.
 ///

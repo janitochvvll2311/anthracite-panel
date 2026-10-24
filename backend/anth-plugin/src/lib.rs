@@ -57,7 +57,7 @@
 //!     fn exec(&mut self, _capability: &str, _args: &Value) -> Result<Value, String> {
 //!         Err("nothing is granted".to_string())
 //!     }
-//!     fn log(&mut self, _message: &str) {}
+//!     fn log_at(&mut self, _level: anth_plugin::LogLevel, _message: &str) {}
 //! }
 //! ```
 //!
@@ -82,8 +82,8 @@ pub mod plugin;
 pub mod transport;
 
 pub use abi::{
-    ABI_VERSION, HostExecutor, alloc_string, answer_cli, answer_direct, answer_http, free_string,
-    read_string, write_string,
+    ABI_VERSION, HostExecutor, LogLevel, alloc_string, answer_cli, answer_direct, answer_http,
+    free_string, read_string, write_string,
 };
 pub use exec::Executor;
 pub use message::{Action, Request, Response, Status};

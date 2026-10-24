@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use anth_wire::{ErrorKind, PluginSummary, Request, Response, WireError};
 
+use crate::log::{Level, Logger};
 use crate::plugins::registry::Registry;
 
 /// Everything a request may need from the daemon.
@@ -20,12 +21,14 @@ use crate::plugins::registry::Registry;
 /// digest that cannot have changed while the process runs.
 pub struct Daemon {
     plugins: Arc<Registry>,
+    log: Arc<Logger>,
 }
 
 impl Daemon {
-    pub fn new(plugins: Registry) -> Self {
+    pub fn new(plugins: Registry, log: Arc<Logger>) -> Self {
         Self {
             plugins: Arc::new(plugins),
+            log,
         }
     }
 
@@ -94,11 +97,53 @@ impl Daemon {
     }
 
     /// Handles one request.
+    /// Answers one request and records what it was and what it cost.
+    ///
+    /// The timings start here, at the one place every transport funnels through,
+    /// so the socket, the HTTP route and a direct call are all measured the same
+    /// way. A failure is logged by its kind and status, never by the plugin's own
+    /// payload, which is the guest's text and is logged where it is produced.
     pub async fn handle(&self, request: Request) -> Response {
-        match dispatch(self, request) {
+        // The least important line this function can emit is the failure at
+        // `warn`, so that is the level the shortcut tests. Guarding on `info`
+        // would skip the whole path — including the failure — whenever the
+        // operator asked for `--log-level warn`, which is exactly when a refusal
+        // is worth reading.
+        if !self.log.enabled(Level::Warn) {
+            return match dispatch(self, request) {
+                Ok(response) => response,
+                Err(error) => Response::Error(error),
+            };
+        }
+
+        let started = std::time::Instant::now();
+        let operation = operation_of(&request);
+        if self.log.enabled(Level::Debug) {
+            self.log
+                .debug("request", "received")
+                .field("op", operation)
+                .emit();
+        }
+
+        let response = match dispatch(self, request) {
             Ok(response) => response,
             Err(error) => Response::Error(error),
-        }
+        };
+        let ms = started.elapsed().as_millis() as u64;
+        let (status, failed) = status_of(&response);
+
+        let event = if failed {
+            self.log.warn("request", "failed")
+        } else {
+            self.log.info("request", "answered")
+        };
+        event
+            .field("op", operation)
+            .field("status", status)
+            .field("ms", ms)
+            .emit();
+
+        response
     }
 }
 
@@ -135,7 +180,11 @@ fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
                 .ok_or_else(|| WireError::new(ErrorKind::NotFound, format!("no plugin `{id}`")))?;
             let canonical = entry.id.clone();
             let loaded = entry.usable()?;
-            let reply = loaded.call(pipe.entry(), &encode_payload(pipe, &payload))?;
+            let reply = loaded.call(
+                pipe.entry(),
+                &encode_payload(pipe, &payload),
+                daemon.log.clone(),
+            )?;
 
             // A plugin's own failure is a *successful* call whose status says
             // what happened, so the caller can show the plugin's message. Only a
@@ -174,4 +223,35 @@ fn hello(protocol_version: u16) -> Result<Response, WireError> {
     Ok(Response::Welcome {
         protocol_version: anth_wire::PROTOCOL_VERSION,
     })
+}
+
+/// A short name for what a request asked, for the log line.
+///
+/// Deliberately not `Debug`: a plugin call's payload can be a whole command line
+/// or body, and a log that prints it would be quoting the guest into the host's
+/// own line. The plugin id and the pipe are what an operator filters on.
+fn operation_of(request: &Request) -> &'static str {
+    match request {
+        Request::Hello { .. } => "hello",
+        Request::HostInfo => "host-info",
+        Request::PluginList => "plugin-list",
+        Request::PluginCall { .. } => "plugin-call",
+    }
+}
+
+/// The status a client would see, and whether it counts as a failure.
+///
+/// A plugin answering `4xx` is a successful *call* — the daemon did its job and
+/// the status travels with the answer — but a `5xx` is the plugin failing, and an
+/// operator triaging a broken plugin wants that line at `warn` without turning on
+/// `debug`. A `Response::Error` is the daemon failing, and its status comes from
+/// the error kind rather than being written here.
+fn status_of(response: &Response) -> (u16, bool) {
+    match response {
+        Response::Welcome { .. } | Response::HostInfo(_) | Response::PluginList { .. } => {
+            (200, false)
+        }
+        Response::PluginReply { status, .. } => (*status, *status >= 500),
+        Response::Error(error) => (error.kind.http_status(), true),
+    }
 }

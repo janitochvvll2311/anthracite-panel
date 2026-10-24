@@ -101,7 +101,7 @@ mod tests {
                 .unwrap_or_else(|| Err(format!("no reply for {capability}")))
         }
 
-        fn log(&mut self, _message: &str) {}
+        fn log_at(&mut self, _level: anth_plugin::LogLevel, _message: &str) {}
     }
 
     /// Runs one anchor through the plugin's real HTTP mapper.
