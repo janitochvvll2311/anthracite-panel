@@ -32,9 +32,14 @@ impl Daemon {
         }
     }
 
-    /// The plugin that declares an anchor, if exactly one does.
-    pub fn anchor_owner(
+    /// One plugin's own anchor, resolved by id or alias rather than by scanning.
+    ///
+    /// Scoped because two plugins may legitimately declare the same path: a
+    /// caller that names its plugin is never ambiguous, so this is the form the
+    /// browser uses and the only anchor lookup the router performs.
+    pub fn anchor_for(
         &self,
+        id: &str,
         method: &str,
         path: &str,
     ) -> Result<
@@ -44,7 +49,7 @@ impl Daemon {
         )>,
         WireError,
     > {
-        self.plugins.anchor_owner(method, path)
+        self.plugins.anchor_for(id, method, path)
     }
 
     /// Whether any plugin answers to this id or alias.
@@ -64,36 +69,6 @@ impl Daemon {
         module: &str,
     ) -> Result<Option<&crate::plugins::registry::Entry>, WireError> {
         self.plugins.ui_module(id_or_alias, module)
-    }
-
-    /// One plugin's own anchor, resolved by id rather than by scanning.
-    ///
-    /// Scoped because two plugins may legitimately declare the same path: the
-    /// unscoped lookup has to answer that as a conflict, but a caller that names
-    /// its plugin is never ambiguous, so this is the form the browser uses.
-    pub fn anchor_for(
-        &self,
-        id: &str,
-        method: &str,
-        path: &str,
-    ) -> Result<
-        Option<(
-            &crate::plugins::registry::Entry,
-            &crate::plugins::runtime::Loaded,
-        )>,
-        WireError,
-    > {
-        let Some(entry) = self.plugins.resolve(id)? else {
-            return Ok(None);
-        };
-        let declared = entry
-            .anchors
-            .iter()
-            .any(|(m, p)| m.eq_ignore_ascii_case(method) && p == path);
-        if !declared {
-            return Ok(None);
-        }
-        Ok(Some((entry, entry.usable()?)))
     }
 
     /// Handles one request.

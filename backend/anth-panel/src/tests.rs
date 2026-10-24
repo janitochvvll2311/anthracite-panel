@@ -108,14 +108,33 @@ mod api {
         assert!(parse_query(Some("")).is_empty());
     }
 
-    /// An anchor no plugin declares must not fall through to the SPA, which
-    /// would answer `200 index.html` and look like a working route.
+    /// `/p/` is the web namespace and nothing else, so a path there that names
+    /// no plugin is a `404` about the route's own shape — not "no anchor",
+    /// which would describe a namespace `/p/` no longer serves. It must not fall
+    /// through to the SPA either, which would answer `200 index.html`.
     #[tokio::test]
-    async fn an_unknown_anchor_is_a_404() {
+    async fn a_path_under_p_that_names_no_plugin_says_so() {
         let (status, body) = get_status_and_body("/p/nope").await;
 
         assert_eq!(status, 404);
-        assert!(body["error"].as_str().unwrap().contains("no anchor"));
+        let error = body["error"].as_str().unwrap();
+        assert!(error.contains("no plugin"), "{error}");
+        assert!(error.contains("/p/<id-or-alias>/<module>"), "{error}");
+        assert!(!error.contains("no anchor"), "{error}");
+    }
+
+    /// An anchor is an operation, so it lives under `/api/plugins/{id}/`. Asking
+    /// `/p/` for one must not reach it: that is the whole point of the split.
+    #[tokio::test]
+    async fn an_anchor_is_not_reachable_under_the_web_namespace() {
+        let (status, body) = ask(aliased_router(), "/p/greeting").await;
+
+        // The fixture's only plugin is disabled, so a reachable anchor would
+        // answer 403 naming it. A `404` about the plugin half of `/p/<id>/<m>`
+        // is what proves the anchor route was never consulted.
+        assert_eq!(status, 404, "body: {body}");
+        let error = body["error"].as_str().unwrap();
+        assert!(error.contains("no plugin"), "{error}");
     }
 
     /// The browser builds `<prefix>/<id><path>`, so the id-scoped route has to
@@ -1581,16 +1600,22 @@ module = "{module}"
         assert!(body.contains("disabled"), "got: {body}");
     }
 
-    /// The web dispatch lives in the anchor catch-all, so the anchors it shares
-    /// that route with must keep working.
+    /// The two namespaces are disjoint: a bundle's module is served by `/p/`
+    /// and its anchor by `/api/plugins/{id}/`, and each keeps working while the
+    /// other route exists beside it.
     #[tokio::test]
-    async fn an_anchor_still_answers_beside_the_web_route() {
+    async fn a_module_and_an_anchor_are_served_by_their_own_namespaces() {
         let root = Root::new("anchor");
         bundle(root.path(), "org.test.web", "web/widget.js");
 
-        let (status, _, body) = get(root.path(), "/p/greeting").await;
+        let (status, _, body) = get(root.path(), "/p/org.test.web/web/widget.js").await;
+        assert_eq!(status, 200, "the module: {body}");
 
-        assert_eq!(status, 200, "body: {body}");
+        // `/p/greeting` is not a module, so it is refused as one rather than
+        // being handed to the anchor route.
+        let (status, _, body) = get(root.path(), "/p/greeting").await;
+        assert_eq!(status, 404, "body: {body}");
+        assert!(body.contains("no plugin"), "got: {body}");
     }
 }
 
@@ -1704,5 +1729,377 @@ mod request_log {
             })
             .await;
         assert_eq!(sink.lines().len(), 1, "a refusal survives");
+    }
+}
+
+/// Anchor methods: a manifest may declare any of five, and every one of them
+/// must be reachable at the same URL.
+///
+/// Driven through the real router over a real bundle, because the defect this
+/// replaces was a route registered `get()` while the manifest accepted `POST`:
+/// a unit test of the lookup would have passed throughout.
+mod anchor_methods {
+    use crate::api::router;
+    use crate::dispatch::Daemon;
+    use crate::plugins::registry::Registry;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use sha2::{Digest, Sha256};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    /// A guest that answers `ok`, so a method test asserts reachability rather
+    /// than the plugin's own logic.
+    const GUEST: &str = r#"
+(module
+  (import "env" "anth_exec" (func $exec (param i32 i32 i32 i32) (result i64)))
+  (import "env" "anth_log" (func $log (param i32 i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 1024) "\7b\22status\22:200,\22value\22:null\7d")
+  (func (export "anth_abi_version") (result i32) (i32.const 3))
+  (func (export "anth_alloc") (param i32) (result i32) (i32.const 2048))
+  (func (export "anth_free") (param i32 i32))
+  (func (export "anth_http") (param i32 i32) (result i64)
+    (i64.or (i64.shl (i64.const 1024) (i64.const 32)) (i64.const 27)))
+)
+"#;
+
+    struct Root(PathBuf);
+
+    impl Root {
+        fn new(label: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "anth-method-{label}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("creating the root");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// One bundle declaring one anchor with `method`.
+    fn bundle(root: &Path, id: &str, method: &str, anchor: &str) {
+        let wasm = wat::parse_str(GUEST).expect("the guest compiles");
+        let digest: String = Sha256::digest(&wasm)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).expect("creating the bundle");
+        std::fs::write(dir.join("plugin.wasm"), &wasm).expect("writing the module");
+        std::fs::write(
+            dir.join("plugin.toml"),
+            format!(
+                r#"
+[plugin]
+id = "{id}"
+version = "0.2.0"
+name = "Method"
+abi = 3
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "{digest}"
+
+[[api]]
+method = "{method}"
+path = "{anchor}"
+"#
+            ),
+        )
+        .expect("writing the manifest");
+    }
+
+    async fn send(root: &Path, method: &str, uri: &str, body: &[u8]) -> (u16, String) {
+        let router = router(Arc::new(Daemon::new(
+            Registry::load(root),
+            crate::tests::quiet(),
+        )));
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::from(body.to_vec()))
+                    .expect("a request"),
+            )
+            .await
+            .expect("the router answers");
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Every method the manifest accepts must reach the anchor it declared.
+    /// Before this, a `POST`, `PUT`, `PATCH` or `DELETE` anchor answered `405`
+    /// while `/api/plugins` listed it as available.
+    #[tokio::test]
+    async fn every_method_the_manifest_accepts_reaches_its_anchor() {
+        for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+            let root = Root::new(method);
+            bundle(root.path(), "org.test.m", method, "/op");
+
+            let (status, body) = send(root.path(), method, "/api/plugins/org.test.m/op", b"").await;
+            assert_eq!(status, 200, "{method} must reach its anchor, got {body}");
+        }
+    }
+
+    /// The method a caller used is the method the plugin is told about: a
+    /// `POST` must not arrive at the guest as a `GET`.
+    #[tokio::test]
+    async fn a_method_other_than_get_is_not_rewritten_before_the_plugin() {
+        let root = Root::new("rewritten");
+        bundle(root.path(), "org.test.m", "POST", "/op");
+
+        let response = router(Arc::new(Daemon::new(
+            Registry::load(root.path()),
+            crate::tests::quiet(),
+        )))
+        .oneshot(
+            HttpRequest::builder()
+                .method("GET")
+                .uri("/api/plugins/org.test.m/op")
+                .body(Body::empty())
+                .expect("a request"),
+        )
+        .await
+        .expect("the router answers");
+
+        assert_eq!(
+            response.status().as_u16(),
+            404,
+            "GET must not resolve an anchor declared POST"
+        );
+    }
+
+    /// A body reaches the plugin as the bytes the caller sent, and no body is
+    /// `null` rather than an empty string, so a plugin can tell them apart.
+    #[test]
+    fn the_envelope_carries_the_callers_method_body_and_query() {
+        let with_body = crate::api::http_payload(
+            "POST",
+            "/submit".to_string(),
+            Some("a=1"),
+            br#"{"name":"Ana"}"#,
+        )
+        .unwrap_or_else(|error| panic!("a valid envelope: {}", error.0.message));
+
+        assert_eq!(with_body["method"], serde_json::json!("POST"));
+        assert_eq!(with_body["path"], serde_json::json!("/submit"));
+        assert_eq!(with_body["query"]["a"], serde_json::json!("1"));
+        assert_eq!(with_body["body"], serde_json::json!(r#"{"name":"Ana"}"#));
+
+        let without = crate::api::http_payload("GET", "/submit".to_string(), None, b"")
+            .unwrap_or_else(|error| panic!("a valid envelope: {}", error.0.message));
+        assert_eq!(without["body"], serde_json::Value::Null);
+    }
+
+    /// A body that is not text is refused, not lossily converted: the plugin's
+    /// `HttpRequest::body` is a `String`, so handing it replacement characters
+    /// would be the panel rewriting the caller's request.
+    #[test]
+    fn a_body_that_is_not_utf8_is_a_400() {
+        let error = match crate::api::http_payload("POST", "/x".to_string(), None, &[0xff, 0xfe]) {
+            Ok(_) => panic!("invalid UTF-8 must be refused"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.0.kind, anth_wire::ErrorKind::Invalid);
+    }
+}
+
+/// Where the daemon looks for its socket, its bundles and its settings.
+///
+/// Every case passes its own environment and its own file, because the thing
+/// under test is the *order* the four sources are consulted in. A test that read
+/// the real environment would pass on a machine that happens to have
+/// `ANTH_PLUGINS` set and fail on one that does not.
+mod config {
+    use crate::config::{DEFAULT_PLUGINS, DEFAULT_SOCKET, Paths, path, resolve};
+    use std::path::{Path, PathBuf};
+
+    /// A settings file that sorts a label, with the given contents.
+    struct File(PathBuf);
+
+    impl File {
+        fn new(label: &str, text: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "anth-config-{label}-{}-{nanos}.toml",
+                std::process::id()
+            ));
+            std::fs::write(&path, text).expect("writing the settings file");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for File {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    fn with_env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        }
+    }
+
+    /// With nothing set anywhere, both paths are relative to the working
+    /// directory, which is what makes a checkout runnable with no flags.
+    #[test]
+    fn an_empty_supply_yields_the_relative_defaults() {
+        let paths = resolve(None, None, &no_env, None).expect("no settings to fail on");
+
+        assert_eq!(
+            paths,
+            Paths {
+                socket: PathBuf::from(DEFAULT_SOCKET),
+                plugins: PathBuf::from(DEFAULT_PLUGINS),
+            }
+        );
+        assert!(!paths.socket.is_absolute());
+        assert!(!paths.plugins.is_absolute());
+    }
+
+    /// The flag wins over everything, because it is the one thing the operator
+    /// typed at that moment.
+    #[test]
+    fn a_flag_wins_over_the_environment_and_the_file() {
+        let file = File::new(
+            "flag",
+            "socket = \"/from-file.sock\"\nplugins = \"/from-file/plugins\"\n",
+        );
+        let env = with_env(&[
+            ("ANTH_SOCKET", "/from-env.sock"),
+            ("ANTH_PLUGINS", "/from-env/plugins"),
+        ]);
+
+        let paths = resolve(
+            Some("/from-flag.sock"),
+            Some("/from-flag/plugins"),
+            &env,
+            Some(file.path()),
+        )
+        .expect("a valid file");
+
+        assert_eq!(paths.socket, PathBuf::from("/from-flag.sock"));
+        assert_eq!(paths.plugins, PathBuf::from("/from-flag/plugins"));
+    }
+
+    /// The environment wins over the file, so a service unit can override one
+    /// setting without rewriting a file the package owns.
+    #[test]
+    fn the_environment_wins_over_the_file() {
+        let file = File::new("env", "socket = \"/from-file.sock\"\n");
+        let env = with_env(&[("ANTH_SOCKET", "/from-env.sock")]);
+
+        let paths = resolve(None, None, &env, Some(file.path())).expect("a valid file");
+
+        assert_eq!(paths.socket, PathBuf::from("/from-env.sock"));
+        // The file sets only `socket`, so `plugins` has nothing to read and
+        // stays relative to the working directory.
+        assert_eq!(paths.plugins, PathBuf::from(DEFAULT_PLUGINS));
+    }
+
+    /// A key the file sets and nothing else does is the file's, and a key it
+    /// omits stays relative.
+    #[test]
+    fn the_file_fills_what_the_environment_left_alone() {
+        let file = File::new("file", "plugins = \"/srv/anth/plugins\"\n");
+        let paths = resolve(None, None, &no_env, Some(file.path())).expect("a valid file");
+
+        assert_eq!(paths.plugins, PathBuf::from("/srv/anth/plugins"));
+        assert_eq!(paths.socket, PathBuf::from(DEFAULT_SOCKET));
+    }
+
+    /// A file written on purpose that will not parse is refused. Answering it
+    /// with defaults would run the daemon with settings nobody chose.
+    #[test]
+    fn a_file_that_will_not_parse_is_refused() {
+        let file = File::new("broken", "socket = [unterminated\n");
+
+        let error = resolve(None, None, &no_env, Some(file.path())).expect_err("must refuse");
+
+        assert_eq!(error.kind, anth_wire::ErrorKind::Invalid);
+        assert!(
+            error.message.contains("will not parse"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// A file that is not there is the default settings, not an error: that is
+    /// a fresh checkout.
+    #[test]
+    fn a_missing_file_is_the_defaults() {
+        let paths = resolve(
+            None,
+            None,
+            &no_env,
+            Some(Path::new("/nonexistent/anth/config.toml")),
+        )
+        .expect("a missing file is not a failure");
+
+        assert_eq!(paths.socket, PathBuf::from(DEFAULT_SOCKET));
+        assert_eq!(paths.plugins, PathBuf::from(DEFAULT_PLUGINS));
+    }
+
+    /// An empty environment variable is "not set", matching how the log
+    /// settings treat one, so a service that exports an empty string behaves
+    /// like one that exports nothing.
+    #[test]
+    fn an_empty_environment_value_is_ignored() {
+        let env = with_env(&[("ANTH_SOCKET", ""), ("ANTH_PLUGINS", "   ")]);
+
+        let paths = resolve(None, None, &env, None).expect("no settings to fail on");
+
+        assert_eq!(paths.socket, PathBuf::from(DEFAULT_SOCKET));
+        assert_eq!(paths.plugins, PathBuf::from(DEFAULT_PLUGINS));
+    }
+
+    /// The settings file itself is chosen the same way, relative by default.
+    #[test]
+    fn the_config_file_path_is_relative_by_default() {
+        assert_eq!(path(None, &no_env), PathBuf::from("config.toml"));
+        assert_eq!(
+            path(None, &with_env(&[("ANTH_CONFIG", "/etc/anth/config.toml")])),
+            PathBuf::from("/etc/anth/config.toml")
+        );
+        assert_eq!(
+            path(Some("/flag/config.toml"), &no_env),
+            PathBuf::from("/flag/config.toml")
+        );
     }
 }

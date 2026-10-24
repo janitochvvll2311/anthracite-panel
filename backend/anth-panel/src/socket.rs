@@ -4,7 +4,7 @@
 //! and what the CLI and HTTP layers expect. The difference is the framing: see
 //! `anth_wire::frame`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anth_wire::{Request, Response, WireError, read_frame, write_frame};
@@ -98,13 +98,5 @@ impl Client {
             .ok_or_else(|| WireError::internal("the daemon closed without answering"))?;
         serde_json::from_slice(&reply)
             .map_err(|e| WireError::internal(format!("unreadable response: {e}")))
-    }
-}
-
-/// Default socket path, matching v0.1.0 so an upgraded host needs no migration.
-pub fn default_socket_path() -> PathBuf {
-    match std::env::var("ANTH_SOCKET") {
-        Ok(path) if !path.is_empty() => PathBuf::from(path),
-        _ => PathBuf::from("/var/tmp/anth.sock"),
     }
 }

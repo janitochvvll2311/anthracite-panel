@@ -10,6 +10,7 @@
 //! prompt stays usable in front of it.
 
 mod api;
+mod config;
 mod dispatch;
 mod log;
 mod plugins;
@@ -34,7 +35,8 @@ use dispatch::Daemon;
 #[derive(Parser, Debug)]
 #[command(name = "anth-panel", version, about = "Host inspection panel")]
 struct Cli {
-    /// Socket path. Falls back to $ANTH_SOCKET, then /var/tmp/anth.sock.
+    /// Socket path. Falls back to $ANTH_SOCKET, then `config.toml`, then
+    /// `./anth.sock` beside the working directory.
     #[arg(long, global = true)]
     socket: Option<String>,
 
@@ -44,14 +46,22 @@ struct Cli {
     #[arg(long, short, global = true)]
     interactive: bool,
 
-    /// The plugin directory. Falls back to $ANTH_PLUGINS, then
-    /// /var/lib/anth/plugins.
+    /// The plugin directory. Falls back to $ANTH_PLUGINS, then `config.toml`,
+    /// then `./plugins` beside the working directory.
     ///
     /// Read by the daemon and by every command that edits the registry, so
     /// `install`, `remove`, `enable` and `disable` act on the same directory
     /// instead of requiring an environment variable that is easy to forget.
     #[arg(long, global = true)]
     plugins: Option<String>,
+
+    /// The settings file. Falls back to $ANTH_CONFIG, then `./config.toml`.
+    ///
+    /// Every default is relative to the working directory, so running from a
+    /// checkout needs no flags. A file that exists and will not parse is
+    /// refused rather than ignored: it was written on purpose.
+    #[arg(long, global = true)]
+    config: Option<String>,
 
     /// How a log line is written: `human`, `json`, or `off`.
     ///
@@ -243,17 +253,25 @@ fn quote(word: &str) -> String {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    let socket = cli
-        .socket
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(socket::default_socket_path);
 
     // Resolved once, here, so the daemon and every editing command agree on the
-    // directory without each re-reading the environment.
-    let root = cli
-        .plugins
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(plugins::registry::default_root);
+    // paths without each re-reading the environment or the settings file. The
+    // defaults are relative, so a checkout runs with no flags at all.
+    let file = config::path(cli.config.as_deref(), &config::environment);
+    let paths = match config::resolve(
+        cli.socket.as_deref(),
+        cli.plugins.as_deref(),
+        &config::environment,
+        Some(&file),
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("anth-panel: {}", error.message);
+            return ExitCode::from(error.kind.exit_code());
+        }
+    };
+    let socket = paths.socket;
+    let root = paths.plugins;
 
     // Resolved before anything runs, so a mistyped flag fails the command instead
     // of producing output in the wrong shape for its whole life.

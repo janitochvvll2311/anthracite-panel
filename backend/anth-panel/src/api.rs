@@ -52,10 +52,14 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/api/host-info", get(host_info))
         .route("/api/plugins", get(plugins))
         .route("/api/plugins/{id}/call", axum::routing::post(plugin_call))
-        .route("/p/{*path}", get(anchor))
-        // The browser's form: it names its plugin, so two plugins declaring one
-        // path are not a conflict here. `/p/` stays for a path-only caller.
-        .route("/api/plugins/{id}/{*path}", get(scoped_anchor))
+        // One namespace per job, so neither route has to guess what a path
+        // meant: `/p/` serves the bundle's web modules and only those, and
+        // `/api/plugins/{id}/` runs anchors and only those. v0.2.0's `/p/`
+        // answered both, which made `/p/status` and `/p/<id>/status` mean
+        // different things and left a module unreachable when an anchor
+        // happened to share its name.
+        .route("/p/{*path}", get(web_module_path))
+        .route("/api/plugins/{id}/{*path}", anchors())
         // The shell. `/` is separate because a catch-all does not match a bare
         // root, so leaving it out answers the front page with a `404` while
         // every asset beside it loads.
@@ -79,25 +83,14 @@ async fn host_info(State(state): State<AppState>) -> Result<impl IntoResponse, A
     }
 }
 
-/// Serves an anchor a plugin declared in its manifest.
+/// `/p/<id-or-alias>/<module>`, split into its parts.
 ///
-/// The route is resolved through the registry rather than parsed: a path that
-/// no plugin declares is a `404`, and two plugins declaring one path is a
-/// conflict the operator has to resolve. The query string becomes the anchor's
-/// query, so a plugin that reads `?name=Ana` gets it without the panel knowing
-/// what a name is.
-/// `/p/<id>/<module>`, split into its parts.
-///
-/// Hand-parsed rather than routed because axum refuses to register a nested
-/// route under a catch-all: `/p/{id}/{*module}` beside `/p/{*path}` is a
-/// startup panic, not a routing preference. So the catch-all keeps the whole
-/// path and asks this whether it names a plugin file.
-///
-/// The module part is kept exactly as the URL spelled it, because it is
-/// compared against the manifest's own `module` string. Anything that rewrote
-/// it on the way through — dropping a `web/` prefix, say — would have the URL
-/// and the declaration disagree about the same file, and the allowlist would
-/// then have to guess which spelling it is checking.
+/// The route is a catch-all because axum refuses to register `/p/{id}/{*module}`
+/// beside it, so the split happens here. `id` is resolved by the registry, which
+/// accepts the alias too, and `module` is kept exactly as the URL spelled it:
+/// it is compared against the manifest's own `module` string, so anything that
+/// rewrote it on the way through would have the URL and the declaration
+/// disagree about the same file.
 struct PluginFile<'a> {
     id: &'a str,
     module: &'a str,
@@ -109,51 +102,118 @@ fn split_plugin_file(path: &str) -> Option<PluginFile<'_>> {
     (!id.is_empty() && !module.is_empty()).then_some(PluginFile { id, module })
 }
 
-async fn anchor(
+/// Serves the web modules a bundle declared, and nothing else.
+///
+/// This namespace is the one a browser loads a widget from, so it holds only
+/// files: an anchor is an operation and lives under `/api/plugins/{id}/`. The
+/// separation is what makes `/p/status` unambiguously "no module called
+/// `status`" instead of sometimes an anchor and sometimes a missing file.
+async fn web_module_path(
     State(state): State<AppState>,
     axum::extract::Path(path): axum::extract::Path<String>,
-    axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> Result<HttpResponse, ApiError> {
     let path = format!("/{path}");
-    // Anchors first. They are the older contract and a plugin that declares
-    // both an anchor and a file at one path means the anchor: a UI module is
-    // served so a browser can load it, while an anchor is an operation the
-    // plugin asked to expose. Only when no plugin claims the path does it get
-    // read as a file, which is also why an unknown `/p/a/b` reports "no anchor"
-    // rather than pretending a file was meant.
-    let owner = state.0.anchor_owner("GET", &path).map_err(ApiError)?;
-    if owner.is_none()
-        && let Some(file) = split_plugin_file(&path)
-    {
-        return web_module(state, file).await;
-    }
-    let (entry, _loaded) = owner.ok_or_else(|| {
+    let file = split_plugin_file(&path).ok_or_else(|| {
+        // `/p/app.js` names a file but no plugin. Saying "no anchor" here would
+        // describe a namespace this route does not serve.
         ApiError(WireError::new(
             ErrorKind::NotFound,
-            format!("no anchor {path}"),
+            format!("no plugin in `{path}`: expected `/p/<id-or-alias>/<module>`"),
         ))
     })?;
-    let id = entry.id.clone();
+    web_module(state, file).await
+}
 
-    let body = serde_json::json!({
-        "method": "GET",
-        "path": path,
-        "query": parse_query(query.as_deref()),
-        "body": serde_json::Value::Null,
-    });
-
-    forward(state, id, PluginPipe::Http, body.to_string()).await
+/// The anchor route, answering every method a manifest may declare.
+///
+/// `any()` rather than `get()`: the manifest accepts `GET`, `POST`, `PUT`,
+/// `PATCH` and `DELETE`, and a route that registered only `GET` answered a
+/// declared `POST` anchor with `405` — the plugin advertised an operation at
+/// startup that no URL could reach.
+fn anchors() -> axum::routing::MethodRouter<AppState> {
+    axum::routing::any(scoped_anchor)
 }
 
 /// Serves an anchor addressed by plugin id and path.
 ///
 /// This is the route [`@anth/plugin`'s `PluginEndpoints`] builds, and it exists
-/// because the unscoped form cannot be used by a widget: two plugins may declare
-/// the same path, and a widget knows which plugin it belongs to. `{id}` accepts
-/// the plugin's alias too — the registry resolves it, and the response is the
-/// canonical plugin's. An id that is not installed and a path that plugin does
-/// not declare are both a `404`, so the route cannot be used to enumerate other
-/// plugins' anchors.
+/// because the id-scoped form is the one a widget can use: the widget knows
+/// which plugin it belongs to, so two plugins declaring one path is not its
+/// problem. `{id}` accepts the plugin's alias too — the registry resolves it,
+/// and the response is the canonical plugin's. An id that is not installed and
+/// a path that plugin does not declare are both a `404`, so the route cannot be
+/// used to enumerate other plugins' anchors.
+///
+/// The method and body are the caller's: the plugin's `from_http` map reads
+/// `method`, `path`, `query` and `body`, so anything the panel rewrote here
+/// would reach the plugin as a request nobody sent. Only `GET` carries no body,
+/// and an absent one is `null` rather than `""` so a plugin can tell "no body"
+/// from "an empty body".
+async fn scoped_anchor(
+    State(state): State<AppState>,
+    method: axum::http::Method,
+    axum::extract::Path((id, path)): axum::extract::Path<(String, String)>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    body: axum::body::Bytes,
+) -> Result<HttpResponse, ApiError> {
+    let path = format!("/{path}");
+    let (entry, _loaded) = state
+        .0
+        .anchor_for(&id, method.as_str(), &path)
+        .map_err(ApiError)?
+        .ok_or_else(|| {
+            ApiError(WireError::new(
+                ErrorKind::NotFound,
+                format!("no anchor {} {path} in plugin `{id}`", method.as_str()),
+            ))
+        })?;
+    let id = entry.id.clone();
+
+    let payload = http_payload(method.as_str(), path, query.as_deref(), &body)?;
+
+    forward(state, id, PluginPipe::Http, payload.to_string()).await
+}
+
+/// The `anth_http` envelope for one anchor request.
+///
+/// One place builds it, so the router cannot answer two transports differently
+/// and a test can assert the exact shape a plugin's `from_http` will read.
+pub(crate) fn http_payload(
+    method: &str,
+    path: String,
+    query: Option<&str>,
+    body: &[u8],
+) -> Result<serde_json::Value, ApiError> {
+    Ok(serde_json::json!({
+        "method": method,
+        "path": path,
+        "query": parse_query(query),
+        "body": body_text(body)?,
+    }))
+}
+
+/// The anchor's body as the plugin's `from_http` reads it.
+///
+/// `null` for an absent body and the raw text otherwise, never a re-encoding:
+/// the plugin decides whether its body is JSON, so a panel that parsed and
+/// re-serialized would reject a payload the plugin could have handled and
+/// change the bytes on the way for one it could not. A body that is not UTF-8
+/// is refused rather than lossily converted, because `HttpRequest::body` is a
+/// `String` and handing the guest replacement characters it never sent would
+/// be a silent rewrite of the caller's request.
+fn body_text(body: &[u8]) -> Result<serde_json::Value, ApiError> {
+    if body.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    match std::str::from_utf8(body) {
+        Ok(text) => Ok(serde_json::Value::String(text.to_string())),
+        Err(error) => Err(ApiError(WireError::invalid(format!(
+            "the anchor body is not UTF-8 at byte {}",
+            error.valid_up_to()
+        )))),
+    }
+}
+
 /// Serves one UI module a bundle declared.
 ///
 /// The answer is the file's bytes with a type by extension, not a plugin call:
@@ -192,34 +252,6 @@ async fn web_module(state: AppState, web: PluginFile<'_>) -> Result<HttpResponse
         bytes: std::borrow::Cow::Owned(bytes),
         content_type: crate::www::content_type_for(std::path::Path::new(web.module)),
     }))
-}
-
-async fn scoped_anchor(
-    State(state): State<AppState>,
-    axum::extract::Path((id, path)): axum::extract::Path<(String, String)>,
-    axum::extract::RawQuery(query): axum::extract::RawQuery,
-) -> Result<HttpResponse, ApiError> {
-    let path = format!("/{path}");
-    let (entry, _loaded) = state
-        .0
-        .anchor_for(&id, "GET", &path)
-        .map_err(ApiError)?
-        .ok_or_else(|| {
-            ApiError(WireError::new(
-                ErrorKind::NotFound,
-                format!("no anchor {path} in plugin `{id}`"),
-            ))
-        })?;
-    let id = entry.id.clone();
-
-    let body = serde_json::json!({
-        "method": "GET",
-        "path": path,
-        "query": parse_query(query.as_deref()),
-        "body": serde_json::Value::Null,
-    });
-
-    forward(state, id, PluginPipe::Http, body.to_string()).await
 }
 
 /// Turns `?a=1&b=two` into the map the HTTP entry expects.

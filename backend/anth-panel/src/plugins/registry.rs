@@ -51,6 +51,8 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Whether the bundle's module loaded, for tests that assert the digest gate.
+    #[cfg(test)]
     pub fn loaded(&self) -> Option<&Loaded> {
         self.loaded.as_ref()
     }
@@ -59,10 +61,10 @@ impl Entry {
     ///
     /// The bundle is intact, so the name, version and UI slots it declares are
     /// still true and stay visible in `plugin list`. The anchors are dropped on
-    /// purpose: `anchor_owner` treats two plugins declaring one route as a
-    /// conflict, and a route this daemon will refuse to serve must not make
-    /// another plugin's route ambiguous. A load failure already recorded is left
-    /// in place, because switching a broken bundle back on would not make it run.
+    /// purpose: a route this daemon will refuse to serve must not linger in an
+    /// entry another plugin's lookup could reach. A load failure already recorded
+    /// is left in place, because switching a broken bundle back on would not make
+    /// it run.
     fn switch_off(&mut self) {
         self.loaded = None;
         self.switched_off = true;
@@ -175,11 +177,36 @@ impl Registry {
         self.entries.values()
     }
 
+    /// One plugin's own anchor, resolved by id rather than by scanning.
+    ///
+    /// Scoped because two plugins may legitimately declare the same path, so a
+    /// caller that names its plugin is never ambiguous. The method is compared
+    /// case-insensitively because a manifest may spell it either way and the
+    /// router hands over `Method::as_str`, which is upper case.
+    pub fn anchor_for(
+        &self,
+        id: &str,
+        method: &str,
+        path: &str,
+    ) -> Result<Option<(&Entry, &Loaded)>, WireError> {
+        let Some(entry) = self.resolve(id)? else {
+            return Ok(None);
+        };
+        let declared = entry
+            .anchors
+            .iter()
+            .any(|(m, p)| m.eq_ignore_ascii_case(method) && p == path);
+        if !declared {
+            return Ok(None);
+        }
+        Ok(Some((entry, entry.usable()?)))
+    }
+
     /// The plugin a caller named, by exact id first and then by alias.
     ///
     /// Two plugins may declare one alias, and picking by directory order would
-    /// make the answer depend on the filesystem. Following `anchor_owner`, an
-    /// ambiguous alias is a conflict the operator resolves, not a coin flip.
+    /// make the answer depend on the filesystem. An ambiguous alias is a conflict
+    /// the operator resolves, not a coin flip.
     pub fn resolve(&self, id_or_alias: &str) -> Result<Option<&Entry>, WireError> {
         if let Some(entry) = self.entries.get(id_or_alias) {
             return Ok(Some(entry));
@@ -241,52 +268,6 @@ impl Registry {
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
-    }
-
-    /// The plugin that declares an anchor, if exactly one does.
-    ///
-    /// Two plugins claiming one route is a conflict the operator has to resolve,
-    /// so it is reported rather than resolved by directory order.
-    pub fn anchor_owner(
-        &self,
-        method: &str,
-        path: &str,
-    ) -> Result<Option<(&Entry, &Loaded)>, WireError> {
-        let mut owners = self.entries.values().filter(|entry| {
-            entry
-                .anchors
-                .iter()
-                .any(|(m, p)| m.eq_ignore_ascii_case(method) && p == path)
-        });
-
-        let Some(first) = owners.next() else {
-            return Ok(None);
-        };
-        if let Some(second) = owners.next() {
-            return Err(WireError::new(
-                ErrorKind::Conflict,
-                format!(
-                    "both `{}` and `{}` declare {method} {path}",
-                    first.id, second.id
-                ),
-            ));
-        }
-        match first.loaded() {
-            Some(loaded) => Ok(Some((first, loaded))),
-            None => Err(WireError::new(
-                ErrorKind::Forbidden,
-                format!(
-                    "plugin `{}` declares {method} {path} but is disabled: {}",
-                    first.id,
-                    first
-                        .enabled
-                        .as_ref()
-                        .err()
-                        .map(String::as_str)
-                        .unwrap_or("")
-                ),
-            )),
-        }
     }
 }
 
@@ -409,12 +390,4 @@ pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<bool, WireErr
     }
     let mut state = super::state::State::load(root);
     state.set(root, id, !enabled)
-}
-
-/// The directory the daemon reads plugins from.
-pub fn default_root() -> PathBuf {
-    match std::env::var("ANTH_PLUGINS") {
-        Ok(path) if !path.is_empty() => PathBuf::from(path),
-        _ => PathBuf::from("/var/lib/anth/plugins"),
-    }
 }

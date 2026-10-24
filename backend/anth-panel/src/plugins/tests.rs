@@ -422,33 +422,69 @@ path = "{anchor}"
         let registry = Registry::load(root.path());
 
         let (entry, _loaded) = registry
-            .anchor_owner("GET", "/hello")
+            .anchor_for("org.test.anchor", "GET", "/hello")
             .expect("looking up")
             .expect("the anchor must resolve");
 
         assert_eq!(entry.id, "org.test.anchor");
         assert!(
             registry
-                .anchor_owner("GET", "/nope")
+                .anchor_for("org.test.anchor", "GET", "/nope")
                 .expect("looking up")
                 .is_none()
         );
     }
 
+    /// Two plugins may declare one path, because the route names its plugin.
+    /// A lookup scoped to one of them resolves that one and no other, which is
+    /// what replaced the conflict the unscoped route had to report.
     #[test]
-    fn two_plugins_claiming_one_anchor_is_a_conflict() {
-        let root = Bundle::new("conflict");
+    fn two_plugins_may_declare_one_anchor_when_the_lookup_names_its_plugin() {
+        let root = Bundle::new("shared-path");
         let module = wasm();
         write_bundle(root.path(), "org.test.one", &digest(&module), "/same");
         write_bundle(root.path(), "org.test.two", &digest(&module), "/same");
         let registry = Registry::load(root.path());
 
-        let error = registry
-            .anchor_owner("GET", "/same")
-            .expect_err("must refuse");
+        for id in ["org.test.one", "org.test.two"] {
+            let (entry, _loaded) = registry
+                .anchor_for(id, "GET", "/same")
+                .expect("looking up")
+                .expect("each plugin declares the path");
+            assert_eq!(entry.id, id);
+        }
+    }
 
-        assert_eq!(error.kind, ErrorKind::Conflict);
-        assert!(error.message.contains("both"), "got: {}", error.message);
+    /// The manifest may declare any of the five methods, so the lookup has to
+    /// match on the method and not on the path alone: an anchor declared `POST`
+    /// is not an anchor a `GET` may reach.
+    #[test]
+    fn an_anchor_is_found_only_by_the_method_it_declared() {
+        let root = Bundle::new("methods");
+        write_bundle(root.path(), "org.test.post", &digest(&wasm()), "/submit");
+        let text = std::fs::read_to_string(root.path().join("org.test.post/plugin.toml"))
+            .expect("the manifest written by the fixture");
+        std::fs::write(
+            root.path().join("org.test.post/plugin.toml"),
+            text.replace("method = \"GET\"", "method = \"POST\""),
+        )
+        .expect("rewriting the method");
+        let registry = Registry::load(root.path());
+
+        assert!(
+            registry
+                .anchor_for("org.test.post", "POST", "/submit")
+                .expect("looking up")
+                .is_some(),
+            "a POST anchor must be reachable by POST"
+        );
+        assert!(
+            registry
+                .anchor_for("org.test.post", "GET", "/submit")
+                .expect("looking up")
+                .is_none(),
+            "GET must not reach a POST anchor"
+        );
     }
 
     /// A missing plugin directory is not an error: a daemon started without plugins
@@ -1461,7 +1497,7 @@ mod enable_disable {
         assert!(entry.anchors.is_empty());
         assert!(
             registry
-                .anchor_owner("GET", "/on")
+                .anchor_for(&id, "GET", "/on")
                 .expect("lookup")
                 .is_none(),
             "the route must not resolve to a plugin that cannot answer"

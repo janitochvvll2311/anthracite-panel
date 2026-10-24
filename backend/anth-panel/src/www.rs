@@ -79,9 +79,11 @@ pub fn available() -> bool {
 /// Where a debug build reads the shell from.
 ///
 /// `ANTH_WEB` overrides it so an installed tree can point at its own assets
-/// without a rebuild. The test suite passes its own root to [`lookup`] instead
-/// of reading this, because a test that depended on the environment it runs in
-/// would pass here and fail elsewhere.
+/// without a rebuild. The compiled-in default is absolute, unlike the socket
+/// and the bundle root: `www/` sits inside the crate, so a debug binary finds
+/// its shell from any working directory. The test suite passes its own root to
+/// [`lookup`] instead of reading this, because a test that depended on the
+/// environment it runs in would pass here and fail elsewhere.
 #[cfg(debug_assertions)]
 pub fn root() -> PathBuf {
     match std::env::var("ANTH_WEB") {
