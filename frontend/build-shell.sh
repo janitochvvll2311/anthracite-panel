@@ -21,7 +21,11 @@ built="$root/frontend/anth-webui/dist"
 [ -f "$built/index.html" ] || { echo "no $built/index.html after the build" >&2; exit 1; }
 
 echo "staging the shell into $dest"
-rm -rf "$dest"
+# `www/` is gitignored apart from `.gitkeep`, which is tracked so a fresh clone
+# has the directory the daemon expects. Removing the tree with `rm -rf` deleted
+# that file too and left the working tree with a staged deletion, so the
+# contents are cleared item by item and the placeholder is kept.
+find "$dest" -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
 mkdir -p "$dest"
 # Everything but the harness page. `cp` cannot exclude, so the copy is driven
 # by `find` and the exclusion is stated once, next to its reason.

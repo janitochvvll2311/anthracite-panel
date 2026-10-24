@@ -202,6 +202,20 @@ against the *current working directory*, so a daemon started from anywhere but
 `backend/` serves nothing. `www::root` uses `CARGO_MANIFEST_DIR`, and `ANTH_WEB`
 overrides it.
 
+`www/` is gitignored, so a release build from a clean checkout used to embed
+nothing and serve no UI while every test passed. `anth-panel/build.rs` now refuses
+a release build with no `www/index.html`, a release-only test asks the router for
+`/` and requires the index to mount `anth-app`, and the CI `rust` job runs
+`frontend/build-shell.sh` before `cargo test --release`. Do not relax any of the
+three: each covers a different way the same hole reopens.
+
+The shell mounts what a plugin declares. `ui[]` entries whose `slot` is
+`dashboard.widget` are imported from `/p/<id>/<module>` and appended to the
+shadow root. The frame is built once and only the host card is repainted, so a
+Refresh does not re-create a live widget; `frontend/anth-webui/src/app.test.ts`
+pins that, and it asserts the node exists before comparing it, because comparing
+two `null`s passes against the bug.
+
 Two routing facts, both learned by testing rather than reading:
 
 - `/{*path}` does not match `/` on axum 0.8, so `/` needs its own route. Miss it

@@ -41,6 +41,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
+      # A release build embeds `www/`, and `www/` is a gitignored build artifact.
+      # Building it here is not a convenience: without it the embed is empty, the
+      # `--release` test below cannot ask for the shell, and a binary that serves
+      # no UI would pass every job. `build.rs` fails the release build outright
+      # rather than trusting this step ran.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Stage the shell for the release tests
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          ./build-shell.sh
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend

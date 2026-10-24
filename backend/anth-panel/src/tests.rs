@@ -982,13 +982,21 @@ mod www {
     use axum::Router;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    #[cfg(debug_assertions)]
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tower::ServiceExt;
 
     /// A fixture tree, removed on drop.
+    ///
+    /// Debug-only: the tests that use it exercise the filesystem lookup, which
+    /// a release build does not compile. Without the gate they are dead code
+    /// there and `-D warnings` turns that into a failed build.
+    #[cfg(debug_assertions)]
     struct Shell(PathBuf);
 
+    #[cfg(debug_assertions)]
     impl Shell {
         fn new(label: &str) -> Self {
             let nanos = std::time::SystemTime::now()
@@ -1027,6 +1035,7 @@ mod www {
         }
     }
 
+    #[cfg(debug_assertions)]
     impl Drop for Shell {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
@@ -1257,6 +1266,26 @@ mod www {
         assert!(!crate::www::available_at(dir.path()));
         dir.write("index.html", "<!doctype html>");
         assert!(crate::www::available_at(dir.path()));
+    }
+
+    /// The profile that ships must actually serve the shell it embedded.
+    ///
+    /// Every other test in this module uses a fixture tree, which a release
+    /// build cannot do: it compiled the filesystem reader out. So this one asks
+    /// the embedded copy, through the real router, for the one file the build
+    /// script exists to require. Without it a release binary that embedded an
+    /// empty `www/` would pass the whole suite and serve no UI in production.
+    #[cfg(not(debug_assertions))]
+    #[tokio::test]
+    async fn a_release_build_serves_the_shell_it_embedded() {
+        let (status, content_type, body) = ask("/").await;
+
+        assert_eq!(status, 200, "the embedded shell must answer: {body}");
+        assert_eq!(content_type, "text/html; charset=utf-8");
+        assert!(
+            body.contains("<anth-app"),
+            "the index must mount the shell: {body}"
+        );
     }
 }
 
