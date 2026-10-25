@@ -453,9 +453,20 @@ async fn plain_session(target: Target<'_>, history: &mut editor::History) -> Exi
 }
 
 fn print_help() {
-    eprintln!(
+    eprintln!("{}", help_text());
+}
+
+/// The prompt's own list of what it can run.
+///
+/// A string rather than a `println!` in a function, so a test can compare it
+/// with the parser: a command added to `Command` and missing here would make
+/// the prompt advertise less than it does.
+fn help_text() -> String {
+    String::from(
         "commands:\n  \
          host-info                      one snapshot of the host\n  \
+         file read <path> [--offset N] [--len N]\n                                 \
+         copy a slice of an approved file to stdout\n  \
          plugin list                    every plugin the daemon found\n  \
          plugin install <bundle.zip>    add a bundle to the registry\n  \
          plugin remove <id>             delete an installed bundle\n  \
@@ -478,8 +489,8 @@ fn print_help() {
          Ctrl-K / Ctrl-U                delete to the end / start\n  \
          Ctrl-L                         repaint the screen\n  \
          Ctrl-C                         abandon the line\n  \
-         Ctrl-D                         leave on an empty line"
-    );
+         Ctrl-D                         leave on an empty line",
+    )
 }
 
 /// Splits a line the way a shell does, so `--message "Ana Sol"` survives.

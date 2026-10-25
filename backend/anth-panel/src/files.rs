@@ -49,8 +49,7 @@ pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, Wir
     // the daemon on a path it is about to refuse. A cursor is also only
     // meaningful on something that can be seeked, and a device can block a read
     // forever, so both are refused.
-    let meta = std::fs::metadata(&resolved)
-        .map_err(|e| WireError::new(ErrorKind::NotFound, format!("cannot open `{path}`: {e}")))?;
+    let meta = std::fs::metadata(&resolved).map_err(|e| unopenable(path, &e))?;
     if !meta.is_file() {
         return Err(WireError::new(
             ErrorKind::Forbidden,
@@ -59,8 +58,7 @@ pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, Wir
     }
     let total = meta.len();
 
-    let mut file = std::fs::File::open(&resolved)
-        .map_err(|e| WireError::new(ErrorKind::NotFound, format!("cannot open `{path}`: {e}")))?;
+    let mut file = std::fs::File::open(&resolved).map_err(|e| unopenable(path, &e))?;
 
     // A size of zero is not evidence of an empty file. A pseudo-file reports one
     // and still has content — `/proc/loadavg` is a regular file of size 0 — so
@@ -150,14 +148,21 @@ pub fn resolve(root: &Path, path: &str) -> Result<PathBuf, WireError> {
     }
 
     let joined = root.join(requested);
-    let real = joined
-        .canonicalize()
-        .map_err(|e| WireError::new(ErrorKind::NotFound, format!("cannot open `{path}`: {e}")))?;
+    let real = joined.canonicalize().map_err(|e| unopenable(path, &e))?;
 
     if !real.starts_with(&root) {
         return Err(forbidden(path, "resolves outside the readable root"));
     }
     Ok(real)
+}
+
+/// The one wording for "this path cannot be reached", so `stat`, `open` and
+/// `canonicalize` cannot describe the same failure three different ways.
+fn unopenable(path: &str, error: &std::io::Error) -> WireError {
+    WireError::new(
+        ErrorKind::NotFound,
+        format!("cannot open `{path}`: {error}"),
+    )
 }
 
 fn forbidden(path: &str, why: &str) -> WireError {

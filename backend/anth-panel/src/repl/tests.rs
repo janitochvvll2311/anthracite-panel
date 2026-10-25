@@ -1513,3 +1513,30 @@ mod shared_queue {
         fn line(&self, _text: &str) {}
     }
 }
+
+/// Every subcommand the prompt can run is advertised.
+///
+/// The list is prose, so nothing but a test ties it to the parser. `file read`
+/// was added and the list kept saying the prompt could do three things, which
+/// is a prompt that under-sells what it does and teaches the operator to reach
+/// for the command line instead.
+#[test]
+fn the_help_lists_every_subcommand_the_prompt_runs() {
+    use clap::CommandFactory;
+
+    let help = super::help_text();
+    let cli = crate::Cli::command();
+
+    for subcommand in cli.get_subcommands() {
+        let name = subcommand.get_name();
+        // `run` and `daemon` start a server, and the help says so instead of
+        // listing them: they are given on the command line, not typed here.
+        if name == "run" || name == "daemon" {
+            continue;
+        }
+        assert!(
+            help.contains(name),
+            "the prompt runs `{name}` but the help does not list it:\n{help}"
+        );
+    }
+}
