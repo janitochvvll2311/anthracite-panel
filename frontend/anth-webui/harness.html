@@ -77,6 +77,14 @@
       const kept = document.querySelector("anth-hello-lit");
 
       const report = (text) => (box.textContent = text);
+
+      // The two render paths differ in who owns the reload, and that is the
+      // point of the example: `anth-hello` hands the plumbing to `mountWidget`,
+      // which returns a handle, while the Lit element is its own component and
+      // reloads itself. Neither interface promises `refresh`, so the harness
+      // asks whichever one owns it instead of assuming a shared shape.
+      const reload = (widget) => (widget.handle ?? widget).refresh();
+      const stateOf = (widget) => (widget.handle ?? widget).state;
       addEventListener("error", (event) => report(`error: ${event.message ?? event.error}`));
       addEventListener("unhandledrejection", (event) => report(`rejection: ${event.reason}`));
 
@@ -87,11 +95,11 @@
 
       document.querySelector(".reload").addEventListener("click", async () => {
         const before = clicks();
-        await Promise.all([markup.refresh(), kept.refresh()]);
+        await Promise.all([reload(markup), reload(kept)]);
         report(
           [
-            `markup state=${markup.state}`,
-            `lit state=${kept.state}`,
+            `markup state=${stateOf(markup)}`,
+            `lit state=${stateOf(kept)}`,
             `lit counter ${JSON.stringify(before)} -> ${JSON.stringify(clicks())}`,
             `message=${JSON.stringify(kept.message)}`,
           ].join("\n"),
@@ -99,9 +107,9 @@
       });
 
       // Loading the page proves the round trip; the button proves the counter.
-      await Promise.all([markup.refresh(), kept.refresh()]);
+      await Promise.all([reload(markup), reload(kept)]);
       report(
-        `loaded · markup=${markup.state} lit=${kept.state} message=${JSON.stringify(kept.message)}`,
+        `loaded · markup=${stateOf(markup)} lit=${stateOf(kept)} message=${JSON.stringify(kept.message)}`,
       );
     </script>
   </body>
