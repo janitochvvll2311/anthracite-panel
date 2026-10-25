@@ -72,6 +72,7 @@ dependencies = [
  "anth-host",
  "anth-wire",
  "axum",
+ "base64",
  "clap",
  "libc",
  "rust-embed",
@@ -99,6 +100,7 @@ dependencies = [
 name = "anth-wire"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "serde",
  "serde_json",
  "tokio",

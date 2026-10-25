@@ -27,7 +27,7 @@ mod api {
     use tower::ServiceExt;
 
     fn test_router() -> Router {
-        router(Arc::new(Daemon::new(
+        router(Arc::new(Daemon::for_test(
             crate::plugins::registry::Registry::empty(),
             crate::tests::quiet(),
         )))
@@ -35,7 +35,7 @@ mod api {
 
     /// A router with one disabled plugin, which is enough to prove a lookup.
     fn aliased_router() -> Router {
-        router(Arc::new(Daemon::new(
+        router(Arc::new(Daemon::for_test(
             crate::plugins::registry::Registry::with_disabled(
                 "org.test.aliased",
                 Some("short"),
@@ -227,7 +227,7 @@ mod dispatch {
     use anth_wire::{ErrorKind, PluginPipe, Request, Response};
 
     fn daemon_without_plugins() -> Daemon {
-        Daemon::new(Registry::empty(), crate::tests::quiet())
+        Daemon::for_test(Registry::empty(), crate::tests::quiet())
     }
 
     #[tokio::test]
@@ -260,7 +260,7 @@ mod dispatch {
     /// the canonical id so a caller can tell which one it reached.
     #[tokio::test]
     async fn a_call_by_alias_reaches_the_plugin_that_declared_it() {
-        let daemon = Daemon::new(
+        let daemon = Daemon::for_test(
             Registry::with_disabled(
                 "org.test.aliased",
                 Some("short"),
@@ -291,7 +291,7 @@ mod dispatch {
     /// the same one its id would.
     #[tokio::test]
     async fn an_anchor_lookup_accepts_the_alias() {
-        let daemon = Daemon::new(
+        let daemon = Daemon::for_test(
             Registry::with_disabled(
                 "org.test.aliased",
                 Some("short"),
@@ -329,7 +329,7 @@ mod dispatch {
     /// An alias is discoverable from the list, or nobody would know to type it.
     #[tokio::test]
     async fn the_list_reports_the_alias() {
-        let daemon = Daemon::new(
+        let daemon = Daemon::for_test(
             Registry::with_disabled("org.test.aliased", Some("short"), &[], "disabled"),
             crate::tests::quiet(),
         );
@@ -947,7 +947,7 @@ mod socket {
     async fn spawn_daemon(label: &str) -> SocketPath {
         let path = SocketPath::new(label);
         let listener = bind(&path.0).expect("binding the test socket");
-        let daemon = Arc::new(Daemon::new(
+        let daemon = Arc::new(Daemon::for_test(
             crate::plugins::registry::Registry::empty(),
             crate::tests::quiet(),
         ));
@@ -1247,7 +1247,7 @@ mod www {
     }
 
     fn shell_router() -> Router {
-        router(Arc::new(Daemon::new(
+        router(Arc::new(Daemon::for_test(
             crate::plugins::registry::Registry::empty(),
             crate::tests::quiet(),
         )))
@@ -1471,7 +1471,7 @@ module = "{module}"
     }
 
     async fn get(root: &Path, uri: &str) -> (u16, String, String) {
-        let router = router(Arc::new(Daemon::new(
+        let router = router(Arc::new(Daemon::for_test(
             Registry::load(root),
             crate::tests::quiet(),
         )));
@@ -1519,7 +1519,7 @@ module = "{module}"
     async fn a_bundles_wasm_and_manifest_are_not_downloadable() {
         let root = Root::new("private");
         bundle(root.path(), "org.test.web", "web/widget.js");
-        let router = router(Arc::new(Daemon::new(
+        let router = router(Arc::new(Daemon::for_test(
             Registry::load(root.path()),
             crate::tests::quiet(),
         )));
@@ -1631,7 +1631,7 @@ mod request_log {
     fn daemon_at(level: Level) -> (Daemon, Capture) {
         let sink = Capture::default();
         let logger = Arc::new(Logger::new(level, Format::Json, Arc::new(sink.clone())));
-        (Daemon::new(Registry::empty(), logger), sink)
+        (Daemon::for_test(Registry::empty(), logger), sink)
     }
 
     #[tokio::test]
@@ -1826,7 +1826,7 @@ path = "{anchor}"
     }
 
     async fn send(root: &Path, method: &str, uri: &str, body: &[u8]) -> (u16, String) {
-        let router = router(Arc::new(Daemon::new(
+        let router = router(Arc::new(Daemon::for_test(
             Registry::load(root),
             crate::tests::quiet(),
         )));
@@ -1868,7 +1868,7 @@ path = "{anchor}"
         let root = Root::new("rewritten");
         bundle(root.path(), "org.test.m", "POST", "/op");
 
-        let response = router(Arc::new(Daemon::new(
+        let response = router(Arc::new(Daemon::for_test(
             Registry::load(root.path()),
             crate::tests::quiet(),
         )))
@@ -1980,13 +1980,14 @@ mod config {
     /// directory, which is what makes a checkout runnable with no flags.
     #[test]
     fn an_empty_supply_yields_the_relative_defaults() {
-        let paths = resolve(None, None, &no_env, None).expect("no settings to fail on");
+        let paths = resolve(None, None, None, &no_env, None).expect("no settings to fail on");
 
         assert_eq!(
             paths,
             Paths {
                 socket: PathBuf::from(DEFAULT_SOCKET),
                 plugins: PathBuf::from(DEFAULT_PLUGINS),
+                readable: PathBuf::from(crate::config::DEFAULT_READABLE),
             }
         );
         assert!(!paths.socket.is_absolute());
@@ -2009,6 +2010,7 @@ mod config {
         let paths = resolve(
             Some("/from-flag.sock"),
             Some("/from-flag/plugins"),
+            None,
             &env,
             Some(file.path()),
         )
@@ -2025,7 +2027,7 @@ mod config {
         let file = File::new("env", "socket = \"/from-file.sock\"\n");
         let env = with_env(&[("ANTH_SOCKET", "/from-env.sock")]);
 
-        let paths = resolve(None, None, &env, Some(file.path())).expect("a valid file");
+        let paths = resolve(None, None, None, &env, Some(file.path())).expect("a valid file");
 
         assert_eq!(paths.socket, PathBuf::from("/from-env.sock"));
         // The file sets only `socket`, so `plugins` has nothing to read and
@@ -2038,7 +2040,7 @@ mod config {
     #[test]
     fn the_file_fills_what_the_environment_left_alone() {
         let file = File::new("file", "plugins = \"/srv/anth/plugins\"\n");
-        let paths = resolve(None, None, &no_env, Some(file.path())).expect("a valid file");
+        let paths = resolve(None, None, None, &no_env, Some(file.path())).expect("a valid file");
 
         assert_eq!(paths.plugins, PathBuf::from("/srv/anth/plugins"));
         assert_eq!(paths.socket, PathBuf::from(DEFAULT_SOCKET));
@@ -2050,7 +2052,7 @@ mod config {
     fn a_file_that_will_not_parse_is_refused() {
         let file = File::new("broken", "socket = [unterminated\n");
 
-        let error = resolve(None, None, &no_env, Some(file.path())).expect_err("must refuse");
+        let error = resolve(None, None, None, &no_env, Some(file.path())).expect_err("must refuse");
 
         assert_eq!(error.kind, anth_wire::ErrorKind::Invalid);
         assert!(
@@ -2065,6 +2067,7 @@ mod config {
     #[test]
     fn a_missing_file_is_the_defaults() {
         let paths = resolve(
+            None,
             None,
             None,
             &no_env,
@@ -2083,7 +2086,7 @@ mod config {
     fn an_empty_environment_value_is_ignored() {
         let env = with_env(&[("ANTH_SOCKET", ""), ("ANTH_PLUGINS", "   ")]);
 
-        let paths = resolve(None, None, &env, None).expect("no settings to fail on");
+        let paths = resolve(None, None, None, &env, None).expect("no settings to fail on");
 
         assert_eq!(paths.socket, PathBuf::from(DEFAULT_SOCKET));
         assert_eq!(paths.plugins, PathBuf::from(DEFAULT_PLUGINS));

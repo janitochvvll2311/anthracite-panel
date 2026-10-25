@@ -45,6 +45,7 @@ use crate::{Cli, dispatch_command};
 pub struct Target<'a> {
     pub socket: &'a std::path::Path,
     pub root: &'a std::path::Path,
+    pub readable: &'a std::path::Path,
     /// What the commands run from the prompt log to. Borrowed rather than owned,
     /// so `Target` stays `Copy` and every helper can take it by value.
     pub log: &'a std::sync::Arc<crate::log::Logger>,
@@ -76,12 +77,14 @@ impl Wired {
 pub async fn run(
     socket: &std::path::Path,
     root: &std::path::Path,
+    readable: &std::path::Path,
     log: std::sync::Arc<crate::log::Logger>,
     wired: Option<Wired>,
 ) -> ExitCode {
     let target = Target {
         socket,
         root,
+        readable,
         log: &log,
     };
     let history_path = history::path();
@@ -150,6 +153,7 @@ async fn session(
     let target = Target {
         socket: target.socket,
         root: target.root,
+        readable: target.readable,
         log: &logger,
     };
 
@@ -344,6 +348,7 @@ async fn run_words(
     dispatch_command(
         &socket,
         &root,
+        target.readable,
         cli.command,
         std::sync::Arc::clone(target.log),
     )

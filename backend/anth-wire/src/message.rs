@@ -24,6 +24,13 @@ pub enum Request {
     HostInfo,
     /// Every plugin the daemon found, including the disabled ones and why.
     PluginList,
+    /// One slice of a file the daemon is allowed to read.
+    ///
+    /// `offset` rather than a handle, because a file is re-readable by
+    /// position: the cursor *is* the identity, so the daemon keeps no state
+    /// between calls and a client that drops the answer simply asks again.
+    /// `len` is bounded by the daemon, not by the caller.
+    FileRead { path: String, offset: u64, len: u32 },
     /// Run one pipe of one plugin.
     ///
     /// `pipe` names the transport: `cli`, `http` or `direct`. It is a field
@@ -95,6 +102,20 @@ pub enum Response {
         id: String,
         status: u16,
         value: serde_json::Value,
+    },
+    /// One slice of a file, answering [`Request::FileRead`].
+    ///
+    /// `offset` is where this slice started and `next` is where the following
+    /// one does, so a client never has to assume the daemon filled the request.
+    /// `eof` is explicit: an empty slice at the end and an empty slice before
+    /// the end are different answers, and only this flag tells them apart.
+    FileSlice {
+        path: String,
+        offset: u64,
+        #[serde(with = "crate::b64")]
+        bytes: Vec<u8>,
+        next: u64,
+        eof: bool,
     },
     Error(WireError),
 }

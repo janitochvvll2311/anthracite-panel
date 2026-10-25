@@ -10,6 +10,7 @@
 //! The crate is deliberately free of panel code: an alternative client or
 //! daemon must be implementable against this module alone.
 
+pub(crate) mod b64;
 mod error;
 mod frame;
 mod message;

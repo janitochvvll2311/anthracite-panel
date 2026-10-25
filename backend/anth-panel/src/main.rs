@@ -12,6 +12,7 @@
 mod api;
 mod config;
 mod dispatch;
+mod files;
 mod log;
 mod plugins;
 mod render;
@@ -54,6 +55,15 @@ struct Cli {
     /// instead of requiring an environment variable that is easy to forget.
     #[arg(long, global = true)]
     plugins: Option<String>,
+
+    /// The only tree `file read` may reach. Falls back to $ANTH_READABLE, then
+    /// `config.toml`, then the working directory.
+    ///
+    /// A read is resolved through symlinks and then checked to be inside this
+    /// root, so the boundary is the resolved path rather than the string the
+    /// caller typed.
+    #[arg(long, global = true)]
+    readable: Option<String>,
 
     /// The settings file. Falls back to $ANTH_CONFIG, then `./config.toml`.
     ///
@@ -104,10 +114,30 @@ enum Command {
     Daemon,
     /// Print a snapshot of the host the daemon runs on.
     HostInfo,
+    /// Read a file the daemon is allowed to read.
+    File {
+        #[command(subcommand)]
+        action: FileAction,
+    },
     /// Inspect and run the plugins the daemon loaded.
     Plugin {
         #[command(subcommand)]
         action: PluginAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum FileAction {
+    /// Copy a file to stdout, one slice per request.
+    Read {
+        /// Path relative to the root the daemon was started with.
+        path: String,
+        /// Where to start, so a reader can resume.
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        /// How many bytes to ask for at a time; the daemon caps it.
+        #[arg(long, default_value_t = 64 * 1024)]
+        len: u32,
     },
 }
 
@@ -261,6 +291,7 @@ async fn main() -> ExitCode {
     let paths = match config::resolve(
         cli.socket.as_deref(),
         cli.plugins.as_deref(),
+        cli.readable.as_deref(),
         &config::environment,
         Some(&file),
     ) {
@@ -272,6 +303,11 @@ async fn main() -> ExitCode {
     };
     let socket = paths.socket;
     let root = paths.plugins;
+    // Canonicalised once, so a relative `--readable` does not depend on a later
+    // working directory change. A client command does not read files, so a root
+    // that does not exist is the daemon's problem and must not fail `host-info`
+    // on a machine where the setting was never used.
+    let readable = paths.readable.canonicalize().unwrap_or(paths.readable);
 
     // Resolved before anything runs, so a mistyped flag fails the command instead
     // of producing output in the wrong shape for its whole life.
@@ -287,11 +323,11 @@ async fn main() -> ExitCode {
     let logger = Arc::new(settings.logger());
 
     if cli.interactive {
-        return interactive(&socket, &root, cli.command, logger).await;
+        return interactive(&socket, &root, &readable, cli.command, logger).await;
     }
 
     match cli.command {
-        Some(command) => dispatch_command(&socket, &root, Some(command), logger).await,
+        Some(command) => dispatch_command(&socket, &root, &readable, Some(command), logger).await,
         None => {
             eprintln!("anth-panel: a command is required unless --interactive is given");
             ExitCode::from(2)
@@ -303,6 +339,7 @@ async fn main() -> ExitCode {
 async fn dispatch_command(
     socket: &std::path::Path,
     root: &std::path::Path,
+    readable: &std::path::Path,
     command: Option<Command>,
     logger: Arc<log::Logger>,
 ) -> ExitCode {
@@ -311,9 +348,12 @@ async fn dispatch_command(
     };
 
     match command {
-        Command::Daemon => serve_with(socket, root, None, logger).await,
-        Command::Run { addr } => serve_with(socket, root, Some(addr), logger).await,
+        Command::Daemon => serve_with(socket, root, readable, None, logger).await,
+        Command::Run { addr } => serve_with(socket, root, readable, Some(addr), logger).await,
         Command::HostInfo => client(socket, Request::HostInfo).await,
+        Command::File {
+            action: FileAction::Read { path, offset, len },
+        } => copy_file(socket, &path, offset, len).await,
         Command::Plugin { action } => match &action {
             PluginAction::List => client(socket, Request::PluginList).await,
             PluginAction::Install { bundle, .. } => {
@@ -422,12 +462,14 @@ fn switch(root: &std::path::Path, id: &str, enabled: bool) -> ExitCode {
 async fn serve_with(
     socket: &std::path::Path,
     root: &std::path::Path,
+    readable: &std::path::Path,
     addr: Option<String>,
     logger: Arc<log::Logger>,
 ) -> ExitCode {
     let daemon = Arc::new(Daemon::new(
         plugins::registry::Registry::load(root),
         logger.clone(),
+        readable,
     ));
 
     let result = match bind(socket, addr.as_deref()).await {
@@ -564,20 +606,22 @@ fn startup(command: Option<Command>) -> Startup {
 async fn interactive(
     socket: &Path,
     root: &Path,
+    readable: &Path,
     command: Option<Command>,
     logger: Arc<log::Logger>,
 ) -> ExitCode {
     let addr = match startup(command) {
-        Startup::Prompt => return repl::run(socket, root, logger, None).await,
+        Startup::Prompt => return repl::run(socket, root, readable, logger, None).await,
         Startup::RunFirst(command) => {
             // A client command still runs first and still keeps the prompt: a
             // failed one is reported, not fatal, because the prompt is where the
             // user fixes it.
-            let code = dispatch_command(socket, root, Some(*command), logger.clone()).await;
+            let code =
+                dispatch_command(socket, root, readable, Some(*command), logger.clone()).await;
             if code != ExitCode::SUCCESS {
                 eprintln!("anth-panel: the startup command failed, staying interactive");
             }
-            return repl::run(socket, root, logger, None).await;
+            return repl::run(socket, root, readable, logger, None).await;
         }
         Startup::Serve { addr } => addr,
     };
@@ -589,6 +633,7 @@ async fn interactive(
     let daemon = Arc::new(Daemon::new(
         plugins::registry::Registry::load(root),
         wired.logger.clone(),
+        readable,
     ));
 
     let listeners = match bind(socket, addr.as_deref()).await {
@@ -601,7 +646,7 @@ async fn interactive(
     announce(&wired.logger, socket, &listeners);
 
     let serving = tokio::spawn(serve_bound(listeners, daemon));
-    let code = repl::run(socket, root, logger, Some(wired)).await;
+    let code = repl::run(socket, root, readable, logger, Some(wired)).await;
     // The prompt owns the process; a listener outliving it would keep the
     // terminal held by a daemon the operator thought they had quit.
     serving.abort();
@@ -618,6 +663,71 @@ async fn client(socket: &std::path::Path, request: Request) -> ExitCode {
         Err((kind, message)) => {
             eprintln!("anth-panel: {message}");
             ExitCode::from(kind.exit_code())
+        }
+    }
+}
+
+/// Copies a file to stdout, one request per slice.
+///
+/// The loop is here rather than in the daemon because a slice is a complete
+/// answer: the cursor is the state, so the daemon keeps nothing between calls
+/// and an interrupted copy resumes with `--offset`.
+///
+/// Bytes go to stdout untouched. A `String` round-trip would replace anything
+/// that is not UTF-8, so `file read dump > copy` would not be a copy.
+async fn copy_file(socket: &std::path::Path, path: &str, mut offset: u64, len: u32) -> ExitCode {
+    use std::io::Write;
+
+    let mut client = match socket::Client::connect(socket).await {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("anth-panel: {}", error.message);
+            return ExitCode::from(error.kind.exit_code());
+        }
+    };
+
+    let mut out = std::io::stdout().lock();
+    loop {
+        let request = Request::FileRead {
+            path: path.to_string(),
+            offset,
+            len,
+        };
+        let response = match client.call(&request).await {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("anth-panel: {}", error.message);
+                return ExitCode::from(error.kind.exit_code());
+            }
+        };
+
+        match response {
+            Response::FileSlice {
+                bytes, next, eof, ..
+            } => {
+                if let Err(error) = out.write_all(&bytes).and_then(|()| out.flush()) {
+                    eprintln!("anth-panel: cannot write to stdout: {error}");
+                    return ExitCode::FAILURE;
+                }
+                if eof {
+                    return ExitCode::SUCCESS;
+                }
+                // A daemon that answers without advancing would spin this loop
+                // forever; a slice that made no progress is a bug, not an end.
+                if next <= offset {
+                    eprintln!("anth-panel: the daemon answered a slice without advancing");
+                    return ExitCode::FAILURE;
+                }
+                offset = next;
+            }
+            Response::Error(error) => {
+                eprintln!("anth-panel: {}", error.message);
+                return ExitCode::from(error.kind.exit_code());
+            }
+            other => {
+                eprintln!("anth-panel: unexpected answer to a file read: {other:?}");
+                return ExitCode::FAILURE;
+            }
         }
     }
 }
@@ -643,6 +753,11 @@ fn render_response(response: Response) -> Result<String, (anth_wire::ErrorKind, 
         Response::HostInfo(info) => Ok(render::render_host_info(&info)),
         Response::Welcome { protocol_version } => Ok(format!("protocol {protocol_version}")),
         Response::PluginList { plugins } => Ok(render::render_plugin_list(&plugins)),
+        // `file read` writes its own bytes, so it never takes this path.
+        Response::FileSlice { .. } => Err((
+            anth_wire::ErrorKind::Internal,
+            "a file slice cannot be rendered as text".to_string(),
+        )),
         Response::PluginReply { status, value, .. } => {
             let body = render::render_plugin_reply(&value);
             if (200..300).contains(&status) {

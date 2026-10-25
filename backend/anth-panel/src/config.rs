@@ -29,11 +29,20 @@ pub const DEFAULT_SOCKET: &str = "anth.sock";
 /// reads.
 pub const DEFAULT_PLUGINS: &str = "plugins";
 
-/// The two paths that decide where the daemon finds its things.
+/// The root `file read` may reach, when the operator names none.
+///
+/// The working directory, so a checkout needs no flag, and deliberately not
+/// `/`: naming a default of `/` would make an omitted setting mean "the whole
+/// filesystem", which is the opposite of a boundary.
+pub const DEFAULT_READABLE: &str = ".";
+
+/// The paths that decide where the daemon finds its things, and how far a read
+/// may reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
     pub socket: PathBuf,
     pub plugins: PathBuf,
+    pub readable: PathBuf,
 }
 
 /// What `config.toml` may set. An absent key falls through to the default.
@@ -41,6 +50,7 @@ pub struct Paths {
 struct File {
     socket: Option<String>,
     plugins: Option<String>,
+    readable: Option<String>,
 }
 
 /// Resolves the socket and the bundle directory.
@@ -50,6 +60,7 @@ struct File {
 pub fn resolve(
     socket_flag: Option<&str>,
     plugins_flag: Option<&str>,
+    readable_flag: Option<&str>,
     env: &dyn Fn(&str) -> Option<String>,
     file: Option<&Path>,
 ) -> Result<Paths, WireError> {
@@ -81,6 +92,12 @@ pub fn resolve(
             "ANTH_PLUGINS",
             settings.plugins.as_deref(),
             DEFAULT_PLUGINS,
+        ),
+        readable: pick(
+            readable_flag,
+            "ANTH_READABLE",
+            settings.readable.as_deref(),
+            DEFAULT_READABLE,
         ),
     })
 }

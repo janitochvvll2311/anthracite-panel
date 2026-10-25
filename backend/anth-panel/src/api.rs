@@ -30,6 +30,7 @@ use serde_json::json;
 use anth_wire::{ErrorKind, PluginPipe, Request, Response, WireError};
 
 use crate::dispatch::Daemon;
+use crate::files;
 use crate::plugins::registry::read_ui_module;
 
 /// The router, with the daemon it answers from.
@@ -51,6 +52,7 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/host-info", get(host_info))
         .route("/api/plugins", get(plugins))
+        .route("/api/files", get(file_read))
         .route("/api/plugins/{id}/call", axum::routing::post(plugin_call))
         // One namespace per job, so neither route has to guess what a path
         // meant: `/p/` serves the bundle's web modules and only those, and
@@ -307,6 +309,84 @@ async fn plugins(State(state): State<AppState>) -> Result<impl IntoResponse, Api
         other => Err(ApiError(WireError::internal(format!(
             "the plugin list answered unexpectedly: {other:?}"
         )))),
+    }
+}
+
+/// One slice of a readable file.
+///
+/// The query names what the CLI names on its own command line, so the two
+/// transports cannot disagree about the defaults. `len` above the cap is
+/// refused by `files::read` rather than clamped here: a route that quietly
+/// shortened a read would hide the limit.
+async fn file_read(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let path = params.get("path").cloned().ok_or_else(|| {
+        ApiError(WireError::invalid(
+            "`path` is required, as ?path=<file>".to_string(),
+        ))
+    })?;
+    let offset = number_param(&params, "offset", 0)?;
+    let len = number_param(&params, "len", u64::from(files::MAX_SLICE))?;
+
+    if len > u64::from(u32::MAX) {
+        return Err(ApiError(WireError::invalid(format!(
+            "`len` of {len} does not fit a slice"
+        ))));
+    }
+
+    let response = state
+        .0
+        .handle(Request::FileRead {
+            path,
+            offset,
+            len: len as u32,
+        })
+        .await;
+
+    match response {
+        Response::FileSlice {
+            path,
+            offset,
+            bytes,
+            next,
+            eof,
+        } => {
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            Ok(axum::Json(json!({
+                "path": path,
+                "offset": offset,
+                "bytes": encoded,
+                "next": next,
+                "eof": eof,
+            })))
+        }
+        Response::Error(error) => Err(ApiError(error)),
+        other => Err(ApiError(WireError::internal(format!(
+            "a file read answered unexpectedly: {other:?}"
+        )))),
+    }
+}
+
+/// One numeric query parameter, or `fallback` when absent.
+///
+/// A present but unparseable value is an error rather than the fallback: a
+/// caller who wrote `?len=abc` meant something, and answering with the default
+/// would answer a different question.
+fn number_param(
+    params: &std::collections::HashMap<String, String>,
+    name: &str,
+    fallback: u64,
+) -> Result<u64, ApiError> {
+    match params.get(name) {
+        None => Ok(fallback),
+        Some(value) => value.parse::<u64>().map_err(|_| {
+            ApiError(WireError::invalid(format!(
+                "`{name}` is `{value}`, which is not a whole number"
+            )))
+        }),
     }
 }
 

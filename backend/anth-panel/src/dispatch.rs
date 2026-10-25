@@ -22,14 +22,34 @@ use crate::plugins::registry::Registry;
 pub struct Daemon {
     plugins: Arc<Registry>,
     log: Arc<Logger>,
+    /// The only tree `Request::FileRead` may reach.
+    ///
+    /// Held here rather than passed per call so no transport can widen it: the
+    /// CLI, the HTTP route and a future caller all go through this one value.
+    readable_root: Arc<std::path::PathBuf>,
 }
 
 impl Daemon {
-    pub fn new(plugins: Registry, log: Arc<Logger>) -> Self {
+    pub fn new(
+        plugins: Registry,
+        log: Arc<Logger>,
+        readable_root: impl Into<std::path::PathBuf>,
+    ) -> Self {
         Self {
             plugins: Arc::new(plugins),
             log,
+            readable_root: Arc::new(readable_root.into()),
         }
+    }
+
+    /// A daemon whose readable root is the temp directory.
+    ///
+    /// Tests that do not exercise `FileRead` should not have to name a root, and
+    /// one helper is what keeps `Daemon::new` from growing an argument at each
+    /// call site.
+    #[cfg(test)]
+    pub fn for_test(plugins: Registry, log: Arc<Logger>) -> Self {
+        Self::new(plugins, log, std::env::temp_dir())
     }
 
     /// One plugin's own anchor, resolved by id or alias rather than by scanning.
@@ -126,6 +146,16 @@ async fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireErr
     match request {
         Request::Hello { protocol_version } => hello(protocol_version),
         Request::HostInfo => Ok(Response::HostInfo(anth_host::collect())),
+        Request::FileRead { path, offset, len } => {
+            let slice = crate::files::read(&daemon.readable_root, &path, offset, len)?;
+            Ok(Response::FileSlice {
+                path,
+                offset,
+                bytes: slice.bytes,
+                next: slice.next,
+                eof: slice.eof,
+            })
+        }
         Request::PluginList => Ok(Response::PluginList {
             plugins: daemon
                 .plugins
@@ -217,6 +247,7 @@ fn operation_of(request: &Request) -> &'static str {
         Request::Hello { .. } => "hello",
         Request::HostInfo => "host-info",
         Request::PluginList => "plugin-list",
+        Request::FileRead { .. } => "file-read",
         Request::PluginCall { .. } => "plugin-call",
     }
 }
@@ -230,9 +261,10 @@ fn operation_of(request: &Request) -> &'static str {
 /// the error kind rather than being written here.
 fn status_of(response: &Response) -> (u16, bool) {
     match response {
-        Response::Welcome { .. } | Response::HostInfo(_) | Response::PluginList { .. } => {
-            (200, false)
-        }
+        Response::Welcome { .. }
+        | Response::HostInfo(_)
+        | Response::PluginList { .. }
+        | Response::FileSlice { .. } => (200, false),
         Response::PluginReply { status, .. } => (*status, *status >= 500),
         Response::Error(error) => (error.kind.http_status(), true),
     }
