@@ -44,6 +44,7 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/main.rs             #   CLI parsing, exit-code policy, serve_all
     src/dispatch.rs         #   the single request match
     src/api.rs              #   axum router over dispatch; ApiError -> status
+    src/files.rs            #   one slice of a file inside the readable root
     src/socket.rs           #   Unix listener, connection loop, client
     src/table.rs            #   the one bordered-grid renderer
     src/render.rs           #   rows for host-info and plugin list, into Table
@@ -389,6 +390,20 @@ Two exceptions, both because they test something the inline form cannot:
   only way to check the exports a wasm guest actually sees.
 - `frontend/**/src/*.test.ts` sits next to its source; that is Bun's
   convention and the typechecker relies on it.
+
+### Blocking work never runs on a runtime worker
+
+A plugin call is wasm behind a 30-second deadline and a file read is disk
+I/O; both go through `tokio::task::spawn_blocking`. A read that waits on a
+slow mount would otherwise hold the thread that answers `/healthz`, and the
+daemon would look dead while it was only busy.
+
+`file read` refuses anything that is not a regular file. The check uses
+`std::fs::metadata` on the *path*, before `File::open`: opening a FIFO with no
+writer blocks until one appears, so checking after the open hangs on exactly
+the case the check exists to refuse — a test that does it this way hangs too.
+A cursor also means nothing on a stream, so `offset` and devices are refused by
+the same rule.
 
 ## The plugin contract
 
