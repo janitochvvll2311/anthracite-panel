@@ -20,15 +20,47 @@ use anth_wire::{ErrorKind, WireError};
 /// v0.1.0 failure this rewrite exists to remove.
 pub const MAX_SLICE: u32 = 64 * 1024;
 
+/// The longest a request may wait for bytes that have not arrived.
+///
+/// A caller asks for a wait; the daemon decides the ceiling. This is the whole
+/// reason a follow request cannot hang: whatever the caller sends, the answer
+/// comes back within this, so a client's own timeout only ever means "the
+/// daemon is gone", never "the file was quiet".
+pub const MAX_WAIT_MS: u32 = 30_000;
+
+/// How often a waiting read looks again.
+///
+/// A follow is a request per interval, not a stream, so this only has to be
+/// small enough that a log line appears promptly. Polling is what a file
+/// offers: there is no portable "tell me when this grows" without inotify,
+/// which would be one more thing the daemon has to own.
+const POLL_MS: u64 = 50;
+
 /// What one read produced.
 pub struct Slice {
     pub bytes: Vec<u8>,
     pub next: u64,
     pub eof: bool,
+    /// Whether the daemon waited for bytes that never arrived.
+    ///
+    /// An empty slice and `waited` is the honest answer to a follower: the file
+    /// did not grow. Without this flag that answer is indistinguishable from an
+    /// empty file, which is the silent truncation this rewrite removes.
+    pub waited: bool,
 }
 
 /// Reads `len` bytes at `offset` from `path`, inside `root`.
-pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, WireError> {
+///
+/// `wait_ms` is how long to wait for those bytes to appear. Zero reads what is
+/// there now; anything else is a follower, and it is capped by [`MAX_WAIT_MS`]
+/// so the daemon always answers.
+pub fn read(
+    root: &Path,
+    path: &str,
+    offset: u64,
+    len: u32,
+    wait_ms: u32,
+) -> Result<Slice, WireError> {
     if len == 0 {
         return Err(WireError::new(
             ErrorKind::Invalid,
@@ -65,41 +97,100 @@ pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, Wir
     // trusting it would answer an empty slice marked `eof`, which is
     // indistinguishable from a file that really is empty. The only trustworthy
     // end is a read that returns nothing, so these are read past the offset and
-    // ended by the read itself.
+    // ended by the read itself. A wait means nothing to them either: their
+    // length cannot be asked for, so they are read now.
     if total == 0 {
-        let mut buffer = vec![0u8; len as usize];
-        let filled = fill(&mut file, &mut buffer, path)?;
-        buffer.truncate(filled);
-        return Ok(Slice {
-            bytes: buffer,
-            next: offset + filled as u64,
-            eof: filled < len as usize,
-        });
+        return read_now(&mut file, path, offset, len);
     }
 
-    // Past the end is not an error: it is how a client discovers it has finished.
+    // Past the end is where a follower waits. A copier (no wait) is told the
+    // file ended here, which is how it discovers it is done.
     if offset >= total {
-        return Ok(Slice {
-            bytes: Vec::new(),
-            next: total,
-            eof: true,
-        });
+        if wait_ms == 0 {
+            return Ok(Slice {
+                bytes: Vec::new(),
+                next: total,
+                eof: true,
+                waited: false,
+            });
+        }
+        if !wait_until_grown(&file, offset, wait_ms)? {
+            // The wait expired with nothing new. This is an answer, not a
+            // failure: the file is still there, it simply did not grow.
+            return Ok(Slice {
+                bytes: Vec::new(),
+                next: offset,
+                eof: true,
+                waited: true,
+            });
+        }
     }
 
     use std::io::{Seek, SeekFrom};
     file.seek(SeekFrom::Start(offset))
         .map_err(|e| WireError::internal(format!("cannot seek in `{path}`: {e}")))?;
 
-    let mut buffer = vec![0u8; len as usize];
-    let filled = fill(&mut file, &mut buffer, path)?;
-    buffer.truncate(filled);
+    read_now(&mut file, path, offset, len)
+}
 
+/// Reads at the current position and reports where it started.
+fn read_now(
+    file: &mut std::fs::File,
+    path: &str,
+    offset: u64,
+    len: u32,
+) -> Result<Slice, WireError> {
+    let mut buffer = vec![0u8; len as usize];
+    let filled = fill(file, &mut buffer, path)?;
+    buffer.truncate(filled);
     let next = offset + filled as u64;
+
+    // A short read is the only evidence of the end: a size from `stat` is not,
+    // for a `/proc` entry, and it may also grow between the two calls.
     Ok(Slice {
         bytes: buffer,
         next,
-        eof: next >= total,
+        eof: filled < len as usize,
+        waited: false,
     })
+}
+
+/// The wait a caller actually gets, with the daemon's cap applied.
+///
+/// A pure function so the cap can be tested without serving the thirty seconds
+/// it bounds: a test that slept through it would cost the suite half a minute
+/// and still only prove that sleeping works.
+fn bounded_wait(wait_ms: u32) -> std::time::Duration {
+    std::time::Duration::from_millis(u64::from(wait_ms.min(MAX_WAIT_MS)))
+}
+
+/// Sleeps until `file` holds more than `offset` bytes, or the wait expires.
+///
+/// The growth is asked of the **open handle**, not of the path. If the file is
+/// rotated the handle keeps describing the file being read, so a follower is
+/// never told to expect bytes that belong to a different file; it sees the old
+/// file stop growing, which is the truth about what it is reading.
+///
+/// The deadline is recomputed against the cap here rather than trusted from the
+/// caller, so an oversized `wait_ms` cannot outlive [`MAX_WAIT_MS`].
+fn wait_until_grown(file: &std::fs::File, offset: u64, wait_ms: u32) -> Result<bool, WireError> {
+    let deadline = std::time::Instant::now() + bounded_wait(wait_ms);
+
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return Ok(false);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(POLL_MS).min(deadline - now));
+
+        let total = file
+            .metadata()
+            .map_err(|e| WireError::internal(format!("cannot stat the file being read: {e}")))?
+            .len();
+        if total > offset {
+            return Ok(true);
+        }
+    }
 }
 
 /// Fills `buffer` from `file`, returning how much was written.

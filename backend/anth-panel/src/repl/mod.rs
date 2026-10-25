@@ -465,8 +465,8 @@ fn help_text() -> String {
     String::from(
         "commands:\n  \
          host-info                      one snapshot of the host\n  \
-         file read <path> [--offset N] [--len N]\n                                 \
-         copy a slice of an approved file to stdout\n  \
+         file read <path> [--offset N] [--len N] [--follow]\n                                 \
+         copy an approved file to stdout, or follow it as it grows\n  \
          plugin list                    every plugin the daemon found\n  \
          plugin install <bundle.zip>    add a bundle to the registry\n  \
          plugin remove <id>             delete an installed bundle\n  \

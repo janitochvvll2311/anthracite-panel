@@ -138,6 +138,16 @@ enum FileAction {
         /// How many bytes to ask for at a time; the daemon caps it.
         #[arg(long, default_value_t = 64 * 1024)]
         len: u32,
+        /// Keep reading as the file grows, instead of stopping at the end.
+        ///
+        /// Each round asks the daemon to wait up to `--wait` for new bytes, so
+        /// a quiet file costs one request per wait rather than a spin. The
+        /// daemon caps the wait, so an interrupt is always possible.
+        #[arg(long)]
+        follow: bool,
+        /// How long one round waits for the file to grow.
+        #[arg(long, default_value_t = 5_000, value_name = "MS")]
+        wait: u32,
     },
 }
 
@@ -352,8 +362,15 @@ async fn dispatch_command(
         Command::Run { addr } => serve_with(socket, root, readable, Some(addr), logger).await,
         Command::HostInfo => client(socket, Request::HostInfo).await,
         Command::File {
-            action: FileAction::Read { path, offset, len },
-        } => copy_file(socket, &path, offset, len).await,
+            action:
+                FileAction::Read {
+                    path,
+                    offset,
+                    len,
+                    follow,
+                    wait,
+                },
+        } => copy_file(socket, &path, offset, len, follow.then_some(wait)).await,
         Command::Plugin { action } => match &action {
             PluginAction::List => client(socket, Request::PluginList).await,
             PluginAction::Install { bundle, .. } => {
@@ -673,9 +690,21 @@ async fn client(socket: &std::path::Path, request: Request) -> ExitCode {
 /// answer: the cursor is the state, so the daemon keeps nothing between calls
 /// and an interrupted copy resumes with `--offset`.
 ///
+/// `wait` turns the same loop into a follower: each answer that says
+/// `waited` means the file did not grow, so the cursor stays put and the next
+/// request waits again. The distinction is the point — an empty answer that
+/// merely reached the end of the file must not stop a follower, and a follower
+/// that treated "no new bytes" as "the end" would exit the moment it caught up.
+///
 /// Bytes go to stdout untouched. A `String` round-trip would replace anything
 /// that is not UTF-8, so `file read dump > copy` would not be a copy.
-async fn copy_file(socket: &std::path::Path, path: &str, mut offset: u64, len: u32) -> ExitCode {
+async fn copy_file(
+    socket: &std::path::Path,
+    path: &str,
+    mut offset: u64,
+    len: u32,
+    wait: Option<u32>,
+) -> ExitCode {
     use std::io::Write;
 
     let mut client = match socket::Client::connect(socket).await {
@@ -692,6 +721,7 @@ async fn copy_file(socket: &std::path::Path, path: &str, mut offset: u64, len: u
             path: path.to_string(),
             offset,
             len,
+            wait_ms: wait.unwrap_or(0),
         };
         let response = match client.call(&request).await {
             Ok(response) => response,
@@ -703,14 +733,26 @@ async fn copy_file(socket: &std::path::Path, path: &str, mut offset: u64, len: u
 
         match response {
             Response::FileSlice {
-                bytes, next, eof, ..
+                bytes,
+                next,
+                eof,
+                waited,
+                ..
             } => {
                 if let Err(error) = out.write_all(&bytes).and_then(|()| out.flush()) {
                     eprintln!("anth-panel: cannot write to stdout: {error}");
                     return ExitCode::FAILURE;
                 }
-                if eof {
+                if wait.is_none() && eof {
+                    // Only a copy ends here. A follower that stopped on `eof`
+                    // would quit the moment it caught up, which is the whole
+                    // case it exists for: the end of a growing file is a pause.
                     return ExitCode::SUCCESS;
+                }
+                if waited {
+                    // Nothing new arrived inside the wait. The cursor stays, so
+                    // asking again is the same question.
+                    continue;
                 }
                 // A daemon that answers without advancing would spin this loop
                 // forever; a slice that made no progress is a bug, not an end.

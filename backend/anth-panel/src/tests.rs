@@ -206,6 +206,69 @@ mod api {
         assert_eq!(response.status().as_u16(), 404);
     }
 
+    /// A router whose readable root is a real directory with one file.
+    fn readable_router(name: &str, contents: &str) -> (std::path::PathBuf, Router) {
+        let root = std::env::temp_dir().join(format!("anth-api-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("the fixture root must be creatable");
+        std::fs::write(root.join("log.txt"), contents).expect("the fixture must be written");
+        let router = router(Arc::new(Daemon::new(
+            crate::plugins::registry::Registry::empty(),
+            crate::tests::quiet(),
+            &root,
+        )));
+        (root, router)
+    }
+
+    /// The HTTP route carries the wait, and says when it waited.
+    ///
+    /// The wait is the one field a follower depends on, and this checks it
+    /// crosses the transport rather than only existing on the wire type.
+    #[tokio::test]
+    async fn a_follow_over_http_says_when_it_waited_and_found_nothing() {
+        let (root, router) = readable_router("follow", "done\n");
+
+        let (status, body) = ask(
+            router,
+            "/api/files?path=log.txt&offset=5&len=64&wait_ms=100",
+        )
+        .await;
+
+        assert_eq!(status, 200);
+        assert_eq!(body["waited"], json!(true), "the wait must be reported");
+        assert_eq!(body["eof"], json!(true));
+        assert_eq!(body["bytes"], json!(""));
+        assert_eq!(body["next"], json!(5), "the cursor must not move");
+        std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+    }
+
+    /// A wait above the daemon's cap is refused, not trimmed.
+    ///
+    /// Trimming would let a client believe it had a deadline it does not have,
+    /// which is the silent shortening rule 1 forbids.
+    #[tokio::test]
+    async fn a_wait_above_the_cap_is_refused_over_http() {
+        let (root, router) = readable_router("cap", "x");
+
+        let (status, body) = ask(
+            router,
+            &format!(
+                "/api/files?path=log.txt&wait_ms={}",
+                crate::files::MAX_WAIT_MS + 1
+            ),
+        )
+        .await;
+
+        assert_eq!(status, 400, "an unusable wait is the caller's mistake");
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|m| m.contains("wait_ms")),
+            "the message must name the field: {body}"
+        );
+        std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+    }
+
     #[test]
     fn an_error_renders_its_mapped_status_and_a_flat_message() {
         use anth_wire::ErrorKind;

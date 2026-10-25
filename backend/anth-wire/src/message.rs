@@ -30,7 +30,24 @@ pub enum Request {
     /// position: the cursor *is* the identity, so the daemon keeps no state
     /// between calls and a client that drops the answer simply asks again.
     /// `len` is bounded by the daemon, not by the caller.
-    FileRead { path: String, offset: u64, len: u32 },
+    ///
+    /// `wait_ms` is how long the daemon may wait for bytes to arrive at
+    /// `offset` before answering an empty slice. Zero — what a caller that
+    /// omits it gets — reads what is there and returns at once, which is a
+    /// copy. A positive value is how a follower reads a file that grows: the
+    /// answer still says `eof`, so "the file ends here" and "nothing arrived in
+    /// time" stay different answers even though both can be empty.
+    ///
+    /// The wait is bounded by the daemon and capped well below a client's own
+    /// timeout, so no request can hang: an empty answer after the wait is the
+    /// daemon saying it waited and there was nothing, not a request that failed.
+    FileRead {
+        path: String,
+        offset: u64,
+        len: u32,
+        #[serde(default)]
+        wait_ms: u32,
+    },
     /// Run one pipe of one plugin.
     ///
     /// `pipe` names the transport: `cli`, `http` or `direct`. It is a field
@@ -116,6 +133,12 @@ pub enum Response {
         bytes: Vec<u8>,
         next: u64,
         eof: bool,
+        /// Whether the daemon waited for bytes that did not arrive.
+        ///
+        /// Defaults to `false` so a peer that predates the wait reads an answer
+        /// about bytes rather than one about time.
+        #[serde(default)]
+        waited: bool,
     },
     Error(WireError),
 }

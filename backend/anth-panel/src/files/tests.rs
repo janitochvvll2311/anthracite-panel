@@ -29,11 +29,16 @@ fn daemon(root: &Path) -> Daemon {
 }
 
 async fn read(root: &Path, path: &str, offset: u64, len: u32) -> Response {
+    read_waiting(root, path, offset, len, 0).await
+}
+
+async fn read_waiting(root: &Path, path: &str, offset: u64, len: u32, wait_ms: u32) -> Response {
     daemon(root)
         .handle(Request::FileRead {
             path: path.to_string(),
             offset,
             len,
+            wait_ms,
         })
         .await
 }
@@ -310,6 +315,204 @@ async fn a_fifo_is_refused_instead_of_waited_on() {
             );
         }
         other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+}
+
+/// A follower must be able to tell "the file ends here" from "nothing arrived".
+///
+/// Both answers are an empty slice at the same cursor, so only `waited` tells
+/// them apart. Without it, a follower that caught up would decide the file was
+/// finished and stop, which is the silent truncation this rewrite removes.
+#[tokio::test]
+async fn a_wait_that_finds_nothing_says_so_instead_of_looking_like_an_end() {
+    let root = scratch("wait-empty");
+    write(&root, "quiet.log", b"one line\n");
+
+    // A copy: no wait, so the empty answer at the end is the end.
+    let copied = read_waiting(&root, "quiet.log", 9, 64, 0).await;
+    match copied {
+        Response::FileSlice { eof, waited, .. } => {
+            assert!(eof, "a copy at the end must say the file ended");
+            assert!(!waited, "a copy must not claim to have waited");
+        }
+        other => panic!("expected a slice, got {other:?}"),
+    }
+
+    // A follower: it waits, finds nothing, and says that instead.
+    let followed = read_waiting(&root, "quiet.log", 9, 64, 100).await;
+    match followed {
+        Response::FileSlice {
+            eof,
+            waited,
+            next,
+            bytes,
+            ..
+        } => {
+            assert!(waited, "the daemon waited, so the answer must say it did");
+            assert!(eof, "the file still has no more to give");
+            assert!(bytes.is_empty(), "nothing arrived, so nothing is returned");
+            assert_eq!(next, 9, "the cursor must not move when nothing arrived");
+        }
+        other => panic!("expected a slice, got {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+}
+
+/// A wait returns as soon as the file grows, not when the wait expires.
+///
+/// The byte is appended from another thread after a delay that is well inside
+/// the wait, so the assertion is about the daemon copying the file and not
+/// about how long the test machine takes.
+#[tokio::test]
+async fn a_wait_returns_the_bytes_as_soon_as_they_arrive() {
+    let root = scratch("wait-grow");
+    let path = write(&root, "growing.log", b"first\n");
+
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("the fixture must stay appendable");
+        file.write_all(b"second\n")
+            .expect("the append must be written");
+    });
+
+    let started = std::time::Instant::now();
+    let answer = read_waiting(&root, "growing.log", 6, 64, 5_000).await;
+    let elapsed = started.elapsed();
+    writer.join().expect("the writer thread must finish");
+
+    match answer {
+        Response::FileSlice {
+            bytes,
+            next,
+            waited,
+            ..
+        } => {
+            assert_eq!(bytes, b"second\n", "the appended bytes must be the answer");
+            assert_eq!(next, 13);
+            assert!(!waited, "bytes arrived, so this is not an empty wait");
+        }
+        other => panic!("expected a slice, got {other:?}"),
+    }
+    assert!(
+        elapsed < std::time::Duration::from_millis(4_000),
+        "it must return on the byte, not on the deadline: took {elapsed:?}"
+    );
+
+    std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+}
+
+/// A wait is capped by the daemon, so no request can outlive it.
+///
+/// Checked on the arithmetic rather than by waiting: sleeping through the cap
+/// would cost the suite thirty seconds to prove that sleeping works. The
+/// property is that no value a client sends can produce a longer wait.
+#[test]
+fn a_wait_longer_than_the_cap_is_cut_to_the_cap() {
+    let cap = std::time::Duration::from_millis(u64::from(crate::files::MAX_WAIT_MS));
+
+    assert_eq!(crate::files::bounded_wait(u32::MAX), cap);
+    assert_eq!(
+        crate::files::bounded_wait(crate::files::MAX_WAIT_MS + 1),
+        cap
+    );
+    assert_eq!(crate::files::bounded_wait(crate::files::MAX_WAIT_MS), cap);
+    assert!(
+        crate::files::bounded_wait(crate::files::MAX_WAIT_MS - 1) < cap,
+        "a wait under the cap must be honoured as asked"
+    );
+    assert_eq!(crate::files::bounded_wait(0), std::time::Duration::ZERO);
+}
+
+/// A waiting read does not occupy the daemon: it is still answered.
+///
+/// This is the property that makes a bounded wait different from a hang, and it
+/// needs a **single** worker to prove it: with two, a read that blocked the
+/// worker would still be answered by the other one, and the test would pass
+/// whatever the code did.
+///
+/// The clock starts before the reading task is spawned. Measuring after the
+/// pause would hide the very delay being tested: a blocking read would have
+/// finished during the pause, and the answer would look fast.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn a_waiting_read_leaves_the_daemon_answering() {
+    let root = scratch("wait-concurrent");
+    write(&root, "quiet.log", b"x");
+
+    let started = std::time::Instant::now();
+    let waiting = {
+        let root = root.clone();
+        tokio::spawn(async move { read_waiting(&root, "quiet.log", 1, 8, 1_500).await })
+    };
+
+    // Give the read a chance to be inside its wait.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    let answered = daemon(&root).handle(Request::HostInfo).await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(answered, Response::HostInfo(_)),
+        "the daemon must answer while a read waits, got {answered:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_millis(1_200),
+        "the answer must not wait behind the read: took {elapsed:?}"
+    );
+
+    let waited = waiting.await.expect("the waiting task must finish");
+    assert!(
+        matches!(waited, Response::FileSlice { waited: true, .. }),
+        "the waiting read must still report its wait, got {waited:?}"
+    );
+
+    std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+}
+
+/// A rotated file is not followed into the file that replaced it.
+///
+/// The wait asks the *open handle* how large the file is, so after a rotation
+/// the reader sees the old file stop growing. Asking the path instead would
+/// report the new file's bytes and hand the reader a slice of a different file
+/// at the same offset, which looks like data and is not.
+#[tokio::test]
+async fn a_rotated_file_is_not_followed_into_its_replacement() {
+    let root = scratch("wait-rotate");
+    write(&root, "app.log", b"old\n");
+
+    let rotator = {
+        let root = root.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            std::fs::rename(root.join("app.log"), root.join("app.log.1"))
+                .expect("the rotation must rename the file");
+            std::fs::write(root.join("app.log"), b"new and longer content\n")
+                .expect("the replacement must be written");
+        })
+    };
+
+    let answer = read_waiting(&root, "app.log", 4, 64, 600).await;
+    rotator.join().expect("the rotator must finish");
+
+    match answer {
+        Response::FileSlice { waited, bytes, .. } => {
+            assert!(
+                waited,
+                "the file it opened stopped growing, so it waited and found nothing"
+            );
+            assert!(
+                bytes.is_empty(),
+                "it must not return the replacement file's bytes, got {:?}",
+                String::from_utf8_lossy(&bytes)
+            );
+        }
+        other => panic!("expected a slice, got {other:?}"),
     }
 
     std::fs::remove_dir_all(&root).expect("the fixture must be removable");

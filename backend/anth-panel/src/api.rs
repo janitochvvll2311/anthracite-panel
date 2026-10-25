@@ -329,6 +329,17 @@ async fn file_read(
     })?;
     let offset = number_param(&params, "offset", 0)?;
     let len = number_param(&params, "len", u64::from(files::MAX_SLICE))?;
+    // A follower asks for a wait; the daemon owns the ceiling. Asking for more
+    // is refused rather than trimmed, for the same reason a long `len` is:
+    // shortening it silently would make the client believe a deadline it does
+    // not have.
+    let wait_ms = number_param(&params, "wait_ms", 0)?;
+    if wait_ms > u64::from(files::MAX_WAIT_MS) {
+        return Err(ApiError(WireError::invalid(format!(
+            "`wait_ms` of {wait_ms} exceeds the {} ms limit",
+            files::MAX_WAIT_MS
+        ))));
+    }
 
     if len > u64::from(u32::MAX) {
         return Err(ApiError(WireError::invalid(format!(
@@ -342,6 +353,7 @@ async fn file_read(
             path,
             offset,
             len: len as u32,
+            wait_ms: wait_ms as u32,
         })
         .await;
 
@@ -352,6 +364,7 @@ async fn file_read(
             bytes,
             next,
             eof,
+            waited,
         } => {
             use base64::Engine;
             let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -361,6 +374,7 @@ async fn file_read(
                 "bytes": encoded,
                 "next": next,
                 "eof": eof,
+                "waited": waited,
             })))
         }
         Response::Error(error) => Err(ApiError(error)),
