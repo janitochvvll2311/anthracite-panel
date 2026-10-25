@@ -27,6 +27,21 @@ pub struct Daemon {
     /// Held here rather than passed per call so no transport can widen it: the
     /// CLI, the HTTP route and a future caller all go through this one value.
     readable_root: Arc<std::path::PathBuf>,
+    /// The open terminals, and the switch that allows any to be opened.
+    ///
+    /// Owned by the daemon for the same reason as the readable root: it is
+    /// authority, and a value passed per request is a value a new transport can
+    /// forget to check.
+    terminal: Arc<crate::terminal::Sessions>,
+    terminal_app: crate::terminal::App,
+    /// What identifies this daemon's clients as one owner.
+    ///
+    /// A socket connection and an HTTP request have no shared identity in the
+    /// protocol, so owner scope here means "this daemon", which is what stops a
+    /// handle from being guessed across two panels on one host. It is one value
+    /// rather than a per-caller one because the protocol carries no caller name,
+    /// and inventing one would make the check look stronger than it is.
+    owner: String,
 }
 
 impl Daemon {
@@ -39,7 +54,30 @@ impl Daemon {
             plugins: Arc::new(plugins),
             log,
             readable_root: Arc::new(readable_root.into()),
+            terminal: Arc::new(crate::terminal::Sessions::new()),
+            terminal_app: crate::terminal::App::default(),
+            owner: "daemon".to_string(),
         }
+    }
+
+    /// Allows this daemon to open terminals, as an operator setting would.
+    ///
+    /// Terminal support is off unless something turns it on, and `new` never
+    /// does: a daemon that started serving shells because it started is a
+    /// daemon that granted authority nobody asked for.
+    pub fn with_terminal(mut self, app: crate::terminal::App) -> Self {
+        self.terminal_app = app;
+        self
+    }
+
+    /// The daemon's log, for the parts that run outside a request.
+    pub fn log(&self) -> &Logger {
+        &self.log
+    }
+
+    /// The open sessions, for the reaper and for tests.
+    pub fn terminals(&self) -> &Arc<crate::terminal::Sessions> {
+        &self.terminal
     }
 
     /// A daemon whose readable root is the temp directory.
@@ -170,6 +208,75 @@ async fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireErr
                 waited: slice.waited,
             })
         }
+        // Every terminal arm refuses first when the operator has not turned
+        // support on, so a daemon without it answers the same `403` to all five
+        // rather than a mixed set of "no such terminal" for handles that could
+        // never have existed.
+        Request::TerminalOpen {
+            program,
+            cols,
+            rows,
+        } => {
+            daemon.terminal_app.refuse_unless_enabled()?;
+            let sessions = Arc::clone(&daemon.terminal);
+            let owner = daemon.owner.clone();
+            let asked = program.clone();
+            // Spawning is a `posix_spawn` and a descriptor setup: cheap, but it
+            // can block on a full descriptor table, and it does not belong on a
+            // worker that answers `/healthz`.
+            let id = tokio::task::spawn_blocking(move || sessions.open(&owner, &asked, cols, rows))
+                .await
+                .map_err(|e| WireError::internal(format!("the open task failed: {e}")))??;
+            Ok(Response::TerminalOpened {
+                id,
+                program,
+                cols,
+                rows,
+            })
+        }
+        Request::TerminalRead { id, wait_ms } => {
+            daemon.terminal_app.refuse_unless_enabled()?;
+            let sessions = Arc::clone(&daemon.terminal);
+            let owner = daemon.owner.clone();
+            // This is the wait, so it is exactly the thing that must not run on
+            // a worker: a chatty program returns at once, a quiet one holds the
+            // task for the whole wait, and the pool is finite.
+            let asked = id.clone();
+            let chunk = tokio::task::spawn_blocking(move || sessions.read(&owner, &asked, wait_ms))
+                .await
+                .map_err(|e| WireError::internal(format!("the read task failed: {e}")))??;
+            Ok(Response::TerminalOutput {
+                id,
+                seq: chunk.seq,
+                bytes: chunk.bytes,
+                eof: chunk.eof,
+            })
+        }
+        Request::TerminalWrite { id, bytes } => {
+            daemon.terminal_app.refuse_unless_enabled()?;
+            let sessions = Arc::clone(&daemon.terminal);
+            let owner = daemon.owner.clone();
+            tokio::task::spawn_blocking(move || sessions.write(&owner, &id, &bytes))
+                .await
+                .map_err(|e| WireError::internal(format!("the write task failed: {e}")))??;
+            Ok(Response::Accepted)
+        }
+        Request::TerminalResize { id, cols, rows } => {
+            daemon.terminal_app.refuse_unless_enabled()?;
+            daemon.terminal.resize(&daemon.owner, &id, cols, rows)?;
+            Ok(Response::Accepted)
+        }
+        Request::TerminalClose { id } => {
+            daemon.terminal_app.refuse_unless_enabled()?;
+            let sessions = Arc::clone(&daemon.terminal);
+            let owner = daemon.owner.clone();
+            // Closing signals the child and waits for it, with a kill as the
+            // fallback: up to 200ms of waiting that no worker should absorb.
+            tokio::task::spawn_blocking(move || sessions.close(&owner, &id))
+                .await
+                .map_err(|e| WireError::internal(format!("the close task failed: {e}")))??;
+            Ok(Response::Accepted)
+        }
         Request::PluginList => Ok(Response::PluginList {
             plugins: daemon
                 .plugins
@@ -262,6 +369,11 @@ fn operation_of(request: &Request) -> &'static str {
         Request::HostInfo => "host-info",
         Request::PluginList => "plugin-list",
         Request::FileRead { .. } => "file-read",
+        Request::TerminalOpen { .. } => "terminal-open",
+        Request::TerminalRead { .. } => "terminal-read",
+        Request::TerminalWrite { .. } => "terminal-write",
+        Request::TerminalResize { .. } => "terminal-resize",
+        Request::TerminalClose { .. } => "terminal-close",
         Request::PluginCall { .. } => "plugin-call",
     }
 }
@@ -278,7 +390,10 @@ fn status_of(response: &Response) -> (u16, bool) {
         Response::Welcome { .. }
         | Response::HostInfo(_)
         | Response::PluginList { .. }
-        | Response::FileSlice { .. } => (200, false),
+        | Response::FileSlice { .. }
+        | Response::TerminalOpened { .. }
+        | Response::TerminalOutput { .. }
+        | Response::Accepted => (200, false),
         Response::PluginReply { status, .. } => (*status, *status >= 500),
         Response::Error(error) => (error.kind.http_status(), true),
     }

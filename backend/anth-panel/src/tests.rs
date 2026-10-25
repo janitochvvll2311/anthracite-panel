@@ -2051,6 +2051,7 @@ mod config {
                 socket: PathBuf::from(DEFAULT_SOCKET),
                 plugins: PathBuf::from(DEFAULT_PLUGINS),
                 readable: PathBuf::from(crate::config::DEFAULT_READABLE),
+                terminal: false,
             }
         );
         assert!(!paths.socket.is_absolute());
@@ -2167,5 +2168,168 @@ mod config {
             path(Some("/flag/config.toml"), &no_env),
             PathBuf::from("/flag/config.toml")
         );
+    }
+}
+
+/// Terminal requests at the dispatch layer.
+///
+/// The registry's own tests cover the rules; these cover the one thing only
+/// `dispatch` can answer: whether a daemon that was never granted terminals
+/// refuses them, and whether the grant actually reaches a real shell.
+mod terminal_dispatch {
+    use crate::dispatch::Daemon;
+    use crate::plugins::registry::Registry;
+    use anth_wire::{ErrorKind, Request, Response};
+
+    fn daemon(terminal: bool) -> Daemon {
+        Daemon::for_test(Registry::empty(), crate::tests::quiet())
+            .with_terminal(crate::terminal::App { enabled: terminal })
+    }
+
+    #[tokio::test]
+    async fn a_daemon_without_the_grant_refuses_every_terminal_request() {
+        let daemon = daemon(false);
+
+        let requests = [
+            Request::TerminalOpen {
+                program: "sh".to_string(),
+                cols: 80,
+                rows: 24,
+            },
+            Request::TerminalRead {
+                id: "t1".to_string(),
+                wait_ms: 0,
+            },
+            Request::TerminalWrite {
+                id: "t1".to_string(),
+                bytes: b"x".to_vec(),
+            },
+            Request::TerminalResize {
+                id: "t1".to_string(),
+                cols: 80,
+                rows: 24,
+            },
+            Request::TerminalClose {
+                id: "t1".to_string(),
+            },
+        ];
+
+        for request in requests {
+            let named = format!("{request:?}");
+            match daemon.handle(request).await {
+                Response::Error(error) => {
+                    assert_eq!(
+                        error.kind,
+                        ErrorKind::Forbidden,
+                        "{named} must be refused, not answered differently"
+                    );
+                    assert!(
+                        error.message.contains("[terminal] enabled"),
+                        "the refusal must name the setting: {}",
+                        error.message
+                    );
+                }
+                other => panic!("{named} must be refused, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_open_read_write_close_round_trip_reaches_a_real_shell() {
+        let daemon = daemon(true);
+
+        let opened = daemon
+            .handle(Request::TerminalOpen {
+                program: "sh".to_string(),
+                cols: 100,
+                rows: 40,
+            })
+            .await;
+        let (id, cols, rows) = match opened {
+            Response::TerminalOpened {
+                id,
+                program,
+                cols,
+                rows,
+            } => {
+                assert_eq!(program, "sh", "the answer must echo what was started");
+                (id, cols, rows)
+            }
+            other => panic!("expected an opened terminal, got {other:?}"),
+        };
+        assert_eq!((cols, rows), (100, 40));
+
+        daemon
+            .handle(Request::TerminalWrite {
+                id: id.clone(),
+                bytes: b"echo dispatched\n".to_vec(),
+            })
+            .await;
+
+        // The shell is asynchronous, so the answer is polled rather than
+        // assumed: a single read would be racing it.
+        let mut seen = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && !seen.contains("dispatched") {
+            match daemon
+                .handle(Request::TerminalRead {
+                    id: id.clone(),
+                    wait_ms: 200,
+                })
+                .await
+            {
+                Response::TerminalOutput { bytes, .. } => {
+                    seen.push_str(&String::from_utf8_lossy(&bytes));
+                }
+                other => panic!("expected output, got {other:?}"),
+            }
+        }
+        assert!(seen.contains("dispatched"), "saw {seen:?}");
+
+        // A resize is answered, and the session is still usable afterwards.
+        let resized = daemon
+            .handle(Request::TerminalResize {
+                id: id.clone(),
+                cols: 120,
+                rows: 50,
+            })
+            .await;
+        assert!(matches!(resized, Response::Accepted));
+
+        let closed = daemon
+            .handle(Request::TerminalClose { id: id.clone() })
+            .await;
+        assert!(matches!(closed, Response::Accepted));
+
+        // After close the handle must be gone rather than answering for a
+        // descriptor that no longer exists.
+        match daemon
+            .handle(Request::TerminalRead { id, wait_ms: 0 })
+            .await
+        {
+            Response::Error(error) => assert_eq!(error.kind, ErrorKind::NotFound),
+            other => panic!("a closed handle must be unknown, got {other:?}"),
+        }
+        assert_eq!(daemon.terminals().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_program_outside_the_allowlist_is_refused() {
+        let daemon = daemon(true);
+        let response = daemon
+            .handle(Request::TerminalOpen {
+                program: "cat".to_string(),
+                cols: 80,
+                rows: 24,
+            })
+            .await;
+
+        match response {
+            Response::Error(error) => {
+                assert_eq!(error.kind, ErrorKind::Forbidden);
+                assert!(error.message.contains("cat"), "{}", error.message);
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
     }
 }

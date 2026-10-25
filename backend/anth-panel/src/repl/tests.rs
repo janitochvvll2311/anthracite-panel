@@ -98,6 +98,7 @@ fn target<'a>(socket: &'a std::path::Path) -> Target<'a> {
         root: std::path::Path::new("/tmp/anth-unused-plugins"),
         readable: std::path::Path::new("/tmp/anth-unused-readable"),
         log: silent(),
+        terminal: false,
     }
 }
 

@@ -49,6 +49,8 @@ pub struct Target<'a> {
     /// What the commands run from the prompt log to. Borrowed rather than owned,
     /// so `Target` stays `Copy` and every helper can take it by value.
     pub log: &'a std::sync::Arc<crate::log::Logger>,
+    /// Whether this session may open terminals, as the daemon it starts would.
+    pub terminal: bool,
 }
 
 /// The logger the prompt writes through, and the queue it drains.
@@ -80,12 +82,14 @@ pub async fn run(
     readable: &std::path::Path,
     log: std::sync::Arc<crate::log::Logger>,
     wired: Option<Wired>,
+    terminal: bool,
 ) -> ExitCode {
     let target = Target {
         socket,
         root,
         readable,
         log: &log,
+        terminal,
     };
     let history_path = history::path();
     let mut history = history_path
@@ -155,6 +159,7 @@ async fn session(
         root: target.root,
         readable: target.readable,
         log: &logger,
+        terminal: target.terminal,
     };
 
     let mut keys = Reader::spawn();
@@ -351,6 +356,7 @@ async fn run_words(
         target.readable,
         cli.command,
         std::sync::Arc::clone(target.log),
+        target.terminal,
     )
     .await;
     None

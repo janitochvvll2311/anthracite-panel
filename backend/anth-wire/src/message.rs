@@ -48,6 +48,37 @@ pub enum Request {
         #[serde(default)]
         wait_ms: u32,
     },
+    /// Open a shell on a pseudo-terminal and name it.
+    ///
+    /// The answer is a handle, which is the one piece of state this protocol
+    /// gives the daemon: a terminal is a process plus two file descriptors, and
+    /// there is no cursor that can stand in for either. Everything else about
+    /// it is a request like any other, so `dispatch` still answers exactly once.
+    ///
+    /// `cols` and `rows` are the size to start at; `program` is validated
+    /// against the daemon's allowlist, not taken as a path to run.
+    TerminalOpen {
+        program: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// One read from an open terminal, waiting at most `wait_ms` for output.
+    ///
+    /// A terminal is the case where waiting is the *only* way to read it: the
+    /// program may have written nothing yet, and an immediate empty answer
+    /// cannot be told apart from a quiet program. The daemon caps the wait, so
+    /// a caller can always walk away.
+    TerminalRead { id: String, wait_ms: u32 },
+    /// Send bytes to the terminal, as a keystroke sequence.
+    TerminalWrite {
+        id: String,
+        #[serde(with = "crate::b64")]
+        bytes: Vec<u8>,
+    },
+    /// Tell the program its window changed size.
+    TerminalResize { id: String, cols: u16, rows: u16 },
+    /// End the session and reap the child.
+    TerminalClose { id: String },
     /// Run one pipe of one plugin.
     ///
     /// `pipe` names the transport: `cli`, `http` or `direct`. It is a field
@@ -140,6 +171,36 @@ pub enum Response {
         #[serde(default)]
         waited: bool,
     },
+    /// A terminal now exists under `id`.
+    ///
+    /// `program` is echoed back so a client can label the session with what it
+    /// actually got, rather than with what it asked for.
+    TerminalOpened {
+        id: String,
+        program: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// Output from a terminal, answering [`Request::TerminalRead`].
+    ///
+    /// `seq` starts at zero per session and increases by one per non-empty
+    /// answer, so a client can notice a gap instead of quietly splicing two
+    /// unrelated moments together. `eof` says the program has exited: an empty
+    /// read with `eof` is the end, and without it means the wait expired with
+    /// nothing written.
+    TerminalOutput {
+        id: String,
+        seq: u64,
+        #[serde(with = "crate::b64")]
+        bytes: Vec<u8>,
+        eof: bool,
+    },
+    /// The request had no answer of its own, and succeeded.
+    ///
+    /// A write, a resize and a close all mean "done", and none of them has a
+    /// value to return. One variant rather than three identical ones: what a
+    /// client needs to know is that the request was accepted.
+    Accepted,
     Error(WireError),
 }
 

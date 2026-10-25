@@ -43,6 +43,12 @@ pub struct Paths {
     pub socket: PathBuf,
     pub plugins: PathBuf,
     pub readable: PathBuf,
+    /// Whether the daemon may open terminals.
+    ///
+    /// In the same struct as the paths because it is resolved by the same pass
+    /// from the same file: a second lookup for one boolean would be a second
+    /// place for "the file said so" to disagree with itself.
+    pub terminal: bool,
 }
 
 /// What `config.toml` may set. An absent key falls through to the default.
@@ -51,6 +57,18 @@ struct File {
     socket: Option<String>,
     plugins: Option<String>,
     readable: Option<String>,
+    #[serde(default)]
+    terminal: TerminalSection,
+}
+
+/// The `[terminal]` table.
+///
+/// Absent means off, not "on by default": the section exists at all only
+/// because an operator wrote it.
+#[derive(Debug, Default, serde::Deserialize)]
+struct TerminalSection {
+    #[serde(default)]
+    enabled: bool,
 }
 
 /// Resolves the socket and the bundle directory.
@@ -99,6 +117,7 @@ pub fn resolve(
             settings.readable.as_deref(),
             DEFAULT_READABLE,
         ),
+        terminal: settings.terminal.enabled,
     })
 }
 

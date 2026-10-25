@@ -45,6 +45,9 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/dispatch.rs         #   the single request match
     src/api.rs              #   axum router over dispatch; ApiError -> status
     src/files.rs            #   one slice of a file inside the readable root
+    src/terminal/           #   the one retained state: sessions over a pty
+      mod.rs                #     registry: owner, cap, idle expiry, allowlist
+      pty.rs                #     the only kernel terminal code: openpty + spawn
     src/socket.rs           #   Unix listener, connection loop, client
     src/table.rs            #   the one bordered-grid renderer
     src/render.rs           #   rows for host-info and plugin list, into Table

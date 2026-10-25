@@ -18,6 +18,7 @@ mod plugins;
 mod render;
 mod socket;
 mod table;
+mod terminal;
 mod www;
 
 #[cfg(test)]
@@ -313,6 +314,9 @@ async fn main() -> ExitCode {
     };
     let socket = paths.socket;
     let root = paths.plugins;
+    // Read once here, like the paths, so the daemon and every editor agree on
+    // whether terminals were granted.
+    let terminal = paths.terminal;
     // Canonicalised once, so a relative `--readable` does not depend on a later
     // working directory change. A client command does not read files, so a root
     // that does not exist is the daemon's problem and must not fail `host-info`
@@ -333,11 +337,21 @@ async fn main() -> ExitCode {
     let logger = Arc::new(settings.logger());
 
     if cli.interactive {
-        return interactive(&socket, &root, &readable, cli.command, logger).await;
+        return interactive(
+            &socket,
+            &root,
+            &readable,
+            cli.command,
+            logger,
+            paths.terminal,
+        )
+        .await;
     }
 
     match cli.command {
-        Some(command) => dispatch_command(&socket, &root, &readable, Some(command), logger).await,
+        Some(command) => {
+            dispatch_command(&socket, &root, &readable, Some(command), logger, terminal).await
+        }
         None => {
             eprintln!("anth-panel: a command is required unless --interactive is given");
             ExitCode::from(2)
@@ -352,14 +366,17 @@ async fn dispatch_command(
     readable: &std::path::Path,
     command: Option<Command>,
     logger: Arc<log::Logger>,
+    terminal: bool,
 ) -> ExitCode {
     let Some(command) = command else {
         return ExitCode::from(2);
     };
 
     match command {
-        Command::Daemon => serve_with(socket, root, readable, None, logger).await,
-        Command::Run { addr } => serve_with(socket, root, readable, Some(addr), logger).await,
+        Command::Daemon => serve_with(socket, root, readable, None, logger, terminal).await,
+        Command::Run { addr } => {
+            serve_with(socket, root, readable, Some(addr), logger, terminal).await
+        }
         Command::HostInfo => client(socket, Request::HostInfo).await,
         Command::File {
             action:
@@ -482,12 +499,16 @@ async fn serve_with(
     readable: &std::path::Path,
     addr: Option<String>,
     logger: Arc<log::Logger>,
+    terminal: bool,
 ) -> ExitCode {
-    let daemon = Arc::new(Daemon::new(
-        plugins::registry::Registry::load(root),
-        logger.clone(),
-        readable,
-    ));
+    let daemon = Arc::new(
+        Daemon::new(
+            plugins::registry::Registry::load(root),
+            logger.clone(),
+            readable,
+        )
+        .with_terminal(crate::terminal::App { enabled: terminal }),
+    );
 
     let result = match bind(socket, addr.as_deref()).await {
         Ok(listeners) => {
@@ -565,10 +586,33 @@ async fn serve_bound(
     listeners: Listeners,
     daemon: Arc<Daemon>,
 ) -> Result<(), anth_wire::WireError> {
+    // An idle daemon must still free its shells: expiry is checked on a timer,
+    // not only when someone happens to open the next session, so a tab closed
+    // for good does not leave a child running until the process stops.
+    let reaping = Arc::clone(&daemon);
+    let reaper = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            let reaped = reaping.terminals().reap();
+            if reaped > 0 {
+                let open = reaping.terminals().len().to_string();
+                reaping
+                    .log()
+                    .info("terminal", "reaped")
+                    .field("reaped", &reaped.to_string())
+                    .field("open", &open)
+                    .emit();
+            }
+        }
+    });
+
     let Some(http) = listeners.http else {
-        return socket::serve(listeners.socket, daemon)
+        let result = socket::serve(listeners.socket, daemon)
             .await
             .map_err(|e| anth_wire::WireError::internal(format!("serving: {e}")));
+        reaper.abort();
+        return result;
     };
 
     let socket_daemon = Arc::clone(&daemon);
@@ -584,10 +628,12 @@ async fn serve_bound(
             .map_err(|e| anth_wire::WireError::internal(format!("serving http: {e}")))
     };
 
-    tokio::select! {
+    let result = tokio::select! {
         result = socket_loop => result,
         result = http_loop => result,
-    }
+    };
+    reaper.abort();
+    result
 }
 
 /// What an interactive session does before the prompt appears.
@@ -626,19 +672,27 @@ async fn interactive(
     readable: &Path,
     command: Option<Command>,
     logger: Arc<log::Logger>,
+    terminal: bool,
 ) -> ExitCode {
     let addr = match startup(command) {
-        Startup::Prompt => return repl::run(socket, root, readable, logger, None).await,
+        Startup::Prompt => return repl::run(socket, root, readable, logger, None, terminal).await,
         Startup::RunFirst(command) => {
             // A client command still runs first and still keeps the prompt: a
             // failed one is reported, not fatal, because the prompt is where the
             // user fixes it.
-            let code =
-                dispatch_command(socket, root, readable, Some(*command), logger.clone()).await;
+            let code = dispatch_command(
+                socket,
+                root,
+                readable,
+                Some(*command),
+                logger.clone(),
+                terminal,
+            )
+            .await;
             if code != ExitCode::SUCCESS {
                 eprintln!("anth-panel: the startup command failed, staying interactive");
             }
-            return repl::run(socket, root, readable, logger, None).await;
+            return repl::run(socket, root, readable, logger, None, terminal).await;
         }
         Startup::Serve { addr } => addr,
     };
@@ -647,11 +701,14 @@ async fn interactive(
     // writes — the startup announcement included — is painted by the prompt
     // instead of being written straight to a terminal the prompt owns.
     let wired = repl::Wired::from(&logger);
-    let daemon = Arc::new(Daemon::new(
-        plugins::registry::Registry::load(root),
-        wired.logger.clone(),
-        readable,
-    ));
+    let daemon = Arc::new(
+        Daemon::new(
+            plugins::registry::Registry::load(root),
+            wired.logger.clone(),
+            readable,
+        )
+        .with_terminal(crate::terminal::App { enabled: terminal }),
+    );
 
     let listeners = match bind(socket, addr.as_deref()).await {
         Ok(listeners) => listeners,
@@ -663,7 +720,7 @@ async fn interactive(
     announce(&wired.logger, socket, &listeners);
 
     let serving = tokio::spawn(serve_bound(listeners, daemon));
-    let code = repl::run(socket, root, readable, logger, Some(wired)).await;
+    let code = repl::run(socket, root, readable, logger, Some(wired), terminal).await;
     // The prompt owns the process; a listener outliving it would keep the
     // terminal held by a daemon the operator thought they had quit.
     serving.abort();
@@ -800,6 +857,14 @@ fn render_response(response: Response) -> Result<String, (anth_wire::ErrorKind, 
             anth_wire::ErrorKind::Internal,
             "a file slice cannot be rendered as text".to_string(),
         )),
+        // Terminal answers are bytes or handles, and the terminal client owns
+        // both: reaching this function with one means a caller forgot the
+        // loop it needs, which is a bug rather than a rendering question.
+        Response::TerminalOpened { .. } | Response::TerminalOutput { .. } => Err((
+            anth_wire::ErrorKind::Internal,
+            "a terminal answer needs the terminal client, not a renderer".to_string(),
+        )),
+        Response::Accepted => Ok(String::new()),
         Response::PluginReply { status, value, .. } => {
             let body = render::render_plugin_reply(&value);
             if (200..300).contains(&status) {
