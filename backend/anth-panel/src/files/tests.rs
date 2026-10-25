@@ -285,3 +285,32 @@ async fn a_really_empty_file_is_an_empty_slice_at_the_end() {
     assert!(eof);
     std::fs::remove_dir_all(&root).expect("the fixture must be removable");
 }
+
+/// A FIFO can block a read forever, and `offset` cannot be honoured on
+/// something that cannot be seeked. One request must stay bounded, so the shape
+/// is refused rather than waited on.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_fifo_is_refused_instead_of_waited_on() {
+    let root = scratch("fifo");
+    let fifo = root.join("pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo must be runnable");
+    assert!(made.success(), "the fixture FIFO must be creatable");
+
+    match read(&root, "pipe", 0, 16).await {
+        Response::Error(error) => {
+            assert_eq!(error.kind, ErrorKind::Forbidden);
+            assert!(
+                error.message.contains("regular file"),
+                "the message must name the rule: {}",
+                error.message
+            );
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+}

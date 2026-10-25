@@ -147,7 +147,14 @@ async fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireErr
         Request::Hello { protocol_version } => hello(protocol_version),
         Request::HostInfo => Ok(Response::HostInfo(anth_host::collect())),
         Request::FileRead { path, offset, len } => {
-            let slice = crate::files::read(&daemon.readable_root, &path, offset, len)?;
+            // Disk I/O, like a plugin call: a slow or stalled filesystem must not
+            // hold a runtime worker that could be answering `/healthz`.
+            let root = Arc::clone(&daemon.readable_root);
+            let asked = path.clone();
+            let slice =
+                tokio::task::spawn_blocking(move || crate::files::read(&root, &asked, offset, len))
+                    .await
+                    .map_err(|e| WireError::internal(format!("the read task failed: {e}")))??;
             Ok(Response::FileSlice {
                 path,
                 offset,

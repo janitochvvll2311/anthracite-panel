@@ -43,13 +43,24 @@ pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, Wir
     }
 
     let resolved = resolve(root, path)?;
+
+    // The type is checked with `metadata` on the *path*, before opening it: on a
+    // FIFO, `open` blocks until a writer appears, so opening first would hang
+    // the daemon on a path it is about to refuse. A cursor is also only
+    // meaningful on something that can be seeked, and a device can block a read
+    // forever, so both are refused.
+    let meta = std::fs::metadata(&resolved)
+        .map_err(|e| WireError::new(ErrorKind::NotFound, format!("cannot open `{path}`: {e}")))?;
+    if !meta.is_file() {
+        return Err(WireError::new(
+            ErrorKind::Forbidden,
+            format!("`{path}` is not a regular file; this reads files, not streams"),
+        ));
+    }
+    let total = meta.len();
+
     let mut file = std::fs::File::open(&resolved)
         .map_err(|e| WireError::new(ErrorKind::NotFound, format!("cannot open `{path}`: {e}")))?;
-
-    let meta = file
-        .metadata()
-        .map_err(|e| WireError::internal(format!("cannot stat `{path}`: {e}")))?;
-    let total = meta.len();
 
     // A size of zero is not evidence of an empty file. A pseudo-file reports one
     // and still has content — `/proc/loadavg` is a regular file of size 0 — so
