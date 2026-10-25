@@ -22,7 +22,25 @@ function mounting(client: HostInfoClient): { element: AnthApp; text: () => strin
   AnthApp.client = client;
   const element = document.createElement("anth-app") as AnthApp;
   document.body.append(element);
-  return { element, text: () => element.shadowRoot?.textContent ?? "" };
+  return { element, text: () => hostInfoText(element) };
+}
+
+/**
+ * The card's text, read through the component that renders it.
+ *
+ * The snapshot moved out of the shell's own shadow root into `anth-host-info`,
+ * so a plain `textContent` on `anth-app` stopped covering it: the element's
+ * content is not in the shell's text, and a test that only read the shell would
+ * pass while the card showed nothing.
+ */
+function hostInfoText(element: AnthApp): string {
+  const panel = element.shadowRoot?.querySelector("anth-host-info");
+  return `${element.shadowRoot?.textContent ?? ""} ${panel?.shadowRoot?.textContent ?? ""}`;
+}
+
+/** The card's rendered body, which is where the values and errors appear. */
+function card(element: AnthApp): Element | null | undefined {
+  return element.shadowRoot?.querySelector("anth-host-info")?.shadowRoot?.querySelector(".body");
 }
 
 /** Waits for the refresh the element starts in `connectedCallback`. */
@@ -30,7 +48,7 @@ async function settled(element: AnthApp): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
-  expect(element.shadowRoot?.querySelector("dl, .error")).not.toBeNull();
+  expect(card(element)?.querySelector("dl, .error")).not.toBeNull();
 }
 
 afterEach(() => {
@@ -49,9 +67,13 @@ describe("anth-app", () => {
     expect(text()).toContain("8");
     // 90_000 s is 1d 1h.
     expect(text()).toContain("1d 1h");
-    // 8 GiB total, 6 GiB available is 2 GiB used.
-    expect(text()).toContain("2.00 GiB of 8.00 GiB used");
-    expect(text()).toContain("none");
+    // Each figure is its own row now: 8 GiB total, 6 GiB available, 2 GiB used.
+    expect(text()).toContain("8.00 GiB");
+    expect(text()).toContain("6.00 GiB");
+    expect(text()).toContain("2.00 GiB");
+    // 2 of 8 GiB is 25%, and the bar is labelled with it.
+    expect(text()).toContain("25.0%");
+    expect(text()).toContain("Not configured");
   });
 
   test("shows a refused read instead of an empty table", async () => {
@@ -63,8 +85,8 @@ describe("anth-app", () => {
     await settled(element);
 
     expect(text()).toContain("control is off");
-    expect(element.shadowRoot?.querySelector("dl")).toBeNull();
-    expect(element.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull();
+    expect(card(element)?.querySelector("dl")).toBeNull();
+    expect(card(element)?.querySelector('[role="alert"]')).not.toBeNull();
   });
 
   test("escapes host-supplied text so a hostname cannot inject markup", async () => {
@@ -73,7 +95,7 @@ describe("anth-app", () => {
     });
     await settled(element);
 
-    expect(element.shadowRoot?.querySelector("img")).toBeNull();
+    expect(card(element)?.querySelector("img")).toBeNull();
     expect(text()).toContain('<img src=x onerror="alert(1)">');
   });
 
@@ -96,7 +118,7 @@ describe("anth-app", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(element.shadowRoot?.querySelector("dl")).not.toBeNull();
+    expect(card(element)?.querySelector("dl")).not.toBeNull();
     expect(text()).toContain("turing");
   });
 
@@ -105,7 +127,7 @@ describe("anth-app", () => {
     document.body.append(element);
     await Promise.resolve();
 
-    expect(element.shadowRoot?.textContent).toContain("No client was configured");
+    expect(hostInfoText(element)).toContain("No client was configured");
   });
 
   test("a client assigned right after mounting is still used", async () => {
@@ -117,7 +139,7 @@ describe("anth-app", () => {
     AnthApp.client = { read: async () => SAMPLE };
 
     expect(await settled(element)).toBeUndefined();
-    expect(element.shadowRoot?.textContent).toContain("turing");
+    expect(hostInfoText(element)).toContain("turing");
   });
 });
 

@@ -7,6 +7,7 @@
  * `AnthApp.client` provides for host info.
  */
 
+import { escape } from "./html";
 import { completeLine } from "./repl-completion";
 import type { ReplBackend, ReplLine } from "./repl";
 import { helpText, runLine } from "./repl";
@@ -175,12 +176,4 @@ export class AnthRepl extends HTMLElement {
   #input(): HTMLInputElement | null {
     return this.shadowRoot?.querySelector("input") ?? null;
   }
-}
-
-/** Escapes text before it becomes markup, so a plugin cannot inject HTML. */
-function escape(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }

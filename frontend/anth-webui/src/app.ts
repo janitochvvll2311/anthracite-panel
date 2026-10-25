@@ -20,14 +20,16 @@
 import type { HostInfo } from "@anth/wire";
 
 import { DESTINATIONS, hashFor, idFromHash } from "./destinations";
+import { escape } from "./html";
 // The shell renders these three, so it imports them: a test that mounts
 // `anth-app` on its own must still get working custom elements.
+import "./host-info";
 import "./fab";
 import "./nav-drawer";
 import "./tab-panel";
 import { DRAWER_CLOSE_EVENT } from "./nav-drawer";
+import type { AnthHostInfo } from "./host-info";
 import { TAB_CHANGE_EVENT, type TabChangeDetail } from "./tab-panel";
-import { formatKib, formatUptime } from "./wire";
 
 import type { HostInfoClient } from "./host-info-client";
 import { DASHBOARD_SLOT, type WidgetHost, slotsFor } from "./widget-slots";
@@ -118,7 +120,13 @@ export class AnthApp extends HTMLElement {
           <main id="main" tabindex="-1">
             <anth-tab-panel active="${this.#active}">
               <section data-tab="host" label="Host">
-                <section class="card" data-host></section>
+                <section class="card" data-host>
+                  <div class="card-head">
+                    <span class="label">Host</span>
+                    <button type="button" data-refresh>Refresh</button>
+                  </div>
+                  <anth-host-info></anth-host-info>
+                </section>
                 <div data-slots></div>
                 <anth-fab icon="↻" label="Refresh host information"></anth-fab>
               </section>
@@ -133,21 +141,20 @@ export class AnthApp extends HTMLElement {
       this.#wireFrame();
     }
 
-    const host = root.querySelector<HTMLElement>("[data-host]");
-    if (!host) {
+    // The card is built once with the frame. Only the element's properties are
+    // reassigned, so a refresh repaints the snapshot without touching the
+    // widget slots or the FAB beside it.
+    const panel = root.querySelector<AnthHostInfo>("anth-host-info");
+    if (!panel) {
       return;
     }
-    host.innerHTML = `
-      <div class="card-head">
-        <span class="label">Host</span>
-        <button type="button" data-refresh ${this.#loading ? "disabled" : ""}>Refresh</button>
-      </div>
-      ${this.body()}
-    `;
-    host.querySelector("[data-refresh]")?.addEventListener("click", () => {
-      void this.refresh();
-    });
-
+    panel.info = this.#info;
+    panel.error = this.#error;
+    panel.loading = this.#loading;
+    root.querySelector<HTMLButtonElement>("[data-refresh]")?.toggleAttribute(
+      "disabled",
+      this.#loading,
+    );
     root.querySelector("anth-fab")?.toggleAttribute("disabled", this.#loading);
   }
 
@@ -207,6 +214,11 @@ export class AnthApp extends HTMLElement {
     root.querySelector("[data-skip]")?.addEventListener("click", (event) => {
       event.preventDefault();
       root.querySelector<HTMLElement>("main")?.focus();
+    });
+    // Attached once with the frame: the button used to be rebuilt on every
+    // refresh, which meant re-registering this listener every time.
+    root.querySelector("[data-refresh]")?.addEventListener("click", () => {
+      void this.refresh();
     });
     const menu = root.querySelector<HTMLElement>(".menu");
     menu?.addEventListener("click", () => {
@@ -286,32 +298,6 @@ export class AnthApp extends HTMLElement {
         }
       }
     }
-  }
-
-  private body(): string {
-    if (this.#error) {
-      return `<p class="error" role="alert">${escape(this.#error)}</p>`;
-    }
-    const info = this.#info;
-    if (!info) {
-      return `<p class="label">Reading the host…</p>`;
-    }
-
-    const used = info.memory.total_kib - info.memory.available_kib;
-    return `
-      <dl>
-        ${row("Hostname", info.hostname)}
-        ${row("Operating system", `${info.os.name} ${info.os.version}`.trim())}
-        ${row("Kernel", info.os.kernel)}
-        ${row("Architecture", info.os.arch)}
-        ${row("CPU", info.cpu_model)}
-        ${row("Logical cores", String(info.logical_cores))}
-        ${row("Uptime", formatUptime(info.uptime_seconds))}
-        ${row("Load", `${info.load.one.toFixed(2)} · ${info.load.five.toFixed(2)} · ${info.load.fifteen.toFixed(2)}`)}
-        ${row("Memory", `${formatKib(used)} of ${formatKib(info.memory.total_kib)} used`)}
-        ${row("Swap", info.memory.swap_total_kib === 0 ? "none" : `${formatKib(info.memory.swap_total_kib - info.memory.swap_free_kib)} of ${formatKib(info.memory.swap_total_kib)} used`)}
-      </dl>
-    `;
   }
 }
 
@@ -424,27 +410,6 @@ const STYLE = `
     dt { margin-top: 0.5rem; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; }
   }
 `;
-
-function row(label: string, value: string): string {
-  return `<dt>${escape(label)}</dt><dd>${escape(value)}</dd>`;
-}
-
-function escape(text: string): string {
-  return text.replace(/[&<>"']/g, (character) => {
-    switch (character) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
-}
 
 if (!customElements.get("anth-app")) {
   customElements.define("anth-app", AnthApp);

@@ -10,6 +10,8 @@
  * only cover content.
  */
 
+import { escape } from "./html";
+
 export class AnthFab extends HTMLElement {
   static get observedAttributes(): string[] {
     return ["icon", "label", "disabled"];
@@ -60,8 +62,8 @@ export class AnthFab extends HTMLElement {
     const label = this.label;
     root.innerHTML = `
       <style>${STYLE}</style>
-      <button type="button" aria-label="${escapeAttribute(label)}" title="${escapeAttribute(label)}"${this.disabled ? " disabled" : ""}>
-        <span aria-hidden="true">${escapeText(this.icon)}</span>
+      <button type="button" aria-label="${escape(label)}" title="${escape(label)}"${this.disabled ? " disabled" : ""}>
+        <span aria-hidden="true">${escape(this.icon)}</span>
       </button>
     `;
   }
@@ -83,16 +85,6 @@ const STYLE = `
   button:disabled { opacity: 0.5; cursor: progress; }
   @media (prefers-reduced-motion: reduce) { button { transition: none; } }
 `;
-
-function escapeText(text: string): string {
-  return text.replace(/[&<>]/g, (character) =>
-    character === "&" ? "&amp;" : character === "<" ? "&lt;" : "&gt;",
-  );
-}
-
-function escapeAttribute(text: string): string {
-  return escapeText(text).replace(/"/g, "&quot;");
-}
 
 if (!customElements.get("anth-fab")) {
   customElements.define("anth-fab", AnthFab);

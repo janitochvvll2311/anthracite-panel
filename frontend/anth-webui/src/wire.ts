@@ -42,3 +42,44 @@ export function formatUptime(seconds: number): string {
   }
   return `${rest}s`;
 }
+
+/** Kibibytes of memory in use: total minus what the kernel counts as available. */
+export function memoryUsedKib(memory: { total_kib: number; available_kib: number }): number {
+  return Math.max(0, memory.total_kib - memory.available_kib);
+}
+
+/** Kibibytes of swap in use: total minus free. */
+export function swapUsedKib(memory: { swap_total_kib: number; swap_free_kib: number }): number {
+  return Math.max(0, memory.swap_total_kib - memory.swap_free_kib);
+}
+
+/**
+ * `used` as a percentage of `total`, clamped to 0..100.
+ *
+ * A bar is painted from this, so a total of zero answers 0 rather than `NaN`:
+ * `NaN%` is an invalid width and the bar would vanish instead of showing empty.
+ */
+export function usagePercent(used: number, total: number): number {
+  if (total <= 0) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, (used / total) * 100));
+}
+
+/** Load relative to the cores available, clamped for a bar width. */
+export function loadPercent(load: number, cores: number): number {
+  if (cores <= 0) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, (load / cores) * 100));
+}
+
+/** A percentage as the panel prints it: one decimal, always `%`. */
+export function formatPercent(value: number): string {
+  return `${value.toFixed(1)}%`;
+}
+
+/** A load average as the panel prints it: two decimals, matching the CLI. */
+export function formatLoad(value: number): string {
+  return value.toFixed(2);
+}
