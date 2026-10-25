@@ -253,3 +253,35 @@ async fn resuming_from_an_offset_returns_only_the_rest() {
     assert!(eof);
     std::fs::remove_dir_all(&root).expect("the fixture must be removable");
 }
+
+/// A path that reports size zero and still has content must be read, not
+/// answered with an empty `eof`. `/proc/loadavg` is the everyday case, and the
+/// bug this pins is a read that returns nothing while answering "end of file".
+#[tokio::test]
+async fn a_path_that_reports_size_zero_is_still_read() {
+    let root = std::path::Path::new("/proc");
+    if !root.join("loadavg").exists() {
+        // No `/proc` means no such pseudo-file; the property is about procfs.
+        return;
+    }
+
+    let (bytes, next, eof) = slice(root, "loadavg", 0, 4096).await;
+
+    assert!(!bytes.is_empty(), "a size of zero is not an empty file");
+    assert_eq!(next, bytes.len() as u64);
+    assert!(eof, "a short read is the only trustworthy end");
+}
+
+/// The other half: a file that really is empty answers `eof` with nothing in it.
+#[tokio::test]
+async fn a_really_empty_file_is_an_empty_slice_at_the_end() {
+    let root = scratch("empty");
+    write(&root, "nothing.txt", b"");
+
+    let (bytes, next, eof) = slice(&root, "nothing.txt", 0, 16).await;
+
+    assert!(bytes.is_empty());
+    assert_eq!(next, 0);
+    assert!(eof);
+    std::fs::remove_dir_all(&root).expect("the fixture must be removable");
+}

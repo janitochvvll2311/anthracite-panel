@@ -46,10 +46,27 @@ pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, Wir
     let mut file = std::fs::File::open(&resolved)
         .map_err(|e| WireError::new(ErrorKind::NotFound, format!("cannot open `{path}`: {e}")))?;
 
-    let total = file
+    let meta = file
         .metadata()
-        .map_err(|e| WireError::internal(format!("cannot stat `{path}`: {e}")))?
-        .len();
+        .map_err(|e| WireError::internal(format!("cannot stat `{path}`: {e}")))?;
+    let total = meta.len();
+
+    // A size of zero is not evidence of an empty file. A pseudo-file reports one
+    // and still has content — `/proc/loadavg` is a regular file of size 0 — so
+    // trusting it would answer an empty slice marked `eof`, which is
+    // indistinguishable from a file that really is empty. The only trustworthy
+    // end is a read that returns nothing, so these are read past the offset and
+    // ended by the read itself.
+    if total == 0 {
+        let mut buffer = vec![0u8; len as usize];
+        let filled = fill(&mut file, &mut buffer, path)?;
+        buffer.truncate(filled);
+        return Ok(Slice {
+            bytes: buffer,
+            next: offset + filled as u64,
+            eof: filled < len as usize,
+        });
+    }
 
     // Past the end is not an error: it is how a client discovers it has finished.
     if offset >= total {
@@ -60,24 +77,12 @@ pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, Wir
         });
     }
 
-    use std::io::{Read, Seek, SeekFrom};
+    use std::io::{Seek, SeekFrom};
     file.seek(SeekFrom::Start(offset))
         .map_err(|e| WireError::internal(format!("cannot seek in `{path}`: {e}")))?;
 
     let mut buffer = vec![0u8; len as usize];
-    let mut filled = 0;
-    // `read` may return less than asked for without being at the end, so the
-    // loop keeps going until the buffer is full or the file really ends.
-    while filled < buffer.len() {
-        match file.read(&mut buffer[filled..]) {
-            Ok(0) => break,
-            Ok(n) => filled += n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => {
-                return Err(WireError::internal(format!("cannot read `{path}`: {e}")));
-            }
-        }
-    }
+    let filled = fill(&mut file, &mut buffer, path)?;
     buffer.truncate(filled);
 
     let next = offset + filled as u64;
@@ -86,6 +91,26 @@ pub fn read(root: &Path, path: &str, offset: u64, len: u32) -> Result<Slice, Wir
         next,
         eof: next >= total,
     })
+}
+
+/// Fills `buffer` from `file`, returning how much was written.
+///
+/// `read` may return less than asked for without being at the end, so this
+/// loops until the buffer is full or the file really ends. A short read is the
+/// only evidence of the end: a size from `stat` is not, for a `/proc` entry.
+fn fill(file: &mut std::fs::File, buffer: &mut [u8], path: &str) -> Result<usize, WireError> {
+    use std::io::Read;
+
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match file.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(WireError::internal(format!("cannot read `{path}`: {e}"))),
+        }
+    }
+    Ok(filled)
 }
 
 /// Resolves `path` under `root`, refusing anything that escapes.
