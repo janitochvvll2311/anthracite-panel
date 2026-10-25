@@ -91,7 +91,7 @@ describe("anth-app", () => {
     expect(text()).toContain("daemon is down");
 
     fail = false;
-    element.shadowRoot?.querySelector("button")?.click();
+    element.shadowRoot?.querySelector<HTMLButtonElement>("[data-refresh]")?.click();
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -263,7 +263,7 @@ describe("anth-app slots", () => {
     const before = element.shadowRoot?.querySelector("[data-plugin='org.anth.hello']");
     expect(before).not.toBeNull();
 
-    element.shadowRoot?.querySelector("button")?.click();
+    element.shadowRoot?.querySelector<HTMLButtonElement>("[data-refresh]")?.click();
     await flush();
 
     expect(host.mounted).toHaveLength(1);

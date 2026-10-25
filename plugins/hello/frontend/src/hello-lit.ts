@@ -74,18 +74,24 @@ export class AnthHelloLit extends LitElement implements PluginWidget<Greeting> {
   }
 
   static override styles = css`
+    /* Every colour is a token with a fallback. The shell declares them on the
+       document root, and a custom property crosses the shadow boundary, so this
+       widget follows the panel's theme instead of painting a light card on a
+       dark page. Outside the shell the fallback keeps it readable. */
     :host {
       display: block;
-      border: 1px solid #d6d6db;
+      color: var(--text, inherit);
+      border: 1px solid var(--panel-border, #d6d6db);
       border-radius: 8px;
       padding: 12px 14px;
-      font: 13px/1.5 system-ui, sans-serif;
+      font: 13px/1.5 var(--sans, system-ui, sans-serif);
+      background: var(--widget-bg, transparent);
     }
     .label {
       font-size: 11px;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      color: #6b6b70;
+      color: var(--muted, #6b6b70);
     }
     .message {
       margin-top: 6px;
@@ -93,15 +99,16 @@ export class AnthHelloLit extends LitElement implements PluginWidget<Greeting> {
     }
     .error {
       margin-top: 6px;
-      color: #b3261e;
+      color: var(--err, #b3261e);
     }
     button {
       margin-top: 10px;
       font: inherit;
       padding: 3px 10px;
       border-radius: 6px;
-      border: 1px solid #c4c4c9;
-      background: #f6f6f8;
+      color: var(--text, inherit);
+      border: 1px solid var(--panel-border, #c4c4c9);
+      background: var(--widget-bg, #f6f6f8);
       cursor: pointer;
     }
   `;

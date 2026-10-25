@@ -1,0 +1,71 @@
+/*
+ * The panel's design tokens, shared by the shell and by any element that
+ * mounts inside it.
+ *
+ * Custom properties cross the shadow boundary, so a plugin widget that writes
+ * `var(--panel, #101721)` instead of a literal colour inherits whatever theme
+ * the shell is running. That is the whole point of keeping them on `:root`
+ * rather than inside the shell's own shadow root: a token defined there would
+ * not reach a widget mounted in a slot.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --page-bg: #070a0f;
+  --panel: #101721;
+  --panel-border: #223041;
+  --text: #dbe6f2;
+  --muted: #8b9bad;
+  --accent: #7dd3fc;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --err: #f87171;
+
+  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* The surface a plugin widget should paint behind its own content. A widget
+     that reads it inherits the panel's theme; one that does not still gets its
+     own fallback. */
+  --widget-bg: rgba(16, 23, 33, 0.5);
+
+  --radius: 10px;
+  --gap: 1rem;
+  --header-height: 3.6rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100svh;
+  margin: 0;
+  background: var(--page-bg);
+}
+
+body {
+  color: var(--text);
+  font: 15px/1.6 var(--sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background:
+    radial-gradient(70% 45% at 50% -10%, rgba(125, 211, 252, 0.12), transparent 70%),
+    radial-gradient(50% 35% at 100% 100%, rgba(110, 231, 183, 0.07), transparent 70%),
+    var(--page-bg);
+}
+
+/* The shell owns the viewport. Nothing outside it may scroll, or the pinned
+   header would leave with the document. */
+body {
+  overflow: hidden;
+}
+
+a {
+  color: var(--accent);
+}

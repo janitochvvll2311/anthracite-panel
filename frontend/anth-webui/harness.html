@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Plugin widget harness</title>
     <style>
       body { font: 13px/1.5 system-ui, sans-serif; margin: 0; padding: 20px;
@@ -35,6 +35,15 @@
       <anth-hello id="markup-widget"></anth-hello>
     </section>
 
+    <!-- The prompt is a development tool, not part of the shipped shell: the
+         panel has its own pages and a console beside them would be a second way
+         to say the same things. It lives here so the commands stay runnable
+         against a live daemon, through the same Vite proxy the widgets use. -->
+    <section>
+      <h2>anth-repl · the browser prompt</h2>
+      <anth-repl id="prompt"></anth-repl>
+    </section>
+
     <section>
       <h2>PluginWidget → LitElement · the element renders itself</h2>
       <anth-hello-lit id="kept-widget"></anth-hello-lit>
@@ -47,6 +56,20 @@
          so the inline one below sees both registrations. -->
     <script type="module" src="/hello.js"></script>
     <script type="module" src="/hello-lit.js"></script>
+
+    <script type="module">
+      // The prompt is registered here rather than by `main.ts`, because the
+      // shell no longer contains it. Importing it from a module script also
+      // means a harness with no daemon still defines the element and shows its
+      // own error instead of leaving an unknown tag on the page.
+      import { AnthRepl } from "/src/repl-element";
+      import { HttpReplBackend } from "/src/repl";
+
+      if (!customElements.get("anth-repl")) {
+        customElements.define("anth-repl", AnthRepl);
+      }
+      AnthRepl.backend = new HttpReplBackend();
+    </script>
 
     <script type="module">
       const box = document.getElementById("report");

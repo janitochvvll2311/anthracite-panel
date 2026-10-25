@@ -52,8 +52,14 @@ export class AnthHello extends HTMLElement implements MarkupWidget<Greeting> {
   /** The widget's own chrome; the states and the retry are `mountWidget`'s. */
   body(markup: string): string {
     return `<style>
-      .card { border: 1px solid #d6d6db; border-radius: 8px; padding: 12px 14px; }
-      .label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #6b6b70; }
+      /* Tokens with a fallback: the shell defines them on :root, so a widget
+         mounted in the panel inherits its theme, and one opened outside the
+         shell still renders in the light palette. */
+      .card { border: 1px solid var(--panel-border, #d6d6db); border-radius: 8px;
+              padding: 12px 14px; color: var(--text, inherit);
+              background: var(--widget-bg, transparent); }
+      .label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+               color: var(--muted, #6b6b70); }
       .message { margin-top: 6px; font-size: 15px; }
     </style>
     ${markup}`;

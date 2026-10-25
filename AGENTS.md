@@ -58,7 +58,7 @@ frontend/                   # Bun workspace, bun.lock committed
     src/exchange.ts         #   one JSON exchange over fetch; WireError
   anth-webui/               # @anth/webui: the shell, Vite build, dist/ gitignored
     src/wire.ts             #   presentation only: formatKib, formatUptime
-    harness.html            #   dev-only page that mounts one widget; never built
+    harness.html            #   dev-only page: one widget, and the browser prompt
   build-shell.sh            # fills backend/anth-panel/www from the Vite build
   anth-plugin/              # @anth/plugin: anchors, widget base, registration
   bunfig.toml               # test preload: happy-dom for component tests
@@ -78,6 +78,25 @@ internals, and `anth-host` is pure parsing so it can be tested without a daemon.
 build. `backend/Cargo.toml` does not list the plugin crates, and `frontend/`
 does not install plugin dependencies. That is deliberate: a plugin ships to a
 third party, so it must build with nothing but its own directory.
+
+## Toolchain location
+
+`cargo`, `rustc` and `bun` are installed under `/tools` rather than `~`, so they
+survive a sandbox rebuild. `/tools/env.sh` exports `CARGO_HOME`, `RUSTUP_HOME`,
+`BUN_INSTALL` and the `PATH` entries, and both `~/.bashrc` and `~/.profile`
+source it, so a login shell already has them. A non-login shell (for example a
+command run through a bare `sh -c`) does not, and needs
+`source /tools/env.sh` first.
+
+Three targets are installed: `x86_64-unknown-linux-gnu` (host),
+`x86_64-unknown-linux-musl` (what `backend/.cargo/config.toml` pins) and
+`wasm32-unknown-unknown` (what a plugin guest is compiled to). `rustfmt` and
+`clippy` are present too; the minimal rustup profile omits them, so a rebuilt
+toolchain needs `rustup component add rustfmt clippy`.
+
+`gh` lives at `/usr/bin/gh` (system package, not `/tools`) and keeps its
+credential in `~/.config/gh/hosts.yml`, which does not survive a sandbox
+rebuild. Re-authenticate with `gh auth login --with-token` after one.
 
 ## Build and test
 
@@ -183,6 +202,83 @@ interactive prompt that nobody could see and hung until it timed out. A helper
 that is not there fails worse than no helper at all: the failure looks like a
 network problem.
 
+## Manual testing
+
+When asked to "run it so I can try it", start both halves in the background and
+leave them up until asked to stop. Do not stop them on your own, and do not
+stop them to "clean up" at the end of a turn: the point is that they outlive
+the turn.
+
+Everything lives under `.tmp/run/`, never in the system temp directory:
+
+```
+.tmp/run/daemon.pid  daemon.log
+.tmp/run/vite.pid    vite.log
+.tmp/run/anth.sock
+```
+
+**Backend.** Use the musl binary, not the gnu one. `backend/.cargo/config.toml`
+pins `x86_64-unknown-linux-musl`, so that is what a plain `cargo build`
+produces. `backend/target/debug/anth-panel` can be a stale artifact from an
+older ABI and will answer with an ABI mismatch that looks like a plugin bug:
+
+```bash
+mkdir -p .tmp/run && rm -f .tmp/run/anth.sock
+nohup ./backend/target/x86_64-unknown-linux-musl/debug/anth-panel run \
+  --addr 127.0.0.1:8080 --socket .tmp/run/anth.sock --plugins plugins/bundles \
+  > .tmp/run/daemon.log 2>&1 &
+echo $! > .tmp/run/daemon.pid
+```
+
+**Frontend.** Bind to `0.0.0.0`, not the default. Vite's default binds
+loopback only and on a machine whose `localhost` resolves to `::1` that leaves
+`http://127.0.0.1:5173` refusing connections, which reads as the server being
+down. `--strictPort` so a second copy cannot silently take 5174 and leave the
+browser pointing at the old one.
+
+Run it from the repo root with `bun run --cwd`, not with `(cd dir && ... &)`. A
+subshell `cd` runs in the background process only, so a following `echo $! >
+../../.tmp/run/vite.pid` resolves the relative path against the original
+directory and fails, leaving the previous PID in the file:
+
+```bash
+nohup bun run --cwd frontend/anth-webui dev \
+  --host 0.0.0.0 --port 5173 --strictPort \
+  > .tmp/run/vite.log 2>&1 &
+echo $! > .tmp/run/vite.pid
+```
+
+`--cwd` is a flag of `bun run`, so it goes before the script name:
+`bun --cwd dir run dev` is parsed as `bun run` with no script and prints the
+usage text instead of starting anything. Relative paths inside the script
+resolve against the target directory, which is what makes this work from the
+repo root. `bun run --cwd "$PWD/frontend/anth-webui" dev` if the shell's
+relative prefix ever gets in the way.
+
+**Check before reporting it up.** A launched process is not a working one:
+
+```bash
+curl -s http://127.0.0.1:8080/healthz          # {"status":"ok"}
+curl -s http://127.0.0.1:5173/api/plugins      # through the Vite proxy
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5173/
+curl -s http://127.0.0.1:5173/ | grep -c anth-repl          # 0
+curl -s http://127.0.0.1:5173/harness.html | grep -c anth-repl   # 2
+```
+
+Then load `/` in a browser: the header, the Host panel and the `Hello` widget.
+The harness, where the prompt lives, is at `/harness.html`.
+
+Two traps worth knowing. A stale daemon can leave `.tmp/live/anth.sock` and a
+`pid` file pointing at a dead process; start a fresh instance in `.tmp/run/`
+rather than reusing them. And confirm the bind actually took effect with
+`ss -ltnp | grep 5173` or `/proc/net/tcp` (`00000000:1435` in state `0A`),
+because Vite printing `Network:` proves nothing about which addresses answer.
+
+Stop with the PIDs in `.tmp/run/*.pid`. `kill $(cat .tmp/run/vite.pid)` is
+enough: bun forwards the signal to the `vite` child, both exit, and port 5173 is
+released. Verify with `ss -ltn | grep 5173` rather than assuming, because a
+surviving orphan holds the port and the next start fails on `--strictPort`.
+
 ## The shell
 
 `anth-panel` serves the built frontend at `/`. The bytes come from `www/`, which
@@ -229,8 +325,10 @@ Two routing facts, both learned by testing rather than reading:
 `harness.html` is a development page and is excluded three times over: Vite
 leaves it out of a production build (`ANTH_HARNESS=1` puts it back, with
 `public/`), `build-shell.sh` does not copy it, and `www::EXCLUDED` refuses to
-serve it. `www::normalise` also refuses any dotfile, because `www/` is tracked in
-git and so holds `.gitkeep`.
+serve it. It is also what mounts `anth-repl`, so the browser prompt is reachable
+in development and absent from a release for the same reason. `www::normalise`
+also refuses any dotfile, because `www/` is tracked in git and so holds
+`.gitkeep`.
 
 ## Design rules
 
