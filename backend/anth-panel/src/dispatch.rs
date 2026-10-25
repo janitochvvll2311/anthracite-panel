@@ -45,7 +45,7 @@ impl Daemon {
     ) -> Result<
         Option<(
             &crate::plugins::registry::Entry,
-            &crate::plugins::runtime::Loaded,
+            std::sync::Arc<crate::plugins::runtime::Loaded>,
         )>,
         WireError,
     > {
@@ -85,7 +85,7 @@ impl Daemon {
         // operator asked for `--log-level warn`, which is exactly when a refusal
         // is worth reading.
         if !self.log.enabled(Level::Warn) {
-            return match dispatch(self, request) {
+            return match dispatch(self, request).await {
                 Ok(response) => response,
                 Err(error) => Response::Error(error),
             };
@@ -100,7 +100,7 @@ impl Daemon {
                 .emit();
         }
 
-        let response = match dispatch(self, request) {
+        let response = match dispatch(self, request).await {
             Ok(response) => response,
             Err(error) => Response::Error(error),
         };
@@ -122,7 +122,7 @@ impl Daemon {
     }
 }
 
-fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
+async fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
     match request {
         Request::Hello { protocol_version } => hello(protocol_version),
         Request::HostInfo => Ok(Response::HostInfo(anth_host::collect())),
@@ -155,11 +155,18 @@ fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireError> {
                 .ok_or_else(|| WireError::new(ErrorKind::NotFound, format!("no plugin `{id}`")))?;
             let canonical = entry.id.clone();
             let loaded = entry.usable()?;
-            let reply = loaded.call(
-                pipe.entry(),
-                &encode_payload(pipe, &payload),
-                daemon.log.clone(),
-            )?;
+            let entry_name = pipe.entry().to_string();
+            let encoded = encode_payload(pipe, &payload);
+            let log = Arc::clone(&daemon.log);
+
+            // A plugin call is CPU-bound wasm behind a wall-clock deadline, so it
+            // must not run on a tokio worker: an invocation that sits at the
+            // 30-second limit would hold the thread that could be answering
+            // `/healthz`. Blocking here is what keeps the pool free.
+            let reply =
+                tokio::task::spawn_blocking(move || loaded.call(&entry_name, &encoded, log))
+                    .await
+                    .map_err(|e| WireError::internal(format!("the plugin task failed: {e}")))??;
 
             // A plugin's own failure is a *successful* call whose status says
             // what happened, so the caller can show the plugin's message. Only a

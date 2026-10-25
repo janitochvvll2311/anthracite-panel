@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anth_wire::{ErrorKind, UiSlotSummary, WireError};
 use sha2::{Digest, Sha256};
@@ -47,14 +48,14 @@ pub struct Entry {
     /// undo with `plugin enable`. Only this flag tells them apart once both have
     /// become an `Err` in `enabled`.
     pub switched_off: bool,
-    loaded: Option<Loaded>,
+    loaded: Option<Arc<Loaded>>,
 }
 
 impl Entry {
     /// Whether the bundle's module loaded, for tests that assert the digest gate.
     #[cfg(test)]
     pub fn loaded(&self) -> Option<&Loaded> {
-        self.loaded.as_ref()
+        self.loaded.as_deref()
     }
 
     /// Marks the entry off at the operator's request, keeping what still holds.
@@ -74,9 +75,14 @@ impl Entry {
         }
     }
 
-    pub fn usable(&self) -> Result<&Loaded, WireError> {
+    /// The loaded module, as a handle the caller can move into blocking work.
+    ///
+    /// Returns an `Arc` rather than a borrow so a caller can hand it to
+    /// `spawn_blocking`: a plugin call is CPU-bound wasm, and running it inline
+    /// inside an `async fn` parks a tokio worker for its whole duration.
+    pub fn usable(&self) -> Result<Arc<Loaded>, WireError> {
         match &self.loaded {
-            Some(loaded) => Ok(loaded),
+            Some(loaded) => Ok(Arc::clone(loaded)),
             None => Err(WireError::new(
                 ErrorKind::Forbidden,
                 format!(
@@ -188,7 +194,7 @@ impl Registry {
         id: &str,
         method: &str,
         path: &str,
-    ) -> Result<Option<(&Entry, &Loaded)>, WireError> {
+    ) -> Result<Option<(&Entry, Arc<Loaded>)>, WireError> {
         let Some(entry) = self.resolve(id)? else {
             return Ok(None);
         };
@@ -311,7 +317,7 @@ fn load_one(dir: &Path) -> Entry {
                     label: slot.label.clone(),
                 })
                 .collect();
-            entry.loaded = Some(loaded);
+            entry.loaded = Some(Arc::new(loaded));
         }
         Err(reason) => entry.enabled = Err(reason),
     }
