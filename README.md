@@ -91,6 +91,9 @@ UI is reachable from another device on the network; the Vite proxy forwards
 `/api` and `/healthz` to `127.0.0.1:8080`. `ANTH_ADDR`, `ANTH_VITE_HOST` and
 `ANTH_VITE_PORT` override the defaults.
 
+Inside an OpenCode session the same commands are available as `/dev-start`,
+`/dev-stop`, `/dev-status` and `/dev-restart` (from `.opencode/commands/`).
+
 The first debug start uses the web bootstrap by default: open the UI, or
 `POST /api/auth/register` with `{"password":"at least 12 characters"}`. A release
 build defaults to printing a generated password once on stderr.
