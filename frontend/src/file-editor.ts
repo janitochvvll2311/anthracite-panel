@@ -4,6 +4,9 @@ import { live } from 'lit/directives/live.js'
 import { repeat } from 'lit/directives/repeat.js'
 import { localized, msg } from '@lit/localize'
 
+import type { EditorState as CodeMirrorState } from '@codemirror/state'
+import type { EditorView as CodeMirrorView } from '@codemirror/view'
+
 import type { FilesClient } from './files-client'
 import { join } from './paths'
 import { WINDOW_CLOSE_EVENT } from './window'
@@ -24,6 +27,13 @@ export const FILE_TABS_EMPTY_EVENT = 'anth-file-tabs-empty'
 
 /** Editors refuse to load or save more than this many bytes. */
 const MAX_EDIT_BYTES = 4 * 1024 * 1024
+
+/**
+ * CodeMirror needs selection and shadow-DOM APIs that the test DOM does not
+ * emulate; the textarea fallback is what the unit tests exercise.
+ */
+const canUseCodeMirror =
+  (import.meta as ImportMeta & { env?: { MODE?: string } }).env?.MODE !== 'test'
 
 /**
  * `anth-file-editor`: the content of a file-editor window.
@@ -62,6 +72,16 @@ export class AnthFileEditor extends LitElement {
   @state()
   private blocked = false
 
+  /** Whether the CodeMirror surface replaced the textarea. */
+  @state()
+  private engine: 'plain' | 'codemirror' = 'plain'
+
+  private view?: CodeMirrorView
+
+  private mounting = false
+
+  private tried = false
+
   override connectedCallback(): void {
     super.connectedCallback()
     if (this.mode === 'edit') {
@@ -71,13 +91,122 @@ export class AnthFileEditor extends LitElement {
     }
   }
 
+  override disconnectedCallback(): void {
+    super.disconnectedCallback()
+    this.view?.destroy()
+    this.view = undefined
+  }
+
   override firstUpdated(): void {
+    void this.ensureCodeMirror()
     this.focusField()
   }
 
-  /** Puts the cursor in the name or content field. */
+  override updated(): void {
+    if (!this.view) {
+      return
+    }
+    const current = this.view.state.doc.toString()
+    if (current !== this.text) {
+      this.view.dispatch({ changes: { from: 0, to: current.length, insert: this.text } })
+    }
+  }
+
+  /** Puts the cursor in the name, CodeMirror or textarea field. */
   focusField(): void {
+    if (this.view) {
+      this.view.requestMeasure()
+      this.view.focus()
+      return
+    }
     this.shadowRoot?.querySelector<HTMLElement>('input, textarea')?.focus()
+  }
+
+  /**
+   * Loads CodeMirror on demand. A failed import or mount leaves the plain
+   * textarea in place, so the editor keeps working without the extra chunk.
+   */
+  private async ensureCodeMirror(): Promise<void> {
+    if (!canUseCodeMirror) {
+      this.tried = true
+      return
+    }
+    if (this.view || this.mounting || this.tried || !this.loaded || this.blocked) {
+      return
+    }
+    this.mounting = true
+    try {
+      const [{ EditorView, basicSetup }, { EditorState }] = await Promise.all([
+        import('codemirror'),
+        import('@codemirror/state'),
+      ])
+      if (!this.isConnected) {
+        return
+      }
+      this.engine = 'codemirror'
+      await this.updateComplete
+      if (!this.isConnected) {
+        this.engine = 'plain'
+        return
+      }
+      const host = this.renderRoot.querySelector<HTMLElement>('.codemirror')
+      if (!host) {
+        this.engine = 'plain'
+        return
+      }
+      const state: CodeMirrorState = EditorState.create({
+        doc: this.text,
+        extensions: [
+          basicSetup,
+          EditorView.contentAttributes.of({
+            'aria-label': msg('Content'),
+            spellcheck: 'false',
+          }),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) {
+              this.text = update.state.doc.toString()
+            }
+          }),
+          EditorView.theme(
+            {
+              '&': {
+                height: '100%',
+                color: 'var(--text, #dbe6f2)',
+                backgroundColor: 'transparent',
+                fontSize: '12px',
+              },
+              '.cm-scroller': {
+                fontFamily: 'var(--mono, monospace)',
+                lineHeight: '1.5',
+                overflow: 'auto',
+              },
+              '.cm-content': { caretColor: 'var(--accent, #7dd3fc)' },
+              '.cm-gutters': {
+                backgroundColor: 'transparent',
+                color: 'var(--muted, #8b9bad)',
+                border: 'none',
+              },
+              '.cm-activeLine': { backgroundColor: 'rgba(125, 211, 252, 0.06)' },
+              '.cm-activeLineGutter': { backgroundColor: 'transparent' },
+              '&.cm-focused': { outline: 'none' },
+              '.cm-selectionBackground': { backgroundColor: 'rgba(125, 211, 252, 0.25)' },
+              '&.cm-focused .cm-selectionBackground': {
+                backgroundColor: 'rgba(125, 211, 252, 0.3)',
+              },
+              '.cm-cursor': { borderLeftColor: 'var(--accent, #7dd3fc)' },
+            },
+            { dark: true },
+          ),
+        ],
+      })
+      this.view = new EditorView({ state, parent: host })
+      this.focusField()
+    } catch {
+      this.engine = 'plain'
+    } finally {
+      this.tried = true
+      this.mounting = false
+    }
   }
 
   /** Reads every chunk, up to the editor cap, before allowing a save. */
@@ -110,6 +239,7 @@ export class AnthFileEditor extends LitElement {
       this.busy = false
       void this.updateComplete.then(() => {
         if (!this.blocked) {
+          void this.ensureCodeMirror()
           this.focusField()
         }
       })
@@ -195,13 +325,17 @@ export class AnthFileEditor extends LitElement {
             `
           : nothing}
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-        <textarea
-          .value=${live(this.text)}
-          aria-label=${msg('Content')}
-          spellcheck="false"
-          ?disabled=${!this.loaded || this.blocked}
-          @input=${this.updateText}
-        ></textarea>
+        <div class="surface">
+          <div class="codemirror" ?hidden=${this.engine !== 'codemirror'}></div>
+          <textarea
+            .value=${live(this.text)}
+            aria-label=${msg('Content')}
+            spellcheck="false"
+            ?hidden=${this.engine === 'codemirror'}
+            ?disabled=${!this.loaded || this.blocked}
+            @input=${this.updateText}
+          ></textarea>
+        </div>
         <footer>
           <span class="target">${target}</span>
           <button
@@ -225,6 +359,7 @@ export class AnthFileEditor extends LitElement {
       display: flex;
       flex-direction: column;
       flex: 1 1 auto;
+      min-width: 0;
       min-height: 0;
       color: var(--text, #dbe6f2);
       font: 14px/1.5 var(--sans, system-ui, sans-serif);
@@ -234,8 +369,10 @@ export class AnthFileEditor extends LitElement {
       flex-direction: column;
       flex: 1 1 auto;
       gap: 8px;
+      min-width: 0;
       min-height: 0;
     }
+    [hidden] { display: none !important; }
     .name {
       display: grid;
       gap: 4px;
@@ -255,8 +392,32 @@ export class AnthFileEditor extends LitElement {
       padding: 8px 9px;
       font: 12px/1.5 var(--mono, monospace);
     }
+    .surface {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+    }
+    .codemirror {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .codemirror .cm-editor {
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
+      height: 100%;
+    }
+    .codemirror .cm-scroller {
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
     textarea {
       flex: 1 1 auto;
+      min-width: 0;
       min-height: 0;
       resize: vertical;
       overscroll-behavior: contain;
@@ -473,6 +634,7 @@ export class AnthFileTabs extends LitElement {
       display: flex;
       flex-direction: column;
       flex: 1 1 auto;
+      min-width: 0;
       min-height: 0;
     }
     .tabs {
@@ -531,10 +693,12 @@ export class AnthFileTabs extends LitElement {
       display: flex;
       flex-direction: column;
       flex: 1 1 auto;
+      min-width: 0;
       min-height: 0;
     }
     anth-file-editor {
       flex: 1 1 auto;
+      min-width: 0;
       min-height: 0;
     }
     anth-file-editor[hidden] { display: none !important; }

@@ -353,6 +353,7 @@ export class AnthWindow extends LitElement {
       display: flex;
       flex-direction: column;
       flex: 1 1 auto;
+      min-width: 0;
       min-height: 0;
     }
     .body > slot { display: contents; }
