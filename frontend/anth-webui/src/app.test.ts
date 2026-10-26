@@ -293,3 +293,68 @@ describe("anth-app slots", () => {
     expect(element.shadowRoot?.querySelector("[data-plugin='org.anth.hello']")).toBe(before);
   });
 });
+
+describe("the shell on a narrow screen", () => {
+  function styleOf(): string {
+    const element = document.createElement("anth-app");
+    document.body.append(element);
+    return element.shadowRoot?.querySelector("style")?.textContent ?? "";
+  }
+
+  function breakpointOf(style: string, kind: "max-width" | "min-width"): number | undefined {
+    const match = style.match(new RegExp(`@media \\(${kind}: ([0-9.]+)rem\\)`));
+    return match ? Number(match[1]) : undefined;
+  }
+
+  function shadowStyleOf(tag: string): string {
+    const element = document.createElement(tag);
+    document.body.append(element);
+    return element.shadowRoot?.querySelector("style")?.textContent ?? "";
+  }
+
+  test("the sidebar collapses by width, never by orientation", () => {
+    // Orientation contradicts itself: a phone in landscape is 844px wide and
+    // would get the sidebar back, while a 768px tablet upright would lose it
+    // and hide its navigation behind a tap for no reason. A width query is
+    // what decides whether two columns fit. Only the rules are inspected: the
+    // stylesheet's own comment says the word "orientation" on purpose.
+    const style = styleOf();
+
+    expect(style).not.toMatch(/@media\s*\(orientation/);
+    expect(style).toContain("@media (max-width: 48rem)");
+    expect(style).toContain(".sidebar { display: none; }");
+    expect(style).toContain(".menu { display: grid; }");
+  });
+
+  test("the drawer and the FAB stop exactly where the sidebar starts", () => {
+    // The three rules are the two halves of one decision. If they disagree, a
+    // width exists where the sidebar is hidden and the drawer refuses to open,
+    // so the navigation cannot be reached at all; or where the sidebar is
+    // visible and the FAB covers its last link.
+    const collapsedAt = breakpointOf(styleOf(), "max-width");
+    const drawerAt = breakpointOf(shadowStyleOf("anth-nav-drawer"), "min-width");
+    const fabAt = breakpointOf(shadowStyleOf("anth-fab"), "min-width");
+
+    expect(collapsedAt).toBe(48);
+    expect(drawerAt).toBeGreaterThan(collapsedAt!);
+    expect(drawerAt! - collapsedAt!).toBeLessThanOrEqual(0.125);
+    expect(fabAt).toBe(drawerAt);
+  });
+
+  test("the menu button is a 44px target", () => {
+    // The one control a phone needs to reach every page sat at 40px.
+    const style = styleOf();
+
+    expect(style).toContain("width: 44px; height: 44px");
+  });
+
+  test("a touch pointer enlarges the refresh button", () => {
+    // A tablet is wide and still touched, so the size belongs to the pointer
+    // rather than to a width query.
+    const style = styleOf();
+    const coarse = style.slice(style.indexOf("@media (pointer: coarse)"));
+
+    expect(coarse).not.toBe("");
+    expect(coarse).toContain("button[data-refresh] { min-height: 44px; }");
+  });
+});

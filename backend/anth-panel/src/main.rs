@@ -10,9 +10,11 @@
 //! prompt stays usable in front of it.
 
 mod api;
+mod auth;
 mod config;
 mod dispatch;
 mod files;
+mod lifecycle;
 mod log;
 mod plugins;
 mod render;
@@ -102,6 +104,37 @@ struct Cli {
     /// The command. Optional because `--interactive` alone is valid.
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// Let `reboot` take the host down.
+    ///
+    /// Read by `run`, `daemon` and `--interactive`, which are the only commands
+    /// that serve. A plain `reboot` on a daemon started without it is refused.
+    #[arg(long, global = true)]
+    allow_reboot: bool,
+}
+
+/// What the settings and the flags decided about how this daemon serves.
+///
+/// One value rather than two booleans threaded through every helper between
+/// `main` and `serve_with`: the two are read together, and a helper that took
+/// one without the other could start a daemon that reboots or one that opens
+/// shells by accident.
+///
+/// No `Default`: the auth switch defaults to *on*, and a derived default would
+/// be the one value in this struct whose zero is the unsafe setting. A caller
+/// that must decide all three writes them out.
+#[derive(Debug, Clone, Copy)]
+pub struct ServeOptions {
+    /// Whether a terminal may be opened, from `[terminal] enabled`.
+    pub terminal: bool,
+    /// Whether `reboot` may take the host down.
+    ///
+    /// Opt-in on the command line, and not derived from `uid == 0`: a panel that
+    /// could reboot because it happened to run as root is a panel whose blast
+    /// radius nobody declared.
+    pub allow_reboot: bool,
+    /// Whether `/api/` requires a session, from `[auth] enabled`.
+    pub auth: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -140,6 +173,78 @@ enum Command {
         #[command(subcommand)]
         action: PluginAction,
     },
+    /// Manage the operator account that guards the HTTP API.
+    ///
+    /// The first `register` opens the bootstrap; every later one is refused.
+    /// These commands are local, like `plugin install`: they write the settings
+    /// file, so they need the access that writing it by hand would need.
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+    /// Replace the daemon process, applying the settings file as it stands.
+    ///
+    /// The panel only: the host keeps running and every other process with it.
+    /// The account, the signing key and the sessions are in the file, so a live
+    /// session stays valid across it. Terminals do not survive: they are child
+    /// processes of the daemon being replaced.
+    ///
+    /// A restart is the only way an edit to `config.toml` takes effect, because
+    /// the daemon resolves its paths once at startup and holds them in memory.
+    Restart,
+    /// Reboot the host.
+    ///
+    /// Not a mode of `restart` and not a bigger version of it: this one replaces
+    /// every process on the machine and applies no settings at all. It needs
+    /// `CAP_SYS_BOOT`, and the daemon refuses it unless started with
+    /// `--allow-reboot`.
+    Reboot {
+        /// Seconds to wait before the host goes down, so this answer arrives
+        /// first. At most 300.
+        #[arg(long, value_name = "SECONDS", default_value_t = 5)]
+        delay: u32,
+        /// Do it without asking, for a script.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AuthAction {
+    /// Create the one account, if none exists.
+    Register {
+        /// The account name.
+        username: String,
+        /// The password. Read from stdin when omitted, so it stays out of the
+        /// shell history and out of `ps`.
+        #[arg(long, value_name = "PASSWORD")]
+        password: Option<String>,
+    },
+    /// Check a password, to prove the stored hash still verifies.
+    ///
+    /// Local, and it says nothing about a session: this is the operator asking
+    /// "is the credential I wrote down the one in the file", which is the
+    /// question a locked-out operator actually has.
+    Verify {
+        /// The account name.
+        username: String,
+        /// The password. Read from stdin when omitted.
+        #[arg(long, value_name = "PASSWORD")]
+        password: Option<String>,
+    },
+    /// Replace the password, ending every session.
+    Passwd {
+        /// The account name.
+        username: String,
+        /// The password in use now. Read from stdin when omitted.
+        #[arg(long, value_name = "PASSWORD")]
+        current: Option<String>,
+        /// The new password. Read from stdin when omitted.
+        #[arg(long, value_name = "PASSWORD")]
+        new: Option<String>,
+    },
+    /// Report whether an account exists, without revealing anything about it.
+    Status,
 }
 
 #[derive(Subcommand, Debug)]
@@ -329,14 +434,16 @@ async fn main() -> ExitCode {
     };
     let socket = paths.socket;
     let root = paths.plugins;
-    // Read once here, like the paths, so the daemon and every editor agree on
-    // whether terminals were granted.
-    let terminal = paths.terminal;
     // Canonicalised once, so a relative `--readable` does not depend on a later
     // working directory change. A client command does not read files, so a root
     // that does not exist is the daemon's problem and must not fail `host-info`
     // on a machine where the setting was never used.
     let readable = paths.readable.canonicalize().unwrap_or(paths.readable);
+    let options = ServeOptions {
+        terminal: paths.terminal,
+        allow_reboot: cli.allow_reboot,
+        auth: paths.auth,
+    };
 
     // Resolved before anything runs, so a mistyped flag fails the command instead
     // of producing output in the wrong shape for its whole life.
@@ -356,16 +463,26 @@ async fn main() -> ExitCode {
             &socket,
             &root,
             &readable,
+            &file,
             cli.command,
             logger,
-            paths.terminal,
+            options,
         )
         .await;
     }
 
     match cli.command {
         Some(command) => {
-            dispatch_command(&socket, &root, &readable, Some(command), logger, terminal).await
+            dispatch_command(
+                &socket,
+                &root,
+                &readable,
+                &file,
+                Some(command),
+                logger,
+                options,
+            )
+            .await
         }
         None => {
             eprintln!("anth-panel: a command is required unless --interactive is given");
@@ -379,18 +496,19 @@ async fn dispatch_command(
     socket: &std::path::Path,
     root: &std::path::Path,
     readable: &std::path::Path,
+    config: &std::path::Path,
     command: Option<Command>,
     logger: Arc<log::Logger>,
-    terminal: bool,
+    options: ServeOptions,
 ) -> ExitCode {
     let Some(command) = command else {
         return ExitCode::from(2);
     };
 
     match command {
-        Command::Daemon => serve_with(socket, root, readable, None, logger, terminal).await,
+        Command::Daemon => serve_with(socket, root, readable, config, None, logger, options).await,
         Command::Run { addr } => {
-            serve_with(socket, root, readable, Some(addr), logger, terminal).await
+            serve_with(socket, root, readable, config, Some(addr), logger, options).await
         }
         Command::HostInfo { watch } => host_info(socket, watch).await,
         Command::File {
@@ -429,6 +547,206 @@ async fn dispatch_command(
                 .await
             }
         },
+        Command::Auth { action } => auth_command(config, &action),
+        Command::Restart => client(socket, Request::Restart).await,
+        Command::Reboot { delay, yes } => {
+            // Asked before the request, never after: a confirmation that arrives
+            // once the machine is going down is not a confirmation. `-y` exists
+            // for the script that has already made the decision.
+            if !yes && !confirm("Reboot the host? Every process on it stops.") {
+                eprintln!("anth-panel: reboot cancelled");
+                return ExitCode::from(2);
+            }
+            client(socket, Request::SystemReboot { delay_s: delay }).await
+        }
+    }
+}
+
+/// Asks a yes/no question on the terminal, defaulting to no.
+///
+/// No terminal means no: a script that did not pass `-y` has not consented, and
+/// treating a closed stdin as agreement is how an unattended pipeline reboots a
+/// machine.
+fn confirm(question: &str) -> bool {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        eprintln!("anth-panel: {question}\npass -y to confirm without a terminal");
+        return false;
+    }
+    print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    if std::io::stdin().lock().read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// Runs one `auth` subcommand, locally.
+///
+/// Local rather than over the socket for the same reason `plugin install` is:
+/// the socket is served by a process that already has an account loaded, and an
+/// operation that *creates* one must not be reachable by anything that can only
+/// talk to the daemon.
+fn auth_command(config: &std::path::Path, action: &AuthAction) -> ExitCode {
+    match action {
+        AuthAction::Status => match crate::auth::store::read(config) {
+            Ok(Some(account)) => {
+                println!("registered: {}", account.username());
+                ExitCode::SUCCESS
+            }
+            Ok(None) => {
+                println!("no account registered");
+                ExitCode::SUCCESS
+            }
+            Err(error) => auth_error(error),
+        },
+        AuthAction::Register { username, password } => {
+            let Some(password) = password_or_ask(password, "Password: ") else {
+                return ExitCode::from(2);
+            };
+            match crate::auth::register(config, username, &password) {
+                Ok(account) => {
+                    println!("registered {}", account.username());
+                    println!("restart the daemon to guard its API with this account");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => auth_error(error),
+            }
+        }
+        AuthAction::Verify { username, password } => {
+            let Some(password) = password_or_ask(password, "Password: ") else {
+                return ExitCode::from(2);
+            };
+            match crate::auth::login(config, username, &password) {
+                Ok(_) => {
+                    println!("the password matches");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => auth_error(error),
+            }
+        }
+        AuthAction::Passwd {
+            username,
+            current,
+            new,
+        } => {
+            let Some(current) = password_or_ask(current, "Current password: ") else {
+                return ExitCode::from(2);
+            };
+            let Some(new) = password_or_ask(new, "New password: ") else {
+                return ExitCode::from(2);
+            };
+            match crate::auth::change_password(config, username, &current, &new) {
+                Ok(_) => {
+                    println!("password changed; every session ended");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => auth_error(error),
+            }
+        }
+    }
+}
+
+/// The password from the flag, or asked for on the terminal.
+///
+/// Asking rather than taking it from `argv` only: an argument is visible in
+/// `ps` and lands in shell history. Reading it needs a terminal — the echo is
+/// turned off in the REPL's own module — so a pipe answers `None` and the caller
+/// exits `2` rather than reading a password from a script's stdin by accident.
+fn password_or_ask(flag: &Option<String>, prompt: &str) -> Option<String> {
+    if let Some(password) = flag {
+        return Some(password.clone());
+    }
+    match crate::repl::term::read_secret(prompt) {
+        Ok(Some(password)) => Some(password),
+        Ok(None) => {
+            eprintln!("anth-panel: no password given, and stdin is not a terminal");
+            None
+        }
+        Err(error) => {
+            eprintln!("anth-panel: cannot read the password: {error}");
+            None
+        }
+    }
+}
+
+/// Reports an authentication failure with the exit code its kind derives.
+fn auth_error(error: crate::auth::AuthError) -> ExitCode {
+    eprintln!("anth-panel: {}", error.message());
+    ExitCode::from(error.exit_code())
+}
+
+/// Loads the account, and tightens a settings file that holds one.
+///
+/// The `chmod` is here rather than in `auth::register` because the file may
+/// predate this feature or have been written by hand: the daemon is the one
+/// place that always runs, and a signing key in a world-readable file is a
+/// compromised panel whether or not this process created the file.
+fn auth_state(
+    config: &Path,
+    options: crate::ServeOptions,
+    logger: &log::Logger,
+) -> crate::auth::guard::Auth {
+    match crate::auth::store::tighten(config) {
+        Ok(true) => logger
+            .warn("auth", "settings file was readable by others")
+            .field("path", &config.display().to_string())
+            .field("now", "0600")
+            .emit(),
+        Ok(false) => {}
+        Err(error) => logger
+            .error("auth", "settings file is too readable")
+            .field("path", &config.display().to_string())
+            .field("problem", error.message())
+            .emit(),
+    }
+
+    match crate::auth::store::read(config) {
+        Ok(Some(_)) => {}
+        Ok(None) => {}
+        Err(error) => logger
+            .error("auth", "the stored account could not be read")
+            .field("path", &config.display().to_string())
+            .field("problem", error.message())
+            .emit(),
+    }
+
+    // With auth off, a missing account is the expected state rather than a
+    // problem to report: nothing will ask for a session.
+    if options.auth {
+        crate::auth::guard::Auth::load(config, true)
+    } else {
+        logger
+            .warn(
+                "auth",
+                "authentication is disabled: every /api/ route is open",
+            )
+            .field("setting", "[auth] enabled = false")
+            .emit();
+        crate::auth::guard::Auth::load(config, false)
+    }
+}
+
+/// Says, once at startup, whether the panel is open for registration.
+///
+/// The operator needs this line: a panel with no account answers every `/api/`
+/// route with `409` until someone registers through the browser, and without a
+/// log line the only symptom is a frontend that shows a form.
+///
+/// Silent when auth is off: there is nothing to register for, and a warning
+/// about a missing account would suggest a problem the operator just chose.
+fn report_registration(auth: &crate::auth::guard::Auth, logger: &log::Logger) {
+    if !auth.required() {
+        return;
+    }
+    if auth.registered() {
+        logger.info("auth", "account registered").emit();
+    } else {
+        logger
+            .warn("auth", "no account yet: open the panel to register one")
+            .field("path", &auth.path().display().to_string())
+            .emit();
     }
 }
 
@@ -508,13 +826,22 @@ fn switch(root: &std::path::Path, id: &str, enabled: bool) -> ExitCode {
 }
 
 /// Serves the socket, and the HTTP API too when an address is given.
+/// The real actions, with the reboot switch the operator asked for.
+fn lifecycle(options: ServeOptions) -> crate::lifecycle::Lifecycle {
+    crate::lifecycle::Lifecycle::new(
+        std::sync::Arc::new(crate::lifecycle::System),
+        options.allow_reboot,
+    )
+}
+
 async fn serve_with(
     socket: &std::path::Path,
     root: &std::path::Path,
     readable: &std::path::Path,
+    config: &std::path::Path,
     addr: Option<String>,
     logger: Arc<log::Logger>,
-    terminal: bool,
+    options: ServeOptions,
 ) -> ExitCode {
     let daemon = Arc::new(
         Daemon::new(
@@ -522,13 +849,19 @@ async fn serve_with(
             logger.clone(),
             readable,
         )
-        .with_terminal(crate::terminal::App { enabled: terminal }),
+        .with_terminal(crate::terminal::App {
+            enabled: options.terminal,
+        })
+        .with_lifecycle(lifecycle(options)),
     );
+
+    let auth = Arc::new(auth_state(config, options, &logger));
 
     let result = match bind(socket, addr.as_deref()).await {
         Ok(listeners) => {
             announce(&logger, socket, &listeners);
-            serve_bound(listeners, daemon).await
+            report_registration(&auth, &logger);
+            serve_bound(listeners, daemon, auth).await
         }
         Err(error) => Err(error),
     };
@@ -600,6 +933,7 @@ fn announce(logger: &log::Logger, socket: &Path, listeners: &Listeners) {
 async fn serve_bound(
     listeners: Listeners,
     daemon: Arc<Daemon>,
+    auth: Arc<crate::auth::guard::Auth>,
 ) -> Result<(), anth_wire::WireError> {
     // An idle daemon must still free its shells: expiry is checked on a timer,
     // not only when someone happens to open the next session, so a tab closed
@@ -638,7 +972,7 @@ async fn serve_bound(
     };
 
     let http_loop = async {
-        axum::serve(http, api::router(daemon))
+        axum::serve(http, api::router(daemon, auth))
             .await
             .map_err(|e| anth_wire::WireError::internal(format!("serving http: {e}")))
     };
@@ -685,12 +1019,15 @@ async fn interactive(
     socket: &Path,
     root: &Path,
     readable: &Path,
+    config: &Path,
     command: Option<Command>,
     logger: Arc<log::Logger>,
-    terminal: bool,
+    options: ServeOptions,
 ) -> ExitCode {
     let addr = match startup(command) {
-        Startup::Prompt => return repl::run(socket, root, readable, logger, None, terminal).await,
+        Startup::Prompt => {
+            return repl::run(socket, root, readable, config, logger, None, options).await;
+        }
         Startup::RunFirst(command) => {
             // A client command still runs first and still keeps the prompt: a
             // failed one is reported, not fatal, because the prompt is where the
@@ -699,15 +1036,16 @@ async fn interactive(
                 socket,
                 root,
                 readable,
+                config,
                 Some(*command),
                 logger.clone(),
-                terminal,
+                options,
             )
             .await;
             if code != ExitCode::SUCCESS {
                 eprintln!("anth-panel: the startup command failed, staying interactive");
             }
-            return repl::run(socket, root, readable, logger, None, terminal).await;
+            return repl::run(socket, root, readable, config, logger, None, options).await;
         }
         Startup::Serve { addr } => addr,
     };
@@ -722,7 +1060,10 @@ async fn interactive(
             wired.logger.clone(),
             readable,
         )
-        .with_terminal(crate::terminal::App { enabled: terminal }),
+        .with_terminal(crate::terminal::App {
+            enabled: options.terminal,
+        })
+        .with_lifecycle(lifecycle(options)),
     );
 
     let listeners = match bind(socket, addr.as_deref()).await {
@@ -734,8 +1075,9 @@ async fn interactive(
     };
     announce(&wired.logger, socket, &listeners);
 
-    let serving = tokio::spawn(serve_bound(listeners, daemon));
-    let code = repl::run(socket, root, readable, logger, Some(wired), terminal).await;
+    let auth = Arc::new(auth_state(config, options, &wired.logger));
+    let serving = tokio::spawn(serve_bound(listeners, daemon, auth));
+    let code = repl::run(socket, root, readable, config, logger, Some(wired), options).await;
     // The prompt owns the process; a listener outliving it would keep the
     // terminal held by a daemon the operator thought they had quit.
     serving.abort();
@@ -899,6 +1241,12 @@ fn render_response(response: Response) -> Result<String, (anth_wire::ErrorKind, 
             "a terminal answer needs the terminal client, not a renderer".to_string(),
         )),
         Response::Accepted => Ok(String::new()),
+        Response::Restarting { pid } => Ok(format!("restarting pid {pid}; reconnect in a moment")),
+        Response::Rebooting { delay_s } => Ok(if delay_s == 0 {
+            "the host is going down now".to_string()
+        } else {
+            format!("the host goes down in {delay_s}s")
+        }),
         Response::PluginReply { status, value, .. } => {
             let body = render::render_plugin_reply(&value);
             if (200..300).contains(&status) {

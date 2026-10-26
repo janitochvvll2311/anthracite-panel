@@ -43,6 +43,9 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
   anth-panel/               # the binary: daemon, HTTP API and CLI client
     src/main.rs             #   CLI parsing, exit-code policy, serve_all
     src/dispatch.rs         #   the single request match
+    src/lifecycle.rs        #   restart/reboot behind one seam; reboot is opt-in
+    src/auth/               #   account, sessions, guard (Authed), store
+    src/config.rs           #   flag -> env -> file -> default; Paths, [auth]
     src/api.rs              #   axum router over dispatch; ApiError -> status
     src/watch.rs            #   the CLI's watch loop; interval parser re-export
     src/files.rs            #   one slice of a file inside the readable root
@@ -376,6 +379,79 @@ needs a stated reason in the commit message.
    panic when it is missing rather than returning an empty value that makes
    every assertion trivially pass. Prefer a real code path — a real listener, a
    real `/proc` fixture tree — over a mock.
+
+### Authentication is one switch, and it defaults to on
+
+`[auth] enabled` in the settings file is the only thing that decides whether
+`/api/` needs a session. It defaults to `true`; turning it off is one line that
+the operator writes:
+
+```toml
+[auth]
+enabled = false
+```
+
+Two rules hold the shape of this.
+
+`Paths::auth` carries the decision and `ServeOptions` passes it to
+`Auth::load(config, required)`. `ServeOptions` derives no `Default` for exactly
+this reason: a derived default would make the zero value of the struct the one
+setting that removes the protection, and `ServeOptions::default()` would be a
+silently open daemon. A caller writes all three fields out.
+
+Nothing else changes. `Authed` stays in every protected signature, so a route is
+still visibly protected in the line that declares it, and the switch only
+changes what `Authed` demands: with auth off it accepts a request without a
+token and still verifies one that is presented, so a stale cookie cannot make an
+open daemon answer as somebody it is not. The account, its signing key and the
+session table are untouched, which is why flipping the line back restores the
+same operator with the same password.
+
+`/api/auth/state` grew a `required` field for the same reason: the browser gate
+reads it before it renders, and with auth off it mounts the shell instead of
+asking for a password the login route would refuse. The gate paints nothing
+until the answer arrives, so an open panel does not flash a login form.
+
+One route keeps asking. `/api/auth/password` rotates the password of "whoever is
+calling", which has no meaning without a session: `Authed::account()` refuses
+with a `401` that names the setting, rather than picking the only account on the
+host and changing a credential nobody proved they own.
+
+The switch is for a host nobody else can reach. A daemon that starts with it off
+says so at `WARN`, and `report_registration` stays silent, because warning about
+a missing account would suggest a problem the operator just chose.
+
+## The web UI on a small screen
+
+Two rules the shell learned the hard way, both from measuring the real thing:
+
+- **A shadow root does not inherit the document's `* { box-sizing }` reset.**
+  The universal selector stops at the boundary, so `theme.css` does reach a
+  custom element's `:host` but not its children. A card declared
+  `width: min(28rem, 100vw - 2rem)` with `padding: 2rem` then measures
+  358 + 64 + 2 = 424px inside a 390px viewport and scrolls the page sideways.
+  A component that pairs a viewport-relative width with its own padding must
+  declare `*, *::before, *::after { box-sizing: border-box; }` in its own
+  stylesheet.
+- **Collapse by width, size by pointer.** `orientation` is the wrong query for
+  layout: a phone in landscape is 844px wide and would get the sidebar back,
+  while a 768px tablet upright would lose it and hide the navigation behind a
+  tap for no gain. The sidebar collapses at `max-width: 48rem` and the drawer
+  and FAB refuse to exist below `min-width: 48.0625rem`; a test pins that the
+  three numbers agree, because a width where the sidebar is hidden and the
+  drawer refuses to open leaves the navigation unreachable. Touch sizing is
+  `pointer: coarse`, not a width: a tablet is wide and still touched, and every
+  control reaches 44px there. Field text never drops below 16px, or Safari
+  zooms on focus.
+
+Strings in a stylesheet are checked by tests, but geometry is not: a rule can
+be present and still lay out wrong. The measurement that found the 424px card
+was a headless Chromium probe over CDP (viewport override, touch enabled, walk
+every shadow root, compare `getBoundingClientRect` against
+`document.documentElement.clientWidth`), not an assertion on the CSS text.
+`pointer: coarse` only matches when touch emulation is on; without
+`Emulation.setTouchEmulationEnabled` a phone is measured with a mouse and the
+touch rules look broken when they are not.
 
 ## Test layout
 

@@ -21,6 +21,14 @@ pub enum ErrorKind {
     /// The caller may not do this: a policy switch is off, or the target is
     /// protected.
     Forbidden,
+    /// The caller has not proved who they are, or the proof expired.
+    ///
+    /// Distinct from [`ErrorKind::Forbidden`] on purpose: `401` says "send a
+    /// credential" and `403` says "this credential is not enough". A client that
+    /// answered both with the same page would offer a login form after a login,
+    /// and the operator would have no way to tell a wrong password from a
+    /// missing permission.
+    Unauthorized,
     /// The request was well formed but conflicts with current state.
     Conflict,
     /// The request itself is malformed: a bad path, an unknown field, a value
@@ -44,6 +52,7 @@ impl ErrorKind {
         match self {
             ErrorKind::NotFound => 404,
             ErrorKind::Forbidden => 403,
+            ErrorKind::Unauthorized => 401,
             ErrorKind::Conflict => 409,
             ErrorKind::Invalid => 400,
             ErrorKind::Unsupported => 501,
@@ -63,11 +72,32 @@ impl ErrorKind {
         }
     }
 
+    /// The kind a status came from, for a caller that has one and needs the
+    /// other.
+    ///
+    /// The inverse of [`ErrorKind::http_status`], kept beside it so the two
+    /// cannot disagree. A status outside the table is `Internal`, because the
+    /// alternative — inventing a kind — would let a route answer `418` and have
+    /// the CLI report it as a bad request.
+    pub fn from_http_status(status: u16) -> Self {
+        match status {
+            404 => ErrorKind::NotFound,
+            403 => ErrorKind::Forbidden,
+            401 => ErrorKind::Unauthorized,
+            409 => ErrorKind::Conflict,
+            400 => ErrorKind::Invalid,
+            501 => ErrorKind::Unsupported,
+            413 => ErrorKind::TooLarge,
+            _ => ErrorKind::Internal,
+        }
+    }
+
     /// Stable machine-readable tag, used in the JSON error body.
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorKind::NotFound => "not_found",
             ErrorKind::Forbidden => "forbidden",
+            ErrorKind::Unauthorized => "unauthorized",
             ErrorKind::Conflict => "conflict",
             ErrorKind::Invalid => "invalid",
             ErrorKind::Unsupported => "unsupported",

@@ -49,6 +49,13 @@ pub struct Paths {
     /// from the same file: a second lookup for one boolean would be a second
     /// place for "the file said so" to disagree with itself.
     pub terminal: bool,
+    /// Whether `/api/` requires a session.
+    ///
+    /// Defaults to `true`, and only a `[auth]` table that says otherwise turns
+    /// it off. A default of "no auth" would make the protection depend on a
+    /// setting an operator forgot to write, which is the wrong way round: the
+    /// file has to say so, and saying so is one visible line.
+    pub auth: bool,
 }
 
 /// What `config.toml` may set. An absent key falls through to the default.
@@ -59,6 +66,8 @@ struct File {
     readable: Option<String>,
     #[serde(default)]
     terminal: TerminalSection,
+    #[serde(default)]
+    auth: AuthSection,
 }
 
 /// The `[terminal]` table.
@@ -69,6 +78,28 @@ struct File {
 struct TerminalSection {
     #[serde(default)]
     enabled: bool,
+}
+
+/// The `[auth]` table.
+///
+/// The one section whose absence means *on*. Every other switch here is a
+/// feature the operator opted into; this one protects the panel, so the file
+/// has to say `enabled = false` out loud. Turning it off makes every `/api/`
+/// route anonymous, which is only ever right on a host nobody else can reach.
+#[derive(Debug, serde::Deserialize)]
+struct AuthSection {
+    #[serde(default = "on")]
+    enabled: bool,
+}
+
+impl Default for AuthSection {
+    fn default() -> Self {
+        Self { enabled: on() }
+    }
+}
+
+fn on() -> bool {
+    true
 }
 
 /// Resolves the socket and the bundle directory.
@@ -118,6 +149,7 @@ pub fn resolve(
             DEFAULT_READABLE,
         ),
         terminal: settings.terminal.enabled,
+        auth: settings.auth.enabled,
     })
 }
 

@@ -43,17 +43,42 @@ use crate::plugins::registry::read_ui_module;
 /// wasm modules, and recompiling one per request would put that cost on the
 /// request path.
 #[derive(Clone)]
-pub struct AppState(Arc<Daemon>);
+pub struct AppState {
+    daemon: Arc<Daemon>,
+    auth: Arc<crate::auth::guard::Auth>,
+}
 
 impl AppState {
-    pub fn new(daemon: Arc<Daemon>) -> Self {
-        Self(daemon)
+    pub fn new(daemon: Arc<Daemon>, auth: Arc<crate::auth::guard::Auth>) -> Self {
+        Self { daemon, auth }
+    }
+
+    pub fn daemon(&self) -> &Arc<Daemon> {
+        &self.daemon
+    }
+
+    /// The one authentication state every protected route asks.
+    pub fn auth(&self) -> &Arc<crate::auth::guard::Auth> {
+        &self.auth
     }
 }
 
-pub fn router(daemon: Arc<Daemon>) -> Router {
+pub fn router(daemon: Arc<Daemon>, auth: Arc<crate::auth::guard::Auth>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        // The auth routes are the only `/api/` paths a caller may reach without
+        // a token: they are how a token is obtained. Every other route below
+        // names an [`Authed`] extractor in its signature, and that is what
+        // protects it — a route added without one is visibly unprotected in the
+        // one line that declares it.
+        .route("/api/auth/state", get(auth_state))
+        .route("/api/auth/register", axum::routing::post(auth_register))
+        .route("/api/auth/login", axum::routing::post(auth_login))
+        .route("/api/auth/refresh", axum::routing::post(auth_refresh))
+        .route("/api/auth/logout", axum::routing::post(auth_logout))
+        .route("/api/auth/password", axum::routing::post(auth_password))
+        .route("/api/restart", axum::routing::post(restart))
+        .route("/api/reboot", axum::routing::post(reboot))
         .route("/api/host-info", get(host_info))
         .route("/api/host-info/watch", get(watch_host_info))
         .route("/api/plugins", get(plugins))
@@ -72,15 +97,308 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
         // every asset beside it loads.
         .route("/", get(index))
         .route("/{*path}", get(asset))
-        .with_state(AppState::new(daemon))
+        .with_state(AppState::new(daemon, auth))
 }
+
+/// Splits a request into its parts and a decoded body.
+///
+/// The credential routes need both: a body for the fields, and the parts for the
+/// `Origin` check and the cookies. Extracting `Json` directly would consume the
+/// request before the handler could look at its headers.
+async fn decode<T: serde::de::DeserializeOwned>(
+    request: axum::extract::Request,
+) -> Result<(axum::http::request::Parts, T), ApiError> {
+    let (parts, body) = request.into_parts();
+    let bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
+        .await
+        .map_err(|error| {
+            ApiError(WireError::invalid(format!(
+                "the request body could not be read: {error}"
+            )))
+        })?;
+    let value = if bytes.is_empty() {
+        serde_json::from_str("{}").expect("an empty object always parses")
+    } else {
+        serde_json::from_slice(&bytes).map_err(|error| {
+            ApiError(WireError::invalid(format!(
+                "the request body is not JSON: {error}"
+            )))
+        })?
+    };
+    Ok((parts, value))
+}
+
+/// How large a credential body may be. A username and a password are bytes; a
+/// megabyte of them is an attack, not a login.
+const MAX_BODY_BYTES: usize = 8 * 1024;
 
 async fn healthz() -> impl IntoResponse {
     axum::Json(json!({"status": "ok"}))
 }
 
-async fn host_info(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    let response = state.0.handle(Request::HostInfo).await;
+/// The body the credential routes accept.
+///
+/// One struct with optional fields rather than one per route: `register` and
+/// `login` take a username and a password, `refresh` may take a token, and a
+/// route that finds a field it needs missing says which. Three structs would let
+/// a route decode a body meant for another without noticing.
+#[derive(serde::Deserialize)]
+struct Credentials {
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    password: Option<String>,
+    /// Accepted from the body so a script need not juggle cookies; the browser
+    /// leaves it out and the cookie is read instead.
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    current_password: Option<String>,
+    #[serde(default)]
+    new_password: Option<String>,
+}
+
+impl Credentials {
+    fn required(value: &Option<String>, name: &str) -> Result<String, ApiError> {
+        value
+            .clone()
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| {
+                ApiError::auth(crate::auth::AuthError::invalid(format!(
+                    "`{name}` is required"
+                )))
+            })
+    }
+}
+
+/// A grant's JSON body, plus the two cookies that carry the same thing.
+///
+/// Both: a browser has no use for the token in the body and a script has no use
+/// for the cookie, and answering one shape only would force the other caller to
+/// reimplement a header.
+fn grant_response(status: StatusCode, grant: crate::auth::session::Grant) -> HttpResponse {
+    let mut response = (status, axum::Json(&grant)).into_response();
+    for cookie in crate::auth::guard::set_cookies(&grant) {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&cookie) {
+            response
+                .headers_mut()
+                .append(axum::http::header::SET_COOKIE, value);
+        }
+    }
+    response
+}
+
+/// The response that ends a session: the answer, and cookies that are gone.
+fn ended(status: StatusCode, body: serde_json::Value) -> HttpResponse {
+    let mut response = (status, axum::Json(body)).into_response();
+    for cookie in crate::auth::guard::clear_cookies() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&cookie) {
+            response
+                .headers_mut()
+                .append(axum::http::header::SET_COOKIE, value);
+        }
+    }
+    response
+}
+
+/// `/api/auth/state` — whether the bootstrap is open.
+///
+/// Unauthenticated by necessity: it is the request that tells a browser which
+/// form to show. It discloses one bit — an account exists — which the login form
+/// already reveals by failing.
+async fn auth_state(State(state): State<AppState>) -> impl IntoResponse {
+    axum::Json(state.auth().state())
+}
+
+/// `/api/auth/register` — the first-run bootstrap, open once.
+async fn auth_register(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Result<HttpResponse, ApiError> {
+    let (_parts, body) = decode::<Credentials>(request).await?;
+    crate::auth::guard::same_origin(&_parts)?;
+
+    let username = Credentials::required(&body.username, "username")?;
+    let password = Credentials::required(&body.password, "password")?;
+
+    let auth = Arc::clone(state.auth());
+    // Argon2 costs tens of milliseconds, and a runtime worker must not pay it:
+    // `/healthz` has to stay answerable while a login is hashing.
+    let grant = tokio::task::spawn_blocking(move || auth.register(&username, &password))
+        .await
+        .map_err(|e| ApiError::auth(crate::auth::AuthError::internal(e.to_string())))??;
+    Ok(grant_response(StatusCode::CREATED, grant))
+}
+
+/// `/api/auth/login` — password in, a session out.
+async fn auth_login(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Result<HttpResponse, ApiError> {
+    let (parts, body) = decode::<Credentials>(request).await?;
+    crate::auth::guard::same_origin(&parts)?;
+
+    let username = Credentials::required(&body.username, "username")?;
+    let password = Credentials::required(&body.password, "password")?;
+
+    let auth = Arc::clone(state.auth());
+    let grant = tokio::task::spawn_blocking(move || auth.login(&username, &password))
+        .await
+        .map_err(|e| ApiError::auth(crate::auth::AuthError::internal(e.to_string())))??;
+    Ok(grant_response(StatusCode::OK, grant))
+}
+
+/// `/api/auth/refresh` — rotate the refresh token, mint a new access token.
+///
+/// Authorised by the refresh token rather than by an access token: requiring
+/// one that has just expired is the situation this route exists to recover from.
+async fn auth_refresh(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Result<HttpResponse, ApiError> {
+    let (parts, body) = decode::<Credentials>(request).await?;
+    crate::auth::guard::same_origin(&parts)?;
+
+    let presented = crate::auth::guard::refresh_token(&parts, body.refresh_token.clone())
+        .ok_or_else(|| {
+            ApiError::auth(crate::auth::AuthError::Unauthorized(
+                "no refresh token: log in again".to_string(),
+            ))
+        })?;
+
+    match state.auth().refresh(&presented) {
+        Ok(grant) => Ok(grant_response(StatusCode::OK, grant)),
+        // A refused refresh is the end of a session, so the cookies go with the
+        // error: leaving them in the browser would retry the same dead token on
+        // every page load.
+        Err(error) => Ok(ended(
+            StatusCode::UNAUTHORIZED,
+            json!({"error": error.message()}),
+        )),
+    }
+}
+
+/// `/api/auth/logout` — end every session, and say how many.
+async fn auth_logout(
+    State(state): State<AppState>,
+    authed: crate::auth::guard::Authed,
+    request: axum::extract::Request,
+) -> Result<HttpResponse, ApiError> {
+    let (parts, _) = decode::<serde::de::IgnoredAny>(request).await?;
+    crate::auth::guard::same_origin(&parts)?;
+    // The extractor proved a live access token; say who, so the log names a
+    // session that is ending rather than an anonymous request.
+    let username = authed.username().to_string();
+
+    let auth = Arc::clone(state.auth());
+    let ended_count = tokio::task::spawn_blocking(move || auth.logout())
+        .await
+        .map_err(|e| ApiError::auth(crate::auth::AuthError::internal(e.to_string())))??;
+    let _ = username;
+    Ok(ended(StatusCode::OK, json!({ "ended": ended_count })))
+}
+
+/// `/api/auth/password` — rotate the password, ending every session.
+async fn auth_password(
+    State(state): State<AppState>,
+    authed: crate::auth::guard::Authed,
+    request: axum::extract::Request,
+) -> Result<HttpResponse, ApiError> {
+    let (parts, body) = decode::<Credentials>(request).await?;
+    crate::auth::guard::same_origin(&parts)?;
+
+    let current = Credentials::required(&body.current_password, "current_password")?;
+    let next = Credentials::required(&body.new_password, "new_password")?;
+    let username = authed.account()?.username().to_string();
+
+    let auth = Arc::clone(state.auth());
+    tokio::task::spawn_blocking(move || auth.change_password(&username, &current, &next))
+        .await
+        .map_err(|e| ApiError::auth(crate::auth::AuthError::internal(e.to_string())))??;
+    // Every session ended with the password, this one included: the browser must
+    // see the cookies go and show the login form rather than a stale token.
+    Ok(ended(
+        StatusCode::OK,
+        json!({ "changed": true, "sessions_ended": true }),
+    ))
+}
+
+/// `/api/restart` — replace the daemon process with a fresh one.
+///
+/// The panel only: the host and every other process on it keep running. Answers
+/// `202` because the replacement happens after this response is written — a
+/// `200` would claim the new process is already serving.
+///
+/// A `POST` with an origin check, like every other mutating route: another site
+/// driving this with a borrowed cookie would be restarting a daemon.
+async fn restart(
+    State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
+    parts: axum::http::request::Parts,
+) -> Result<impl IntoResponse, ApiError> {
+    crate::auth::guard::same_origin(&parts)?;
+    match state.daemon().handle(Request::Restart).await {
+        Response::Restarting { pid } => Ok((
+            StatusCode::ACCEPTED,
+            axum::Json(json!({
+                "restarting": true,
+                "pid": pid,
+                // Said here because a caller cannot infer it: a restart applies
+                // the settings and drops every terminal, and this response is
+                // the last thing the old process will ever say.
+                "applies_settings": true,
+                "drop_terminals": true,
+            })),
+        )),
+        Response::Error(error) => Err(ApiError(error)),
+        other => Err(ApiError(WireError::internal(format!(
+            "a restart answered unexpectedly: {other:?}"
+        )))),
+    }
+}
+
+/// `/api/reboot` — take the host down.
+///
+/// Not a variant of `/api/restart`: this replaces every process on the machine,
+/// applies no settings and needs `CAP_SYS_BOOT`. The daemon refuses it unless
+/// started with `--allow-reboot`, and that refusal is a `403` here rather than a
+/// silent no-op.
+async fn reboot(
+    State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
+    parts: axum::http::request::Parts,
+    body: Option<axum::Json<RebootBody>>,
+) -> Result<impl IntoResponse, ApiError> {
+    crate::auth::guard::same_origin(&parts)?;
+    let delay_s = body.map(|axum::Json(body)| body.delay_s).unwrap_or(0);
+    match state
+        .daemon()
+        .handle(Request::SystemReboot { delay_s })
+        .await
+    {
+        Response::Rebooting { delay_s } => Ok((
+            StatusCode::ACCEPTED,
+            axum::Json(json!({ "rebooting": true, "delay_s": delay_s })),
+        )),
+        Response::Error(error) => Err(ApiError(error)),
+        other => Err(ApiError(WireError::internal(format!(
+            "a reboot answered unexpectedly: {other:?}"
+        )))),
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+struct RebootBody {
+    #[serde(default)]
+    delay_s: u32,
+}
+
+/// `/api/host-info` — one snapshot.
+async fn host_info(
+    State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
+) -> Result<impl IntoResponse, ApiError> {
+    let response = state.daemon().handle(Request::HostInfo).await;
     match response {
         anth_wire::Response::HostInfo(info) => Ok(axum::Json(info)),
         anth_wire::Response::Error(error) => Err(ApiError(error)),
@@ -116,6 +434,7 @@ const RETRY: Duration = Duration::from_millis(3_000);
 /// last moment the status line can still say so.
 async fn watch_host_info(
     State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<Sse<impl futures_util::stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let raw = params
@@ -125,7 +444,7 @@ async fn watch_host_info(
         .map_err(WireError::invalid)
         .map_err(ApiError)?;
 
-    let daemon = Arc::clone(&state.0);
+    let daemon = Arc::clone(state.daemon());
     let produce = move || {
         let daemon = Arc::clone(&daemon);
         async move { daemon.handle(Request::HostInfo).await }
@@ -238,6 +557,7 @@ fn split_plugin_file(path: &str) -> Option<PluginFile<'_>> {
 /// `status`" instead of sometimes an anchor and sometimes a missing file.
 async fn web_module_path(
     State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> Result<HttpResponse, ApiError> {
     let path = format!("/{path}");
@@ -279,14 +599,22 @@ fn anchors() -> axum::routing::MethodRouter<AppState> {
 /// from "an empty body".
 async fn scoped_anchor(
     State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
     method: axum::http::Method,
+    parts: axum::http::request::Parts,
     axum::extract::Path((id, path)): axum::extract::Path<(String, String)>,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
     body: axum::body::Bytes,
 ) -> Result<HttpResponse, ApiError> {
+    // An anchor may be `GET` or a declared `POST`. Only the methods that can
+    // change something need the check: a `GET` anchor is a read, and refusing a
+    // cross-origin read is the browser's job, not a policy this route adds.
+    if method != axum::http::Method::GET {
+        crate::auth::guard::same_origin(&parts)?;
+    }
     let path = format!("/{path}");
     let (entry, _loaded) = state
-        .0
+        .daemon()
         .anchor_for(&id, method.as_str(), &path)
         .map_err(ApiError)?
         .ok_or_else(|| {
@@ -350,9 +678,9 @@ fn body_text(body: &[u8]) -> Result<serde_json::Value, ApiError> {
 /// usable: a disabled bundle never produced a validated manifest, so it has no
 /// declaration to serve and no claim worth trusting.
 async fn web_module(state: AppState, web: PluginFile<'_>) -> Result<HttpResponse, ApiError> {
-    let known = state.0.has_plugin(web.id).map_err(ApiError)?;
+    let known = state.daemon().has_plugin(web.id).map_err(ApiError)?;
     let entry = state
-        .0
+        .daemon()
         .ui_module(web.id, web.module)
         .map_err(ApiError)?
         .ok_or_else(|| {
@@ -412,7 +740,7 @@ async fn forward(
     payload: String,
 ) -> Result<HttpResponse, ApiError> {
     match state
-        .0
+        .daemon()
         .handle(Request::PluginCall { id, pipe, payload })
         .await
     {
@@ -428,8 +756,11 @@ async fn forward(
 }
 
 /// Every plugin, including the disabled ones.
-async fn plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    match state.0.handle(Request::PluginList).await {
+async fn plugins(
+    State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
+) -> Result<impl IntoResponse, ApiError> {
+    match state.daemon().handle(Request::PluginList).await {
         Response::PluginList { plugins } => Ok(axum::Json(json!({ "plugins": plugins }))),
         Response::Error(error) => Err(ApiError(error)),
         other => Err(ApiError(WireError::internal(format!(
@@ -446,6 +777,7 @@ async fn plugins(State(state): State<AppState>) -> Result<impl IntoResponse, Api
 /// shortened a read would hide the limit.
 async fn file_read(
     State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = params.get("path").cloned().ok_or_else(|| {
@@ -474,7 +806,7 @@ async fn file_read(
     }
 
     let response = state
-        .0
+        .daemon()
         .handle(Request::FileRead {
             path,
             offset,
@@ -539,9 +871,14 @@ fn number_param(
 /// either before forwarding, so the plugin never learns which was used.
 async fn plugin_call(
     State(state): State<AppState>,
+    _auth: crate::auth::guard::Authed,
+    parts: axum::http::request::Parts,
     axum::extract::Path(id): axum::extract::Path<String>,
     body: Option<axum::Json<CallBody>>,
 ) -> Result<HttpResponse, ApiError> {
+    // A `POST` that runs a plugin's code: the origin check is what keeps another
+    // site from driving it with this browser's cookie.
+    crate::auth::guard::same_origin(&parts)?;
     let call = body.map(|axum::Json(body)| body).unwrap_or_default();
     // The plugin's status is the answer's status. A non-2xx here is the plugin's
     // outcome, delivered faithfully rather than reclassified: a caller that
@@ -565,6 +902,27 @@ struct CallBody {
 /// client had to handle both. Detail belongs in the message, and the status is
 /// in the status line.
 pub struct ApiError(pub WireError);
+
+impl ApiError {
+    /// A refusal from the authentication layer.
+    ///
+    /// The kind is derived from the status rather than chosen here, so a route
+    /// and a CLI command cannot disagree about what `Unauthorized` means: `401`
+    /// maps back to `Forbidden` in `anth-wire`, which is that crate's name for
+    /// "your credential did not stand".
+    pub fn auth(error: crate::auth::AuthError) -> Self {
+        let status = error.http_status();
+        let kind = ErrorKind::from_http_status(status);
+        Self(WireError::new(kind, error.message().to_string()))
+    }
+}
+
+/// So a handler can `?` an [`crate::auth::AuthError`] straight out.
+impl From<crate::auth::AuthError> for ApiError {
+    fn from(error: crate::auth::AuthError) -> Self {
+        Self::auth(error)
+    }
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> HttpResponse {

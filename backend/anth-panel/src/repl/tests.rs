@@ -97,8 +97,15 @@ fn target<'a>(socket: &'a std::path::Path) -> Target<'a> {
         socket,
         root: std::path::Path::new("/tmp/anth-unused-plugins"),
         readable: std::path::Path::new("/tmp/anth-unused-readable"),
+        config: std::path::Path::new("/tmp/anth-unused-config.toml"),
         log: silent(),
-        terminal: false,
+        // What a prompt gets from a settings file with no `[terminal]` and no
+        // `--allow-reboot`, which is what these tests would run against.
+        options: crate::ServeOptions {
+            terminal: false,
+            allow_reboot: false,
+            auth: true,
+        },
     }
 }
 

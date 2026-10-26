@@ -46,11 +46,18 @@ pub struct Target<'a> {
     pub socket: &'a std::path::Path,
     pub root: &'a std::path::Path,
     pub readable: &'a std::path::Path,
+    /// The settings file, which also holds the account: a line typed here may
+    /// register one, so the prompt carries the path like every other route.
+    pub config: &'a std::path::Path,
     /// What the commands run from the prompt log to. Borrowed rather than owned,
     /// so `Target` stays `Copy` and every helper can take it by value.
     pub log: &'a std::sync::Arc<crate::log::Logger>,
-    /// Whether this session may open terminals, as the daemon it starts would.
-    pub terminal: bool,
+    /// What this session may do, as the daemon it starts would.
+    ///
+    /// The whole value rather than one field per permission: the prompt and the
+    /// daemon it starts read the same settings, and a field copied by hand is a
+    /// field the next flag forgets.
+    pub options: crate::ServeOptions,
 }
 
 /// The logger the prompt writes through, and the queue it drains.
@@ -80,16 +87,18 @@ pub async fn run(
     socket: &std::path::Path,
     root: &std::path::Path,
     readable: &std::path::Path,
+    config: &std::path::Path,
     log: std::sync::Arc<crate::log::Logger>,
     wired: Option<Wired>,
-    terminal: bool,
+    options: crate::ServeOptions,
 ) -> ExitCode {
     let target = Target {
         socket,
         root,
         readable,
+        config,
         log: &log,
-        terminal,
+        options,
     };
     let history_path = history::path();
     let mut history = history_path
@@ -158,8 +167,9 @@ async fn session(
         socket: target.socket,
         root: target.root,
         readable: target.readable,
+        config: target.config,
         log: &logger,
-        terminal: target.terminal,
+        options: target.options,
     };
 
     let mut keys = Reader::spawn();
@@ -354,9 +364,10 @@ async fn run_words(
         &socket,
         &root,
         target.readable,
+        target.config,
         cli.command,
         std::sync::Arc::clone(target.log),
-        target.terminal,
+        target.options,
     )
     .await;
     None
@@ -480,11 +491,23 @@ fn help_text() -> String {
          plugin enable <id>             switch it back on\n  \
          plugin call <id> [LINE] [--http] [--direct]\n                                 \
          run one plugin over its own pipe\n  \
+         auth register <user> [--password N]\n                                 \
+         create the operator account, once\n  \
+         auth status                    whether an account exists\n  \
+         auth verify <user> [--password N]\n                                 \
+         check a stored password\n  \
+         auth passwd <user> [--current N] [--new N]\n                                 \
+         replace the password and end every session\n  \
+         restart                        replace the daemon, applying the settings\n  \
+         reboot [-y] [--delay N]        take the host down (needs --allow-reboot)\n  \
          help                           this message\n  \
          quit | exit                    leave\n\
          \n\
          `run` and `daemon` start a server, so they are given on the command line\n\
          (`anth-panel run -i`), not typed here.\n\
+         \n\
+         `restart` replaces this panel and leaves the host alone; `reboot` replaces\n\
+         every process on the host and applies no settings.\n\
          \n\
          editing:\n  \
          Tab                            complete a command, subcommand or flag\n  \

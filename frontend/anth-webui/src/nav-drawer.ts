@@ -126,14 +126,16 @@ const STYLE = `
           0.75rem max(1rem, env(safe-area-inset-left)); border-bottom: 1px solid var(--panel-border, #223041); }
   .title { color: var(--muted, #8b9bad); font: 600 11px/1.3 var(--mono, monospace);
            letter-spacing: 0.12em; text-transform: uppercase; }
-  .close { display: grid; place-items: center; width: 40px; height: 40px; padding: 0;
+  .close { display: grid; place-items: center; width: 44px; height: 44px; padding: 0;
            color: inherit; background: transparent; border: 1px solid var(--panel-border, #223041);
            border-radius: 8px; font-size: 15px; cursor: pointer; }
   .close:hover, .close:focus-visible { border-color: var(--accent, #7dd3fc); outline: none; }
   .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
           padding: 1rem 0.75rem; padding-left: max(0.75rem, env(safe-area-inset-left)); }
-  /* The drawer is a portrait affordance; in landscape the sidebar is visible. */
-  @media (orientation: landscape) { dialog { display: none !important; } }
+  /* The drawer exists only while the shell hides its sidebar. The two rules
+     must name the same breakpoint, or a width where the sidebar is hidden and
+     the drawer refused leaves the navigation unreachable. */
+  @media (min-width: 48.0625rem) { dialog { display: none !important; } }
 `;
 
 if (!customElements.get("anth-nav-drawer")) {

@@ -13,6 +13,56 @@ pub(crate) fn quiet() -> std::sync::Arc<crate::log::Logger> {
     std::sync::Arc::new(crate::log::Logger::silent())
 }
 
+/// A router with a live session attached to every request.
+///
+/// The daemon varies per test but the session does not, so this is the one place
+/// that wires the two together: register an account on a scratch file, log in,
+/// and attach the token. A test that wants to see a `401` calls `crate::api::router`
+/// directly instead of coming through here.
+pub(crate) fn signed_router(daemon: crate::dispatch::Daemon, name: &str) -> axum::Router {
+    let auth = std::sync::Arc::new(crate::auth::guard::Auth::load(scratch(name), true));
+    auth.register("operator", "correct horse battery")
+        .expect("registration must succeed on a fresh file");
+    let token = auth
+        .login("operator", "correct horse battery")
+        .expect("the password just registered must verify")
+        .access_token;
+    let value = axum::http::HeaderValue::from_str(&format!("Bearer {token}"))
+        .expect("a token is a valid header value");
+    crate::api::router(std::sync::Arc::new(daemon), auth).layer(axum::middleware::from_fn(
+        move |mut request: axum::extract::Request, next: axum::middleware::Next| {
+            let value = value.clone();
+            async move {
+                request
+                    .headers_mut()
+                    .entry(axum::http::header::AUTHORIZATION)
+                    .or_insert(value);
+                next.run(request).await
+            }
+        },
+    ))
+}
+
+/// A settings file for one test, under the scratch directory.
+///
+/// Named after the test so two tests cannot share an account, and placed under
+/// `TMPDIR` like every other fixture, so a bug here cannot reach the system temp
+/// directory.
+pub(crate) fn scratch(name: &str) -> std::path::PathBuf {
+    // A counter, because `test_router()` builds a fresh state per call and two
+    // calls in one test would otherwise share one account — and a test that
+    // registers twice would fail on the second, which says nothing about the
+    // code it was written for.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let directory = std::env::temp_dir().join(format!(
+        "anth-auth-{name}-{}-{sequence}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    directory.join("config.toml")
+}
+
 /// A snapshot with every field filled, for tests that care about the shape of an
 /// answer rather than what this machine happens to report.
 pub(crate) fn blank_host_info() -> anth_wire::HostInfo {
@@ -42,7 +92,7 @@ pub(crate) fn blank_host_info() -> anth_wire::HostInfo {
 }
 
 /// The HTTP transport, which must answer exactly what the socket does.
-mod api {
+pub(crate) mod api {
     use crate::api::{ApiError, parse_query, router};
     use crate::dispatch::Daemon;
     use anth_wire::WireError;
@@ -54,31 +104,117 @@ mod api {
     use std::sync::Arc;
     use tower::ServiceExt;
 
+    /// An auth state with no account, rooted in a scratch file.
+    ///
+    /// Every router now needs one. The bootstrap is open, so a test that is not
+    /// about authentication reads and writes as if the guard were not there —
+    /// and it is: `Authed` still runs, it just finds an account that exists.
+    pub(crate) fn test_auth(name: &str) -> Arc<crate::auth::guard::Auth> {
+        Arc::new(crate::auth::guard::Auth::load(
+            crate::tests::scratch(name),
+            true,
+        ))
+    }
+
+    /// A router whose every request carries a valid session.
+    ///
+    /// The routes are protected now, so a test about a plugin, a file or the
+    /// shell needs a token or it would only ever assert on `401`. This builds
+    /// the account, logs in, and returns the pair a caller sends.
+    pub(crate) fn authenticated(name: &str) -> (Router, String, Arc<crate::auth::guard::Auth>) {
+        let auth = test_auth(name);
+        auth.register("operator", "correct horse battery")
+            .expect("registration must succeed on a fresh file");
+        let token = login_token(&auth);
+        let router = router(
+            Arc::new(Daemon::for_test(
+                crate::plugins::registry::Registry::empty(),
+                crate::tests::quiet(),
+            )),
+            Arc::clone(&auth),
+        );
+        (router, token, auth)
+    }
+
+    /// An access token for an already-registered auth state.
+    pub(crate) fn login_token(auth: &crate::auth::guard::Auth) -> String {
+        let grant = auth
+            .login("operator", "correct horse battery")
+            .expect("the password just registered must verify");
+        grant.access_token
+    }
+
+    /// A router every request of which carries a session.
+    ///
+    /// The layer is the test's stand-in for a browser: it attaches the
+    /// `Authorization` header that `EventSource` and `fetch` would carry as a
+    /// cookie. It exists so the tests written before authentication keep testing
+    /// what they were written for — a route, not a credential — instead of all
+    /// of them turning into `401` assertions.
+    ///
+    /// A test *about* authentication calls [`unauthenticated_router`], which is
+    /// the same router without the layer.
     pub(crate) fn test_router() -> Router {
-        router(Arc::new(Daemon::for_test(
-            crate::plugins::registry::Registry::empty(),
-            crate::tests::quiet(),
-        )))
+        authenticated_router("test-router")
+    }
+
+    pub(crate) fn authenticated_router(name: &str) -> Router {
+        let (router, token, _auth) = authenticated(name);
+        let value = axum::http::HeaderValue::from_str(&format!("Bearer {token}"))
+            .expect("a token is a valid header value");
+        router.layer(axum::middleware::from_fn(
+            move |mut request: axum::extract::Request, next: axum::middleware::Next| {
+                let value = value.clone();
+                async move {
+                    request
+                        .headers_mut()
+                        .entry(axum::http::header::AUTHORIZATION)
+                        .or_insert(value);
+                    next.run(request).await
+                }
+            },
+        ))
+    }
+
+    /// A router with no session attached, and an auth state with no account.
+    ///
+    /// Two states in one value: `registered` is what a test flips by calling
+    /// `auth.register`, and the router is the one that answers from it. Returned
+    /// together because a test about the bootstrap needs to change the state and
+    /// then ask the same router.
+    pub(crate) fn unauthenticated_router(name: &str) -> (Router, Arc<crate::auth::guard::Auth>) {
+        let auth = test_auth(name);
+        let router = router(
+            Arc::new(Daemon::for_test(
+                crate::plugins::registry::Registry::empty(),
+                crate::tests::quiet(),
+            )),
+            Arc::clone(&auth),
+        );
+        (router, auth)
     }
 
     /// A router with one disabled plugin, which is enough to prove a lookup.
     fn aliased_router() -> Router {
-        router(Arc::new(Daemon::for_test(
-            crate::plugins::registry::Registry::with_disabled(
-                "org.test.aliased",
-                Some("short"),
-                &[("GET", "/greeting")],
-                "the bundle was rewritten",
+        crate::tests::signed_router(
+            Daemon::for_test(
+                crate::plugins::registry::Registry::with_disabled(
+                    "org.test.aliased",
+                    Some("short"),
+                    &[("GET", "/greeting")],
+                    "the bundle was rewritten",
+                ),
+                crate::tests::quiet(),
             ),
-            crate::tests::quiet(),
-        )))
+            "aliased",
+        )
     }
 
     async fn get_status_and_body(uri: &str) -> (u16, serde_json::Value) {
         ask(test_router(), uri).await
     }
 
-    async fn ask(router: Router, uri: &str) -> (u16, serde_json::Value) {
+    pub(crate) async fn ask(router: Router, uri: &str) -> (u16, serde_json::Value) {
         let response = router
             .oneshot(
                 HttpRequest::builder()
@@ -240,11 +376,14 @@ mod api {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("the fixture root must be creatable");
         std::fs::write(root.join("log.txt"), contents).expect("the fixture must be written");
-        let router = router(Arc::new(Daemon::new(
-            crate::plugins::registry::Registry::empty(),
-            crate::tests::quiet(),
-            &root,
-        )));
+        let router = crate::tests::signed_router(
+            Daemon::new(
+                crate::plugins::registry::Registry::empty(),
+                crate::tests::quiet(),
+                &root,
+            ),
+            name,
+        );
         (root, router)
     }
 
@@ -1151,7 +1290,6 @@ mod socket {
 /// about the filesystem — a path that escapes, a symlink out of the tree, a file
 /// that is not there — and a mock would simply agree with itself.
 mod www {
-    use crate::api::router;
     use crate::dispatch::Daemon;
     use crate::www::{content_type_for, denied, normalise};
     use axum::Router;
@@ -1160,7 +1298,6 @@ mod www {
     use std::path::Path;
     #[cfg(debug_assertions)]
     use std::path::PathBuf;
-    use std::sync::Arc;
     use tower::ServiceExt;
 
     /// A fixture tree, removed on drop.
@@ -1340,10 +1477,13 @@ mod www {
     }
 
     fn shell_router() -> Router {
-        router(Arc::new(Daemon::for_test(
-            crate::plugins::registry::Registry::empty(),
-            crate::tests::quiet(),
-        )))
+        crate::tests::signed_router(
+            Daemon::for_test(
+                crate::plugins::registry::Registry::empty(),
+                crate::tests::quiet(),
+            ),
+            "shell",
+        )
     }
 
     async fn ask(uri: &str) -> (u16, String, String) {
@@ -1471,14 +1611,12 @@ mod www {
 /// worth testing is the decision about *which files may be read*, and a mocked
 /// registry would let a broken allowlist pass.
 mod plugin_web {
-    use crate::api::router;
     use crate::dispatch::Daemon;
     use crate::plugins::registry::Registry;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
     use sha2::{Digest, Sha256};
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
     use tower::ServiceExt;
 
     const GUEST: &str = r#"
@@ -1564,10 +1702,10 @@ module = "{module}"
     }
 
     async fn get(root: &Path, uri: &str) -> (u16, String, String) {
-        let router = router(Arc::new(Daemon::for_test(
-            Registry::load(root),
-            crate::tests::quiet(),
-        )));
+        let router = crate::tests::signed_router(
+            Daemon::for_test(Registry::load(root), crate::tests::quiet()),
+            "web-module",
+        );
         let response = router
             .oneshot(
                 HttpRequest::builder()
@@ -1612,10 +1750,10 @@ module = "{module}"
     async fn a_bundles_wasm_and_manifest_are_not_downloadable() {
         let root = Root::new("private");
         bundle(root.path(), "org.test.web", "web/widget.js");
-        let router = router(Arc::new(Daemon::for_test(
-            Registry::load(root.path()),
-            crate::tests::quiet(),
-        )));
+        let router = crate::tests::signed_router(
+            Daemon::for_test(Registry::load(root.path()), crate::tests::quiet()),
+            "private-bundle",
+        );
 
         for uri in [
             "/p/org.test.web/web/plugin.wasm",
@@ -1832,14 +1970,12 @@ mod request_log {
 /// replaces was a route registered `get()` while the manifest accepted `POST`:
 /// a unit test of the lookup would have passed throughout.
 mod anchor_methods {
-    use crate::api::router;
     use crate::dispatch::Daemon;
     use crate::plugins::registry::Registry;
     use axum::body::Body;
     use axum::http::Request as HttpRequest;
     use sha2::{Digest, Sha256};
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
     use tower::ServiceExt;
 
     /// A guest that answers `ok`, so a method test asserts reachability rather
@@ -1919,10 +2055,10 @@ path = "{anchor}"
     }
 
     async fn send(root: &Path, method: &str, uri: &str, body: &[u8]) -> (u16, String) {
-        let router = router(Arc::new(Daemon::for_test(
-            Registry::load(root),
-            crate::tests::quiet(),
-        )));
+        let router = crate::tests::signed_router(
+            Daemon::for_test(Registry::load(root), crate::tests::quiet()),
+            "anchor",
+        );
         let response = router
             .oneshot(
                 HttpRequest::builder()
@@ -1961,10 +2097,10 @@ path = "{anchor}"
         let root = Root::new("rewritten");
         bundle(root.path(), "org.test.m", "POST", "/op");
 
-        let response = router(Arc::new(Daemon::for_test(
-            Registry::load(root.path()),
-            crate::tests::quiet(),
-        )))
+        let response = crate::tests::signed_router(
+            Daemon::for_test(Registry::load(root.path()), crate::tests::quiet()),
+            "rewritten-method",
+        )
         .oneshot(
             HttpRequest::builder()
                 .method("GET")
@@ -2237,10 +2373,54 @@ mod config {
                 plugins: PathBuf::from(DEFAULT_PLUGINS),
                 readable: PathBuf::from(crate::config::DEFAULT_READABLE),
                 terminal: false,
+                auth: true,
             }
         );
         assert!(!paths.socket.is_absolute());
         assert!(!paths.plugins.is_absolute());
+    }
+
+    /// The default is the protection, so an untouched checkout requires a
+    /// session.
+    #[test]
+    fn an_empty_supply_leaves_authentication_on() {
+        let paths = resolve(None, None, None, &no_env, None).expect("no settings to fail on");
+
+        // The default is the protection. A test that flipped this to `false`
+        // would be pinning the wrong side of the switch.
+        assert!(paths.auth);
+    }
+
+    /// Only the file can turn auth off, and only when it says so.
+    #[test]
+    fn the_auth_table_is_opt_out_and_the_rest_of_the_file_is_unchanged() {
+        let file = File::new("auth-off", "[auth]\nenabled = false\n");
+        let paths = resolve(None, None, None, &no_env, Some(file.path())).expect("a valid file");
+
+        assert!(!paths.auth);
+        // Turning auth off must not disturb the socket or the bundle root: the
+        // two settings are read by the same pass and independent of each other.
+        assert_eq!(paths.socket, PathBuf::from(DEFAULT_SOCKET));
+        assert_eq!(paths.plugins, PathBuf::from(DEFAULT_PLUGINS));
+    }
+
+    /// A `[auth]` table that says nothing leaves the default in place.
+    #[test]
+    fn an_empty_auth_table_keeps_authentication_on() {
+        let file = File::new("auth-empty", "[auth]\n");
+        let paths = resolve(None, None, None, &no_env, Some(file.path())).expect("a valid file");
+
+        assert!(paths.auth);
+    }
+
+    /// An explicit `true` reads the same as no key at all, so a file written by
+    /// a tool that spells out every setting is not the odd one out.
+    #[test]
+    fn an_explicit_true_matches_the_default() {
+        let file = File::new("auth-on", "[auth]\nenabled = true\n");
+        let paths = resolve(None, None, None, &no_env, Some(file.path())).expect("a valid file");
+
+        assert!(paths.auth);
     }
 
     /// The flag wins over everything, because it is the one thing the operator
@@ -2807,5 +2987,377 @@ mod sse_stream {
         for event in &events {
             assert!(event.contains("host-info"), "{event}");
         }
+    }
+}
+
+/// The two lifecycle actions: what each replaces, and what each one refuses.
+///
+/// Every test here drives the seam rather than the host. A test that called
+/// `System::reboot` would not report a failure — it would take down the machine
+/// the suite runs on — and a test that called `System::restart` would replace
+/// the test binary with itself and never report either. `Recorded` is what makes
+/// the assertions able to fail.
+mod lifecycle {
+    use std::ffi::OsString;
+
+    use crate::lifecycle::{Actions, Lifecycle, MAX_REBOOT_DELAY_S, Recorded};
+
+    fn recording(allow_reboot: bool) -> (Lifecycle, std::sync::Arc<Recorded>) {
+        Lifecycle::recorded(allow_reboot)
+    }
+
+    #[test]
+    fn a_restart_replaces_this_process_with_its_own_command_line() {
+        let (lifecycle, recorded) = recording(false);
+
+        lifecycle.restart();
+
+        let calls = recorded.restarts.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one restart, one exec");
+        let argv = &calls[0];
+        assert!(!argv.is_empty(), "exec needs a program");
+        // The program a restart asks for is the one running: a restart that
+        // exec'd something else would be a different operation wearing the name.
+        let running = std::env::current_exe().expect("the test binary has a path");
+        let asked = std::path::Path::new(&argv[0]);
+        assert!(
+            asked.file_name() == running.file_name()
+                || asked.to_string_lossy() == running.to_string_lossy(),
+            "restart asked for {}, which is not {}",
+            asked.display(),
+            running.display()
+        );
+    }
+
+    #[test]
+    fn a_restart_keeps_the_arguments_it_was_started_with() {
+        let (lifecycle, recorded) = recording(false);
+
+        lifecycle.restart();
+
+        let calls = recorded.restarts.lock().unwrap();
+        let argv = &calls[0];
+        // The daemon is replaced by the command that started it, not by a fresh
+        // invocation: dropping `--config` or `--socket` would restart with
+        // different settings than the ones on disk, which is the opposite of what
+        // a restart is for.
+        let expected: Vec<OsString> = std::env::args_os().collect();
+        assert_eq!(*argv, expected, "the whole command line must survive");
+    }
+
+    #[test]
+    fn a_daemon_without_the_switch_refuses_a_reboot_without_running_one() {
+        let (lifecycle, recorded) = recording(false);
+
+        let refused = lifecycle.authorize_reboot(0).expect_err("must refuse");
+
+        assert_eq!(refused.kind, anth_wire::ErrorKind::Forbidden);
+        assert!(
+            recorded.reboots.lock().unwrap().is_empty(),
+            "a refused reboot must not reach the host"
+        );
+    }
+
+    #[test]
+    fn the_refusal_names_the_flag_that_would_allow_it() {
+        let (lifecycle, _recorded) = recording(false);
+
+        let refused = lifecycle.authorize_reboot(0).expect_err("must refuse");
+
+        assert!(
+            refused.message.contains("--allow-reboot"),
+            "an operator reading this must learn how to allow it: {}",
+            refused.message
+        );
+    }
+
+    #[test]
+    fn a_reboot_past_the_limit_is_refused_before_it_reaches_the_host() {
+        let (lifecycle, recorded) = recording(true);
+
+        let refused = lifecycle
+            .authorize_reboot(MAX_REBOOT_DELAY_S + 1)
+            .expect_err("must refuse");
+
+        assert_eq!(refused.kind, anth_wire::ErrorKind::Invalid);
+        assert!(
+            recorded.reboots.lock().unwrap().is_empty(),
+            "a delay outside the limit must not schedule anything"
+        );
+    }
+
+    #[test]
+    fn the_longest_allowed_delay_is_accepted() {
+        let (lifecycle, recorded) = recording(true);
+
+        lifecycle
+            .authorize_reboot(MAX_REBOOT_DELAY_S)
+            .expect("the limit is inclusive");
+
+        // Authorising is not scheduling: the caller answers first, then performs.
+        assert!(recorded.reboots.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_allowed_reboot_is_performed_with_the_delay_it_was_given() {
+        let (lifecycle, recorded) = recording(true);
+
+        lifecycle.authorize_reboot(30).expect("allowed");
+        lifecycle.perform_reboot(30).expect("recorded");
+
+        assert_eq!(*recorded.reboots.lock().unwrap(), vec![30]);
+    }
+
+    #[test]
+    fn a_restart_needs_no_switch() {
+        // The asymmetry is the point: replacing this process depends on nothing
+        // the daemon does not already have, so it is not gated like the reboot.
+        let (lifecycle, recorded) = recording(false);
+
+        lifecycle.restart();
+
+        assert_eq!(recorded.restarts.lock().unwrap().len(), 1);
+    }
+
+    /// Points `PATH` at a directory holding one stand-in command, runs `change`,
+    /// and restores the environment.
+    fn with_path_of(
+        directory: &std::path::Path,
+        change: impl FnOnce() -> Result<(), anth_wire::WireError>,
+    ) -> Result<(), anth_wire::WireError> {
+        let saved = std::env::var_os("PATH");
+        // SAFETY: no test in this binary spawns a process concurrently, and the
+        // window is one call. `set_var` is unsafe in edition 2024 because a
+        // concurrent read would be undefined behaviour.
+        unsafe { std::env::set_var("PATH", directory) };
+        let outcome = change();
+        match saved {
+            Some(saved) => unsafe { std::env::set_var("PATH", saved) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+        outcome
+    }
+
+    fn stand_in(name: &str, body: &str, scratch: &str) -> std::path::PathBuf {
+        // `scratch` returns a settings *file* inside its directory, so the
+        // script has to sit beside it rather than at the path it hands back.
+        let settings = crate::tests::scratch(scratch);
+        let directory = settings
+            .parent()
+            .expect("a scratch directory")
+            .to_path_buf();
+        let script = directory.join(name);
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("a script");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("an executable");
+        directory
+    }
+
+    #[test]
+    fn a_failing_reboot_command_is_reported_rather_than_assumed_to_work() {
+        // `System` tries `systemctl` first, then `reboot`. A `PATH` holding only
+        // a failing `reboot` makes the first attempt `NotFound` and the second
+        // exit non-zero, which must be reported rather than swallowed: an answer
+        // that says "rebooting" when the host is not is the worst outcome here.
+        let directory = stand_in("reboot", "exit 1", "lifecycle-reboot-fail");
+
+        let error = with_path_of(&directory, || crate::lifecycle::System.reboot(0))
+            .expect_err("a host that failed to reboot must not report success");
+
+        assert_eq!(error.kind, anth_wire::ErrorKind::Internal);
+        assert!(
+            error.message.contains("reboot"),
+            "the message must name what failed: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_reboot_command_that_succeeds_is_not_an_error() {
+        let directory = stand_in("reboot", "exit 0", "lifecycle-reboot-ok");
+
+        with_path_of(&directory, || crate::lifecycle::System.reboot(0))
+            .expect("a reboot command that exited 0 is a success");
+    }
+
+    #[test]
+    fn the_real_actions_and_the_recorder_are_the_same_trait() {
+        // `Recorded` is `cfg(test)`; this keeps the substitution type-checked, so
+        // a change to the trait cannot leave the recorder behind.
+        let _real: &dyn Actions = &crate::lifecycle::System;
+        let recorded = <std::sync::Arc<Recorded> as Default>::default();
+        let _fake: &dyn Actions = recorded.as_ref();
+    }
+}
+
+/// The two routes that change what is running: `/api/restart` and `/api/reboot`.
+///
+/// `test_router` builds a daemon whose lifecycle is a recorder, so a request
+/// here records instead of replacing this test binary or rebooting the machine.
+/// The refusal test builds its own daemon with the switch off, because that is
+/// the state a daemon started without `--allow-reboot` is in and the state a
+/// `403` has to come from.
+mod lifecycle_routes {
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    use crate::tests::{quiet, signed_router};
+
+    async fn post(router: axum::Router, uri: &str, body: &str) -> (u16, serde_json::Value) {
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("a valid request"),
+            )
+            .await
+            .expect("the router must answer");
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("a readable body");
+        let body = serde_json::from_slice(&bytes).expect("the body must be JSON");
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn a_restart_is_accepted_rather_than_reported_complete() {
+        let (status, body) = post(crate::tests::api::test_router(), "/api/restart", "").await;
+
+        // `202`: the replacement happens after this answer is written. A `200`
+        // would claim the new process is already serving, which it cannot be.
+        assert_eq!(status, 202);
+        assert_eq!(body["restarting"], json!(true));
+        // The pid is the pid the new process will have, because `execv` keeps
+        // it. A caller reconnecting and finding a different one is talking to a
+        // restart that went through `spawn`, which orphans the old process.
+        assert!(body["pid"].as_u64().is_some(), "{}", body["pid"]);
+    }
+
+    #[tokio::test]
+    async fn a_restart_says_what_it_costs() {
+        let (_status, body) = post(crate::tests::api::test_router(), "/api/restart", "").await;
+
+        // A caller that does not know a restart applies the settings and drops
+        // the terminals cannot tell it from a reload that does neither.
+        assert_eq!(body["applies_settings"], json!(true));
+        assert_eq!(body["drop_terminals"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn a_reboot_without_the_switch_is_forbidden_and_does_nothing() {
+        // The state a daemon started without `--allow-reboot` is in. Built
+        // explicitly because `for_test` allows everything: its recorder exists
+        // so a request cannot reach the host, not to model the switch.
+        let (lifecycle, recorded) = crate::lifecycle::Lifecycle::recorded(false);
+        let daemon =
+            crate::dispatch::Daemon::for_test(crate::plugins::registry::Registry::empty(), quiet())
+                .with_lifecycle(lifecycle);
+        let (status, body) =
+            post(signed_router(daemon, "reboot-refused"), "/api/reboot", "{}").await;
+
+        assert_eq!(status, 403);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("--allow-reboot"),
+            "{}",
+            body["error"]
+        );
+        assert!(
+            recorded.reboots.lock().unwrap().is_empty(),
+            "a refused reboot must not reach the host"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reboot_with_the_switch_is_accepted() {
+        let (lifecycle, _recorded) = crate::lifecycle::Lifecycle::recorded(true);
+        let daemon =
+            crate::dispatch::Daemon::for_test(crate::plugins::registry::Registry::empty(), quiet())
+                .with_lifecycle(lifecycle);
+        let (status, body) = post(
+            signed_router(daemon, "reboot-allowed"),
+            "/api/reboot",
+            r#"{"delay_s":10}"#,
+        )
+        .await;
+
+        assert_eq!(status, 202);
+        assert_eq!(body["rebooting"], json!(true));
+        assert_eq!(body["delay_s"], json!(10));
+    }
+
+    #[tokio::test]
+    async fn a_reboot_delay_past_the_limit_is_a_bad_request() {
+        let (lifecycle, _recorded) = crate::lifecycle::Lifecycle::recorded(true);
+        let daemon =
+            crate::dispatch::Daemon::for_test(crate::plugins::registry::Registry::empty(), quiet())
+                .with_lifecycle(lifecycle);
+        let (status, body) = post(
+            signed_router(daemon, "reboot-too-long"),
+            "/api/reboot",
+            r#"{"delay_s":301}"#,
+        )
+        .await;
+
+        assert_eq!(status, 400);
+        assert!(
+            body["error"].as_str().unwrap_or_default().contains("300"),
+            "{}",
+            body["error"]
+        );
+    }
+
+    #[tokio::test]
+    async fn neither_route_answers_a_get() {
+        // A link or a prefetch must not restart a daemon. Only `POST` is routed,
+        // so a `GET` is a `405` rather than a restart.
+        for uri in ["/api/restart", "/api/reboot"] {
+            let response = crate::tests::api::test_router()
+                .oneshot(
+                    HttpRequest::builder()
+                        .uri(uri)
+                        .body(Body::empty())
+                        .expect("a valid request"),
+                )
+                .await
+                .expect("the router must answer");
+            assert_eq!(response.status().as_u16(), 405, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_restart_without_a_session_is_unauthorized() {
+        // Built directly rather than through `test_router`, which attaches a
+        // token: this is the state an unauthenticated caller is in, and a
+        // restart that answered it would let a page restart a daemon.
+        let daemon =
+            crate::dispatch::Daemon::for_test(crate::plugins::registry::Registry::empty(), quiet());
+        let auth = std::sync::Arc::new(crate::auth::guard::Auth::load(
+            crate::tests::scratch("restart-anonymous"),
+            true,
+        ));
+        let router = crate::api::router(std::sync::Arc::new(daemon), auth);
+
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/restart")
+                    .body(Body::empty())
+                    .expect("a valid request"),
+            )
+            .await
+            .expect("the router must answer");
+
+        assert_eq!(response.status().as_u16(), 401);
     }
 }

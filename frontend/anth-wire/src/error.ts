@@ -14,6 +14,7 @@
  * it is what arrives on the line, not a translation of a number.
  */
 export type ErrorKind =
+  | "unauthorized"
   | "not_found"
   | "forbidden"
   | "conflict"
@@ -25,6 +26,8 @@ export type ErrorKind =
 /** HTTP status for a kind: the browser side of `ErrorKind::http_status`. */
 export function httpStatus(kind: ErrorKind): number {
   switch (kind) {
+    case "unauthorized":
+      return 401;
     case "not_found":
       return 404;
     case "forbidden":
@@ -47,6 +50,8 @@ export function errorKind(status: number): ErrorKind | undefined {
   switch (status) {
     case 400:
       return "invalid";
+    case 401:
+      return "unauthorized";
     case 403:
       return "forbidden";
     case 404:

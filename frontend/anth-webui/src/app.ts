@@ -24,6 +24,7 @@ import { escape } from "./html";
 // The shell renders these three, so it imports them: a test that mounts
 // `anth-app` on its own must still get working custom elements.
 import "./host-info";
+import "./maintenance";
 import "./fab";
 import "./nav-drawer";
 import "./tab-panel";
@@ -129,6 +130,9 @@ export class AnthApp extends HTMLElement {
                 </section>
                 <div data-slots></div>
                 <anth-fab icon="↻" label="Refresh host information"></anth-fab>
+              </section>
+              <section data-tab="maintenance" label="Maintenance">
+                <anth-maintenance></anth-maintenance>
               </section>
             </anth-tab-panel>
           </main>
@@ -330,6 +334,9 @@ const STYLE = `
           border-radius: 7px; background: var(--panel, #101721);
           font: 600 12px/1.3 var(--mono, monospace); text-decoration: none; }
   .skip:focus { top: 0.5rem; }
+  /* iOS shows the skip link on a tap as well as on focus, so it has to be a
+     target a finger can hit. */
+  @media (pointer: coarse) { .skip { display: inline-flex; align-items: center; min-height: 44px; } }
 
   header { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 1rem; align-items: center;
            justify-content: space-between; padding: 0.9rem clamp(1rem, 4vw, 2.5rem);
@@ -342,7 +349,7 @@ const STYLE = `
   h1 { margin: 0; font: 600 16px/1.2 var(--mono, monospace); letter-spacing: 0.02em; }
   .version { color: var(--muted, #8b9bad); font: 12px/1.4 var(--mono, monospace); }
 
-  .menu { display: none; place-items: center; width: 40px; height: 40px; padding: 0;
+  .menu { display: none; place-items: center; width: 44px; height: 44px; padding: 0;
           color: inherit; border: 1px solid var(--panel-border, #223041); border-radius: 9px;
           background: transparent; font: 400 18px/1 var(--sans, sans-serif); cursor: pointer; }
   .menu:hover, .menu:focus-visible { border-color: var(--accent, #7dd3fc); outline: none; }
@@ -385,7 +392,7 @@ const STYLE = `
   .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; }
   .label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted, #8b9bad); }
 
-  button[data-refresh] { font: inherit; padding: 4px 12px; border-radius: 6px;
+  button[data-refresh] { font: inherit; min-height: 36px; padding: 4px 12px; border-radius: 6px;
           color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
           background: rgba(125, 211, 252, 0.08); cursor: pointer; }
   button[data-refresh]:hover:not(:disabled) { border-color: var(--accent, #7dd3fc); }
@@ -399,7 +406,13 @@ const STYLE = `
            border: 1px solid rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.12);
            color: var(--err, #f87171); }
 
-  @media (orientation: portrait) {
+  /* The sidebar becomes a drawer by width, never by orientation.
+     A 768px tablet held upright has room for a 200px sidebar and spending it
+     on a drawer hides the navigation behind a tap for no gain; a phone turned
+     sideways has 844px of width and almost none of height, so orientation
+     would bring the sidebar back and leave 300px of column. Width is what
+     decides whether two columns fit. */
+  @media (max-width: 48rem) {
     .shell { grid-template-columns: minmax(0, 1fr); }
     .sidebar { display: none; }
     .menu { display: grid; }
@@ -412,6 +425,17 @@ const STYLE = `
            padding-left: max(0.8rem, env(safe-area-inset-left)); }
     dl { grid-template-columns: 1fr; gap: 2px; }
     dt { margin-top: 0.5rem; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; }
+    /* The 16px floor is Safari's zoom threshold for a focused field; below it,
+       tapping an input zooms the page and the layout the visitor sees is not
+       the one this stylesheet describes. */
+    button[data-refresh] { font-size: max(16px, 1rem); }
+  }
+
+  @media (pointer: coarse) {
+    button[data-refresh] { min-height: 44px; }
+    /* The same 44px on every link in the navigation, including the drawer's:
+       the drawer is slotted, so one rule on the host covers both copies. */
+    .nav-item { min-height: 44px; }
   }
 `;
 

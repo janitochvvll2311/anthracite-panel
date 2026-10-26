@@ -28,3 +28,15 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # The REPL needs termios for raw mode. `libc` is already in the tree via other
 # crates, and a raw terminal has no std-only spelling.
 libc = "0.2"
+# Authentication: Argon2id for the password, HS256 for the access token. The
+# password hash is slow on purpose (19 MiB, two passes); a login pays it once.
+argon2 = { version = "0.5", features = ["std"] }
+# A JWT is a signature over a header and a few claims. `rust_crypto` picks the
+# pure-Rust backend, because the pinned musl target has no ring/aws-lc build.
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
+# Entropy for the signing key and the refresh tokens. A guessable signing key
+# would let anyone mint an access token.
+getrandom = "0.3"
+# Editing `config.toml` in place: `toml` round-trips through a map and would
+# drop the operator's comments and key order.
+toml_edit = "0.25"

@@ -24,6 +24,7 @@ export interface Destination {
 
 export const DESTINATIONS: readonly Destination[] = [
   { id: "host", label: "Host", shortLabel: "Host", icon: "▤" },
+  { id: "maintenance", label: "Maintenance", shortLabel: "Maint.", icon: "⟳" },
 ];
 
 /** The destination a hash names, falling back to the first one. */

@@ -93,3 +93,78 @@ impl Drop for RawMode {
         }
     }
 }
+
+/// Reads one line from the terminal with the echo off.
+///
+/// A password typed at the prompt must not appear on screen, and the flag form
+/// puts it in `ps`; this is the third option, and the one the CLI uses when no
+/// flag was given.
+///
+/// The echo is restored by the same guard the prompt uses, so a Ctrl-C or a read
+/// error cannot leave the terminal not echoing. `Ok(None)` means stdin is not a
+/// terminal: a script that forgot the flag is told so instead of having the
+/// password read from whatever was piped in.
+pub fn read_secret(prompt: &str) -> io::Result<Option<String>> {
+    read_secret_if(prompt, io::stdin().is_terminal())
+}
+
+/// [`read_secret`] with the terminal decision passed in, so a test covers the
+/// pipe path without touching the real terminal.
+pub(crate) fn read_secret_if(prompt: &str, interactive: bool) -> io::Result<Option<String>> {
+    use std::io::{BufRead, Write};
+
+    if !interactive {
+        return Ok(None);
+    }
+
+    let mut out = io::stdout();
+    out.write_all(prompt.as_bytes())?;
+    out.flush()?;
+
+    let echo_off = EchoOff::enable()?;
+    let mut line = String::new();
+    let read = io::stdin().lock().read_line(&mut line);
+    drop(echo_off);
+    // The terminal has swallowed the newline the user typed; without this the
+    // next thing printed would start on the password's line.
+    out.write_all(b"\n")?;
+    out.flush()?;
+
+    read?;
+    let line = line.trim_end_matches(['\n', '\r']).to_string();
+    Ok((!line.is_empty()).then_some(line))
+}
+
+/// `ECHO` off for as long as the value lives, restored on drop.
+struct EchoOff {
+    original: libc::termios,
+}
+
+impl EchoOff {
+    fn enable() -> io::Result<Self> {
+        // SAFETY: `tcgetattr` writes into a `termios` it owns; the fd is stdin,
+        // which is open for the life of the process.
+        let mut original: libc::termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut original) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut quiet = original;
+        quiet.c_lflag &= !libc::ECHO;
+        // SAFETY: `quiet` is an initialised `termios` derived from the one the
+        // terminal reported, and stdin is the fd it was read from.
+        if unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &quiet) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { original })
+    }
+}
+
+impl Drop for EchoOff {
+    fn drop(&mut self) {
+        // SAFETY: restoring the settings read in `enable`; a failure here leaves
+        // the terminal as it was, which is the best this can do on the way out.
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original);
+        }
+    }
+}

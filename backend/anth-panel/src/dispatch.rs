@@ -34,6 +34,12 @@ pub struct Daemon {
     /// forget to check.
     terminal: Arc<crate::terminal::Sessions>,
     terminal_app: crate::terminal::App,
+    /// The two ways this daemon can be brought back up, and the switch that
+    /// gates the destructive one.
+    ///
+    /// Held here for the same reason as the readable root: it is authority, and a
+    /// value passed per request is a value a new transport can forget to check.
+    lifecycle: Arc<crate::lifecycle::Lifecycle>,
     /// What identifies this daemon's clients as one owner.
     ///
     /// A socket connection and an HTTP request have no shared identity in the
@@ -56,8 +62,17 @@ impl Daemon {
             readable_root: Arc::new(readable_root.into()),
             terminal: Arc::new(crate::terminal::Sessions::new()),
             terminal_app: crate::terminal::App::default(),
+            // A daemon that started serving has not been told it may reboot: the
+            // switch is opt-in on the command line.
+            lifecycle: Arc::new(crate::lifecycle::Lifecycle::without_reboot()),
             owner: "daemon".to_string(),
         }
+    }
+
+    /// Sets the lifecycle actions, including whether a reboot is allowed.
+    pub fn with_lifecycle(mut self, lifecycle: crate::lifecycle::Lifecycle) -> Self {
+        self.lifecycle = Arc::new(lifecycle);
+        self
     }
 
     /// Allows this daemon to open terminals, as an operator setting would.
@@ -86,8 +101,15 @@ impl Daemon {
     /// one helper is what keeps `Daemon::new` from growing an argument at each
     /// call site.
     #[cfg(test)]
+    ///
+    /// The lifecycle is a recorder here rather than [`crate::lifecycle::System`]:
+    /// a test that asked the router to restart would otherwise `exec` the test
+    /// binary and never report anything, and one that asked it to reboot would
+    /// take the machine down. A test that wants to see a refusal builds its own
+    /// daemon with [`Self::with_lifecycle`].
     pub fn for_test(plugins: Registry, log: Arc<Logger>) -> Self {
         Self::new(plugins, log, std::env::temp_dir())
+            .with_lifecycle(crate::lifecycle::Lifecycle::empty_recorder())
     }
 
     /// One plugin's own anchor, resolved by id or alias rather than by scanning.
@@ -296,6 +318,32 @@ async fn dispatch(daemon: &Daemon, request: Request) -> Result<Response, WireErr
                 })
                 .collect(),
         }),
+        Request::Restart => {
+            // The process cannot survive its own answer, so the replacement is
+            // handed to a timer: the response below is written first, and the
+            // `execv` happens once this task has yielded.
+            let lifecycle = Arc::clone(&daemon.lifecycle);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                lifecycle.restart();
+            });
+            Ok(Response::Restarting {
+                pid: std::process::id(),
+            })
+        }
+        Request::SystemReboot { delay_s } => {
+            daemon.lifecycle.authorize_reboot(delay_s)?;
+            let lifecycle = Arc::clone(&daemon.lifecycle);
+            tokio::spawn(async move {
+                // The answer has to leave before the machine does. The delay is
+                // the caller's, and this pause only covers the write itself.
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                if let Err(error) = lifecycle.perform_reboot(delay_s) {
+                    eprintln!("anth-panel: reboot failed: {error}");
+                }
+            });
+            Ok(Response::Rebooting { delay_s })
+        }
         Request::PluginCall { id, pipe, payload } => {
             // Resolved by id or alias, but reported back by canonical id: a
             // caller that typed `hello` should still see `org.anth.hello` in the
@@ -375,6 +423,8 @@ fn operation_of(request: &Request) -> &'static str {
         Request::TerminalResize { .. } => "terminal-resize",
         Request::TerminalClose { .. } => "terminal-close",
         Request::PluginCall { .. } => "plugin-call",
+        Request::Restart => "restart",
+        Request::SystemReboot { .. } => "system-reboot",
     }
 }
 
@@ -393,6 +443,8 @@ fn status_of(response: &Response) -> (u16, bool) {
         | Response::FileSlice { .. }
         | Response::TerminalOpened { .. }
         | Response::TerminalOutput { .. }
+        | Response::Restarting { .. }
+        | Response::Rebooting { .. }
         | Response::Accepted => (200, false),
         Response::PluginReply { status, .. } => (*status, *status >= 500),
         Response::Error(error) => (error.kind.http_status(), true),

@@ -73,7 +73,9 @@ const STYLE = `
   :host { position: fixed; right: max(1rem, env(safe-area-inset-right));
           bottom: calc(1rem + env(safe-area-inset-bottom)); z-index: 20; }
   :host([hidden]) { display: none; }
-  @media (orientation: landscape) { :host { display: none; } }
+  /* Shown while the sidebar is a drawer, for the same reason the shell's
+     refresh button exists: on a phone the card is the whole viewport. */
+  @media (min-width: 48.0625rem) { :host { display: none; } }
   button { display: grid; place-items: center; width: 56px; height: 56px; padding: 0;
            color: #071018; border: 1px solid rgba(125, 211, 252, 0.7); border-radius: 50%;
            background: var(--accent, #7dd3fc); box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);

@@ -92,6 +92,33 @@ pub enum Request {
         /// `direct`.
         payload: String,
     },
+    /// Replace this daemon process with a fresh one.
+    ///
+    /// Distinct from [`Request::SystemReboot`] in everything that matters:
+    /// this one re-reads the settings and re-loads the plugin registry, and it
+    /// depends on no privilege the daemon does not already have. Only the
+    /// process is replaced; the account, the signing key and the host are
+    /// untouched, so a live session stays valid across it.
+    ///
+    /// The answer is [`Response::Accepted`] and it travels *before* the
+    /// replacement: a caller that has the answer knows the request was taken,
+    /// not that the new process came up.
+    Restart,
+    /// Reboot the host.
+    ///
+    /// The whole machine, not this process, and deliberately a request of its
+    /// own rather than a mode of [`Request::Restart`]: the two differ in blast
+    /// radius, in the privilege they need and in whether they apply the
+    /// settings at all. It is refused unless the daemon was started with
+    /// `--allow-reboot`, so a daemon that can reboot is one an operator said so
+    /// on the command line, not one that happens to run as root.
+    ///
+    /// `delay_s` is how long the daemon waits before the host goes down, so a
+    /// caller receives its answer first.
+    SystemReboot {
+        #[serde(default)]
+        delay_s: u32,
+    },
 }
 
 /// The transport a plugin call stands in for.
@@ -201,6 +228,19 @@ pub enum Response {
     /// value to return. One variant rather than three identical ones: what a
     /// client needs to know is that the request was accepted.
     Accepted,
+    /// Answer to [`Request::Restart`], sent before the process is replaced.
+    ///
+    /// `pid` is the process that will be replaced. `execv` keeps it, so it is
+    /// also the pid of the daemon that comes up: a caller that reconnects and
+    /// finds the same pid is talking to a process that *did* restart, not to
+    /// the one it was talking to before.
+    Restarting {
+        pid: u32,
+    },
+    /// Answer to [`Request::SystemReboot`], sent before the host goes down.
+    Rebooting {
+        delay_s: u32,
+    },
     Error(WireError),
 }
 

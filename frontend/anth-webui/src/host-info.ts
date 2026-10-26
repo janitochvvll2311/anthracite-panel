@@ -524,7 +524,7 @@ const STYLE = `
   .field { display: inline-flex; align-items: center; gap: 0.35rem;
            font: 12px/1.4 var(--mono, monospace); color: var(--muted, #8b9bad); }
   .toolbar select, .toolbar button {
-    font: inherit; color: var(--text, #dbe6f2); padding: 2px 8px; border-radius: 6px;
+    font: inherit; color: var(--text, #dbe6f2); min-height: 32px; padding: 2px 8px; border-radius: 6px;
     border: 1px solid var(--panel-border, #223041); background: var(--widget-bg, rgba(16, 23, 33, 0.5)); }
   .toolbar button { cursor: pointer; margin-left: auto; }
   .toolbar button:hover { border-color: var(--accent, #7dd3fc); }
@@ -592,12 +592,20 @@ const STYLE = `
            border: 1px solid rgba(248, 113, 113, 0.4);
            background: rgba(248, 113, 113, 0.12); color: var(--err, #f87171); }
 
+  /* Taps, not clicks: 44px is the smallest target a finger hits reliably and
+     these sat at 22-26px. Keyed on the pointer because a tablet is wide and
+     still touched, while a narrow desktop window is neither. */
+  @media (pointer: coarse) {
+    .toolbar select, .toolbar button { min-height: 44px; font-size: max(16px, 1rem); }
+  }
+
   /* A phone: the summary stacks, and the text gets one step larger because the
      card is the whole viewport rather than a column in a grid. Keyed on width,
      not orientation: a 768px tablet in portrait fits three columns and would
      waste two-thirds of the row. 30rem is 480px at the default root size, which
      is a phone in landscape and the largest phone in portrait. */
   @media (max-width: 30rem) {
+    .toolbar button { margin-left: 0; }
     .summary { align-items: start; padding: 0.75rem; }
     .quick { grid-template-columns: minmax(0, 1fr); }
     .quick div { justify-content: space-between; }

@@ -15,10 +15,17 @@ function page(name: string): string {
 }
 
 describe("the shipped page", () => {
-  test("mounts the shell and nothing else", () => {
+  test("mounts the gate and the shell, and no prompt", () => {
     const html = page("index.html");
 
-    expect(html).toContain("<anth-app>");
+    // The gate is what a visitor sees first: every data route answers `401`
+    // until a session exists, so a page that mounted only the shell would show
+    // an error card where the login form belongs.
+    expect(html).toContain("<anth-auth-gate>");
+    // The shell is created by the composition root once a session exists, so
+    // the page itself must not carry one: a shell in the markup would fetch a
+    // snapshot before the cookie and show an error card behind the form.
+    expect(html).not.toContain("<anth-app");
     expect(html).not.toContain("<anth-repl");
   });
 });
