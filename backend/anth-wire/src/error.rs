@@ -49,6 +49,21 @@ impl ErrorKind {
         }
     }
 
+    /// Stable snake_case name, matching the wire serialization.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorKind::NotFound => "not_found",
+            ErrorKind::Forbidden => "forbidden",
+            ErrorKind::Unauthorized => "unauthorized",
+            ErrorKind::Conflict => "conflict",
+            ErrorKind::Invalid => "invalid",
+            ErrorKind::Unsupported => "unsupported",
+            ErrorKind::TooLarge => "too_large",
+            ErrorKind::TooMany => "too_many",
+            ErrorKind::Internal => "internal",
+        }
+    }
+
     /// Stable machine tag used when a caller does not provide a narrower code.
     pub fn default_code(self) -> &'static str {
         match self {

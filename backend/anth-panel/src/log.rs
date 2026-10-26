@@ -117,7 +117,18 @@ impl Settings {
         out: Option<&str>,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> (Self, Vec<String>) {
-        let mut settings = Settings::default();
+        Self::resolve_with(Settings::default(), format, level, out, env)
+    }
+
+    /// Resolves against an explicit default, usually `[log]` from the config.
+    pub fn resolve_with(
+        default: Settings,
+        format: Option<&str>,
+        level: Option<&str>,
+        out: Option<&str>,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> (Self, Vec<String>) {
+        let mut settings = default;
         let mut problems = Vec::new();
 
         let chosen = |flag: Option<&str>, name: &str| -> Option<String> {
