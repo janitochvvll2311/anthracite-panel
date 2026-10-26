@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { live } from 'lit/directives/live.js'
+import { repeat } from 'lit/directives/repeat.js'
 import { localized, msg } from '@lit/localize'
 
 import type { FilesClient } from './files-client'
@@ -12,8 +13,14 @@ import './window'
 /** Fired on `document` after an editor writes a file. */
 export const FILES_CHANGED_EVENT = 'anth-files-changed'
 
-/** Fired when a create window's title follows the typed name. */
+/** Fired when a create tab's title follows the typed name. */
 export const EDITOR_TITLE_EVENT = 'anth-file-editor-title'
+
+/** Fired after a save so the tab host can close that tab. */
+export const EDITOR_DONE_EVENT = 'anth-file-editor-done'
+
+/** Fired when the last tab closes, so the window goes away too. */
+export const FILE_TABS_EMPTY_EVENT = 'anth-file-tabs-empty'
 
 /** Editors refuse to load or save more than this many bytes. */
 const MAX_EDIT_BYTES = 4 * 1024 * 1024
@@ -148,21 +155,18 @@ export class AnthFileEditor extends LitElement {
           detail: { directory: this.directory, path },
         }),
       )
-      this.closeWindow()
+      this.dispatchEvent(
+        new CustomEvent(EDITOR_DONE_EVENT, {
+          bubbles: true,
+          composed: true,
+          detail: { path },
+        }),
+      )
     } catch (error) {
       this.error = describe(error)
     } finally {
       this.busy = false
     }
-  }
-
-  private closeWindow(): void {
-    const window = this.closest('anth-window') as AnthWindow | null
-    if (window) {
-      window.close()
-      return
-    }
-    this.remove()
   }
 
   private onKeydown(event: KeyboardEvent): void {
@@ -301,6 +305,243 @@ export class AnthFileEditor extends LitElement {
   `
 }
 
+interface FileTab {
+  key: string
+  mode: 'edit' | 'create'
+  directory: string
+  name: string
+  /** Full path on edit tabs; empty on create tabs until a name is typed. */
+  path: string
+  label: string
+}
+
+let tabIds = 0
+
+/**
+ * The tab strip and the editors of the single file-editor window. Every open
+ * file keeps its own `anth-file-editor`, so switching tabs never reloads or
+ * loses unsaved text.
+ */
+@customElement('anth-file-tabs')
+@localized()
+export class AnthFileTabs extends LitElement {
+  @property({ attribute: false })
+  client?: FilesClient
+
+  @state()
+  private tabs: FileTab[] = []
+
+  @state()
+  private active = ''
+
+  /** Adds a tab, or activates the one already open for that path. */
+  open(options: OpenFileEditor): string {
+    this.client = options.client
+    if (options.mode === 'edit') {
+      const path = join(options.directory, options.name)
+      const existing = this.tabs.find((tab) => tab.path === path)
+      if (existing) {
+        this.activate(existing.key)
+        return existing.key
+      }
+    }
+    const key = `tab-${++tabIds}`
+    const path = options.mode === 'edit' ? join(options.directory, options.name) : ''
+    const label = options.mode === 'edit' ? path : uniqueNewLabel(this.tabs)
+    this.tabs = [
+      ...this.tabs,
+      {
+        key,
+        mode: options.mode,
+        directory: options.directory,
+        name: options.name,
+        path,
+        label,
+      },
+    ]
+    this.active = key
+    void this.updateComplete.then(() => this.focusEditor(key))
+    return key
+  }
+
+  /** Puts the cursor in whatever tab is visible. */
+  focusActive(): void {
+    void this.updateComplete.then(() => this.focusEditor(this.active))
+  }
+
+  private activate(key: string): void {
+    this.active = key
+    void this.updateComplete.then(() => this.focusEditor(key))
+  }
+
+  private closeTab(key: string): void {
+    if (!this.tabs.some((tab) => tab.key === key)) {
+      return
+    }
+    const tabs = this.tabs.filter((tab) => tab.key !== key)
+    this.tabs = tabs
+    if (this.active === key) {
+      this.active = tabs.at(-1)?.key ?? ''
+    }
+    if (tabs.length === 0) {
+      this.dispatchEvent(
+        new CustomEvent(FILE_TABS_EMPTY_EVENT, { bubbles: true, composed: true }),
+      )
+      return
+    }
+    void this.updateComplete.then(() => this.focusEditor(this.active))
+  }
+
+  private onTitle(event: Event): void {
+    const key = (event.target as HTMLElement).dataset.key
+    const title = (event as CustomEvent<{ title?: string }>).detail?.title
+    if (!key || !title) {
+      return
+    }
+    this.tabs = this.tabs.map((tab) => (tab.key === key ? { ...tab, label: title } : tab))
+  }
+
+  private onDone(event: Event): void {
+    const key = (event.target as HTMLElement).dataset.key
+    if (key) {
+      this.closeTab(key)
+    }
+  }
+
+  private focusEditor(key: string): void {
+    if (!key) {
+      return
+    }
+    const editor = this.shadowRoot?.querySelector<AnthFileEditor>(
+      `anth-file-editor[data-key="${key}"]`,
+    )
+    editor?.focusField()
+  }
+
+  override render() {
+    return html`
+      <div class="tabs" role="tablist">
+        ${this.tabs.map(
+          (tab) => html`
+            <div class="tab" data-active=${tab.key === this.active ? '' : nothing}>
+              <button
+                type="button"
+                class="tab-button"
+                role="tab"
+                aria-selected=${tab.key === this.active}
+                title=${tab.label}
+                @click=${() => this.activate(tab.key)}
+              >
+                ${tab.label}
+              </button>
+              <button
+                type="button"
+                class="tab-close"
+                title=${msg('Close')}
+                aria-label=${msg('Close')}
+                @click=${() => this.closeTab(tab.key)}
+              >
+                ✕
+              </button>
+            </div>
+          `,
+        )}
+      </div>
+      <div class="editors">
+        ${repeat(
+          this.tabs,
+          (tab) => tab.key,
+          (tab) => html`
+            <anth-file-editor
+              data-key=${tab.key}
+              .client=${this.client}
+              .mode=${tab.mode}
+              .directory=${tab.directory}
+              .name=${tab.name}
+              ?hidden=${tab.key !== this.active}
+              @anth-file-editor-title=${this.onTitle}
+              @anth-file-editor-done=${this.onDone}
+            ></anth-file-editor>
+          `,
+        )}
+      </div>
+    `
+  }
+
+  static styles = css`
+    :host {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .tabs {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 4px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--panel-border, #223041);
+      overscroll-behavior-x: contain;
+    }
+    .tab {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      border: 1px solid var(--panel-border, #223041);
+      border-bottom: 0;
+      border-radius: 6px 6px 0 0;
+      background: rgba(125, 211, 252, 0.04);
+    }
+    .tab[data-active] {
+      border-color: var(--accent, #7dd3fc);
+      background: rgba(125, 211, 252, 0.14);
+    }
+    .tab-button {
+      max-width: 16rem;
+      overflow: hidden;
+      border: 0;
+      background: transparent;
+      color: var(--muted, #8b9bad);
+      padding: 5px 8px;
+      font: 12px/1.4 var(--mono, monospace);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .tab[data-active] .tab-button { color: var(--text, #dbe6f2); }
+    .tab-close {
+      border: 0;
+      border-left: 1px solid var(--panel-border, #223041);
+      background: transparent;
+      color: var(--muted, #8b9bad);
+      padding: 5px 7px;
+      font: 12px/1.4 var(--mono, monospace);
+      cursor: pointer;
+    }
+    .tab-close:hover { color: var(--err, #f87171); background: rgba(248, 113, 113, 0.12); }
+    .tab-button:focus-visible,
+    .tab-close:focus-visible {
+      outline: 2px solid var(--accent, #7dd3fc);
+      outline-offset: -2px;
+    }
+    .editors {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    anth-file-editor {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    anth-file-editor[hidden] { display: none !important; }
+    @media (pointer: coarse) {
+      .tab-button, .tab-close { min-height: 44px; }
+    }
+  `
+}
+
 export interface OpenFileEditor {
   client: FilesClient
   mode: 'edit' | 'create'
@@ -308,51 +549,57 @@ export interface OpenFileEditor {
   name: string
 }
 
-const openByPath = new Map<string, AnthWindow>()
+let editorWindow: AnthWindow | undefined
+let editorHost: AnthFileTabs | undefined
 
 /**
- * Opens one editor window. Editing the same path again restores the existing
- * window instead of opening a duplicate; create windows are always new.
+ * The Files section has one editor window for the whole page. Opening a file
+ * adds a tab to it; the window lives on `document.body`, so navigating the
+ * panel cannot close it or lose its tabs.
  */
 export function openFileEditor(options: OpenFileEditor): AnthWindow {
-  const path = options.mode === 'edit' ? join(options.directory, options.name) : ''
-  const existing = path ? openByPath.get(path) : undefined
-  if (existing?.isConnected) {
-    existing.restore()
-    existing.open = true
-    const editor = existing.querySelector('anth-file-editor') as AnthFileEditor | null
-    void editor?.updateComplete.then(() => editor.focusField())
-    return existing
+  if (!editorWindow?.isConnected || !editorHost) {
+    const host = document.createElement('anth-file-tabs') as AnthFileTabs
+    host.client = options.client
+    const window = document.createElement('anth-window') as AnthWindow
+    window.label = msg('Editor')
+    window.append(host)
+    host.addEventListener(FILE_TABS_EMPTY_EVENT, () => window.close())
+    window.addEventListener(WINDOW_CLOSE_EVENT, () => {
+      window.remove()
+      if (editorWindow === window) {
+        editorWindow = undefined
+        editorHost = undefined
+      }
+    })
+    document.body.append(window)
+    editorWindow = window
+    editorHost = host
   }
 
-  const editor = document.createElement('anth-file-editor') as AnthFileEditor
-  editor.client = options.client
-  editor.mode = options.mode
-  editor.directory = options.directory
-  editor.name = options.name
-
-  const window = document.createElement('anth-window') as AnthWindow
-  window.label = options.mode === 'create' ? msg('New file') : path
-  window.append(editor)
-  editor.addEventListener(EDITOR_TITLE_EVENT, (event) => {
-    const detail = (event as CustomEvent<{ title?: string }>).detail
-    if (detail?.title) {
-      window.label = detail.title
-    }
-  })
-  window.addEventListener(WINDOW_CLOSE_EVENT, () => {
-    if (path) {
-      openByPath.delete(path)
-    }
-    window.remove()
-  })
-  document.body.append(window)
+  const window = editorWindow
+  const host = editorHost
+  if (!window || !host) {
+    throw new Error('the editor window could not be created')
+  }
+  window.restore()
   window.open = true
-  void editor.updateComplete.then(() => editor.focusField())
-  if (path) {
-    openByPath.set(path, window)
-  }
+  host.open(options)
+  host.focusActive()
   return window
+}
+
+function uniqueNewLabel(tabs: FileTab[]): string {
+  const base = msg('New file')
+  const labels = new Set(tabs.map((tab) => tab.label))
+  if (!labels.has(base)) {
+    return base
+  }
+  let index = 2
+  while (labels.has(`${base} ${index}`)) {
+    index += 1
+  }
+  return `${base} ${index}`
 }
 
 function describe(error: unknown): string {

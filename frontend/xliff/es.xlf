@@ -514,6 +514,10 @@
   <source>This file is too large to edit.</source>
   <target>Este archivo es demasiado grande para editarlo.</target>
 </trans-unit>
+<trans-unit id="sa75b95980cd80e78">
+  <source>Editor</source>
+  <target>Editor</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

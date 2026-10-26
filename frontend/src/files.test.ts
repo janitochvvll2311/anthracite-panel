@@ -65,8 +65,19 @@ function lastWindow(): WindowElement | null {
   return document.querySelector<WindowElement>('anth-window')
 }
 
+type TabsElement = HTMLElement & { shadowRoot: ShadowRoot }
+
+function fileTabs(): TabsElement | null {
+  return document.querySelector<TabsElement>('anth-file-tabs')
+}
+
+function tabEditors(): EditorElement[] {
+  const host = fileTabs()
+  return [...(host?.shadowRoot.querySelectorAll<EditorElement>('anth-file-editor') ?? [])]
+}
+
 function lastEditor(): EditorElement | null {
-  return document.querySelector<EditorElement>('anth-file-editor')
+  return tabEditors().at(-1) ?? null
 }
 
 async function openEditor(element: FilesElement, name: string): Promise<void> {
@@ -262,10 +273,11 @@ test('restores an existing editor instead of opening a duplicate', async () => {
   edit?.click()
   await settleWindows()
   expect(document.querySelectorAll('anth-window')).toHaveLength(1)
+  expect(tabEditors()).toHaveLength(1)
   expect(lastWindow()?.minimized).toBe(false)
 })
 
-test('opens a second file after minimizing the first window', async () => {
+test('opens a second file as a tab in the same window', async () => {
   const element = await mount(fakeClient())
   await openEditor(element, 'note.txt')
 
@@ -278,11 +290,40 @@ test('opens a second file after minimizing the first window', async () => {
   expect(element.shadowRoot?.querySelector('.layout')).not.toBeNull()
 
   await openEditor(element, 'other.txt')
-  expect(document.querySelectorAll('anth-window')).toHaveLength(2)
-  const minimized = [...document.querySelectorAll<WindowElement>('anth-window')].filter(
-    (window) => window.minimized,
-  )
-  expect(minimized).toHaveLength(1)
+  expect(document.querySelectorAll('anth-window')).toHaveLength(1)
+  expect(tabEditors()).toHaveLength(2)
+  expect(lastWindow()?.minimized).toBe(false)
+
+  const tabs = [...(fileTabs()?.shadowRoot.querySelectorAll<HTMLButtonElement>('.tab-button') ?? [])]
+  expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['/note.txt', '/other.txt'])
+  expect(tabs[1]?.getAttribute('aria-selected')).toBe('true')
+})
+
+test('switches and closes tabs without closing the window', async () => {
+  const element = await mount(fakeClient())
+  await openEditor(element, 'note.txt')
+  const first = lastWindow()
+  first?.shadowRoot.querySelector<HTMLButtonElement>('.control-min')?.click()
+  await first?.updateComplete
+  await openEditor(element, 'other.txt')
+
+  const host = fileTabs()
+  const tabs = [...(host?.shadowRoot.querySelectorAll<HTMLButtonElement>('.tab-button') ?? [])]
+  tabs[0]?.click()
+  await settleWindows()
+
+  const editors = tabEditors()
+  expect(editors[0]?.hidden).toBe(false)
+  expect(editors[1]?.hidden).toBe(true)
+
+  host?.shadowRoot.querySelectorAll<HTMLButtonElement>('.tab-close')[1]?.click()
+  await settleWindows()
+  expect(tabEditors()).toHaveLength(1)
+  expect(lastWindow()).not.toBeNull()
+
+  host?.shadowRoot.querySelector<HTMLButtonElement>('.tab-close')?.click()
+  await settleWindows()
+  expect(lastWindow()).toBeNull()
 })
 
 test('navigates to a path typed in the breadcrumb', async () => {

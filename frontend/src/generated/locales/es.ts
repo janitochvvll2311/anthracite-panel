@@ -101,6 +101,7 @@
 'sa3deee7949f9fece': `detenido`,
 'sa48f8bf001b8a4d0': `Usado`,
 'sa6895584d61478fb': `Libre`,
+'sa75b95980cd80e78': `Editor`,
 'sab8b4cbbb1fa71fa': `Actual`,
 'saef07bb631a84e61': `El host se está reiniciando.`,
 'safd53ef5b98bca6f': `Configura la primera contraseña`,
