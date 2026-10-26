@@ -49,10 +49,19 @@ export class AnthFiles extends LitElement {
   private next: string | null = null
 
   @state()
+  private previewEntry?: FileEntry
+
+  @state()
   private chunk?: FileChunk
 
   @state()
   private previewPath = ''
+
+  @state()
+  private previewUnavailable = false
+
+  @state()
+  private confirmingDelete = false
 
   @state()
   private error = ''
@@ -80,8 +89,11 @@ export class AnthFiles extends LitElement {
       this.path = normalize(path)
       this.entries = page.items
       this.next = page.next ?? null
+      this.previewEntry = undefined
       this.chunk = undefined
       this.previewPath = ''
+      this.previewUnavailable = false
+      this.confirmingDelete = false
       this.editor = undefined
       this.error = ''
     } catch (error) {
@@ -113,14 +125,45 @@ export class AnthFiles extends LitElement {
       return
     }
     const path = join(this.path, entry.name)
+    this.previewEntry = entry
+    this.previewPath = path
+    this.chunk = undefined
+    this.previewUnavailable = false
+    this.confirmingDelete = false
+    this.error = ''
     this.busy = true
     try {
       this.chunk = await this.client.read(path)
-      this.previewPath = path
+    } catch {
+      // Binary files, permissions and transport errors all land on the same
+      // generic placeholder; the details and the actions still work.
+      this.previewUnavailable = true
+    } finally {
+      this.busy = false
+    }
+  }
+
+  private closePreview(): void {
+    this.previewEntry = undefined
+    this.chunk = undefined
+    this.previewPath = ''
+    this.previewUnavailable = false
+    this.confirmingDelete = false
+  }
+
+  private async deleteFile(): Promise<void> {
+    if (!this.client || !this.previewPath) {
+      return
+    }
+    this.busy = true
+    try {
+      await this.client.delete(this.previewPath)
+      const directory = this.path
+      this.closePreview()
+      await this.open(directory)
       this.error = ''
     } catch (error) {
       this.error = describe(error)
-      this.chunk = undefined
     } finally {
       this.busy = false
     }
@@ -269,47 +312,28 @@ export class AnthFiles extends LitElement {
       return html`<p class="empty">${msg('This folder is empty.')}</p>`
     }
     return html`
-      <table>
-        <thead>
-          <tr>
-            <th>${msg('Name')}</th>
-            <th>${msg('Kind')}</th>
-            <th class="num">${msg('Size')}</th>
-            <th class="num">${msg('Modified')}</th>
-            <th class="actions">${msg('Actions')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${this.entries.map(
-            (entry) => html`
-              <tr>
-                <td>
-                  <button type="button" class="entry" @click=${() => this.activate(entry)}>
-                    ${entry.name}${entry.kind === 'dir' ? '/' : ''}
-                  </button>
-                </td>
-                <td>${this.kindLabel(entry.kind)}</td>
-                <td class="num">${entry.kind === 'file' ? formatBytes(entry.size) : '-'}</td>
-                <td class="num">
-                  ${entry.modified_ms > 0 ? new Date(entry.modified_ms).toLocaleString() : '-'}
-                </td>
-                <td class="actions">
-                  ${entry.kind === 'file'
-                    ? html`<button
-                        type="button"
-                        class="action"
-                        ?disabled=${this.busy}
-                        @click=${() => this.edit(entry)}
-                      >
-                        ${msg('Edit')}
-                      </button>`
-                    : nothing}
-                </td>
-              </tr>
-            `,
-          )}
-        </tbody>
-      </table>
+      <div class="rows">
+        <div class="row head" aria-hidden="true">
+          <span>${msg('Name')}</span>
+          <span>${msg('Kind')}</span>
+          <span class="num">${msg('Size')}</span>
+          <span class="num">${msg('Modified')}</span>
+        </div>
+        ${this.entries.map(
+          (entry) => html`
+            <div class="row">
+              <button type="button" class="entry" @click=${() => this.activate(entry)}>
+                ${entry.name}${entry.kind === 'dir' ? '/' : ''}
+              </button>
+              <span>${this.kindLabel(entry.kind)}</span>
+              <span class="num">${entry.kind === 'file' ? formatBytes(entry.size) : '-'}</span>
+              <span class="num">
+                ${entry.modified_ms > 0 ? new Date(entry.modified_ms).toLocaleString() : '-'}
+              </span>
+            </div>
+          `,
+        )}
+      </div>
     `
   }
 
@@ -359,19 +383,104 @@ export class AnthFiles extends LitElement {
     `
   }
 
-  private renderPreview(chunk: FileChunk) {
+  private renderPreview() {
+    const entry = this.previewEntry
+    if (!entry) {
+      return nothing
+    }
     return html`
       <aside class="preview">
         <header>
-          <code>${this.previewPath}</code>
-          <button type="button" @click=${() => (this.chunk = undefined)}>${msg('Close')}</button>
+          <span class="title" title=${this.previewPath}>${entry.name}</span>
+          <div class="actions">
+            ${entry.kind === 'file'
+              ? html`<button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => void this.edit(entry)}
+                >
+                  ${msg('Edit')}
+                </button>`
+              : nothing}
+            ${entry.kind === 'file' || entry.kind === 'symlink'
+              ? html`<button
+                  type="button"
+                  class="danger"
+                  ?disabled=${this.busy}
+                  @click=${() => (this.confirmingDelete = true)}
+                >
+                  ${msg('Delete')}
+                </button>`
+              : nothing}
+            <button type="button" @click=${() => this.closePreview()}>${msg('Close')}</button>
+          </div>
         </header>
-        <pre>${chunk.text}</pre>
-        ${chunk.eof
-          ? nothing
-          : html`<button type="button" ?disabled=${this.busy} @click=${() => this.morePreview()}>
-              ${msg('Load more')}
-            </button>`}
+        ${this.confirmingDelete
+          ? html`
+              <div class="confirm" role="alert">
+                <span>${msg('Delete this file?')}</span>
+                <button
+                  type="button"
+                  class="danger"
+                  ?disabled=${this.busy}
+                  @click=${() => void this.deleteFile()}
+                >
+                  ${msg('Delete')}
+                </button>
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => (this.confirmingDelete = false)}
+                >
+                  ${msg('Cancel')}
+                </button>
+              </div>
+            `
+          : nothing}
+        <dl class="details">
+          <div>
+            <dt>${msg('Path')}</dt>
+            <dd><code>${this.previewPath}</code></dd>
+          </div>
+          <div>
+            <dt>${msg('Kind')}</dt>
+            <dd>${this.kindLabel(entry.kind)}</dd>
+          </div>
+          <div>
+            <dt>${msg('Size')}</dt>
+            <dd>${entry.kind === 'file' ? formatBytes(entry.size) : '-'}</dd>
+          </div>
+          <div>
+            <dt>${msg('Modified')}</dt>
+            <dd>
+              ${entry.modified_ms > 0 ? new Date(entry.modified_ms).toLocaleString() : '-'}
+            </dd>
+          </div>
+        </dl>
+        <div class="content">
+          ${this.chunk
+            ? html`
+                <pre>${this.chunk.text}</pre>
+                ${this.chunk.eof
+                  ? nothing
+                  : html`<button
+                      type="button"
+                      class="more"
+                      ?disabled=${this.busy}
+                      @click=${() => this.morePreview()}
+                    >
+                      ${msg('Load more')}
+                    </button>`}
+              `
+            : this.previewUnavailable
+              ? html`
+                  <div class="placeholder" role="status">
+                    <span class="glyph" aria-hidden="true">▤</span>
+                    <p>${msg('Preview not available for this file.')}</p>
+                  </div>
+                `
+              : html`<p class="placeholder">${msg('Loading…')}</p>`}
+        </div>
       </aside>
     `
   }
@@ -396,7 +505,7 @@ export class AnthFiles extends LitElement {
 
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
 
-        <div class="layout ${this.chunk ? 'preview-open' : ''}">
+        <div class="layout ${this.previewEntry ? 'preview-open' : ''}">
           <div class="listing">
             ${this.busy && this.entries.length === 0
               ? html`<p class="empty">${msg('Loading…')}</p>`
@@ -407,7 +516,7 @@ export class AnthFiles extends LitElement {
                 </button>`
               : nothing}
           </div>
-          ${this.chunk ? this.renderPreview(this.chunk) : nothing}
+          ${this.renderPreview()}
         </div>
         ${this.editor ? this.renderEditor(this.editor) : nothing}
       </section>
@@ -430,7 +539,7 @@ export class AnthFiles extends LitElement {
       gap: 8px;
     }
     .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
-    .crumb, .tools button, .more, .preview button {
+    .crumb, .tools button, .more, .preview button, .confirm button {
       border: 1px solid transparent;
       border-radius: 6px;
       background: transparent;
@@ -439,14 +548,14 @@ export class AnthFiles extends LitElement {
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
-    .crumb:hover, .tools button:hover, .more:hover, .preview button:hover {
+    .crumb:hover, .tools button:hover, .more:hover, .preview button:hover, .confirm button:hover {
       border-color: var(--panel-border, #223041);
       background: rgba(125, 211, 252, 0.06);
     }
     .crumb[aria-current='page'] { color: var(--accent, #7dd3fc); }
     .sep { color: var(--muted, #8b9bad); }
     .tools { display: flex; gap: 6px; }
-    .tools button, .more, .preview button {
+    .tools button, .more, .preview button, .confirm button {
       border-color: var(--panel-border, #223041);
       background: rgba(125, 211, 252, 0.08);
     }
@@ -455,14 +564,23 @@ export class AnthFiles extends LitElement {
 
     .layout { display: grid; gap: 12px; min-width: 0; }
     .listing { min-width: 0; overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font: 13px/1.45 var(--mono, monospace); }
-    th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--panel-border, #223041); }
-    th {
+    .rows { min-width: 0; }
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem 10rem;
+      gap: 0 0.75rem;
+      align-items: baseline;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--panel-border, #223041);
+      font: 13px/1.45 var(--mono, monospace);
+    }
+    .row.head {
       color: var(--muted, #8b9bad);
       font: 600 11px/1.4 var(--mono, monospace);
       letter-spacing: 0.06em;
       text-transform: uppercase;
     }
+    .row > :first-child { min-width: 0; }
     .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .entry {
       border: 0;
@@ -471,20 +589,10 @@ export class AnthFiles extends LitElement {
       color: var(--accent, #7dd3fc);
       font: inherit;
       text-align: left;
+      overflow-wrap: anywhere;
       cursor: pointer;
     }
     .entry:hover { text-decoration: underline; }
-    .actions { width: 1%; text-align: right; white-space: nowrap; }
-    .action {
-      border: 1px solid var(--panel-border, #223041);
-      border-radius: 6px;
-      background: rgba(125, 211, 252, 0.08);
-      color: var(--text, #dbe6f2);
-      padding: 2px 8px;
-      font: 12px/1.4 var(--mono, monospace);
-      cursor: pointer;
-    }
-    .action:hover { background: rgba(125, 211, 252, 0.16); }
     .empty {
       margin: 0;
       padding: 1.5rem 0.75rem;
@@ -502,23 +610,77 @@ export class AnthFiles extends LitElement {
       color: var(--err, #f87171);
     }
     .preview {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      max-height: calc(100dvh - 13rem);
       border: 1px solid var(--panel-border, #223041);
       border-radius: 8px;
       background: var(--panel, #101721);
       padding: 10px;
-      min-width: 0;
     }
     .preview header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .preview pre {
+    .preview .title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font: 12px/1.4 var(--mono, monospace);
+      color: var(--text, #dbe6f2);
+    }
+    .preview .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .preview .danger { border-color: rgba(248, 113, 113, 0.4); color: var(--err, #f87171); }
+    .preview .danger:hover { background: rgba(248, 113, 113, 0.12); }
+    .confirm {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 6px 8px;
+      border: 1px solid rgba(248, 113, 113, 0.4);
+      border-radius: 6px;
+      background: rgba(248, 113, 113, 0.1);
+      font: 12px/1.4 var(--mono, monospace);
+    }
+    .confirm span { margin-right: auto; }
+    .details {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 2px 10px;
       margin: 8px 0 0;
-      max-height: 24rem;
+      font: 12px/1.5 var(--mono, monospace);
+    }
+    .details > div { display: contents; }
+    .details dt { color: var(--muted, #8b9bad); }
+    .details dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .preview .content {
+      flex: 1 1 auto;
+      min-height: 0;
       overflow: auto;
+      margin-top: 8px;
+    }
+    .preview pre {
+      margin: 0;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       font: 12px/1.5 var(--mono, monospace);
       color: var(--text, #dbe6f2);
     }
     .preview code { color: var(--muted, #8b9bad); font: 12px/1.4 var(--mono, monospace); }
+    .placeholder {
+      display: grid;
+      place-items: center;
+      gap: 6px;
+      margin: 0;
+      padding: 2rem 0.75rem;
+      text-align: center;
+      color: var(--muted, #8b9bad);
+      border: 1px dashed var(--panel-border, #223041);
+      border-radius: 8px;
+    }
+    .placeholder p { margin: 0; }
+    .placeholder .glyph { font-size: 1.5rem; line-height: 1; }
     .more { justify-self: start; margin-top: 8px; }
 
     .editor-layer {
@@ -605,11 +767,33 @@ export class AnthFiles extends LitElement {
       .layout.preview-open { grid-template-columns: minmax(0, 1fr) minmax(18rem, 32rem); }
     }
     @media (max-width: 48rem) {
-      /* Below this width the preview and the editor take the panel over
-         instead of sitting beside the listing. */
+      /* Below this width the listing stacks so a name keeps the full row, and
+         the preview and the editor take the panel over instead of sitting
+         beside it. */
+      .row.head { display: none; }
+      .row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "name name"
+          "kind modified";
+        gap: 0.15rem 0.5rem;
+        padding: 0.55rem 0.35rem;
+      }
+      .row > :nth-child(1) { grid-area: name; }
+      .row > :nth-child(2) {
+        grid-area: kind;
+        color: var(--muted, #8b9bad);
+        font-size: 11px;
+      }
+      .row > :nth-child(3) { display: none; }
+      .row > :nth-child(4) {
+        grid-area: modified;
+        color: var(--muted, #8b9bad);
+        font-size: 11px;
+      }
       .layout.preview-open { grid-template-columns: minmax(0, 1fr); }
       .layout.preview-open .listing { display: none; }
-      .preview pre { max-height: none; }
+      .preview { max-height: none; height: calc(100dvh - 12rem); }
       .files.editing { min-height: 0; }
       .files.editing .bar,
       .files.editing .layout,
@@ -619,7 +803,7 @@ export class AnthFiles extends LitElement {
       .editor textarea { min-height: 55vh; resize: none; }
     }
     @media (pointer: coarse) {
-      .crumb, .tools button, .more, .preview button, .entry, .action, .editor .close { min-height: 44px; }
+      .crumb, .tools button, .more, .preview button, .entry, .editor .close { min-height: 44px; }
     }
   `
 }

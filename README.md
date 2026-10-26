@@ -18,9 +18,10 @@ auth/lifecycle slice are in place:
   watch.
 - Minimal auth: `auto`/`generated`/`web` bootstrap, Argon2id, HS256 access
   tokens, rotating refresh tokens, cookies.
-- Read-only file browsing: paginated directory listing and UTF-8 preview over
-  socket, HTTP, CLI and the web Files section, with root containment and
-  `..`/symlink guards.
+- File browsing and editing UI: paginated listing, UTF-8 preview with details
+  and a generic placeholder, a create/edit window, and file deletion behind
+  `files.write`, over socket, HTTP, CLI and the web Files section, with root
+  containment and `..`/symlink guards.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
@@ -33,7 +34,7 @@ auth/lifecycle slice are in place:
 - Config/secrets/state path mapping, atomic writes and comment-preserving
   `config set`; CI for backend and frontend.
 
-The remaining features (processes, files, network, firewall, volumes, accounts,
+The remaining features (processes, network, firewall, volumes, accounts,
 terminal, plugins, settings) arrive in later phases. The plan is
 [docs/design/v0.3.0.md](docs/design/v0.3.0.md); the accepted Phase 0 contracts
 are [docs/design/phase-0-contracts.md](docs/design/phase-0-contracts.md).

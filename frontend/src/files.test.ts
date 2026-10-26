@@ -26,6 +26,7 @@ function fakeClient(): FilesClient {
       eof: true,
       text: 'hello files',
     })),
+    delete: vi.fn(async () => {}),
   }
 }
 
@@ -86,17 +87,47 @@ test('previews a file in place', async () => {
   expect(element.shadowRoot?.querySelector('pre')?.textContent).toBe('hello files')
   // The class drives the mobile swap: preview replaces the listing.
   expect(element.shadowRoot?.querySelector('.layout')?.classList.contains('preview-open')).toBe(true)
+  const details = element.shadowRoot?.querySelector('.details')?.textContent?.replace(/\s+/g, ' ')
+  expect(details).toContain('/note.txt')
+  expect(details).toContain('File')
+  expect(details).toContain('11 B')
 })
 
-test('opens a file in the editor', async () => {
+test('shows a placeholder when a file cannot be previewed', async () => {
+  const client = fakeClient()
+  client.read = vi.fn().mockRejectedValue(new Error('not_text'))
+  const element = await mount(client)
+
+  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
+    (button) => button.textContent?.includes('note.txt'),
+  )
+  file?.click()
+  await settle(element)
+
+  expect(element.shadowRoot?.querySelector('.placeholder')?.textContent).toContain(
+    'Preview not available for this file.',
+  )
+  expect(element.shadowRoot?.querySelector('.error')).toBeNull()
+  expect(element.shadowRoot?.querySelector('.details')?.textContent).toContain('/note.txt')
+})
+
+test('opens a file in the editor from the preview', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
-  const edit = element.shadowRoot?.querySelector<HTMLButtonElement>('.action')
+  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
+    (button) => button.textContent?.includes('note.txt'),
+  )
+  file?.click()
+  await settle(element)
+
+  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Edit'),
+  )
   edit?.click()
   await settle(element)
 
-  expect(client.read).toHaveBeenCalledWith('/note.txt')
+  expect(client.read).toHaveBeenLastCalledWith('/note.txt')
   expect(element.shadowRoot?.querySelector('.editor-layer')).not.toBeNull()
   expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(true)
   expect(element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')?.value).toBe(
@@ -107,6 +138,32 @@ test('opens a file in the editor', async () => {
   await settle(element)
   expect(element.shadowRoot?.querySelector('.editor-layer')).toBeNull()
   expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(false)
+})
+
+test('deletes the previewed file after confirming', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
+    (button) => button.textContent?.includes('note.txt'),
+  )
+  file?.click()
+  await settle(element)
+
+  const remove = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Delete'),
+  )
+  remove?.click()
+  await settle(element)
+  expect(element.shadowRoot?.querySelector('.confirm')?.textContent).toContain('Delete this file?')
+
+  const confirm = element.shadowRoot?.querySelector<HTMLButtonElement>('.confirm .danger')
+  confirm?.click()
+  await settle(element)
+
+  expect(client.delete).toHaveBeenCalledWith('/note.txt')
+  expect(client.list).toHaveBeenCalledTimes(2)
+  expect(element.shadowRoot?.querySelector('.preview')).toBeNull()
 })
 
 test('creates a new file from the toolbar', async () => {

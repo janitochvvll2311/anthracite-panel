@@ -24,6 +24,7 @@ export interface FileChunk {
 export interface FilesClient {
   list(path: string, cursor?: string | null, limit?: number): Promise<FilePage>
   read(path: string, offset?: number, maxBytes?: number): Promise<FileChunk>
+  delete(path: string): Promise<void>
 }
 
 export class HttpFilesClient implements FilesClient {
@@ -49,5 +50,11 @@ export class HttpFilesClient implements FilesClient {
     const response = await this.fetchImpl(`/api/files/read?${params}`)
     if (!response.ok) throw await responseError(response)
     return (await response.json()) as FileChunk
+  }
+
+  async delete(path: string): Promise<void> {
+    const params = new URLSearchParams({ path })
+    const response = await this.fetchImpl(`/api/files?${params}`, { method: 'DELETE' })
+    if (!response.ok) throw await responseError(response)
   }
 }

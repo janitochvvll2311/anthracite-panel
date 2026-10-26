@@ -90,3 +90,20 @@ test('the files client does not call fetch as a method', async () => {
 
   await expect(client.list('/')).resolves.toMatchObject({ items: [] })
 })
+
+test('the files client deletes with a DELETE request', async () => {
+  const calls: { method?: string; url: string }[] = []
+  const fake = ((input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ method: init?.method, url: String(input) })
+    return Promise.resolve(
+      new Response(JSON.stringify({ path: 'note.txt' }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  }) as typeof fetch
+  const client = new HttpFilesClient(fake)
+
+  await client.delete('note.txt')
+
+  expect(calls).toEqual([{ method: 'DELETE', url: '/api/files?path=note.txt' }])
+})

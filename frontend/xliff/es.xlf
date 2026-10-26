@@ -454,10 +454,6 @@
   <source>Up</source>
   <target>Subir</target>
 </trans-unit>
-<trans-unit id="s8af61807443f32a4">
-  <source>Actions</source>
-  <target>Acciones</target>
-</trans-unit>
 <trans-unit id="s64ef2a6c2dd1d3d1">
   <source>Edit</source>
   <target>Editar</target>
@@ -481,6 +477,22 @@
 <trans-unit id="s7f04cf4b6841593a">
   <source>Saving arrives in a later update.</source>
   <target>Guardar estará disponible en una próxima actualización.</target>
+</trans-unit>
+<trans-unit id="sdc673e73b5c13aea">
+  <source>Delete</source>
+  <target>Eliminar</target>
+</trans-unit>
+<trans-unit id="s5b7c55e39c27e871">
+  <source>Delete this file?</source>
+  <target>¿Eliminar este archivo?</target>
+</trans-unit>
+<trans-unit id="s2ceb11be2290bb1b">
+  <source>Cancel</source>
+  <target>Cancelar</target>
+</trans-unit>
+<trans-unit id="s2557e133b53b898e">
+  <source>Preview not available for this file.</source>
+  <target>Vista previa no disponible para este archivo.</target>
 </trans-unit>
 </body>
 </file>
