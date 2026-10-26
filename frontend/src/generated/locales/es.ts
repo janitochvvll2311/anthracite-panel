@@ -16,6 +16,7 @@
 's16e1bead7b9c95ce': `Memoria`,
 's1ccedf72cf7a2cd9': `Tiempo activo`,
 's2b1e95d988e7d0c1': `Cargando información del host…`,
+'s2c8189544e3ea679': `Reintentar`,
 's3cad4921d1a382f9': `La cuenta de operador es`,
 's3d1396b47ff4a56f': `En vivo`,
 's3d197283cb019b5a': `Resumen`,

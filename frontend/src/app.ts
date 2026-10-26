@@ -141,7 +141,9 @@ export class AnthApp extends LitElement {
       <main>
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
         ${!this.auth
-          ? html`<p class="muted">${msg('Loading…')}</p>`
+          ? this.error
+            ? html`<p class="muted"><button type="button" ?disabled=${this.busy} @click=${() => this.load()}>${msg('Retry')}</button></p>`
+            : html`<p class="muted">${msg('Loading…')}</p>`
           : this.ready()
             ? html`
                 <section class="welcome">

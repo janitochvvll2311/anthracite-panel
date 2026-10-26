@@ -44,7 +44,8 @@ export class HttpHostInfoClient implements HostInfoClient {
   private readonly fetchImpl: typeof fetch
 
   constructor(fetchImpl: typeof fetch = fetch) {
-    this.fetchImpl = fetchImpl
+    // Same rule as the auth client: fetch must not be called as a method.
+    this.fetchImpl = fetchImpl.bind(globalThis)
   }
 
   async get(): Promise<HostInfo> {

@@ -17,7 +17,9 @@ export class HttpAuthClient implements AuthClient {
   private readonly fetchImpl: typeof fetch
 
   constructor(fetchImpl: typeof fetch = fetch) {
-    this.fetchImpl = fetchImpl
+    // Browsers reject `obj.fetch(...)` with "Illegal invocation": fetch must
+    // run with `window` as `this`, never with the client instance.
+    this.fetchImpl = fetchImpl.bind(globalThis)
   }
 
   async state(): Promise<AuthState> {
