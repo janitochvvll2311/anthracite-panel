@@ -182,6 +182,82 @@ export class AnthSettings extends LitElement {
     `
   }
 
+  private renderAccount(settings: Settings) {
+    return html`
+      <article class="card">
+        <h3>${msg('Account')}</h3>
+        <dl class="facts">
+          <div><dt>${msg('Username')}</dt><dd>${settings.auth.username}</dd></div>
+          <div><dt>${msg('Authentication')}</dt><dd>${settings.auth.enabled ? msg('on') : msg('off')}</dd></div>
+          <div><dt>${msg('Bootstrap')}</dt><dd>${settings.auth.bootstrap}</dd></div>
+        </dl>
+      </article>
+    `
+  }
+
+  private renderSessionsPanel() {
+    return html`
+      <article class="card">
+        <h3>${msg('Sessions')}</h3>
+        ${this.renderSessions()}
+      </article>
+    `
+  }
+
+  private renderPolicy(settings: Settings) {
+    return html`
+      <article class="card">
+        <h3>${msg('Policy')}</h3>
+        <div class="toggles">
+          ${this.toggles(settings).map((toggle) => this.renderToggle(toggle))}
+        </div>
+      </article>
+    `
+  }
+
+  private renderPaths(settings: Settings) {
+    return html`
+      <article class="card">
+        <h3>${msg('Paths')}</h3>
+        <dl class="facts">
+          <div><dt>${msg('Socket')}</dt><dd><code>${settings.socket_path}</code></dd></div>
+          <div><dt>${msg('State directory')}</dt><dd><code>${settings.state_dir}</code></dd></div>
+          <div><dt>${msg('HTTP address')}</dt><dd><code>${settings.server.addr}</code></dd></div>
+          <div><dt>${msg('Log level')}</dt><dd><code>${settings.log.level}</code></dd></div>
+        </dl>
+      </article>
+    `
+  }
+
+  private renderLifecycle() {
+    return html`
+      <article class="card">
+        <h3>${msg('Lifecycle')}</h3>
+        <p class="muted">${msg('A restart re-reads the configuration. A reboot is refused unless the daemon was started with --allow-reboot.')}</p>
+        <div class="actions">
+          <button type="button" ?disabled=${this.busy} @click=${this.restart}>
+            ${msg('Restart panel')}
+          </button>
+          <label class="delay">
+            ${msg('Delay (seconds)')}
+            <input
+              type="number"
+              min="0"
+              max="300"
+              .value=${String(this.rebootDelay)}
+              @change=${(event: Event) => {
+                this.rebootDelay = Number((event.currentTarget as HTMLInputElement).value)
+              }}
+            />
+          </label>
+          <button class="danger" type="button" ?disabled=${this.busy} @click=${this.reboot}>
+            ${msg('Reboot host')}
+          </button>
+        </div>
+      </article>
+    `
+  }
+
   override render() {
     const settings = this.settings
     return html`
@@ -189,7 +265,7 @@ export class AnthSettings extends LitElement {
         <header class="bar">
           <div>
             <p class="eyebrow">${msg('Settings')}</p>
-            <h2>${msg('Settings')}</h2>
+            <h2>${msg('General')}</h2>
           </div>
           <button type="button" ?disabled=${this.busy} @click=${this.load}>
             ${msg('Reload')}
@@ -210,61 +286,9 @@ export class AnthSettings extends LitElement {
         ${!settings
           ? html`<p class="muted">${msg('Loading settings…')}</p>`
           : html`
-              <article class="card">
-                <h3>${msg('Account')}</h3>
-                <dl class="facts">
-                  <div><dt>${msg('Username')}</dt><dd>${settings.auth.username}</dd></div>
-                  <div><dt>${msg('Authentication')}</dt><dd>${settings.auth.enabled ? msg('on') : msg('off')}</dd></div>
-                  <div><dt>${msg('Bootstrap')}</dt><dd>${settings.auth.bootstrap}</dd></div>
-                </dl>
-              </article>
-
-              <article class="card">
-                <h3>${msg('Sessions')}</h3>
-                ${this.renderSessions()}
-              </article>
-
-              <article class="card">
-                <h3>${msg('Policy')}</h3>
-                <div class="toggles">
-                  ${this.toggles(settings).map((toggle) => this.renderToggle(toggle))}
-                </div>
-              </article>
-
-              <article class="card">
-                <h3>${msg('Paths')}</h3>
-                <dl class="facts">
-                  <div><dt>${msg('Socket')}</dt><dd><code>${settings.socket_path}</code></dd></div>
-                  <div><dt>${msg('State directory')}</dt><dd><code>${settings.state_dir}</code></dd></div>
-                  <div><dt>${msg('HTTP address')}</dt><dd><code>${settings.server.addr}</code></dd></div>
-                  <div><dt>${msg('Log level')}</dt><dd><code>${settings.log.level}</code></dd></div>
-                </dl>
-              </article>
-
-              <article class="card">
-                <h3>${msg('Lifecycle')}</h3>
-                <p class="muted">${msg('A restart re-reads the configuration. A reboot is refused unless the daemon was started with --allow-reboot.')}</p>
-                <div class="actions">
-                  <button type="button" ?disabled=${this.busy} @click=${this.restart}>
-                    ${msg('Restart panel')}
-                  </button>
-                  <label class="delay">
-                    ${msg('Delay (seconds)')}
-                    <input
-                      type="number"
-                      min="0"
-                      max="300"
-                      .value=${String(this.rebootDelay)}
-                      @change=${(event: Event) => {
-                        this.rebootDelay = Number((event.currentTarget as HTMLInputElement).value)
-                      }}
-                    />
-                  </label>
-                  <button class="danger" type="button" ?disabled=${this.busy} @click=${this.reboot}>
-                    ${msg('Reboot host')}
-                  </button>
-                </div>
-              </article>
+              ${this.renderAccount(settings)} ${this.renderSessionsPanel()}
+              ${this.renderPolicy(settings)} ${this.renderPaths(settings)}
+              ${this.renderLifecycle()}
             `}
       </section>
     `

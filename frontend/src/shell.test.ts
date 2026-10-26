@@ -111,24 +111,23 @@ test('the frame keeps the header outside the scroll container', async () => {
   expect(element.classList.contains('auth-only')).toBe(false)
 })
 
-test('the sidebar, the tab strip and the drawer share the destinations', async () => {
+test('the sidebar and the drawer share the sections, and the strip is bare there', async () => {
   const element = mountShell(OPEN)
   await flush()
   const root = element.shadowRoot!
 
   const sidebar = root.querySelector('[data-sidebar]')!
   expect(sidebar.querySelectorAll('a')).toHaveLength(2)
-  expect(sidebar.querySelector('a[data-destination="host"]')).not.toBeNull()
-  expect(sidebar.querySelector('a[data-destination="settings"]')).not.toBeNull()
+  expect(sidebar.querySelector('a[data-section="home"]')).not.toBeNull()
+  expect(sidebar.querySelector('a[data-section="settings"]')).not.toBeNull()
 
   const drawer = root.querySelector('anth-nav-drawer')!
   expect(drawer.querySelectorAll('a')).toHaveLength(2)
 
-  const panel = root.querySelector('anth-tab-panel') as AnthTabPanel
-  const tabs = panel.shadowRoot!.querySelectorAll('.tab')
-  expect(tabs).toHaveLength(2)
-  expect(tabs[0]!.textContent).toBe('Host')
-  expect(tabs[1]!.textContent).toBe('Settings')
+  const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
+  expect(outer.active).toBe('home')
+  // The section strip is hidden: the sidebar already names the sections.
+  expect((outer.shadowRoot!.querySelector('.strip') as HTMLElement).hidden).toBe(true)
 })
 
 test('the menu opens the drawer and the drawer asks the shell to close it', async () => {
@@ -146,25 +145,23 @@ test('the menu opens the drawer and the drawer asks the shell to close it', asyn
   expect(drawer.open).toBe(false)
 })
 
-test('switching a tab parks the inactive panel', async () => {
+test('the settings section owns a single General panel and parks Home', async () => {
   const element = mountShell(OPEN)
   await flush()
   const root = element.shadowRoot!
-  const panel = root.querySelector('anth-tab-panel') as AnthTabPanel
+  const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
 
-  expect(panel.active).toBe('host')
-  expect(panel.querySelector('[data-tab="host"]')).not.toBeNull()
-  expect(panel.querySelector('[data-tab="settings"]')).toBeNull()
-
-  const tabs = panel.shadowRoot!.querySelectorAll<HTMLButtonElement>('.tab')
-  tabs[1]!.click()
+  location.hash = '#/settings'
+  window.dispatchEvent(new Event('hashchange'))
   await flush()
 
-  expect(location.hash).toBe('#/settings')
-  expect(panel.active).toBe('settings')
-  expect(panel.querySelector('[data-tab="settings"]')).not.toBeNull()
-  // The hidden panel is removed, which is what closes its stream.
-  expect(panel.querySelector('[data-tab="host"]')).toBeNull()
+  expect(outer.active).toBe('settings')
+  expect(outer.querySelector('[data-tab="home"]')).toBeNull()
+  const inner = outer.querySelector('anth-tab-panel') as AnthTabPanel
+  expect(inner.active).toBe('general')
+  const tabs = inner.shadowRoot!.querySelectorAll<HTMLButtonElement>('.tab')
+  expect([...tabs].map((tab) => tab.textContent)).toEqual(['General'])
+  expect(inner.querySelector('[data-tab="general"]')?.querySelector('anth-settings')).not.toBeNull()
 })
 
 test('an unauthenticated shell shows the registration form instead of the tabs', async () => {

@@ -386,6 +386,14 @@
   <source>Close navigation</source>
   <target>Cerrar navegación</target>
 </trans-unit>
+<trans-unit id="s6abb1cd87fe0114e">
+  <source>Home</source>
+  <target>Inicio</target>
+</trans-unit>
+<trans-unit id="sc3ac225273c8316b">
+  <source>General</source>
+  <target>General</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

@@ -14,8 +14,14 @@
 import { msg } from '@lit/localize'
 
 import type { AuthClient, AuthState } from './auth-client'
-import { destinations, hashFor, idFromHash } from './destinations'
-import type { AnthFab } from './fab'
+import {
+  hashForPanel,
+  hashForSection,
+  routeFrom,
+  sections,
+  settingsPanels,
+} from './destinations'
+import type { Route, SettingsPanelId } from './destinations'
 import { escape } from './html'
 import type { AnthHostInfo } from './host-info'
 import type { HostInfoClient } from './host-info-client'
@@ -47,14 +53,16 @@ export class AnthApp extends HTMLElement {
   #auth?: AuthState
   #error = ''
   #busy = false
-  #route = idFromHash('')
+  #route: Route = routeFrom('')
   #locale: PanelLocale = 'en'
 
   #frameMounted = false
   #shellMounted = false
   #tabPanel?: AnthTabPanel
-  #hostSection?: HTMLElement
+  #settingsPanel?: AnthTabPanel
+  #homeSection?: HTMLElement
   #settingsSection?: HTMLElement
+  #settingsSections = new Map<SettingsPanelId, HTMLElement>()
   #drawer?: AnthNavDrawer
 
   connectedCallback(): void {
@@ -62,7 +70,7 @@ export class AnthApp extends HTMLElement {
       this.attachShadow({ mode: 'open' })
     }
     this.#locale = currentLocale()
-    this.#route = idFromHash(location.hash)
+    this.#route = routeFrom(location.hash)
     this.#buildFrame()
     globalThis.addEventListener('hashchange', this.#onHashChange)
     globalThis.addEventListener('lit-localize-status', this.#onLocaleChange)
@@ -261,13 +269,13 @@ export class AnthApp extends HTMLElement {
     if (!root) {
       return
     }
-    const links = destinations()
+    const links = sections()
       .map(
-        (destination) => `
-          <a class="nav-item" href="${hashFor(destination)}" data-destination="${destination.id}"
-             ${destination.id === this.#route ? 'data-active aria-current="page"' : ''}>
-            <span class="nav-icon" aria-hidden="true">${escape(destination.icon)}</span>
-            <span class="nav-label">${escape(destination.label)}</span>
+        (section) => `
+          <a class="nav-item" href="${hashForSection(section.id)}" data-section="${section.id}"
+             ${section.id === this.#route.section ? 'data-active aria-current="page"' : ''}>
+            <span class="nav-icon" aria-hidden="true">${escape(section.icon)}</span>
+            <span class="nav-label">${escape(section.label)}</span>
           </a>`,
       )
       .join('')
@@ -311,15 +319,20 @@ export class AnthApp extends HTMLElement {
       ?.addEventListener('submit', register ? this.#onRegister : this.#onLogin)
   }
 
-  /** Mounts the tab strip and both panels the first time the shell is ready. */
+  /**
+   * Mounts the two levels once: sections in a bare tab panel (the sidebar is
+   * their navigation), and the settings panels in a tab strip of their own.
+   */
   #ensureShell(container: HTMLElement): void {
     if (this.#shellMounted) {
       return
     }
-    const panel = document.createElement('anth-tab-panel') as AnthTabPanel
-    panel.setAttribute('active', this.#route)
-    panel.innerHTML = `
-      <section data-tab="host" label="${escape(msg('Host'))}">
+    const outer = document.createElement('anth-tab-panel') as AnthTabPanel
+    // The sidebar already names the sections; a strip here would duplicate it.
+    outer.setAttribute('bare', '')
+    outer.setAttribute('active', this.#route.section)
+    outer.innerHTML = `
+      <section data-tab="home" label="${escape(msg('Home'))}">
         <section class="card" data-host-card>
           <div class="card-head">
             <span class="label">${msg('Host')}</span>
@@ -329,35 +342,59 @@ export class AnthApp extends HTMLElement {
           <anth-fab icon="↻" label="${escape(msg('Refresh host information'))}"></anth-fab>
         </section>
       </section>
-      <section data-tab="settings" label="${escape(msg('Settings'))}">
-        <anth-settings></anth-settings>
-      </section>
+      <section data-tab="settings" label="${escape(msg('Settings'))}"></section>
     `
-    // Assign the clients before the panel joins the page: the panels start
-    // reading from `connectedCallback`, so a later assignment would be a card
-    // that never loads.
-    const host = panel.querySelector<AnthHostInfo>('anth-host-info')
+    const homeSection = outer.querySelector<HTMLElement>('[data-tab="home"]') ?? undefined
+    const settingsSection = outer.querySelector<HTMLElement>('[data-tab="settings"]') ?? undefined
+
+    const inner = document.createElement('anth-tab-panel') as AnthTabPanel
+    inner.setAttribute('active', this.#route.panel)
+    inner.innerHTML = settingsPanels()
+      .map(
+        (panel) => `
+          <section data-tab="${panel.id}" label="${escape(panel.label)}">
+            <anth-settings></anth-settings>
+          </section>`,
+      )
+      .join('')
+    const settingsSections = new Map<SettingsPanelId, HTMLElement>()
+    for (const section of inner.querySelectorAll<HTMLElement>(':scope > section')) {
+      const id = section.dataset.tab as SettingsPanelId | undefined
+      if (id) {
+        settingsSections.set(id, section)
+      }
+    }
+    settingsSection?.append(inner)
+
+    // Assign the clients before the panels join the page: they start reading
+    // from `connectedCallback`, so a later assignment would be a card that
+    // never loads.
+    const host = homeSection?.querySelector<AnthHostInfo>('anth-host-info')
     if (host) {
       host.client = AnthApp.hostClient
     }
-    const settings = panel.querySelector<AnthSettings>('anth-settings')
-    if (settings) {
+    for (const settings of inner.querySelectorAll<AnthSettings>('anth-settings')) {
       settings.client = AnthApp.settingsClient
     }
-    container.append(panel)
 
-    this.#tabPanel = panel
-    this.#hostSection = panel.querySelector<HTMLElement>('[data-tab="host"]') ?? undefined
-    this.#settingsSection = panel.querySelector<HTMLElement>('[data-tab="settings"]') ?? undefined
-    panel
-      .querySelector('[data-refresh]')
+    container.append(outer)
+
+    this.#tabPanel = outer
+    this.#settingsPanel = inner
+    this.#homeSection = homeSection
+    this.#settingsSection = settingsSection
+    this.#settingsSections = settingsSections
+
+    homeSection
+      ?.querySelector('[data-refresh]')
       ?.addEventListener('click', () => void host?.refresh())
-    const fab = panel.querySelector<AnthFab>('anth-fab')
-    fab?.addEventListener('click', () => void host?.refresh())
-    panel.addEventListener(TAB_CHANGE_EVENT, (event) => {
+    homeSection
+      ?.querySelector('anth-fab')
+      ?.addEventListener('click', () => void host?.refresh())
+    inner.addEventListener(TAB_CHANGE_EVENT, (event) => {
       const { id } = (event as CustomEvent<TabChangeDetail>).detail
-      // The hash stays the source of truth, so back and forward walk tabs.
-      location.hash = `#/${id}`
+      // The hash stays the source of truth, so back and forward walk panels.
+      location.hash = hashForPanel(id as SettingsPanelId)
     })
     this.#shellMounted = true
   }
@@ -369,8 +406,10 @@ export class AnthApp extends HTMLElement {
     }
     this.#shellMounted = false
     this.#tabPanel = undefined
-    this.#hostSection = undefined
+    this.#settingsPanel = undefined
+    this.#homeSection = undefined
     this.#settingsSection = undefined
+    this.#settingsSections.clear()
     container.innerHTML = ''
   }
 
@@ -378,9 +417,12 @@ export class AnthApp extends HTMLElement {
     if (!this.#tabPanel) {
       return
     }
-    this.#hostSection?.setAttribute('label', msg('Host'))
+    this.#homeSection?.setAttribute('label', msg('Home'))
     this.#settingsSection?.setAttribute('label', msg('Settings'))
-    const card = this.#hostSection?.querySelector('[data-host-card]')
+    for (const panel of settingsPanels()) {
+      this.#settingsSections.get(panel.id)?.setAttribute('label', panel.label)
+    }
+    const card = this.#homeSection?.querySelector('[data-host-card]')
     const label = card?.querySelector('.card-head .label')
     if (label) {
       label.textContent = msg('Host')
@@ -390,13 +432,17 @@ export class AnthApp extends HTMLElement {
       refresh.textContent = msg('Refresh')
     }
     card?.querySelector('anth-fab')?.setAttribute('label', msg('Refresh host information'))
-    this.#tabPanel.active = this.#route
+    this.#tabPanel.active = this.#route.section
+    if (this.#settingsPanel) {
+      this.#settingsPanel.active = this.#route.panel
+    }
     this.#tabPanel.refresh()
+    this.#settingsPanel?.refresh()
   }
 
   readonly #onHashChange = (): void => {
-    const next = idFromHash(location.hash)
-    if (next === this.#route) {
+    const next = routeFrom(location.hash)
+    if (next.section === this.#route.section && next.panel === this.#route.panel) {
       return
     }
     this.#route = next

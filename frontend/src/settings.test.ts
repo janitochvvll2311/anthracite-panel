@@ -54,14 +54,16 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-test('renders the account, sessions and policy', async () => {
+test('renders every settings group under one General panel', async () => {
   const element = await mount(fakeClient())
   const text = element.shadowRoot?.textContent ?? ''
 
+  expect(text).toContain('General')
   expect(text).toContain('admin')
-  expect(text).toContain('Process control')
   expect(text).toContain('Current')
+  expect(text).toContain('Process control')
   expect(text).toContain('./anth.sock')
+  expect(text).toContain('Restart panel')
 })
 
 test('a policy toggle writes the key and asks for a restart', async () => {

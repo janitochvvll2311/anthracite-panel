@@ -34,7 +34,7 @@ interface TabDefinition {
 
 export class AnthTabPanel extends HTMLElement {
   static get observedAttributes(): string[] {
-    return ['active']
+    return ['active', 'bare']
   }
 
   /** Id of the visible tab. An unknown or empty value selects the first. */
@@ -95,7 +95,7 @@ export class AnthTabPanel extends HTMLElement {
   }
 
   attributeChangedCallback(name: string): void {
-    if (name === 'active') {
+    if (name === 'active' || name === 'bare') {
       this.#paint()
     }
   }
@@ -154,6 +154,7 @@ export class AnthTabPanel extends HTMLElement {
 
     const strip = this.shadowRoot.querySelector<HTMLElement>('.strip')
     if (strip) {
+      strip.hidden = this.hasAttribute('bare')
       strip.innerHTML = ''
       for (const tab of tabs) {
         const button = document.createElement('button')
@@ -203,6 +204,7 @@ const STYLE = `
   :host { display: block; min-width: 0; }
   .strip { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: var(--gap, 1rem);
            border-bottom: 1px solid var(--panel-border, #223041); }
+  .strip[hidden] { display: none; }
   .tab { min-height: 44px; padding: 0.45rem 0.8rem; color: var(--muted, #8b9bad);
          background: transparent; border: 0; border-bottom: 2px solid transparent;
          font: 600 12px/1.3 var(--mono, monospace); letter-spacing: 0.02em;
