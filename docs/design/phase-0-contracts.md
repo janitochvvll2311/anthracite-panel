@@ -10,8 +10,8 @@ workspace, `anth-wire`, `anth-host`, config/state atomic writes, logger, CI,
 Unix socket with `Hello`, HTTP + SSE, CLI `host-info`, minimal auth and the Lit
 shell with its embed guard. Phase 2 adds login rate limiting, session listing
 and revocation, the settings surface and restart/reboot. Phase 3 has started
-with read-only file listing and UTF-8 preview. The remaining feature phases are
-still pending.
+with read-only file listing and UTF-8 preview, including its web panel. The
+remaining feature phases are still pending.
 
 Reference: [v0.3.0.md](v0.3.0.md).
 

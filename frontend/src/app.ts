@@ -15,15 +15,18 @@ import { msg } from '@lit/localize'
 
 import type { AuthClient, AuthState } from './auth-client'
 import {
+  filesPanels,
   hashForPanel,
   hashForSection,
   routeFrom,
   sections,
   settingsPanels,
 } from './destinations'
-import type { Route, SettingsPanelId } from './destinations'
+import type { PanelId, Route } from './destinations'
 import { escape } from './html'
+import type { AnthFiles } from './files'
 import type { AnthHostInfo } from './host-info'
+import type { FilesClient } from './files-client'
 import type { HostInfoClient } from './host-info-client'
 import { changeLocale, currentLocale } from './i18n'
 import type { PanelLocale } from './i18n'
@@ -37,6 +40,7 @@ import type { AnthTabPanel, TabChangeDetail } from './tab-panel'
 // The shell renders these, so it imports them: a test that mounts `anth-app`
 // on its own must still get working custom elements.
 import './fab'
+import './files'
 import './host-info'
 import './nav-drawer'
 import './settings'
@@ -48,6 +52,7 @@ export class AnthApp extends HTMLElement {
   /** Set before mounting by `main`, or replaced by a test. */
   static authClient: AuthClient | undefined
   static hostClient: HostInfoClient | undefined
+  static filesClient: FilesClient | undefined
   static settingsClient: SettingsClient | undefined
 
   #auth?: AuthState
@@ -59,10 +64,13 @@ export class AnthApp extends HTMLElement {
   #frameMounted = false
   #shellMounted = false
   #tabPanel?: AnthTabPanel
+  #filesPanel?: AnthTabPanel
   #settingsPanel?: AnthTabPanel
   #homeSection?: HTMLElement
+  #filesSection?: HTMLElement
   #settingsSection?: HTMLElement
-  #settingsSections = new Map<SettingsPanelId, HTMLElement>()
+  #filesTabSection?: HTMLElement
+  #generalTabSection?: HTMLElement
   #drawer?: AnthNavDrawer
 
   connectedCallback(): void {
@@ -321,7 +329,7 @@ export class AnthApp extends HTMLElement {
 
   /**
    * Mounts the two levels once: sections in a bare tab panel (the sidebar is
-   * their navigation), and the settings panels in a tab strip of their own.
+   * their navigation), and one tab strip per section that owns a panel.
    */
   #ensureShell(container: HTMLElement): void {
     if (this.#shellMounted) {
@@ -342,14 +350,29 @@ export class AnthApp extends HTMLElement {
           <anth-fab icon="↻" label="${escape(msg('Refresh host information'))}"></anth-fab>
         </section>
       </section>
+      <section data-tab="files" label="${escape(msg('Files'))}"></section>
       <section data-tab="settings" label="${escape(msg('Settings'))}"></section>
     `
     const homeSection = outer.querySelector<HTMLElement>('[data-tab="home"]') ?? undefined
+    const filesSection = outer.querySelector<HTMLElement>('[data-tab="files"]') ?? undefined
     const settingsSection = outer.querySelector<HTMLElement>('[data-tab="settings"]') ?? undefined
 
-    const inner = document.createElement('anth-tab-panel') as AnthTabPanel
-    inner.setAttribute('active', this.#route.panel)
-    inner.innerHTML = settingsPanels()
+    const filesPanel = document.createElement('anth-tab-panel') as AnthTabPanel
+    filesPanel.setAttribute('active', 'files')
+    filesPanel.innerHTML = filesPanels()
+      .map(
+        (panel) => `
+          <section data-tab="${panel.id}" label="${escape(panel.label)}">
+            <anth-files></anth-files>
+          </section>`,
+      )
+      .join('')
+    const filesTabSection = filesPanel.querySelector<HTMLElement>(':scope > section') ?? undefined
+    filesSection?.append(filesPanel)
+
+    const settingsPanel = document.createElement('anth-tab-panel') as AnthTabPanel
+    settingsPanel.setAttribute('active', 'general')
+    settingsPanel.innerHTML = settingsPanels()
       .map(
         (panel) => `
           <section data-tab="${panel.id}" label="${escape(panel.label)}">
@@ -357,14 +380,9 @@ export class AnthApp extends HTMLElement {
           </section>`,
       )
       .join('')
-    const settingsSections = new Map<SettingsPanelId, HTMLElement>()
-    for (const section of inner.querySelectorAll<HTMLElement>(':scope > section')) {
-      const id = section.dataset.tab as SettingsPanelId | undefined
-      if (id) {
-        settingsSections.set(id, section)
-      }
-    }
-    settingsSection?.append(inner)
+    const generalTabSection =
+      settingsPanel.querySelector<HTMLElement>(':scope > section') ?? undefined
+    settingsSection?.append(settingsPanel)
 
     // Assign the clients before the panels join the page: they start reading
     // from `connectedCallback`, so a later assignment would be a card that
@@ -373,17 +391,24 @@ export class AnthApp extends HTMLElement {
     if (host) {
       host.client = AnthApp.hostClient
     }
-    for (const settings of inner.querySelectorAll<AnthSettings>('anth-settings')) {
+    const files = filesPanel.querySelector<AnthFiles>('anth-files')
+    if (files) {
+      files.client = AnthApp.filesClient
+    }
+    for (const settings of settingsPanel.querySelectorAll<AnthSettings>('anth-settings')) {
       settings.client = AnthApp.settingsClient
     }
 
     container.append(outer)
 
     this.#tabPanel = outer
-    this.#settingsPanel = inner
+    this.#filesPanel = filesPanel
+    this.#settingsPanel = settingsPanel
     this.#homeSection = homeSection
+    this.#filesSection = filesSection
     this.#settingsSection = settingsSection
-    this.#settingsSections = settingsSections
+    this.#filesTabSection = filesTabSection
+    this.#generalTabSection = generalTabSection
 
     homeSection
       ?.querySelector('[data-refresh]')
@@ -391,10 +416,14 @@ export class AnthApp extends HTMLElement {
     homeSection
       ?.querySelector('anth-fab')
       ?.addEventListener('click', () => void host?.refresh())
-    inner.addEventListener(TAB_CHANGE_EVENT, (event) => {
+    filesPanel.addEventListener(TAB_CHANGE_EVENT, (event) => {
       const { id } = (event as CustomEvent<TabChangeDetail>).detail
       // The hash stays the source of truth, so back and forward walk panels.
-      location.hash = hashForPanel(id as SettingsPanelId)
+      location.hash = hashForPanel(id as PanelId)
+    })
+    settingsPanel.addEventListener(TAB_CHANGE_EVENT, (event) => {
+      const { id } = (event as CustomEvent<TabChangeDetail>).detail
+      location.hash = hashForPanel(id as PanelId)
     })
     this.#shellMounted = true
   }
@@ -406,10 +435,13 @@ export class AnthApp extends HTMLElement {
     }
     this.#shellMounted = false
     this.#tabPanel = undefined
+    this.#filesPanel = undefined
     this.#settingsPanel = undefined
     this.#homeSection = undefined
+    this.#filesSection = undefined
     this.#settingsSection = undefined
-    this.#settingsSections.clear()
+    this.#filesTabSection = undefined
+    this.#generalTabSection = undefined
     container.innerHTML = ''
   }
 
@@ -418,10 +450,10 @@ export class AnthApp extends HTMLElement {
       return
     }
     this.#homeSection?.setAttribute('label', msg('Home'))
+    this.#filesSection?.setAttribute('label', msg('Files'))
     this.#settingsSection?.setAttribute('label', msg('Settings'))
-    for (const panel of settingsPanels()) {
-      this.#settingsSections.get(panel.id)?.setAttribute('label', panel.label)
-    }
+    this.#filesTabSection?.setAttribute('label', msg('Files'))
+    this.#generalTabSection?.setAttribute('label', msg('General'))
     const card = this.#homeSection?.querySelector('[data-host-card]')
     const label = card?.querySelector('.card-head .label')
     if (label) {
@@ -433,10 +465,14 @@ export class AnthApp extends HTMLElement {
     }
     card?.querySelector('anth-fab')?.setAttribute('label', msg('Refresh host information'))
     this.#tabPanel.active = this.#route.section
+    if (this.#filesPanel) {
+      this.#filesPanel.active = 'files'
+    }
     if (this.#settingsPanel) {
-      this.#settingsPanel.active = this.#route.panel
+      this.#settingsPanel.active = 'general'
     }
     this.#tabPanel.refresh()
+    this.#filesPanel?.refresh()
     this.#settingsPanel?.refresh()
   }
 

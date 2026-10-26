@@ -394,6 +394,66 @@
   <source>General</source>
   <target>General</target>
 </trans-unit>
+<trans-unit id="s803ce7e1a2294d50">
+  <source>Files</source>
+  <target>Archivos</target>
+</trans-unit>
+<trans-unit id="s4de8e17afbc4b713">
+  <source>No files client was configured</source>
+  <target>No se configuró un cliente de archivos</target>
+</trans-unit>
+<trans-unit id="s9434ea90b6fee97d">
+  <source>Folder</source>
+  <target>Carpeta</target>
+</trans-unit>
+<trans-unit id="sd1f81284eeb7b503">
+  <source>File</source>
+  <target>Archivo</target>
+</trans-unit>
+<trans-unit id="s3cf89cb47fdde7e9">
+  <source>Link</source>
+  <target>Enlace</target>
+</trans-unit>
+<trans-unit id="sc9e494c8346b7cb5">
+  <source>Other</source>
+  <target>Otro</target>
+</trans-unit>
+<trans-unit id="s2e532e19ed477a56">
+  <source>Path</source>
+  <target>Ruta</target>
+</trans-unit>
+<trans-unit id="s311e3f068f60fff6">
+  <source>This folder is empty.</source>
+  <target>Esta carpeta está vacía.</target>
+</trans-unit>
+<trans-unit id="sef49aec68fd1dc66">
+  <source>Name</source>
+  <target>Nombre</target>
+</trans-unit>
+<trans-unit id="s70af97de3ad8fb23">
+  <source>Kind</source>
+  <target>Tipo</target>
+</trans-unit>
+<trans-unit id="s78789724e789221c">
+  <source>Size</source>
+  <target>Tamaño</target>
+</trans-unit>
+<trans-unit id="s7f47cec3e840a432">
+  <source>Modified</source>
+  <target>Modificado</target>
+</trans-unit>
+<trans-unit id="s5e8250fb85d64c23">
+  <source>Close</source>
+  <target>Cerrar</target>
+</trans-unit>
+<trans-unit id="s7584ded3d749c75e">
+  <source>Load more</source>
+  <target>Cargar más</target>
+</trans-unit>
+<trans-unit id="s09313a07b5c3ab60">
+  <source>Up</source>
+  <target>Subir</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

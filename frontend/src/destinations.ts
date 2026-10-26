@@ -1,16 +1,17 @@
 /**
  * Where the shell can navigate, in one place.
  *
- * There are two levels: the sidebar sections (Home, Settings) and, inside
- * Settings, the panels the section owns. The sidebar and the drawer render the
- * sections; the tab strip renders the panels of the section that is open. That
- * keeps a destination declared once and out of the other level's list.
+ * There are two levels: the sidebar sections (Home, Files, Settings) and, inside
+ * a section that owns more than one panel, the tab strip. The sidebar and the
+ * drawer render the sections; the tab strip renders the panels of the section
+ * that is open. That keeps a destination declared once and out of the other
+ * level's list.
  */
 
 import { msg } from '@lit/localize'
 
-export type SectionId = 'home' | 'settings'
-export type SettingsPanelId = 'general'
+export type SectionId = 'home' | 'files' | 'settings'
+export type PanelId = 'general' | 'files'
 
 export interface Section {
   /** Stable id. It is the route and the hash, so it never changes. */
@@ -21,28 +22,33 @@ export interface Section {
   icon: string
 }
 
-export interface SettingsPanel {
+export interface Panel {
   /** Stable id. It is the tab id and the route segment. */
-  id: SettingsPanelId
+  id: PanelId
   label: string
 }
 
 export interface Route {
   section: SectionId
-  /** Only meaningful when `section` is `settings`. */
-  panel: SettingsPanelId
+  panel: PanelId
 }
 
 /** Labels are built per call so a locale change is picked up by the next paint. */
 export function sections(): Section[] {
   return [
     { id: 'home', label: msg('Home'), icon: '▤' },
+    { id: 'files', label: msg('Files'), icon: '🗀' },
     { id: 'settings', label: msg('Settings'), icon: '⚙' },
   ]
 }
 
-/** The panels that live under the Settings section. */
-export function settingsPanels(): SettingsPanel[] {
+/** The single panel the Files section owns. */
+export function filesPanels(): Panel[] {
+  return [{ id: 'files', label: msg('Files') }]
+}
+
+/** The single panel the Settings section owns. */
+export function settingsPanels(): Panel[] {
   return [{ id: 'general', label: msg('General') }]
 }
 
@@ -52,18 +58,28 @@ export function routeFrom(hash: string): Route {
     .replace(/^#\/?/, '')
     .split('/')
     .filter(Boolean)
+  if (parts[0] === 'files') {
+    return { section: 'files', panel: 'files' }
+  }
   if (parts[0] === 'settings') {
     return { section: 'settings', panel: 'general' }
   }
   return { section: 'home', panel: 'general' }
 }
 
-/** The hash for a section. Settings defaults to its only panel. */
+/** The hash for a section. */
 export function hashForSection(section: SectionId): string {
-  return section === 'settings' ? '#/settings' : '#/'
+  switch (section) {
+    case 'files':
+      return '#/files'
+    case 'settings':
+      return '#/settings'
+    default:
+      return '#/'
+  }
 }
 
-/** The hash for one panel inside Settings. */
-export function hashForPanel(panel: SettingsPanelId): string {
-  return panel === 'general' ? '#/settings' : `#/settings/${panel}`
+/** The hash for one panel. */
+export function hashForPanel(panel: PanelId): string {
+  return panel === 'files' ? '#/files' : '#/settings'
 }

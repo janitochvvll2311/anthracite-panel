@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest'
 
 import { HttpAuthClient } from './auth-client'
+import { HttpFilesClient } from './files-client'
 import { HttpHostInfoClient } from './host-info-client'
 import { HttpSettingsClient } from './settings-client'
 
@@ -82,4 +83,10 @@ test('the settings client does not call fetch as a method', async () => {
   )
 
   await expect(client.get()).resolves.toMatchObject({ version: 1 })
+})
+
+test('the files client does not call fetch as a method', async () => {
+  const client = new HttpFilesClient(browserFetch({ items: [], next: null }))
+
+  await expect(client.list('/')).resolves.toMatchObject({ items: [] })
 })

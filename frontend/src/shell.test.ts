@@ -73,6 +73,10 @@ function mountShell(state: AuthState): AnthApp {
       return () => {}
     }),
   }
+  AnthApp.filesClient = {
+    list: vi.fn().mockResolvedValue({ items: [], next: null }),
+    read: vi.fn(),
+  }
   AnthApp.settingsClient = settingsClient()
   const element = document.createElement('anth-app') as AnthApp
   document.body.append(element)
@@ -91,6 +95,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   AnthApp.authClient = undefined
   AnthApp.hostClient = undefined
+  AnthApp.filesClient = undefined
   AnthApp.settingsClient = undefined
   location.hash = ''
 })
@@ -117,12 +122,13 @@ test('the sidebar and the drawer share the sections, and the strip is bare there
   const root = element.shadowRoot!
 
   const sidebar = root.querySelector('[data-sidebar]')!
-  expect(sidebar.querySelectorAll('a')).toHaveLength(2)
+  expect(sidebar.querySelectorAll('a')).toHaveLength(3)
   expect(sidebar.querySelector('a[data-section="home"]')).not.toBeNull()
+  expect(sidebar.querySelector('a[data-section="files"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="settings"]')).not.toBeNull()
 
   const drawer = root.querySelector('anth-nav-drawer')!
-  expect(drawer.querySelectorAll('a')).toHaveLength(2)
+  expect(drawer.querySelectorAll('a')).toHaveLength(3)
 
   const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
   expect(outer.active).toBe('home')
@@ -143,6 +149,28 @@ test('the menu opens the drawer and the drawer asks the shell to close it', asyn
 
   drawer.dispatchEvent(new CustomEvent(DRAWER_CLOSE_EVENT))
   expect(drawer.open).toBe(false)
+})
+
+test('the files section owns its own Files tab', async () => {
+  const element = mountShell(OPEN)
+  await flush()
+  const root = element.shadowRoot!
+  const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
+
+  location.hash = '#/files'
+  window.dispatchEvent(new Event('hashchange'))
+  await flush()
+
+  expect(outer.active).toBe('files')
+  expect(outer.querySelector('[data-tab="home"]')).toBeNull()
+  const inner = outer.querySelector('anth-tab-panel') as AnthTabPanel
+  expect(inner.active).toBe('files')
+  expect([...inner.shadowRoot!.querySelectorAll('.tab')].map((tab) => tab.textContent)).toEqual([
+    'Files',
+  ])
+  expect(
+    inner.querySelector('[data-tab="files"]')?.querySelector('anth-files'),
+  ).not.toBeNull()
 })
 
 test('the settings section owns a single General panel and parks Home', async () => {
