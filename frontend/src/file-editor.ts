@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { live } from 'lit/directives/live.js'
 import { repeat } from 'lit/directives/repeat.js'
-import { localized, msg } from '@lit/localize'
+import { localized, msg, str } from '@lit/localize'
 
 import type { EditorState as CodeMirrorState } from '@codemirror/state'
 import type { EditorView as CodeMirrorView } from '@codemirror/view'
@@ -76,14 +76,29 @@ export class AnthFileEditor extends LitElement {
   @state()
   private engine: 'plain' | 'codemirror' = 'plain'
 
+  @state()
+  private line = 1
+
+  @state()
+  private column = 1
+
+  @state()
+  private selected = 0
+
+  @state()
+  private languageName = ''
+
   private view?: CodeMirrorView
 
   private mounting = false
 
   private tried = false
 
+  private reconfigureLanguage?: (name: string) => Promise<void>
+
   override connectedCallback(): void {
     super.connectedCallback()
+    this.languageName = msg('Plain text')
     if (this.mode === 'edit') {
       void this.load()
     } else {
@@ -136,9 +151,18 @@ export class AnthFileEditor extends LitElement {
     }
     this.mounting = true
     try {
-      const [{ EditorView, basicSetup }, { EditorState }] = await Promise.all([
+      const [
+        { EditorView, basicSetup },
+        { Compartment, EditorState },
+        { HighlightStyle, LanguageDescription, syntaxHighlighting },
+        { tags },
+        { languages },
+      ] = await Promise.all([
         import('codemirror'),
         import('@codemirror/state'),
+        import('@codemirror/language'),
+        import('@lezer/highlight'),
+        import('@codemirror/language-data'),
       ])
       if (!this.isConnected) {
         return
@@ -154,10 +178,78 @@ export class AnthFileEditor extends LitElement {
         this.engine = 'plain'
         return
       }
+
+      const highlight = HighlightStyle.define([
+        { tag: tags.keyword, color: '#c792ea' },
+        {
+          tag: [
+            tags.name,
+            tags.deleted,
+            tags.character,
+            tags.propertyName,
+            tags.macroName,
+          ],
+          color: '#dbe6f2',
+        },
+        { tag: [tags.function(tags.variableName), tags.labelName], color: '#7dd3fc' },
+        {
+          tag: [tags.color, tags.constant(tags.name), tags.standard(tags.name)],
+          color: '#fbbf24',
+        },
+        { tag: [tags.definition(tags.name), tags.separator], color: '#dbe6f2' },
+        {
+          tag: [
+            tags.typeName,
+            tags.className,
+            tags.number,
+            tags.changed,
+            tags.annotation,
+            tags.modifier,
+            tags.self,
+            tags.namespace,
+          ],
+          color: '#f59e0b',
+        },
+        {
+          tag: [tags.operator, tags.operatorKeyword, tags.url, tags.escape, tags.regexp],
+          color: '#7dd3fc',
+        },
+        { tag: [tags.meta, tags.comment], color: '#8b9bad', fontStyle: 'italic' },
+        { tag: tags.strong, fontWeight: 'bold' },
+        { tag: tags.emphasis, fontStyle: 'italic' },
+        { tag: tags.strikethrough, textDecoration: 'line-through' },
+        { tag: tags.link, color: '#7dd3fc', textDecoration: 'underline' },
+        { tag: [tags.atom, tags.bool, tags.special(tags.variableName)], color: '#f87171' },
+        { tag: [tags.processingInstruction, tags.string, tags.inserted], color: '#86efac' },
+        { tag: tags.invalid, color: '#f87171' },
+      ])
+
+      const compartment = new Compartment()
+      const detect = async (name: string) => {
+        const description = LanguageDescription.matchFilename(languages, name)
+        if (!description) {
+          return { support: null, name: msg('Plain text') }
+        }
+        try {
+          return { support: await description.load(), name: description.name }
+        } catch {
+          return { support: null, name: msg('Plain text') }
+        }
+      }
+      const initial = await detect(this.name)
+      this.languageName = initial.name
+      this.reconfigureLanguage = async (name: string) => {
+        const detected = await detect(name)
+        this.languageName = detected.name
+        this.view?.dispatch({ effects: compartment.reconfigure(detected.support ?? []) })
+      }
+
       const state: CodeMirrorState = EditorState.create({
         doc: this.text,
         extensions: [
           basicSetup,
+          compartment.of(initial.support ?? []),
+          syntaxHighlighting(highlight),
           EditorView.contentAttributes.of({
             'aria-label': msg('Content'),
             spellcheck: 'false',
@@ -165,6 +257,9 @@ export class AnthFileEditor extends LitElement {
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               this.text = update.state.doc.toString()
+            }
+            if (update.docChanged || update.selectionSet) {
+              this.syncViewCursor(update.state)
             }
           }),
           EditorView.theme(
@@ -200,6 +295,7 @@ export class AnthFileEditor extends LitElement {
         ],
       })
       this.view = new EditorView({ state, parent: host })
+      this.syncViewCursor(state)
       this.focusField()
     } catch {
       this.engine = 'plain'
@@ -231,6 +327,9 @@ export class AnthFileEditor extends LitElement {
         text += chunk.text
       }
       this.text = text
+      this.line = 1
+      this.column = 1
+      this.selected = 0
     } catch (error) {
       this.error = describe(error)
       this.blocked = true
@@ -260,10 +359,37 @@ export class AnthFileEditor extends LitElement {
         detail: { title },
       }),
     )
+    void this.reconfigureLanguage?.(this.name)
   }
 
   private updateText(event: Event): void {
-    this.text = (event.target as HTMLTextAreaElement).value
+    const area = event.target as HTMLTextAreaElement
+    this.text = area.value
+    this.syncCursor(area.value, area.selectionStart, area.selectionEnd)
+  }
+
+  private onTextareaCursor(event: Event): void {
+    const area = event.target as HTMLTextAreaElement
+    this.syncCursor(area.value, area.selectionStart, area.selectionEnd)
+  }
+
+  private syncCursor(value: string, start: number, end: number): void {
+    const before = value.slice(0, start)
+    this.line = before.split('\n').length
+    this.column = start - before.lastIndexOf('\n')
+    this.selected = Math.abs(end - start)
+  }
+
+  private syncViewCursor(state: CodeMirrorState): void {
+    const head = state.selection.main.head
+    const line = state.doc.lineAt(head)
+    this.line = line.number
+    this.column = head - line.from + 1
+    this.selected = Math.abs(state.selection.main.to - state.selection.main.from)
+  }
+
+  private lineEnding(): string {
+    return this.text.includes('\r\n') ? 'CRLF' : 'LF'
   }
 
   private async save(): Promise<void> {
@@ -334,6 +460,10 @@ export class AnthFileEditor extends LitElement {
             ?hidden=${this.engine === 'codemirror'}
             ?disabled=${!this.loaded || this.blocked}
             @input=${this.updateText}
+            @keyup=${this.onTextareaCursor}
+            @click=${this.onTextareaCursor}
+            @select=${this.onTextareaCursor}
+            @focus=${this.onTextareaCursor}
           ></textarea>
         </div>
         <footer>
@@ -350,6 +480,16 @@ export class AnthFileEditor extends LitElement {
             ${msg('Save')}
           </button>
         </footer>
+        <div class="statusbar">
+          <span>${msg(str`Ln ${this.line}, Col ${this.column}`)}</span>
+          ${this.selected > 0
+            ? html`<span>${msg(str`Sel ${this.selected}`)}</span>`
+            : nothing}
+          <span class="spacer"></span>
+          <span>${this.languageName}</span>
+          <span>UTF-8</span>
+          <span>${this.lineEnding()}</span>
+        </div>
       </div>
     `
   }
@@ -394,29 +534,32 @@ export class AnthFileEditor extends LitElement {
     }
     .surface {
       display: flex;
-      flex: 1 1 auto;
+      flex: 1 1 0;
       min-width: 0;
       min-height: 0;
     }
     .codemirror {
+      position: relative;
       display: flex;
-      flex: 1 1 auto;
+      flex: 1 1 0;
       min-width: 0;
       min-height: 0;
       overflow: hidden;
     }
     .codemirror .cm-editor {
-      flex: 1 1 auto;
-      width: 100%;
+      position: absolute;
+      inset: 0;
       min-width: 0;
-      height: 100%;
+      min-height: 0;
+      width: auto;
+      height: auto;
     }
     .codemirror .cm-scroller {
       overflow: auto;
       overscroll-behavior: contain;
     }
     textarea {
-      flex: 1 1 auto;
+      flex: 1 1 0;
       min-width: 0;
       min-height: 0;
       resize: vertical;
@@ -448,6 +591,18 @@ export class AnthFileEditor extends LitElement {
     .save:hover:not(:disabled) { background: rgba(125, 211, 252, 0.26); }
     .save:disabled { opacity: 0.5; cursor: default; }
     .save:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
+    .statusbar {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0 10px;
+      padding-top: 5px;
+      border-top: 1px solid var(--panel-border, #223041);
+      color: var(--muted, #8b9bad);
+      font: 11px/1.4 var(--mono, monospace);
+    }
+    .statusbar .spacer { flex: 1 1 auto; }
     .error {
       margin: 0;
       padding: 0.5rem 0.65rem;

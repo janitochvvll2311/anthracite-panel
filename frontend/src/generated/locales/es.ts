@@ -3,7 +3,7 @@
     // Re-generate this file by running lit-localize
 
     
-    
+    import {str} from '@lit/localize';
 
     /* eslint-disable no-irregular-whitespace */
     /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -49,6 +49,7 @@
 's4de8e17afbc4b713': `No se configuró un cliente de archivos`,
 's4e99ddb3c388e596': `Reinicia el panel para aplicar los cambios.`,
 's5515a136187c74c0': `Confirmar contraseña`,
+'s5597788eab931ecf': str`Ln ${0}, Col ${1}`,
 's55cb5df23153f152': `Nombre del archivo`,
 's57ceab080115d392': `Aún no hay información del host.`,
 's5a34b413c316fdab': `en pausa`,
@@ -66,6 +67,8 @@
 's64ef2a6c2dd1d3d1': `Editar`,
 's66dd6a35c1114387': `Las contraseñas no coinciden.`,
 's674c6a1d96d9ebeb': `Swap usado`,
+'s67bf5996b8c30a1d': str`Sel ${0}`,
+'s67d906865b6518fe': `Texto plano`,
 's69f615ea583c4629': `Un reinicio vuelve a leer la configuración. Un reinicio del host se rechaza salvo que el daemon se haya iniciado con --allow-reboot.`,
 's6abb1cd87fe0114e': `Inicio`,
 's6b05f9d8801fc14f': `Host`,

@@ -434,6 +434,32 @@ test('saves an edited file and reloads the preview', async () => {
   expect(element.shadowRoot?.querySelector('.preview')).not.toBeNull()
 })
 
+test('shows a classic status bar with the cursor position', async () => {
+  const element = await mount(fakeClient())
+
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('New file'),
+  )
+  create?.click()
+  await settle(element)
+  await settleWindows()
+
+  const editor = lastEditor()
+  const area = editor?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')
+  if (area) {
+    area.value = 'a\nbc'
+    area.setSelectionRange(3, 3)
+    area.dispatchEvent(new Event('input'))
+  }
+  await settleWindows()
+
+  const status = editor?.shadowRoot.querySelector('.statusbar')?.textContent?.replace(/\s+/g, ' ')
+  expect(status).toContain('Ln 2, Col 2')
+  expect(status).toContain('Plain text')
+  expect(status).toContain('UTF-8')
+  expect(status).toContain('LF')
+})
+
 test('creates a file from the editor', async () => {
   const client = fakeClient()
   const element = await mount(client)

@@ -518,6 +518,18 @@
   <source>Editor</source>
   <target>Editor</target>
 </trans-unit>
+<trans-unit id="s67d906865b6518fe">
+  <source>Plain text</source>
+  <target>Texto plano</target>
+</trans-unit>
+<trans-unit id="s5597788eab931ecf">
+  <source>Ln <x id="0" equiv-text="${this.line}"/>, Col <x id="1" equiv-text="${this.column}"/></source>
+  <target>Ln <x id="0" equiv-text="${this.line}"/>, Col <x id="1" equiv-text="${this.column}"/></target>
+</trans-unit>
+<trans-unit id="s67bf5996b8c30a1d">
+  <source>Sel <x id="0" equiv-text="${this.selected}"/></source>
+  <target>Sel <x id="0" equiv-text="${this.selected}"/></target>
+</trans-unit>
 </body>
 </file>
 </xliff>
