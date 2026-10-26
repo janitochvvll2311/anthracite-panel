@@ -102,6 +102,23 @@ On a terminal each watch frame overwrites the previous one. When the output is
 redirected, frames are separated by a blank line. `Ctrl-C` exits `0`; a dropped
 daemon exits `1`.
 
+## `files`
+
+```bash
+anth-panel files list
+anth-panel files list --path /etc --limit 50
+anth-panel files list --path /var/log --cursor <opaque>
+anth-panel files read --path /etc/hosts
+anth-panel files read --path big.log --offset 4096 --max-bytes 8192
+```
+
+`list` reads one page of a directory under `[files] root` (`/` by default),
+sorted by name. `--limit` is 1–1000; `--cursor` is the `next` value from the
+previous page. `read` prints a UTF-8 text file, capped by
+`files.max_preview_bytes`; when it stops early, the next offset is printed to
+stderr. Paths are relative to the root; `..` and paths that escape it through a
+symlink are refused.
+
 ## `config`
 
 ```bash

@@ -68,6 +68,11 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         delay: u32,
     },
+    /// Browse and read files under the configured root.
+    Files {
+        #[command(subcommand)]
+        command: FilesCommand,
+    },
     /// Print a snapshot of the host the daemon runs on.
     HostInfo {
         /// Keep reading every INTERVAL instead of printing once.
@@ -101,6 +106,34 @@ enum ConfigCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum FilesCommand {
+    /// List a directory under the file root.
+    List {
+        /// Path relative to the file root.
+        #[arg(long, default_value = "/", value_name = "PATH")]
+        path: String,
+        /// Maximum entries in this page (1-1000).
+        #[arg(long)]
+        limit: Option<u16>,
+        /// Opaque cursor from a previous page.
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Print a UTF-8 text file.
+    Read {
+        /// Path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// Byte offset to start at.
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        /// Maximum bytes to read.
+        #[arg(long)]
+        max_bytes: Option<u64>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run().await {
@@ -127,6 +160,7 @@ async fn run() -> CliResult {
         Command::Reboot { delay } => {
             lifecycle_command(&path, LifecycleRequest::Reboot(*delay)).await
         }
+        Command::Files { command } => files_command(&path, command).await,
         Command::Run { addr, allow_reboot } => {
             serve(&path, Some(addr.clone()), *allow_reboot, &cli).await
         }
@@ -266,6 +300,73 @@ async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) ->
             Ok(())
         }
         other => Err((1, format!("unexpected response: {other:?}"))),
+    }
+}
+
+async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliResult {
+    let config = Config::load_or_default(path);
+    let paths = config.paths(path).map_err(|error| (1, error))?;
+    let mut client = Client::connect(&paths.socket)
+        .await
+        .map_err(|error| (1, error.to_string()))?;
+    client
+        .hello()
+        .await
+        .map_err(|error| (1, error.to_string()))?;
+
+    match command {
+        FilesCommand::List {
+            path,
+            limit,
+            cursor,
+        } => {
+            let response = client
+                .call(&Request::FilesList {
+                    path: path.clone(),
+                    limit: *limit,
+                    cursor: cursor.clone(),
+                })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::FilesList(page) => {
+                    print!("{}", render::file_list(&page));
+                    println!();
+                    Ok(())
+                }
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        FilesCommand::Read {
+            path,
+            offset,
+            max_bytes,
+        } => {
+            let response = client
+                .call(&Request::FilesRead {
+                    path: path.clone(),
+                    offset: *offset,
+                    max_bytes: *max_bytes,
+                })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::FilesRead(chunk) => {
+                    print!("{}", chunk.text);
+                    if !chunk.text.ends_with('\n') {
+                        println!();
+                    }
+                    if !chunk.eof {
+                        eprintln!(
+                            "[more at offset {}]",
+                            chunk.offset + u64::try_from(chunk.text.len()).unwrap_or(u64::MAX)
+                        );
+                    }
+                    Ok(())
+                }
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
     }
 }
 

@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 
-use anth_wire::HostInfo;
+use anth_wire::{FileEntry, HostInfo, Page};
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -118,6 +118,77 @@ fn usage_percent(used: u64, total: u64) -> f64 {
     }
 }
 
+/// Formats one page of a directory listing.
+pub fn file_list(page: &Page<FileEntry>) -> String {
+    if page.items.is_empty() {
+        return "(empty)".to_string();
+    }
+    let mut out = String::new();
+    let _ = writeln!(out, "{:<5} {:>10}  {:<6} NAME", "KIND", "SIZE", "AGE");
+    for entry in &page.items {
+        let kind = match entry.kind.as_str() {
+            "symlink" => "link",
+            other => other,
+        };
+        let size = if entry.kind == "file" {
+            format_bytes(entry.size)
+        } else {
+            "-".to_string()
+        };
+        let _ = writeln!(
+            out,
+            "{kind:<5} {:>10}  {:<6} {}",
+            size,
+            format_age(entry.modified_ms),
+            entry.name
+        );
+    }
+    if let Some(next) = &page.next {
+        let _ = writeln!(out, "next: {next}");
+    }
+    out.trim_end().to_string()
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn format_age(modified_ms: u64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    if modified_ms == 0 {
+        return "-".to_string();
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    if now_ms <= modified_ms {
+        return "now".to_string();
+    }
+    let seconds = (now_ms - modified_ms) / 1000;
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3_600)
+    } else {
+        format!("{}d", seconds / 86_400)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use anth_wire::{LoadAverage, MemoryInfo, OsInfo};
@@ -180,5 +251,31 @@ mod tests {
         assert_eq!(format_kib(0), "0 KiB");
         assert_eq!(format_kib(2048), "2.0 MiB");
         assert_eq!(format_kib(2 * 1024 * 1024), "2.0 GiB");
+    }
+
+    #[test]
+    fn a_file_list_has_a_header_rows_and_a_next_cursor() {
+        let page = Page::with_next(
+            vec![
+                FileEntry {
+                    name: "dir".to_string(),
+                    kind: "dir".to_string(),
+                    size: 0,
+                    modified_ms: 0,
+                },
+                FileEntry {
+                    name: "note.txt".to_string(),
+                    kind: "file".to_string(),
+                    size: 2048,
+                    modified_ms: 0,
+                },
+            ],
+            "note.txt",
+        );
+        let text = file_list(&page);
+        assert!(text.starts_with("KIND"));
+        assert!(text.contains("dir"));
+        assert!(text.contains("2.0 KiB"));
+        assert!(text.contains("next: note.txt"));
     }
 }

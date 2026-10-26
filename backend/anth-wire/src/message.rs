@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
+use crate::page::Page;
 
 /// Bumped when a change would make an older peer misread a message.
 ///
@@ -38,6 +39,24 @@ pub enum Request {
         #[serde(default)]
         delay_s: u32,
     },
+    /// One page of a directory listing.
+    FilesList {
+        /// Path relative to the configured file root; empty or `/` is the root.
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        limit: Option<u16>,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    /// A chunk of a UTF-8 text file.
+    FilesRead {
+        path: String,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default)]
+        max_bytes: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,6 +83,10 @@ pub enum Response {
         /// Seconds until the host goes down.
         delay_s: u32,
     },
+    /// One page of a directory listing.
+    FilesList(Page<FileEntry>),
+    /// A chunk of a text file.
+    FilesRead(FileChunk),
     Error(WireError),
 }
 
@@ -134,4 +157,28 @@ pub struct HostInfo {
     pub memory: MemoryInfo,
     /// Unix epoch milliseconds when the snapshot was collected.
     pub collected_at_ms: u64,
+}
+
+/// One entry in a directory listing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub name: String,
+    /// `file`, `dir`, `symlink` or `other`.
+    pub kind: String,
+    pub size: u64,
+    /// Unix epoch milliseconds, or 0 when the platform cannot report it.
+    pub modified_ms: u64,
+}
+
+/// A chunk of a UTF-8 text file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileChunk {
+    /// The path relative to the file root, using `/` separators.
+    pub path: String,
+    pub offset: u64,
+    /// Full size of the file in bytes.
+    pub size: u64,
+    /// Whether this chunk reaches the end of the file.
+    pub eof: bool,
+    pub text: String,
 }

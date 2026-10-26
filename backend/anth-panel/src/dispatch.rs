@@ -5,9 +5,10 @@
 
 use std::sync::Arc;
 
-use anth_wire::{ErrorKind, PROTOCOL_VERSION, Request, Response, WireError};
+use anth_wire::{ErrorKind, PROTOCOL_VERSION, PageRequest, Request, Response, WireError};
 
 use crate::config::{Config, Paths};
+use crate::files::FileService;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 
@@ -17,6 +18,7 @@ pub struct Daemon {
     paths: Paths,
     logger: Arc<Logger>,
     lifecycle: Arc<Lifecycle>,
+    files: Result<FileService, String>,
 }
 
 impl Daemon {
@@ -31,11 +33,25 @@ impl Daemon {
         logger: Arc<Logger>,
         lifecycle: Arc<Lifecycle>,
     ) -> Self {
+        let root = {
+            let root = std::path::PathBuf::from(&config.files.root);
+            if root.is_absolute() {
+                root
+            } else {
+                paths.config_dir.join(root)
+            }
+        };
+        let files = FileService::new(
+            root,
+            config.files.max_entries,
+            config.files.max_preview_bytes,
+        );
         Self {
             config,
             paths,
             logger,
             lifecycle,
+            files,
         }
     }
 
@@ -53,6 +69,12 @@ impl Daemon {
 
     pub fn lifecycle(&self) -> &Arc<Lifecycle> {
         &self.lifecycle
+    }
+
+    fn files(&self) -> Result<&FileService, WireError> {
+        self.files
+            .as_ref()
+            .map_err(|error| WireError::internal(format!("the file root is unavailable: {error}")))
     }
 
     /// Handles one request.
@@ -110,6 +132,21 @@ impl Daemon {
                 });
                 Ok(Response::Rebooting { delay_s })
             }
+            Request::FilesList {
+                path,
+                limit,
+                cursor,
+            } => {
+                let request = PageRequest { limit, cursor };
+                Ok(Response::FilesList(self.files()?.list(&path, &request)?))
+            }
+            Request::FilesRead {
+                path,
+                offset,
+                max_bytes,
+            } => Ok(Response::FilesRead(
+                self.files()?.read(&path, offset, max_bytes)?,
+            )),
         }
     }
 }
@@ -153,6 +190,8 @@ fn operation_of(request: &Request) -> &'static str {
         Request::HostInfo => "host-info",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
+        Request::FilesList { .. } => "files-list",
+        Request::FilesRead { .. } => "files-read",
     }
 }
 

@@ -18,6 +18,8 @@ auth/lifecycle slice are in place:
   watch.
 - Minimal auth: `auto`/`generated`/`web` bootstrap, Argon2id, HS256 access
   tokens, rotating refresh tokens, cookies.
+- Read-only file browsing: paginated directory listing and UTF-8 preview over
+  socket, HTTP and CLI, with root containment and `..`/symlink guards.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused

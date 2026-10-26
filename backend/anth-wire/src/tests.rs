@@ -140,6 +140,52 @@ fn lifecycle_messages_round_trip() {
 }
 
 #[test]
+fn file_messages_round_trip() {
+    let list = Request::FilesList {
+        path: "/etc".to_string(),
+        limit: Some(50),
+        cursor: None,
+    };
+    let text = serde_json::to_string(&list).expect("serialize");
+    assert_eq!(serde_json::from_str::<Request>(&text).expect("parse"), list);
+
+    let read = Request::FilesRead {
+        path: "etc/hosts".to_string(),
+        offset: 4,
+        max_bytes: Some(64),
+    };
+    let text = serde_json::to_string(&read).expect("serialize");
+    assert_eq!(serde_json::from_str::<Request>(&text).expect("parse"), read);
+
+    let entry = FileEntry {
+        name: "hosts".to_string(),
+        kind: "file".to_string(),
+        size: 12,
+        modified_ms: 1_700_000_000_000,
+    };
+    let response = Response::FilesList(Page::with_next(vec![entry.clone()], "hosts"));
+    let text = serde_json::to_string(&response).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<Response>(&text).expect("parse"),
+        response
+    );
+
+    let chunk = FileChunk {
+        path: "etc/hosts".to_string(),
+        offset: 0,
+        size: 12,
+        eof: true,
+        text: "127.0.0.1\n".to_string(),
+    };
+    let response = Response::FilesRead(chunk);
+    let text = serde_json::to_string(&response).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<Response>(&text).expect("parse"),
+        response
+    );
+}
+
+#[test]
 fn page_requests_validate_limits_and_cursor_length() {
     assert!(PageRequest::default().valid());
     assert_eq!(PageRequest::default().limit(), DEFAULT_PAGE_LIMIT);

@@ -215,6 +215,42 @@ of the same command line, which re-reads `config.toml`. The pid is kept.
 `202 {"rebooting":true,"delay_s":0}`. The delay is at most 300 seconds. The
 daemon refuses with `403 forbidden` unless it was started with `--allow-reboot`.
 
+## Files
+
+Both routes require a live access token unless auth is disabled. Paths are
+relative to `[files] root`; `..` and paths that escape through a symlink are
+refused.
+
+### `GET /api/files?path=/&limit=100&cursor=...`
+
+```json
+{
+  "items": [
+    { "name": "etc", "kind": "dir", "size": 0, "modified_ms": 1790000000000 },
+    { "name": "hosts", "kind": "file", "size": 220, "modified_ms": 1790000000000 }
+  ],
+  "next": "hosts"
+}
+```
+
+`kind` is `file`, `dir`, `symlink` or `other`. `next` is absent on the last
+page. The listing is sorted by name; `cursor` is the previous `next` value.
+
+### `GET /api/files/read?path=etc/hosts&offset=0&max_bytes=...`
+
+```json
+{
+  "path": "etc/hosts",
+  "offset": 0,
+  "size": 220,
+  "eof": true,
+  "text": "127.0.0.1 localhost\n"
+}
+```
+
+Only regular UTF-8 text files are accepted. `max_bytes` is capped by
+`files.max_preview_bytes`; `eof` tells the caller whether another chunk exists.
+
 ## Static UI
 
 `GET /` and `GET /{*path}` serve the embedded shell. A missing file is `404`; an

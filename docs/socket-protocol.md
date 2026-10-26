@@ -111,6 +111,45 @@ the answer is written. The pid is kept and the new image re-reads the config.
 `delay_s` is at most 300. The daemon refuses with `forbidden` unless it was
 started with `--allow-reboot`. Both actions answer before they run.
 
+### Files
+
+```json
+{ "type": "files_list", "data": { "path": "/etc", "limit": 100, "cursor": null } }
+```
+
+```json
+{
+  "type": "files_list",
+  "data": {
+    "items": [
+      { "name": "hosts", "kind": "file", "size": 220, "modified_ms": 1790000000000 }
+    ],
+    "next": "hosts"
+  }
+}
+```
+
+```json
+{ "type": "files_read", "data": { "path": "etc/hosts", "offset": 0, "max_bytes": 8192 } }
+```
+
+```json
+{
+  "type": "files_read",
+  "data": {
+    "path": "etc/hosts",
+    "offset": 0,
+    "size": 220,
+    "eof": true,
+    "text": "127.0.0.1 localhost\n"
+  }
+}
+```
+
+Paths are relative to the configured file root. `..`, absolute names and
+symlinks that leave the root are refused with `forbidden`; a non-UTF-8 file is
+`unsupported`.
+
 ## Errors
 
 ```json

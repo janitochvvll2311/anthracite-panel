@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anth_wire::{ErrorKind, Request, Response, WireError};
+use anth_wire::{ErrorKind, FileChunk, FileEntry, Page, Request, Response, WireError};
 use axum::body::Body;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{
@@ -71,6 +71,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/sessions/revoke", post(revoke_session))
         .route("/api/host-info", get(host_info))
         .route("/api/host-info/watch", get(watch_host_info))
+        .route("/api/files", get(list_files))
+        .route("/api/files/read", get(read_file))
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
         .route("/api/settings", get(get_settings).patch(patch_settings))
@@ -217,6 +219,25 @@ struct PasswordBody {
 struct WatchQuery {
     #[serde(default)]
     interval: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FilesQuery {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    limit: Option<u16>,
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileReadQuery {
+    path: String,
+    #[serde(default)]
+    offset: u64,
+    #[serde(default)]
+    max_bytes: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -529,6 +550,52 @@ async fn watch_host_info(
         }
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+async fn list_files(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<FilesQuery>, QueryRejection>,
+) -> Result<Json<Page<FileEntry>>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesList {
+            path: query.path,
+            limit: query.limit,
+            cursor: query.cursor,
+        })
+        .await
+    {
+        Response::FilesList(page) => Ok(Json(page)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a file list answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn read_file(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<FileReadQuery>, QueryRejection>,
+) -> Result<Json<FileChunk>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesRead {
+            path: query.path,
+            offset: query.offset,
+            max_bytes: query.max_bytes,
+        })
+        .await
+    {
+        Response::FilesRead(chunk) => Ok(Json(chunk)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a file read answered unexpectedly: {other:?}"
+        ))),
+    }
 }
 
 async fn index() -> HttpResponse {
