@@ -24,8 +24,9 @@ auth/lifecycle slice are in place:
   unless the daemon runs with `--allow-reboot` and is capped at 300 seconds.
 - Settings API and Lit settings page for the policy switches, sessions and
   lifecycle actions.
-- Lit shell with the host card, settings route and English/Spanish
-  `lit-localize` setup.
+- Lit shell with the v0.2 layout — sidebar, drawer, tab strip and FAB — host
+  cards with load/memory/swap bars and interval/pause controls, a settings route
+  and English/Spanish `lit-localize` setup.
 - Config/secrets/state path mapping, atomic writes and comment-preserving
   `config set`; CI for backend and frontend.
 

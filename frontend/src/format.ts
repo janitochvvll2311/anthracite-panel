@@ -45,3 +45,9 @@ export function usagePercent(used: number, total: number): number {
   if (total <= 0) return 0
   return Math.min(100, Math.max(0, (used / total) * 100))
 }
+
+/** Load relative to the number of logical cores, clamped for a bar width. */
+export function loadPercent(load: number, cores: number): number {
+  if (cores <= 0) return 0
+  return Math.min(100, Math.max(0, (load / cores) * 100))
+}

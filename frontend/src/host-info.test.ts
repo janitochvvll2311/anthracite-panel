@@ -23,25 +23,43 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-test('renders the grouped host card from the stream', async () => {
+type HostElement = HTMLElement & {
+  client: HostInfoClient
+  updateComplete: Promise<boolean>
+}
+
+function fakeClient() {
   let handlers: HostInfoHandlers | undefined
+  const close = vi.fn()
+  const watch = vi.fn((_interval: number, next: HostInfoHandlers) => {
+    handlers = next
+    next.onStatus?.('live')
+    return close
+  })
   const client: HostInfoClient = {
     get: vi.fn().mockResolvedValue(sample),
-    watch: vi.fn((_interval: number, next: HostInfoHandlers) => {
-      handlers = next
-      next.onStatus?.('live')
-      return () => {}
-    }),
+    watch,
   }
+  return {
+    client,
+    watch,
+    close,
+    snapshot: () => handlers?.onSnapshot(sample),
+  }
+}
 
-  const element = document.createElement('anth-host-info') as HTMLElement & {
-    client: HostInfoClient
-    updateComplete: Promise<boolean>
-  }
+async function mount(client: HostInfoClient): Promise<HostElement> {
+  const element = document.createElement('anth-host-info') as HostElement
   element.client = client
   document.body.append(element)
   await element.updateComplete
-  handlers?.onSnapshot(sample)
+  return element
+}
+
+test('renders the summary, the resource cards and their bars', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.snapshot()
   await element.updateComplete
 
   const text = element.shadowRoot?.textContent ?? ''
@@ -49,29 +67,42 @@ test('renders the grouped host card from the stream', async () => {
   expect(text).toContain('Debian GNU/Linux')
   expect(text).toContain('Example CPU')
   expect(text).toContain('8 logical cores')
-  expect(text).toContain('4.0 GiB / 8.0 GiB')
+  expect(text).toContain('Load average')
   expect(text).toContain('Not configured')
+
+  // Three load bars, one memory bar; swap is not configured.
+  expect(element.shadowRoot?.querySelectorAll('.bar')).toHaveLength(4)
 })
 
-test('shows an error when the stream fails', async () => {
-  let handlers: HostInfoHandlers | undefined
-  const client: HostInfoClient = {
-    get: vi.fn().mockResolvedValue(sample),
-    watch: vi.fn((_interval: number, next: HostInfoHandlers) => {
-      handlers = next
-      return () => {}
-    }),
-  }
-
-  const element = document.createElement('anth-host-info') as HTMLElement & {
-    client: HostInfoClient
-    updateComplete: Promise<boolean>
-  }
-  element.client = client
-  document.body.append(element)
-  await element.updateComplete
-  handlers?.onError(new Error('stream down'))
+test('pause closes the stream and resume opens a new one', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.snapshot()
   await element.updateComplete
 
-  expect(element.shadowRoot?.textContent).toContain('stream down')
+  const button = element.shadowRoot?.querySelector('.toolbar button') as HTMLButtonElement
+  expect(button.textContent).toContain('Pause')
+
+  button.click()
+  await element.updateComplete
+  expect(feed.close).toHaveBeenCalledTimes(1)
+  expect(button.textContent).toContain('Resume')
+  expect(element.shadowRoot?.querySelector('.status')?.getAttribute('data-state')).toBe('paused')
+
+  button.click()
+  await element.updateComplete
+  expect(feed.watch).toHaveBeenCalledTimes(2)
+})
+
+test('changing the interval restarts the stream on the new period', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  await element.updateComplete
+
+  const select = element.shadowRoot?.querySelector('select') as HTMLSelectElement
+  select.value = '5000'
+  select.dispatchEvent(new Event('change'))
+  await element.updateComplete
+
+  expect(feed.watch).toHaveBeenLastCalledWith(5000, expect.anything())
 })

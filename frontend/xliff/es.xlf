@@ -34,10 +34,6 @@
   <source>Username</source>
   <target>Usuario</target>
 </trans-unit>
-<trans-unit id="s957fe1ac29eda7e6">
-  <source>Host control</source>
-  <target>Control del host</target>
-</trans-unit>
 <trans-unit id="sefcf950b3cc4fc3b">
   <source>Language</source>
   <target>Idioma</target>
@@ -58,37 +54,9 @@
   <source>Loading…</source>
   <target>Cargando…</target>
 </trans-unit>
-<trans-unit id="s3d197283cb019b5a">
-  <source>Overview</source>
-  <target>Resumen</target>
-</trans-unit>
-<trans-unit id="sf35700f38ab0cabe">
-  <source>Live host information from the daemon.</source>
-  <target>Información del host en vivo desde el daemon.</target>
-</trans-unit>
-<trans-unit id="s3d1396b47ff4a56f">
-  <source>Live</source>
-  <target>En vivo</target>
-</trans-unit>
-<trans-unit id="s4b052cb287d81da7">
-  <source>Connecting</source>
-  <target>Conectando</target>
-</trans-unit>
-<trans-unit id="s5f343a43e7ea9f91">
-  <source>Error</source>
-  <target>Error</target>
-</trans-unit>
-<trans-unit id="s95bc8722b2708f8b">
-  <source>Paused</source>
-  <target>En pausa</target>
-</trans-unit>
 <trans-unit id="s16e1bead7b9c95ce">
   <source>Memory</source>
   <target>Memoria</target>
-</trans-unit>
-<trans-unit id="s74770d66bf7310b8">
-  <source>available</source>
-  <target>disponible</target>
 </trans-unit>
 <trans-unit id="scf28302518a72dee">
   <source>Swap</source>
@@ -97,14 +65,6 @@
 <trans-unit id="sd23d45996ee5598e">
   <source>Not configured</source>
   <target>No configurado</target>
-</trans-unit>
-<trans-unit id="s7f625478d788e11b">
-  <source>free</source>
-  <target>libre</target>
-</trans-unit>
-<trans-unit id="s2b1e95d988e7d0c1">
-  <source>Loading host info…</source>
-  <target>Cargando información del host…</target>
 </trans-unit>
 <trans-unit id="s57ceab080115d392">
   <source>No host information yet.</source>
@@ -145,10 +105,6 @@
 <trans-unit id="s8c88bdf90c240bd6">
   <source>Load average</source>
   <target>Carga media</target>
-</trans-unit>
-<trans-unit id="s6c80eb6564ea86d6">
-  <source>1 / 5 / 15 minutes</source>
-  <target>1 / 5 / 15 minutos</target>
 </trans-unit>
 <trans-unit id="s7b7163270e57e8b4">
   <source>Refresh</source>
@@ -317,6 +273,118 @@
 <trans-unit id="s9973846e8ba95e5a">
   <source>Reboot host</source>
   <target>Reiniciar host</target>
+</trans-unit>
+<trans-unit id="sb5ed5975f4aa9b62">
+  <source>No auth client was configured</source>
+  <target>No se configuró un cliente de autenticación</target>
+</trans-unit>
+<trans-unit id="sd5e9b70ffb7a8b46">
+  <source>Skip to content</source>
+  <target>Saltar al contenido</target>
+</trans-unit>
+<trans-unit id="sbd4d179564d6d31d">
+  <source>Open navigation</source>
+  <target>Abrir navegación</target>
+</trans-unit>
+<trans-unit id="sce09c29df0f4e75c">
+  <source>Refresh host information</source>
+  <target>Actualizar la información del host</target>
+</trans-unit>
+<trans-unit id="sbf6695ad6966058f">
+  <source>live</source>
+  <target>en vivo</target>
+</trans-unit>
+<trans-unit id="sc7f1beea639774c7">
+  <source>connecting</source>
+  <target>conectando</target>
+</trans-unit>
+<trans-unit id="s9f7452dd75d54d31">
+  <source>error</source>
+  <target>error</target>
+</trans-unit>
+<trans-unit id="s5a34b413c316fdab">
+  <source>paused</source>
+  <target>en pausa</target>
+</trans-unit>
+<trans-unit id="sa3deee7949f9fece">
+  <source>stopped</source>
+  <target>detenido</target>
+</trans-unit>
+<trans-unit id="s9e9b04c54923ae13">
+  <source>idle</source>
+  <target>inactivo</target>
+</trans-unit>
+<trans-unit id="s89118d3a7be870ca">
+  <source>Resume</source>
+  <target>Reanudar</target>
+</trans-unit>
+<trans-unit id="s061cc20e3432dead">
+  <source>Pause</source>
+  <target>Pausar</target>
+</trans-unit>
+<trans-unit id="sf4372a571ffb02cd">
+  <source>Refresh interval</source>
+  <target>Intervalo de actualización</target>
+</trans-unit>
+<trans-unit id="s1153970079d1c964">
+  <source>every</source>
+  <target>cada</target>
+</trans-unit>
+<trans-unit id="s235e0bfb873f6948">
+  <source>1 min</source>
+  <target>1 min</target>
+</trans-unit>
+<trans-unit id="s62366f52f4e1194c">
+  <source>5 min</source>
+  <target>5 min</target>
+</trans-unit>
+<trans-unit id="s49c8b62e39e3216b">
+  <source>15 min</source>
+  <target>15 min</target>
+</trans-unit>
+<trans-unit id="sed8ec5e3c64fa25d">
+  <source>Total</source>
+  <target>Total</target>
+</trans-unit>
+<trans-unit id="sa48f8bf001b8a4d0">
+  <source>Used</source>
+  <target>Usado</target>
+</trans-unit>
+<trans-unit id="sd158a5fc0f062f18">
+  <source>Available</source>
+  <target>Disponible</target>
+</trans-unit>
+<trans-unit id="sda094e68cd28324b">
+  <source>Memory used</source>
+  <target>Memoria usada</target>
+</trans-unit>
+<trans-unit id="s7d678ae4032b59f0">
+  <source>used</source>
+  <target>usado</target>
+</trans-unit>
+<trans-unit id="sa6895584d61478fb">
+  <source>Free</source>
+  <target>Libre</target>
+</trans-unit>
+<trans-unit id="s674c6a1d96d9ebeb">
+  <source>Swap used</source>
+  <target>Swap usado</target>
+</trans-unit>
+<trans-unit id="s5be2aa0248d08547">
+  <source>Paused — press Resume to read the host again.</source>
+  <target>En pausa: pulsa Reanudar para volver a leer el host.</target>
+</trans-unit>
+<trans-unit id="se107049a929079fc">
+  <source>Reading the host…</source>
+  <target>Leyendo el host…</target>
+</trans-unit>
+<trans-unit id="s07e6118e838b2e23">
+  <source>Navigation</source>
+  <target>Navegación</target>
+</trans-unit>
+<trans-unit id="s5d5a228abdf71b27">
+  <source>Close navigation</source>
+  <target>Cerrar navegación</target>
 </trans-unit>
 </body>
 </file>
