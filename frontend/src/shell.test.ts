@@ -77,6 +77,7 @@ function mountShell(state: AuthState): AnthApp {
     list: vi.fn().mockResolvedValue({ items: [], next: null }),
     read: vi.fn(),
     delete: vi.fn(),
+    write: vi.fn(),
   }
   AnthApp.settingsClient = settingsClient()
   const element = document.createElement('anth-app') as AnthApp

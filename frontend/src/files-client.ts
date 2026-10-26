@@ -21,10 +21,16 @@ export interface FileChunk {
   text: string
 }
 
+export interface FileWritten {
+  path: string
+  size: number
+}
+
 export interface FilesClient {
   list(path: string, cursor?: string | null, limit?: number): Promise<FilePage>
   read(path: string, offset?: number, maxBytes?: number): Promise<FileChunk>
   delete(path: string): Promise<void>
+  write(path: string, content: string, create: boolean): Promise<FileWritten>
 }
 
 export class HttpFilesClient implements FilesClient {
@@ -56,5 +62,15 @@ export class HttpFilesClient implements FilesClient {
     const params = new URLSearchParams({ path })
     const response = await this.fetchImpl(`/api/files?${params}`, { method: 'DELETE' })
     if (!response.ok) throw await responseError(response)
+  }
+
+  async write(path: string, content: string, create: boolean): Promise<FileWritten> {
+    const response = await this.fetchImpl('/api/files/write', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, content, create }),
+    })
+    if (!response.ok) throw await responseError(response)
+    return (await response.json()) as FileWritten
   }
 }

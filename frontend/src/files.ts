@@ -74,6 +74,9 @@ export class AnthFiles extends LitElement {
   private editor?: EditorState
 
   @state()
+  private saveError = ''
+
+  @state()
   private editingPath = false
 
   @state()
@@ -232,16 +235,53 @@ export class AnthFiles extends LitElement {
 
   private showEditor(editor: EditorState): void {
     this.editor = editor
+    this.saveError = ''
   }
 
   private closeEditor(): void {
     this.editor = undefined
+    this.saveError = ''
   }
 
   private onEditorKeydown(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault()
+      void this.save()
+      return
+    }
     if (event.key === 'Escape') {
       event.stopPropagation()
       this.closeEditor()
+    }
+  }
+
+  /** Writes the editor content and reloads the listing. */
+  private async save(): Promise<void> {
+    const editor = this.editor
+    if (!this.client || !editor) {
+      return
+    }
+    if (editor.mode === 'create' && editor.name.trim() === '') {
+      return
+    }
+    const target = join(editor.directory, editor.name)
+    this.busy = true
+    this.saveError = ''
+    try {
+      await this.client.write(target, editor.text, editor.mode === 'create')
+      const directory = editor.directory
+      const name = editor.name
+      this.closeEditor()
+      await this.open(directory)
+      const entry = this.entries.find((item) => item.name === name)
+      if (entry) {
+        await this.preview(entry)
+      }
+      this.error = ''
+    } catch (error) {
+      this.saveError = describe(error)
+    } finally {
+      this.busy = false
     }
   }
 
@@ -398,6 +438,15 @@ export class AnthFiles extends LitElement {
         .label=${title}
         @anth-window-close=${() => this.closeEditor()}
       >
+        <button
+          slot="actions"
+          type="button"
+          class="save"
+          ?disabled=${this.busy || (editor.mode === 'create' && editor.name.trim() === '')}
+          @click=${() => void this.save()}
+        >
+          ${msg('Save')}
+        </button>
         <div class="editor" @keydown=${this.onEditorKeydown}>
           ${editor.mode === 'create'
             ? html`
@@ -413,6 +462,7 @@ export class AnthFiles extends LitElement {
                 </label>
               `
             : nothing}
+          ${this.saveError ? html`<div class="error" role="alert">${this.saveError}</div>` : nothing}
           <textarea
             .value=${live(editor.text)}
             aria-label=${msg('Content')}
@@ -421,7 +471,6 @@ export class AnthFiles extends LitElement {
           ></textarea>
           <footer>
             <span class="target">${target}</span>
-            <span class="hint">${msg('Saving arrives in a later update.')}</span>
           </footer>
         </div>
       </anth-window>
@@ -792,7 +841,17 @@ export class AnthFiles extends LitElement {
       font: 12px/1.4 var(--mono, monospace);
       color: var(--muted, #8b9bad);
     }
-    .editor .hint { color: var(--warn, #fbbf24); font-size: 12px; }
+    .save {
+      border: 1px solid var(--accent, #7dd3fc);
+      border-radius: 6px;
+      background: rgba(125, 211, 252, 0.16);
+      color: var(--text, #dbe6f2);
+      padding: 4px 10px;
+      font: 600 12px/1.4 var(--mono, monospace);
+      cursor: pointer;
+    }
+    .save:hover:not(:disabled) { background: rgba(125, 211, 252, 0.26); }
+    .save:disabled { opacity: 0.5; cursor: default; }
 
     @media (min-width: 48rem) {
       .layout.preview-open { grid-template-columns: minmax(0, 1fr) minmax(18rem, 32rem); }

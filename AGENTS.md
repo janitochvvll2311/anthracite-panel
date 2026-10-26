@@ -2,7 +2,7 @@
 
 ## Current state
 
-- `v0.3.0` is the rewrite branch. Phase 0, the Phase 1 host-info slice and the Phase 2 auth/lifecycle slice are in place: daemon socket with `Hello`, CLI `host-info`, HTTP + SSE, minimal auth, settings API/page, session revocation, restart/reboot and a Lit shell with the v0.2 layout (sidebar, drawer, tab strip, FAB) plus host bars and refresh/pause controls. Files supports listing, UTF-8 preview, a create/edit window and deletion behind `files.write` over socket, HTTP, CLI and the web UI; writes/upload, archives and trash are still missing. There is no process/network feature, plugin runtime or full settings UI yet.
+- `v0.3.0` is the rewrite branch. Phase 0, the Phase 1 host-info slice and the Phase 2 auth/lifecycle slice are in place: daemon socket with `Hello`, CLI `host-info`, HTTP + SSE, minimal auth, settings API/page, session revocation, restart/reboot and a Lit shell with the v0.2 layout (sidebar, drawer, tab strip, FAB) plus host bars and refresh/pause controls. Files supports listing, UTF-8 preview, create/edit/save and deletion behind `files.write` over socket, HTTP, CLI and the web UI; upload, archives and trash are still missing. There is no process/network feature, plugin runtime or full settings UI yet.
 - The plan of record is `docs/design/v0.3.0.md`. The accepted Phase 0 contracts are in `docs/design/phase-0-contracts.md`. The architecture reference for the two previous trees is `docs/design/reference-v0.1-v0.2.md`.
 - Prior code lives on other refs:
   - `origin/v0.2.0` — newest previous implementation: Rust workspace `backend/` (`anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`), Bun workspace `frontend/`, `plugins/hello/`, frozen `v1/`, and CI in `.github/workflows/v2.yml`.

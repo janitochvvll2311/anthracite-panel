@@ -27,6 +27,7 @@ function fakeClient(): FilesClient {
       text: 'hello files',
     })),
     delete: vi.fn(async () => {}),
+    write: vi.fn(async (path: string) => ({ path, size: 0 })),
   }
 }
 
@@ -248,4 +249,60 @@ test('creates a new file from the toolbar', async () => {
 
   expect(element.shadowRoot?.querySelector('.editor .target')?.textContent).toBe('/draft.txt')
   expect(element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')?.value).toBe('')
+})
+
+test('saves an edited file and reloads the preview', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
+    (button) => button.textContent?.includes('note.txt'),
+  )
+  file?.click()
+  await settle(element)
+  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Edit'),
+  )
+  edit?.click()
+  await settle(element)
+
+  const area = element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')
+  expect(area).not.toBeNull()
+  if (area) {
+    area.value = 'updated'
+    area.dispatchEvent(new Event('input'))
+  }
+  await settle(element)
+  element.shadowRoot?.querySelector<HTMLButtonElement>('.save')?.click()
+  await settle(element)
+
+  expect(client.write).toHaveBeenCalledWith('/note.txt', 'updated', false)
+  expect(element.shadowRoot?.querySelector('anth-window')).toBeNull()
+  expect(client.list).toHaveBeenCalledTimes(2)
+  expect(element.shadowRoot?.querySelector('.preview')).not.toBeNull()
+})
+
+test('creates a file from the editor', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('New file'),
+  )
+  create?.click()
+  await settle(element)
+
+  const name = element.shadowRoot?.querySelector<HTMLInputElement>('.editor input')
+  const area = element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')
+  if (name && area) {
+    name.value = 'draft.txt'
+    name.dispatchEvent(new Event('input'))
+    area.value = 'hello world'
+    area.dispatchEvent(new Event('input'))
+  }
+  await settle(element)
+  element.shadowRoot?.querySelector<HTMLButtonElement>('.save')?.click()
+  await settle(element)
+
+  expect(client.write).toHaveBeenCalledWith('/draft.txt', 'hello world', true)
 })

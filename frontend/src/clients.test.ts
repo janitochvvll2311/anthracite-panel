@@ -107,3 +107,25 @@ test('the files client deletes with a DELETE request', async () => {
 
   expect(calls).toEqual([{ method: 'DELETE', url: '/api/files?path=note.txt' }])
 })
+
+test('the files client posts writes as JSON', async () => {
+  const calls: { method?: string; body?: string; url: string }[] = []
+  const fake = ((input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ method: init?.method, body: String(init?.body), url: String(input) })
+    return Promise.resolve(
+      new Response(JSON.stringify({ path: 'draft.txt', size: 5 }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  }) as typeof fetch
+  const client = new HttpFilesClient(fake)
+
+  await expect(client.write('draft.txt', 'hello', true)).resolves.toMatchObject({ size: 5 })
+  expect(calls).toEqual([
+    {
+      method: 'POST',
+      body: JSON.stringify({ path: 'draft.txt', content: 'hello', create: true }),
+      url: '/api/files/write',
+    },
+  ])
+})
