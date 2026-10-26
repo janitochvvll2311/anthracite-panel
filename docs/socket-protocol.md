@@ -87,6 +87,30 @@ The answer is:
 Unreadable host fields degrade to `unknown` or `0`; the request still succeeds.
 `collected_at_ms` is Unix epoch milliseconds and is also the SSE event id.
 
+### Lifecycle
+
+```json
+{ "type": "restart" }
+```
+
+```json
+{ "type": "restarting", "data": { "pid": 1234 } }
+```
+
+`restart` replaces the process with a fresh copy of the same command line after
+the answer is written. The pid is kept and the new image re-reads the config.
+
+```json
+{ "type": "system_reboot", "data": { "delay_s": 0 } }
+```
+
+```json
+{ "type": "rebooting", "data": { "delay_s": 0 } }
+```
+
+`delay_s` is at most 300. The daemon refuses with `forbidden` unless it was
+started with `--allow-reboot`. Both actions answer before they run.
+
 ## Errors
 
 ```json

@@ -18,11 +18,14 @@ the default.
 ## `run`
 
 ```bash
-anth-panel run [--addr ADDR]
+anth-panel run [--addr ADDR] [--allow-reboot]
 ```
 
 Starts the Unix-socket daemon and the HTTP API in one process. `ADDR` defaults to
 `0.0.0.0:8080`.
+
+`--allow-reboot` is required for `reboot` to take the host down. Without it the
+daemon answers `403 forbidden` instead of acting.
 
 The server creates a missing config with `Config::load_or_create`. A config that
 exists and will not parse is refused, never replaced.
@@ -38,11 +41,32 @@ First-run bootstrap respects `[auth] bootstrap`:
 ## `daemon`
 
 ```bash
-anth-panel daemon
+anth-panel daemon [--allow-reboot]
 ```
 
 Serves the Unix socket only. It uses the same config and auth bootstrap as
 `run`.
+
+## `restart`
+
+```bash
+anth-panel restart
+```
+
+Replaces the running daemon with a fresh copy of the same command line. The pid
+is kept, and the new image re-reads `config.toml`, so this is how a settings
+change takes effect. The command answers before the replacement starts.
+
+## `reboot`
+
+```bash
+anth-panel reboot
+anth-panel reboot --delay 60
+```
+
+Asks the host to reboot, optionally after a delay of at most 300 seconds. The
+daemon refuses unless it was started with `--allow-reboot`, and the answer
+reaches the caller before the host goes down.
 
 ## `host-info`
 

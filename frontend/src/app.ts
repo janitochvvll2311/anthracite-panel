@@ -3,16 +3,21 @@ import { customElement, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
 import './host-info'
+import './settings'
 import type { AuthClient, AuthState } from './auth-client'
 import type { HostInfoClient } from './host-info-client'
+import type { SettingsClient } from './settings-client'
 import { changeLocale, currentLocale } from './i18n'
 import type { PanelLocale } from './i18n'
+
+type Route = 'home' | 'settings'
 
 @customElement('anth-app')
 @localized()
 export class AnthApp extends LitElement {
   static authClient: AuthClient | undefined
   static hostClient: HostInfoClient | undefined
+  static settingsClient: SettingsClient | undefined
 
   @state()
   private auth?: AuthState
@@ -26,10 +31,28 @@ export class AnthApp extends LitElement {
   @state()
   private locale: PanelLocale = 'en'
 
+  @state()
+  private route: Route = 'home'
+
+  private readonly onHashChange = () => {
+    this.route = this.routeOf()
+  }
+
   override connectedCallback(): void {
     super.connectedCallback()
     this.locale = currentLocale()
+    this.route = this.routeOf()
+    globalThis.addEventListener('hashchange', this.onHashChange)
     queueMicrotask(() => void this.load())
+  }
+
+  override disconnectedCallback(): void {
+    globalThis.removeEventListener('hashchange', this.onHashChange)
+    super.disconnectedCallback()
+  }
+
+  private routeOf(): Route {
+    return globalThis.location?.hash === '#/settings' ? 'settings' : 'home'
   }
 
   private async load(): Promise<void> {
@@ -128,6 +151,12 @@ export class AnthApp extends LitElement {
           <span class="eyebrow">Anthracite Panel</span>
           <h1>${msg('Host control')}</h1>
         </div>
+        ${this.ready()
+          ? html`<nav aria-label=${msg('Sections')}>
+              <a href="#/" aria-current=${this.route === 'home' ? 'page' : nothing}>${msg('Host')}</a>
+              <a href="#/settings" aria-current=${this.route === 'settings' ? 'page' : nothing}>${msg('Settings')}</a>
+            </nav>`
+          : nothing}
         <div class="header-actions">
           <select aria-label=${msg('Language')} .value=${this.locale} @change=${this.switchLocale}>
             <option value="en">${msg('English')}</option>
@@ -145,16 +174,18 @@ export class AnthApp extends LitElement {
             ? html`<p class="muted"><button type="button" ?disabled=${this.busy} @click=${() => this.load()}>${msg('Retry')}</button></p>`
             : html`<p class="muted">${msg('Loading…')}</p>`
           : this.ready()
-            ? html`
-                <section class="welcome">
-                  <div>
-                    <p class="eyebrow">${msg('Overview')}</p>
-                    <h2>${msg('Host control')}</h2>
-                    <p class="muted">${msg('Live host information from the daemon.')}</p>
-                  </div>
-                </section>
-                <anth-host-info .client=${AnthApp.hostClient}></anth-host-info>
-              `
+            ? this.route === 'settings'
+              ? html`<anth-settings .client=${AnthApp.settingsClient}></anth-settings>`
+              : html`
+                  <section class="welcome">
+                    <div>
+                      <p class="eyebrow">${msg('Overview')}</p>
+                      <h2>${msg('Host control')}</h2>
+                      <p class="muted">${msg('Live host information from the daemon.')}</p>
+                    </div>
+                  </section>
+                  <anth-host-info .client=${AnthApp.hostClient}></anth-host-info>
+                `
             : this.renderForm()}
       </main>
     `
@@ -179,6 +210,16 @@ export class AnthApp extends LitElement {
       background: rgba(16, 23, 33, .72);
     }
     .header-actions { display: flex; gap: 8px; align-items: center; }
+    nav { display: flex; gap: 4px; }
+    nav a {
+      padding: 6px 10px;
+      border-radius: 6px;
+      color: var(--muted, #8b9bad);
+      text-decoration: none;
+      font: 13px/1.4 var(--mono, monospace);
+    }
+    nav a:hover { color: var(--text, #dbe6f2); }
+    nav a[aria-current='page'] { background: #172231; color: var(--text, #dbe6f2); }
     h1, h2 { margin: 0; font-family: var(--mono, monospace); }
     h1 { font-size: 18px; }
     h2 { font-size: clamp(24px, 4vw, 34px); }

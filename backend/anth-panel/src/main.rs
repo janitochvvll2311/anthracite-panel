@@ -10,6 +10,7 @@ use anth_panel::auth::AuthService;
 use anth_panel::client::Client;
 use anth_panel::config::Config;
 use anth_panel::dispatch::Daemon;
+use anth_panel::lifecycle::{self, Lifecycle};
 use anth_panel::log::{Format, Level, Logger, Out, Settings};
 use anth_panel::{render, socket};
 use anth_wire::{Request, Response, parse_interval};
@@ -48,9 +49,25 @@ enum Command {
         /// HTTP bind address.
         #[arg(long, default_value = "0.0.0.0:8080")]
         addr: String,
+        /// Let `reboot` take the host down.
+        #[arg(long)]
+        allow_reboot: bool,
     },
     /// Serve the Unix socket only.
-    Daemon,
+    Daemon {
+        /// Let `reboot` take the host down.
+        #[arg(long)]
+        allow_reboot: bool,
+    },
+    /// Replace the running daemon with a fresh copy of itself, re-reading the
+    /// configuration.
+    Restart,
+    /// Ask the host to reboot.
+    Reboot {
+        /// Seconds to wait before the host goes down (at most 300).
+        #[arg(long, default_value_t = 0)]
+        delay: u32,
+    },
     /// Print a snapshot of the host the daemon runs on.
     HostInfo {
         /// Keep reading every INTERVAL instead of printing once.
@@ -105,8 +122,14 @@ async fn run() -> CliResult {
     match &cli.command {
         Command::Config { command } => config_command(&path, command, &cli),
         Command::HostInfo { watch } => host_info(&path, watch.clone()).await,
-        Command::Daemon => serve(&path, None, &cli).await,
-        Command::Run { addr } => serve(&path, Some(addr.clone()), &cli).await,
+        Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
+        Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
+        Command::Reboot { delay } => {
+            lifecycle_command(&path, LifecycleRequest::Reboot(*delay)).await
+        }
+        Command::Run { addr, allow_reboot } => {
+            serve(&path, Some(addr.clone()), *allow_reboot, &cli).await
+        }
     }
 }
 
@@ -136,7 +159,12 @@ fn config_command(path: &std::path::Path, command: &ConfigCommand, cli: &Cli) ->
     }
 }
 
-async fn serve(path: &std::path::Path, addr: Option<String>, cli: &Cli) -> CliResult {
+async fn serve(
+    path: &std::path::Path,
+    addr: Option<String>,
+    allow_reboot: bool,
+    cli: &Cli,
+) -> CliResult {
     let config = Config::load_or_create(path).map_err(|error| (1, error))?;
     let paths = config.paths(path).map_err(|error| (1, error))?;
     prepare_state_dir(&paths.state_dir)?;
@@ -159,10 +187,11 @@ async fn serve(path: &std::path::Path, addr: Option<String>, cli: &Cli) -> CliRe
         );
     }
 
-    let daemon = Arc::new(Daemon::new(
+    let daemon = Arc::new(Daemon::with_lifecycle(
         config.clone(),
         paths.clone(),
         Arc::clone(&logger),
+        Arc::new(Lifecycle::new(Arc::new(lifecycle::System), allow_reboot)),
     ));
     let socket_listener =
         socket::bind(&paths.socket).map_err(|error| (1, format!("socket: {error}")))?;
@@ -196,6 +225,47 @@ async fn serve(path: &std::path::Path, addr: Option<String>, cli: &Cli) -> CliRe
         socket::serve(socket_listener, daemon)
             .await
             .map_err(|error| (1, format!("socket server: {error}")))
+    }
+}
+
+enum LifecycleRequest {
+    Restart,
+    Reboot(u32),
+}
+
+async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) -> CliResult {
+    let config = Config::load_or_default(path);
+    let paths = config.paths(path).map_err(|error| (1, error))?;
+    let mut client = Client::connect(&paths.socket)
+        .await
+        .map_err(|error| (1, error.to_string()))?;
+    client
+        .hello()
+        .await
+        .map_err(|error| (1, error.to_string()))?;
+
+    let request = match command {
+        LifecycleRequest::Restart => Request::Restart,
+        LifecycleRequest::Reboot(delay) => Request::SystemReboot { delay_s: delay },
+    };
+    let response = client
+        .call(&request)
+        .await
+        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+    match response {
+        Response::Restarting { pid } => {
+            println!("restarting the panel (pid {pid}); it re-reads the configuration");
+            Ok(())
+        }
+        Response::Rebooting { delay_s } => {
+            if delay_s == 0 {
+                println!("the host is rebooting");
+            } else {
+                println!("the host reboots in {delay_s}s");
+            }
+            Ok(())
+        }
+        other => Err((1, format!("unexpected response: {other:?}"))),
     }
 }
 

@@ -5,7 +5,8 @@ and a web UI. Apache-2.0.
 
 ## Status
 
-`v0.3.0` is a rewrite in progress. Phase 1 host-info slice is in place:
+`v0.3.0` is a rewrite in progress. The Phase 1 host-info slice and Phase 2
+auth/lifecycle slice are in place:
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
@@ -13,10 +14,18 @@ and a web UI. Apache-2.0.
 - Pure `/proc` and `os-release` parsers with fixture tests.
 - Unix-socket daemon and CLI `host-info`, including the grouped webui-like
   output.
-- HTTP API with health, auth and host-info routes; SSE watch.
+- HTTP API with health, auth, host-info, settings and lifecycle routes; SSE
+  watch.
 - Minimal auth: `auto`/`generated`/`web` bootstrap, Argon2id, HS256 access
   tokens, rotating refresh tokens, cookies.
-- Lit shell with the host card and English/Spanish `lit-localize` setup.
+- Auth hardening: failures-only login rate limiting with `Retry-After`, session
+  listing and revocation.
+- Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
+  unless the daemon runs with `--allow-reboot` and is capped at 300 seconds.
+- Settings API and Lit settings page for the policy switches, sessions and
+  lifecycle actions.
+- Lit shell with the host card, settings route and English/Spanish
+  `lit-localize` setup.
 - Config/secrets/state path mapping, atomic writes and comment-preserving
   `config set`; CI for backend and frontend.
 

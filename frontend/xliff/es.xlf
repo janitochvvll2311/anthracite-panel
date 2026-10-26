@@ -158,6 +158,166 @@
   <source>Retry</source>
   <target>Reintentar</target>
 </trans-unit>
+<trans-unit id="s0337d90cf703df0d">
+  <source>Sections</source>
+  <target>Secciones</target>
+</trans-unit>
+<trans-unit id="s1ac62856de30fa6d">
+  <source>No settings client was configured</source>
+  <target>No se configuró un cliente de ajustes</target>
+</trans-unit>
+<trans-unit id="s2f7d05d134eed951">
+  <source>Other sessions were signed out.</source>
+  <target>Se cerraron las demás sesiones.</target>
+</trans-unit>
+<trans-unit id="s6c2f7c166c91f005">
+  <source>No other sessions.</source>
+  <target>No hay otras sesiones.</target>
+</trans-unit>
+<trans-unit id="sb83926911f8902fb">
+  <source>The panel is restarting…</source>
+  <target>El panel se está reiniciando…</target>
+</trans-unit>
+<trans-unit id="saef07bb631a84e61">
+  <source>The host is rebooting.</source>
+  <target>El host se está reiniciando.</target>
+</trans-unit>
+<trans-unit id="s13e928d8ebddd783">
+  <source>Process control</source>
+  <target>Control de procesos</target>
+</trans-unit>
+<trans-unit id="s8b8d8c6b3ec200f0">
+  <source>Network control</source>
+  <target>Control de red</target>
+</trans-unit>
+<trans-unit id="s752a951c22010bc4">
+  <source>Firewall control</source>
+  <target>Control de cortafuegos</target>
+</trans-unit>
+<trans-unit id="s8c6c14b0091ddec6">
+  <source>Volume control</source>
+  <target>Control de volúmenes</target>
+</trans-unit>
+<trans-unit id="see97744963f730a9">
+  <source>Account control</source>
+  <target>Control de cuentas</target>
+</trans-unit>
+<trans-unit id="s38437eab5d317469">
+  <source>File writes</source>
+  <target>Escritura de archivos</target>
+</trans-unit>
+<trans-unit id="s62c75c025c5c6db1">
+  <source>Terminal</source>
+  <target>Terminal</target>
+</trans-unit>
+<trans-unit id="s2462044f08a1be2b">
+  <source>Plugins</source>
+  <target>Complementos</target>
+</trans-unit>
+<trans-unit id="s9ecbaa744eb6a475">
+  <source>No live sessions.</source>
+  <target>No hay sesiones activas.</target>
+</trans-unit>
+<trans-unit id="sb1b241f06bb1cf03">
+  <source>expires</source>
+  <target>caduca</target>
+</trans-unit>
+<trans-unit id="sab8b4cbbb1fa71fa">
+  <source>Current</source>
+  <target>Actual</target>
+</trans-unit>
+<trans-unit id="s6114303ac45db90b">
+  <source>Sign out other sessions</source>
+  <target>Cerrar las demás sesiones</target>
+</trans-unit>
+<trans-unit id="s9d8b8aa2b404c2c8">
+  <source>Settings</source>
+  <target>Ajustes</target>
+</trans-unit>
+<trans-unit id="sd5b6130b4937488c">
+  <source>Reload</source>
+  <target>Recargar</target>
+</trans-unit>
+<trans-unit id="s4e99ddb3c388e596">
+  <source>Restart the panel to apply the changes.</source>
+  <target>Reinicia el panel para aplicar los cambios.</target>
+</trans-unit>
+<trans-unit id="s0586c6db55ce141c">
+  <source>Restart now</source>
+  <target>Reiniciar ahora</target>
+</trans-unit>
+<trans-unit id="sda4e1200cf4b49da">
+  <source>Loading settings…</source>
+  <target>Cargando ajustes…</target>
+</trans-unit>
+<trans-unit id="s846b3790b6e25c1c">
+  <source>Account</source>
+  <target>Cuenta</target>
+</trans-unit>
+<trans-unit id="sc25edca57df81461">
+  <source>Authentication</source>
+  <target>Autenticación</target>
+</trans-unit>
+<trans-unit id="s08b05807b5566370">
+  <source>on</source>
+  <target>activada</target>
+</trans-unit>
+<trans-unit id="s1a249b1921e2bdea">
+  <source>off</source>
+  <target>desactivada</target>
+</trans-unit>
+<trans-unit id="se0fab22656187f39">
+  <source>Bootstrap</source>
+  <target>Inicialización</target>
+</trans-unit>
+<trans-unit id="s5c18cae48b93138c">
+  <source>Sessions</source>
+  <target>Sesiones</target>
+</trans-unit>
+<trans-unit id="s042baf59902a711f">
+  <source>Policy</source>
+  <target>Política</target>
+</trans-unit>
+<trans-unit id="sfed17b0e30748cdf">
+  <source>Paths</source>
+  <target>Rutas</target>
+</trans-unit>
+<trans-unit id="sf95bafcc1b7292ec">
+  <source>Socket</source>
+  <target>Socket</target>
+</trans-unit>
+<trans-unit id="s84b135a4cf69f3c1">
+  <source>State directory</source>
+  <target>Directorio de estado</target>
+</trans-unit>
+<trans-unit id="sed6a574e64f50bdd">
+  <source>HTTP address</source>
+  <target>Dirección HTTP</target>
+</trans-unit>
+<trans-unit id="s71e05b7632be9133">
+  <source>Log level</source>
+  <target>Nivel de registro</target>
+</trans-unit>
+<trans-unit id="scd223a9aac742fcf">
+  <source>Lifecycle</source>
+  <target>Ciclo de vida</target>
+</trans-unit>
+<trans-unit id="s69f615ea583c4629">
+  <source>A restart re-reads the configuration. A reboot is refused unless the daemon was started with --allow-reboot.</source>
+  <target>Un reinicio vuelve a leer la configuración. Un reinicio del host se rechaza salvo que el daemon se haya iniciado con --allow-reboot.</target>
+</trans-unit>
+<trans-unit id="s88158aec462e0bf2">
+  <source>Restart panel</source>
+  <target>Reiniciar panel</target>
+</trans-unit>
+<trans-unit id="s76a853ba9439fcfc">
+  <source>Delay (seconds)</source>
+  <target>Retardo (segundos)</target>
+</trans-unit>
+<trans-unit id="s9973846e8ba95e5a">
+  <source>Reboot host</source>
+  <target>Reiniciar host</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

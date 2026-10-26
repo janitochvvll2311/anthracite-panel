@@ -2,6 +2,7 @@ import { expect, test } from 'vitest'
 
 import { HttpAuthClient } from './auth-client'
 import { HttpHostInfoClient } from './host-info-client'
+import { HttpSettingsClient } from './settings-client'
 
 /**
  * Chrome throws "Illegal invocation" when `fetch` runs with anything other
@@ -58,4 +59,27 @@ test('the host-info client does not call fetch as a method', async () => {
   )
 
   await expect(client.get()).resolves.toMatchObject({ hostname: 'example' })
+})
+
+test('the settings client does not call fetch as a method', async () => {
+  const client = new HttpSettingsClient(
+    browserFetch({
+      version: 1,
+      socket_path: './anth.sock',
+      state_dir: './state',
+      server: { addr: '127.0.0.1:8080' },
+      log: { level: 'info', format: 'human', out: 'stdout' },
+      terminal: { enabled: false, shell: 'auto', max_sessions: 4 },
+      process: { control: false, spawn: false },
+      network: { control: false, manage: false },
+      firewall: { control: false },
+      volumes: { control: false, partition: false, format: false },
+      accounts: { control: false, manage_passwords: false },
+      files: { write: false, trash: false },
+      auth: { enabled: true, username: 'admin', cookie_secure: false, bootstrap: 'auto' },
+      plugins: { enabled: false },
+    }),
+  )
+
+  await expect(client.get()).resolves.toMatchObject({ version: 1 })
 })

@@ -43,6 +43,17 @@ pub struct AuthState {
     pub username: String,
 }
 
+/// One live login as the settings page sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionSummary {
+    /// The session id carried by the access and refresh tokens.
+    pub sid: String,
+    /// Unix seconds after which the whole session dies.
+    pub expires: u64,
+    /// Whether this is the session that made the request.
+    pub current: bool,
+}
+
 /// A login pair handed to the browser.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grant {
@@ -329,6 +340,59 @@ impl AuthService {
         let mut records = self.sessions.lock().expect("session lock");
         let count = records.len();
         records.clear();
+        sessions::save(&self.sessions_path, &records).map_err(AuthError::Internal)?;
+        Ok(count)
+    }
+
+    /// Lists live sessions, one entry per login, with the caller marked.
+    pub fn list_sessions(&self, current: &str) -> Vec<SessionSummary> {
+        let now = jwt::now_seconds();
+        let mut records = self.sessions.lock().expect("session lock");
+        sessions::trim(&mut records, now);
+
+        let mut summaries: Vec<SessionSummary> = Vec::new();
+        for record in records.iter() {
+            match summaries
+                .iter_mut()
+                .find(|summary| summary.sid == record.sid)
+            {
+                Some(summary) => summary.expires = summary.expires.max(record.expires),
+                None => summaries.push(SessionSummary {
+                    sid: record.sid.clone(),
+                    expires: record.expires,
+                    current: record.sid == current,
+                }),
+            }
+        }
+        summaries.sort_by_key(|summary| std::cmp::Reverse(summary.expires));
+        summaries
+    }
+
+    /// Revokes one session by id. Returns whether anything matched.
+    pub fn revoke_session(&self, sid: &str) -> Result<bool, AuthError> {
+        let mut records = self.sessions.lock().expect("session lock");
+        let before = records.len();
+        records.retain(|record| record.sid != sid);
+        if records.len() == before {
+            return Ok(false);
+        }
+        sessions::save(&self.sessions_path, &records).map_err(AuthError::Internal)?;
+        Ok(true)
+    }
+
+    /// Revokes every session except `current`. Returns how many logins went.
+    pub fn revoke_others(&self, current: &str) -> Result<usize, AuthError> {
+        let mut records = self.sessions.lock().expect("session lock");
+        let dropped: std::collections::HashSet<&str> = records
+            .iter()
+            .filter(|record| record.sid != current)
+            .map(|record| record.sid.as_str())
+            .collect();
+        let count = dropped.len();
+        if count == 0 {
+            return Ok(0);
+        }
+        records.retain(|record| record.sid == current);
         sessions::save(&self.sessions_path, &records).map_err(AuthError::Internal)?;
         Ok(count)
     }
@@ -668,6 +732,45 @@ mod tests {
             .expect("change");
         assert!(auth.verify_access(&grant.access_token).is_err());
         assert!(auth.login("admin", "a different long password").is_ok());
+        std::fs::remove_dir_all(paths.config_dir).unwrap();
+    }
+
+    #[test]
+    fn sessions_can_be_listed_and_revoked() {
+        let paths = scratch("auth-sessions");
+        let config = AuthConfig {
+            bootstrap: BootstrapMode::Generated,
+            ..AuthConfig::default()
+        };
+        let (auth, password) = AuthService::load(&config, &paths).expect("load");
+        let password = password.expect("password");
+        let first = auth.login("admin", &password).expect("first");
+        let second = auth.login("admin", &password).expect("second");
+        let first_sid = auth.verify_access(&first.access_token).expect("first sid");
+        let second_sid = auth
+            .verify_access(&second.access_token)
+            .expect("second sid");
+
+        let sessions = auth.list_sessions(&first_sid);
+        assert_eq!(sessions.len(), 2);
+        assert!(
+            sessions
+                .iter()
+                .any(|session| session.current && session.sid == first_sid)
+        );
+        assert!(
+            sessions
+                .iter()
+                .any(|session| !session.current && session.sid == second_sid)
+        );
+
+        assert_eq!(auth.revoke_others(&first_sid).expect("revoke others"), 1);
+        assert!(auth.verify_access(&second.access_token).is_err());
+        assert!(auth.verify_access(&first.access_token).is_ok());
+
+        assert!(auth.revoke_session(&first_sid).expect("revoke one"));
+        assert!(auth.verify_access(&first.access_token).is_err());
+        assert!(!auth.revoke_session("missing").expect("no match"));
         std::fs::remove_dir_all(paths.config_dir).unwrap();
     }
 }

@@ -28,6 +28,16 @@ pub enum Request {
     },
     /// One snapshot of the host the daemon runs on.
     HostInfo,
+    /// Replaces this process with a fresh copy of the same command line, which
+    /// re-reads the configuration.
+    Restart,
+    /// Asks the host to reboot after `delay_s` seconds.
+    SystemReboot {
+        /// Seconds to wait before the host goes down. At most
+        /// `anth_panel::lifecycle::MAX_REBOOT_DELAY_S`.
+        #[serde(default)]
+        delay_s: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +54,16 @@ pub enum Response {
         features: Vec<String>,
     },
     HostInfo(HostInfo),
+    /// The restart was accepted; this process is about to be replaced.
+    Restarting {
+        /// The pid the new image keeps.
+        pid: u32,
+    },
+    /// The reboot was accepted and is scheduled.
+    Rebooting {
+        /// Seconds until the host goes down.
+        delay_s: u32,
+    },
     Error(WireError),
 }
 

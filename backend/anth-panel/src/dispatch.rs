@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anth_wire::{ErrorKind, PROTOCOL_VERSION, Request, Response, WireError};
 
 use crate::config::{Config, Paths};
+use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 
 /// Everything a request may need from the process.
@@ -15,14 +16,26 @@ pub struct Daemon {
     config: Config,
     paths: Paths,
     logger: Arc<Logger>,
+    lifecycle: Arc<Lifecycle>,
 }
 
 impl Daemon {
+    /// A daemon that may restart but never reboot.
     pub fn new(config: Config, paths: Paths, logger: Arc<Logger>) -> Self {
+        Self::with_lifecycle(config, paths, logger, Arc::new(Lifecycle::without_reboot()))
+    }
+
+    pub fn with_lifecycle(
+        config: Config,
+        paths: Paths,
+        logger: Arc<Logger>,
+        lifecycle: Arc<Lifecycle>,
+    ) -> Self {
         Self {
             config,
             paths,
             logger,
+            lifecycle,
         }
     }
 
@@ -36,6 +49,10 @@ impl Daemon {
 
     pub fn logger(&self) -> &Arc<Logger> {
         &self.logger
+    }
+
+    pub fn lifecycle(&self) -> &Arc<Lifecycle> {
+        &self.lifecycle
     }
 
     /// Handles one request.
@@ -71,6 +88,27 @@ impl Daemon {
                         WireError::internal(format!("the host-info task failed: {error}"))
                     })?;
                 Ok(Response::HostInfo(info))
+            }
+            Request::Restart => {
+                let lifecycle = Arc::clone(&self.lifecycle);
+                tokio::spawn(async move {
+                    tokio::time::sleep(ACTION_GRACE).await;
+                    lifecycle.restart();
+                });
+                Ok(Response::Restarting {
+                    pid: std::process::id(),
+                })
+            }
+            Request::SystemReboot { delay_s } => {
+                self.lifecycle.authorize_reboot(delay_s)?;
+                let lifecycle = Arc::clone(&self.lifecycle);
+                tokio::spawn(async move {
+                    tokio::time::sleep(ACTION_GRACE).await;
+                    if let Err(error) = lifecycle.perform_reboot(delay_s) {
+                        eprintln!("anth-panel: reboot failed: {error}");
+                    }
+                });
+                Ok(Response::Rebooting { delay_s })
             }
         }
     }
@@ -113,5 +151,61 @@ fn operation_of(request: &Request) -> &'static str {
     match request {
         Request::Hello { .. } => "hello",
         Request::HostInfo => "host-info",
+        Request::Restart => "restart",
+        Request::SystemReboot { .. } => "system-reboot",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    use crate::lifecycle::{Recorded, recorded};
+    use crate::log::Settings;
+
+    fn daemon(allow_reboot: bool) -> (Arc<Daemon>, Arc<Recorded>) {
+        let config = Config::dev_default();
+        let paths = config
+            .paths("/tmp/anthracite-panel/tests/dispatch/config.toml")
+            .expect("paths");
+        let (lifecycle, recorder) = recorded(allow_reboot);
+        let logger = Arc::new(Logger::buffer(Settings::default()).0);
+        (
+            Arc::new(Daemon::with_lifecycle(
+                config,
+                paths,
+                logger,
+                Arc::new(lifecycle),
+            )),
+            recorder,
+        )
+    }
+
+    #[tokio::test]
+    async fn restart_is_answered_before_the_action() {
+        let (daemon, recorder) = daemon(false);
+        let response = daemon.execute(Request::Restart).await;
+        assert!(matches!(response, Response::Restarting { .. }));
+        tokio::time::sleep(ACTION_GRACE + Duration::from_millis(200)).await;
+        assert_eq!(recorder.restarts.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn reboot_without_the_switch_is_refused_and_not_scheduled() {
+        let (daemon, recorder) = daemon(false);
+        let response = daemon.execute(Request::SystemReboot { delay_s: 0 }).await;
+        assert_eq!(response.error().expect("error").kind, ErrorKind::Forbidden);
+        tokio::time::sleep(ACTION_GRACE + Duration::from_millis(100)).await;
+        assert!(recorder.reboots.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_authorized_reboot_is_scheduled() {
+        let (daemon, recorder) = daemon(true);
+        let response = daemon.execute(Request::SystemReboot { delay_s: 7 }).await;
+        assert!(matches!(response, Response::Rebooting { delay_s: 7 }));
+        tokio::time::sleep(ACTION_GRACE + Duration::from_millis(200)).await;
+        assert_eq!(recorder.reboots.lock().unwrap().as_slice(), &[7]);
     }
 }

@@ -64,7 +64,7 @@ Public only while `bootstrap = "web"` and no password exists.
 - `201` with the access/refresh cookies, or `409 bootstrap_closed` after the
   first registration.
 - `400 password_too_short` when the password is under 12 characters.
-- `429 rate_limited` after repeated attempts.
+- `429 too_many` after repeated failures, with `Retry-After` in seconds.
 
 ### `POST /api/auth/login`
 
@@ -77,7 +77,9 @@ Public.
 - `200` with cookies and `{"token_type":"Bearer","expires_in":900}`.
 - `401 invalid_credentials`.
 - `409 not_registered` when no account exists.
-- `429 rate_limited`.
+- `429 too_many` after five failures from one source in a minute, with
+  `Retry-After` in seconds. Only failures spend the budget; a successful login
+  clears it.
 
 ### `POST /api/auth/refresh`
 
@@ -102,6 +104,34 @@ Requires a live access token.
 - `200` and clears the cookies; every session is revoked.
 - `401` if the current password is wrong.
 - `400 password_too_short`.
+
+### `GET /api/auth/sessions`
+
+Requires a live access token.
+
+```json
+{
+  "max": 10,
+  "sessions": [
+    { "sid": "d301d3dab719f6803488bfbec29d8483", "expires": 1795634191, "current": true }
+  ]
+}
+```
+
+One entry per login, not per refresh rotation. `sid` is safe to display: the
+refresh token is stored only as a digest. `expires` is Unix seconds.
+
+### `POST /api/auth/sessions/revoke`
+
+Requires a live access token.
+
+```json
+{ "others": true }
+```
+
+- `{"ok":true,"revoked":1,"scope":"others"}` revokes every session except the
+  caller's.
+- `{ "sid": "..." }` revokes one session instead.
 
 ## Host info
 
@@ -142,6 +172,48 @@ Requires a live access token. Server-Sent Events:
 A bad interval is a `400` before the stream opens. After the first byte, a
 failure is an `event: error` with the error JSON and the stream closes.
 `interval` accepts `ms`, `s`, `m` and `h` suffixes and is at least `10ms`.
+
+## Settings and lifecycle
+
+All four routes require a live access token unless auth is disabled. The two
+mutations check `Origin` against `Host`.
+
+### `GET /api/settings`
+
+Returns the operator policy as it is in `config.toml` (the field names match the
+file). It contains no secrets: credentials live in `secrets.toml`.
+
+### `PATCH /api/settings`
+
+```json
+{ "key": "auth.username", "value": "operator" }
+```
+
+Changes one dotted key through the same comment-preserving editor as
+`config set`, validates the whole file, and writes it atomically. The daemon
+keeps its current policy until a restart.
+
+- `200 {"ok":true,"key":"auth.username","restart_required":true}`
+- `400` for an unknown key, a value of the wrong type, or a file that would no
+  longer parse.
+
+### `POST /api/restart`
+
+```json
+{ "restarting": true, "pid": 1234 }
+```
+
+`202 Accepted`. The daemon answers first, then replaces itself with a fresh copy
+of the same command line, which re-reads `config.toml`. The pid is kept.
+
+### `POST /api/reboot`
+
+```json
+{ "delay_s": 0 }
+```
+
+`202 {"rebooting":true,"delay_s":0}`. The delay is at most 300 seconds. The
+daemon refuses with `403 forbidden` unless it was started with `--allow-reboot`.
 
 ## Static UI
 

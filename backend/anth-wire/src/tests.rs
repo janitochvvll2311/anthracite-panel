@@ -105,6 +105,41 @@ fn hello_and_welcome_round_trip() {
 }
 
 #[test]
+fn lifecycle_messages_round_trip() {
+    let restarted = Request::Restart;
+    let text = serde_json::to_string(&restarted).expect("serialize");
+    assert_eq!(text, r#"{"type":"restart"}"#);
+    assert_eq!(
+        serde_json::from_str::<Request>(&text).expect("parse"),
+        restarted
+    );
+
+    let reboot = Request::SystemReboot { delay_s: 30 };
+    let text = serde_json::to_string(&reboot).expect("serialize");
+    assert_eq!(text, r#"{"type":"system_reboot","data":{"delay_s":30}}"#);
+    assert_eq!(
+        serde_json::from_str::<Request>(&text).expect("parse"),
+        reboot
+    );
+
+    let restarting = Response::Restarting { pid: 42 };
+    let text = serde_json::to_string(&restarting).expect("serialize");
+    assert_eq!(text, r#"{"type":"restarting","data":{"pid":42}}"#);
+    assert_eq!(
+        serde_json::from_str::<Response>(&text).expect("parse"),
+        restarting
+    );
+
+    let rebooting = Response::Rebooting { delay_s: 5 };
+    let text = serde_json::to_string(&rebooting).expect("serialize");
+    assert_eq!(text, r#"{"type":"rebooting","data":{"delay_s":5}}"#);
+    assert_eq!(
+        serde_json::from_str::<Response>(&text).expect("parse"),
+        rebooting
+    );
+}
+
+#[test]
 fn page_requests_validate_limits_and_cursor_length() {
     assert!(PageRequest::default().valid());
     assert_eq!(PageRequest::default().limit(), DEFAULT_PAGE_LIMIT);
