@@ -295,7 +295,9 @@ test('opens a second file as a tab in the same window', async () => {
   expect(lastWindow()?.minimized).toBe(false)
 
   const tabs = [...(fileTabs()?.shadowRoot.querySelectorAll<HTMLButtonElement>('.tab-button') ?? [])]
-  expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['/note.txt', '/other.txt'])
+  expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['note.txt', 'other.txt'])
+  expect(tabs[0]?.title).toBe('/note.txt')
+  expect(tabs[1]?.title).toBe('/other.txt')
   expect(tabs[1]?.getAttribute('aria-selected')).toBe('true')
 })
 

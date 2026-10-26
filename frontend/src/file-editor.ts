@@ -215,6 +215,22 @@ export class AnthFileEditor extends LitElement {
           color: '#7dd3fc',
         },
         { tag: [tags.meta, tags.comment], color: '#8b9bad', fontStyle: 'italic' },
+        {
+          tag: [
+            tags.heading,
+            tags.heading1,
+            tags.heading2,
+            tags.heading3,
+            tags.heading4,
+            tags.heading5,
+            tags.heading6,
+          ],
+          color: '#7dd3fc',
+          fontWeight: 'bold',
+        },
+        { tag: tags.quote, color: '#8b9bad', fontStyle: 'italic' },
+        { tag: [tags.monospace, tags.processingInstruction], color: '#fbbf24' },
+        { tag: tags.contentSeparator, color: '#8b9bad' },
         { tag: tags.strong, fontWeight: 'bold' },
         { tag: tags.emphasis, fontStyle: 'italic' },
         { tag: tags.strikethrough, textDecoration: 'line-through' },
@@ -547,12 +563,10 @@ export class AnthFileEditor extends LitElement {
       overflow: hidden;
     }
     .codemirror .cm-editor {
-      position: absolute;
-      inset: 0;
+      width: 100%;
+      height: 100%;
       min-width: 0;
       min-height: 0;
-      width: auto;
-      height: auto;
     }
     .codemirror .cm-scroller {
       overflow: auto;
@@ -628,7 +642,10 @@ interface FileTab {
   name: string
   /** Full path on edit tabs; empty on create tabs until a name is typed. */
   path: string
+  /** Short label shown in the tab. */
   label: string
+  /** Full path shown as the tab tooltip. */
+  title: string
 }
 
 let tabIds = 0
@@ -663,7 +680,8 @@ export class AnthFileTabs extends LitElement {
     }
     const key = `tab-${++tabIds}`
     const path = options.mode === 'edit' ? join(options.directory, options.name) : ''
-    const label = options.mode === 'edit' ? path : uniqueNewLabel(this.tabs)
+    const label = options.mode === 'edit' ? options.name : uniqueNewLabel(this.tabs)
+    const title = options.mode === 'edit' ? path : msg('New file')
     this.tabs = [
       ...this.tabs,
       {
@@ -673,6 +691,7 @@ export class AnthFileTabs extends LitElement {
         name: options.name,
         path,
         label,
+        title,
       },
     ]
     this.active = key
@@ -714,7 +733,10 @@ export class AnthFileTabs extends LitElement {
     if (!key || !title) {
       return
     }
-    this.tabs = this.tabs.map((tab) => (tab.key === key ? { ...tab, label: title } : tab))
+    const label = baseName(title)
+    this.tabs = this.tabs.map((tab) =>
+      tab.key === key ? { ...tab, label, title } : tab,
+    )
   }
 
   private onDone(event: Event): void {
@@ -745,7 +767,7 @@ export class AnthFileTabs extends LitElement {
                 class="tab-button"
                 role="tab"
                 aria-selected=${tab.key === this.active}
-                title=${tab.label}
+                title=${tab.title}
                 @click=${() => this.activate(tab.key)}
               >
                 ${tab.label}
@@ -757,7 +779,7 @@ export class AnthFileTabs extends LitElement {
                 aria-label=${msg('Close')}
                 @click=${() => this.closeTab(tab.key)}
               >
-                ✕
+                ×
               </button>
             </div>
           `,
@@ -921,6 +943,11 @@ function uniqueNewLabel(tabs: FileTab[]): string {
     index += 1
   }
   return `${base} ${index}`
+}
+
+function baseName(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts.at(-1) ?? path
 }
 
 function describe(error: unknown): string {

@@ -241,7 +241,7 @@ export class AnthWindow extends LitElement {
           @pointerup=${this.endDrag}
           @pointercancel=${this.endDrag}
         >
-          <span class="grip" aria-hidden="true">⠿</span>
+          <span class="grip" aria-hidden="true"></span>
           <span class="title">${this.label}</span>
           <div class="actions"><slot name="actions"></slot></div>
           <button
@@ -251,7 +251,7 @@ export class AnthWindow extends LitElement {
             aria-label=${msg('Minimize')}
             @click=${() => this.minimize()}
           >
-            –
+            <span class="icon icon-min" aria-hidden="true"></span>
           </button>
           <button
             type="button"
@@ -260,7 +260,7 @@ export class AnthWindow extends LitElement {
             aria-label=${this.maximized ? msg('Restore') : msg('Maximize')}
             @click=${() => this.toggleMaximize()}
           >
-            ${this.maximized ? '❐' : '□'}
+            <span class="icon ${this.maximized ? 'icon-restore' : 'icon-max'}" aria-hidden="true"></span>
           </button>
           <button
             type="button"
@@ -269,7 +269,7 @@ export class AnthWindow extends LitElement {
             aria-label=${msg('Close')}
             @click=${() => this.close()}
           >
-            ✕
+            <span class="icon icon-close" aria-hidden="true"></span>
           </button>
         </header>
         <div class="body"><slot></slot></div>
@@ -302,6 +302,8 @@ export class AnthWindow extends LitElement {
       gap: 8px;
       width: min(100%, 56rem);
       height: min(100%, 40rem);
+      min-width: 0;
+      max-width: 100%;
       box-sizing: border-box;
       padding: 12px;
       border: 1px solid var(--panel-border, #223041);
@@ -313,6 +315,7 @@ export class AnthWindow extends LitElement {
     :host([maximized]) .frame {
       width: 100%;
       height: 100%;
+      max-width: 100%;
       border: 0;
       border-radius: 0;
       transform: none;
@@ -326,7 +329,15 @@ export class AnthWindow extends LitElement {
     }
     header:active { cursor: grabbing; }
     :host([maximized]) header { cursor: default; }
-    .grip { color: var(--muted, #8b9bad); font-size: 14px; line-height: 1; }
+    .grip {
+      flex: 0 0 auto;
+      width: 8px;
+      height: 14px;
+      color: var(--muted, #8b9bad);
+      background-image: radial-gradient(currentColor 1px, transparent 1.2px);
+      background-size: 4px 4px;
+      opacity: 0.7;
+    }
     .title {
       flex: 1 1 auto;
       min-width: 0;
@@ -338,15 +349,62 @@ export class AnthWindow extends LitElement {
     }
     .actions { display: flex; gap: 6px; }
     .control {
-      min-width: 28px;
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 26px;
+      box-sizing: border-box;
       border: 1px solid var(--panel-border, #223041);
       border-radius: 6px;
       background: rgba(125, 211, 252, 0.08);
       color: var(--text, #dbe6f2);
-      padding: 4px 7px;
+      padding: 0;
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
+    .icon {
+      position: relative;
+      display: block;
+      width: 10px;
+      height: 10px;
+    }
+    .icon-min {
+      height: 0;
+      margin-top: 4px;
+      border-top: 1.5px solid currentColor;
+    }
+    .icon-max {
+      border: 1.5px solid currentColor;
+      border-radius: 1px;
+    }
+    .icon-restore {
+      border: 1.5px solid currentColor;
+      border-radius: 1px;
+      transform: translate(1px, -1px);
+    }
+    .icon-restore::before {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: -4px;
+      width: 8px;
+      height: 8px;
+      border: 1.5px solid currentColor;
+      border-radius: 1px;
+      background: var(--panel, #101721);
+    }
+    .icon-close::before,
+    .icon-close::after {
+      content: '';
+      position: absolute;
+      top: 4px;
+      left: -1px;
+      width: 12px;
+      height: 1.5px;
+      background: currentColor;
+      transform: rotate(45deg);
+    }
+    .icon-close::after { transform: rotate(-45deg); }
     .control:hover { background: rgba(125, 211, 252, 0.16); }
     .control:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
     .body {
@@ -377,7 +435,7 @@ export class AnthWindow extends LitElement {
       .control-max { display: none; }
     }
     @media (pointer: coarse) {
-      .control { min-height: 44px; }
+      .control { min-height: 44px; min-width: 44px; }
     }
   `
 }
@@ -424,7 +482,7 @@ export class AnthWindowDock extends LitElement {
                 aria-label=${msg('Close')}
                 @click=${item.close}
               >
-                ✕
+                ×
               </button>
             </div>
           `,
