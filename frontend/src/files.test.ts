@@ -84,4 +84,48 @@ test('previews a file in place', async () => {
 
   expect(client.read).toHaveBeenCalledWith('/note.txt')
   expect(element.shadowRoot?.querySelector('pre')?.textContent).toBe('hello files')
+  // The class drives the mobile swap: preview replaces the listing.
+  expect(element.shadowRoot?.querySelector('.layout')?.classList.contains('preview-open')).toBe(true)
+})
+
+test('opens a file in the editor', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  const edit = element.shadowRoot?.querySelector<HTMLButtonElement>('.action')
+  edit?.click()
+  await settle(element)
+
+  expect(client.read).toHaveBeenCalledWith('/note.txt')
+  expect(element.shadowRoot?.querySelector('.editor-layer')).not.toBeNull()
+  expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(true)
+  expect(element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')?.value).toBe(
+    'hello files',
+  )
+
+  element.shadowRoot?.querySelector<HTMLButtonElement>('.editor .close')?.click()
+  await settle(element)
+  expect(element.shadowRoot?.querySelector('.editor-layer')).toBeNull()
+  expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(false)
+})
+
+test('creates a new file from the toolbar', async () => {
+  const element = await mount(fakeClient())
+
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('New file'),
+  )
+  create?.click()
+  await settle(element)
+
+  const name = element.shadowRoot?.querySelector<HTMLInputElement>('.editor input')
+  expect(name).not.toBeNull()
+  if (name) {
+    name.value = 'draft.txt'
+    name.dispatchEvent(new Event('input'))
+  }
+  await settle(element)
+
+  expect(element.shadowRoot?.querySelector('.editor .target')?.textContent).toBe('/draft.txt')
+  expect(element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')?.value).toBe('')
 })

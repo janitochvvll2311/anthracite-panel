@@ -454,6 +454,34 @@
   <source>Up</source>
   <target>Subir</target>
 </trans-unit>
+<trans-unit id="s8af61807443f32a4">
+  <source>Actions</source>
+  <target>Acciones</target>
+</trans-unit>
+<trans-unit id="s64ef2a6c2dd1d3d1">
+  <source>Edit</source>
+  <target>Editar</target>
+</trans-unit>
+<trans-unit id="sa75b95980cd80e78">
+  <source>Editor</source>
+  <target>Editor</target>
+</trans-unit>
+<trans-unit id="s014cee951b8294bd">
+  <source>New file</source>
+  <target>Nuevo archivo</target>
+</trans-unit>
+<trans-unit id="s55cb5df23153f152">
+  <source>File name</source>
+  <target>Nombre del archivo</target>
+</trans-unit>
+<trans-unit id="s642a4070f6bcfee2">
+  <source>Content</source>
+  <target>Contenido</target>
+</trans-unit>
+<trans-unit id="s7f04cf4b6841593a">
+  <source>Saving arrives in a later update.</source>
+  <target>Guardar estará disponible en una próxima actualización.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

@@ -1,9 +1,19 @@
 import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
+import { live } from 'lit/directives/live.js'
 import { localized, msg } from '@lit/localize'
 
 import { formatBytes } from './format'
 import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
+
+interface EditorState {
+  mode: 'edit' | 'create'
+  /** Directory the editor was opened from. */
+  directory: string
+  /** Name inside that directory: selected on edit, typed on create. */
+  name: string
+  text: string
+}
 
 /** A display path: always starts at `/` and has no empty or `.` segments. */
 function normalize(path: string): string {
@@ -50,6 +60,9 @@ export class AnthFiles extends LitElement {
   @state()
   private busy = false
 
+  @state()
+  private editor?: EditorState
+
   override connectedCallback(): void {
     super.connectedCallback()
     queueMicrotask(() => void this.open(this.path))
@@ -69,6 +82,7 @@ export class AnthFiles extends LitElement {
       this.next = page.next ?? null
       this.chunk = undefined
       this.previewPath = ''
+      this.editor = undefined
       this.error = ''
     } catch (error) {
       this.error = describe(error)
@@ -139,6 +153,64 @@ export class AnthFiles extends LitElement {
     }
   }
 
+  /** Reads one file and opens it in the editor. */
+  private async edit(entry: FileEntry): Promise<void> {
+    if (!this.client) {
+      return
+    }
+    this.busy = true
+    try {
+      const chunk = await this.client.read(join(this.path, entry.name))
+      this.showEditor({
+        mode: 'edit',
+        directory: this.path,
+        name: entry.name,
+        text: chunk.text,
+      })
+      this.error = ''
+    } catch (error) {
+      this.error = describe(error)
+    } finally {
+      this.busy = false
+    }
+  }
+
+  private create(): void {
+    this.showEditor({ mode: 'create', directory: this.path, name: '', text: '' })
+    this.error = ''
+  }
+
+  private showEditor(editor: EditorState): void {
+    this.editor = editor
+    void this.updateComplete.then(() => {
+      const field = this.shadowRoot?.querySelector<HTMLElement>('.editor input, .editor textarea')
+      field?.focus()
+    })
+  }
+
+  private closeEditor(): void {
+    this.editor = undefined
+  }
+
+  private onEditorKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.stopPropagation()
+      this.closeEditor()
+    }
+  }
+
+  private setEditorName(event: Event): void {
+    if (this.editor) {
+      this.editor = { ...this.editor, name: (event.target as HTMLInputElement).value }
+    }
+  }
+
+  private setEditorText(event: Event): void {
+    if (this.editor) {
+      this.editor = { ...this.editor, text: (event.target as HTMLTextAreaElement).value }
+    }
+  }
+
   private up(): void {
     if (this.path !== '/') {
       void this.open(parent(this.path))
@@ -204,6 +276,7 @@ export class AnthFiles extends LitElement {
             <th>${msg('Kind')}</th>
             <th class="num">${msg('Size')}</th>
             <th class="num">${msg('Modified')}</th>
+            <th class="actions">${msg('Actions')}</th>
           </tr>
         </thead>
         <tbody>
@@ -220,11 +293,69 @@ export class AnthFiles extends LitElement {
                 <td class="num">
                   ${entry.modified_ms > 0 ? new Date(entry.modified_ms).toLocaleString() : '-'}
                 </td>
+                <td class="actions">
+                  ${entry.kind === 'file'
+                    ? html`<button
+                        type="button"
+                        class="action"
+                        ?disabled=${this.busy}
+                        @click=${() => this.edit(entry)}
+                      >
+                        ${msg('Edit')}
+                      </button>`
+                    : nothing}
+                </td>
               </tr>
             `,
           )}
         </tbody>
       </table>
+    `
+  }
+
+  private renderEditor(editor: EditorState) {
+    const target = editor.name ? join(editor.directory, editor.name) : editor.directory
+    return html`
+      <div
+        class="editor-layer"
+        role="dialog"
+        aria-modal="true"
+        aria-label=${msg('Editor')}
+        @keydown=${this.onEditorKeydown}
+      >
+        <section class="editor">
+          <header>
+            <span class="title">${editor.mode === 'create' ? msg('New file') : target}</span>
+            <button type="button" class="close" @click=${() => this.closeEditor()}>
+              ${msg('Close')}
+            </button>
+          </header>
+          ${editor.mode === 'create'
+            ? html`
+                <label class="name">
+                  ${msg('File name')}
+                  <input
+                    .value=${live(editor.name)}
+                    placeholder="notes.txt"
+                    autocomplete="off"
+                    spellcheck="false"
+                    @input=${this.setEditorName}
+                  />
+                </label>
+              `
+            : nothing}
+          <textarea
+            .value=${live(editor.text)}
+            aria-label=${msg('Content')}
+            spellcheck="false"
+            @input=${this.setEditorText}
+          ></textarea>
+          <footer>
+            <span class="target">${target}</span>
+            <span class="hint">${msg('Saving arrives in a later update.')}</span>
+          </footer>
+        </section>
+      </div>
     `
   }
 
@@ -247,10 +378,13 @@ export class AnthFiles extends LitElement {
 
   override render() {
     return html`
-      <section class="files">
+      <section class="files ${this.editor ? 'editing' : ''}">
         <header class="bar">
           ${this.renderCrumbs()}
           <div class="tools">
+            <button type="button" ?disabled=${this.busy} @click=${() => this.create()}>
+              ${msg('New file')}
+            </button>
             <button type="button" ?disabled=${this.busy || this.path === '/'} @click=${() => this.up()}>
               ${msg('Up')}
             </button>
@@ -262,7 +396,7 @@ export class AnthFiles extends LitElement {
 
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
 
-        <div class="layout">
+        <div class="layout ${this.chunk ? 'preview-open' : ''}">
           <div class="listing">
             ${this.busy && this.entries.length === 0
               ? html`<p class="empty">${msg('Loading…')}</p>`
@@ -275,6 +409,7 @@ export class AnthFiles extends LitElement {
           </div>
           ${this.chunk ? this.renderPreview(this.chunk) : nothing}
         </div>
+        ${this.editor ? this.renderEditor(this.editor) : nothing}
       </section>
     `
   }
@@ -285,7 +420,8 @@ export class AnthFiles extends LitElement {
       color: var(--text, #dbe6f2);
       font: 14px/1.5 var(--sans, system-ui, sans-serif);
     }
-    .files { display: grid; gap: 12px; }
+    .files { position: relative; display: grid; gap: 12px; min-width: 0; }
+    .files.editing { min-height: 24rem; }
     .bar {
       display: flex;
       flex-wrap: wrap;
@@ -338,6 +474,17 @@ export class AnthFiles extends LitElement {
       cursor: pointer;
     }
     .entry:hover { text-decoration: underline; }
+    .actions { width: 1%; text-align: right; white-space: nowrap; }
+    .action {
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 6px;
+      background: rgba(125, 211, 252, 0.08);
+      color: var(--text, #dbe6f2);
+      padding: 2px 8px;
+      font: 12px/1.4 var(--mono, monospace);
+      cursor: pointer;
+    }
+    .action:hover { background: rgba(125, 211, 252, 0.16); }
     .empty {
       margin: 0;
       padding: 1.5rem 0.75rem;
@@ -374,11 +521,105 @@ export class AnthFiles extends LitElement {
     .preview code { color: var(--muted, #8b9bad); font: 12px/1.4 var(--mono, monospace); }
     .more { justify-self: start; margin-top: 8px; }
 
-    @media (min-width: 60rem) {
-      .layout:has(.preview) { grid-template-columns: minmax(0, 1fr) minmax(18rem, 32rem); }
+    .editor-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      display: grid;
+      place-items: center;
+      padding: 12px;
+      background: rgba(4, 8, 14, 0.62);
+    }
+    .editor {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: min(100%, 56rem);
+      max-height: 100%;
+      padding: 12px;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 10px;
+      background: var(--panel, #101721);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+    }
+    .editor header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .editor .title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font: 12px/1.4 var(--mono, monospace);
+      color: var(--muted, #8b9bad);
+    }
+    .editor .close {
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 6px;
+      background: rgba(125, 211, 252, 0.08);
+      color: var(--text, #dbe6f2);
+      padding: 4px 7px;
+      font: 12px/1.4 var(--mono, monospace);
+      cursor: pointer;
+    }
+    .editor .close:hover { background: rgba(125, 211, 252, 0.16); }
+    .editor .name {
+      display: grid;
+      gap: 4px;
+      font: 11px/1.4 var(--mono, monospace);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted, #8b9bad);
+    }
+    .editor input,
+    .editor textarea {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 6px;
+      background: var(--panel-2, #0b1119);
+      color: var(--text, #dbe6f2);
+      padding: 8px 9px;
+      font: 12px/1.5 var(--mono, monospace);
+    }
+    .editor textarea { flex: 1 1 auto; min-height: 16rem; resize: vertical; }
+    .editor footer {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .editor .target {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font: 12px/1.4 var(--mono, monospace);
+      color: var(--muted, #8b9bad);
+    }
+    .editor .hint { color: var(--warn, #fbbf24); font-size: 12px; }
+
+    @media (min-width: 48rem) {
+      .layout.preview-open { grid-template-columns: minmax(0, 1fr) minmax(18rem, 32rem); }
+    }
+    @media (max-width: 48rem) {
+      /* Below this width the preview and the editor take the panel over
+         instead of sitting beside the listing. */
+      .layout.preview-open { grid-template-columns: minmax(0, 1fr); }
+      .layout.preview-open .listing { display: none; }
+      .preview pre { max-height: none; }
+      .files.editing { min-height: 0; }
+      .files.editing .bar,
+      .files.editing .layout,
+      .files.editing > .error { display: none; }
+      .editor-layer { position: static; padding: 0; background: none; }
+      .editor { width: 100%; max-height: none; }
+      .editor textarea { min-height: 55vh; resize: none; }
     }
     @media (pointer: coarse) {
-      .crumb, .tools button, .more, .preview button, .entry { min-height: 44px; }
+      .crumb, .tools button, .more, .preview button, .entry, .action, .editor .close { min-height: 44px; }
     }
   `
 }
