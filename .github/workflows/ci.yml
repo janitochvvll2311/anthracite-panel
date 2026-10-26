@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [v0.3.0, "feat/**"]
+    paths:
+      - "backend/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    branches: [v0.3.0]
+    paths:
+      - "backend/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/ci.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the musl toolchain
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Test (release)
+        run: cargo test --workspace --release
