@@ -94,6 +94,16 @@ test('pause closes the stream and resume opens a new one', async () => {
   expect(feed.watch).toHaveBeenCalledTimes(2)
 })
 
+test('the interval selector shows the period the stream actually uses', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  await element.updateComplete
+
+  const select = element.shadowRoot?.querySelector('select') as HTMLSelectElement
+  expect(select.value).toBe('2000')
+  expect(feed.watch).toHaveBeenCalledWith(2000, expect.anything())
+})
+
 test('changing the interval restarts the stream on the new period', async () => {
   const feed = fakeClient()
   const element = await mount(feed.client)

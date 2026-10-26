@@ -208,7 +208,9 @@ export class AnthHostInfo extends LitElement {
           >
             ${INTERVALS.map(
               (ms) =>
-                html`<option value=${String(ms)}>${msg('every')} ${intervalLabel(ms)}</option>`,
+                html`<option value=${String(ms)} ?selected=${ms === this.interval}>
+                  ${msg('every')} ${intervalLabel(ms)}
+                </option>`,
             )}
           </select>
         </label>
