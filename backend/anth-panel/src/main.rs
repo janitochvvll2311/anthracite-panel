@@ -132,6 +132,12 @@ enum FilesCommand {
         #[arg(long)]
         max_bytes: Option<u64>,
     },
+    /// Delete a file under the file root. Requires files.write.
+    Delete {
+        /// Path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+    },
 }
 
 #[tokio::main]
@@ -362,6 +368,19 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
                             chunk.offset + u64::try_from(chunk.text.len()).unwrap_or(u64::MAX)
                         );
                     }
+                    Ok(())
+                }
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        FilesCommand::Delete { path } => {
+            let response = client
+                .call(&Request::FilesDelete { path: path.clone() })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::FilesDeleted { path } => {
+                    println!("deleted {path}");
                     Ok(())
                 }
                 other => Err((1, format!("unexpected response: {other:?}"))),

@@ -33,6 +33,7 @@ fn app(name: &str, auth_on: bool) -> (axum::Router, PathBuf) {
     let config = Config {
         files: FilesConfig {
             root: root.display().to_string(),
+            write: true,
             ..FilesConfig::default()
         },
         ..Config::dev_default()
@@ -119,6 +120,40 @@ async fn reads_a_text_file_and_refuses_traversal() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let error = body_json(response).await;
     assert_eq!(error["error"]["code"], "path_escape");
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn deletes_a_file_and_refuses_a_directory() {
+    let (router, root) = app("files-delete", false);
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("DELETE")
+                .uri("/api/files?path=note.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("delete");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!root.join("note.txt").exists());
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .method("DELETE")
+                .uri("/api/files?path=folder")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("delete a directory");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(root.join("folder").exists());
 
     fs::remove_dir_all(root).expect("cleanup");
 }

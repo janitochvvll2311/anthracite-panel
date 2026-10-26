@@ -43,6 +43,7 @@ impl Daemon {
         };
         let files = FileService::new(
             root,
+            config.files.write,
             config.files.max_entries,
             config.files.max_preview_bytes,
         );
@@ -147,6 +148,9 @@ impl Daemon {
             } => Ok(Response::FilesRead(
                 self.files()?.read(&path, offset, max_bytes)?,
             )),
+            Request::FilesDelete { path } => Ok(Response::FilesDeleted {
+                path: self.files()?.delete(&path)?,
+            }),
         }
     }
 }
@@ -192,6 +196,7 @@ fn operation_of(request: &Request) -> &'static str {
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",
         Request::FilesRead { .. } => "files-read",
+        Request::FilesDelete { .. } => "files-delete",
     }
 }
 

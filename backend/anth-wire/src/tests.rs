@@ -157,6 +157,15 @@ fn file_messages_round_trip() {
     let text = serde_json::to_string(&read).expect("serialize");
     assert_eq!(serde_json::from_str::<Request>(&text).expect("parse"), read);
 
+    let delete = Request::FilesDelete {
+        path: "etc/hosts".to_string(),
+    };
+    let text = serde_json::to_string(&delete).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<Request>(&text).expect("parse"),
+        delete
+    );
+
     let entry = FileEntry {
         name: "hosts".to_string(),
         kind: "file".to_string(),
@@ -178,6 +187,15 @@ fn file_messages_round_trip() {
         text: "127.0.0.1\n".to_string(),
     };
     let response = Response::FilesRead(chunk);
+    let text = serde_json::to_string(&response).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<Response>(&text).expect("parse"),
+        response
+    );
+
+    let response = Response::FilesDeleted {
+        path: "etc/hosts".to_string(),
+    };
     let text = serde_json::to_string(&response).expect("serialize");
     assert_eq!(
         serde_json::from_str::<Response>(&text).expect("parse"),

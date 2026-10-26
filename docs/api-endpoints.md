@@ -217,7 +217,7 @@ daemon refuses with `403 forbidden` unless it was started with `--allow-reboot`.
 
 ## Files
 
-Both routes require a live access token unless auth is disabled. Paths are
+The routes require a live access token unless auth is disabled. Paths are
 relative to `[files] root`; `..` and paths that escape through a symlink are
 refused.
 
@@ -250,6 +250,21 @@ page. The listing is sorted by name; `cursor` is the previous `next` value.
 
 Only regular UTF-8 text files are accepted. `max_bytes` is capped by
 `files.max_preview_bytes`; `eof` tells the caller whether another chunk exists.
+
+### `DELETE /api/files?path=etc/hosts`
+
+Deletes one regular file or a symlink (the link itself, not its target). The
+daemon answers with 200:
+
+```json
+{ "path": "etc/hosts" }
+```
+
+Deletion requires `files.write = true`; otherwise the daemon answers `403
+forbidden` with code `write_disabled`. Directories are `400 invalid`, and the
+file root cannot be deleted. This is a permanent delete; trash and archives are
+part of the next files slice, so the caller confirms before sending the
+request.
 
 ## Static UI
 

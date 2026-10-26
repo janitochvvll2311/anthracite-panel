@@ -146,9 +146,19 @@ started with `--allow-reboot`. Both actions answer before they run.
 }
 ```
 
+```json
+{ "type": "files_delete", "data": { "path": "etc/hosts" } }
+```
+
+```json
+{ "type": "files_deleted", "data": { "path": "etc/hosts" } }
+```
+
 Paths are relative to the configured file root. `..`, absolute names and
 symlinks that leave the root are refused with `forbidden`; a non-UTF-8 file is
-`unsupported`.
+`unsupported`. `files_delete` removes one regular file or a symlink (the link,
+not its target), refuses directories and requires `files.write`; with writes
+disabled it answers `forbidden` and code `write_disabled`.
 
 ## Errors
 

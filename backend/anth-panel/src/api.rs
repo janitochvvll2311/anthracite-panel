@@ -26,7 +26,7 @@ use axum::{Json, Router};
 use futures_util::stream;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::auth::{ACCESS_COOKIE, AuthError, AuthService, Grant, REFRESH_COOKIE};
 use crate::config::Config;
@@ -71,7 +71,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/sessions/revoke", post(revoke_session))
         .route("/api/host-info", get(host_info))
         .route("/api/host-info/watch", get(watch_host_info))
-        .route("/api/files", get(list_files))
+        .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
@@ -238,6 +238,11 @@ struct FileReadQuery {
     offset: u64,
     #[serde(default)]
     max_bytes: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileDeleteQuery {
+    path: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -594,6 +599,25 @@ async fn read_file(
         Response::Error(error) => Err(ApiError::from(error)),
         other => Err(ApiError::internal(format!(
             "a file read answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn delete_file(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<FileDeleteQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesDelete { path: query.path })
+        .await
+    {
+        Response::FilesDeleted { path } => Ok(Json(json!({ "path": path }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a file delete answered unexpectedly: {other:?}"
         ))),
     }
 }

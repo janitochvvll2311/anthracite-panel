@@ -57,6 +57,9 @@ pub enum Request {
         #[serde(default)]
         max_bytes: Option<u64>,
     },
+    /// Deletes one regular file under the configured root. Requires
+    /// `files.write`; directories are refused.
+    FilesDelete { path: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,6 +90,10 @@ pub enum Response {
     FilesList(Page<FileEntry>),
     /// A chunk of a text file.
     FilesRead(FileChunk),
+    /// The file was deleted.
+    FilesDeleted {
+        path: String,
+    },
     Error(WireError),
 }
 

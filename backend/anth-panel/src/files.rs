@@ -1,11 +1,16 @@
-//! Read-only file access under one configured root.
+//! File access under one configured root.
 //!
 //! Every request resolves the path twice. A lexical pass rejects `..` and
 //! absolute names before any I/O; `canonicalize` then resolves symlinks, and
 //! the result must stay under the root. The second check is the one that stops
 //! a symlink from escaping; the first keeps an obviously hostile name from
 //! reaching the filesystem at all.
+//!
+//! Deleting is the one write this slice supports. It is gated by
+//! `files.write`, and it unlinks the final name instead of canonicalizing it:
+//! resolving a symlink before `unlink` would delete its target.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
@@ -15,6 +20,7 @@ use anth_wire::{ErrorKind, FileChunk, FileEntry, Page, PageRequest, WireError};
 
 pub struct FileService {
     root: PathBuf,
+    write: bool,
     max_entries: usize,
     max_preview_bytes: u64,
 }
@@ -24,6 +30,7 @@ impl FileService {
     /// compares against the same absolute path.
     pub fn new(
         root: impl AsRef<Path>,
+        write: bool,
         max_entries: usize,
         max_preview_bytes: u64,
     ) -> Result<Self, String> {
@@ -38,6 +45,7 @@ impl FileService {
         }
         Ok(Self {
             root,
+            write,
             max_entries: max_entries.max(1),
             max_preview_bytes: max_preview_bytes.max(1),
         })
@@ -176,6 +184,37 @@ impl FileService {
         })
     }
 
+    /// Deletes one regular file or symlink under the root.
+    ///
+    /// The final component is never canonicalized: unlinking a symlink must
+    /// remove the link, not the file it points at. The parent is resolved and
+    /// checked against the root, and directories are refused.
+    pub fn delete(&self, path: &str) -> Result<String, WireError> {
+        if !self.write {
+            return Err(WireError::new(
+                ErrorKind::Forbidden,
+                "write_disabled",
+                "file changes are disabled; set files.write to true",
+            ));
+        }
+        let display = display_path(path);
+        let (parent, name) = split_parent(path)?;
+        let canonical_parent =
+            fs::canonicalize(self.root.join(parent)).map_err(|error| io_error(&display, error))?;
+        if !canonical_parent.starts_with(&self.root) {
+            return Err(escape("the path escapes the file root"));
+        }
+        let target = canonical_parent.join(name);
+        let metadata = fs::symlink_metadata(&target).map_err(|error| io_error(&display, error))?;
+        if metadata.is_dir() {
+            return Err(WireError::invalid(format!(
+                "{display} is a directory; only files can be deleted"
+            )));
+        }
+        fs::remove_file(&target).map_err(|error| io_error(&display, error))?;
+        Ok(display)
+    }
+
     /// Resolves a request path to a canonical path under the root.
     fn resolve(&self, requested: &str) -> Result<PathBuf, WireError> {
         let display = display_path(requested);
@@ -186,32 +225,45 @@ impl FileService {
                 Component::Normal(part) => joined.push(part),
                 Component::CurDir => {}
                 Component::ParentDir => {
-                    return Err(WireError::new(
-                        ErrorKind::Forbidden,
-                        "path_escape",
-                        "the path may not contain `..`",
-                    ));
+                    return Err(escape("the path may not contain `..`"));
                 }
                 Component::RootDir | Component::Prefix(_) => {
-                    return Err(WireError::new(
-                        ErrorKind::Forbidden,
-                        "path_escape",
-                        "the path must be relative to the file root",
-                    ));
+                    return Err(escape("the path must be relative to the file root"));
                 }
             }
         }
 
         let canonical = fs::canonicalize(&joined).map_err(|error| io_error(&display, error))?;
         if !canonical.starts_with(&self.root) {
-            return Err(WireError::new(
-                ErrorKind::Forbidden,
-                "path_escape",
-                "the path escapes the file root",
-            ));
+            return Err(escape("the path escapes the file root"));
         }
         Ok(canonical)
     }
+}
+
+/// Splits a request path into a relative parent and a final name.
+///
+/// `..`, absolute components and the root itself are refused before any I/O.
+fn split_parent(requested: &str) -> Result<(PathBuf, OsString), WireError> {
+    let relative = Path::new(requested.trim_start_matches('/'));
+    let mut parent = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => parent.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(escape("the path may not contain `..`"));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(escape("the path must be relative to the file root"));
+            }
+        }
+    }
+    let Some(name) = parent.file_name().map(OsString::from) else {
+        return Err(WireError::invalid("the file root cannot be deleted"));
+    };
+    parent.pop();
+    Ok((parent, name))
 }
 
 /// The path as the client sees it, with `/` separators and no leading slash.
@@ -222,6 +274,10 @@ fn display_path(requested: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn escape(message: &str) -> WireError {
+    WireError::new(ErrorKind::Forbidden, "path_escape", message)
 }
 
 fn modified_ms(metadata: &fs::Metadata) -> u64 {
@@ -261,7 +317,11 @@ mod tests {
     }
 
     fn service(root: &Path) -> FileService {
-        FileService::new(root, 100, 64).expect("service")
+        FileService::new(root, false, 100, 64).expect("service")
+    }
+
+    fn writable(root: &Path) -> FileService {
+        FileService::new(root, true, 100, 64).expect("service")
     }
 
     #[test]
@@ -401,6 +461,71 @@ mod tests {
                 .kind,
             ErrorKind::NotFound
         );
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn deleting_a_file_requires_write_and_unlinks_it() {
+        let root = scratch("delete");
+        fs::write(root.join("note.txt"), b"hello").expect("write");
+        let files = writable(&root);
+
+        assert_eq!(files.delete("/note.txt").expect("delete"), "note.txt");
+        assert!(!root.join("note.txt").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn deleting_is_refused_when_writes_are_disabled() {
+        let root = scratch("delete-off");
+        fs::write(root.join("note.txt"), b"hello").expect("write");
+        let files = service(&root);
+
+        assert_eq!(
+            files.delete("note.txt").expect_err("disabled").code,
+            "write_disabled"
+        );
+        assert!(root.join("note.txt").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn deleting_a_directory_or_escaping_path_is_refused() {
+        let root = scratch("delete-guard");
+        fs::create_dir(root.join("dir")).expect("dir");
+        let files = writable(&root);
+
+        assert_eq!(
+            files.delete("dir").expect_err("dir").kind,
+            ErrorKind::Invalid
+        );
+        assert_eq!(
+            files.delete("../etc/hosts").expect_err("parent").code,
+            "path_escape"
+        );
+        assert_eq!(
+            files.delete("/").expect_err("root").kind,
+            ErrorKind::Invalid
+        );
+        assert!(root.join("dir").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn deleting_a_symlink_removes_the_link_and_keeps_the_target() {
+        let root = scratch("delete-symlink");
+        let target = root.join("target.txt");
+        fs::write(&target, b"keep me").expect("write");
+        symlink(&target, root.join("link")).expect("symlink");
+        let files = writable(&root);
+
+        files.delete("link").expect("delete");
+        assert!(!root.join("link").exists());
+        assert!(target.exists());
+
         fs::remove_dir_all(root).expect("cleanup");
     }
 }
