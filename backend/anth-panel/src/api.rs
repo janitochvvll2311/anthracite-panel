@@ -17,12 +17,16 @@
 //! JSON `404` rather than the index: answering `200 text/html` for a typo makes
 //! a broken client look like a working route until the JSON parse fails.
 
+use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response as HttpResponse};
 use axum::routing::get;
 use serde_json::json;
@@ -51,6 +55,7 @@ pub fn router(daemon: Arc<Daemon>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/host-info", get(host_info))
+        .route("/api/host-info/watch", get(watch_host_info))
         .route("/api/plugins", get(plugins))
         .route("/api/files", get(file_read))
         .route("/api/plugins/{id}/call", axum::routing::post(plugin_call))
@@ -83,6 +88,127 @@ async fn host_info(State(state): State<AppState>) -> Result<impl IntoResponse, A
             "host-info answered with an unexpected response: {other:?}"
         )))),
     }
+}
+
+/// How often an idle stream sends a comment so a proxy does not close it.
+///
+/// The browser reconnects on its own after a drop, but a connection closed by a
+/// proxy in the middle of a quiet period is a reconnect the operator sees as a
+/// flicker. `EventSource` ignores a comment line, so keeping the socket warm
+/// costs a few bytes and nothing else.
+const KEEP_ALIVE: Duration = Duration::from_secs(15);
+
+/// Delay the browser should wait before reconnecting after a drop.
+const RETRY: Duration = Duration::from_millis(3_000);
+
+/// `/api/host-info/watch?interval=500ms` — one snapshot per interval, as SSE.
+///
+/// The route adds a transport, not a message. Every frame is a `HostInfo`
+/// answered by the same `dispatch` the one-shot route calls, so the daemon keeps
+/// one code path and a bug in the snapshot is the same bug either way. What
+/// changes is who repeats it: the CLI repeats on its own clock
+/// (`anth-panel host-info --watch`), and a browser is told to repeat here
+/// because it cannot hold a timer across a page reload.
+///
+/// `interval` is read by `anth_wire::parse_interval`, the same function the CLI
+/// flag uses, so the two cannot accept different spellings or disagree about the
+/// bounds. A bad interval is a `400` **before** the stream starts, which is the
+/// last moment the status line can still say so.
+async fn watch_host_info(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Sse<impl futures_util::stream::Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let raw = params
+        .get("interval")
+        .map_or(anth_wire::DEFAULT_INTERVAL, String::as_str);
+    let period = anth_wire::parse_interval(raw)
+        .map_err(WireError::invalid)
+        .map_err(ApiError)?;
+
+    let daemon = Arc::clone(&state.0);
+    let produce = move || {
+        let daemon = Arc::clone(&daemon);
+        async move { daemon.handle(Request::HostInfo).await }
+    };
+
+    Ok(
+        Sse::new(snapshot_stream(tokio::time::interval(period), produce))
+            .keep_alive(KeepAlive::new().interval(KEEP_ALIVE)),
+    )
+}
+
+/// Turns a ticker and the request to repeat into the frames of a watch.
+///
+/// Split from the handler so the two behaviours that matter can be tested
+/// without a daemon that fails on demand: the first frame is immediate, and a
+/// failure **ends** the stream instead of being retried forever. `produce` is
+/// the seam — production passes a call into `Daemon::handle`, a test passes
+/// something that answers `Error` on purpose.
+pub(crate) fn snapshot_stream<F, Fut>(
+    mut ticks: tokio::time::Interval,
+    produce: F,
+) -> impl futures_util::stream::Stream<Item = Result<Event, Infallible>>
+where
+    F: FnMut() -> Fut + Send,
+    Fut: std::future::Future<Output = Response> + Send,
+{
+    // `Delay` rather than the default: a snapshot that took longer than the
+    // interval must not be followed by a burst of catch-up frames, each asking
+    // the daemon the same question.
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // `None` is the end of the stream: the closure returns it after a failure,
+    // and `unfold` stops asking. A sentinel count instead would keep polling a
+    // daemon that has already refused.
+    futures_util::stream::unfold(Some((ticks, produce, 0_u64)), |current| async move {
+        let (mut ticks, mut produce, frames) = current?;
+        // The first tick fires immediately, so a client sees a snapshot on
+        // connect rather than one silent period later.
+        ticks.tick().await;
+
+        let (event, failed) = match produce().await {
+            Response::HostInfo(info) => match serde_json::to_string(&info) {
+                Ok(data) => (snapshot_event(&data, frames), false),
+                Err(error) => (error_event(&error.to_string()), true),
+            },
+            Response::Error(error) => (
+                error_event(&format!("{}: {}", error.kind.as_str(), error.message)),
+                true,
+            ),
+            other => (
+                error_event(&format!("unexpected answer to a host snapshot: {other:?}")),
+                true,
+            ),
+        };
+
+        // An error ends the stream. Once the first byte is out the status
+        // can no longer change, so the failure travels as an `error` event
+        // and the response closes; `EventSource` reconnects, which is the
+        // recovery path rather than a stream that keeps asking a daemon that
+        // keeps refusing.
+        Some((Ok(event), (!failed).then_some((ticks, produce, frames + 1))))
+    })
+}
+
+/// One snapshot frame, of the event name the browser client listens for.
+///
+/// The first frame carries the retry hint, because it is the only frame that is
+/// guaranteed to have been written before a drop.
+fn snapshot_event(data: &str, frames: u64) -> Event {
+    let event = Event::default()
+        .event("host-info")
+        .id((frames + 1).to_string())
+        .data(data);
+    if frames == 0 {
+        event.retry(RETRY)
+    } else {
+        event
+    }
+}
+
+/// An SSE event that reports a failure rather than a snapshot.
+fn error_event(message: &str) -> Event {
+    Event::default().event("error").id("error").data(message)
 }
 
 /// `/p/<id-or-alias>/<module>`, split into its parts.
@@ -320,7 +446,7 @@ async fn plugins(State(state): State<AppState>) -> Result<impl IntoResponse, Api
 /// shortened a read would hide the limit.
 async fn file_read(
     State(state): State<AppState>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
     let path = params.get("path").cloned().ok_or_else(|| {
         ApiError(WireError::invalid(

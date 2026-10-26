@@ -148,6 +148,10 @@ export class AnthApp extends HTMLElement {
     if (!panel) {
       return;
     }
+    // The card refreshes itself from here on. The shell still hands it the
+    // snapshot it read, so the first paint has data without waiting for a
+    // frame, and the widget's own subscription takes over from there.
+    panel.watchUrl = AnthApp.client?.watchUrl;
     panel.info = this.#info;
     panel.error = this.#error;
     panel.loading = this.#loading;

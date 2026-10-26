@@ -19,6 +19,7 @@ mod render;
 mod socket;
 mod table;
 mod terminal;
+mod watch;
 mod www;
 
 #[cfg(test)]
@@ -114,7 +115,21 @@ enum Command {
     /// Serve the Unix socket only.
     Daemon,
     /// Print a snapshot of the host the daemon runs on.
-    HostInfo,
+    HostInfo {
+        /// Keep reading every INTERVAL instead of printing once.
+        ///
+        /// Bare, it repeats every 2s. The loop is the client's: the daemon still
+        /// answers one request with one snapshot, so this adds no frame type and
+        /// no state to the protocol. On a terminal each snapshot replaces the
+        /// previous one; through a pipe they are separated by a blank line.
+        #[arg(
+            long,
+            value_name = "INTERVAL",
+            num_args = 0..=1,
+            default_missing_value = anth_wire::DEFAULT_INTERVAL
+        )]
+        watch: Option<String>,
+    },
     /// Read a file the daemon is allowed to read.
     File {
         #[command(subcommand)]
@@ -377,7 +392,7 @@ async fn dispatch_command(
         Command::Run { addr } => {
             serve_with(socket, root, readable, Some(addr), logger, terminal).await
         }
-        Command::HostInfo => client(socket, Request::HostInfo).await,
+        Command::HostInfo { watch } => host_info(socket, watch).await,
         Command::File {
             action:
                 FileAction::Read {
@@ -737,6 +752,25 @@ async fn client(socket: &std::path::Path, request: Request) -> ExitCode {
         Err((kind, message)) => {
             eprintln!("anth-panel: {message}");
             ExitCode::from(kind.exit_code())
+        }
+    }
+}
+
+/// One snapshot, or the same snapshot on a loop.
+///
+/// The interval is parsed before the first frame for a reason: a wrong flag that
+/// printed once and then exited would read as a daemon that had stopped rather
+/// than as a typo, and exit code `2` is what `anth-wire` derives for a bad
+/// request.
+async fn host_info(socket: &std::path::Path, watch: Option<String>) -> ExitCode {
+    let Some(raw) = watch else {
+        return client(socket, Request::HostInfo).await;
+    };
+    match anth_wire::parse_interval(&raw) {
+        Ok(period) => watch::host_info(socket, period).await,
+        Err(problem) => {
+            eprintln!("anth-panel: {problem}");
+            ExitCode::from(anth_wire::ErrorKind::Invalid.exit_code())
         }
     }
 }

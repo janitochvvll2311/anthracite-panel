@@ -74,6 +74,7 @@ dependencies = [
  "axum",
  "base64",
  "clap",
+ "futures-util",
  "libc",
  "rust-embed",
  "serde",

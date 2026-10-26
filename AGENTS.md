@@ -44,6 +44,7 @@ backend/                    # Rust workspace, resolver = "2", version 0.2.0
     src/main.rs             #   CLI parsing, exit-code policy, serve_all
     src/dispatch.rs         #   the single request match
     src/api.rs              #   axum router over dispatch; ApiError -> status
+    src/watch.rs            #   the CLI's watch loop; interval parser re-export
     src/files.rs            #   one slice of a file inside the readable root
     src/terminal/           #   the one retained state: sessions over a pty
       mod.rs                #     registry: owner, cap, idle expiry, allowlist
@@ -60,8 +61,11 @@ frontend/                   # Bun workspace, bun.lock committed
     src/error.ts            #   ErrorKind + the one status map, mirrors anth-wire
     src/message.ts          #   payload interfaces, no socket envelope
     src/exchange.ts         #   one JSON exchange over fetch; WireError
+    src/stream.ts           #   one SSE subscription over EventSource; StreamStatus
+                            #     reads readyState: CLOSED is a refusal, not a blip
   anth-webui/               # @anth/webui: the shell, Vite build, dist/ gitignored
     src/wire.ts             #   presentation only: formatKib, formatUptime
+    src/host-info.ts        #   the card: owns its SSE subscription and toolbar
     harness.html            #   dev-only page: one widget, and the browser prompt
   build-shell.sh            # fills backend/anth-panel/www from the Vite build
   anth-plugin/              # @anth/plugin: anchors, widget base, registration
@@ -129,6 +133,19 @@ bun run build          # typechecks, then writes anth-webui/dist
 The Rust binary serves `www/`, so `build-shell.sh` is what makes `cargo run` show
 a page. In a release build the same script has to run before `cargo build
 --release`, because `rust-embed` reads `www/` at compile time.
+
+`bun run build` alone is not enough to see a frontend change in a browser that
+talks to the daemon: it writes `anth-webui/dist`, and the daemon serves
+`backend/anth-panel/www`. The two directories are separate on purpose, and a
+stale `www/` looks exactly like a stale backend — a widget whose new route
+answers `404` and whose new code never runs. When a UI change does not appear,
+check which of the two the page actually loaded before touching the Rust side.
+
+A **debug** build reads `www/` from disk per request, so staging the shell needs
+no Rust rebuild; the process still has to serve the route it was started with.
+A daemon started before a route was added answers `404` for that route forever,
+and no frontend change can fix it: restart it. `curl` the route first — a `404`
+on `/api/host-info/watch` is a stale process, not a broken widget.
 
 From `plugins/hello/`, which CI also runs:
 

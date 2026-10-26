@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import type { HostInfo } from "@anth/wire";
 
@@ -233,5 +233,286 @@ describe("the card on a narrow screen", () => {
     // this the card would push the whole shell sideways.
     expect(style).toContain("overflow-wrap: anywhere");
     expect(style).toContain("min-width: 0");
+  });
+});
+
+/**
+ * The card's own refresh.
+ *
+ * `watch` is driven through the real `EventSource` shape rather than a spy on
+ * the element's internals, and the assertions are about what a person would see:
+ * a frame replaces the numbers, the selector re-subscribes, pause closes the
+ * subscription and resume opens a fresh one.
+ *
+ * The fake carries `readyState` because `EventSource` reports two different
+ * failures through one event: a dropped socket it will retry (`CONNECTING`) and
+ * a reply it has given up on (`CLOSED`), such as the `404` a daemon without the
+ * watch route answers.
+ */
+class FakeEventSource {
+  static opened: FakeEventSource[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+
+  readonly url: string;
+  closed = false;
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  #listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>();
+
+  constructor(url: string) {
+    this.url = url;
+    FakeEventSource.opened.push(this);
+  }
+
+  addEventListener(name: string, listener: (event: MessageEvent<string>) => void): void {
+    this.#listeners.set(name, [...(this.#listeners.get(name) ?? []), listener]);
+  }
+
+  close(): void {
+    this.closed = true;
+    this.readyState = FakeEventSource.CLOSED;
+  }
+
+  emit(name: string, data: string): void {
+    for (const listener of this.#listeners.get(name) ?? []) {
+      listener({ data } as MessageEvent<string>);
+    }
+  }
+
+  static last(): FakeEventSource {
+    const source = FakeEventSource.opened.at(-1);
+    if (!source) {
+      throw new Error("the card opened no stream");
+    }
+    return source;
+  }
+}
+
+const realEventSource = globalThis.EventSource;
+
+/** A card the shell has connected to a stream. */
+function liveCard(): AnthHostInfo {
+  const element = mount();
+  element.watchUrl = "/api/host-info";
+  return element;
+}
+
+beforeEach(() => {
+  globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+});
+
+afterEach(() => {
+  FakeEventSource.opened = [];
+  globalThis.EventSource = realEventSource;
+  document.body.innerHTML = "";
+});
+
+describe("the card's live stream", () => {
+  test("subscribes to the watch route at the documented default", () => {
+    liveCard();
+
+    expect(FakeEventSource.last().url).toBe("/api/host-info/watch?interval=2s");
+  });
+
+  test("the toolbar appears and goes with the URL that needs it", () => {
+    const element = mount(SAMPLE);
+    expect(element.shadowRoot?.querySelector("[data-pause]")).toBeNull();
+
+    element.watchUrl = "/api/host-info";
+    expect(element.shadowRoot?.querySelector("[data-pause]")).not.toBeNull();
+
+    // Losing the URL means the buttons have nothing to control, so they must not
+    // be left on screen promising an action.
+    element.watchUrl = undefined;
+    expect(element.shadowRoot?.querySelector("[data-pause]")).toBeNull();
+    expect(FakeEventSource.last().readyState).toBe(FakeEventSource.CLOSED);
+  });
+
+  test("a frame replaces the card's numbers without a full re-render", () => {
+    const element = liveCard();
+    const body = element.shadowRoot?.querySelector(".body");
+    FakeEventSource.last().emit(
+      "host-info",
+      JSON.stringify({ ...SAMPLE, hostname: "after-the-frame" }),
+    );
+
+    // The same node, repainted: a re-render would replace `.body` and lose a
+    // scroll position inside a long card.
+    expect(element.shadowRoot?.querySelector(".body")).toBe(body);
+    expect(text(element)).toContain("after-the-frame");
+    expect(text(element)).not.toContain("turing");
+  });
+
+  test("the status pill follows the stream", () => {
+    const element = liveCard();
+    const status = () => element.shadowRoot?.querySelector("[data-status]");
+
+    expect(status()?.getAttribute("data-state")).toBe("connecting");
+
+    const source = FakeEventSource.last();
+    source.onopen?.();
+    expect(status()?.getAttribute("data-state")).toBe("live");
+    // The word, not only the attribute: a pill that changed colour but kept
+    // saying "connecting" is the bug this asserts against.
+    expect(status()?.textContent).toBe("live");
+
+    source.onerror?.();
+    expect(status()?.getAttribute("data-state")).toBe("error");
+    expect(status()?.textContent).toBe("reconnecting");
+    // An interrupted stream is reported, not hidden: the next frame clears it.
+    expect(text(element)).toContain("interrupted");
+
+    source.emit("host-info", JSON.stringify(SAMPLE));
+    expect(status()?.getAttribute("data-state")).toBe("live");
+    expect(status()?.textContent).toBe("live");
+    expect(text(element)).not.toContain("interrupted");
+  });
+
+  test("choosing another interval re-subscribes at the new period", () => {
+    const element = liveCard();
+    const first = FakeEventSource.last();
+
+    element.interval = "10s";
+
+    expect(first.closed).toBe(true);
+    expect(FakeEventSource.last().url).toBe("/api/host-info/watch?interval=10s");
+  });
+
+  test("the selector is what changes the interval", () => {
+    const element = liveCard();
+    const select = element.shadowRoot?.querySelector<HTMLSelectElement>("[data-interval]");
+    expect(select).not.toBeNull();
+    // The offered values are the labels the daemon parses, so what the browser
+    // sends is what the CLI flag takes.
+    expect([...(select?.options ?? [])].map((option) => option.value)).toContain("10s");
+
+    select!.value = "5s";
+    select!.dispatchEvent(new Event("change"));
+
+    expect(FakeEventSource.last().url).toBe("/api/host-info/watch?interval=5s");
+  });
+
+  test("a frame arriving mid-selection does not close the selector", () => {
+    const element = liveCard();
+    const select = element.shadowRoot?.querySelector<HTMLSelectElement>("[data-interval]");
+
+    FakeEventSource.last().emit("host-info", JSON.stringify(SAMPLE));
+
+    // The toolbar is built once; only its state is reassigned. Rebuilding it on
+    // every frame would close the menu under the operator's pointer.
+    expect(element.shadowRoot?.querySelector("[data-interval]")).toBe(select);
+  });
+
+  test("pause closes the stream and resume opens a fresh one", () => {
+    const element = liveCard();
+    const first = FakeEventSource.last();
+
+    element.toggle();
+    expect(first.closed).toBe(true);
+    expect(element.paused).toBe(true);
+    expect(
+      element.shadowRoot?.querySelector("[data-status]")?.getAttribute("data-state"),
+    ).toBe("closed");
+    // The numbers stay on screen: pausing stops the refresh, it does not blank
+    // the card.
+    element.info = SAMPLE;
+    expect(text(element)).toContain("turing");
+    expect(FakeEventSource.opened).toHaveLength(1);
+
+    element.toggle();
+    expect(element.paused).toBe(false);
+    expect(FakeEventSource.opened).toHaveLength(2);
+    expect(FakeEventSource.last().url).toBe("/api/host-info/watch?interval=2s");
+  });
+
+  test("the pause button is what pauses", () => {
+    const element = liveCard();
+    element.shadowRoot?.querySelector<HTMLButtonElement>("[data-pause]")?.click();
+
+    expect(element.paused).toBe(true);
+    expect(element.shadowRoot?.querySelector<HTMLButtonElement>("[data-pause]")?.textContent).toBe(
+      "Resume",
+    );
+  });
+
+  test("removing the card closes its subscription", () => {
+    const element = liveCard();
+    const first = FakeEventSource.last();
+
+    element.remove();
+
+    // An `EventSource` outlives the element otherwise, reconnecting forever for
+    // a card nobody can see.
+    expect(first.closed).toBe(true);
+  });
+
+  test("a card with no watch URL renders but never subscribes", () => {
+    mount(SAMPLE);
+
+    expect(FakeEventSource.opened).toHaveLength(0);
+  });
+
+  test("the first frame fills a card the shell left empty", () => {
+    const element = liveCard();
+    expect(text(element)).toContain("Reading the host");
+
+    FakeEventSource.last().emit("host-info", JSON.stringify(SAMPLE));
+
+    expect(text(element)).toContain("turing");
+    expect(text(element)).not.toContain("Reading the host");
+  });
+});
+
+/**
+ * When the stream cannot be opened at all.
+ *
+ * The fake keeps the browser's lifecycle value honest: `CLOSED` is what
+ * `EventSource` reports after a reply it will not retry, such as the `404` a
+ * daemon without the route answers.
+ */
+describe("a card whose stream was refused", () => {
+  test("says so instead of promising a reconnection that never comes", () => {
+    const element = liveCard();
+    const source = FakeEventSource.last();
+    source.readyState = 2;
+    source.onerror?.();
+
+    const status = element.shadowRoot?.querySelector("[data-status]");
+    expect(status?.getAttribute("data-state")).toBe("closed");
+    expect(status?.textContent).toBe("stopped");
+    expect(text(element)).toContain("refused");
+    // The old behaviour, and the bug: a pill that said "reconnecting" forever
+    // against a route that answers `404`.
+    expect(text(element)).not.toContain("reconnecting");
+  });
+
+  test("offers a retry, because the daemon may have been restarted since", () => {
+    const element = liveCard();
+    const source = FakeEventSource.last();
+    source.readyState = 2;
+    source.onerror?.();
+
+    const button = element.shadowRoot?.querySelector<HTMLButtonElement>("[data-pause]");
+    expect(button?.textContent).toBe("Retry");
+
+    // What the operator restarts a stream with is the button in front of them.
+    button?.click();
+
+    expect(FakeEventSource.opened).toHaveLength(2);
+    expect(element.paused).toBe(false);
+  });
+
+  test("a retryable drop still reads as reconnecting", () => {
+    const element = liveCard();
+    const source = FakeEventSource.last();
+    source.readyState = 0;
+    source.onerror?.();
+
+    const status = element.shadowRoot?.querySelector("[data-status]");
+    expect(status?.getAttribute("data-state")).toBe("error");
+    expect(status?.textContent).toBe("reconnecting");
   });
 });

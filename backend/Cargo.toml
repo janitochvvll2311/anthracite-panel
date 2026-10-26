@@ -22,6 +22,9 @@ sha2 = { version = "0.10", default-features = false }
 # `Vec<u8>` into an array of numbers, tripling it at the boundary.
 base64 = "0.22"
 wasmi_core = "2"
+# The SSE route needs one stream combinator (`unfold`) to turn a ticker into
+# frames. `axum` already pulls this crate in, so naming it adds no compile unit.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # The REPL needs termios for raw mode. `libc` is already in the tree via other
 # crates, and a raw terminal has no std-only spelling.
 libc = "0.2"

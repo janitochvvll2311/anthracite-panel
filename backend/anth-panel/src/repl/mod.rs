@@ -470,7 +470,7 @@ fn print_help() {
 fn help_text() -> String {
     String::from(
         "commands:\n  \
-         host-info                      one snapshot of the host\n  \
+         host-info [--watch [INTERVAL]]  one snapshot, or one every INTERVAL\n  \
          file read <path> [--offset N] [--len N] [--follow]\n                                 \
          copy an approved file to stdout, or follow it as it grows\n  \
          plugin list                    every plugin the daemon found\n  \

@@ -13,6 +13,34 @@ pub(crate) fn quiet() -> std::sync::Arc<crate::log::Logger> {
     std::sync::Arc::new(crate::log::Logger::silent())
 }
 
+/// A snapshot with every field filled, for tests that care about the shape of an
+/// answer rather than what this machine happens to report.
+pub(crate) fn blank_host_info() -> anth_wire::HostInfo {
+    anth_wire::HostInfo {
+        hostname: "test-host".to_string(),
+        os: anth_wire::OsInfo {
+            name: "Test OS".to_string(),
+            version: "1".to_string(),
+            kernel: "6.0".to_string(),
+            arch: "x86_64".to_string(),
+        },
+        uptime_seconds: 1,
+        cpu_model: "Test CPU".to_string(),
+        logical_cores: 2,
+        load: anth_wire::LoadAverage {
+            one: 0.0,
+            five: 0.0,
+            fifteen: 0.0,
+        },
+        memory: anth_wire::MemoryInfo {
+            total_kib: 1024,
+            available_kib: 512,
+            swap_total_kib: 0,
+            swap_free_kib: 0,
+        },
+    }
+}
+
 /// The HTTP transport, which must answer exactly what the socket does.
 mod api {
     use crate::api::{ApiError, parse_query, router};
@@ -26,7 +54,7 @@ mod api {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    fn test_router() -> Router {
+    pub(crate) fn test_router() -> Router {
         router(Arc::new(Daemon::for_test(
             crate::plugins::registry::Registry::empty(),
             crate::tests::quiet(),
@@ -446,7 +474,10 @@ mod main {
     #[test]
     fn the_cli_parses_the_host_info_subcommand() {
         let cli = Cli::try_parse_from(["anth-panel", "host-info"]).expect("parsing");
-        assert!(matches!(cli.command, Some(Command::HostInfo)));
+        assert!(matches!(
+            cli.command,
+            Some(Command::HostInfo { watch: None })
+        ));
         assert!(cli.socket.is_none());
     }
 
@@ -733,10 +764,10 @@ mod main {
     /// and then keeps the prompt.
     #[test]
     fn a_client_command_under_interactive_runs_first_and_keeps_the_prompt() {
-        let Startup::RunFirst(command) = startup(Some(Command::HostInfo)) else {
+        let Startup::RunFirst(command) = startup(Some(Command::HostInfo { watch: None })) else {
             panic!("a client command must run before the prompt");
         };
-        assert!(matches!(*command, Command::HostInfo));
+        assert!(matches!(*command, Command::HostInfo { watch: None }));
     }
 
     #[test]
@@ -976,49 +1007,48 @@ mod table {
 }
 
 /// The Unix socket, over a real listener in the test temp directory.
+/// A socket path unique to this test, removed on drop.
+///
+/// Shared by the socket and watch suites: both need a real daemon on a real
+/// listener, and a second copy of this helper would be a second place for the
+/// naming to collide.
+pub(crate) struct SocketPath(pub(crate) std::path::PathBuf);
+
+impl SocketPath {
+    pub(crate) fn new(label: &str) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        Self(std::env::temp_dir().join(format!("anth-{label}-{}-{nanos}.sock", std::process::id())))
+    }
+}
+
+impl Drop for SocketPath {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Starts a daemon on a unique path and returns the path once it is bound.
+pub(crate) async fn spawn_daemon(label: &str) -> SocketPath {
+    let path = SocketPath::new(label);
+    let listener = crate::socket::bind(&path.0).expect("binding the test socket");
+    let daemon = std::sync::Arc::new(crate::dispatch::Daemon::for_test(
+        crate::plugins::registry::Registry::empty(),
+        crate::tests::quiet(),
+    ));
+    tokio::spawn(async move {
+        let _ = crate::socket::serve(listener, daemon).await;
+    });
+    path
+}
+
 mod socket {
-    use crate::dispatch::Daemon;
-    use crate::socket::{Client, bind, serve};
+    use crate::socket::{Client, bind};
+    use crate::tests::{SocketPath, spawn_daemon};
     use anth_wire::{Request, Response, read_frame, write_frame};
-    use std::path::PathBuf;
-    use std::sync::Arc;
     use tokio::net::UnixStream;
-
-    /// A socket path unique to this test, removed on drop.
-    struct SocketPath(PathBuf);
-
-    impl SocketPath {
-        fn new(label: &str) -> Self {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            Self(
-                std::env::temp_dir()
-                    .join(format!("anth-{label}-{}-{nanos}.sock", std::process::id())),
-            )
-        }
-    }
-
-    impl Drop for SocketPath {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-
-    /// Starts a daemon on a unique path and returns the path once it is bound.
-    async fn spawn_daemon(label: &str) -> SocketPath {
-        let path = SocketPath::new(label);
-        let listener = bind(&path.0).expect("binding the test socket");
-        let daemon = Arc::new(Daemon::for_test(
-            crate::plugins::registry::Registry::empty(),
-            crate::tests::quiet(),
-        ));
-        tokio::spawn(async move {
-            let _ = serve(listener, daemon).await;
-        });
-        path
-    }
 
     #[tokio::test]
     async fn a_request_reaches_the_daemon_over_the_socket() {
@@ -1988,6 +2018,161 @@ path = "{anchor}"
     }
 }
 
+/// `host-info --watch`: the interval, the frames, and the loop over a real daemon.
+///
+/// The loop is the client's, so there is no daemon-side watch to test. What is
+/// worth pinning is that the two output shapes differ for the reason they exist,
+/// that a repeated watch really asks more than once, and that a reader going
+/// away ends it as a success rather than a failure.
+mod watch {
+    use crate::tests::spawn_daemon;
+    use crate::watch::{Frames, watch_into};
+    use anth_wire::parse_interval;
+    use std::io::{self, Write};
+    use std::process::ExitCode;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[test]
+    fn an_interval_needs_a_unit_and_is_converted() {
+        assert_eq!(parse_interval("500ms").unwrap(), Duration::from_millis(500));
+        assert_eq!(parse_interval("2s").unwrap(), Duration::from_secs(2));
+        assert_eq!(parse_interval("1.5s").unwrap(), Duration::from_millis(1500));
+        assert_eq!(parse_interval("1m").unwrap(), Duration::from_secs(60));
+        assert_eq!(parse_interval("1h").unwrap(), Duration::from_secs(3600));
+        // Whitespace is a fact of shell input, not a different interval.
+        assert_eq!(parse_interval(" 2s ").unwrap(), Duration::from_secs(2));
+    }
+
+    /// A bare number is refused rather than guessed: `2` read as seconds is
+    /// right, `2` read as milliseconds is a thousand snapshots a second.
+    #[test]
+    fn an_interval_without_a_unit_is_refused() {
+        let problem = parse_interval("2").unwrap_err();
+        assert!(problem.contains("unit suffix"), "{problem}");
+    }
+
+    #[test]
+    fn an_interval_must_be_positive_and_in_range() {
+        for raw in ["0s", "-1s", "abc s", "0.0001ms", "25h"] {
+            assert!(
+                parse_interval(raw).is_err(),
+                "`{raw}` must be refused, not silently accepted"
+            );
+        }
+    }
+
+    /// On a terminal each frame replaces the last; through a pipe frames are
+    /// separated by a blank line. Both are asserted as exact bytes, because the
+    /// difference is the whole reason `redraw` exists.
+    #[test]
+    fn a_redraw_overwrites_and_a_pipe_separates() {
+        let mut redrawn = Vec::new();
+        let mut frames = Frames::new(&mut redrawn, true);
+        frames.write_frame("a\nb").unwrap();
+        frames.write_frame("c").unwrap();
+        let text = String::from_utf8(redrawn).unwrap();
+        // Two lines in the first frame, so the cursor walks up two.
+        assert_eq!(text, "a\nb\n\x1b[2A\x1b[Jc\n");
+
+        let mut piped = Vec::new();
+        let mut frames = Frames::new(&mut piped, false);
+        frames.write_frame("a").unwrap();
+        frames.write_frame("b").unwrap();
+        let text = String::from_utf8(piped).unwrap();
+        assert_eq!(text, "a\n\nb\n");
+        assert!(
+            !text.contains('\x1b'),
+            "a redirected log must carry no escapes: {text:?}"
+        );
+    }
+
+    /// A writer that accepts `allowed` frames and then refuses, the way `| head`
+    /// closes the pipe. The bytes and the count are shared, because `Frames`
+    /// takes the writer by value and the test still has to read what it wrote.
+    #[derive(Clone, Default)]
+    struct Head {
+        seen: Arc<Mutex<String>>,
+        frames: Arc<Mutex<usize>>,
+        allowed: usize,
+    }
+
+    impl Write for Head {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut frames = self.frames.lock().unwrap();
+            if *frames >= self.allowed {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "head went away"));
+            }
+            self.seen
+                .lock()
+                .unwrap()
+                .push_str(std::str::from_utf8(buf).unwrap());
+            // `write_frame` issues one `write` per line, so the frame boundary is
+            // the newline that ends it — the same thing a reader sees.
+            *frames += buf.iter().filter(|b| **b == b'\n').count();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The whole path: a real listener, a real `Client`, the real renderer, and
+    /// a writer that stops once it has been handed more than two frames.
+    ///
+    /// Two frames is what proves the loop repeats; asserting only that it
+    /// returned would pass for a watch that drew once and stopped.
+    #[tokio::test]
+    async fn a_watch_draws_more_than_one_frame_and_stops_when_the_reader_leaves() {
+        let path = spawn_daemon("watch-frames").await;
+        // Three table frames are about 54 newlines, so a budget of 40 lets two
+        // frames through whole and refuses during the third. The point is that
+        // more than one frame arrived, and the budget is what ends the run
+        // instead of the test timing out.
+        // Three table frames are about 54 newlines, so a budget of 40 lets two
+        // frames through whole and refuses during the third: the budget ends the
+        // run instead of the test waiting on a timeout.
+        let head = Head {
+            allowed: 40,
+            ..Head::default()
+        };
+        let seen = Arc::clone(&head.seen);
+
+        let code = watch_into(&path.0, Duration::from_millis(20), Frames::new(head, false)).await;
+
+        // `BrokenPipe` is the reader's decision, not a failure.
+        assert_eq!(code, ExitCode::SUCCESS);
+        let text = seen.lock().unwrap().clone();
+        // The top border is drawn once per frame, so counting it counts
+        // snapshots without depending on a label's spelling.
+        assert!(
+            text.matches('┌').count() >= 2,
+            "the loop must draw more than one snapshot, got: {text}"
+        );
+    }
+
+    /// A watch that cannot reach the daemon fails like any other client command,
+    /// rather than looping on a connection that was never made.
+    #[tokio::test]
+    async fn a_watch_without_a_daemon_reports_the_failure() {
+        let missing = crate::tests::SocketPath::new("watch-absent");
+
+        let code = watch_into(
+            &missing.0,
+            Duration::from_millis(20),
+            Frames::new(io::sink(), false),
+        )
+        .await;
+
+        // `Client::connect` reports a missing socket as `NotFound`, and the exit
+        // code must come from that kind rather than a hardcoded 1.
+        assert_eq!(
+            code,
+            ExitCode::from(anth_wire::ErrorKind::NotFound.exit_code())
+        );
+    }
+}
+
 /// Where the daemon looks for its socket, its bundles and its settings.
 ///
 /// Every case passes its own environment and its own file, because the thing
@@ -2330,6 +2515,297 @@ mod terminal_dispatch {
                 assert!(error.message.contains("cat"), "{}", error.message);
             }
             other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+}
+
+/// `host-info --watch` as clap parses it.
+///
+/// The flag is optional and its value optional too, which is three shapes clap
+/// could get wrong silently: a bare `--watch` taking the *next* word as its
+/// interval, or an absent value reading as `Some("")`, would both parse.
+mod watch_cli {
+    use crate::{Cli, Command};
+    use clap::Parser;
+
+    fn watch_of(args: &[&str]) -> Option<String> {
+        let mut argv = vec!["anth-panel", "host-info"];
+        argv.extend_from_slice(args);
+        match Cli::try_parse_from(argv).expect("parsing").command {
+            Some(Command::HostInfo { watch }) => watch,
+            other => panic!("expected the host-info subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_flag_means_one_snapshot() {
+        assert_eq!(watch_of(&[]), None);
+    }
+
+    /// A bare `--watch` must use the documented default rather than swallowing
+    /// whatever follows it.
+    #[test]
+    fn a_bare_watch_takes_the_default_interval() {
+        assert_eq!(watch_of(&["--watch"]), Some("2s".to_string()));
+    }
+
+    #[test]
+    fn an_explicit_interval_is_kept_as_written() {
+        assert_eq!(watch_of(&["--watch", "500ms"]), Some("500ms".to_string()));
+        assert_eq!(
+            watch_of(&["--watch", "1m"]),
+            Some("1m".to_string()),
+            "a following word is the interval, not a leftover positional"
+        );
+    }
+
+    /// An interval the parser cannot read must reach the command rather than
+    /// fail in clap: the message that names `ms, s, m or h` comes from the
+    /// interval parser, and it is the one an operator can act on.
+    #[test]
+    fn an_unreadable_interval_still_parses_and_is_refused_later() {
+        assert_eq!(watch_of(&["--watch", "nope"]), Some("nope".to_string()));
+        assert!(anth_wire::parse_interval("nope").is_err());
+    }
+}
+
+/// The SSE watch route, driven through the real router.
+///
+/// The body is read as bytes and asserted as the SSE wire format, because the
+/// format *is* the contract here: an `EventSource` in the browser parses those
+/// exact lines, so a change that looked harmless (renaming the event, dropping
+/// the `data:` prefix) would break the widget with every Rust test still green.
+mod sse {
+    use crate::tests::api::test_router;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use futures_util::StreamExt;
+    use std::time::{Duration, Instant};
+    use tower::ServiceExt;
+
+    /// Reads whatever the stream produced before `within`, then stops.
+    ///
+    /// The body is consumed chunk by chunk rather than with `to_bytes`, which
+    /// only returns at EOF or at its byte limit: a watch has neither, so a
+    /// single `to_bytes` would wait for a deadline and throw away every frame it
+    /// had already received. Accumulating per chunk is what makes the read
+    /// assert on bytes that actually arrived.
+    async fn read_for(uri: &str, within: Duration) -> String {
+        let response = test_router()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("a valid request"),
+            )
+            .await
+            .expect("the router must answer");
+
+        assert_eq!(response.status().as_u16(), 200, "{uri} must open a stream");
+        assert!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/event-stream")),
+            "an SSE route must say so in its content type"
+        );
+
+        let mut stream = response.into_body().into_data_stream();
+        let mut text = String::new();
+        let deadline = tokio::time::Instant::now() + within;
+
+        loop {
+            let next = tokio::time::timeout_at(deadline, stream.next()).await;
+            match next {
+                Ok(Some(Ok(chunk))) => text.push_str(&String::from_utf8_lossy(&chunk)),
+                Ok(Some(Err(error))) => panic!("reading the stream failed: {error}"),
+                Ok(None) | Err(_) => break,
+            }
+        }
+        text
+    }
+
+    /// Frames are `event: <name>` lines followed by one `data:` each.
+    fn frames(text: &str, event: &str) -> Vec<String> {
+        text.split("\n\n")
+            .filter(|block| block.contains(&format!("event: {event}")))
+            .map(|block| {
+                block
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data: "))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_watch_opens_with_a_snapshot_and_names_its_event() {
+        let text = read_for(
+            "/api/host-info/watch?interval=20ms",
+            Duration::from_millis(300),
+        )
+        .await;
+
+        let snapshots = frames(&text, "host-info");
+        assert!(
+            !snapshots.is_empty(),
+            "the first frame must arrive without waiting a whole interval: {text:?}"
+        );
+
+        // The payload is the same JSON shape the one-shot route answers, because
+        // it is the same `HostInfo` — the widget parses one shape either way.
+        let first: serde_json::Value =
+            serde_json::from_str(&snapshots[0]).expect("a frame carries JSON");
+        assert!(
+            first["hostname"].as_str().is_some_and(|s| !s.is_empty()),
+            "{first}"
+        );
+        assert!(first["os"]["name"].is_string(), "{first}");
+
+        // The retry hint belongs to the first frame; a browser uses it to know
+        // how long to wait before reconnecting.
+        assert!(text.contains("retry:"), "no retry hint in {text:?}");
+    }
+
+    #[tokio::test]
+    async fn a_watch_keeps_answering_at_the_interval_it_was_given() {
+        let started = Instant::now();
+        let text = read_for(
+            "/api/host-info/watch?interval=20ms",
+            Duration::from_millis(250),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        let count = frames(&text, "host-info").len();
+        // A 20ms interval over 250ms cannot yield fewer than a few frames. The
+        // bound is loose on purpose: a busy CI machine slows the ticks, and the
+        // assertion that matters is "more than one", not an exact count.
+        assert!(
+            count >= 3,
+            "{count} frames in {elapsed:?} is not a repeating watch: {text:?}"
+        );
+    }
+
+    /// An interval the CLI would refuse is refused here too, before any byte of
+    /// the stream is written, so the client gets a status rather than a stream
+    /// that opens and then says nothing.
+    #[tokio::test]
+    async fn a_bad_interval_is_a_400_before_the_stream_opens() {
+        for uri in [
+            "/api/host-info/watch?interval=2",
+            "/api/host-info/watch?interval=0s",
+            "/api/host-info/watch?interval=nope",
+        ] {
+            let response = test_router()
+                .oneshot(
+                    HttpRequest::builder()
+                        .uri(uri)
+                        .body(Body::empty())
+                        .expect("a valid request"),
+                )
+                .await
+                .expect("the router must answer");
+
+            assert_eq!(response.status().as_u16(), 400, "{uri} must be refused");
+        }
+    }
+
+    /// The route and the CLI flag accept exactly the same strings, because they
+    /// call the same parser. This is the assertion that keeps them from drifting
+    /// when one of the two grows a spelling the other lacks.
+    #[test]
+    fn the_route_and_the_flag_share_one_interval_grammar() {
+        for raw in ["500ms", "2s", "1.5s", "1m", "1h", " 2s "] {
+            assert!(
+                anth_wire::parse_interval(raw).is_ok(),
+                "`{raw}` must be accepted by both transports"
+            );
+        }
+        for raw in ["2", "0s", "-1s", "2d"] {
+            assert!(
+                anth_wire::parse_interval(raw).is_err(),
+                "`{raw}` must be refused by both transports"
+            );
+        }
+    }
+}
+
+/// The stream the watch is built from, with the answer supplied by the test.
+///
+/// Driving `snapshot_stream` directly is what makes the failure path testable:
+/// a real daemon answers `HostInfo` and cannot be asked to fail on cue, and the
+/// behaviour worth pinning is that one error ends the stream rather than being
+/// retried forever.
+mod sse_stream {
+    use crate::api::snapshot_stream;
+    use anth_wire::{Response, WireError};
+    use futures_util::StreamExt;
+
+    /// Collects at most `limit` frames, so a stream that never ends fails the
+    /// test by count instead of hanging it.
+    async fn take(
+        mut stream: impl futures_util::Stream<
+            Item = Result<axum::response::sse::Event, std::convert::Infallible>,
+        > + Unpin,
+        limit: usize,
+    ) -> Vec<String> {
+        let mut seen = Vec::new();
+        while seen.len() < limit {
+            match stream.next().await {
+                Some(Ok(event)) => seen.push(format!("{event:?}")),
+                Some(Err(never)) => match never {},
+                None => break,
+            }
+        }
+        seen
+    }
+
+    #[tokio::test]
+    async fn a_refusal_ends_the_stream_after_one_error_event() {
+        let mut answers = vec![
+            Response::Error(WireError::internal("the host went away")),
+            // If the stream kept going it would answer this second one, so its
+            // absence is what proves the first error stopped it.
+            Response::HostInfo(anth_wire::HostInfo {
+                hostname: "must never be sent".into(),
+                ..crate::tests::blank_host_info()
+            }),
+        ]
+        .into_iter();
+
+        let ticks = tokio::time::interval(std::time::Duration::from_millis(10));
+        let stream = snapshot_stream(ticks, || {
+            let next = answers
+                .next()
+                .unwrap_or(Response::Error(WireError::internal(
+                    "asked more than twice",
+                )));
+            async move { next }
+        });
+
+        let events = take(Box::pin(stream), 5).await;
+        assert_eq!(
+            events.len(),
+            1,
+            "an error must end the stream, not feed the next frame: {events:?}"
+        );
+        assert!(events[0].contains("error"), "{events:?}");
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_carries_the_host_info_event_name() {
+        let ticks = tokio::time::interval(std::time::Duration::from_millis(10));
+        let stream = snapshot_stream(ticks, || async {
+            Response::HostInfo(crate::tests::blank_host_info())
+        });
+
+        let events = take(Box::pin(stream), 2).await;
+        assert_eq!(events.len(), 2, "a watch must not stop after one frame");
+        for event in &events {
+            assert!(event.contains("host-info"), "{event}");
         }
     }
 }

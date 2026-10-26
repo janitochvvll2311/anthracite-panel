@@ -12,6 +12,12 @@
 export { type ApiErrorBody, type ErrorKind, errorKind, httpStatus } from "./error";
 export { type JsonFetch, type JsonRequest, WireError, responseError, send } from "./exchange";
 export {
+  type StreamStatus,
+  type WatchRequest,
+  watch,
+  watchPath,
+} from "./stream";
+export {
   type HostInfo,
   type LoadAverage,
   type MemoryInfo,
