@@ -176,7 +176,7 @@ export class AnthFiles extends LitElement {
       <nav class="crumbs" aria-label=${msg('Path')}>
         ${crumbs.map(
           (crumb, index) => html`
-            ${index > 0 ? html`<span class="sep" aria-hidden="true">/</span>` : nothing}
+            ${index > 1 ? html`<span class="sep" aria-hidden="true">/</span>` : nothing}
             <button
               type="button"
               class="crumb"

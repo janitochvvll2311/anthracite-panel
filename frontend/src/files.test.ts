@@ -66,6 +66,10 @@ test('lists the root and navigates into a directory', async () => {
 
   expect(client.list).toHaveBeenLastCalledWith('/folder')
   expect(element.shadowRoot?.textContent).toContain('nested.txt')
+  // The root crumb is already `/`, so the first segment must not add another.
+  expect(element.shadowRoot?.querySelector('.crumbs')?.textContent?.replace(/\s+/g, '')).toBe(
+    '/folder',
+  )
 })
 
 test('previews a file in place', async () => {
