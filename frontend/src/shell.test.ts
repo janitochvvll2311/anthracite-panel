@@ -108,6 +108,7 @@ test('the frame keeps the header outside the scroll container', async () => {
   expect(header!.parentNode).toBe(root)
   expect(root.querySelectorAll('main')).toHaveLength(1)
   expect(root.querySelector('.sidebar')).not.toBeNull()
+  expect(element.classList.contains('auth-only')).toBe(false)
 })
 
 test('the sidebar, the tab strip and the drawer share the destinations', async () => {
@@ -179,4 +180,5 @@ test('an unauthenticated shell shows the registration form instead of the tabs',
 
   expect(root.querySelector('[data-auth] form[data-register]')).not.toBeNull()
   expect(root.querySelector('[data-shell]')!.hasAttribute('hidden')).toBe(true)
+  expect(element.classList.contains('auth-only')).toBe(true)
 })

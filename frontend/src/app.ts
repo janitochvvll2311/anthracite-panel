@@ -124,6 +124,13 @@ export class AnthApp extends HTMLElement {
     if (!this.shadowRoot) {
       return
     }
+    const ready = this.ready()
+    // The login/registration form owns the whole page: a sidebar behind it
+    // would suggest sections the visitor cannot open yet.
+    this.classList.toggle('auth-only', !ready)
+    if (!ready) {
+      this.#setDrawer(false)
+    }
     this.#paintHeader()
     this.#paintNav()
 
@@ -456,6 +463,17 @@ const STYLE = `
   :host { display: flex; flex-direction: column; height: 100svh; height: 100dvh;
           overflow: hidden; color: var(--text, #dbe6f2);
           background: transparent; box-sizing: border-box; }
+
+  /* The author display rules below would otherwise beat the UA [hidden] rule,
+     which is exactly what left the auth block taking the full column after
+     login. */
+  [hidden] { display: none !important; }
+
+  /* While the login form is the whole page there is no navigation to show. */
+  :host(.auth-only) .sidebar { display: none; }
+  :host(.auth-only) .shell { grid-template-columns: minmax(0, 1fr); }
+  :host(.auth-only) .menu { display: none; }
+  :host(.auth-only) anth-nav-drawer { display: none; }
 
   .skip { position: absolute; top: -10rem; left: 0.5rem; z-index: 30; padding: 0.5rem 0.75rem;
           color: var(--text, #dbe6f2); border: 1px solid var(--accent, #7dd3fc);
