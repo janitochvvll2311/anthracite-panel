@@ -10,12 +10,12 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anth_wire::{ErrorKind, FileChunk, FileEntry, Page, Request, Response, WireError};
+use anth_wire::{ErrorKind, FileChunk, FileEntry, FileWritten, Page, Request, Response, WireError};
 use axum::body::Body;
-use axum::extract::rejection::QueryRejection;
+use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{
-    ConnectInfo, FromRequest, FromRequestParts, Path as AxumPath, Query, Request as AxumRequest,
-    State,
+    ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path as AxumPath, Query,
+    Request as AxumRequest, State,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
@@ -59,6 +59,11 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    // The write route accepts a text body; keep the limit tied to the config
+    // so a larger upload cap is not silently capped by the extractor default.
+    let write_limit = usize::try_from(state.daemon.config().files.max_upload_bytes)
+        .unwrap_or(usize::MAX)
+        .saturating_add(1024 * 1024);
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/auth/state", get(auth_state))
@@ -73,6 +78,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/host-info/watch", get(watch_host_info))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
+        .route(
+            "/api/files/write",
+            post(write_file).layer(DefaultBodyLimit::max(write_limit)),
+        )
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
         .route("/api/settings", get(get_settings).patch(patch_settings))
@@ -243,6 +252,14 @@ struct FileReadQuery {
 #[derive(Debug, Deserialize)]
 struct FileDeleteQuery {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileWriteBody {
+    path: String,
+    content: String,
+    #[serde(default)]
+    create: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -618,6 +635,29 @@ async fn delete_file(
         Response::Error(error) => Err(ApiError::from(error)),
         other => Err(ApiError::internal(format!(
             "a file delete answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn write_file(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<FileWriteBody>, JsonRejection>,
+) -> Result<Json<FileWritten>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesWrite {
+            path: body.path,
+            content: body.content,
+            create: body.create,
+        })
+        .await
+    {
+        Response::FilesWritten(written) => Ok(Json(written)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a file write answered unexpectedly: {other:?}"
         ))),
     }
 }

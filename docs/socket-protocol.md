@@ -154,11 +154,25 @@ started with `--allow-reboot`. Both actions answer before they run.
 { "type": "files_deleted", "data": { "path": "etc/hosts" } }
 ```
 
+```json
+{
+  "type": "files_write",
+  "data": { "path": "etc/motd", "content": "hello\n", "create": true }
+}
+```
+
+```json
+{ "type": "files_written", "data": { "path": "etc/motd", "size": 6 } }
+```
+
 Paths are relative to the configured file root. `..`, absolute names and
 symlinks that leave the root are refused with `forbidden`; a non-UTF-8 file is
 `unsupported`. `files_delete` removes one regular file or a symlink (the link,
 not its target), refuses directories and requires `files.write`; with writes
-disabled it answers `forbidden` and code `write_disabled`.
+disabled it answers `forbidden` and code `write_disabled`. `files_write` writes
+one UTF-8 text file, caps the content at `files.max_upload_bytes`, requires
+`files.write`, and answers `conflict` with code `exists` when `create` is true
+and the file is already there.
 
 ## Errors
 

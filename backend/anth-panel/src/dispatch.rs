@@ -46,6 +46,7 @@ impl Daemon {
             config.files.write,
             config.files.max_entries,
             config.files.max_preview_bytes,
+            config.files.max_upload_bytes,
         );
         Self {
             config,
@@ -151,6 +152,13 @@ impl Daemon {
             Request::FilesDelete { path } => Ok(Response::FilesDeleted {
                 path: self.files()?.delete(&path)?,
             }),
+            Request::FilesWrite {
+                path,
+                content,
+                create,
+            } => Ok(Response::FilesWritten(
+                self.files()?.write(&path, &content, create)?,
+            )),
         }
     }
 }
@@ -197,6 +205,7 @@ fn operation_of(request: &Request) -> &'static str {
         Request::FilesList { .. } => "files-list",
         Request::FilesRead { .. } => "files-read",
         Request::FilesDelete { .. } => "files-delete",
+        Request::FilesWrite { .. } => "files-write",
     }
 }
 

@@ -266,6 +266,25 @@ file root cannot be deleted. This is a permanent delete; trash and archives are
 part of the next files slice, so the caller confirms before sending the
 request.
 
+### `POST /api/files/write`
+
+```json
+{ "path": "etc/motd", "content": "hello\n", "create": false }
+```
+
+Writes one UTF-8 text file and answers:
+
+```json
+{ "path": "etc/motd", "size": 6 }
+```
+
+`create: true` fails with `409 conflict` (code `exists`) instead of replacing an
+existing file; the default replaces it. Writing requires `files.write = true`
+(`403` with `write_disabled` otherwise). The content is capped by
+`files.max_upload_bytes`; directories and non-regular files are refused, and
+symlinks that leave the root are rejected. The request body limit follows
+`files.max_upload_bytes` plus room for the JSON envelope.
+
 ## Static UI
 
 `GET /` and `GET /{*path}` serve the embedded shell. A missing file is `404`; an

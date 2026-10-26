@@ -159,6 +159,72 @@ async fn deletes_a_file_and_refuses_a_directory() {
 }
 
 #[tokio::test]
+async fn writes_and_creates_files() {
+    let (router, root) = app("files-write", false);
+
+    let update = serde_json::json!({
+        "path": "note.txt",
+        "content": "hello edit",
+        "create": false,
+    });
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/write")
+                .header("content-type", "application/json")
+                .body(Body::from(update.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("write");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        fs::read_to_string(root.join("note.txt")).expect("read"),
+        "hello edit"
+    );
+
+    let create = serde_json::json!({
+        "path": "draft.txt",
+        "content": "draft",
+        "create": true,
+    });
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/write")
+                .header("content-type", "application/json")
+                .body(Body::from(create.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("create");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        fs::read_to_string(root.join("draft.txt")).expect("read"),
+        "draft"
+    );
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/write")
+                .header("content-type", "application/json")
+                .body(Body::from(create.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("conflict");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
 async fn files_require_a_session_when_auth_is_on() {
     let (router, root) = app("files-auth", true);
     let response = router

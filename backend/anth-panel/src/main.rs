@@ -1,6 +1,6 @@
 //! `anth-panel` binary: daemon, HTTP API and CLI client.
 
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -137,6 +137,15 @@ enum FilesCommand {
         /// Path relative to the file root.
         #[arg(long, value_name = "PATH")]
         path: String,
+    },
+    /// Write a UTF-8 file under the file root; the content comes from stdin.
+    Write {
+        /// Path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// Fail instead of replacing an existing file.
+        #[arg(long)]
+        create: bool,
     },
 }
 
@@ -381,6 +390,27 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
             match response {
                 Response::FilesDeleted { path } => {
                     println!("deleted {path}");
+                    Ok(())
+                }
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        FilesCommand::Write { path, create } => {
+            let mut content = String::new();
+            std::io::stdin()
+                .read_to_string(&mut content)
+                .map_err(|error| (1, format!("reading stdin: {error}")))?;
+            let response = client
+                .call(&Request::FilesWrite {
+                    path: path.clone(),
+                    content,
+                    create: *create,
+                })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::FilesWritten(written) => {
+                    println!("wrote {} ({} bytes)", written.path, written.size);
                     Ok(())
                 }
                 other => Err((1, format!("unexpected response: {other:?}"))),

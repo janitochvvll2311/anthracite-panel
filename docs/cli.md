@@ -111,6 +111,8 @@ anth-panel files list --path /var/log --cursor <opaque>
 anth-panel files read --path /etc/hosts
 anth-panel files read --path big.log --offset 4096 --max-bytes 8192
 anth-panel files delete --path /tmp/old.log
+anth-panel files write --path /tmp/motd < motd.txt
+anth-panel files write --path /tmp/note.txt --create < note.txt
 ```
 
 `list` reads one page of a directory under `[files] root` (`/` by default),
@@ -118,7 +120,9 @@ sorted by name. `--limit` is 1–1000; `--cursor` is the `next` value from the
 previous page. `read` prints a UTF-8 text file, capped by
 `files.max_preview_bytes`; when it stops early, the next offset is printed to
 stderr. `delete` removes one file or symlink and requires `files.write = true`;
-directories and the root are refused. Paths are relative to the root; `..` and
+directories and the root are refused. `write` reads the new content from stdin
+(up to `files.max_upload_bytes`) and requires `files.write`; `--create` fails
+instead of replacing an existing file. Paths are relative to the root; `..` and
 paths that escape it through a symlink are refused.
 
 ## `config`

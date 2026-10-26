@@ -14,8 +14,8 @@ pub use error::{ErrorKind, WireError};
 pub use frame::{MAX_FRAME_LEN, read_frame, read_frame_limited, write_frame, write_frame_limited};
 pub use interval::{DEFAULT_INTERVAL, MAX_INTERVAL, MIN_INTERVAL, parse_interval};
 pub use message::{
-    FileChunk, FileEntry, HostInfo, LoadAverage, MemoryInfo, OsInfo, PROTOCOL_VERSION, Request,
-    Response,
+    FileChunk, FileEntry, FileWritten, HostInfo, LoadAverage, MemoryInfo, OsInfo, PROTOCOL_VERSION,
+    Request, Response,
 };
 pub use page::{DEFAULT_PAGE_LIMIT, MAX_CURSOR_LEN, MAX_PAGE_LIMIT, Page, PageRequest};
 

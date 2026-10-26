@@ -166,6 +166,17 @@ fn file_messages_round_trip() {
         delete
     );
 
+    let write = Request::FilesWrite {
+        path: "etc/motd".to_string(),
+        content: "hello\n".to_string(),
+        create: true,
+    };
+    let text = serde_json::to_string(&write).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<Request>(&text).expect("parse"),
+        write
+    );
+
     let entry = FileEntry {
         name: "hosts".to_string(),
         kind: "file".to_string(),
@@ -196,6 +207,16 @@ fn file_messages_round_trip() {
     let response = Response::FilesDeleted {
         path: "etc/hosts".to_string(),
     };
+    let text = serde_json::to_string(&response).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<Response>(&text).expect("parse"),
+        response
+    );
+
+    let response = Response::FilesWritten(FileWritten {
+        path: "etc/motd".to_string(),
+        size: 6,
+    });
     let text = serde_json::to_string(&response).expect("serialize");
     assert_eq!(
         serde_json::from_str::<Response>(&text).expect("parse"),

@@ -60,6 +60,16 @@ pub enum Request {
     /// Deletes one regular file under the configured root. Requires
     /// `files.write`; directories are refused.
     FilesDelete { path: String },
+    /// Writes one UTF-8 text file under the configured root. Requires
+    /// `files.write`.
+    FilesWrite {
+        path: String,
+        content: String,
+        /// Fail with `conflict` when the file already exists instead of
+        /// replacing it.
+        #[serde(default)]
+        create: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,6 +104,8 @@ pub enum Response {
     FilesDeleted {
         path: String,
     },
+    /// The file was written.
+    FilesWritten(FileWritten),
     Error(WireError),
 }
 
@@ -188,4 +200,13 @@ pub struct FileChunk {
     /// Whether this chunk reaches the end of the file.
     pub eof: bool,
     pub text: String,
+}
+
+/// The result of writing a UTF-8 text file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileWritten {
+    /// The path relative to the file root, using `/` separators.
+    pub path: String,
+    /// Bytes written.
+    pub size: u64,
 }

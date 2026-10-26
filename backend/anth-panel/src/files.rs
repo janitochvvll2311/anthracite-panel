@@ -12,17 +12,18 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use anth_wire::{ErrorKind, FileChunk, FileEntry, Page, PageRequest, WireError};
+use anth_wire::{ErrorKind, FileChunk, FileEntry, FileWritten, Page, PageRequest, WireError};
 
 pub struct FileService {
     root: PathBuf,
     write: bool,
     max_entries: usize,
     max_preview_bytes: u64,
+    max_write_bytes: u64,
 }
 
 impl FileService {
@@ -33,6 +34,7 @@ impl FileService {
         write: bool,
         max_entries: usize,
         max_preview_bytes: u64,
+        max_write_bytes: u64,
     ) -> Result<Self, String> {
         let requested = root.as_ref();
         let root = fs::canonicalize(requested)
@@ -48,6 +50,7 @@ impl FileService {
             write,
             max_entries: max_entries.max(1),
             max_preview_bytes: max_preview_bytes.max(1),
+            max_write_bytes: max_write_bytes.max(1),
         })
     }
 
@@ -190,13 +193,7 @@ impl FileService {
     /// remove the link, not the file it points at. The parent is resolved and
     /// checked against the root, and directories are refused.
     pub fn delete(&self, path: &str) -> Result<String, WireError> {
-        if !self.write {
-            return Err(WireError::new(
-                ErrorKind::Forbidden,
-                "write_disabled",
-                "file changes are disabled; set files.write to true",
-            ));
-        }
+        self.require_write()?;
         let display = display_path(path);
         let (parent, name) = split_parent(path)?;
         let canonical_parent =
@@ -213,6 +210,100 @@ impl FileService {
         }
         fs::remove_file(&target).map_err(|error| io_error(&display, error))?;
         Ok(display)
+    }
+
+    /// Writes one UTF-8 text file under the root.
+    ///
+    /// A create never overwrites; an edit requires an existing regular file.
+    /// Symlinks that resolve outside the root are refused, and the final
+    /// component is resolved before writing so a link cannot redirect it.
+    pub fn write(&self, path: &str, content: &str, create: bool) -> Result<FileWritten, WireError> {
+        self.require_write()?;
+        let display = display_path(path);
+        let bytes = content.as_bytes();
+        let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if size > self.max_write_bytes {
+            return Err(WireError::new(
+                ErrorKind::TooLarge,
+                "too_large",
+                format!(
+                    "the content is larger than the {} byte limit",
+                    self.max_write_bytes
+                ),
+            ));
+        }
+
+        let (parent, name) = split_parent(path)?;
+        let canonical_parent =
+            fs::canonicalize(self.root.join(parent)).map_err(|error| io_error(&display, error))?;
+        if !canonical_parent.starts_with(&self.root) {
+            return Err(escape("the path escapes the file root"));
+        }
+        let target = canonical_parent.join(name);
+
+        if create {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map_err(|error| match error.kind() {
+                    std::io::ErrorKind::AlreadyExists => WireError::new(
+                        ErrorKind::Conflict,
+                        "exists",
+                        format!("{display} already exists"),
+                    ),
+                    _ => io_error(&display, error),
+                })?;
+            file.write_all(bytes)
+                .map_err(|error| io_error(&display, error))?;
+            file.sync_all().map_err(|error| io_error(&display, error))?;
+            return Ok(FileWritten {
+                path: display,
+                size,
+            });
+        }
+
+        let metadata = fs::symlink_metadata(&target).map_err(|error| io_error(&display, error))?;
+        if metadata.is_dir() {
+            return Err(WireError::invalid(format!(
+                "{display} is a directory; only files can be written"
+            )));
+        }
+        let resolved = if metadata.file_type().is_symlink() {
+            let resolved = fs::canonicalize(&target).map_err(|error| io_error(&display, error))?;
+            if !resolved.starts_with(&self.root) {
+                return Err(escape("the path escapes the file root"));
+            }
+            if !resolved.is_file() {
+                return Err(WireError::invalid(format!(
+                    "{display} is not a regular file"
+                )));
+            }
+            resolved
+        } else {
+            if !metadata.is_file() {
+                return Err(WireError::invalid(format!(
+                    "{display} is not a regular file"
+                )));
+            }
+            target
+        };
+        fs::write(&resolved, bytes).map_err(|error| io_error(&display, error))?;
+        Ok(FileWritten {
+            path: display,
+            size,
+        })
+    }
+
+    fn require_write(&self) -> Result<(), WireError> {
+        if self.write {
+            return Ok(());
+        }
+        Err(WireError::new(
+            ErrorKind::Forbidden,
+            "write_disabled",
+            "file changes are disabled; set files.write to true",
+        ))
     }
 
     /// Resolves a request path to a canonical path under the root.
@@ -260,7 +351,7 @@ fn split_parent(requested: &str) -> Result<(PathBuf, OsString), WireError> {
         }
     }
     let Some(name) = parent.file_name().map(OsString::from) else {
-        return Err(WireError::invalid("the file root cannot be deleted"));
+        return Err(WireError::invalid("the file root cannot be changed"));
     };
     parent.pop();
     Ok((parent, name))
@@ -317,11 +408,11 @@ mod tests {
     }
 
     fn service(root: &Path) -> FileService {
-        FileService::new(root, false, 100, 64).expect("service")
+        FileService::new(root, false, 100, 64, 1024).expect("service")
     }
 
     fn writable(root: &Path) -> FileService {
-        FileService::new(root, true, 100, 64).expect("service")
+        FileService::new(root, true, 100, 64, 1024).expect("service")
     }
 
     #[test]
@@ -527,5 +618,95 @@ mod tests {
         assert!(target.exists());
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn creates_and_replaces_files_but_never_overwrites_on_create() {
+        let root = scratch("write");
+        let files = writable(&root);
+
+        let written = files.write("note.txt", "hello", true).expect("create");
+        assert_eq!(written.path, "note.txt");
+        assert_eq!(written.size, 5);
+        assert_eq!(
+            fs::read_to_string(root.join("note.txt")).expect("read"),
+            "hello"
+        );
+
+        files.write("note.txt", "bye", false).expect("replace");
+        assert_eq!(
+            fs::read_to_string(root.join("note.txt")).expect("read"),
+            "bye"
+        );
+        assert_eq!(
+            files
+                .write("note.txt", "again", true)
+                .expect_err("exists")
+                .code,
+            "exists"
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn writing_requires_write_and_refuses_a_directory() {
+        let root = scratch("write-guard");
+        fs::create_dir(root.join("dir")).expect("dir");
+
+        let read_only = service(&root);
+        assert_eq!(
+            read_only
+                .write("note.txt", "x", true)
+                .expect_err("off")
+                .code,
+            "write_disabled"
+        );
+
+        let files = writable(&root);
+        assert_eq!(
+            files.write("dir", "x", false).expect_err("dir").kind,
+            ErrorKind::Invalid
+        );
+        assert_eq!(
+            files
+                .write("../escape.txt", "x", true)
+                .expect_err("escape")
+                .code,
+            "path_escape"
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn writing_respects_the_size_cap_and_symlink_containment() {
+        let root = scratch("write-cap");
+        let outside = scratch("write-cap-outside");
+        fs::write(outside.join("secret.txt"), b"secret").expect("write");
+        symlink(outside.join("secret.txt"), root.join("link")).expect("symlink");
+        let files = writable(&root);
+
+        assert_eq!(
+            files
+                .write("big.txt", &"x".repeat(2048), true)
+                .expect_err("cap")
+                .kind,
+            ErrorKind::TooLarge
+        );
+        assert_eq!(
+            files
+                .write("link", "overwrite", false)
+                .expect_err("symlink")
+                .code,
+            "path_escape"
+        );
+        assert_eq!(
+            fs::read_to_string(outside.join("secret.txt")).expect("read"),
+            "secret"
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+        fs::remove_dir_all(outside).expect("cleanup");
     }
 }
