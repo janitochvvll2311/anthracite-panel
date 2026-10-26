@@ -1,0 +1,27 @@
+{
+  "name": "anth-panel-web",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "lit-localize build && tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "i18n:extract": "lit-localize extract",
+    "i18n:build": "lit-localize build"
+  },
+  "dependencies": {
+    "@lit/localize": "^0.12.2",
+    "lit": "^3.3.3"
+  },
+  "devDependencies": {
+    "@lit/localize-tools": "^0.8.2",
+    "happy-dom": "^21.0.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.5"
+  }
+}

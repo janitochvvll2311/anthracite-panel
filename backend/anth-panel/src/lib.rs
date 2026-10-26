@@ -9,6 +9,7 @@ pub mod log;
 pub mod render;
 pub mod socket;
 pub mod state;
+pub mod www;
 
 pub use config::Config;
 pub use log::{Logger, Settings};

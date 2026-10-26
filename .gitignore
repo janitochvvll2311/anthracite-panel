@@ -36,5 +36,9 @@ rustc-ice-*.txt
 /backend/plugins/
 /backend/plugins.d/
 /backend/anth.sock
+/frontend/node_modules/
+/frontend/dist/
+/backend/anth-panel/www/*
+!/backend/anth-panel/www/.gitkeep
 
 *.toml.lock

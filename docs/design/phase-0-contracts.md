@@ -5,10 +5,10 @@ architecture draft into the contracts Phase 0 needs. Decisions below were
 confirmed before code; later changes must update this file and the architecture
 draft explicitly.
 
-Implementation status: the Phase 0 foundation has landed — workspace, `anth-wire`
-(handshake, frame, error, page, interval), `anth-host` parsers, config/state
-atomic writes, logger and CI. The daemon, HTTP/auth layer, CLI host-info slice
-and frontend are still pending.
+Implementation status: Phase 0 and the Phase 1 host-info slice have landed —
+workspace, `anth-wire`, `anth-host`, config/state atomic writes, logger, CI,
+Unix socket with `Hello`, HTTP + SSE, CLI `host-info`, minimal auth and the Lit
+shell with its embed guard. The remaining feature phases are still pending.
 
 Reference: [v0.3.0.md](v0.3.0.md).
 

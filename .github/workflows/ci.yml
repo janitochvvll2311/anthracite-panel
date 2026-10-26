@@ -5,12 +5,14 @@ on:
     branches: [v0.3.0, "feat/**"]
     paths:
       - "backend/**"
+      - "frontend/**"
       - "rust-toolchain.toml"
       - ".github/workflows/ci.yml"
   pull_request:
     branches: [v0.3.0]
     paths:
       - "backend/**"
+      - "frontend/**"
       - "rust-toolchain.toml"
       - ".github/workflows/ci.yml"
 
@@ -32,6 +34,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Stage the shell for release tests
+        working-directory: frontend
+        run: ./build-shell.sh
+
       - name: Format
         run: cargo fmt --all --check
 
@@ -43,3 +53,35 @@ jobs:
 
       - name: Test (release)
         run: cargo test --workspace --release
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
+
+      - name: Build and stage the shell
+        run: ./build-shell.sh
+
+      - name: The harness is not in the production shell
+        run: |
+          if [ -e ../backend/anth-panel/www/harness.html ]; then
+            echo "harness.html reached the shell" >&2
+            exit 1
+          fi
+          test -f ../backend/anth-panel/www/index.html

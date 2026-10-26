@@ -1,14 +1,21 @@
 # Documentation
 
-This branch is the v0.3.0 rewrite. The user-facing contract
-(`cli.md`, `api-endpoints.md`, `socket-protocol.md`, feature docs) will be added
-with the code it describes.
+This branch is the v0.3.0 rewrite. The Phase 1 host-info slice is implemented;
+the remaining feature documentation is added with the code it describes.
 
-Until then, the planning documents are:
+## User contract
+
+| Document | Contents |
+| --- | --- |
+| [cli.md](cli.md) | Commands, flags, output, exit codes and bootstrap |
+| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, host-info, SSE and error shape |
+| [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
+
+## Design
 
 | Document | Contents |
 | --- | --- |
 | [design/reference-v0.1-v0.2.md](design/reference-v0.1-v0.2.md) | What v0.1.0 and v0.2.0 built, what worked, and what failed |
-| [design/v0.3.0.md](design/v0.3.0.md) | Draft architecture, decisions, target layout and phases |
-| [design/phase-0-contracts.md](design/phase-0-contracts.md) | Phase 0 proposal: wire, config/state, bootstrap, HTTP/CLI, logging, git |
+| [design/v0.3.0.md](design/v0.3.0.md) | Architecture draft, decisions, target layout and phases |
+| [design/phase-0-contracts.md](design/phase-0-contracts.md) | Phase 0 contracts: wire, config/state, bootstrap, HTTP/CLI, logging, git |
 | [design/protocol-changelog.md](design/protocol-changelog.md) | Wire versions and the pre-1.0.0 compatibility scaffold |

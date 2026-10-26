@@ -130,6 +130,7 @@ async fn http_host_info_and_auth_state_are_reachable_with_auth_off() {
     let state: serde_json::Value = serde_json::from_slice(&body).expect("state json");
     assert_eq!(state["required"], false);
     assert_eq!(state["registered"], false);
+    assert_eq!(state["authenticated"], true);
 
     fs::remove_dir_all(root).expect("cleanup");
 }

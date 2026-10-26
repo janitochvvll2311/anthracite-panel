@@ -38,6 +38,7 @@ pub enum Bootstrap {
 pub struct AuthState {
     pub required: bool,
     pub registered: bool,
+    pub authenticated: bool,
     pub bootstrap: Bootstrap,
     pub username: String,
 }
@@ -58,6 +59,7 @@ pub enum AuthError {
     AlreadyRegistered,
     Unauthorized(String),
     Invalid(String),
+    WeakPassword(String),
     Forbidden(String),
     Internal(String),
 }
@@ -67,7 +69,7 @@ impl AuthError {
         match self {
             AuthError::NotRegistered | AuthError::AlreadyRegistered => ErrorKind::Conflict,
             AuthError::Unauthorized(_) => ErrorKind::Unauthorized,
-            AuthError::Invalid(_) => ErrorKind::Invalid,
+            AuthError::Invalid(_) | AuthError::WeakPassword(_) => ErrorKind::Invalid,
             AuthError::Forbidden(_) => ErrorKind::Forbidden,
             AuthError::Internal(_) => ErrorKind::Internal,
         }
@@ -79,6 +81,7 @@ impl AuthError {
             AuthError::AlreadyRegistered => "bootstrap_closed",
             AuthError::Unauthorized(_) => "invalid_credentials",
             AuthError::Invalid(_) => "invalid_request",
+            AuthError::WeakPassword(_) => "password_too_short",
             AuthError::Forbidden(_) => "forbidden",
             AuthError::Internal(_) => "internal",
         }
@@ -90,6 +93,7 @@ impl AuthError {
             AuthError::AlreadyRegistered => "an account is already registered",
             AuthError::Unauthorized(why)
             | AuthError::Invalid(why)
+            | AuthError::WeakPassword(why)
             | AuthError::Forbidden(why)
             | AuthError::Internal(why) => why,
         }
@@ -206,6 +210,7 @@ impl AuthService {
         AuthState {
             required: self.config.enabled,
             registered: self.account.read().expect("account lock").is_some(),
+            authenticated: false,
             bootstrap: *self.bootstrap.read().expect("bootstrap lock"),
             username: self.config.username.clone(),
         }
@@ -228,7 +233,7 @@ impl AuthService {
             return Err(AuthError::AlreadyRegistered);
         }
 
-        let hash = password::hash(password).map_err(AuthError::Invalid)?;
+        let hash = hash_password(password)?;
         let mut secrets = read_secrets(&self.secrets_path).map_err(AuthError::Internal)?;
         secrets.auth.password_hash = hash.clone();
         write_secrets(&self.secrets_path, &secrets.auth).map_err(AuthError::Internal)?;
@@ -341,7 +346,7 @@ impl AuthService {
                 "the current password is incorrect".to_string(),
             ));
         }
-        let hash = password::hash(next).map_err(AuthError::Invalid)?;
+        let hash = hash_password(next)?;
         let mut secrets = read_secrets(&self.secrets_path).map_err(AuthError::Internal)?;
         secrets.auth.password_hash = hash.clone();
         write_secrets(&self.secrets_path, &secrets.auth).map_err(AuthError::Internal)?;
@@ -530,6 +535,16 @@ fn write_secrets(path: &Path, auth: &SecretsAuth) -> Result<(), String> {
     state::write_atomic(path, text.as_bytes(), 0o600)
 }
 
+fn hash_password(password: &str) -> Result<String, AuthError> {
+    password::hash(password).map_err(|message| {
+        if message.contains("at least") {
+            AuthError::WeakPassword(message)
+        } else {
+            AuthError::Internal(message)
+        }
+    })
+}
+
 fn random_bytes(length: usize) -> Result<Vec<u8>, String> {
     let mut bytes = vec![0u8; length];
     getrandom::fill(&mut bytes).map_err(|error| format!("reading entropy: {error}"))?;
@@ -611,6 +626,10 @@ mod tests {
         assert!(password.is_none());
         assert!(!auth.state().registered);
         assert_eq!(auth.state().bootstrap, Bootstrap::Web);
+        assert_eq!(
+            auth.register("short").expect_err("short").code(),
+            "password_too_short"
+        );
         auth.register("a sufficiently long password")
             .expect("register");
         assert!(auth.state().registered);

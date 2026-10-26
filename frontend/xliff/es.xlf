@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+<file target-language="es" source-language="en" original="lit-localize-inputs" datatype="plaintext">
+<body>
+<trans-unit id="s66dd6a35c1114387">
+  <source>The passwords do not match.</source>
+  <target>Las contraseñas no coinciden.</target>
+</trans-unit>
+<trans-unit id="safd53ef5b98bca6f">
+  <source>Set the first password</source>
+  <target>Configura la primera contraseña</target>
+</trans-unit>
+<trans-unit id="s3cad4921d1a382f9">
+  <source>The operator account is</source>
+  <target>La cuenta de operador es</target>
+</trans-unit>
+<trans-unit id="sf6e1665c7022a1f8">
+  <source>Password</source>
+  <target>Contraseña</target>
+</trans-unit>
+<trans-unit id="s5515a136187c74c0">
+  <source>Confirm password</source>
+  <target>Confirmar contraseña</target>
+</trans-unit>
+<trans-unit id="s94f83322f089fbae">
+  <source>Create password</source>
+  <target>Crear contraseña</target>
+</trans-unit>
+<trans-unit id="s5e27738a2e8eb763">
+  <source>Sign in</source>
+  <target>Iniciar sesión</target>
+</trans-unit>
+<trans-unit id="s03f42eea72154959">
+  <source>Username</source>
+  <target>Usuario</target>
+</trans-unit>
+<trans-unit id="s957fe1ac29eda7e6">
+  <source>Host control</source>
+  <target>Control del host</target>
+</trans-unit>
+<trans-unit id="sefcf950b3cc4fc3b">
+  <source>Language</source>
+  <target>Idioma</target>
+</trans-unit>
+<trans-unit id="s4caed5b7a7e5d89b">
+  <source>English</source>
+  <target>Inglés</target>
+</trans-unit>
+<trans-unit id="sf1868dc19e3917bb">
+  <source>Spanish</source>
+  <target>Español</target>
+</trans-unit>
+<trans-unit id="s7cfe12cd14df9950">
+  <source>Sign out</source>
+  <target>Cerrar sesión</target>
+</trans-unit>
+<trans-unit id="s6ebc9bd6feae62a3">
+  <source>Loading…</source>
+  <target>Cargando…</target>
+</trans-unit>
+<trans-unit id="s3d197283cb019b5a">
+  <source>Overview</source>
+  <target>Resumen</target>
+</trans-unit>
+<trans-unit id="sf35700f38ab0cabe">
+  <source>Live host information from the daemon.</source>
+  <target>Información del host en vivo desde el daemon.</target>
+</trans-unit>
+<trans-unit id="s3d1396b47ff4a56f">
+  <source>Live</source>
+  <target>En vivo</target>
+</trans-unit>
+<trans-unit id="s4b052cb287d81da7">
+  <source>Connecting</source>
+  <target>Conectando</target>
+</trans-unit>
+<trans-unit id="s5f343a43e7ea9f91">
+  <source>Error</source>
+  <target>Error</target>
+</trans-unit>
+<trans-unit id="s95bc8722b2708f8b">
+  <source>Paused</source>
+  <target>En pausa</target>
+</trans-unit>
+<trans-unit id="s16e1bead7b9c95ce">
+  <source>Memory</source>
+  <target>Memoria</target>
+</trans-unit>
+<trans-unit id="s74770d66bf7310b8">
+  <source>available</source>
+  <target>disponible</target>
+</trans-unit>
+<trans-unit id="scf28302518a72dee">
+  <source>Swap</source>
+  <target>Swap</target>
+</trans-unit>
+<trans-unit id="sd23d45996ee5598e">
+  <source>Not configured</source>
+  <target>No configurado</target>
+</trans-unit>
+<trans-unit id="s7f625478d788e11b">
+  <source>free</source>
+  <target>libre</target>
+</trans-unit>
+<trans-unit id="s2b1e95d988e7d0c1">
+  <source>Loading host info…</source>
+  <target>Cargando información del host…</target>
+</trans-unit>
+<trans-unit id="s57ceab080115d392">
+  <source>No host information yet.</source>
+  <target>Aún no hay información del host.</target>
+</trans-unit>
+<trans-unit id="s6b05f9d8801fc14f">
+  <source>Host</source>
+  <target>Host</target>
+</trans-unit>
+<trans-unit id="s498865c7bd1f3959">
+  <source>unknown</source>
+  <target>desconocido</target>
+</trans-unit>
+<trans-unit id="se8574bce64d9c1f8">
+  <source>Kernel</source>
+  <target>Kernel</target>
+</trans-unit>
+<trans-unit id="s79a0ca53769f8f62">
+  <source>Architecture</source>
+  <target>Arquitectura</target>
+</trans-unit>
+<trans-unit id="s1ccedf72cf7a2cd9">
+  <source>Uptime</source>
+  <target>Tiempo activo</target>
+</trans-unit>
+<trans-unit id="s0b453a19aa0f85a9">
+  <source>CPU</source>
+  <target>CPU</target>
+</trans-unit>
+<trans-unit id="s12de5ca6110035a7">
+  <source>Unknown CPU</source>
+  <target>CPU desconocida</target>
+</trans-unit>
+<trans-unit id="s0c92ba59687debd8">
+  <source>logical cores</source>
+  <target>núcleos lógicos</target>
+</trans-unit>
+<trans-unit id="s8c88bdf90c240bd6">
+  <source>Load average</source>
+  <target>Carga media</target>
+</trans-unit>
+<trans-unit id="s6c80eb6564ea86d6">
+  <source>1 / 5 / 15 minutes</source>
+  <target>1 / 5 / 15 minutos</target>
+</trans-unit>
+<trans-unit id="s7b7163270e57e8b4">
+  <source>Refresh</source>
+  <target>Actualizar</target>
+</trans-unit>
+</body>
+</file>
+</xliff>

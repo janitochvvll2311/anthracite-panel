@@ -16,6 +16,7 @@ futures-util.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 libc.workspace = true
+rust-embed.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true

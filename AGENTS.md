@@ -2,7 +2,7 @@
 
 ## Current state
 
-- `v0.3.0` is the rewrite branch. Phase 0 foundation is in place: a Rust workspace with `anth-wire`, `anth-host`, `anth-plugin` and `anth-panel`; config/secrets/state path mapping and atomic writes; a logger; and CI. There is no daemon, HTTP route, auth service or frontend yet.
+- `v0.3.0` is the rewrite branch. Phase 1 host-info slice is in place: daemon socket with `Hello`, CLI `host-info`, HTTP + SSE, minimal auth, and a Lit shell with the host card. There is no process/network/file feature, plugin runtime or full settings UI yet.
 - The plan of record is `docs/design/v0.3.0.md`. The accepted Phase 0 contracts are in `docs/design/phase-0-contracts.md`. The architecture reference for the two previous trees is `docs/design/reference-v0.1-v0.2.md`.
 - Prior code lives on other refs:
   - `origin/v0.2.0` — newest previous implementation: Rust workspace `backend/` (`anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`), Bun workspace `frontend/`, `plugins/hello/`, frozen `v1/`, and CI in `.github/workflows/v2.yml`.
@@ -27,15 +27,28 @@
 
 ## Build and test
 
-Run from `backend/`. The workspace pins `x86_64-unknown-linux-musl`; a bare `cargo build` is correct.
+Run backend commands from `backend/`. The workspace pins `x86_64-unknown-linux-musl`; a bare `cargo build` is correct.
 
 ```bash
 cd backend
 cargo build --workspace
 cargo test --workspace
-cargo test --workspace --release
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+A release build embeds `backend/anth-panel/www/`. Build the shell first, or `build.rs` refuses the release build:
+
+```bash
+cd frontend
+bun install
+bun run test
+bun run typecheck
+bun run build
+./build-shell.sh
+
+cd ../backend
+cargo test --workspace --release
 ```
 
 Focused checks:
@@ -44,17 +57,18 @@ Focused checks:
 cargo test -p anth-wire
 cargo test -p anth-host
 cargo test -p anth-panel
-cargo run -q -p anth-panel -- config set version 1 --config ./config.toml
-cargo run -q -p anth-panel -- config validate --config ./config.toml
+cargo test -p anth-panel --test host_info
+cargo run -q -p anth-panel -- run --addr 127.0.0.1:8080 --config /tmp/anthracite-panel/run/config.toml
+cargo run -q -p anth-panel -- host-info --config /tmp/anthracite-panel/run/config.toml
 ```
 
-Debug builds default to relative paths (`./config.toml`, `./anth.sock`, `./state`, `./plugins`, `./plugins.d`, `./secrets.toml`). Release defaults use `/etc/anth/*` and `/var/lib/anth/*`. `Config::load_or_create` writes a missing config; `Config::set_key` edits one dotted key through `toml_edit` and preserves comments.
+Debug builds default to relative paths (`./config.toml`, `./anth.sock`, `./state`, `./plugins`, `./plugins.d`, `./secrets.toml`). Release defaults use `/etc/anth/*` and `/var/lib/anth/*`. `Config::load_or_create` writes a missing config; `Config::set_key` edits one dotted key through `toml_edit` and preserves comments. `www/` is gitignored apart from `.gitkeep`; `frontend/build-shell.sh` stages it.
 
 ## Working here
 
 - The Phase 0 contracts are accepted; implement against them and update the file if a decision changes.
 - Use `/tmp/anthracite-panel` for test scratch and manual run state, never the shared `/tmp` root and never `.tmp`.
 - Docs are written in English, matching the previous trees. Keep them in sync with code as it lands.
-- The root `.gitignore` covers this repo's local debug config, secrets, state and plugin directories.
+- The root `.gitignore` covers local debug config, secrets, state, plugin directories, `frontend/node_modules`, `frontend/dist` and the staged `www/`.
 - License is Apache-2.0 (`LICENSE`).
 - Do not switch, merge or rebase branches unless asked. Feature branches start from and target `v0.3.0`; `main` still holds v0.1.

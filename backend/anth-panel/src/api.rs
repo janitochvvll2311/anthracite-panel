@@ -11,12 +11,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anth_wire::{ErrorKind, WireError};
+use axum::body::Body;
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{
-    ConnectInfo, FromRequest, FromRequestParts, Query, Request as AxumRequest, State,
+    ConnectInfo, FromRequest, FromRequestParts, Path as AxumPath, Query, Request as AxumRequest,
+    State,
 };
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response as HttpResponse};
 use axum::routing::{get, post};
@@ -29,6 +31,7 @@ use serde_json::json;
 use crate::auth::{ACCESS_COOKIE, AuthError, AuthService, Grant, REFRESH_COOKIE};
 use crate::dispatch::Daemon;
 use crate::log::{Level, Logger};
+use crate::www;
 
 const MAX_BODY_BYTES: usize = 8 * 1024;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
@@ -65,6 +68,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/password", post(password))
         .route("/api/host-info", get(host_info))
         .route("/api/host-info/watch", get(watch_host_info))
+        .route("/", get(index))
+        .route("/{*path}", get(static_path))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             log_request,
@@ -116,8 +121,12 @@ async fn healthz() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
 
-async fn auth_state(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.auth.state())
+async fn auth_state(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let mut status = state.auth.state();
+    status.authenticated = !status.required
+        || bearer_or_cookie(&headers, ACCESS_COOKIE)
+            .is_some_and(|token| state.auth.verify_access(&token).is_ok());
+    Json(status)
 }
 
 /// An `Authed` extractor is the visible protection on a route.
@@ -338,6 +347,7 @@ async fn watch_host_info(
             let event = Event::default()
                 .event("host-info")
                 .id(info.collected_at_ms.to_string())
+                .retry(Duration::from_secs(3))
                 .json_data(info)
                 .unwrap_or_else(|error| {
                     Event::default().event("error").data(format!(
@@ -349,6 +359,57 @@ async fn watch_host_info(
         }
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+async fn index() -> HttpResponse {
+    serve_static("index.html")
+}
+
+async fn static_path(AxumPath(path): AxumPath<String>) -> HttpResponse {
+    serve_static(&path)
+}
+
+fn serve_static(path: &str) -> HttpResponse {
+    if path == "api" || path.starts_with("api/") {
+        return ApiError::not_found("no such API route").into_response();
+    }
+
+    let path = if path.is_empty() { "index.html" } else { path };
+    if let Some(asset) = www::get(path) {
+        let mut response = HttpResponse::new(Body::from(asset.bytes.into_owned()));
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(asset.content_type),
+        );
+        response.headers_mut().insert(
+            HeaderName::from_static("x-content-type-options"),
+            HeaderValue::from_static("nosniff"),
+        );
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        return response;
+    }
+
+    if www::looks_like_file(path) {
+        return ApiError::not_found("no such file").into_response();
+    }
+
+    match www::get("index.html") {
+        Some(asset) => {
+            let mut response = HttpResponse::new(Body::from(asset.bytes.into_owned()));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(asset.content_type),
+            );
+            response.headers_mut().insert(
+                HeaderName::from_static("x-content-type-options"),
+                HeaderValue::from_static("nosniff"),
+            );
+            response
+        }
+        None => ApiError::not_found("the web UI is not built").into_response(),
+    }
 }
 
 fn grant_response(auth: &AuthService, status: StatusCode, grant: Grant) -> HttpResponse {
@@ -439,6 +500,10 @@ pub struct ApiError(WireError);
 impl ApiError {
     pub fn from_auth(error: AuthError) -> Self {
         Self(error.into())
+    }
+
+    pub fn not_found(message: impl Into<String>) -> Self {
+        Self(WireError::not_found(message))
     }
 
     pub fn invalid(message: impl Into<String>) -> Self {
