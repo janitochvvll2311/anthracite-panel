@@ -202,13 +202,15 @@ export class AnthTabPanel extends HTMLElement {
 
 const STYLE = `
   :host { display: block; min-width: 0; }
-  .strip { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: var(--gap, 1rem);
+  .strip { display: flex; flex-wrap: nowrap; gap: 0.35rem; overflow-x: auto;
+           overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch;
+           scrollbar-width: thin; margin-bottom: var(--gap, 1rem);
            border-bottom: 1px solid var(--panel-border, #223041); }
   .strip[hidden] { display: none; }
-  .tab { min-height: 44px; padding: 0.45rem 0.8rem; color: var(--muted, #8b9bad);
+  .tab { flex: 0 0 auto; min-height: 44px; padding: 0.45rem 0.8rem; color: var(--muted, #8b9bad);
          background: transparent; border: 0; border-bottom: 2px solid transparent;
          font: 600 12px/1.3 var(--mono, monospace); letter-spacing: 0.02em;
-         cursor: pointer; }
+         white-space: nowrap; cursor: pointer; }
   .tab:hover, .tab:focus-visible { color: var(--text, #dbe6f2); outline: none; }
   .tab:focus-visible { box-shadow: inset 0 0 0 1px var(--accent, #7dd3fc); border-radius: 4px; }
   .tab[data-active] { color: var(--accent, #7dd3fc); border-bottom-color: var(--accent, #7dd3fc); }

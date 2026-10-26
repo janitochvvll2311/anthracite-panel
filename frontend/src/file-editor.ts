@@ -480,9 +480,11 @@ export class AnthFileTabs extends LitElement {
       flex: 0 0 auto;
       gap: 4px;
       overflow-x: auto;
+      overscroll-behavior-x: contain;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
       padding-bottom: 4px;
       border-bottom: 1px solid var(--panel-border, #223041);
-      overscroll-behavior-x: contain;
     }
     .tab {
       display: flex;
