@@ -470,10 +470,6 @@
   <source>Content</source>
   <target>Contenido</target>
 </trans-unit>
-<trans-unit id="s7f04cf4b6841593a">
-  <source>Saving arrives in a later update.</source>
-  <target>Guardar estará disponible en una próxima actualización.</target>
-</trans-unit>
 <trans-unit id="sdc673e73b5c13aea">
   <source>Delete</source>
   <target>Eliminar</target>
@@ -493,6 +489,26 @@
 <trans-unit id="s9d8acc398ad3fb04">
   <source>Edit path</source>
   <target>Editar ruta</target>
+</trans-unit>
+<trans-unit id="s5c49cfa8045bc89d">
+  <source>Window</source>
+  <target>Ventana</target>
+</trans-unit>
+<trans-unit id="s1c109a21525649fd">
+  <source>Minimize</source>
+  <target>Minimizar</target>
+</trans-unit>
+<trans-unit id="s26f91b6796e33111">
+  <source>Restore</source>
+  <target>Restaurar</target>
+</trans-unit>
+<trans-unit id="s2b3441b8eece504f">
+  <source>Maximize</source>
+  <target>Maximizar</target>
+</trans-unit>
+<trans-unit id="s33f85f24c0f5f008">
+  <source>Save</source>
+  <target>Guardar</target>
 </trans-unit>
 </body>
 </file>

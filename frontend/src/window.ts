@@ -1,4 +1,4 @@
-import { LitElement, css, html } from 'lit'
+import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
@@ -13,12 +13,19 @@ interface DragState {
   originY: number
 }
 
+interface DockItem {
+  id: number
+  title: string
+  restore: () => void
+  close: () => void
+}
+
 /**
  * `anth-window`: a floating window over the whole page.
  *
- * It owns the backdrop, the draggable header, the title and the close button;
- * the consumer only fills the default slot with its own content and may add
- * header buttons through the `actions` slot:
+ * It owns the backdrop, the draggable header, the title, the minimize,
+ * maximize and close buttons; the consumer only fills the default slot with
+ * its own content and may add header buttons through the `actions` slot:
  *
  * ```html
  * <anth-window label="Editor" open>
@@ -29,6 +36,8 @@ interface DragState {
  *
  * The window is fixed to the viewport, so a panel with `overflow` cannot clip
  * it. On compact screens the frame fills the viewport and dragging is off.
+ * Minimizing parks it in the dock bar at the bottom of the page; every window
+ * shares that bar.
  */
 @customElement('anth-window')
 @localized()
@@ -40,11 +49,23 @@ export class AnthWindow extends LitElement {
   @property()
   label = ''
 
+  /** Fills the viewport instead of the normal frame size. */
+  @property({ type: Boolean, reflect: true })
+  maximized = false
+
+  /** Hidden while its chip sits in the dock bar. */
+  @property({ type: Boolean, reflect: true })
+  minimized = false
+
   /** Pixel offset of the frame, relative to its centered position. */
   @state()
   private offset = { x: 0, y: 0 }
 
+  private readonly key = nextWindowId()
+
   private drag?: DragState
+
+  private docked = false
 
   /** The deep active element before the window opened, restored on close. */
   private restoreFocus?: Element
@@ -66,6 +87,7 @@ export class AnthWindow extends LitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback()
     this.removeEventListener('keydown', this.onHostKeydown)
+    this.undock()
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
@@ -75,9 +97,7 @@ export class AnthWindow extends LitElement {
     if (this.open) {
       this.restoreFocus = deepActiveElement()
       this.offset = { x: 0, y: 0 }
-      void this.updateComplete.then(() => {
-        this.querySelector<HTMLElement>('input, textarea, select, button')?.focus()
-      })
+      void this.updateComplete.then(() => this.focusFirst())
     } else {
       if (this.restoreFocus instanceof HTMLElement) {
         this.restoreFocus.focus()
@@ -94,14 +114,62 @@ export class AnthWindow extends LitElement {
     if (!this.open) {
       return
     }
+    this.undock()
+    this.minimized = false
+    this.maximized = false
     this.open = false
     this.dispatchEvent(
       new CustomEvent(WINDOW_CLOSE_EVENT, { bubbles: true, composed: true }),
     )
   }
 
+  minimize(): void {
+    if (!this.open || this.minimized) {
+      return
+    }
+    this.drag = undefined
+    this.minimized = true
+    this.docked = true
+    ensureDock().add({
+      id: this.key,
+      title: this.label || msg('Window'),
+      restore: () => this.restore(),
+      close: () => this.close(),
+    })
+  }
+
+  restore(): void {
+    if (!this.minimized) {
+      return
+    }
+    this.undock()
+    this.minimized = false
+    void this.updateComplete.then(() => this.focusFirst())
+  }
+
+  toggleMaximize(): void {
+    if (this.minimized) {
+      return
+    }
+    this.maximized = !this.maximized
+    this.offset = { x: 0, y: 0 }
+    this.drag = undefined
+  }
+
+  private undock(): void {
+    if (!this.docked) {
+      return
+    }
+    this.docked = false
+    existingDock()?.drop(this.key)
+  }
+
+  private focusFirst(): void {
+    this.querySelector<HTMLElement>('input, textarea, select, button, [tabindex]')?.focus()
+  }
+
   private startDrag(event: PointerEvent): void {
-    if (event.button !== 0 || compact()) {
+    if (event.button !== 0 || compact() || this.maximized) {
       return
     }
     const target = event.target as HTMLElement | null
@@ -166,7 +234,33 @@ export class AnthWindow extends LitElement {
           <span class="grip" aria-hidden="true">⠿</span>
           <span class="title">${this.label}</span>
           <div class="actions"><slot name="actions"></slot></div>
-          <button type="button" class="close" @click=${() => this.close()}>${msg('Close')}</button>
+          <button
+            type="button"
+            class="control control-min"
+            title=${msg('Minimize')}
+            aria-label=${msg('Minimize')}
+            @click=${() => this.minimize()}
+          >
+            –
+          </button>
+          <button
+            type="button"
+            class="control control-max"
+            title=${this.maximized ? msg('Restore') : msg('Maximize')}
+            aria-label=${this.maximized ? msg('Restore') : msg('Maximize')}
+            @click=${() => this.toggleMaximize()}
+          >
+            ${this.maximized ? '❐' : '□'}
+          </button>
+          <button
+            type="button"
+            class="control close"
+            title=${msg('Close')}
+            aria-label=${msg('Close')}
+            @click=${() => this.close()}
+          >
+            ✕
+          </button>
         </header>
         <div class="body"><slot></slot></div>
       </section>
@@ -182,7 +276,9 @@ export class AnthWindow extends LitElement {
       place-items: center;
       padding: 12px;
     }
-    :host(:not([open])) { display: none; }
+    :host(:not([open])),
+    :host([minimized]) { display: none; }
+    :host([maximized]) { padding: 0; }
 
     .backdrop {
       position: absolute;
@@ -204,6 +300,13 @@ export class AnthWindow extends LitElement {
       box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
       transform: translate(var(--window-x, 0px), var(--window-y, 0px));
     }
+    :host([maximized]) .frame {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-radius: 0;
+      transform: none;
+    }
     header {
       display: flex;
       align-items: center;
@@ -212,6 +315,7 @@ export class AnthWindow extends LitElement {
       user-select: none;
     }
     header:active { cursor: grabbing; }
+    :host([maximized]) header { cursor: default; }
     .grip { color: var(--muted, #8b9bad); font-size: 14px; line-height: 1; }
     .title {
       flex: 1 1 auto;
@@ -223,7 +327,8 @@ export class AnthWindow extends LitElement {
       color: var(--muted, #8b9bad);
     }
     .actions { display: flex; gap: 6px; }
-    .close {
+    .control {
+      min-width: 28px;
       border: 1px solid var(--panel-border, #223041);
       border-radius: 6px;
       background: rgba(125, 211, 252, 0.08);
@@ -232,8 +337,8 @@ export class AnthWindow extends LitElement {
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
-    .close:hover { background: rgba(125, 211, 252, 0.16); }
-    .close:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
+    .control:hover { background: rgba(125, 211, 252, 0.16); }
+    .control:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
     .body {
       display: flex;
       flex-direction: column;
@@ -258,11 +363,150 @@ export class AnthWindow extends LitElement {
       }
       header { cursor: default; }
       header:active { cursor: default; }
+      .control-max { display: none; }
     }
     @media (pointer: coarse) {
-      .close { min-height: 44px; }
+      .control { min-height: 44px; }
     }
   `
+}
+
+/**
+ * The bar that holds minimized windows, shared by every `anth-window` on the
+ * page. It lives on `document.body` so no panel can clip or scroll it.
+ */
+@customElement('anth-window-dock')
+@localized()
+export class AnthWindowDock extends LitElement {
+  @state()
+  private items: DockItem[] = []
+
+  add(item: DockItem): void {
+    this.items = [...this.items.filter((existing) => existing.id !== item.id), item]
+  }
+
+  drop(id: number): void {
+    this.items = this.items.filter((item) => item.id !== id)
+  }
+
+  override render() {
+    if (this.items.length === 0) {
+      return nothing
+    }
+    return html`
+      <div class="bar">
+        ${this.items.map(
+          (item) => html`
+            <div class="chip">
+              <button
+                type="button"
+                class="restore"
+                title=${msg('Restore')}
+                @click=${item.restore}
+              >
+                ${item.title}
+              </button>
+              <button
+                type="button"
+                class="dismiss"
+                title=${msg('Close')}
+                aria-label=${msg('Close')}
+                @click=${item.close}
+              >
+                ✕
+              </button>
+            </div>
+          `,
+        )}
+      </div>
+    `
+  }
+
+  static styles = css`
+    :host {
+      position: fixed;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 150;
+      display: block;
+      pointer-events: none;
+    }
+    .bar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      overflow-x: auto;
+      padding: 6px max(12px, env(safe-area-inset-right))
+        calc(6px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+      border-top: 1px solid var(--panel-border, #223041);
+      background: rgba(16, 23, 33, 0.96);
+      pointer-events: auto;
+      backdrop-filter: blur(6px);
+    }
+    .chip {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: rgba(125, 211, 252, 0.08);
+      overflow: hidden;
+    }
+    .restore {
+      max-width: 14rem;
+      overflow: hidden;
+      border: 0;
+      background: transparent;
+      color: var(--text, #dbe6f2);
+      padding: 6px 9px;
+      font: 12px/1.4 var(--mono, monospace);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .restore:hover { background: rgba(125, 211, 252, 0.14); }
+    .dismiss {
+      border: 0;
+      border-left: 1px solid var(--panel-border, #223041);
+      background: transparent;
+      color: var(--muted, #8b9bad);
+      padding: 6px 9px;
+      font: 12px/1.4 var(--mono, monospace);
+      cursor: pointer;
+    }
+    .dismiss:hover { color: var(--err, #f87171); background: rgba(248, 113, 113, 0.12); }
+    .restore:focus-visible,
+    .dismiss:focus-visible {
+      outline: 2px solid var(--accent, #7dd3fc);
+      outline-offset: -2px;
+    }
+    @media (pointer: coarse) {
+      .restore, .dismiss { min-height: 44px; }
+    }
+  `
+}
+
+let dock: AnthWindowDock | undefined
+let windowIds = 0
+
+function nextWindowId(): number {
+  windowIds += 1
+  return windowIds
+}
+
+function existingDock(): AnthWindowDock | undefined {
+  return dock?.isConnected ? dock : undefined
+}
+
+function ensureDock(): AnthWindowDock {
+  const connected = existingDock()
+  if (connected) {
+    return connected
+  }
+  dock = new AnthWindowDock()
+  document.body.append(dock)
+  return dock
 }
 
 /** The focused element, crossing open shadow roots. */
