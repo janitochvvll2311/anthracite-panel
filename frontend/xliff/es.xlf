@@ -458,10 +458,6 @@
   <source>Edit</source>
   <target>Editar</target>
 </trans-unit>
-<trans-unit id="sa75b95980cd80e78">
-  <source>Editor</source>
-  <target>Editor</target>
-</trans-unit>
 <trans-unit id="s014cee951b8294bd">
   <source>New file</source>
   <target>Nuevo archivo</target>
@@ -493,6 +489,10 @@
 <trans-unit id="s2557e133b53b898e">
   <source>Preview not available for this file.</source>
   <target>Vista previa no disponible para este archivo.</target>
+</trans-unit>
+<trans-unit id="s9d8acc398ad3fb04">
+  <source>Edit path</source>
+  <target>Editar ruta</target>
 </trans-unit>
 </body>
 </file>

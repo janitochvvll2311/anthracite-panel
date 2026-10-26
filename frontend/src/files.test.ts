@@ -128,15 +128,16 @@ test('opens a file in the editor from the preview', async () => {
   await settle(element)
 
   expect(client.read).toHaveBeenLastCalledWith('/note.txt')
-  expect(element.shadowRoot?.querySelector('.editor-layer')).not.toBeNull()
+  const window = element.shadowRoot?.querySelector<HTMLElement>('anth-window')
+  expect(window).not.toBeNull()
   expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(true)
   expect(element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')?.value).toBe(
     'hello files',
   )
 
-  element.shadowRoot?.querySelector<HTMLButtonElement>('.editor .close')?.click()
+  window?.shadowRoot?.querySelector<HTMLButtonElement>('.close')?.click()
   await settle(element)
-  expect(element.shadowRoot?.querySelector('.editor-layer')).toBeNull()
+  expect(element.shadowRoot?.querySelector('anth-window')).toBeNull()
   expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(false)
 })
 
@@ -149,19 +150,19 @@ test('drags the editor window on desktop', async () => {
   create?.click()
   await settle(element)
 
-  const layer = element.shadowRoot?.querySelector<HTMLElement>('.editor-layer')
-  const editor = element.shadowRoot?.querySelector<HTMLElement>('.editor')
-  const header = element.shadowRoot?.querySelector<HTMLElement>('.editor header')
-  expect(layer && editor && header).toBeTruthy()
-  if (!layer || !editor || !header) {
+  const window = element.shadowRoot?.querySelector<HTMLElement>('anth-window') as
+    | (HTMLElement & { updateComplete: Promise<boolean> })
+    | null
+  const frame = window?.shadowRoot?.querySelector<HTMLElement>('.frame')
+  const header = window?.shadowRoot?.querySelector<HTMLElement>('header')
+  expect(window && frame && header).toBeTruthy()
+  if (!window || !frame || !header) {
     return
   }
 
   // happy-dom has no layout, so give the drag code a measurable box.
-  Object.defineProperty(layer, 'clientWidth', { configurable: true, value: 800 })
-  Object.defineProperty(layer, 'clientHeight', { configurable: true, value: 600 })
-  Object.defineProperty(editor, 'offsetWidth', { configurable: true, value: 400 })
-  Object.defineProperty(editor, 'offsetHeight', { configurable: true, value: 300 })
+  Object.defineProperty(frame, 'offsetWidth', { configurable: true, value: 400 })
+  Object.defineProperty(frame, 'offsetHeight', { configurable: true, value: 300 })
 
   const down = new Event('pointerdown', { bubbles: true }) as PointerEvent
   Object.assign(down, { button: 0, clientX: 100, clientY: 100, pointerId: 7 })
@@ -170,10 +171,36 @@ test('drags the editor window on desktop', async () => {
   const move = new Event('pointermove', { bubbles: true }) as PointerEvent
   Object.assign(move, { clientX: 140, clientY: 120, pointerId: 7 })
   header.dispatchEvent(move)
+  await window.updateComplete
+
+  expect(frame.getAttribute('style')).toContain('--window-x: 40px')
+  expect(frame.getAttribute('style')).toContain('--window-y: 20px')
+})
+
+test('navigates to a path typed in the breadcrumb', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  element.shadowRoot
+    ?.querySelector<HTMLButtonElement>('.crumb[aria-current="page"]')
+    ?.click()
   await settle(element)
 
-  expect(editor.getAttribute('style')).toContain('--editor-x: 40px')
-  expect(editor.getAttribute('style')).toContain('--editor-y: 20px')
+  const input = element.shadowRoot?.querySelector<HTMLInputElement>('.path-edit input')
+  expect(input?.value).toBe('/')
+  if (input) {
+    input.value = 'folder'
+    input.dispatchEvent(new Event('input'))
+  }
+  element.shadowRoot
+    ?.querySelector('form.path-edit')
+    ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  await settle(element)
+
+  expect(client.list).toHaveBeenLastCalledWith('/folder')
+  expect(element.shadowRoot?.querySelector('.crumbs')?.textContent?.replace(/\s+/g, '')).toBe(
+    '/folder',
+  )
 })
 
 test('deletes the previewed file after confirming', async () => {

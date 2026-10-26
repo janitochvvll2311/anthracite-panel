@@ -5,6 +5,7 @@ import { localized, msg } from '@lit/localize'
 
 import { formatBytes } from './format'
 import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
+import './window'
 
 interface EditorState {
   mode: 'edit' | 'create'
@@ -13,14 +14,6 @@ interface EditorState {
   /** Name inside that directory: selected on edit, typed on create. */
   name: string
   text: string
-}
-
-interface DragState {
-  pointerId: number
-  startX: number
-  startY: number
-  originX: number
-  originY: number
 }
 
 /** A display path: always starts at `/` and has no empty or `.` segments. */
@@ -80,11 +73,11 @@ export class AnthFiles extends LitElement {
   @state()
   private editor?: EditorState
 
-  /** Pixel offset of the floating editor, relative to its centered position. */
   @state()
-  private editorOffset = { x: 0, y: 0 }
+  private editingPath = false
 
-  private drag?: DragState
+  @state()
+  private pathDraft = ''
 
   override connectedCallback(): void {
     super.connectedCallback()
@@ -239,17 +232,10 @@ export class AnthFiles extends LitElement {
 
   private showEditor(editor: EditorState): void {
     this.editor = editor
-    this.editorOffset = { x: 0, y: 0 }
-    this.drag = undefined
-    void this.updateComplete.then(() => {
-      const field = this.shadowRoot?.querySelector<HTMLElement>('.editor input, .editor textarea')
-      field?.focus()
-    })
   }
 
   private closeEditor(): void {
     this.editor = undefined
-    this.drag = undefined
   }
 
   private onEditorKeydown(event: KeyboardEvent): void {
@@ -257,55 +243,6 @@ export class AnthFiles extends LitElement {
       event.stopPropagation()
       this.closeEditor()
     }
-  }
-
-  /** Starts a drag from the editor header on desktop; compact screens swap. */
-  private startDrag(event: PointerEvent): void {
-    if (event.button !== 0 || compact()) {
-      return
-    }
-    const target = event.target as HTMLElement | null
-    if (target?.closest('button, input, textarea, a')) {
-      return
-    }
-    const handle = event.currentTarget as HTMLElement
-    handle.setPointerCapture?.(event.pointerId)
-    this.drag = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: this.editorOffset.x,
-      originY: this.editorOffset.y,
-    }
-    event.preventDefault()
-  }
-
-  private onDrag(event: PointerEvent): void {
-    const drag = this.drag
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return
-    }
-    const layer = this.shadowRoot?.querySelector<HTMLElement>('.editor-layer')
-    const editor = this.shadowRoot?.querySelector<HTMLElement>('.editor')
-    if (!layer || !editor) {
-      return
-    }
-    // The overlay centers the window; keep the whole window inside its box.
-    const boundX = Math.max(0, (layer.clientWidth - editor.offsetWidth) / 2)
-    const boundY = Math.max(0, (layer.clientHeight - editor.offsetHeight) / 2)
-    this.editorOffset = {
-      x: clamp(drag.originX + event.clientX - drag.startX, -boundX, boundX),
-      y: clamp(drag.originY + event.clientY - drag.startY, -boundY, boundY),
-    }
-  }
-
-  private endDrag(event: PointerEvent): void {
-    if (!this.drag || this.drag.pointerId !== event.pointerId) {
-      return
-    }
-    const handle = event.currentTarget as HTMLElement
-    handle.releasePointerCapture?.(event.pointerId)
-    this.drag = undefined
   }
 
   private setEditorName(event: Event): void {
@@ -351,24 +288,73 @@ export class AnthFiles extends LitElement {
     }
   }
 
-  private renderCrumbs() {
+  private startPathEdit(): void {
+    this.pathDraft = this.path
+    this.editingPath = true
+    void this.updateComplete.then(() => {
+      const input = this.shadowRoot?.querySelector<HTMLInputElement>('.path-edit input')
+      input?.focus()
+      input?.select()
+    })
+  }
+
+  private cancelPathEdit(): void {
+    this.editingPath = false
+  }
+
+  private async submitPath(event: Event): Promise<void> {
+    event.preventDefault()
+    const target = normalize(this.pathDraft)
+    this.editingPath = false
+    await this.open(target)
+  }
+
+  private onPathInput(event: Event): void {
+    this.pathDraft = (event.target as HTMLInputElement).value
+  }
+
+  private onPathKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.stopPropagation()
+      this.cancelPathEdit()
+    }
+  }
+
+  private renderPath() {
+    if (this.editingPath) {
+      return html`
+        <form class="path-edit" @submit=${this.submitPath}>
+          <input
+            .value=${live(this.pathDraft)}
+            aria-label=${msg('Path')}
+            autocomplete="off"
+            spellcheck="false"
+            @input=${this.onPathInput}
+            @keydown=${this.onPathKeydown}
+            @blur=${() => this.cancelPathEdit()}
+          />
+        </form>
+      `
+    }
     const crumbs = this.crumbs()
     return html`
       <nav class="crumbs" aria-label=${msg('Path')}>
-        ${crumbs.map(
-          (crumb, index) => html`
+        ${crumbs.map((crumb, index) => {
+          const current = crumb.path === this.path
+          return html`
             ${index > 1 ? html`<span class="sep" aria-hidden="true">/</span>` : nothing}
             <button
               type="button"
               class="crumb"
-              aria-current=${crumb.path === this.path ? 'page' : nothing}
+              aria-current=${current ? 'page' : nothing}
+              title=${current ? msg('Edit path') : nothing}
               ?disabled=${this.busy}
-              @click=${() => this.open(crumb.path)}
+              @click=${() => (current ? this.startPathEdit() : this.open(crumb.path))}
             >
               ${crumb.label}
             </button>
-          `,
-        )}
+          `
+        })}
       </nav>
     `
   }
@@ -405,30 +391,14 @@ export class AnthFiles extends LitElement {
 
   private renderEditor(editor: EditorState) {
     const target = editor.name ? join(editor.directory, editor.name) : editor.directory
+    const title = editor.mode === 'create' ? msg('New file') : target
     return html`
-      <div
-        class="editor-layer"
-        role="dialog"
-        aria-modal="true"
-        aria-label=${msg('Editor')}
-        @keydown=${this.onEditorKeydown}
+      <anth-window
+        .open=${true}
+        .label=${title}
+        @anth-window-close=${() => this.closeEditor()}
       >
-        <section
-          class="editor"
-          style="--editor-x: ${this.editorOffset.x}px; --editor-y: ${this.editorOffset.y}px"
-        >
-          <header
-            @pointerdown=${this.startDrag}
-            @pointermove=${this.onDrag}
-            @pointerup=${this.endDrag}
-            @pointercancel=${this.endDrag}
-          >
-            <span class="grip" aria-hidden="true">⠿</span>
-            <span class="title">${editor.mode === 'create' ? msg('New file') : target}</span>
-            <button type="button" class="close" @click=${() => this.closeEditor()}>
-              ${msg('Close')}
-            </button>
-          </header>
+        <div class="editor" @keydown=${this.onEditorKeydown}>
           ${editor.mode === 'create'
             ? html`
                 <label class="name">
@@ -453,8 +423,8 @@ export class AnthFiles extends LitElement {
             <span class="target">${target}</span>
             <span class="hint">${msg('Saving arrives in a later update.')}</span>
           </footer>
-        </section>
-      </div>
+        </div>
+      </anth-window>
     `
   }
 
@@ -564,7 +534,7 @@ export class AnthFiles extends LitElement {
     return html`
       <section class="files ${this.editor ? 'editing' : ''}">
         <header class="bar">
-          ${this.renderCrumbs()}
+          ${this.renderPath()}
           <div class="tools">
             <button type="button" ?disabled=${this.busy} @click=${() => this.create()}>
               ${msg('New file')}
@@ -611,7 +581,6 @@ export class AnthFiles extends LitElement {
       gap: 12px;
       min-width: 0;
     }
-    .files.editing { min-height: 24rem; }
     .bar {
       display: flex;
       flex-wrap: wrap;
@@ -635,6 +604,18 @@ export class AnthFiles extends LitElement {
     }
     .crumb[aria-current='page'] { color: var(--accent, #7dd3fc); }
     .sep { color: var(--muted, #8b9bad); }
+    .path-edit { flex: 1 1 auto; min-width: 0; }
+    .path-edit input {
+      box-sizing: border-box;
+      width: 100%;
+      border: 1px solid var(--accent, #7dd3fc);
+      border-radius: 6px;
+      background: var(--panel-2, #0b1119);
+      color: var(--text, #dbe6f2);
+      padding: 4px 7px;
+      font: 12px/1.4 var(--mono, monospace);
+    }
+    .path-edit input:focus { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 1px; }
     .tools { display: flex; gap: 6px; }
     .tools button, .more, .preview button, .confirm button {
       border-color: var(--panel-border, #223041);
@@ -771,59 +752,13 @@ export class AnthFiles extends LitElement {
     .placeholder .glyph { font-size: 1.5rem; line-height: 1; }
     .more { justify-self: start; margin-top: 8px; }
 
-    .editor-layer {
-      position: absolute;
-      inset: 0;
-      z-index: 10;
-      display: grid;
-      place-items: center;
-      padding: 12px;
-      background: rgba(4, 8, 14, 0.62);
-    }
     .editor {
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      width: min(100%, 56rem);
-      height: min(100%, 40rem);
-      max-height: 100%;
-      box-sizing: border-box;
-      padding: 12px;
-      border: 1px solid var(--panel-border, #223041);
-      border-radius: 10px;
-      background: var(--panel, #101721);
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
-      transform: translate(var(--editor-x, 0px), var(--editor-y, 0px));
-    }
-    .editor header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      cursor: grab;
-      user-select: none;
-    }
-    .editor header:active { cursor: grabbing; }
-    .editor .grip { color: var(--muted, #8b9bad); font-size: 14px; line-height: 1; }
-    .editor .title {
       flex: 1 1 auto;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font: 12px/1.4 var(--mono, monospace);
-      color: var(--muted, #8b9bad);
+      gap: 8px;
+      min-height: 0;
     }
-    .editor .close {
-      border: 1px solid var(--panel-border, #223041);
-      border-radius: 6px;
-      background: rgba(125, 211, 252, 0.08);
-      color: var(--text, #dbe6f2);
-      padding: 4px 7px;
-      font: 12px/1.4 var(--mono, monospace);
-      cursor: pointer;
-    }
-    .editor .close:hover { background: rgba(125, 211, 252, 0.16); }
     .editor .name {
       display: grid;
       gap: 4px;
@@ -890,31 +825,17 @@ export class AnthFiles extends LitElement {
       .layout.preview-open { grid-template-columns: minmax(0, 1fr); }
       .layout.preview-open .listing { display: none; }
       .preview { max-height: none; height: var(--pane-height); }
-      .files.editing { min-height: 0; }
       .files.editing .bar,
       .files.editing .layout,
       .files.editing > .error { display: none; }
-      .editor-layer { position: static; padding: 0; background: none; }
-      .editor { width: 100%; height: var(--pane-height); max-height: none; transform: none; }
       .editor textarea { min-height: 0; resize: none; }
     }
     @media (pointer: coarse) {
-      .crumb, .tools button, .more, .preview button, .entry, .editor .close { min-height: 44px; }
+      .crumb, .tools button, .more, .preview button, .entry { min-height: 44px; }
     }
   `
 }
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max)
-}
-
-/** True when the shell uses its compact layout, where the editor swaps in. */
-function compact(): boolean {
-  return (
-    typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 48rem)').matches
-  )
 }
