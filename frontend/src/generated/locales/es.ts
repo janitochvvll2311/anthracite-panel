@@ -35,6 +35,7 @@
 's2b3441b8eece504f': `Maximizar`,
 's2c8189544e3ea679': `Reintentar`,
 's2ceb11be2290bb1b': `Cancelar`,
+'s2d5364b6538e85f1': `Este archivo es demasiado grande para editarlo.`,
 's2e532e19ed477a56': `Ruta`,
 's2f7d05d134eed951': `Se cerraron las demás sesiones.`,
 's311e3f068f60fff6': `Esta carpeta está vacía.`,

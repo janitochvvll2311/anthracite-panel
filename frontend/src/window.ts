@@ -77,16 +77,24 @@ export class AnthWindow extends LitElement {
     }
   }
 
+  private readonly raise = (): void => {
+    topZ += 1
+    this.style.zIndex = String(topZ)
+  }
+
   override connectedCallback(): void {
     super.connectedCallback()
     // Slotted content is in the consumer's tree, so a keydown handler in our
     // template would never see it; the host is on the light-DOM path.
     this.addEventListener('keydown', this.onHostKeydown)
+    this.addEventListener('pointerdown', this.raise)
+    this.raise()
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback()
     this.removeEventListener('keydown', this.onHostKeydown)
+    this.removeEventListener('pointerdown', this.raise)
     this.undock()
   }
 
@@ -95,6 +103,7 @@ export class AnthWindow extends LitElement {
       return
     }
     if (this.open) {
+      this.raise()
       this.restoreFocus = deepActiveElement()
       this.offset = { x: 0, y: 0 }
       void this.updateComplete.then(() => this.focusFirst())
@@ -144,6 +153,7 @@ export class AnthWindow extends LitElement {
     }
     this.undock()
     this.minimized = false
+    this.raise()
     void this.updateComplete.then(() => this.focusFirst())
   }
 
@@ -428,7 +438,7 @@ export class AnthWindowDock extends LitElement {
       right: 0;
       bottom: 0;
       left: 0;
-      z-index: 150;
+      z-index: 1000;
       display: block;
       pointer-events: none;
     }
@@ -489,6 +499,7 @@ export class AnthWindowDock extends LitElement {
 
 let dock: AnthWindowDock | undefined
 let windowIds = 0
+let topZ = 100
 
 function nextWindowId(): number {
   windowIds += 1

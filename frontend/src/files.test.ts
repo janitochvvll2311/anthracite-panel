@@ -7,6 +7,7 @@ const ROOT_PAGE: FilePage = {
   items: [
     { name: 'folder', kind: 'dir', size: 0, modified_ms: 0 },
     { name: 'note.txt', kind: 'file', size: 11, modified_ms: 0 },
+    { name: 'other.txt', kind: 'file', size: 3, modified_ms: 0 },
   ],
   next: null,
 }
@@ -40,6 +41,45 @@ async function settle(element: FilesElement): Promise<void> {
   await element.updateComplete
   await new Promise((resolve) => setTimeout(resolve, 0))
   await element.updateComplete
+}
+
+type WindowElement = HTMLElement & {
+  shadowRoot: ShadowRoot
+  updateComplete: Promise<boolean>
+  minimized: boolean
+}
+
+type EditorElement = HTMLElement & {
+  shadowRoot: ShadowRoot
+  updateComplete: Promise<boolean>
+}
+
+/** Windows are global and render a couple of async steps behind the panel. */
+async function settleWindows(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
+function lastWindow(): WindowElement | null {
+  return document.querySelector<WindowElement>('anth-window')
+}
+
+function lastEditor(): EditorElement | null {
+  return document.querySelector<EditorElement>('anth-file-editor')
+}
+
+async function openEditor(element: FilesElement, name: string): Promise<void> {
+  const entry = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
+    (button) => button.textContent?.includes(name),
+  )
+  entry?.click()
+  await settle(element)
+  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Edit'),
+  )
+  edit?.click()
+  await settleWindows()
 }
 
 async function mount(client: FilesClient): Promise<FilesElement> {
@@ -112,7 +152,7 @@ test('shows a placeholder when a file cannot be previewed', async () => {
   expect(element.shadowRoot?.querySelector('.details')?.textContent).toContain('/note.txt')
 })
 
-test('opens a file in the editor from the preview', async () => {
+test('opens a file in a global editor window', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
@@ -127,19 +167,21 @@ test('opens a file in the editor from the preview', async () => {
   )
   edit?.click()
   await settle(element)
+  await settleWindows()
 
   expect(client.read).toHaveBeenLastCalledWith('/note.txt')
-  const window = element.shadowRoot?.querySelector<HTMLElement>('anth-window')
+  const window = lastWindow()
+  const editor = lastEditor()
   expect(window).not.toBeNull()
-  expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(true)
-  expect(element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')?.value).toBe(
+  expect(editor).not.toBeNull()
+  expect(element.shadowRoot?.querySelector('anth-window')).toBeNull()
+  expect(editor?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(
     'hello files',
   )
 
-  window?.shadowRoot?.querySelector<HTMLButtonElement>('.close')?.click()
-  await settle(element)
-  expect(element.shadowRoot?.querySelector('anth-window')).toBeNull()
-  expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(false)
+  window?.shadowRoot.querySelector<HTMLButtonElement>('.close')?.click()
+  await settleWindows()
+  expect(lastWindow()).toBeNull()
 })
 
 test('drags the editor window on desktop', async () => {
@@ -150,12 +192,11 @@ test('drags the editor window on desktop', async () => {
   )
   create?.click()
   await settle(element)
+  await settleWindows()
 
-  const window = element.shadowRoot?.querySelector<HTMLElement>('anth-window') as
-    | (HTMLElement & { updateComplete: Promise<boolean> })
-    | null
-  const frame = window?.shadowRoot?.querySelector<HTMLElement>('.frame')
-  const header = window?.shadowRoot?.querySelector<HTMLElement>('header')
+  const window = lastWindow()
+  const frame = window?.shadowRoot.querySelector<HTMLElement>('.frame')
+  const header = window?.shadowRoot.querySelector<HTMLElement>('header')
   expect(window && frame && header).toBeTruthy()
   if (!window || !frame || !header) {
     return
@@ -176,6 +217,72 @@ test('drags the editor window on desktop', async () => {
 
   expect(frame.getAttribute('style')).toContain('--window-x: 40px')
   expect(frame.getAttribute('style')).toContain('--window-y: 20px')
+})
+
+test('keeps editor windows alive when the files panel unmounts', async () => {
+  const element = await mount(fakeClient())
+
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('New file'),
+  )
+  create?.click()
+  await settle(element)
+  await settleWindows()
+
+  const window = lastWindow()
+  expect(window).not.toBeNull()
+
+  element.remove()
+  await settleWindows()
+
+  expect(window?.isConnected).toBe(true)
+  expect(lastEditor()).not.toBeNull()
+})
+
+test('restores an existing editor instead of opening a duplicate', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
+    (button) => button.textContent?.includes('note.txt'),
+  )
+  file?.click()
+  await settle(element)
+  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Edit'),
+  )
+  edit?.click()
+  await settleWindows()
+
+  const window = lastWindow()
+  window?.shadowRoot.querySelector<HTMLButtonElement>('.control-min')?.click()
+  await window?.updateComplete
+  expect(window?.minimized).toBe(true)
+
+  edit?.click()
+  await settleWindows()
+  expect(document.querySelectorAll('anth-window')).toHaveLength(1)
+  expect(lastWindow()?.minimized).toBe(false)
+})
+
+test('opens a second file after minimizing the first window', async () => {
+  const element = await mount(fakeClient())
+  await openEditor(element, 'note.txt')
+
+  const first = lastWindow()
+  first?.shadowRoot.querySelector<HTMLButtonElement>('.control-min')?.click()
+  await first?.updateComplete
+  expect(first?.minimized).toBe(true)
+  // Minimizing must leave the explorer in place so another file can be opened.
+  expect(element.isConnected).toBe(true)
+  expect(element.shadowRoot?.querySelector('.layout')).not.toBeNull()
+
+  await openEditor(element, 'other.txt')
+  expect(document.querySelectorAll('anth-window')).toHaveLength(2)
+  const minimized = [...document.querySelectorAll<WindowElement>('anth-window')].filter(
+    (window) => window.minimized,
+  )
+  expect(minimized).toHaveLength(1)
 })
 
 test('navigates to a path typed in the breadcrumb', async () => {
@@ -230,7 +337,7 @@ test('deletes the previewed file after confirming', async () => {
   expect(element.shadowRoot?.querySelector('.preview')).toBeNull()
 })
 
-test('creates a new file from the toolbar', async () => {
+test('opens a create window from the toolbar', async () => {
   const element = await mount(fakeClient())
 
   const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
@@ -238,17 +345,19 @@ test('creates a new file from the toolbar', async () => {
   )
   create?.click()
   await settle(element)
+  await settleWindows()
 
-  const name = element.shadowRoot?.querySelector<HTMLInputElement>('.editor input')
+  const editor = lastEditor()
+  const name = editor?.shadowRoot.querySelector<HTMLInputElement>('input')
   expect(name).not.toBeNull()
   if (name) {
     name.value = 'draft.txt'
     name.dispatchEvent(new Event('input'))
   }
-  await settle(element)
+  await settleWindows()
 
-  expect(element.shadowRoot?.querySelector('.editor .target')?.textContent).toBe('/draft.txt')
-  expect(element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')?.value).toBe('')
+  expect(editor?.shadowRoot.querySelector('.target')?.textContent).toBe('/draft.txt')
+  expect(editor?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('')
 })
 
 test('saves an edited file and reloads the preview', async () => {
@@ -265,19 +374,21 @@ test('saves an edited file and reloads the preview', async () => {
   )
   edit?.click()
   await settle(element)
+  await settleWindows()
 
-  const area = element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')
+  const area = lastEditor()?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')
   expect(area).not.toBeNull()
   if (area) {
     area.value = 'updated'
     area.dispatchEvent(new Event('input'))
   }
-  await settle(element)
-  element.shadowRoot?.querySelector<HTMLButtonElement>('.save')?.click()
+  await settleWindows()
+  lastEditor()?.shadowRoot.querySelector<HTMLButtonElement>('.save')?.click()
+  await settleWindows()
   await settle(element)
 
   expect(client.write).toHaveBeenCalledWith('/note.txt', 'updated', false)
-  expect(element.shadowRoot?.querySelector('anth-window')).toBeNull()
+  expect(lastWindow()).toBeNull()
   expect(client.list).toHaveBeenCalledTimes(2)
   expect(element.shadowRoot?.querySelector('.preview')).not.toBeNull()
 })
@@ -291,18 +402,20 @@ test('creates a file from the editor', async () => {
   )
   create?.click()
   await settle(element)
+  await settleWindows()
 
-  const name = element.shadowRoot?.querySelector<HTMLInputElement>('.editor input')
-  const area = element.shadowRoot?.querySelector<HTMLTextAreaElement>('.editor textarea')
+  const editor = lastEditor()
+  const name = editor?.shadowRoot.querySelector<HTMLInputElement>('input')
+  const area = editor?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')
   if (name && area) {
     name.value = 'draft.txt'
     name.dispatchEvent(new Event('input'))
     area.value = 'hello world'
     area.dispatchEvent(new Event('input'))
   }
-  await settle(element)
-  element.shadowRoot?.querySelector<HTMLButtonElement>('.save')?.click()
-  await settle(element)
+  await settleWindows()
+  editor?.shadowRoot.querySelector<HTMLButtonElement>('.save')?.click()
+  await settleWindows()
 
   expect(client.write).toHaveBeenCalledWith('/draft.txt', 'hello world', true)
 })

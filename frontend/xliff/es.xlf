@@ -510,6 +510,10 @@
   <source>Save</source>
   <target>Guardar</target>
 </trans-unit>
+<trans-unit id="s2d5364b6538e85f1">
+  <source>This file is too large to edit.</source>
+  <target>Este archivo es demasiado grande para editarlo.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

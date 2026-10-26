@@ -4,35 +4,9 @@ import { live } from 'lit/directives/live.js'
 import { localized, msg } from '@lit/localize'
 
 import { formatBytes } from './format'
+import { openFileEditor, FILES_CHANGED_EVENT } from './file-editor'
 import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
-import './window'
-
-interface EditorState {
-  mode: 'edit' | 'create'
-  /** Directory the editor was opened from. */
-  directory: string
-  /** Name inside that directory: selected on edit, typed on create. */
-  name: string
-  text: string
-}
-
-/** A display path: always starts at `/` and has no empty or `.` segments. */
-function normalize(path: string): string {
-  const parts = path
-    .split('/')
-    .filter((part) => part !== '' && part !== '.')
-  return `/${parts.join('/')}`
-}
-
-function join(base: string, name: string): string {
-  return normalize(`${base}/${name}`)
-}
-
-function parent(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  parts.pop()
-  return `/${parts.join('/')}`
-}
+import { join, normalize, parent } from './paths'
 
 @customElement('anth-files')
 @localized()
@@ -71,12 +45,6 @@ export class AnthFiles extends LitElement {
   private busy = false
 
   @state()
-  private editor?: EditorState
-
-  @state()
-  private saveError = ''
-
-  @state()
   private editingPath = false
 
   @state()
@@ -84,7 +52,13 @@ export class AnthFiles extends LitElement {
 
   override connectedCallback(): void {
     super.connectedCallback()
+    document.addEventListener(FILES_CHANGED_EVENT, this.onFilesChanged)
     queueMicrotask(() => void this.open(this.path))
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback()
+    document.removeEventListener(FILES_CHANGED_EVENT, this.onFilesChanged)
   }
 
   /** Lists one directory and clears any open preview. */
@@ -104,7 +78,6 @@ export class AnthFiles extends LitElement {
       this.previewPath = ''
       this.previewUnavailable = false
       this.confirmingDelete = false
-      this.editor = undefined
       this.error = ''
     } catch (error) {
       this.error = describe(error)
@@ -206,94 +179,42 @@ export class AnthFiles extends LitElement {
     }
   }
 
-  /** Reads one file and opens it in the editor. */
-  private async edit(entry: FileEntry): Promise<void> {
+  private edit(entry: FileEntry): void {
     if (!this.client) {
       return
     }
-    this.busy = true
-    try {
-      const chunk = await this.client.read(join(this.path, entry.name))
-      this.showEditor({
-        mode: 'edit',
-        directory: this.path,
-        name: entry.name,
-        text: chunk.text,
-      })
-      this.error = ''
-    } catch (error) {
-      this.error = describe(error)
-    } finally {
-      this.busy = false
-    }
+    openFileEditor({
+      client: this.client,
+      mode: 'edit',
+      directory: this.path,
+      name: entry.name,
+    })
   }
 
   private create(): void {
-    this.showEditor({ mode: 'create', directory: this.path, name: '', text: '' })
-    this.error = ''
-  }
-
-  private showEditor(editor: EditorState): void {
-    this.editor = editor
-    this.saveError = ''
-  }
-
-  private closeEditor(): void {
-    this.editor = undefined
-    this.saveError = ''
-  }
-
-  private onEditorKeydown(event: KeyboardEvent): void {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault()
-      void this.save()
+    if (!this.client) {
       return
     }
-    if (event.key === 'Escape') {
-      event.stopPropagation()
-      this.closeEditor()
-    }
+    openFileEditor({ client: this.client, mode: 'create', directory: this.path, name: '' })
   }
 
-  /** Writes the editor content and reloads the listing. */
-  private async save(): Promise<void> {
-    const editor = this.editor
-    if (!this.client || !editor) {
+  /** A global editor wrote a file; reload the listing and its preview. */
+  private readonly onFilesChanged = (event: Event): void => {
+    const detail = (event as CustomEvent<{ directory?: string; path?: string }>).detail
+    if (detail?.directory && normalize(detail.directory) !== this.path) {
       return
     }
-    if (editor.mode === 'create' && editor.name.trim() === '') {
+    void this.refreshAfterSave(detail?.path)
+  }
+
+  private async refreshAfterSave(path?: string): Promise<void> {
+    await this.open(this.path)
+    if (!path) {
       return
     }
-    const target = join(editor.directory, editor.name)
-    this.busy = true
-    this.saveError = ''
-    try {
-      await this.client.write(target, editor.text, editor.mode === 'create')
-      const directory = editor.directory
-      const name = editor.name
-      this.closeEditor()
-      await this.open(directory)
-      const entry = this.entries.find((item) => item.name === name)
-      if (entry) {
-        await this.preview(entry)
-      }
-      this.error = ''
-    } catch (error) {
-      this.saveError = describe(error)
-    } finally {
-      this.busy = false
-    }
-  }
-
-  private setEditorName(event: Event): void {
-    if (this.editor) {
-      this.editor = { ...this.editor, name: (event.target as HTMLInputElement).value }
-    }
-  }
-
-  private setEditorText(event: Event): void {
-    if (this.editor) {
-      this.editor = { ...this.editor, text: (event.target as HTMLTextAreaElement).value }
+    const entry = this.entries.find((item) => join(this.path, item.name) === path)
+    if (entry) {
+      await this.preview(entry)
     }
   }
 
@@ -429,54 +350,6 @@ export class AnthFiles extends LitElement {
     `
   }
 
-  private renderEditor(editor: EditorState) {
-    const target = editor.name ? join(editor.directory, editor.name) : editor.directory
-    const title = editor.mode === 'create' ? msg('New file') : target
-    return html`
-      <anth-window
-        .open=${true}
-        .label=${title}
-        @anth-window-close=${() => this.closeEditor()}
-      >
-        <button
-          slot="actions"
-          type="button"
-          class="save"
-          ?disabled=${this.busy || (editor.mode === 'create' && editor.name.trim() === '')}
-          @click=${() => void this.save()}
-        >
-          ${msg('Save')}
-        </button>
-        <div class="editor" @keydown=${this.onEditorKeydown}>
-          ${editor.mode === 'create'
-            ? html`
-                <label class="name">
-                  ${msg('File name')}
-                  <input
-                    .value=${live(editor.name)}
-                    placeholder="notes.txt"
-                    autocomplete="off"
-                    spellcheck="false"
-                    @input=${this.setEditorName}
-                  />
-                </label>
-              `
-            : nothing}
-          ${this.saveError ? html`<div class="error" role="alert">${this.saveError}</div>` : nothing}
-          <textarea
-            .value=${live(editor.text)}
-            aria-label=${msg('Content')}
-            spellcheck="false"
-            @input=${this.setEditorText}
-          ></textarea>
-          <footer>
-            <span class="target">${target}</span>
-          </footer>
-        </div>
-      </anth-window>
-    `
-  }
-
   private renderPreview() {
     const entry = this.previewEntry
     if (!entry) {
@@ -581,7 +454,7 @@ export class AnthFiles extends LitElement {
 
   override render() {
     return html`
-      <section class="files ${this.editor ? 'editing' : ''}">
+      <section class="files">
         <header class="bar">
           ${this.renderPath()}
           <div class="tools">
@@ -612,7 +485,6 @@ export class AnthFiles extends LitElement {
           </div>
           ${this.renderPreview()}
         </div>
-        ${this.editor ? this.renderEditor(this.editor) : nothing}
       </section>
     `
   }
@@ -801,58 +673,6 @@ export class AnthFiles extends LitElement {
     .placeholder .glyph { font-size: 1.5rem; line-height: 1; }
     .more { justify-self: start; margin-top: 8px; }
 
-    .editor {
-      display: flex;
-      flex-direction: column;
-      flex: 1 1 auto;
-      gap: 8px;
-      min-height: 0;
-    }
-    .editor .name {
-      display: grid;
-      gap: 4px;
-      font: 11px/1.4 var(--mono, monospace);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--muted, #8b9bad);
-    }
-    .editor input,
-    .editor textarea {
-      box-sizing: border-box;
-      width: 100%;
-      border: 1px solid var(--panel-border, #223041);
-      border-radius: 6px;
-      background: var(--panel-2, #0b1119);
-      color: var(--text, #dbe6f2);
-      padding: 8px 9px;
-      font: 12px/1.5 var(--mono, monospace);
-    }
-    .editor textarea { flex: 1 1 auto; min-height: 0; resize: vertical; overscroll-behavior: contain; }
-    .editor footer {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-    .editor .target {
-      min-width: 0;
-      overflow-wrap: anywhere;
-      font: 12px/1.4 var(--mono, monospace);
-      color: var(--muted, #8b9bad);
-    }
-    .save {
-      border: 1px solid var(--accent, #7dd3fc);
-      border-radius: 6px;
-      background: rgba(125, 211, 252, 0.16);
-      color: var(--text, #dbe6f2);
-      padding: 4px 10px;
-      font: 600 12px/1.4 var(--mono, monospace);
-      cursor: pointer;
-    }
-    .save:hover:not(:disabled) { background: rgba(125, 211, 252, 0.26); }
-    .save:disabled { opacity: 0.5; cursor: default; }
-
     @media (min-width: 48rem) {
       .layout.preview-open { grid-template-columns: minmax(0, 1fr) minmax(18rem, 32rem); }
     }
@@ -884,10 +704,6 @@ export class AnthFiles extends LitElement {
       .layout.preview-open { grid-template-columns: minmax(0, 1fr); }
       .layout.preview-open .listing { display: none; }
       .preview { max-height: none; height: var(--pane-height); }
-      .files.editing .bar,
-      .files.editing .layout,
-      .files.editing > .error { display: none; }
-      .editor textarea { min-height: 0; resize: none; }
     }
     @media (pointer: coarse) {
       .crumb, .tools button, .more, .preview button, .entry { min-height: 44px; }
