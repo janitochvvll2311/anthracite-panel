@@ -15,6 +15,14 @@ interface EditorState {
   text: string
 }
 
+interface DragState {
+  pointerId: number
+  startX: number
+  startY: number
+  originX: number
+  originY: number
+}
+
 /** A display path: always starts at `/` and has no empty or `.` segments. */
 function normalize(path: string): string {
   const parts = path
@@ -71,6 +79,12 @@ export class AnthFiles extends LitElement {
 
   @state()
   private editor?: EditorState
+
+  /** Pixel offset of the floating editor, relative to its centered position. */
+  @state()
+  private editorOffset = { x: 0, y: 0 }
+
+  private drag?: DragState
 
   override connectedCallback(): void {
     super.connectedCallback()
@@ -225,6 +239,8 @@ export class AnthFiles extends LitElement {
 
   private showEditor(editor: EditorState): void {
     this.editor = editor
+    this.editorOffset = { x: 0, y: 0 }
+    this.drag = undefined
     void this.updateComplete.then(() => {
       const field = this.shadowRoot?.querySelector<HTMLElement>('.editor input, .editor textarea')
       field?.focus()
@@ -233,6 +249,7 @@ export class AnthFiles extends LitElement {
 
   private closeEditor(): void {
     this.editor = undefined
+    this.drag = undefined
   }
 
   private onEditorKeydown(event: KeyboardEvent): void {
@@ -240,6 +257,55 @@ export class AnthFiles extends LitElement {
       event.stopPropagation()
       this.closeEditor()
     }
+  }
+
+  /** Starts a drag from the editor header on desktop; compact screens swap. */
+  private startDrag(event: PointerEvent): void {
+    if (event.button !== 0 || compact()) {
+      return
+    }
+    const target = event.target as HTMLElement | null
+    if (target?.closest('button, input, textarea, a')) {
+      return
+    }
+    const handle = event.currentTarget as HTMLElement
+    handle.setPointerCapture?.(event.pointerId)
+    this.drag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: this.editorOffset.x,
+      originY: this.editorOffset.y,
+    }
+    event.preventDefault()
+  }
+
+  private onDrag(event: PointerEvent): void {
+    const drag = this.drag
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return
+    }
+    const layer = this.shadowRoot?.querySelector<HTMLElement>('.editor-layer')
+    const editor = this.shadowRoot?.querySelector<HTMLElement>('.editor')
+    if (!layer || !editor) {
+      return
+    }
+    // The overlay centers the window; keep the whole window inside its box.
+    const boundX = Math.max(0, (layer.clientWidth - editor.offsetWidth) / 2)
+    const boundY = Math.max(0, (layer.clientHeight - editor.offsetHeight) / 2)
+    this.editorOffset = {
+      x: clamp(drag.originX + event.clientX - drag.startX, -boundX, boundX),
+      y: clamp(drag.originY + event.clientY - drag.startY, -boundY, boundY),
+    }
+  }
+
+  private endDrag(event: PointerEvent): void {
+    if (!this.drag || this.drag.pointerId !== event.pointerId) {
+      return
+    }
+    const handle = event.currentTarget as HTMLElement
+    handle.releasePointerCapture?.(event.pointerId)
+    this.drag = undefined
   }
 
   private setEditorName(event: Event): void {
@@ -347,8 +413,17 @@ export class AnthFiles extends LitElement {
         aria-label=${msg('Editor')}
         @keydown=${this.onEditorKeydown}
       >
-        <section class="editor">
-          <header>
+        <section
+          class="editor"
+          style="--editor-x: ${this.editorOffset.x}px; --editor-y: ${this.editorOffset.y}px"
+        >
+          <header
+            @pointerdown=${this.startDrag}
+            @pointermove=${this.onDrag}
+            @pointerup=${this.endDrag}
+            @pointercancel=${this.endDrag}
+          >
+            <span class="grip" aria-hidden="true">⠿</span>
             <span class="title">${editor.mode === 'create' ? msg('New file') : target}</span>
             <button type="button" class="close" @click=${() => this.closeEditor()}>
               ${msg('Close')}
@@ -529,7 +604,13 @@ export class AnthFiles extends LitElement {
       color: var(--text, #dbe6f2);
       font: 14px/1.5 var(--sans, system-ui, sans-serif);
     }
-    .files { position: relative; display: grid; gap: 12px; min-width: 0; }
+    .files {
+      --pane-height: max(14rem, calc(100dvh - 16rem));
+      position: relative;
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
     .files.editing { min-height: 24rem; }
     .bar {
       display: flex;
@@ -563,7 +644,12 @@ export class AnthFiles extends LitElement {
     button:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
 
     .layout { display: grid; gap: 12px; min-width: 0; }
-    .listing { min-width: 0; overflow-x: auto; }
+    .listing {
+      min-width: 0;
+      max-height: var(--pane-height);
+      overflow: auto;
+      overscroll-behavior: contain;
+    }
     .rows { min-width: 0; }
     .row {
       display: grid;
@@ -613,7 +699,8 @@ export class AnthFiles extends LitElement {
       display: flex;
       flex-direction: column;
       min-width: 0;
-      max-height: calc(100dvh - 13rem);
+      max-height: var(--pane-height);
+      box-sizing: border-box;
       border: 1px solid var(--panel-border, #223041);
       border-radius: 8px;
       background: var(--panel, #101721);
@@ -658,6 +745,7 @@ export class AnthFiles extends LitElement {
       flex: 1 1 auto;
       min-height: 0;
       overflow: auto;
+      overscroll-behavior: contain;
       margin-top: 8px;
     }
     .preview pre {
@@ -697,20 +785,28 @@ export class AnthFiles extends LitElement {
       flex-direction: column;
       gap: 8px;
       width: min(100%, 56rem);
+      height: min(100%, 40rem);
       max-height: 100%;
+      box-sizing: border-box;
       padding: 12px;
       border: 1px solid var(--panel-border, #223041);
       border-radius: 10px;
       background: var(--panel, #101721);
       box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+      transform: translate(var(--editor-x, 0px), var(--editor-y, 0px));
     }
     .editor header {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
+      cursor: grab;
+      user-select: none;
     }
+    .editor header:active { cursor: grabbing; }
+    .editor .grip { color: var(--muted, #8b9bad); font-size: 14px; line-height: 1; }
     .editor .title {
+      flex: 1 1 auto;
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -747,7 +843,7 @@ export class AnthFiles extends LitElement {
       padding: 8px 9px;
       font: 12px/1.5 var(--mono, monospace);
     }
-    .editor textarea { flex: 1 1 auto; min-height: 16rem; resize: vertical; }
+    .editor textarea { flex: 1 1 auto; min-height: 0; resize: vertical; overscroll-behavior: contain; }
     .editor footer {
       display: flex;
       flex-wrap: wrap;
@@ -793,14 +889,14 @@ export class AnthFiles extends LitElement {
       }
       .layout.preview-open { grid-template-columns: minmax(0, 1fr); }
       .layout.preview-open .listing { display: none; }
-      .preview { max-height: none; height: calc(100dvh - 12rem); }
+      .preview { max-height: none; height: var(--pane-height); }
       .files.editing { min-height: 0; }
       .files.editing .bar,
       .files.editing .layout,
       .files.editing > .error { display: none; }
       .editor-layer { position: static; padding: 0; background: none; }
-      .editor { width: 100%; max-height: none; }
-      .editor textarea { min-height: 55vh; resize: none; }
+      .editor { width: 100%; height: var(--pane-height); max-height: none; transform: none; }
+      .editor textarea { min-height: 0; resize: none; }
     }
     @media (pointer: coarse) {
       .crumb, .tools button, .more, .preview button, .entry, .editor .close { min-height: 44px; }
@@ -810,4 +906,15 @@ export class AnthFiles extends LitElement {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+/** True when the shell uses its compact layout, where the editor swaps in. */
+function compact(): boolean {
+  return (
+    typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 48rem)').matches
+  )
 }

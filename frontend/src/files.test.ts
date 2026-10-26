@@ -140,6 +140,42 @@ test('opens a file in the editor from the preview', async () => {
   expect(element.shadowRoot?.querySelector('.files')?.classList.contains('editing')).toBe(false)
 })
 
+test('drags the editor window on desktop', async () => {
+  const element = await mount(fakeClient())
+
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('New file'),
+  )
+  create?.click()
+  await settle(element)
+
+  const layer = element.shadowRoot?.querySelector<HTMLElement>('.editor-layer')
+  const editor = element.shadowRoot?.querySelector<HTMLElement>('.editor')
+  const header = element.shadowRoot?.querySelector<HTMLElement>('.editor header')
+  expect(layer && editor && header).toBeTruthy()
+  if (!layer || !editor || !header) {
+    return
+  }
+
+  // happy-dom has no layout, so give the drag code a measurable box.
+  Object.defineProperty(layer, 'clientWidth', { configurable: true, value: 800 })
+  Object.defineProperty(layer, 'clientHeight', { configurable: true, value: 600 })
+  Object.defineProperty(editor, 'offsetWidth', { configurable: true, value: 400 })
+  Object.defineProperty(editor, 'offsetHeight', { configurable: true, value: 300 })
+
+  const down = new Event('pointerdown', { bubbles: true }) as PointerEvent
+  Object.assign(down, { button: 0, clientX: 100, clientY: 100, pointerId: 7 })
+  header.dispatchEvent(down)
+
+  const move = new Event('pointermove', { bubbles: true }) as PointerEvent
+  Object.assign(move, { clientX: 140, clientY: 120, pointerId: 7 })
+  header.dispatchEvent(move)
+  await settle(element)
+
+  expect(editor.getAttribute('style')).toContain('--editor-x: 40px')
+  expect(editor.getAttribute('style')).toContain('--editor-y: 20px')
+})
+
 test('deletes the previewed file after confirming', async () => {
   const client = fakeClient()
   const element = await mount(client)
