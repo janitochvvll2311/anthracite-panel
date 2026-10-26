@@ -78,13 +78,16 @@ Debug builds default to relative paths (`./config.toml`, `./anth.sock`,
 Run the panel in development:
 
 ```bash
-cd backend
-cargo run -p anth-panel -- run --addr 127.0.0.1:8080 --config ./config.toml
-
-# another shell
-cd frontend
-bun run dev                 # Vite proxies /api and /healthz to :8080
+./scripts/dev.sh start      # backend on :8080 + Vite on :5173
+./scripts/dev.sh status
+./scripts/dev.sh stop
 ```
+
+The script runs both processes in parallel and keeps the debug config, logs and
+PIDs under `/tmp/anthracite-panel/dev`. Vite listens on `0.0.0.0:5173`, so the
+UI is reachable from another device on the network; the Vite proxy forwards
+`/api` and `/healthz` to `127.0.0.1:8080`. `ANTH_ADDR`, `ANTH_VITE_HOST` and
+`ANTH_VITE_PORT` override the defaults.
 
 The first debug start uses the web bootstrap by default: open the UI, or
 `POST /api/auth/register` with `{"password":"at least 12 characters"}`. A release
