@@ -397,6 +397,43 @@ request has no peer address, so the delete path guard is skipped; loopback and
 last-default-route guards still apply. `[network] control` and
 `[network] manage` are independent.
 
+### Firewall
+
+```json
+{ "type": "firewall_status" }
+{ "type": "firewall_add", "data": { "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" } }
+{ "type": "firewall_delete", "data": { "handle": 4 } }
+{ "type": "firewall_flush" }
+```
+
+Status answers:
+
+```json
+{
+  "type": "firewall_snapshot",
+  "data": {
+    "initialized": true,
+    "control_enabled": true,
+    "rules": [
+      {
+        "handle": 3,
+        "chain": "input",
+        "action": "deny",
+        "protocol": "tcp",
+        "port": 80,
+        "comment": "http"
+      }
+    ],
+    "ruleset": "table inet anthracite { ... }",
+    "timestamp_ms": 1790000000000
+  }
+}
+```
+
+Every mutation answers `{"type":"firewall_changed","data":{"message":"..."}}`.
+The managed table is `inet anthracite`, its only chain is `input`, and every
+operation requires `[firewall] control`. See [firewall.md](firewall.md).
+
 ### Processes
 
 ```json

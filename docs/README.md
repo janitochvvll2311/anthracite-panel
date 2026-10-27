@@ -1,8 +1,9 @@
 # Documentation
 
 This branch is the v0.3.0 rewrite. Phases 0–4 are implemented and Phase 5 is in
-progress with the network inventory and its guarded mutations; the remaining
-feature documentation is added with the code it describes.
+progress with the network inventory, its guarded mutations and the managed
+firewall; the remaining feature documentation is added with the code it
+describes.
 
 ## User contract
 
@@ -13,6 +14,7 @@ feature documentation is added with the code it describes.
 | [terminal.md](terminal.md) | PTY sessions, policy, socket/WebSocket contract and mobile UI |
 | [processes.md](processes.md) | Process table, signals, spawn policy, SSE, CLI and the flat/tree UI |
 | [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, guarded up/down/create/edit/rename/delete, SSE, CLI and the Interfaces tab |
+| [firewall.md](firewall.md) | Managed nftables table, deny/allow/delete/flush, guards, HTTP/socket/CLI and the Firewall tab |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

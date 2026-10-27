@@ -193,6 +193,25 @@ a terminal. `create` accepts `--kind` (`veth`, `bridge`, `bond`, `vlan`,
 Mutations print the daemon's one-line message. Reading works regardless of both
 switches.
 
+## `firewall`
+
+```bash
+anth-panel firewall status
+anth-panel firewall list
+anth-panel firewall deny 22
+anth-panel firewall deny 53/udp --comment dns --yes
+anth-panel firewall allow 80/tcp --yes
+anth-panel firewall delete 4 --yes
+anth-panel firewall flush --yes
+```
+
+`status` (alias `list`) prints the managed `inet anthracite` / `input` rules as
+HANDLE, ACTION, PROTO, PORT and COMMENT. `deny` and `allow` take
+`PORT[/PROTOCOL]`; the protocol defaults to `tcp`, and `--comment` is optional.
+`allow` removes a matching managed deny rule; it does not add an accept rule.
+Every mutation requires `[firewall] control = true`, asks for confirmation on a
+TTY and refuses without `--yes` when stdin is not a terminal.
+
 ## `process`
 
 ```bash

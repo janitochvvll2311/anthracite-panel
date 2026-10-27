@@ -255,6 +255,59 @@ protected_interface`, `409 interface_up`, `409 interface_exists`, `404
 interface_not_found`, `400 invalid_interface`, `403 ip_permission`, `501
 ip_unsupported`, `501 tun_unavailable` and `500 ip_failed`/`ip_unavailable`.
 
+## Firewall
+
+The managed `inet anthracite` / `input` chain; policy and semantics are in
+[firewall.md](firewall.md). All routes require a live session unless auth is
+disabled.
+
+### `GET /api/firewall`
+
+```json
+{
+  "initialized": true,
+  "control_enabled": true,
+  "rules": [
+    {
+      "handle": 3,
+      "chain": "input",
+      "action": "deny",
+      "protocol": "tcp",
+      "port": 80,
+      "comment": "http"
+    }
+  ],
+  "ruleset": "table inet anthracite { ... }",
+  "timestamp_ms": 1790000000000
+}
+```
+
+A missing table is `initialized: false` with no rules and an empty ruleset.
+
+### `POST /api/firewall/rule`
+
+```json
+{ "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" }
+```
+
+`200 {"message":"denied tcp/80"}`. `action` is `allow` or `deny`; `protocol` is
+`tcp` or `udp`. `allow` removes a matching managed deny instead of adding an
+accept rule. Requires `[firewall] control`. Refusals include `403
+firewall_control_disabled`, `400 firewall_port`, `400 firewall_comment`, `403
+nft_permission`, `501 nft_unavailable` and `400 nft_refused`.
+
+### `POST /api/firewall/delete`
+
+```json
+{ "handle": 4 }
+```
+
+`200 {"message":"deleted firewall rule 4"}`. Requires control.
+
+### `POST /api/firewall/flush`
+
+No body. `200 {"message":"flushed 2 firewall rules"}`. Requires control.
+
 ## Settings and lifecycle
 
 All four routes require a live access token unless auth is disabled. The two

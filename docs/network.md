@@ -346,8 +346,9 @@ Mutations print the daemon's one-line message.
 
 ## Web UI
 
-**Network** is one section in the sidebar with an **Interfaces** tab. The tab
-owns its SSE feed and closes it when the section is left:
+**Network** is one section in the sidebar with **Interfaces** and **Firewall**
+tabs. The Interfaces tab owns its SSE feed and closes it when the section is
+left; the Firewall tab is documented in [firewall.md](firewall.md).
 
 - Toolbar: feed state, interface/up count, refresh interval and a
   pause/resume/retry button.

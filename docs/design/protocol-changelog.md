@@ -5,11 +5,11 @@ so an operator can tell which side to update.
 
 | Version | Release | State | Notes |
 | --- | --- | --- | --- |
-| 2 | v0.3.0 (draft) | current | 4-byte length-prefixed JSON, mandatory `Hello`/`Welcome`, pagination, files/trash/archive/terminal/process/network operations, one `WireError` |
+| 2 | v0.3.0 (draft) | current | 4-byte length-prefixed JSON, mandatory `Hello`/`Welcome`, pagination, files/trash/archive/terminal/process/network/firewall operations, one `WireError` |
 | 1 | v0.2.0 | superseded | length-prefixed JSON, `Hello`, per-feature wire types |
 | unversioned | v0.1.0 | legacy | newline-delimited JSON, 1 MiB line cap, `type`/`data` envelope |
 
-Version 2 gained files, terminal, process and network operations during the rewrite.
+Version 2 gained files, terminal, process, network and firewall operations during the rewrite.
 Those are additive variants: no existing frame changed shape, and a peer that
 does not know a variant fails loudly at that frame instead of misreading it, so
 the version stays 2.

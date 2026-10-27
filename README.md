@@ -7,8 +7,8 @@ and a web UI. Apache-2.0.
 
 `v0.3.0` is a rewrite in progress. Phases 0–4 are in place: foundation,
 host-info, auth/lifecycle, files and the terminal and process slices. Phase 5 is
-in progress: the network inventory and its guarded interface mutations are in
-place; the firewall is next. The remaining phases are
+in progress: the network inventory, its guarded interface mutations and the
+managed nftables firewall are in place. The remaining phases are
 volumes/partitions/accounts, plugins and hardening/release.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
@@ -41,6 +41,9 @@ volumes/partitions/accounts, plugins and hardening/release.
   addresses, cumulative counters, default routes and client-derived rates, plus
   policy-gated up/down, create, edit, rename and delete through direct `ip`
   argv, over socket, HTTP, SSE, CLI and the Network section.
+- Firewall: one managed `inet anthracite` / `input` nftables chain with deny,
+  allow (removing a managed deny), delete and flush through direct `nft` argv,
+  over socket, HTTP, CLI and the Firewall tab.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
