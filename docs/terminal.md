@@ -46,8 +46,9 @@ own environment is not inherited.
 - `seq` starts at zero and advances only when bytes are returned, so a gap means
   a lost answer.
 - A WebSocket disconnect closes its PTY and kills the process group. Closing the
-  last web tab closes the window and its sessions. Reattaching after a network
-  drop is not part of this slice.
+  last web tab closes the window and its sessions. Reattaching to the *same*
+  shell after a network drop is not part of this slice; pressing Enter in the
+  tab starts a fresh session instead.
 - The terminal is off unless `[terminal] enabled = true`.
 
 ## Wire contract
@@ -122,6 +123,8 @@ Sessions survive navigating to Files or Settings because the window lives on
 - Double-tap sends Tab; pinch changes font size; long-press and drag sends
   arrow keys; long-press selects text with the normal mobile selection UI.
 - `A−`/`A+` change font size; the keyboard button hides the soft keyboard.
+- After the shell exits or the connection drops, the tab shows the reason and
+  **Enter** reconnects in the same tab with a new session.
 - A physical keyboard hides the soft keyboard and sends keys directly.
 - xterm uses the panel theme; the shell with line editing (`bash`, `zsh`, ...)
   owns Up/Down and Tab. A minimal `dash` falls back to local history/Tab.

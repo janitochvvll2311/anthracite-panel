@@ -15,6 +15,7 @@ import {
   ANTH_TERMINAL_ERROR_EVENT,
   ANTH_TERMINAL_EXIT_EVENT,
   ANTH_TERMINAL_READY_EVENT,
+  ANTH_TERMINAL_RETRY_EVENT,
   ANTH_TERMINAL_STATUS_EVENT,
 } from './terminal-view'
 import { WebSocketTerminalTransport } from './lib/terminal/websocket-transport'
@@ -92,6 +93,12 @@ export class AnthTerminalTabs extends LitElement {
   private gestureOrigin?: { x: number; y: number }
   private gestureActive = false
   private opening = false
+
+  private newTransport(): WebSocketTerminalTransport {
+    return new WebSocketTerminalTransport({
+      url: (size) => `/api/terminal?cols=${size.cols}&rows=${size.rows}`,
+    })
+  }
   private tapStart?: { at: number; x: number; y: number }
   private lastTap?: { at: number; x: number; y: number }
 
@@ -125,13 +132,12 @@ export class AnthTerminalTabs extends LitElement {
     terminal.autoFocus = true
     terminal.keyboardMode = 'auto'
     terminal.fontSize = this.fontSize
-    const transport = new WebSocketTerminalTransport({
-      url: (size) => `/api/terminal?cols=${size.cols}&rows=${size.rows}`,
-    })
+    const transport = this.newTransport()
     terminal.transport = transport
 
     terminal.addEventListener(ANTH_TERMINAL_READY_EVENT, (event) => {
       const detail = (event as CustomEvent<AnthTerminalReadyDetail>).detail
+      this.notice = ''
       this.sessions = this.sessions.map((session) =>
         session.key === key
           ? { ...session, label: programLabel(detail.program), status: 'open' }
@@ -145,12 +151,17 @@ export class AnthTerminalTabs extends LitElement {
     terminal.addEventListener(ANTH_TERMINAL_EXIT_EVENT, (event) => {
       const detail = (event as CustomEvent<AnthTerminalExitDetail>).detail
       this.setStatus(key, 'closed')
-      this.notice = msg(str`Shell exited with code ${detail.code}`)
+      this.notice = msg(
+        str`Shell exited with code ${detail.code}. Press Enter to reconnect.`,
+      )
     })
     terminal.addEventListener(ANTH_TERMINAL_ERROR_EVENT, (event) => {
       const detail = (event as CustomEvent<AnthTerminalErrorDetail>).detail
       this.setStatus(key, 'error')
-      this.notice = detail.message
+      this.notice = msg(str`${detail.message}. Press Enter to reconnect.`)
+    })
+    terminal.addEventListener(ANTH_TERMINAL_RETRY_EVENT, () => {
+      void this.reconnect(key)
     })
 
     wrapper.append(terminal)
@@ -184,6 +195,20 @@ export class AnthTerminalTabs extends LitElement {
     }
     const session = this.sessions.find((item) => item.key === key)
     session?.terminal.focus()
+  }
+
+  private async reconnect(key: string): Promise<void> {
+    const session = this.sessions.find((item) => item.key === key)
+    if (!session || session.status === 'connecting' || session.status === 'open') {
+      return
+    }
+    const transport = this.newTransport()
+    session.terminal.transport = transport
+    this.sessions = this.sessions.map((item) =>
+      item.key === key ? { ...item, transport, status: 'connecting' } : item,
+    )
+    this.notice = msg('Reconnecting…')
+    session.terminal.focus()
   }
 
   private closeSession(key: string): void {

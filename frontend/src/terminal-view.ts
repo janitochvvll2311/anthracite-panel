@@ -19,6 +19,8 @@ export const ANTH_TERMINAL_EXIT_EVENT = 'anth-terminal-exit'
 export const ANTH_TERMINAL_ERROR_EVENT = 'anth-terminal-error'
 /** Event fired on every connection state transition. */
 export const ANTH_TERMINAL_STATUS_EVENT = 'anth-terminal-status'
+/** Event fired when Enter is pressed while the session is closed or failed. */
+export const ANTH_TERMINAL_RETRY_EVENT = 'anth-terminal-retry'
 
 export type AnthTerminalKeyboardMode = 'auto' | 'shell' | 'local'
 
@@ -107,6 +109,7 @@ function commonPrefix(values: string[]): string {
  * @fires anth-terminal-exit - `{ code }` when the remote process ends.
  * @fires anth-terminal-error - `{ message }` when the transport fails.
  * @fires anth-terminal-status - `{ status }` on every state transition.
+ * @fires anth-terminal-retry - Enter while the session is closed or failed.
  *
  * @slot title - Replaces the title text.
  * @slot actions - Extra controls placed at the right of the title bar.
@@ -770,7 +773,18 @@ export class AnthTerminal extends LitElement {
   }
 
   private handleInput(data: string): void {
-    if (this.readOnly || this.connectionStatus !== 'open') return
+    if (this.readOnly) return
+    if (this.connectionStatus !== 'open') {
+      if (data.includes('\r') || data.includes('\n')) {
+        this.dispatchEvent(
+          new CustomEvent(ANTH_TERMINAL_RETRY_EVENT, {
+            bubbles: true,
+            composed: true,
+          }),
+        )
+      }
+      return
+    }
     if (
       this.commandHistoryEnabled &&
       this.effectiveKeyboardMode === 'local'
@@ -959,6 +973,7 @@ export class AnthTerminal extends LitElement {
     )
     this.sessionInfo = undefined
     this.setStatus('closed')
+    this.focus()
     this.dispatchEvent(
       new CustomEvent<AnthTerminalExitDetail>(ANTH_TERMINAL_EXIT_EVENT, {
         detail: { code },
@@ -972,6 +987,7 @@ export class AnthTerminal extends LitElement {
     this.errorMessage = error.message
     this.write(`\r\n\x1b[31m[terminal error: ${error.message}]\x1b[0m\r\n`)
     this.setStatus('error')
+    this.focus()
     this.dispatchEvent(
       new CustomEvent<AnthTerminalErrorDetail>(ANTH_TERMINAL_ERROR_EVENT, {
         detail: { message: error.message },

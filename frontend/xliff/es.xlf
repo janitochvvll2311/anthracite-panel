@@ -666,10 +666,6 @@
   <source>Open terminal</source>
   <target>Abrir terminal</target>
 </trans-unit>
-<trans-unit id="s8a2643641883350d">
-  <source>Shell exited with code <x id="0" equiv-text="${detail.code}"/></source>
-  <target>El shell terminó con código <x id="0" equiv-text="${detail.code}"/></target>
-</trans-unit>
 <trans-unit id="sc92905d14a9421f3">
   <source>Idle</source>
   <target>Inactivo</target>
@@ -717,6 +713,18 @@
 <trans-unit id="s37ae9702e375544b">
   <source>Terminal keys</source>
   <target>Teclas del terminal</target>
+</trans-unit>
+<trans-unit id="s65f21480f9b8d132">
+  <source>Shell exited with code <x id="0" equiv-text="${detail.code}"/>. Press Enter to reconnect.</source>
+  <target>El shell terminó con código <x id="0" equiv-text="${detail.code}"/>. Presioná Enter para reconectar.</target>
+</trans-unit>
+<trans-unit id="s88052d4771d35a66">
+  <source><x id="0" equiv-text="${detail.message}"/>. Press Enter to reconnect.</source>
+  <target><x id="0" equiv-text="${detail.message}"/>. Presioná Enter para reconectar.</target>
+</trans-unit>
+<trans-unit id="sc999fade9ee65d44">
+  <source>Reconnecting…</source>
+  <target>Reconectando…</target>
 </trans-unit>
 </body>
 </file>
