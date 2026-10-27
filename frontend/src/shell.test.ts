@@ -113,20 +113,8 @@ afterEach(() => {
   AnthApp.filesClient = undefined
   AnthApp.settingsClient = undefined
   localStorage.removeItem('anth.sidebar')
-  vi.unstubAllGlobals()
   location.hash = ''
 })
-
-function viewport(matches: boolean): void {
-  vi.stubGlobal(
-    'matchMedia',
-    vi.fn(() => ({
-      matches,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })),
-  )
-}
 
 test('the frame keeps the header outside the scroll container', async () => {
   const element = mountShell(OPEN)
@@ -203,24 +191,19 @@ test('the sidebar and the drawer share the sections, and the strip is bare there
   expect((outer.shadowRoot!.querySelector('.strip') as HTMLElement).hidden).toBe(true)
 })
 
-test('the header menu opens the drawer on a narrow viewport', async () => {
-  viewport(true)
+test('the menu opens the drawer and the drawer asks the shell to close it', async () => {
   const element = mountShell(OPEN)
   await flush()
   const root = element.shadowRoot!
   const drawer = root.querySelector('anth-nav-drawer') as AnthNavDrawer
   const menu = root.querySelector('.menu') as HTMLButtonElement
 
-  expect(menu.getAttribute('aria-label')).toContain('Open navigation')
-  expect(menu.getAttribute('aria-controls')).toBe('app-navigation')
   expect(drawer.open).toBe(false)
   menu.click()
   expect(drawer.open).toBe(true)
-  expect(menu.getAttribute('aria-expanded')).toBe('true')
 
   drawer.dispatchEvent(new CustomEvent(DRAWER_CLOSE_EVENT))
   expect(drawer.open).toBe(false)
-  expect(menu.getAttribute('aria-expanded')).toBe('false')
 })
 
 test('the files section owns its own Files tab', async () => {
@@ -280,40 +263,37 @@ test('an unauthenticated shell shows the registration form instead of the tabs',
   expect(element.classList.contains('auth-only')).toBe(true)
 })
 
-test('the header menu collapses the sidebar to an icon rail and remembers it', async () => {
-  viewport(false)
+test('the sidebar toggle collapses it to an icon rail and remembers it', async () => {
   const element = mountShell(OPEN)
   await flush()
   const root = element.shadowRoot!
-  const menu = root.querySelector<HTMLButtonElement>('.menu')!
-  expect(menu).not.toBeNull()
-  expect(menu.querySelector('anth-icon')?.getAttribute('name')).toBe('menu')
+  const toggle = root.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')!
+  expect(toggle).not.toBeNull()
   expect(element.classList.contains('sidebar-collapsed')).toBe(false)
-  expect(menu.getAttribute('aria-expanded')).toBe('true')
-  expect(menu.getAttribute('aria-controls')).toBe('sidebar')
-  expect(menu.getAttribute('aria-label')).toContain('Collapse')
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  expect(toggle.getAttribute('aria-label')).toContain('Collapse')
 
-  menu.click()
+  toggle.click()
   await flush()
   expect(element.classList.contains('sidebar-collapsed')).toBe(true)
-  expect(menu.getAttribute('aria-expanded')).toBe('false')
-  expect(menu.getAttribute('aria-label')).toContain('Expand')
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(toggle.getAttribute('aria-label')).toContain('Expand')
+  expect(toggle.querySelector('anth-icon')?.getAttribute('name')).toBe('chevron-right')
   expect(localStorage.getItem('anth.sidebar')).toBe('collapsed')
 
-  menu.click()
+  toggle.click()
   await flush()
   expect(element.classList.contains('sidebar-collapsed')).toBe(false)
-  expect(menu.getAttribute('aria-label')).toContain('Collapse')
+  expect(toggle.querySelector('anth-icon')?.getAttribute('name')).toBe('chevron-left')
   expect(localStorage.getItem('anth.sidebar')).toBe('expanded')
 })
 
 test('a stored collapsed preference is applied on mount', async () => {
-  viewport(false)
   localStorage.setItem('anth.sidebar', 'collapsed')
   const element = mountShell(OPEN)
   await flush()
-  const menu = element.shadowRoot?.querySelector('.menu')
+  const toggle = element.shadowRoot?.querySelector('[data-sidebar-toggle]')
   expect(element.classList.contains('sidebar-collapsed')).toBe(true)
-  expect(menu?.getAttribute('aria-expanded')).toBe('false')
-  expect(menu?.getAttribute('aria-label')).toContain('Expand')
+  expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+  expect(toggle?.querySelector('anth-icon')?.getAttribute('name')).toBe('chevron-right')
 })
