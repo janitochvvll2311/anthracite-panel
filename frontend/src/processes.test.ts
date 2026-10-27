@@ -120,9 +120,7 @@ test('renders rows and computes CPU from two consecutive snapshots', async () =>
   )
   await element.updateComplete
 
-  const row = [...(element.shadowRoot?.querySelectorAll('tbody tr') ?? [])].find(
-    (candidate) => candidate.textContent?.includes('42'),
-  )
+  const row = element.shadowRoot?.querySelector('.metrics-row[data-key="42:5"]')
   // 50 ticks over 1s on a 100 Hz clock is 50% of one core.
   expect(row?.textContent).toContain('50.0%')
 })
@@ -141,7 +139,7 @@ test('filters rows by command, user or pid', async () => {
   search!.dispatchEvent(new Event('input'))
   await element.updateComplete
 
-  const rows = element.shadowRoot?.querySelectorAll('tbody tr') ?? []
+  const rows = element.shadowRoot?.querySelectorAll('.identity-row') ?? []
   expect(rows).toHaveLength(1)
   expect(rows[0].textContent).toContain('sleep 30')
   const text = element.shadowRoot?.textContent?.replace(/\s+/g, ' ') ?? ''
@@ -160,14 +158,14 @@ test('the view switch renders the tree and collapses branches', async () => {
   switches?.[1].click()
   await element.updateComplete
 
-  let rows = element.shadowRoot?.querySelectorAll('.grid.row') ?? []
+  let rows = element.shadowRoot?.querySelectorAll('.identity-row') ?? []
   expect(rows).toHaveLength(2)
   expect(rows[0].getAttribute('aria-level')).toBe('1')
   expect(rows[1].getAttribute('aria-level')).toBe('2')
 
   element.shadowRoot?.querySelector<HTMLButtonElement>('.toggle')?.click()
   await element.updateComplete
-  rows = element.shadowRoot?.querySelectorAll('.grid.row') ?? []
+  rows = element.shadowRoot?.querySelectorAll('.identity-row') ?? []
   expect(rows).toHaveLength(1)
 })
 
@@ -178,7 +176,7 @@ test('selecting a row and sending a signal uses the row start_ticks', async () =
   feed.push(snapshot())
   await element.updateComplete
 
-  const rows = element.shadowRoot?.querySelectorAll<HTMLTableRowElement>('tbody tr') ?? []
+  const rows = element.shadowRoot?.querySelectorAll<HTMLElement>('.identity-row') ?? []
   rows[0].click()
   await element.updateComplete
   expect(element.shadowRoot?.querySelector('.actions')).not.toBeNull()
@@ -270,10 +268,34 @@ test('hides signals and start when their switches are off', async () => {
   expect(element.shadowRoot?.querySelector('.actions .signal')).toBeNull()
   expect(element.shadowRoot?.textContent).toContain('Control is disabled by the daemon.')
 
-  const row = element.shadowRoot?.querySelector<HTMLTableRowElement>('tbody tr')
+  const row = element.shadowRoot?.querySelector<HTMLElement>('.identity-row')
   row?.click()
   await element.updateComplete
   expect(element.shadowRoot?.querySelector('.actions .signal')).toBeNull()
+})
+
+test('selection marks both panes and only the identity pane scrolls sideways', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.push(snapshot())
+  await element.updateComplete
+
+  const shadow = element.shadowRoot!
+  expect(shadow.querySelector('.pane.identity')).not.toBeNull()
+  expect(shadow.querySelector('.pane.metrics')).not.toBeNull()
+
+  const row = shadow.querySelector<HTMLElement>('.identity-row')!
+  row.click()
+  await element.updateComplete
+
+  expect(row.classList.contains('selected')).toBe(true)
+  expect(row.getAttribute('aria-selected')).toBe('true')
+  const key = row.getAttribute('data-key')
+  const metrics = shadow.querySelector<HTMLElement>(
+    `.metrics-row[data-key="${key}"]`,
+  )
+  expect(metrics?.classList.contains('selected')).toBe(true)
+  expect(metrics?.getAttribute('aria-selected')).toBe('true')
 })
 
 test('the HTTP client sends the wire shape the daemon expects', async () => {

@@ -71,8 +71,9 @@ never shortened to fit a frame:
   `items`, `next` and `total`.
 - `limit` is 1–1000 (default 100). `next` is an opaque offset into that sorted
   snapshot; `next = null` is the only end signal.
-- The web table asks for 1000 rows in one live page and shows
-  `Showing N of M processes` when the host has more.
+- The web table asks for 1000 rows in one live page and shows `N / M
+  processes`; when the host has more than a page, the count's tooltip says that
+  only the first page is loaded.
 
 A cursor describes the snapshot it came from. The table changes between ticks,
 so a cursor is for walking one listing, not for resuming a live feed.
@@ -223,15 +224,20 @@ process manager:
   `pid:start_ticks`; the first frame shows `—`. States read as words (`running`,
   `sleeping`, `zombie`, ...) with colour for running, stopped and zombie.
 - The filter matches pid, user, name, command and state.
-- Selecting a row fills the footer with the identity and command. With
-  `process.control`, the footer offers the signal list, a **Group** switch and
-  **Send signal** after a confirmation dialog. Without control it says so and
-  offers nothing.
+- The table is split into two panes: the **identity** pane (tree gutter, pid and
+  command) and the **metric** pane (threads, user, state, memory, CPU). Only the
+  identity pane scrolls sideways — a long command or a deep tree moves there
+  while the metrics stay on screen. Both panes share the vertical scroll.
+- Selecting a row highlights it across both panes and fills the footer with its
+  identity and command. With `process.control`, the footer offers the signal
+  list, a **Group** switch and **Send signal** after a confirmation dialog.
+  Without control it says so and offers nothing.
 - **Start process** only appears with `process.spawn`. The form takes a command
   line and an optional working directory, and lists `spawn_allow` as chips that
   replace the program word while keeping the arguments. Arguments follow the
   documented quoting rules — whitespace separates them, quotes group them and
   there is no shell expansion. The daemon validates the allowlist again.
 
-The table and the tree scroll horizontally on narrow screens; THREADS is hidden
-below 48rem.
+On a phone THREADS and USER are hidden. Switching to the tree starts the
+identity pane at the pid instead of an empty stretch of guide lines; scrolling
+left reveals the full hierarchy.

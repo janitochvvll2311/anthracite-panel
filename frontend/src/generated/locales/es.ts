@@ -11,6 +11,7 @@
     export const templates = {
       's014cee951b8294bd': `Nuevo archivo`,
 's01d7a6aea9c35819': str`Restaurado ${0}`,
+'s026cb3e209957ede': str`Solo están cargados los primeros ${0} procesos.`,
 's0337d90cf703df0d': `Secciones`,
 's0379fc73608ab971': `Completado`,
 's03f42eea72154959': `Usuario`,
@@ -58,7 +59,6 @@
 's38437eab5d317469': `Escritura de archivos`,
 's38cba0a354bb3929': `Señal`,
 's3b151ca64eb26ec1': `Expandir`,
-'s3b32dd23d086c992': `Árbol de procesos`,
 's3bb786d3b55ba37c': `Cancelado`,
 's3cad4921d1a382f9': `La cuenta de operador es`,
 's3cf89cb47fdde7e9': `Enlace`,

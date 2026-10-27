@@ -285,6 +285,38 @@ export class AnthProcesses extends LitElement {
       this.sort = 'cpu'
       this.descending = true
     }
+    void this.updateComplete.then(() => {
+      if (view === 'flat') {
+        // The tree may have been scrolled right to show its pid; the flat pane
+        // starts at the pid again.
+        const pane = this.renderRoot.querySelector<HTMLElement>('.pane.identity')
+        if (pane) pane.scrollLeft = 0
+        return
+      }
+      this.revealIdentity()
+    })
+  }
+
+  /**
+   * On a phone the tree gutter can be wider than the identity pane. Start the
+   * pane at the pid instead of an empty stretch of guide lines; scrolling left
+   * still reveals the full hierarchy.
+   */
+  private revealIdentity(): void {
+    if (this.view !== 'tree') {
+      return
+    }
+    const pane = this.renderRoot.querySelector<HTMLElement>('.pane.identity')
+    if (!pane) {
+      return
+    }
+    const indent =
+      Number.parseFloat(
+        getComputedStyle(pane).getPropertyValue('--tree-indent'),
+      ) || 0
+    if (indent > pane.clientWidth) {
+      pane.scrollLeft = indent - 8
+    }
   }
 
   private select(process: ProcessInfo): void {
@@ -457,7 +489,12 @@ export class AnthProcesses extends LitElement {
         <span class="status" data-state=${this.status} role="status">
           ${this.statusText()}
         </span>
-        <span class="count">
+        <span
+          class="count"
+          title=${this.total > this.rows.length
+            ? msg(str`Only the first ${this.rows.length} processes are loaded.`)
+            : nothing}
+        >
           ${this.filtered().length} / ${this.total} ${msg('processes')}
         </span>
         <span class="spacer"></span>
@@ -669,84 +706,17 @@ export class AnthProcesses extends LitElement {
     `
   }
 
-  private renderHeader(column: ProcessColumn, sortable = true) {
+  private isSelected(process: ProcessRow): boolean {
+    return keyOf(process) === this.selectedKey
+  }
+
+  private renderHeadCell(column: ProcessColumn, sortable: boolean) {
     if (!sortable) {
-      return html`<th scope="col"></th>`
-    }
-    return html`
-      <th
-        scope="col"
-        class=${`${column.numeric ? 'number' : ''} ${column.key === 'threads' ? 'threads' : ''}`}
-        aria-sort=${this.sortAria(column.key)}
-      >
-        <button type="button" class="sort" @click=${() => this.sortBy(column.key)}>
-          ${column.label}
-          <span class="sort-mark" aria-hidden="true">
-            ${this.sort === column.key ? (this.descending ? '↓' : '↑') : '↕'}
-          </span>
-        </button>
-      </th>
-    `
-  }
-
-  private renderFlatRow(process: ProcessRow) {
-    const selected = keyOf(process) === this.selectedKey
-    return html`
-      <tr
-        class=${selected ? 'selected' : ''}
-        tabindex="0"
-        role="button"
-        aria-selected=${selected}
-        data-state=${process.state}
-        @click=${() => this.select(process)}
-        @keydown=${(event: KeyboardEvent) => this.onRowKey(event, process)}
-      >
-        <td class="number mono">${process.pid}</td>
-        <td class="command" title=${process.command}>
-          ${process.command !== '' ? process.command : process.name}
-        </td>
-        <td class="number mono threads">${process.threads}</td>
-        <td class="user">${process.user}</td>
-        <td>
-          <span class="state" data-state=${process.state}>
-            ${stateLabel(process.state)}
-          </span>
-        </td>
-        <td class="number mono">${formatKib(process.rss_kib)}</td>
-        <td class="number mono">${this.cpuText(process)}</td>
-      </tr>
-    `
-  }
-
-  private renderFlat() {
-    const columns = processColumns()
-    const rows = this.sorted()
-    return html`
-      <div class="table-wrap" part="table">
-        <table>
-          <thead>
-            <tr>
-              ${columns.map((column) => this.renderHeader(column))}
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map((process) => this.renderFlatRow(process))}
-          </tbody>
-        </table>
-      </div>
-    `
-  }
-
-  private renderTreeHeader(column: ProcessColumn) {
-    // The tree leaves pid and command unsorted: hierarchy owns their order.
-    if (column.key === 'pid' || column.key === 'command') {
       return html`<div class="cell head-cell" role="columnheader"></div>`
     }
     return html`
       <div
-        class=${`cell head-cell ${column.numeric ? 'number' : ''} ${
-          column.key === 'threads' ? 'threads' : ''
-        }`}
+        class=${`cell head-cell col-${column.key} ${column.numeric ? "number" : ""}`}
         role="columnheader"
         aria-sort=${this.sortAria(column.key)}
       >
@@ -760,92 +730,144 @@ export class AnthProcesses extends LitElement {
     `
   }
 
-  private renderTreeRow(row: TreeDisplayRow) {
-    const { process, depth, ancestorsLast, isLast, hasChildren, expanded } = row
-    const selected = keyOf(process) === this.selectedKey
+  private renderIdentityHead(tree: boolean) {
+    const columns = processColumns()
+    const pid = columns.find((column) => column.key === 'pid')!
+    const command = columns.find((column) => column.key === 'command')!
     return html`
-      <div
-        class=${`grid row ${selected ? 'selected' : ''}`}
-        role="treeitem"
-        aria-level=${depth + 1}
-        aria-selected=${selected}
-        aria-expanded=${hasChildren ? expanded : nothing}
-        tabindex="0"
-        data-state=${process.state}
-        @click=${() => this.select(process)}
-        @keydown=${(event: KeyboardEvent) => this.onRowKey(event, process)}
-      >
-        <span class="cell tree-cell">
-          <span class="tree-guides" aria-hidden="true">
-            ${ancestorsLast.map(
-              (last) => html`<span class=${`tree-vline ${last ? 'last' : ''}`}></span>`,
-            )}
-            ${depth === 0
-              ? nothing
-              : html`<span class=${`tree-elbow ${isLast ? 'last' : ''}`}></span>`}
-          </span>
-          ${depth === 0
-            ? html`<span class="tree-root-spacer" aria-hidden="true"></span>`
-            : nothing}
-          ${hasChildren
-            ? html`
-                <button
-                  type="button"
-                  class="toggle"
-                  aria-expanded=${expanded}
-                  aria-label=${expanded
-                    ? msg(str`Collapse process ${process.pid}`)
-                    : msg(str`Expand process ${process.pid}`)}
-                  @click=${(event: MouseEvent) => this.toggleCollapse(process.pid, event)}
-                >
-                  <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true">
-                    <path
-                      d="M4 2.5 8 6l-4 3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-              `
-            : html`<span class="toggle-spacer" aria-hidden="true"></span>`}
-        </span>
-        <span class="cell mono">${process.pid}</span>
-        <span class="cell command" title=${process.command}>
-          ${process.command !== '' ? process.command : process.name}
-        </span>
-        <span class="cell number mono threads">${process.threads}</span>
-        <span class="cell user">${process.user}</span>
-        <span class="cell">
-          <span class="state" data-state=${process.state}>
-            ${stateLabel(process.state)}
-          </span>
-        </span>
-        <span class="cell number mono">${formatKib(process.rss_kib)}</span>
-        <span class="cell number mono">${this.cpuText(process)}</span>
+      <div class="row head identity-head" role="row">
+        ${tree
+          ? html`<div class="cell tree-head" role="columnheader">${msg('Tree')}</div>`
+          : nothing}
+        ${this.renderHeadCell(pid, !tree)}
+        ${this.renderHeadCell(command, !tree)}
       </div>
     `
   }
 
-  private renderTree() {
-    const nodes = buildTree(this.filtered(), this.sort, this.direction())
-    const rows = visibleTreeRows(nodes, this.collapsed)
-    if (rows.length === 0) {
-      return html`<p class="empty">${msg('No process matches the filter.')}</p>`
-    }
+  private renderMetricsHead() {
     return html`
-      <div class="tree-scroll" part="table">
-        <div class="grid head" role="row">
-          <div class="cell tree-head" role="columnheader">${msg('Tree')}</div>
-          ${processColumns().map((column) => this.renderTreeHeader(column))}
-        </div>
-        <div class="tree" role="tree" aria-label=${msg('Process tree')}>
-          ${rows.map((row) => this.renderTreeRow(row))}
-        </div>
+      <div class="row head metrics-head" role="row">
+        ${processColumns()
+          .filter((column) => column.key !== 'pid' && column.key !== 'command')
+          .map((column) => this.renderHeadCell(column, true))}
       </div>
     `
+  }
+
+  private renderTreeCell(row: TreeDisplayRow) {
+    const { process, depth, ancestorsLast, isLast, hasChildren, expanded } = row
+    return html`
+      <span class="cell tree-cell">
+        <span class="tree-guides" aria-hidden="true">
+          ${ancestorsLast.map(
+            (last) => html`<span class=${`tree-vline ${last ? 'last' : ''}`}></span>`,
+          )}
+          ${depth === 0
+            ? nothing
+            : html`<span class=${`tree-elbow ${isLast ? 'last' : ''}`}></span>`}
+        </span>
+        ${depth === 0
+          ? html`<span class="tree-root-spacer" aria-hidden="true"></span>`
+          : nothing}
+        ${hasChildren
+          ? html`
+              <button
+                type="button"
+                class="toggle"
+                aria-expanded=${expanded}
+                aria-label=${expanded
+                  ? msg(str`Collapse process ${process.pid}`)
+                  : msg(str`Expand process ${process.pid}`)}
+                @click=${(event: MouseEvent) => this.toggleCollapse(process.pid, event)}
+              >
+                <svg class="chevron" viewBox="0 0 12 12" aria-hidden="true">
+                  <path
+                    d="M4 2.5 8 6l-4 3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.6"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            `
+          : html`<span class="toggle-spacer" aria-hidden="true"></span>`}
+      </span>
+    `
+  }
+
+  /**
+   * The identity pane: the tree gutter, the pid and the command.
+   *
+   * It is the only part of the table with a horizontal scrollbar. The metric
+   * pane stays fixed, so a narrow screen or a deep tree never hides CPU and
+   * memory behind a table-wide scroll.
+   */
+  private renderIdentityRow(treeRow: TreeDisplayRow | undefined, process: ProcessRow) {
+    const selected = this.isSelected(process)
+    return html`
+      <div
+        class=${`row identity-row ${selected ? 'selected' : ''}`}
+        role=${treeRow === undefined ? 'row' : 'treeitem'}
+        aria-level=${treeRow === undefined ? nothing : treeRow.depth + 1}
+        aria-selected=${selected}
+        aria-expanded=${treeRow?.hasChildren ? treeRow.expanded : nothing}
+        tabindex="0"
+        data-key=${keyOf(process)}
+        data-state=${process.state}
+        @click=${() => this.select(process)}
+        @keydown=${(event: KeyboardEvent) => this.onRowKey(event, process)}
+      >
+        ${treeRow === undefined ? nothing : this.renderTreeCell(treeRow)}
+        <span class="cell pid mono" role="cell">${process.pid}</span>
+        <span class="cell command" role="cell" title=${process.command}>
+          ${process.command !== '' ? process.command : process.name}
+        </span>
+      </div>
+    `
+  }
+
+  private renderMetricsRow(process: ProcessRow) {
+    const selected = this.isSelected(process)
+    return html`
+      <div
+        class=${`row metrics-row ${selected ? 'selected' : ''}`}
+        role="row"
+        aria-selected=${selected}
+        data-key=${keyOf(process)}
+        @click=${() => this.select(process)}
+      >
+        <span class="cell col-threads threads number mono" role="cell">
+          ${process.threads}
+        </span>
+        <span class="cell col-user user" role="cell">${process.user}</span>
+        <span class="cell col-state state-cell" role="cell">
+          <span class="state" data-state=${process.state}>
+            ${stateLabel(process.state)}
+          </span>
+        </span>
+        <span class="cell col-memory number mono" role="cell">
+          ${formatKib(process.rss_kib)}
+        </span>
+        <span class="cell col-cpu number mono" role="cell">
+          ${this.cpuText(process)}
+        </span>
+      </div>
+    `
+  }
+
+  /** Keeps both panes on the same vertical offset without a scroll loop. */
+  private readonly syncVertical = (event: Event): void => {
+    const source = event.currentTarget as HTMLElement
+    const target = this.renderRoot.querySelector<HTMLElement>(
+      source.classList.contains('identity') ? '.pane.metrics' : '.pane.identity',
+    )
+    if (!target || target.scrollTop === source.scrollTop) {
+      return
+    }
+    target.scrollTop = source.scrollTop
   }
 
   private renderTable() {
@@ -855,7 +877,43 @@ export class AnthProcesses extends LitElement {
     if (this.filtered().length === 0) {
       return html`<p class="empty">${msg('No process matches the filter.')}</p>`
     }
-    return this.view === 'tree' ? this.renderTree() : this.renderFlat()
+
+    const tree = this.view === 'tree'
+    let treeRows: TreeDisplayRow[] = []
+    let rows: ProcessRow[]
+    if (tree) {
+      treeRows = visibleTreeRows(
+        buildTree(this.filtered(), this.sort, this.direction()),
+        this.collapsed,
+      )
+      rows = treeRows.map((row) => row.process)
+    } else {
+      rows = this.sorted()
+    }
+    if (rows.length === 0) {
+      return html`<p class="empty">${msg('No process matches the filter.')}</p>`
+    }
+
+    const depth = treeRows.reduce((max, row) => Math.max(max, row.depth), 0)
+    const style = tree ? `--tree-indent: ${depth * 14 + 50}px` : nothing
+    return html`
+      <div
+        class=${`table-shell ${tree ? 'tree-view' : 'flat-view'}`}
+        part="table"
+        style=${style}
+      >
+        <div class="pane identity" role="rowgroup" @scroll=${this.syncVertical}>
+          ${this.renderIdentityHead(tree)}
+          ${tree
+            ? treeRows.map((row) => this.renderIdentityRow(row, row.process))
+            : rows.map((process) => this.renderIdentityRow(undefined, process))}
+        </div>
+        <div class="pane metrics" role="rowgroup" @scroll=${this.syncVertical}>
+          ${this.renderMetricsHead()}
+          ${rows.map((process) => this.renderMetricsRow(process))}
+        </div>
+      </div>
+    `
   }
 
   private renderNotes() {
@@ -1048,47 +1106,88 @@ export class AnthProcesses extends LitElement {
     .signal { display: flex; align-items: center; gap: 0.5rem; }
     .control-off { font-size: 12px; }
 
-    .table-wrap,
-    .tree-scroll {
+    .table-shell {
+      display: flex;
       max-height: var(--process-table-height, 34rem);
-      overflow: auto;
       border: 1px solid var(--panel-border, #223041);
       border-radius: 8px;
       background: var(--panel, #101721);
+      overflow: hidden;
+    }
+    .pane {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
       scrollbar-color: var(--panel-border, #223041) transparent;
       scrollbar-width: thin;
     }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      white-space: nowrap;
-      line-height: 1.3;
+    /* The identity pane is the only sideways scroll: a deep tree or a long
+       command scrolls here, and the metrics never leave the screen. */
+    .pane.identity {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-x: auto;
+      --identity-columns: 4.5rem minmax(10rem, max-content);
     }
-    thead {
+    .table-shell.tree-view .pane.identity {
+      --identity-columns: var(--tree-indent) 4.5rem minmax(10rem, max-content);
+    }
+    .pane.metrics {
+      flex: 0 0 auto;
+      overflow-x: hidden;
+      border-left: 1px solid var(--panel-border, #223041);
+      scrollbar-width: none;
+      --metrics-columns: 4.5rem 7rem 6.5rem 6.5rem 5.5rem;
+    }
+    .pane.metrics::-webkit-scrollbar { display: none; }
+
+    .row {
+      display: grid;
+      align-items: center;
+      height: var(--process-row-height, 27px);
+      border-top: 1px solid rgba(34, 48, 65, 0.6);
+      cursor: pointer;
+    }
+    .identity .row { grid-template-columns: var(--identity-columns); }
+    .metrics .row { grid-template-columns: var(--metrics-columns); }
+    .row.head {
       position: sticky;
       top: 0;
-      z-index: 1;
+      z-index: 2;
+      border-top: 0;
+      border-bottom: 1px solid var(--panel-border, #223041);
       background: var(--panel, #101721);
-    }
-    th {
-      padding: 0;
       color: var(--muted, #8b9bad);
       font-size: 10px;
       font-weight: 600;
       letter-spacing: 0.06em;
-      text-align: left;
       text-transform: uppercase;
-      border-bottom: 1px solid var(--panel-border, #223041);
+      cursor: default;
     }
-    th.number .sort { justify-content: flex-end; }
+    .row:not(.head):hover { background: rgba(125, 211, 252, 0.06); }
+    .row.selected {
+      background: rgba(125, 211, 252, 0.14);
+      box-shadow: inset 3px 0 0 var(--accent, #7dd3fc);
+    }
+
+    .cell {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      height: 100%;
+      padding: 0 0.5rem;
+      white-space: nowrap;
+    }
+    .head-cell { padding: 0; }
+    .head-cell.number .sort { justify-content: flex-end; }
     .sort {
       display: flex;
       gap: 0.35rem;
       align-items: center;
       width: 100%;
+      height: 100%;
       min-height: 0;
-      padding: 0.45rem 0.6rem;
+      padding: 0 0.5rem;
       color: inherit;
       font: inherit;
       letter-spacing: inherit;
@@ -1105,70 +1204,17 @@ export class AnthProcesses extends LitElement {
     [aria-sort='ascending'] .sort-mark,
     [aria-sort='descending'] .sort-mark { opacity: 1; }
 
-    td {
-      padding: 0.3rem 0.6rem;
-      border-top: 1px solid rgba(34, 48, 65, 0.6);
-    }
-    tbody tr { cursor: pointer; }
-    tbody tr:hover { background: rgba(125, 211, 252, 0.06); }
-    tbody tr.selected {
-      background: rgba(125, 211, 252, 0.14);
-      box-shadow: inset 3px 0 0 var(--accent, #7dd3fc);
-    }
     .number { text-align: right; }
     .mono { font-variant-numeric: tabular-nums; }
-    .command {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+    .cell.command { padding-right: 1rem; }
 
-    .grid {
-      display: grid;
-      grid-template-columns:
-        minmax(7rem, max-content)
-        4.5rem
-        minmax(10rem, 1fr)
-        4.5rem
-        7rem
-        6.5rem
-        6.5rem
-        5.5rem;
-      align-items: center;
-      min-width: 52rem;
+    .tree-head { padding: 0 0.5rem; }
+    .tree-cell {
+      display: flex;
+      align-self: stretch;
+      align-items: stretch;
+      padding: 0 0.15rem 0 0.4rem;
     }
-    .grid.head {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      color: var(--muted, #8b9bad);
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      background: var(--panel, #101721);
-      border-bottom: 1px solid var(--panel-border, #223041);
-    }
-    .tree-head { padding: 0.45rem 0.6rem; }
-    .head-cell { padding: 0; }
-    .head-cell.number .sort { justify-content: flex-end; }
-    /* Keep this unprefixed: .tree-cell overrides the padding below, and a
-       more specific .grid .cell would win and leave a gap in the guides. */
-    .cell {
-      min-width: 0;
-      padding: 0.2rem 0.5rem;
-      white-space: nowrap;
-    }
-    .grid .row {
-      border-top: 1px solid rgba(34, 48, 65, 0.6);
-      cursor: pointer;
-    }
-    .grid .row:hover { background: rgba(125, 211, 252, 0.06); }
-    .grid .row.selected {
-      background: rgba(125, 211, 252, 0.14);
-      box-shadow: inset 3px 0 0 var(--accent, #7dd3fc);
-    }
-    .tree-cell { display: flex; align-self: stretch; align-items: stretch; padding: 0 0.15rem 0 0.4rem; }
     .tree-guides { display: flex; align-self: stretch; flex: 0 0 auto; }
     .tree-vline,
     .tree-elbow { position: relative; width: 14px; align-self: stretch; }
@@ -1236,20 +1282,15 @@ export class AnthProcesses extends LitElement {
     }
 
     @media (max-width: 48rem) {
-      .threads { display: none; }
-      /* The track for the hidden column goes away too, or every later cell
-         would shift one column to the left. */
-      .grid {
-        grid-template-columns:
-          minmax(6rem, max-content)
-          4.5rem
-          minmax(8rem, 1fr)
-          7rem
-          6.5rem
-          6.5rem
-          5.5rem;
-        min-width: 36rem;
+      .pane.metrics { --metrics-columns: 5.2rem 5.5rem 4.5rem; }
+      .pane.identity { --identity-columns: 4rem minmax(8rem, max-content); }
+      .table-shell.tree-view .pane.identity {
+        --identity-columns: var(--tree-indent) 4rem minmax(8rem, max-content);
       }
+      /* Hidden header and row cells both leave their track, so the remaining
+         columns still line up. */
+      .col-threads,
+      .col-user { display: none; }
       .toolbar .spacer { display: none; }
       .field-label { display: none; }
       .btn-label { display: none; }
@@ -1259,8 +1300,10 @@ export class AnthProcesses extends LitElement {
       input[type='text'],
       select { min-height: 40px; }
       .view-switch button { min-height: 40px; }
-      .table-wrap,
-      .tree-scroll { max-height: 26rem; }
+      .table-shell {
+        --process-row-height: 30px;
+        max-height: 26rem;
+      }
       .selection { flex-basis: 100%; }
     }
   `
