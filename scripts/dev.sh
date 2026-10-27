@@ -7,6 +7,11 @@
 #   ./scripts/dev.sh status
 #   ./scripts/dev.sh restart
 #
+# Set ANTH_HMR=on for Vite fast refresh on desktop. HMR is off by default
+# because Android drops the HMR socket while the native file picker is open and
+# Vite reloads the page when it reconnects, losing the selected file.
+export ANTH_HMR=${ANTH_HMR:-off}
+
 # PIDs, logs and the debug config live under /tmp/anthracite-panel/dev, so the
 # tree stays clean and a run never inherits a stale socket from another one.
 set -euo pipefail

@@ -97,6 +97,15 @@ UI is reachable from another device on the network; the Vite proxy forwards
 `/api` and `/healthz` to `127.0.0.1:8080`. `ANTH_ADDR`, `ANTH_VITE_HOST` and
 `ANTH_VITE_PORT` override the defaults.
 
+Phones drop the Vite HMR socket while the native file picker is open, and Vite
+reloads the page on return, losing the selection. The script therefore starts
+Vite with HMR off; set `ANTH_HMR=on` for fast refresh on desktop. The built
+shell on `:8080` has no HMR either.
+
+```bash
+ANTH_HMR=on ./scripts/dev.sh restart   # desktop fast refresh
+```
+
 Inside an OpenCode session the same commands are available as `/dev-start`,
 `/dev-stop`, `/dev-status` and `/dev-restart` (from `.opencode/commands/`).
 
