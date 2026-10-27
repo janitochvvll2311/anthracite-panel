@@ -14,6 +14,7 @@ import type {
 import {
   ANTH_TERMINAL_ERROR_EVENT,
   ANTH_TERMINAL_EXIT_EVENT,
+  ANTH_TERMINAL_MODIFIER_EVENT,
   ANTH_TERMINAL_READY_EVENT,
   ANTH_TERMINAL_RETRY_EVENT,
   ANTH_TERMINAL_STATUS_EVENT,
@@ -101,7 +102,7 @@ export class AnthTerminalTabs extends LitElement {
   }
   private tapStart?: { at: number; x: number; y: number }
   private lastTap?: { at: number; x: number; y: number }
-  private lastPointerHotkey = 0
+  private touchHotkey?: { x: number; y: number; action: () => void }
 
   /** Number of open tabs. */
   get sessionCount(): number {
@@ -164,6 +165,10 @@ export class AnthTerminalTabs extends LitElement {
     terminal.addEventListener(ANTH_TERMINAL_RETRY_EVENT, () => {
       void this.reconnect(key)
     })
+    terminal.addEventListener(ANTH_TERMINAL_MODIFIER_EVENT, () => {
+      this.ctrl = false
+      this.alt = false
+    })
 
     wrapper.append(terminal)
     this.screens.append(wrapper)
@@ -196,6 +201,7 @@ export class AnthTerminalTabs extends LitElement {
     }
     const session = this.sessions.find((item) => item.key === key)
     session?.terminal.focus()
+    this.pushModifiers()
   }
 
   private async reconnect(key: string): Promise<void> {
@@ -210,6 +216,7 @@ export class AnthTerminalTabs extends LitElement {
     )
     this.notice = msg('Reconnecting…')
     session.terminal.focus()
+    this.pushModifiers()
   }
 
   private closeSession(key: string): void {
@@ -235,28 +242,73 @@ export class AnthTerminalTabs extends LitElement {
     session?.terminal.send(data)
     this.ctrl = false
     this.alt = false
+    this.pushModifiers()
   }
 
   private sendHotkey(key: Hotkey): void {
     this.send(key.data)
   }
 
-  /**
-   * Sends a hotkey from a pointer event before the browser can suppress the
-   * click or move focus away from xterm.
-   */
-  private readonly pressHotkey = (event: PointerEvent, action: () => void): void => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    this.lastPointerHotkey = Date.now()
-    this.sessions.find((session) => session.key === this.active)?.terminal.focus()
-    action()
+  /** Mirrors the sticky buttons into the active terminal. */
+  private pushModifiers(): void {
+    const session = this.sessions.find((item) => item.key === this.active)
+    if (!session) return
+    session.terminal.stickyCtrl = this.ctrl
+    session.terminal.stickyAlt = this.alt
   }
 
-  /** Keyboard activation still arrives as a detail-0 click. */
+  /** Pointer-based activation: mouse and pen go down, touch waits for the up. */
+  private readonly pressHotkey = (event: PointerEvent, action: () => void): void => {
+    if (event.pointerType === 'touch' || event.button > 0) return
+    event.preventDefault()
+    this.activateHotkey(action)
+  }
+
+  /**
+   * Remembers where the finger went down so a tap can be told apart from a
+   * horizontal scroll of the key bar.
+   */
+  private readonly startHotkey = (event: TouchEvent, action: () => void): void => {
+    if (event.touches.length !== 1) {
+      this.touchHotkey = undefined
+      return
+    }
+    this.touchHotkey = {
+      x: event.touches[0].clientX,
+      y: event.touches[0].clientY,
+      action,
+    }
+  }
+
+  /**
+   * Sends the key on `touchend` when the finger did not move.
+   *
+   * Android drops the `click` of a button once the soft keyboard closes and the
+   * window resizes, and `touchstart` cannot be cancelled without breaking the
+   * bar's horizontal scroll. Cancelling `touchend` stops the button from taking
+   * focus (which closes the keyboard) while a real drag is left untouched.
+   */
+  private readonly endHotkey = (event: TouchEvent): void => {
+    const pending = this.touchHotkey
+    this.touchHotkey = undefined
+    if (!pending) return
+    const touch = event.changedTouches[0]
+    if (touch) {
+      const movedX = Math.abs(touch.clientX - pending.x)
+      const movedY = Math.abs(touch.clientY - pending.y)
+      if (movedX > 10 || movedY > 10) return
+    }
+    event.preventDefault()
+    this.activateHotkey(pending.action)
+  }
+
+  /** Keyboard activation (Enter/Space) arrives as a detail-0 click. */
   private readonly clickHotkey = (event: MouseEvent, action: () => void): void => {
-    if (Date.now() - this.lastPointerHotkey < 600) return
     if (event.detail !== 0) return
+    this.activateHotkey(action)
+  }
+
+  private activateHotkey(action: () => void): void {
     this.sessions.find((session) => session.key === this.active)?.terminal.focus()
     action()
   }
@@ -271,7 +323,13 @@ export class AnthTerminalTabs extends LitElement {
         type="button"
         class=${pressed === undefined ? 'hotkey' : 'hotkey modifier'}
         aria-pressed=${pressed === undefined ? nothing : pressed}
+        @mousedown=${(event: MouseEvent) => event.preventDefault()}
         @pointerdown=${(event: PointerEvent) => this.pressHotkey(event, action)}
+        @touchstart=${(event: TouchEvent) => this.startHotkey(event, action)}
+        @touchend=${this.endHotkey}
+        @touchcancel=${() => {
+          this.touchHotkey = undefined
+        }}
         @click=${(event: MouseEvent) => this.clickHotkey(event, action)}
       >
         ${label}
@@ -287,6 +345,7 @@ export class AnthTerminalTabs extends LitElement {
       this.alt = !this.alt
       if (this.alt) this.ctrl = false
     }
+    this.pushModifiers()
   }
 
   /** Applies a sticky modifier to the next character hotkey. */
@@ -334,7 +393,26 @@ export class AnthTerminalTabs extends LitElement {
     }
   }
 
+  /**
+   * Taps on tabs, buttons or the hotkey bar must not drive terminal gestures.
+   *
+   * The listener sits on the host, so `event.target` is retargeted to
+   * `anth-terminal-tabs`; the real element comes from `composedPath()`.
+   */
+  private static isControlTarget(event: Event): boolean {
+    const target = event.composedPath()[0]
+    return (
+      target instanceof Element &&
+      target.closest('button, .tabs, .hotkeys') !== null
+    )
+  }
+
   private readonly onTouchStart = (event: TouchEvent): void => {
+    if (AnthTerminalTabs.isControlTarget(event)) {
+      this.tapStart = undefined
+      this.cancelLongPress()
+      return
+    }
     if (event.touches.length === 2) {
       this.pinchDistance = touchDistance(event.touches)
       this.tapStart = undefined
@@ -401,6 +479,7 @@ export class AnthTerminalTabs extends LitElement {
   }
 
   private readonly onTouchEnd = (event: TouchEvent): void => {
+    if (AnthTerminalTabs.isControlTarget(event)) return
     if (!this.gestureActive && this.tapStart && event.touches.length === 0) {
       const now = Date.now()
       const elapsed = now - this.tapStart.at
@@ -695,22 +774,10 @@ export class AnthTerminalTabs extends LitElement {
       background: rgba(125, 211, 252, 0.2);
       color: var(--accent, #7dd3fc);
     }
+    .hotkey { touch-action: manipulation; }
     @media (max-width: 48rem) {
       .tab-status { display: none; }
       .tab-main { max-width: 9rem; }
-      /* Wrap the special keys instead of hiding half of them behind a
-         horizontal scroll that competes with the terminal's touch gestures. */
-      .hotkeys { overflow-x: visible; }
-      .hotkey-row {
-        flex-wrap: wrap;
-        min-width: 0;
-      }
-      .hotkey {
-        flex: 0 0 auto;
-        min-width: 40px;
-        min-height: 40px;
-        touch-action: manipulation;
-      }
     }
   `
 }

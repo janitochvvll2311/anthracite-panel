@@ -4,6 +4,7 @@ import { customElement, property, query, state } from 'lit/decorators.js'
 import xtermCss from '@xterm/xterm/css/xterm.css?inline'
 import type { ITerminalOptions, ITheme, Terminal } from '@xterm/xterm'
 import type { FitAddon } from '@xterm/addon-fit'
+import { applyStickyModifiers } from './lib/terminal/modifiers'
 import type {
   TerminalSessionInfo,
   TerminalSize,
@@ -21,8 +22,15 @@ export const ANTH_TERMINAL_ERROR_EVENT = 'anth-terminal-error'
 export const ANTH_TERMINAL_STATUS_EVENT = 'anth-terminal-status'
 /** Event fired when Enter is pressed while the session is closed or failed. */
 export const ANTH_TERMINAL_RETRY_EVENT = 'anth-terminal-retry'
+/** Event fired when the sticky Ctrl/Alt state changes. */
+export const ANTH_TERMINAL_MODIFIER_EVENT = 'anth-terminal-modifier'
 
 export type AnthTerminalKeyboardMode = 'auto' | 'shell' | 'local'
+
+export interface AnthTerminalModifierDetail {
+  ctrl: boolean
+  alt: boolean
+}
 
 export interface AnthTerminalReadyDetail {
   program: string
@@ -110,6 +118,7 @@ function commonPrefix(values: string[]): string {
  * @fires anth-terminal-error - `{ message }` when the transport fails.
  * @fires anth-terminal-status - `{ status }` on every state transition.
  * @fires anth-terminal-retry - Enter while the session is closed or failed.
+ * @fires anth-terminal-modifier - `{ ctrl, alt }` when a sticky modifier is used.
  *
  * @slot title - Replaces the title text.
  * @slot actions - Extra controls placed at the right of the title bar.
@@ -151,6 +160,12 @@ export class AnthTerminal extends LitElement {
   /** Disable keyboard input while still showing output. */
   @property({ type: Boolean, attribute: 'read-only', reflect: true })
   readOnly = false
+
+  /** Apply `Ctrl` to the next character typed on the soft keyboard. */
+  stickyCtrl = false
+
+  /** Apply `Alt` to the next character typed on the soft keyboard. */
+  stickyAlt = false
 
   /** Render only the screen; the owner supplies the window and tabs. */
   @property({ type: Boolean, attribute: 'chromeless', reflect: true })
@@ -785,6 +800,7 @@ export class AnthTerminal extends LitElement {
       }
       return
     }
+    data = this.applyStickyModifiers(data)
     if (
       this.commandHistoryEnabled &&
       this.effectiveKeyboardMode === 'local'
@@ -792,6 +808,31 @@ export class AnthTerminal extends LitElement {
       this.trackCommandLine(data)
     }
     this.connectedTransport?.sendInput(new TextEncoder().encode(data))
+  }
+
+  /**
+   * Turns the next typed character into `Ctrl+<key>` or `Alt+<key>` when the
+   * extended keyboard left a modifier armed.
+   *
+   * This is the path the soft keyboard uses: `Ctrl` is tapped on the hotkey
+   * bar, then `c` is typed on the keyboard. Without this the modifier only
+   * applied to the bar's own character buttons and `Ctrl+C` never reached the
+   * shell.
+   */
+  private applyStickyModifiers(data: string): string {
+    if (!this.stickyCtrl && !this.stickyAlt) return data
+    const modified = applyStickyModifiers(data, this.stickyCtrl, this.stickyAlt)
+    if (modified === data) return data
+    this.stickyCtrl = false
+    this.stickyAlt = false
+    this.dispatchEvent(
+      new CustomEvent<AnthTerminalModifierDetail>(ANTH_TERMINAL_MODIFIER_EVENT, {
+        detail: { ctrl: false, alt: false },
+        bubbles: true,
+        composed: true,
+      }),
+    )
+    return modified
   }
 
   private handleKeyEvent(event: KeyboardEvent): boolean {

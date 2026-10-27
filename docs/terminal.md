@@ -117,14 +117,18 @@ Sessions survive navigating to Files or Settings because the window lives on
 
 - Tab strip with status dot, shell label, close and `+`.
 - Full-bleed xterm.js surface, lazy loaded, fitted to the window.
-- Mobile extended keyboard above the soft keyboard: `Ctrl`, `Alt`, `Esc`, `Tab`,
-  arrows, `Home/End`, `PgUp/PgDn`, `^C`, `^D`, `^L`, `^Z` and common symbols.
-  `Ctrl`/`Alt` are sticky for the next character key.
+- Mobile extended keyboard in a horizontally scrolling bar above the soft
+  keyboard: `Ctrl`, `Alt`, `Esc`, `Tab`, arrows, `Home/End`, `PgUp/PgDn`, `^C`,
+  `^D`, `^L`, `^Z` and common symbols.
+- `Ctrl`/`Alt` stay armed for the next character, whether it comes from the key
+  bar or from the soft keyboard (`Ctrl`, then `c`, sends `0x03`).
 - The window follows `visualViewport` and the viewport declares
   `interactive-widget=resizes-content`, so the key bar stays above the soft
-  keyboard. Hotkey presses keep xterm focused instead of closing the keyboard.
+  keyboard. Keys are sent on `touchend` for a tap (a drag scrolls the bar) and
+  keep xterm focused, so the soft keyboard does not close.
 - Double-tap sends Tab; pinch changes font size; long-press and drag sends
   arrow keys; long-press selects text with the normal mobile selection UI.
+  Taps on the tab strip and the key bar never trigger these gestures.
 - `A−`/`A+` change font size; the keyboard button hides the soft keyboard.
 - After the shell exits or the connection drops, the tab shows the reason and
   **Enter** reconnects in the same tab with a new session.
