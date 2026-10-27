@@ -36,6 +36,9 @@ export default defineConfig({
       '/healthz': 'http://127.0.0.1:8080',
       '/api': {
         target: 'http://127.0.0.1:8080',
+        // The terminal is a WebSocket at /api/terminal; without this the
+        // proxy completes the HTTP handshake and leaves the upgrade hanging.
+        ws: true,
       },
     },
   },

@@ -500,9 +500,6 @@ export class AnthApp extends HTMLElement {
     this.#tabPanel.refresh()
     this.#filesPanel?.refresh()
     this.#settingsPanel?.refresh()
-    if (this.#route.section === 'terminal') {
-      void openTerminalWindow()
-    }
   }
 
   readonly #onHashChange = (): void => {

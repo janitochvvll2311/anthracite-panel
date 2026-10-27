@@ -97,7 +97,12 @@ server exchange JSON text frames:
 
 `ready` precedes any output. The bridge runs a long-poll read next to the input
 loop, so typing does not wait for a quiet shell. The WebSocket frame cap is
-128 KiB.
+128 KiB. A connection that never reaches `ready` is reported as an error after
+ten seconds instead of staying in `connecting` forever.
+
+When Vite fronts the panel, the `/api` proxy must forward WebSocket upgrades
+(`ws: true`); otherwise the browser completes the HTTP handshake and waits for
+a socket the proxy never opened. `frontend/vite.config.ts` sets it.
 
 `anth-panel terminal [--cols N --rows N]` does the same over the socket. It puts
 the local TTY in raw mode, forwards `SIGWINCH`, restores the TTY on exit and

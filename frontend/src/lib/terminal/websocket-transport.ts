@@ -19,6 +19,8 @@ export interface WebSocketTerminalTransportOptions {
   url: string | ((size: TerminalSize) => string)
   /** Application-level ping cadence. `0` disables it. */
   heartbeatIntervalMs?: number
+  /** How long to wait for `ready`, including the WebSocket upgrade. */
+  openTimeoutMs?: number
 }
 
 /**
@@ -31,6 +33,7 @@ export interface WebSocketTerminalTransportOptions {
 export class WebSocketTerminalTransport implements TerminalTransport {
   private readonly url: WebSocketTerminalTransportOptions['url']
   private readonly heartbeatIntervalMs: number
+  private readonly openTimeoutMs: number
   private socket?: JsonWebSocketTransport<
     TerminalClientMessage,
     TerminalServerMessage
@@ -41,12 +44,14 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     reject: (error: Error) => void
   }
   private heartbeat?: ReturnType<typeof setInterval>
+  private openTimer?: ReturnType<typeof setTimeout>
   private intentionalClose = false
   private lastStatus?: TerminalStatus
 
   constructor(options: WebSocketTerminalTransportOptions) {
     this.url = options.url
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 20_000
+    this.openTimeoutMs = options.openTimeoutMs ?? 10_000
   }
 
   async open(
@@ -67,6 +72,11 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     // `connect()` can reject before the caller receives this promise; keep its
     // rejection from surfacing as an unhandled rejection.
     void ready.catch(() => {})
+    this.openTimer = setTimeout(() => {
+      if (this.pendingOpen) {
+        this.reportError(new Error('timed out connecting to the terminal'))
+      }
+    }, this.openTimeoutMs)
 
     const socket = new JsonWebSocketTransport<
       TerminalClientMessage,
@@ -88,6 +98,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
         error instanceof Error ? error : new Error(String(error))
       this.intentionalClose = true
       this.pendingOpen = undefined
+      this.clearOpenTimer()
       this.closeSocket()
       this.setStatus('error')
       throw wrapped
@@ -125,6 +136,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     this.intentionalClose = true
     this.pendingOpen?.reject(new Error('terminal closed before it was ready'))
     this.pendingOpen = undefined
+    this.clearOpenTimer()
     this.closeSocket()
     if (wasActive) {
       this.setStatus('closed')
@@ -148,6 +160,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
 
     switch (message.type) {
       case 'ready':
+        this.clearOpenTimer()
         this.startHeartbeat()
         this.setStatus('open')
         this.pendingOpen?.resolve({
@@ -182,6 +195,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     if (this.socket !== socket) return
     this.socket = undefined
     this.stopHeartbeat()
+    this.clearOpenTimer()
 
     if (this.intentionalClose) {
       this.setStatus('closed')
@@ -198,6 +212,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     // While `open()` is still pending, the rejection of that promise is the
     // error signal; only report through the callback once the session is live.
     const opening = this.pendingOpen !== undefined
+    this.clearOpenTimer()
     this.pendingOpen?.reject(error)
     this.pendingOpen = undefined
     this.intentionalClose = true
@@ -206,6 +221,13 @@ export class WebSocketTerminalTransport implements TerminalTransport {
       this.handlers?.onError(error)
     }
     this.setStatus('error')
+  }
+
+  private clearOpenTimer(): void {
+    if (this.openTimer !== undefined) {
+      clearTimeout(this.openTimer)
+      this.openTimer = undefined
+    }
   }
 
   private setStatus(status: TerminalStatus): void {
