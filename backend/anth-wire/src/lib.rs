@@ -39,7 +39,10 @@ pub use terminal::{
     DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK, MAX_TERMINAL_DIMENSION, MAX_TERMINAL_INPUT,
     MAX_TERMINAL_WAIT_MS, MIN_TERMINAL_DIMENSION, TerminalOpened, TerminalOutput, TerminalSize,
 };
-pub use volumes::{VolumeDevice, VolumeKind, VolumeMount, VolumeSnapshot, VolumeUsage};
+pub use volumes::{
+    VolumeDevice, VolumeKind, VolumeMount, VolumeMountRequest, VolumeSnapshot,
+    VolumeUnmountRequest, VolumeUsage,
+};
 
 #[cfg(test)]
 mod tests;

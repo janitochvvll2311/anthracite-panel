@@ -12,7 +12,7 @@ use crate::network::{NetworkCreate, NetworkEdit, NetworkSnapshot};
 use crate::page::Page;
 use crate::process::{ProcessSignal, ProcessSnapshot, ProcessStarted};
 use crate::terminal::{TerminalOpened, TerminalOutput};
-use crate::volumes::VolumeSnapshot;
+use crate::volumes::{VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest};
 
 /// Bumped when a change would make an older peer misread a message.
 ///
@@ -92,8 +92,12 @@ pub enum Request {
         chain: FirewallChain,
         policy: FirewallAction,
     },
-    /// One snapshot of block devices and mounts. Read-only in this slice.
+    /// One snapshot of block devices and mounts.
     Volumes,
+    /// Mount one device. Requires `[volumes] control`.
+    VolumesMount(VolumeMountRequest),
+    /// Unmount one current mountpoint. Requires `[volumes] control`.
+    VolumesUnmount(VolumeUnmountRequest),
     /// Replaces this process with a fresh copy of the same command line, which
     /// re-reads the configuration.
     Restart,
@@ -243,6 +247,10 @@ pub enum Response {
     },
     /// One storage inventory snapshot.
     Volumes(VolumeSnapshot),
+    /// A storage mutation succeeded.
+    VolumeChanged {
+        message: String,
+    },
     /// The restart was accepted; this process is about to be replaced.
     Restarting {
         /// The pid the new image keeps.

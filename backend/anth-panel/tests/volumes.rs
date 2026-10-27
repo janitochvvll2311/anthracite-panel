@@ -194,7 +194,7 @@ async fn the_socket_returns_the_same_inventory() {
 
 #[test]
 fn the_live_probe_reports_the_root_mount() {
-    let service = VolumesService::new(VolumesConfig::default());
+    let service = VolumesService::new(VolumesConfig::default(), Vec::new());
     let snapshot = service.snapshot();
     assert!(snapshot.timestamp_ms > 0);
     assert!(

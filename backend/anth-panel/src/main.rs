@@ -505,6 +505,39 @@ enum StorageCommand {
     /// List block devices, mounts and swap areas.
     #[command(alias = "ls")]
     List,
+    /// Mount one block device under the configured mount root.
+    Mount(StorageMountArgs),
+    /// Unmount one current mountpoint.
+    Unmount(StorageUnmountArgs),
+}
+
+#[derive(Args, Debug)]
+struct StorageMountArgs {
+    /// Device path or kernel name, for example /dev/sdb1 or sdb1.
+    device: String,
+    /// Absolute target directory under the configured mount root.
+    target: String,
+    /// Filesystem type; defaults to the type lsblk detected.
+    #[arg(long = "type", value_name = "FS")]
+    fs_type: Option<String>,
+    /// Mount read-only.
+    #[arg(long)]
+    read_only: bool,
+    /// Allow a removable device.
+    #[arg(long)]
+    allow_removable: bool,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct StorageUnmountArgs {
+    /// Mountpoint to unmount.
+    target: String,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1344,6 +1377,54 @@ async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> Cl
                 other => Err((1, format!("unexpected response: {other:?}"))),
             }
         }
+        StorageCommand::Mount(args) => {
+            if !args.yes {
+                confirm(&format!(
+                    "Mount {} on {}?{}",
+                    args.device,
+                    args.target,
+                    if args.read_only { " Read-only." } else { "" }
+                ))?;
+            }
+            volume_change(
+                &mut client,
+                Request::VolumesMount(anth_wire::VolumeMountRequest {
+                    device: args.device.clone(),
+                    target: args.target.clone(),
+                    fs_type: args.fs_type.clone(),
+                    read_only: args.read_only,
+                    allow_removable: args.allow_removable,
+                }),
+            )
+            .await
+        }
+        StorageCommand::Unmount(args) => {
+            if !args.yes {
+                confirm(&format!("Unmount {}?", args.target))?;
+            }
+            volume_change(
+                &mut client,
+                Request::VolumesUnmount(anth_wire::VolumeUnmountRequest {
+                    target: args.target.clone(),
+                }),
+            )
+            .await
+        }
+    }
+}
+
+async fn volume_change(client: &mut Client, request: Request) -> CliResult {
+    let response = client
+        .call(&request)
+        .await
+        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+    match response {
+        Response::VolumeChanged { message } => {
+            println!("{message}");
+            Ok(())
+        }
+        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+        other => Err((1, format!("unexpected response: {other:?}"))),
     }
 }
 

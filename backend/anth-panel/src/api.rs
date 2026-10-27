@@ -14,7 +14,8 @@ use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
     FileWritten, FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot, NetworkCreate,
     NetworkEdit, NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request,
-    Response, TerminalSize, TrashListing, VolumeSnapshot, WireError,
+    Response, TerminalSize, TrashListing, VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest,
+    WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -98,6 +99,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/firewall/delete", post(firewall_delete))
         .route("/api/firewall/flush", post(firewall_flush))
         .route("/api/volumes", get(volumes))
+        .route("/api/volumes/mount", post(volumes_mount))
+        .route("/api/volumes/unmount", post(volumes_unmount))
         .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
@@ -1081,6 +1084,67 @@ async fn volumes(
         Response::Error(error) => Err(ApiError::from(error)),
         other => Err(ApiError::internal(format!(
             "a storage snapshot answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumeMountBody {
+    device: String,
+    target: String,
+    #[serde(default)]
+    fs_type: Option<String>,
+    #[serde(default)]
+    read_only: bool,
+    #[serde(default)]
+    allow_removable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumeUnmountBody {
+    target: String,
+}
+
+async fn volumes_mount(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<VolumeMountBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    volume_change(
+        &state.daemon,
+        Request::VolumesMount(VolumeMountRequest {
+            device: body.device,
+            target: body.target,
+            fs_type: body.fs_type,
+            read_only: body.read_only,
+            allow_removable: body.allow_removable,
+        }),
+    )
+    .await
+}
+
+async fn volumes_unmount(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<VolumeUnmountBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    volume_change(
+        &state.daemon,
+        Request::VolumesUnmount(VolumeUnmountRequest {
+            target: body.target,
+        }),
+    )
+    .await
+}
+
+async fn volume_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<Value>, ApiError> {
+    match daemon.execute(request).await {
+        Response::VolumeChanged { message } => Ok(Json(json!({ "message": message }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a storage change answered unexpectedly: {other:?}"
         ))),
     }
 }

@@ -57,6 +57,7 @@ impl Daemon {
                 paths.config_dir.join(root)
             }
         };
+        let files_root = root.clone();
         let files = FileService::new(
             root,
             config.files.write,
@@ -81,7 +82,21 @@ impl Daemon {
         );
         let network = NetworkService::new(config.network.control, config.network.manage);
         let firewall = FirewallService::new(config.firewall.control);
-        let volumes = VolumesService::new(config.volumes.clone());
+        let mut protected = vec![
+            files_root,
+            paths.config.clone(),
+            paths.socket.clone(),
+            paths.state_dir.clone(),
+            paths.secrets.clone(),
+            paths.sessions.clone(),
+            paths.plugins.clone(),
+            paths.grants.clone(),
+            paths.plugin_state.clone(),
+        ];
+        if let Ok(executable) = std::env::current_exe() {
+            protected.push(executable);
+        }
+        let volumes = VolumesService::new(config.volumes.clone(), protected);
         Self {
             config,
             paths,
@@ -323,6 +338,16 @@ impl Daemon {
                     blocking(move || Ok::<_, WireError>(volumes.snapshot())).await?,
                 ))
             }
+            Request::VolumesMount(request) => {
+                let volumes = self.volumes.clone();
+                let message = blocking(move || volumes.mount(&request)).await?;
+                Ok(Response::VolumeChanged { message })
+            }
+            Request::VolumesUnmount(request) => {
+                let volumes = self.volumes.clone();
+                let message = blocking(move || volumes.unmount(&request)).await?;
+                Ok(Response::VolumeChanged { message })
+            }
             Request::Restart => {
                 let lifecycle = Arc::clone(&self.lifecycle);
                 tokio::spawn(async move {
@@ -558,6 +583,8 @@ fn operation_of(request: &Request) -> &'static str {
         Request::FirewallFlush { .. } => "firewall-flush",
         Request::FirewallSetPolicy { .. } => "firewall-set-policy",
         Request::Volumes => "volumes",
+        Request::VolumesMount(_) => "volumes-mount",
+        Request::VolumesUnmount(_) => "volumes-unmount",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

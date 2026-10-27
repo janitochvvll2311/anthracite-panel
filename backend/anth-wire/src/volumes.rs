@@ -133,6 +133,29 @@ pub struct VolumeMount {
     pub usage: Option<VolumeUsage>,
 }
 
+/// A request to mount one device under the configured mount root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeMountRequest {
+    /// Device path or kernel name.
+    pub device: String,
+    /// Absolute target directory, under `[volumes] mount_root`.
+    pub target: String,
+    /// Filesystem type; defaults to the type `lsblk` detected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fs_type: Option<String>,
+    #[serde(default)]
+    pub read_only: bool,
+    /// Allow a removable device; refused by default.
+    #[serde(default)]
+    pub allow_removable: bool,
+}
+
+/// A request to unmount one current mountpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeUnmountRequest {
+    pub target: String,
+}
+
 /// One point-in-time view of the storage attached to the host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VolumeSnapshot {
