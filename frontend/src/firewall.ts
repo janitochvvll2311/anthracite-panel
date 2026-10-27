@@ -2,11 +2,12 @@
  * `anth-firewall`: the managed nftables table.
  *
  * Unlike the network inventory this panel does not stream: it reads on connect
- * and after every mutation. The daemon owns exactly `inet anthracite` /
- * `input`; the panel never offers another table or chain.
+ * and after every mutation. The daemon owns exactly `inet anthracite` with its
+ * `input` and `output` base chains; the panel never offers another table.
  *
- * Allowing a port removes a matching managed deny rule. It does not add an
- * accept rule, because an accept in this table cannot override another table.
+ * Both chains keep accept and drop rules and have their own default policy.
+ * One managed rule exists per protocol/port in a chain: adding a rule for a
+ * target that is already managed replaces it.
  */
 
 import { LitElement, css, html, nothing } from 'lit'
@@ -17,6 +18,8 @@ import './icon'
 import { describeError } from './errors'
 import type {
   FirewallAction,
+  FirewallChain,
+  FirewallChainState,
   FirewallClient,
   FirewallProtocol,
   FirewallRule,
@@ -25,6 +28,8 @@ import type {
 } from './firewall-client'
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+const CHAINS: FirewallChain[] = ['input', 'output']
 
 @customElement('anth-firewall')
 @localized()
@@ -54,6 +59,9 @@ export class AnthFirewall extends LitElement {
   private action: FirewallAction = 'deny'
 
   @state()
+  private chain: FirewallChain = 'input'
+
+  @state()
   private protocol: FirewallProtocol = 'tcp'
 
   @state()
@@ -63,10 +71,34 @@ export class AnthFirewall extends LitElement {
   private comment = ''
 
   @state()
-  private confirmingFlush = false
+  private confirmingFlush?: FirewallChain
 
   @state()
   private confirmingDelete?: number
+
+  @state()
+  private editing?: number
+
+  @state()
+  private editAction: FirewallAction = 'deny'
+
+  @state()
+  private editChain: FirewallChain = 'input'
+
+  @state()
+  private editProtocol: FirewallProtocol = 'tcp'
+
+  @state()
+  private editPort = ''
+
+  @state()
+  private editComment = ''
+
+  @state()
+  private policyDrafts: Partial<Record<FirewallChain, FirewallAction>> = {}
+
+  @state()
+  private pendingPolicy?: { chain: FirewallChain; policy: FirewallAction }
 
   override connectedCallback(): void {
     super.connectedCallback()
@@ -84,11 +116,20 @@ export class AnthFirewall extends LitElement {
       this.status = 'ready'
       this.error = ''
     } catch (failure) {
-      this.error = describeError(failure)
+      this.error = this.failureMessage(failure)
       this.status = 'error'
     } finally {
       this.loading = false
     }
+  }
+
+  private failureMessage(failure: unknown): string {
+    if ((failure as { status?: number }).status === 405) {
+      return msg(
+        'The daemon does not support this firewall operation. Rebuild and restart it, then reload the page.',
+      )
+    }
+    return describeError(failure)
   }
 
   private async run(
@@ -107,7 +148,7 @@ export class AnthFirewall extends LitElement {
       this.status = 'ready'
       this.notice = msg('Change applied.')
     } catch (failure) {
-      this.error = describeError(failure)
+      this.error = this.failureMessage(failure)
       this.status = 'error'
     } finally {
       this.busy = false
@@ -125,10 +166,55 @@ export class AnthFirewall extends LitElement {
     }
     const comment = this.comment.trim()
     void this.run(
-      (current) => current.add(this.action, this.protocol, port, comment || undefined),
+      (current) =>
+        current.add(
+          this.chain,
+          this.action,
+          this.protocol,
+          port,
+          comment || undefined,
+        ),
       () => {
         this.port = ''
         this.comment = ''
+      },
+    )
+  }
+
+  private beginEdit(rule: FirewallRule): void {
+    if (rule.action === 'custom') return
+    this.editing = rule.handle
+    this.editAction = rule.action
+    this.editChain = rule.chain
+    this.editProtocol = rule.protocol ?? 'tcp'
+    this.editPort = rule.port ? String(rule.port) : ''
+    this.editComment = rule.comment ?? ''
+    this.confirmingDelete = undefined
+  }
+
+  private submitEdit(event: Event, rule: FirewallRule): void {
+    event.preventDefault()
+    const client = this.client
+    if (!client || this.busy) return
+    const port = Number(this.editPort)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      this.error = msg('The port must be between 1 and 65535.')
+      return
+    }
+    const comment = this.editComment.trim()
+    void this.run(
+      (current) =>
+        current.update(
+          rule.handle,
+          this.editChain,
+          this.editAction,
+          this.editProtocol,
+          port,
+          comment || undefined,
+        ),
+      () => {
+        this.chain = this.editChain
+        this.editing = undefined
       },
     )
   }
@@ -138,15 +224,44 @@ export class AnthFirewall extends LitElement {
       (client) => client.remove(rule.handle),
       () => {
         this.confirmingDelete = undefined
+        if (this.editing === rule.handle) this.editing = undefined
       },
     )
   }
 
-  private flush(): void {
+  private flush(chain: FirewallChain): void {
     void this.run(
-      (client) => client.flush(),
+      (client) => client.flush(chain),
       () => {
-        this.confirmingFlush = false
+        this.confirmingFlush = undefined
+      },
+    )
+  }
+
+  private policyDraft(state: FirewallChainState): FirewallAction {
+    return this.policyDrafts[state.chain] ?? state.policy
+  }
+
+  private setPolicyDraft(chain: FirewallChain, policy: FirewallAction): void {
+    this.policyDrafts = { ...this.policyDrafts, [chain]: policy }
+    this.pendingPolicy = undefined
+  }
+
+  private requestPolicy(state: FirewallChainState): void {
+    const policy = this.policyDraft(state)
+    if (policy === state.policy) return
+    this.pendingPolicy = { chain: state.chain, policy }
+    this.confirmingFlush = undefined
+  }
+
+  private confirmPolicy(): void {
+    const pending = this.pendingPolicy
+    if (!pending) return
+    void this.run(
+      (client) => client.setPolicy(pending.chain, pending.policy),
+      () => {
+        this.pendingPolicy = undefined
+        this.policyDrafts = {}
       },
     )
   }
@@ -163,11 +278,53 @@ export class AnthFirewall extends LitElement {
   }
 
   private ruleCount(): string {
-    if (!this.snapshot?.initialized) return msg('No rules')
-    const count = this.snapshot.rules.length
+    const count = this.chainRules().length
     if (count === 0) return msg('No rules')
     if (count === 1) return msg('1 rule')
     return msg(str`${count} rules`)
+  }
+
+  private chainRules(): FirewallRule[] {
+    return (this.snapshot?.rules ?? []).filter((rule) => rule.chain === this.chain)
+  }
+
+  private chainCount(chain: FirewallChain): number {
+    return (this.snapshot?.rules ?? []).filter((rule) => rule.chain === chain).length
+  }
+
+  private selectChain(chain: FirewallChain): void {
+    if (this.chain === chain) return
+    this.chain = chain
+    this.editing = undefined
+    this.confirmingDelete = undefined
+    this.confirmingFlush = undefined
+    this.pendingPolicy = undefined
+  }
+
+  private renderTabs() {
+    const chains = this.snapshot?.chains ?? []
+    if (chains.length === 0) return nothing
+    return html`
+      <div class="subtabs" role="tablist" part="subtabs">
+        ${chains.map((state) => {
+          const active = this.chain === state.chain
+          return html`
+            <button
+              type="button"
+              class="subtab"
+              role="tab"
+              data-chain=${state.chain}
+              data-active=${active ? '' : nothing}
+              aria-selected=${active ? 'true' : 'false'}
+              @click=${() => this.selectChain(state.chain)}
+            >
+              <span>${state.chain === 'input' ? msg('Input') : msg('Output')}</span>
+              <span class="tab-count">${this.chainCount(state.chain)}</span>
+            </button>
+          `
+        })}
+      </div>
+    `
   }
 
   private renderToolbar() {
@@ -187,47 +344,7 @@ export class AnthFirewall extends LitElement {
           <anth-icon name="refresh"></anth-icon>
           <span class="btn-label">${msg('Refresh')}</span>
         </button>
-        ${this.controlEnabled()
-          ? html`
-              <button
-                type="button"
-                class="danger"
-                ?disabled=${this.busy || !this.snapshot?.initialized}
-                title=${msg('Flush the managed chain')}
-                @click=${() => {
-                  this.confirmingFlush = !this.confirmingFlush
-                }}
-              >
-                <anth-icon name="trash"></anth-icon>
-                <span class="btn-label">${msg('Flush')}</span>
-              </button>
-            `
-          : nothing}
       </div>
-      ${this.confirmingFlush
-        ? html`
-            <div class="confirm" role="alert">
-              <span>${msg('Flush every rule from the managed chain?')}</span>
-              <button
-                type="button"
-                class="danger"
-                ?disabled=${this.busy}
-                @click=${() => this.flush()}
-              >
-                ${msg('Flush')}
-              </button>
-              <button
-                type="button"
-                ?disabled=${this.busy}
-                @click=${() => {
-                  this.confirmingFlush = false
-                }}
-              >
-                ${msg('Cancel')}
-              </button>
-            </div>
-          `
-        : nothing}
     `
   }
 
@@ -236,7 +353,7 @@ export class AnthFirewall extends LitElement {
       <div class="context" part="context">
         <span class="context-label">${msg('Managed table')}</span>
         <span class="table-name">inet anthracite</span>
-        <span class="muted">chain input</span>
+        <span class="muted">input + output</span>
         <span class="policy" data-on=${this.controlEnabled() ? 'yes' : 'no'}>
           ${this.controlEnabled() ? msg('control') : msg('read-only')}
         </span>
@@ -303,7 +420,7 @@ export class AnthFirewall extends LitElement {
         <button type="submit" ?disabled=${this.busy}>${msg('Add rule')}</button>
       </form>
       <p class="hint">
-        ${msg('Allow removes a matching managed deny rule; it does not add an accept rule.')}
+        ${msg('Adding a rule for an existing protocol and port in this direction replaces it.')}
       </p>
     `
   }
@@ -324,6 +441,233 @@ export class AnthFirewall extends LitElement {
     return '—'
   }
 
+  private renderPolicyConfirm() {
+    const pending = this.pendingPolicy
+    if (!pending) return nothing
+    return html`
+      <div class="confirm policy-confirm" role="alert">
+        <span>
+          ${pending.policy === 'deny'
+            ? msg(
+                str`Set the ${pending.chain} policy to deny? Unmatched traffic will be dropped, which can lock you out.`,
+              )
+            : msg(str`Set the ${pending.chain} policy to allow?`)}
+        </span>
+        <button
+          type="button"
+          ?disabled=${this.busy}
+          @click=${() => this.confirmPolicy()}
+        >
+          ${msg('Apply')}
+        </button>
+        <button
+          type="button"
+          ?disabled=${this.busy}
+          @click=${() => {
+            this.pendingPolicy = undefined
+          }}
+        >
+          ${msg('Cancel')}
+        </button>
+      </div>
+    `
+  }
+
+  private renderFlushConfirm(chain: FirewallChain) {
+    return html`
+      <div class="confirm" role="alert">
+        <span>${msg(str`Flush every rule from the ${chain} chain?`)}</span>
+        <button
+          type="button"
+          class="danger"
+          ?disabled=${this.busy}
+          @click=${() => this.flush(chain)}
+        >
+          ${msg('Flush')}
+        </button>
+        <button
+          type="button"
+          ?disabled=${this.busy}
+          @click=${() => {
+            this.confirmingFlush = undefined
+          }}
+        >
+          ${msg('Cancel')}
+        </button>
+      </div>
+    `
+  }
+
+  private renderChain(state: FirewallChainState) {
+    const draft = this.policyDraft(state)
+    const pending = this.pendingPolicy?.chain === state.chain
+    return html`
+      <div class="chain-row" part="chain" data-chain=${state.chain}>
+        <span class="chain-name">${state.chain}</span>
+        <span class="chain-state" data-on=${state.initialized ? 'yes' : 'no'}>
+          ${state.initialized ? msg('managed') : msg('not created')}
+        </span>
+        <span class="policy-label">${msg('Policy')}</span>
+        ${this.controlEnabled()
+          ? html`
+              <select
+                .value=${draft}
+                ?disabled=${this.busy}
+                @change=${(event: Event) =>
+                  this.setPolicyDraft(
+                    state.chain,
+                    (event.currentTarget as HTMLSelectElement)
+                      .value as FirewallAction,
+                  )}
+              >
+                <option value="allow">${msg('Allow')}</option>
+                <option value="deny">${msg('Deny')}</option>
+              </select>
+              <button
+                type="button"
+                ?disabled=${this.busy || draft === state.policy}
+                @click=${() => this.requestPolicy(state)}
+              >
+                ${msg('Apply')}
+              </button>
+              <button
+                type="button"
+                class="danger"
+                ?disabled=${this.busy || !state.initialized}
+                @click=${() => {
+                  this.confirmingFlush =
+                    this.confirmingFlush === state.chain
+                      ? undefined
+                      : state.chain
+                  this.pendingPolicy = undefined
+                }}
+              >
+                ${msg('Flush')}
+              </button>
+            `
+          : html`<span class="policy-value">${this.actionLabel(state.policy)}</span>`}
+      </div>
+      ${this.confirmingFlush === state.chain
+        ? this.renderFlushConfirm(state.chain)
+        : nothing}
+      ${pending ? this.renderPolicyConfirm() : nothing}
+    `
+  }
+
+  private renderActiveChain() {
+    const chains = this.snapshot?.chains ?? []
+    if (chains.length === 0) {
+      return html`<p class="error" role="alert">
+        ${msg('This daemon does not report the input and output chains. Rebuild and restart it, then reload the page.')}
+      </p>`
+    }
+    const state =
+      chains.find((candidate) => candidate.chain === this.chain) ?? chains[0]
+    const rules = this.chainRules()
+    return html`
+      ${this.renderChain(state)}
+      ${this.controlEnabled() ? this.renderAddForm() : nothing}
+      ${!this.snapshot?.initialized
+        ? html`
+            <p class="empty">
+              ${msg('The managed table does not exist yet. Adding a rule or changing a policy creates it.')}
+            </p>
+          `
+        : rules.length === 0
+          ? html`<p class="empty">${msg('No managed rules in this direction. Adding a rule creates one.')}</p>`
+          : html`<div class="list" part="list">${rules.map((rule) => this.renderRule(rule))}</div>`}
+    `
+  }
+
+  private renderEditForm(rule: FirewallRule) {
+    return html`
+      <form
+        class="edit"
+        part="edit"
+        @submit=${(event: Event) => this.submitEdit(event, rule)}
+      >
+        <label>
+          <span>${msg('Direction')}</span>
+          <select
+            .value=${this.editChain}
+            ?disabled=${this.busy}
+            @change=${(event: Event) => {
+              this.editChain = (event.currentTarget as HTMLSelectElement)
+                .value as FirewallChain
+            }}
+          >
+            ${CHAINS.map(
+              (chain) => html`<option value=${chain}>${chain}</option>`,
+            )}
+          </select>
+        </label>
+        <label>
+          <span>${msg('Action')}</span>
+          <select
+            .value=${this.editAction}
+            ?disabled=${this.busy}
+            @change=${(event: Event) => {
+              this.editAction = (event.currentTarget as HTMLSelectElement)
+                .value as FirewallAction
+            }}
+          >
+            <option value="deny">${msg('Deny')}</option>
+            <option value="allow">${msg('Allow')}</option>
+          </select>
+        </label>
+        <label>
+          <span>${msg('Port')}</span>
+          <input
+            type="number"
+            min="1"
+            max="65535"
+            required
+            .value=${this.editPort}
+            ?disabled=${this.busy}
+            @input=${(event: Event) => {
+              this.editPort = (event.currentTarget as HTMLInputElement).value
+            }}
+          />
+        </label>
+        <label>
+          <span>${msg('Protocol')}</span>
+          <select
+            .value=${this.editProtocol}
+            ?disabled=${this.busy}
+            @change=${(event: Event) => {
+              this.editProtocol = (event.currentTarget as HTMLSelectElement)
+                .value as FirewallProtocol
+            }}
+          >
+            <option value="tcp">tcp</option>
+            <option value="udp">udp</option>
+          </select>
+        </label>
+        <label class="grow">
+          <span>${msg('Comment (optional)')}</span>
+          <input
+            maxlength="32"
+            .value=${this.editComment}
+            ?disabled=${this.busy}
+            @input=${(event: Event) => {
+              this.editComment = (event.currentTarget as HTMLInputElement).value
+            }}
+          />
+        </label>
+        <button type="submit" ?disabled=${this.busy}>${msg('Save')}</button>
+        <button
+          type="button"
+          ?disabled=${this.busy}
+          @click=${() => {
+            this.editing = undefined
+          }}
+        >
+          ${msg('Cancel')}
+        </button>
+      </form>
+    `
+  }
+
   private renderRule(rule: FirewallRule) {
     return html`
       <article class="rule" part="rule" data-action=${rule.action}>
@@ -331,6 +675,19 @@ export class AnthFirewall extends LitElement {
         <span class="badge">${this.actionLabel(rule.action)}</span>
         <span class="target">${this.ruleTarget(rule)}</span>
         <span class="comment">${rule.comment || '—'}</span>
+        ${this.controlEnabled() && rule.action !== 'custom'
+          ? html`
+              <button
+                type="button"
+                class="edit-rule"
+                ?disabled=${this.busy}
+                title=${msg(str`Edit rule #${rule.handle}`)}
+                @click=${() => this.beginEdit(rule)}
+              >
+                ${msg('Edit')}
+              </button>
+            `
+          : nothing}
         ${this.controlEnabled()
           ? html`
               <button
@@ -340,13 +697,17 @@ export class AnthFirewall extends LitElement {
                 title=${msg(str`Delete rule #${rule.handle}`)}
                 @click=${() => {
                   this.confirmingDelete =
-                    this.confirmingDelete === rule.handle ? undefined : rule.handle
+                    this.confirmingDelete === rule.handle
+                      ? undefined
+                      : rule.handle
+                  this.editing = undefined
                 }}
               >
                 ${msg('Delete')}
               </button>
             `
           : nothing}
+        ${this.editing === rule.handle ? this.renderEditForm(rule) : nothing}
         ${this.confirmingDelete === rule.handle
           ? html`
               <div class="confirm" role="alert">
@@ -382,21 +743,10 @@ export class AnthFirewall extends LitElement {
       return html`<p class="empty">${msg('No firewall information yet.')}</p>`
     }
 
-    const rules = this.snapshot.rules
     return html`
       ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
       ${this.notice ? html`<p class="notice" role="status">${this.notice}</p>` : nothing}
-      ${this.renderContext()}
-      ${this.controlEnabled() ? this.renderAddForm() : nothing}
-      ${!this.snapshot.initialized
-        ? html`
-            <p class="empty">
-              ${msg('The managed table does not exist yet. Denying a port creates it.')}
-            </p>
-          `
-        : rules.length === 0
-          ? html`<p class="empty">${msg('No managed rules. Denying a port adds one.')}</p>`
-          : html`<div class="list" part="list">${rules.map((rule) => this.renderRule(rule))}</div>`}
+      ${this.renderContext()} ${this.renderTabs()} ${this.renderActiveChain()}
       ${this.snapshot.ruleset
         ? html`
             <details class="raw" part="raw">
@@ -460,7 +810,8 @@ export class AnthFirewall extends LitElement {
     .spacer { flex: 1; }
 
     .toolbar button,
-    .confirm button {
+    .confirm button,
+    .chain-row button {
       display: inline-flex;
       align-items: center;
       gap: 0.35rem;
@@ -474,11 +825,14 @@ export class AnthFirewall extends LitElement {
       cursor: pointer;
     }
     .toolbar button:hover,
-    .confirm button:hover { border-color: var(--accent, #7dd3fc); }
+    .confirm button:hover,
+    .chain-row button:hover { border-color: var(--accent, #7dd3fc); }
     .toolbar button:disabled,
-    .confirm button:disabled { opacity: 0.55; cursor: progress; }
+    .confirm button:disabled,
+    .chain-row button:disabled { opacity: 0.55; cursor: progress; }
     .toolbar button.danger,
-    .confirm button.danger { color: var(--err, #f87171); }
+    .confirm button.danger,
+    .chain-row button.danger { color: var(--err, #f87171); }
     .toolbar anth-icon { font-size: 14px; }
 
     .context {
@@ -510,7 +864,98 @@ export class AnthFirewall extends LitElement {
     }
     .policy[data-on='yes'] { color: var(--ok, #34d399); }
 
-    .add {
+    .subtabs {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 0.35rem;
+      margin-bottom: 0.25rem;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      border-bottom: 1px solid var(--panel-border, #223041);
+    }
+    .subtab {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 0.4rem;
+      min-height: 40px;
+      padding: 0.4rem 0.8rem;
+      color: var(--muted, #8b9bad);
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      font: 600 12px/1.3 var(--mono, monospace);
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .subtab:hover,
+    .subtab:focus-visible { color: var(--text, #dbe6f2); outline: none; }
+    .subtab:focus-visible {
+      box-shadow: inset 0 0 0 1px var(--accent, #7dd3fc);
+      border-radius: 4px;
+    }
+    .subtab[data-active] {
+      color: var(--accent, #7dd3fc);
+      border-bottom-color: var(--accent, #7dd3fc);
+    }
+    .tab-count {
+      min-width: 1.25rem;
+      padding: 0 0.3rem;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 999px;
+      color: var(--muted, #8b9bad);
+      font-size: 10px;
+      text-align: center;
+    }
+    .subtab[data-active] .tab-count {
+      color: var(--accent, #7dd3fc);
+      border-color: var(--accent, #7dd3fc);
+    }
+
+    .chain-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 0.75rem;
+      padding: 0.5rem 0.65rem;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 9px;
+      background: var(--panel, #101721);
+      font: 12px/1.4 var(--mono, monospace);
+    }
+    .chain-name {
+      min-width: 3.5rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .chain-state {
+      padding: 0.1rem 0.4rem;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 999px;
+      color: var(--muted, #8b9bad);
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+    .chain-state[data-on='yes'] { color: var(--ok, #34d399); }
+    .policy-label { color: var(--muted, #8b9bad); }
+    .policy-value { color: var(--text, #dbe6f2); font-weight: 600; }
+    .chain-row select {
+      min-height: 30px;
+      padding: 0.2rem 0.45rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: 12px/1.4 var(--mono, monospace);
+    }
+    .chain-row .confirm { flex-basis: 100%; }
+
+    .add,
+    .edit {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
       align-items: end;
@@ -520,15 +965,20 @@ export class AnthFirewall extends LitElement {
       border-radius: 9px;
       background: var(--panel, #101721);
     }
-    .add label {
+    .edit { grid-column: 1 / -1; background: var(--panel-2, #0b121b); }
+    .add label,
+    .edit label {
       display: grid;
       gap: 0.2rem;
       color: var(--muted, #8b9bad);
       font: 11px/1.3 var(--mono, monospace);
     }
-    .add .grow { grid-column: span 2; }
+    .add .grow,
+    .edit .grow { grid-column: span 2; }
     .add input,
-    .add select {
+    .add select,
+    .edit input,
+    .edit select {
       min-height: 32px;
       padding: 0.3rem 0.5rem;
       color: var(--text, #dbe6f2);
@@ -537,7 +987,8 @@ export class AnthFirewall extends LitElement {
       background: var(--panel-2, #0b121b);
       font: 13px/1.4 var(--sans, system-ui, sans-serif);
     }
-    .add button {
+    .add button,
+    .edit button {
       min-height: 32px;
       padding: 0.3rem 0.65rem;
       color: var(--text, #dbe6f2);
@@ -547,11 +998,18 @@ export class AnthFirewall extends LitElement {
       font: inherit;
       cursor: pointer;
     }
-    .add button:hover { border-color: var(--accent, #7dd3fc); }
-    .add button:disabled { opacity: 0.55; cursor: progress; }
+    .add button:hover,
+    .edit button:hover { border-color: var(--accent, #7dd3fc); }
+    .add button:disabled,
+    .edit button:disabled { opacity: 0.55; cursor: progress; }
     .add input:focus-visible,
     .add select:focus-visible,
     .add button:focus-visible,
+    .edit input:focus-visible,
+    .edit select:focus-visible,
+    .edit button:focus-visible,
+    .chain-row select:focus-visible,
+    .chain-row button:focus-visible,
     .toolbar button:focus-visible,
     .confirm button:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
     .hint { margin: -0.25rem 0 0; color: var(--muted, #8b9bad); font-size: 11px; }
@@ -559,7 +1017,7 @@ export class AnthFirewall extends LitElement {
     .list { display: flex; flex-direction: column; gap: 0.5rem; }
     .rule {
       display: grid;
-      grid-template-columns: auto auto minmax(5rem, auto) 1fr auto;
+      grid-template-columns: auto auto minmax(5rem, auto) 1fr auto auto;
       align-items: center;
       gap: 0.4rem 0.75rem;
       padding: 0.55rem 0.65rem;
@@ -584,12 +1042,24 @@ export class AnthFirewall extends LitElement {
     .rule[data-action='allow'] .badge { color: var(--ok, #34d399); }
     .target { font: 600 13px/1.4 var(--mono, monospace); }
     .comment { color: var(--muted, #8b9bad); overflow-wrap: anywhere; }
-    .delete { min-height: 30px; padding: 0.2rem 0.5rem; color: var(--err, #f87171);
-              border: 1px solid var(--panel-border, #223041); border-radius: 7px;
-              background: var(--panel-2, #0b121b); font: inherit; cursor: pointer; }
+    .edit-rule,
+    .delete {
+      min-height: 30px;
+      padding: 0.2rem 0.5rem;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: inherit;
+      cursor: pointer;
+    }
+    .delete { color: var(--err, #f87171); }
+    .edit-rule:hover,
+    .delete:hover { border-color: var(--accent, #7dd3fc); }
     .delete:hover { border-color: var(--err, #f87171); }
+    .edit-rule:disabled,
     .delete:disabled { opacity: 0.55; cursor: progress; }
-    .rule .confirm { grid-column: 1 / -1; }
+    .rule .confirm,
+    .rule form.edit { grid-column: 1 / -1; }
 
     .confirm {
       display: flex;
@@ -631,15 +1101,30 @@ export class AnthFirewall extends LitElement {
     @media (max-width: 44rem) {
       .toolbar button { min-height: 44px; }
       .toolbar .btn-label { display: inline; }
-      .add { grid-template-columns: 1fr 1fr; }
-      .add .grow { grid-column: 1 / -1; }
+      .add,
+      .edit { grid-template-columns: 1fr 1fr; }
+      .add .grow,
+      .edit .grow { grid-column: 1 / -1; }
       .add input,
       .add select,
-      .add button { min-height: 44px; }
-      .add button { grid-column: 1 / -1; }
-      .rule { grid-template-columns: auto auto 1fr auto; }
-      .rule .comment { grid-column: 1 / -1; }
+      .add button,
+      .edit input,
+      .edit select,
+      .edit button { min-height: 44px; }
+      .add button,
+      .edit button { grid-column: 1 / -1; }
+      .rule { grid-template-columns: auto auto 1fr auto auto; }
+      .rule .handle { grid-area: 1 / 1; }
+      .rule .badge { grid-area: 1 / 2; }
+      .rule .target { grid-area: 1 / 3; }
+      .rule .comment { grid-area: 2 / 1 / 3 / -1; }
+      .rule .edit-rule { grid-area: 1 / 4; }
+      .rule .delete { grid-area: 1 / 5; }
+      .rule .edit-rule,
       .rule .delete { min-height: 44px; }
+      .subtab { min-height: 44px; }
+      .chain-row button,
+      .chain-row select { min-height: 44px; }
       .confirm button { min-height: 44px; }
     }
   `

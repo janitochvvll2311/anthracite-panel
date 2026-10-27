@@ -203,26 +203,49 @@ pub fn network(snapshot: &NetworkSnapshot) -> String {
     out.trim_end().to_string()
 }
 
-/// Formats the managed firewall chain. A missing table is a normal state: the
+/// Formats the managed firewall table. A missing table is a normal state: the
 /// daemon has simply never created it.
 pub fn firewall(snapshot: &FirewallSnapshot) -> String {
     if !snapshot.initialized {
-        return "Firewall table is not initialized. Deny a port to create it.".to_string();
-    }
-    if snapshot.rules.is_empty() {
-        return "Managed firewall chain is empty.".to_string();
+        return "Firewall table is not initialized. Add a rule or set a policy to create it."
+            .to_string();
     }
     let mut out = String::new();
+    for state in &snapshot.chains {
+        let count = snapshot
+            .rules
+            .iter()
+            .filter(|rule| rule.chain == state.chain)
+            .count();
+        let _ = writeln!(
+            out,
+            "{}: policy {} ({}, {} rule{})",
+            state.chain,
+            state.policy,
+            if state.initialized {
+                "managed"
+            } else {
+                "not created"
+            },
+            count,
+            if count == 1 { "" } else { "s" },
+        );
+    }
+    if snapshot.rules.is_empty() {
+        out.push_str("\nNo managed rules.");
+        return out;
+    }
     let _ = writeln!(
         out,
-        "{:>6} {:<6} {:<6} {:>5}  COMMENT",
-        "HANDLE", "ACTION", "PROTO", "PORT"
+        "\n{:>6} {:<6} {:<6} {:<6} {:>5}  COMMENT",
+        "HANDLE", "CHAIN", "ACTION", "PROTO", "PORT"
     );
     for rule in &snapshot.rules {
         let _ = writeln!(
             out,
-            "{:>6} {:<6} {:<6} {:>5}  {}",
+            "{:>6} {:<6} {:<6} {:<6} {:>5}  {}",
             rule.handle,
+            rule.chain,
             safe(&rule.action).to_uppercase(),
             rule.protocol
                 .map(|protocol| protocol.as_str())

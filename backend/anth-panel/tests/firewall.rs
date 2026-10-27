@@ -14,7 +14,7 @@ use anth_panel::dispatch::Daemon;
 use anth_panel::firewall::{FirewallService, NftOutput, NftRunner};
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
-use anth_wire::{FirewallAction, FirewallProtocol, Request, Response};
+use anth_wire::{FirewallAction, FirewallChain, FirewallProtocol, Request, Response};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
@@ -59,21 +59,20 @@ fn ok(stdout: &str) -> Result<NftOutput, String> {
     })
 }
 
-fn fail(stderr: &str) -> Result<NftOutput, String> {
-    Ok(NftOutput {
-        ok: false,
-        stdout: String::new(),
-        stderr: stderr.to_string(),
-    })
-}
-
 fn rules_json() -> String {
     serde_json::json!({
         "nftables": [
-            {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 3, "comment": "anth:deny:tcp:80|http"}}
+            {"chain": {"family": "inet", "table": "anthracite", "name": "input", "type": "filter", "hook": "input", "policy": "drop"}},
+            {"chain": {"family": "inet", "table": "anthracite", "name": "output", "type": "filter", "hook": "output", "policy": "accept"}},
+            {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 3, "comment": "anth:deny:tcp:80|http"}},
+            {"rule": {"family": "inet", "table": "anthracite", "chain": "output", "handle": 6, "comment": "anth:allow:tcp:443|https"}}
         ]
     })
     .to_string()
+}
+
+fn empty_json() -> String {
+    r#"{"nftables":[]}"#.to_string()
 }
 
 fn scratch(name: &str) -> (PathBuf, PathBuf) {
@@ -149,18 +148,23 @@ fn get(uri: &str) -> HttpRequest<Body> {
 }
 
 #[tokio::test]
-async fn the_http_routes_read_add_delete_and_flush() {
+async fn the_http_routes_read_add_update_delete_flush_and_set_policy() {
     let nft = Arc::new(FakeNft::new(vec![
         ok(&rules_json()),
         ok("table inet anthracite"),
-        fail("No such file or directory"),
         ok(""),
-        fail("No such file or directory"),
+        ok(""),
+        ok(&empty_json()),
+        ok(""),
+        ok(&rules_json()),
+        ok(""),
+        ok(&rules_json()),
+        ok(""),
+        ok(&rules_json()),
         ok(""),
         ok(""),
         ok(""),
         ok(&rules_json()),
-        ok("table inet anthracite"),
         ok(""),
     ]));
     let built = daemon("firewall-http", true, Arc::clone(&nft));
@@ -175,20 +179,42 @@ async fn the_http_routes_read_add_delete_and_flush() {
     let snapshot = body_json(response).await;
     assert_eq!(snapshot["initialized"], true);
     assert_eq!(snapshot["rules"][0]["handle"], 3);
+    assert_eq!(snapshot["rules"][0]["chain"], "input");
     assert_eq!(snapshot["rules"][0]["action"], "deny");
     assert_eq!(snapshot["rules"][0]["protocol"], "tcp");
     assert_eq!(snapshot["rules"][0]["port"], 80);
+    assert_eq!(snapshot["chains"][0]["chain"], "input");
+    assert_eq!(snapshot["chains"][0]["policy"], "deny");
+    assert_eq!(snapshot["chains"][1]["chain"], "output");
+    assert_eq!(snapshot["chains"][1]["policy"], "allow");
 
     let response = router
         .clone()
         .oneshot(post(
             "/api/firewall/rule",
-            json!({ "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" }),
+            json!({ "chain": "input", "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" }),
         ))
         .await
         .expect("deny");
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(body_json(response).await["message"], "denied tcp/80");
+    assert_eq!(
+        body_json(response).await["message"],
+        "denied tcp/80 on input"
+    );
+
+    let response = router
+        .clone()
+        .oneshot(post(
+            "/api/firewall/update",
+            json!({ "handle": 3, "chain": "input", "action": "allow", "protocol": "tcp", "port": 443, "comment": "https" }),
+        ))
+        .await
+        .expect("update");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["message"],
+        "updated firewall rule 3 to allow tcp/443 on input"
+    );
 
     let response = router
         .clone()
@@ -199,13 +225,27 @@ async fn the_http_routes_read_add_delete_and_flush() {
 
     let response = router
         .clone()
-        .oneshot(post("/api/firewall/flush", json!({})))
+        .oneshot(post("/api/firewall/flush", json!({ "chain": "output" })))
         .await
         .expect("flush");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         body_json(response).await["message"],
-        "flushed 1 firewall rule"
+        "flushed 1 firewall rule from output"
+    );
+
+    let response = router
+        .clone()
+        .oneshot(post(
+            "/api/firewall/policy",
+            json!({ "chain": "input", "policy": "allow" }),
+        ))
+        .await
+        .expect("policy");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["message"],
+        "set input policy to allow"
     );
 
     let response = router
@@ -232,10 +272,78 @@ async fn the_http_routes_read_add_delete_and_flush() {
             "comment",
             "\"anth:deny:tcp:80|http\""
         ]));
+    assert!(calls.iter().any(|call| call
+        == &vec![
+            "replace",
+            "rule",
+            "inet",
+            "anthracite",
+            "input",
+            "handle",
+            "3",
+            "tcp",
+            "dport",
+            "443",
+            "accept",
+            "comment",
+            "\"anth:allow:tcp:443|https\""
+        ]));
     assert!(
         calls
             .iter()
-            .any(|call| call == &vec!["flush", "chain", "inet", "anthracite", "input"])
+            .any(|call| call == &vec!["flush", "chain", "inet", "anthracite", "output"])
+    );
+    assert!(calls.iter().any(|call| call
+        == &vec![
+            "add",
+            "chain",
+            "inet",
+            "anthracite",
+            "input",
+            "{ policy accept; }"
+        ]));
+}
+
+#[tokio::test]
+async fn the_http_add_route_honours_the_output_chain() {
+    let nft = Arc::new(FakeNft::new(vec![
+        ok(""),
+        ok(""),
+        ok(&empty_json()),
+        ok(""),
+    ]));
+    let built = daemon("firewall-http-output", true, Arc::clone(&nft));
+    let router = api::router(state(built.daemon));
+
+    let response = router
+        .oneshot(post(
+            "/api/firewall/rule",
+            json!({ "chain": "output", "action": "deny", "protocol": "udp", "port": 5353 }),
+        ))
+        .await
+        .expect("deny");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["message"],
+        "denied udp/5353 on output"
+    );
+
+    let calls = nft.calls();
+    assert_eq!(
+        calls.last().expect("add"),
+        &vec![
+            "add",
+            "rule",
+            "inet",
+            "anthracite",
+            "output",
+            "udp",
+            "dport",
+            "5353",
+            "drop",
+            "comment",
+            "\"anth:deny:udp:5353\""
+        ]
     );
 }
 
@@ -248,7 +356,7 @@ async fn the_http_route_refuses_when_control_is_off() {
     let response = router
         .oneshot(post(
             "/api/firewall/rule",
-            json!({ "action": "deny", "protocol": "tcp", "port": 22 }),
+            json!({ "chain": "input", "action": "deny", "protocol": "tcp", "port": 22 }),
         ))
         .await
         .expect("deny");
@@ -265,13 +373,17 @@ async fn the_socket_answers_status_and_mutations() {
     let nft = Arc::new(FakeNft::new(vec![
         ok(&rules_json()),
         ok("table inet anthracite"),
-        fail("No such file or directory"),
         ok(""),
-        fail("No such file or directory"),
+        ok(""),
+        ok(&empty_json()),
+        ok(""),
+        ok(&rules_json()),
+        ok(""),
         ok(""),
         ok(""),
         ok(&rules_json()),
-        ok("table inet anthracite"),
+        ok(""),
+        ok(&rules_json()),
         ok(""),
     ]));
     let built = daemon("firewall-socket", true, Arc::clone(&nft));
@@ -284,13 +396,15 @@ async fn the_socket_answers_status_and_mutations() {
     match client.call(&Request::FirewallStatus).await.expect("status") {
         Response::FirewallSnapshot(snapshot) => {
             assert!(snapshot.initialized);
-            assert_eq!(snapshot.rules.len(), 1);
+            assert_eq!(snapshot.rules.len(), 2);
+            assert_eq!(snapshot.chains[1].chain, FirewallChain::Output);
         }
         other => panic!("expected a firewall snapshot, got {other:?}"),
     }
 
     match client
         .call(&Request::FirewallAdd {
+            chain: FirewallChain::Output,
             action: FirewallAction::Deny,
             protocol: FirewallProtocol::Udp,
             port: 53,
@@ -299,11 +413,47 @@ async fn the_socket_answers_status_and_mutations() {
         .await
         .expect("add")
     {
-        Response::FirewallChanged { message } => assert_eq!(message, "denied udp/53"),
+        Response::FirewallChanged { message } => assert_eq!(message, "denied udp/53 on output"),
         other => panic!("expected a firewall change, got {other:?}"),
     }
 
-    match client.call(&Request::FirewallFlush).await.expect("flush") {
+    match client
+        .call(&Request::FirewallUpdate {
+            handle: 3,
+            chain: FirewallChain::Input,
+            action: FirewallAction::Allow,
+            protocol: FirewallProtocol::Tcp,
+            port: 443,
+            comment: Some("https".to_string()),
+        })
+        .await
+        .expect("update")
+    {
+        Response::FirewallChanged { message } => {
+            assert_eq!(message, "updated firewall rule 3 to allow tcp/443 on input")
+        }
+        other => panic!("expected a firewall change, got {other:?}"),
+    }
+
+    match client
+        .call(&Request::FirewallSetPolicy {
+            chain: FirewallChain::Output,
+            policy: FirewallAction::Deny,
+        })
+        .await
+        .expect("policy")
+    {
+        Response::FirewallChanged { message } => assert_eq!(message, "set output policy to deny"),
+        other => panic!("expected a firewall change, got {other:?}"),
+    }
+
+    match client
+        .call(&Request::FirewallFlush {
+            chain: FirewallChain::Input,
+        })
+        .await
+        .expect("flush")
+    {
         Response::FirewallChanged { message } => assert!(message.starts_with("flushed")),
         other => panic!("expected a firewall change, got {other:?}"),
     }
@@ -320,4 +470,6 @@ fn the_service_parses_and_reports_the_policy() {
     assert!(snapshot.control_enabled);
     assert_eq!(snapshot.rules[0].action, "deny");
     assert_eq!(snapshot.rules[0].comment.as_deref(), Some("http"));
+    assert_eq!(snapshot.chains[0].policy, FirewallAction::Deny);
+    assert_eq!(snapshot.chains[1].policy, FirewallAction::Allow);
 }

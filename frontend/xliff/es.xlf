@@ -1146,17 +1146,9 @@
   <source><x id="0" equiv-text="${count}"/> rules</source>
   <target><x id="0" equiv-text="${count}"/> reglas</target>
 </trans-unit>
-<trans-unit id="sedfc3b46fa3b672a">
-  <source>Flush the managed chain</source>
-  <target>Vaciar la cadena gestionada</target>
-</trans-unit>
 <trans-unit id="s96dc700b4bc9239d">
   <source>Flush</source>
   <target>Vaciar</target>
-</trans-unit>
-<trans-unit id="sdfd1c0de9c76f7ec">
-  <source>Flush every rule from the managed chain?</source>
-  <target>¿Vaciar todas las reglas de la cadena gestionada?</target>
 </trans-unit>
 <trans-unit id="sfdf1cca4e8a5f056">
   <source>Managed table</source>
@@ -1198,10 +1190,6 @@
   <source>Add rule</source>
   <target>Añadir regla</target>
 </trans-unit>
-<trans-unit id="s78ea3e07e6b16eee">
-  <source>Allow removes a matching managed deny rule; it does not add an accept rule.</source>
-  <target>Permitir elimina una regla de denegación gestionada coincidente; no añade una regla de aceptación.</target>
-</trans-unit>
 <trans-unit id="s69cf87bb73bb55b2">
   <source>allow</source>
   <target>permitir</target>
@@ -1230,17 +1218,61 @@
   <source>No firewall information yet.</source>
   <target>Aún no hay información del cortafuegos.</target>
 </trans-unit>
-<trans-unit id="sdb606841f7c360d0">
-  <source>The managed table does not exist yet. Denying a port creates it.</source>
-  <target>La tabla gestionada todavía no existe. Denegar un puerto la crea.</target>
-</trans-unit>
-<trans-unit id="s55952ffc4ab34b28">
-  <source>No managed rules. Denying a port adds one.</source>
-  <target>No hay reglas gestionadas. Denegar un puerto añade una.</target>
-</trans-unit>
 <trans-unit id="s92ef95b71575a04b">
   <source>Raw ruleset</source>
   <target>Reglas nft en bruto</target>
+</trans-unit>
+<trans-unit id="sd23ee5e66df8400a">
+  <source>Direction</source>
+  <target>Dirección</target>
+</trans-unit>
+<trans-unit id="s026af2c34ef56b46">
+  <source>Set the <x id="0" equiv-text="${pending.chain}"/> policy to deny? Unmatched traffic will be dropped, which can lock you out.</source>
+  <target>¿Establecer la política de <x id="0" equiv-text="${pending.chain}"/> en denegar? El tráfico no coincidente se descartará, lo que puede bloquearte el acceso.</target>
+</trans-unit>
+<trans-unit id="s7a1cb53658896c81">
+  <source>Set the <x id="0" equiv-text="${pending.chain}"/> policy to allow?</source>
+  <target>¿Establecer la política de <x id="0" equiv-text="${pending.chain}"/> en permitir?</target>
+</trans-unit>
+<trans-unit id="s9429553895ca5c91">
+  <source>Flush every rule from the <x id="0" equiv-text="${chain}"/> chain?</source>
+  <target>¿Vaciar todas las reglas de la cadena <x id="0" equiv-text="${chain}"/>?</target>
+</trans-unit>
+<trans-unit id="s63569dc4e6b7c67a">
+  <source>not created</source>
+  <target>no creada</target>
+</trans-unit>
+<trans-unit id="s313b7c1b7faa6c76">
+  <source>Edit rule #<x id="0" equiv-text="${rule.handle}"/></source>
+  <target>Editar la regla #<x id="0" equiv-text="${rule.handle}"/></target>
+</trans-unit>
+<trans-unit id="s7dba9c97afbfd82f">
+  <source>The managed table does not exist yet. Adding a rule or changing a policy creates it.</source>
+  <target>La tabla gestionada todavía no existe. Añadir una regla o cambiar una política la crea.</target>
+</trans-unit>
+<trans-unit id="sfc3276ed5797aaa2">
+  <source>The daemon does not support this firewall operation. Rebuild and restart it, then reload the page.</source>
+  <target>El daemon no admite esta operación del cortafuegos. Recompílalo y reinícialo, y luego recarga la página.</target>
+</trans-unit>
+<trans-unit id="s5dec83357150b1c6">
+  <source>This daemon does not report the input and output chains. Rebuild and restart it, then reload the page.</source>
+  <target>Este daemon no informa de las cadenas de entrada y salida. Recompílalo y reinícialo, y luego recarga la página.</target>
+</trans-unit>
+<trans-unit id="sdb1595f5c742dfbb">
+  <source>Input</source>
+  <target>Entrada</target>
+</trans-unit>
+<trans-unit id="sfd77270c3f54f664">
+  <source>Output</source>
+  <target>Salida</target>
+</trans-unit>
+<trans-unit id="s6b2e8e84093f3b24">
+  <source>Adding a rule for an existing protocol and port in this direction replaces it.</source>
+  <target>Añadir una regla para un protocolo y puerto existentes en esta dirección la reemplaza.</target>
+</trans-unit>
+<trans-unit id="s60bca33e5711d3b3">
+  <source>No managed rules in this direction. Adding a rule creates one.</source>
+  <target>No hay reglas gestionadas en esta dirección. Añadir una regla crea una.</target>
 </trans-unit>
 </body>
 </file>

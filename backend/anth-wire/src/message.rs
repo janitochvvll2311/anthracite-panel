@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
-use crate::firewall::{FirewallAction, FirewallProtocol, FirewallSnapshot};
+use crate::firewall::{FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot};
 use crate::network::{NetworkCreate, NetworkEdit, NetworkSnapshot};
 use crate::page::Page;
 use crate::process::{ProcessSignal, ProcessSnapshot, ProcessStarted};
@@ -17,7 +17,7 @@ use crate::terminal::{TerminalOpened, TerminalOutput};
 ///
 /// Pre-1.0.0 breaking changes are allowed; see
 /// `docs/design/protocol-changelog.md`.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
@@ -57,6 +57,21 @@ pub enum Request {
     FirewallStatus,
     /// Add one allow/deny rule for a port. Requires `firewall.control`.
     FirewallAdd {
+        #[serde(default)]
+        chain: FirewallChain,
+        action: FirewallAction,
+        protocol: FirewallProtocol,
+        port: u16,
+        /// Optional comment, letters/digits/`.`/`_`/`-`, at most 32 chars.
+        #[serde(default)]
+        comment: Option<String>,
+    },
+    /// Change the action, target or comment of one managed rule.
+    /// Requires `firewall.control`.
+    FirewallUpdate {
+        handle: u64,
+        #[serde(default)]
+        chain: FirewallChain,
         action: FirewallAction,
         protocol: FirewallProtocol,
         port: u16,
@@ -66,8 +81,16 @@ pub enum Request {
     },
     /// Delete one rule from the managed chain by its nftables handle.
     FirewallDelete { handle: u64 },
-    /// Remove every rule from the managed chain.
-    FirewallFlush,
+    /// Remove every rule from one managed chain.
+    FirewallFlush {
+        #[serde(default)]
+        chain: FirewallChain,
+    },
+    /// Change the default policy of one managed base chain.
+    FirewallSetPolicy {
+        chain: FirewallChain,
+        policy: FirewallAction,
+    },
     /// Replaces this process with a fresh copy of the same command line, which
     /// re-reads the configuration.
     Restart,

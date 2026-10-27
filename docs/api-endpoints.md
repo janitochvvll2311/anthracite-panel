@@ -257,9 +257,9 @@ ip_unsupported`, `501 tun_unavailable` and `500 ip_failed`/`ip_unavailable`.
 
 ## Firewall
 
-The managed `inet anthracite` / `input` chain; policy and semantics are in
-[firewall.md](firewall.md). All routes require a live session unless auth is
-disabled.
+The managed `inet anthracite` table with its `input` and `output` chains;
+policy and semantics are in [firewall.md](firewall.md). All routes require a
+live session unless auth is disabled.
 
 ### `GET /api/firewall`
 
@@ -277,24 +277,41 @@ disabled.
       "comment": "http"
     }
   ],
+  "chains": [
+    { "chain": "input", "initialized": true, "policy": "deny" },
+    { "chain": "output", "initialized": true, "policy": "allow" }
+  ],
   "ruleset": "table inet anthracite { ... }",
   "timestamp_ms": 1790000000000
 }
 ```
 
-A missing table is `initialized: false` with no rules and an empty ruleset.
+A missing table is `initialized: false` with no rules, both chains not created
+and an empty ruleset.
 
 ### `POST /api/firewall/rule`
 
 ```json
-{ "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" }
+{ "chain": "input", "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" }
 ```
 
-`200 {"message":"denied tcp/80"}`. `action` is `allow` or `deny`; `protocol` is
-`tcp` or `udp`. `allow` removes a matching managed deny instead of adding an
-accept rule. Requires `[firewall] control`. Refusals include `403
+`200 {"message":"denied tcp/80 on input"}`. `chain` is `input` or `output` and
+defaults to `input`; `action` is `allow` or `deny`; `protocol` is `tcp` or
+`udp`. A rule for the same chain/protocol/port replaces the existing one.
+Requires `[firewall] control`. Refusals include `403
 firewall_control_disabled`, `400 firewall_port`, `400 firewall_comment`, `403
 nft_permission`, `501 nft_unavailable` and `400 nft_refused`.
+
+### `POST /api/firewall/update`
+
+```json
+{ "handle": 4, "chain": "input", "action": "allow", "protocol": "tcp", "port": 443 }
+```
+
+`200 {"message":"updated firewall rule 4 to allow tcp/443 on input"}`. Custom
+rules are refused with `400 firewall_custom_rule`; a duplicate target in the
+same chain is `400 firewall_duplicate`; an unknown handle is `404
+firewall_rule_not_found`.
 
 ### `POST /api/firewall/delete`
 
@@ -302,11 +319,27 @@ nft_permission`, `501 nft_unavailable` and `400 nft_refused`.
 { "handle": 4 }
 ```
 
-`200 {"message":"deleted firewall rule 4"}`. Requires control.
+`200 {"message":"deleted firewall rule 4"}`. The daemon resolves the rule's
+chain. Requires control.
 
 ### `POST /api/firewall/flush`
 
-No body. `200 {"message":"flushed 2 firewall rules"}`. Requires control.
+```json
+{ "chain": "output" }
+```
+
+`200 {"message":"flushed 2 firewall rules from output"}`. `chain` defaults to
+`input`. Requires control.
+
+### `POST /api/firewall/policy`
+
+```json
+{ "chain": "input", "policy": "deny" }
+```
+
+`200 {"message":"set input policy to deny"}`. `policy` is `allow`/`accept` or
+`deny`/`drop`. Setting a chain to deny can lock the operator out; see
+[firewall.md](firewall.md#changing-the-default-policy). Requires control.
 
 ## Settings and lifecycle
 

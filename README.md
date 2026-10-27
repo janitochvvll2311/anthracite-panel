@@ -41,9 +41,10 @@ volumes/partitions/accounts, plugins and hardening/release.
   addresses, cumulative counters, default routes and client-derived rates, plus
   policy-gated up/down, create, edit, rename and delete through direct `ip`
   argv, over socket, HTTP, SSE, CLI and the Network section.
-- Firewall: one managed `inet anthracite` / `input` nftables chain with deny,
-  allow (removing a managed deny), delete and flush through direct `nft` argv,
-  over socket, HTTP, CLI and the Firewall tab.
+- Firewall: one managed `inet anthracite` nftables table with `input` and
+  `output` chains, allow/deny/edit/delete/flush rules and per-chain default
+  policies through direct `nft` argv, over socket, HTTP, CLI and the Firewall
+  tab.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
@@ -126,14 +127,16 @@ shell on `:8080` has no HMR either.
 ANTH_HMR=on ./scripts/dev.sh restart   # desktop fast refresh
 ```
 
-Network mutations and the firewall need a daemon with `CAP_NET_ADMIN`. On a
-host where root has that capability, run the whole development script with
-`sudo ./scripts/dev.sh start` or `ANTH_SUDO=1 ./scripts/dev.sh start`, and use
-the same form for `stop` and `restart`. The `ANTH_SUDO` form re-executes the
-script under `sudo`; it is a development convenience, not a privilege boundary,
-and it cannot add a capability the container's bounding set excludes. If `sudo`
-needs a password, run it from a terminal or configure NOPASSWD; a
-non-interactive caller gets an error instead of a silent wait.
+Network mutations and the firewall need a daemon with `CAP_NET_ADMIN`, so
+`./scripts/dev.sh start` builds the binary as your user and then runs it through
+`sudo`, with the directory you invoked the script in as the working directory.
+Only the daemon is elevated: `cargo build` and Vite keep your account, so
+`backend/target`, `frontend/node_modules` and the run directory keep their
+owner. `stop` and `restart` signal the root daemon through `sudo` as well. This
+is a development convenience, not a privilege boundary, and it cannot add a
+capability the container's bounding set excludes. If `sudo` needs a password,
+run it from a terminal or configure NOPASSWD; a non-interactive caller gets an
+error instead of a silent wait.
 
 Inside an OpenCode session the same commands are available as `/dev-start`,
 `/dev-stop`, `/dev-status` and `/dev-restart` (from `.opencode/commands/`).

@@ -2,15 +2,16 @@
 #
 # Runs the daemon and the Vite dev server together.
 #
-#   ./scripts/dev.sh start     # cargo run -p anth-panel -- run + bun run dev
+#   ./scripts/dev.sh start     # cargo build + daemon + bun run dev
 #   ./scripts/dev.sh stop
 #   ./scripts/dev.sh status
 #   ./scripts/dev.sh restart
 #
-# Network mutations and the firewall need a daemon with CAP_NET_ADMIN. On a
-# normal host that means either `sudo ./scripts/dev.sh start` or
-# `ANTH_SUDO=1 ./scripts/dev.sh start`; use the same form for stop/restart.
-# Sudo does not add a capability the container's bounding set excludes.
+# Network mutations and the firewall need a daemon with CAP_NET_ADMIN, so the
+# daemon always runs through sudo: the helper builds the binary as your own
+# user, then launches it from the directory you invoked the script in. `stop`
+# and `restart` signal the root daemon through sudo too. Sudo does not add a
+# capability the container's bounding set excludes.
 #
 # Set ANTH_HMR=on for Vite fast refresh on desktop. HMR is off by default
 # because Android drops the HMR socket while the native file picker is open and
@@ -21,40 +22,18 @@ export ANTH_HMR=${ANTH_HMR:-off}
 # tree stays clean and a run never inherits a stale socket from another one.
 set -euo pipefail
 
-# `sudo` resets PATH on many hosts. Source the toolchain paths here and again
-# in the elevated process, so the cargo and bun wrappers are found either way.
+# `sudo` resets PATH on many hosts. Source the toolchain paths here so the
+# cargo and bun wrappers are found, including after the SUDO_USER hand-back.
 if [ -r /tools/env.sh ]; then
   # shellcheck disable=SC1091
   . /tools/env.sh
 fi
 
-# Re-exec once under sudo when the caller asked for an elevated daemon. Running
-# the whole script as root keeps stop/restart symmetrical; this is a development
-# helper, not a privilege-separation boundary. Use `sudo ./scripts/dev.sh ...`
-# directly if you already have a root shell.
-if [ "${ANTH_SUDO:-0}" = "1" ] && [ "$(id -u)" -ne 0 ]; then
-  if ! command -v sudo >/dev/null 2>&1; then
-    echo "error: ANTH_SUDO=1 needs sudo on PATH" >&2
-    exit 2
-  fi
-  # Do not sit on an invisible password prompt when the helper is started by a
-  # non-interactive caller. A terminal gets one explicit prompt; anything else
-  # fails with an actionable message instead of looking hung.
-  if ! sudo -n true 2>/dev/null; then
-    if [ -t 0 ] && [ -t 2 ]; then
-      echo "dev: sudo needs a password; asking once..." >&2
-      sudo -v || exit 2
-    else
-      echo "error: sudo needs a password but stdin is not a terminal" >&2
-      echo "       run this from a terminal or configure NOPASSWD for the dev helper" >&2
-      exit 2
-    fi
-  fi
-  script_path=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
-  exec sudo -E "$script_path" "$@"
-fi
-
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+script_path=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
+# The daemon runs from the directory the helper was called in, not from the
+# repo, so relative config or plugin paths the caller expects still resolve.
+invoke_dir=$PWD
 run=/tmp/anthracite-panel/dev
 config=$run/config.toml
 backend_log=$run/backend.log
@@ -67,6 +46,27 @@ vite_host=${ANTH_VITE_HOST:-0.0.0.0}
 vite_port=${ANTH_VITE_PORT:-5173}
 health_host=${backend_addr/0.0.0.0/127.0.0.1}
 health_url="http://$health_host/healthz"
+
+# Elevation model: only the daemon runs as root. `sudo ./scripts/dev.sh ...`
+# arrives as root with SUDO_USER set, so hand the helper back to that account
+# and let the daemon launch elevate itself. Running the whole helper as root
+# would leave root-owned build output, node_modules and run files behind and
+# break the next plain run.
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  exec sudo -u "$SUDO_USER" -H env \
+    ANTH_HMR="$ANTH_HMR" \
+    ANTH_ADDR="$backend_addr" \
+    ANTH_VITE_HOST="$vite_host" \
+    ANTH_VITE_PORT="$vite_port" \
+    "$script_path" "$@"
+fi
+
+# Prefix for the daemon launch. A root shell needs no wrapper; `-n` keeps a
+# missing password from turning into an invisible prompt (see sudo_ready).
+daemon_prefix=()
+if [ "$(id -u)" -ne 0 ]; then
+  daemon_prefix=(sudo -n)
+fi
 
 mkdir -p "$run"
 
@@ -90,12 +90,57 @@ alive() {
   [ "$state" != "Z" ] && [ "$state" != "X" ]
 }
 
+proc_uid() {
+  sed -n 's/^Uid:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "/proc/$1/status" 2>/dev/null || true
+}
+
+# A pid owned by another account (the sudo daemon) needs sudo to be signalled.
+is_foreign() {
+  local pid=$1
+  local uid
+  [ "$(id -u)" -eq 0 ] && return 1
+  uid=$(proc_uid "$pid")
+  [ -n "$uid" ] && [ "$uid" != "$(id -u)" ]
+}
+
+# Makes sure a later `sudo -n` succeeds. A terminal gets one explicit password
+# prompt; a non-interactive caller fails with an actionable message instead of
+# looking hung. The cached timestamp covers the daemon launch and the stop.
+sudo_ready() {
+  [ "$(id -u)" -eq 0 ] && return 0
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "error: elevating the daemon needs sudo on PATH" >&2
+    return 1
+  fi
+  if sudo -n true 2>/dev/null; then
+    return 0
+  fi
+  if [ -t 0 ] && [ -t 2 ]; then
+    echo "dev: sudo needs a password; asking once..." >&2
+    sudo -v
+    return
+  fi
+  echo "error: sudo needs a password but stdin is not a terminal" >&2
+  echo "       run this from a terminal or configure NOPASSWD for the dev helper" >&2
+  return 1
+}
+
 # Lists the direct children of a pid from /proc, so a killed `cargo run` does
 # not leave the compiled daemon behind (and vice versa for `bun` and `vite`).
 children_of() {
   local pid=$1
   if [ -r "/proc/$pid/task/$pid/children" ]; then
     cat "/proc/$pid/task/$pid/children"
+  fi
+}
+
+signal_pid() {
+  local signal=$1
+  local pid=$2
+  if is_foreign "$pid"; then
+    sudo -n kill "-$signal" "$pid" 2>/dev/null || true
+  else
+    kill "-$signal" "$pid" 2>/dev/null || true
   fi
 }
 
@@ -106,7 +151,7 @@ kill_tree() {
   for child in $(children_of "$pid"); do
     kill_tree "$signal" "$child"
   done
-  kill "-$signal" "$pid" 2>/dev/null || true
+  signal_pid "$signal" "$pid"
   return 0
 }
 
@@ -129,6 +174,15 @@ wait_for() {
   return 1
 }
 
+# Effective capabilities of the root process the daemon will run as.
+effective_caps() {
+  if [ "$(id -u)" -eq 0 ]; then
+    sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status 2>/dev/null || true
+  else
+    sudo -n sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status 2>/dev/null || true
+  fi
+}
+
 # Warn once per start when the host cannot exercise the network mutations. The
 # panel still serves the inventory; only ip/nft changes need these.
 check_network_tools() {
@@ -140,14 +194,49 @@ check_network_tools() {
     warnings+=("nft is not installed; the firewall slice will need nftables")
   fi
   local effective
-  effective=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status 2>/dev/null)
+  effective=$(effective_caps)
   if [ -n "$effective" ] && [ $((0x$effective & 0x1000)) -eq 0 ]; then
-    warnings+=("CAP_NET_ADMIN is missing; ip and nft changes will be refused (start the container with --cap-add=NET_ADMIN)")
+    warnings+=("CAP_NET_ADMIN is missing even for root; ip and nft changes will be refused (start the container with --cap-add=NET_ADMIN)")
   fi
   local warning
   for warning in "${warnings[@]}"; do
     echo "warning: $warning" >&2
   done
+}
+
+# Builds as the invoking user and prints the binary path, so an elevated daemon
+# never writes root-owned objects into backend/target. cargo's diagnostics stay
+# on the terminal while the artifact messages are parsed for the executable.
+build_daemon() {
+  local messages
+  local binary
+  if ! messages=$(cd "$root/backend" && cargo build -q -p anth-panel --message-format=json-render-diagnostics); then
+    return 1
+  fi
+  binary=$(printf '%s\n' "$messages" |
+    sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' |
+    tail -n 1)
+  if [ -z "$binary" ]; then
+    echo "error: could not locate the built anth-panel binary" >&2
+    return 1
+  fi
+  printf '%s' "$binary"
+}
+
+# The elevated daemon writes its config and state under $run as root; hand them
+# back so a later plain `start` can still write there. Best effort, and silent
+# when sudo is not available.
+restore_run_owner() {
+  local uid
+  local gid
+  [ "$(id -u)" -ne 0 ] || return 0
+  [ -d "$run" ] || return 0
+  uid=$(id -u)
+  gid=$(id -g)
+  if [ -z "$(find "$run" ! -user "$uid" -print -quit 2>/dev/null)" ]; then
+    return 0
+  fi
+  sudo -n chown -R "$uid:$gid" "$run" 2>/dev/null || true
 }
 
 launch() {
@@ -172,6 +261,14 @@ stop_one() {
     return 0
   fi
 
+  # A daemon started elevated belongs to root; the shell needs sudo to signal
+  # it. Ask before trying, so a missing password is reported once instead of
+  # leaving a half-stopped tree.
+  if is_foreign "$pid" && ! sudo_ready; then
+    echo "$name: running as another user (pid $pid); rerun as root" >&2
+    return 1
+  fi
+
   kill_tree TERM "$pid"
   local i
   for i in $(seq 1 50); do
@@ -184,7 +281,7 @@ stop_one() {
     kill_tree KILL "$pid"
   fi
   if alive "$pid"; then
-    echo "$name: still running (pid $pid); rerun with ANTH_SUDO=1 or as root" >&2
+    echo "$name: still running (pid $pid); rerun as root" >&2
     return 1
   fi
   rm -f "$file"
@@ -205,12 +302,38 @@ start_one() {
 
 start() {
   local code=0
-  check_network_tools
+  local binary
+  local launcher=''
+  local start_daemon=0
+
+  # The daemon runs as root, so ask for the password up front: the cached
+  # timestamp then covers the ownership fix, the capability probe and the
+  # launch itself.
+  if ! sudo_ready; then
+    exit 2
+  fi
+
+  restore_run_owner
   start_one backend
   if ! alive "$(read_pid "$backend_pid")"; then
-    echo "backend: starting on $backend_addr"
-    launch backend "$root/backend" "$backend_log" \
-      cargo run -q -p anth-panel -- run --addr "$backend_addr" --config "$config"
+    start_daemon=1
+  fi
+
+  check_network_tools
+
+  if [ "$start_daemon" = 1 ]; then
+    echo "backend: building"
+    if ! binary=$(build_daemon); then
+      echo "backend: build failed; see the compiler output above" >&2
+      return 1
+    fi
+    if [ "$(id -u)" -ne 0 ]; then
+      launcher=" (daemon via sudo from $invoke_dir)"
+    fi
+    echo "backend: starting on $backend_addr$launcher"
+    launch backend "$invoke_dir" "$backend_log" \
+      ${daemon_prefix[@]+"${daemon_prefix[@]}"} \
+      "$binary" run --addr "$backend_addr" --config "$config"
   fi
 
   start_one frontend
@@ -246,6 +369,7 @@ stop() {
   local code=0
   stop_one frontend || code=1
   stop_one backend || code=1
+  restore_run_owner
   return "$code"
 }
 

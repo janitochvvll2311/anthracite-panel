@@ -43,12 +43,12 @@ the channel and target explicitly in Phase 0 so the install is reproducible.
 
 ---
 
-## 1. Wire v2 minimal contract
+## 1. Wire v3 minimal contract
 
 ### Constants
 
 ```rust
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_FRAME_LEN: usize = 64 * 1024 * 1024;
 pub const DEFAULT_PAGE_LIMIT: u16 = 100;
 pub const MAX_PAGE_LIMIT: u16 = 1000;

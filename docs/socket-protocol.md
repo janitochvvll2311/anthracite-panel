@@ -401,9 +401,11 @@ last-default-route guards still apply. `[network] control` and
 
 ```json
 { "type": "firewall_status" }
-{ "type": "firewall_add", "data": { "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" } }
+{ "type": "firewall_add", "data": { "chain": "input", "action": "deny", "protocol": "tcp", "port": 80, "comment": "http" } }
+{ "type": "firewall_update", "data": { "handle": 4, "chain": "input", "action": "allow", "protocol": "tcp", "port": 443 } }
 { "type": "firewall_delete", "data": { "handle": 4 } }
-{ "type": "firewall_flush" }
+{ "type": "firewall_flush", "data": { "chain": "output" } }
+{ "type": "firewall_set_policy", "data": { "chain": "input", "policy": "deny" } }
 ```
 
 Status answers:
@@ -424,6 +426,10 @@ Status answers:
         "comment": "http"
       }
     ],
+    "chains": [
+      { "chain": "input", "initialized": true, "policy": "deny" },
+      { "chain": "output", "initialized": true, "policy": "allow" }
+    ],
     "ruleset": "table inet anthracite { ... }",
     "timestamp_ms": 1790000000000
   }
@@ -431,8 +437,9 @@ Status answers:
 ```
 
 Every mutation answers `{"type":"firewall_changed","data":{"message":"..."}}`.
-The managed table is `inet anthracite`, its only chain is `input`, and every
-operation requires `[firewall] control`. See [firewall.md](firewall.md).
+The managed table is `inet anthracite` with its `input` and `output` chains, and
+every operation requires `[firewall] control`. `chain` defaults to `input` when
+omitted on add, update and flush. See [firewall.md](firewall.md).
 
 ### Processes
 
@@ -545,6 +552,6 @@ daemon user nor root must use the authenticated HTTP API instead.
 
 ## Versioning
 
-`PROTOCOL_VERSION` is 2 for the v0.3 line. Before 1.0.0 a breaking change bumps
+`PROTOCOL_VERSION` is 3 for the v0.3 line. Before 1.0.0 a breaking change bumps
 the version and is recorded in [protocol-changelog](design/protocol-changelog.md);
 there is no compatibility promise yet.

@@ -13,7 +13,10 @@ use anth_panel::dispatch::Daemon;
 use anth_panel::lifecycle::{self, Lifecycle};
 use anth_panel::log::{Format, Level, Logger, Out, Settings};
 use anth_panel::{render, socket};
-use anth_wire::{FirewallAction, FirewallProtocol, Request, Response, parse_interval};
+use anth_wire::{
+    FirewallAction, FirewallChain, FirewallProtocol, PROTOCOL_VERSION, Request, Response,
+    parse_interval,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -388,13 +391,17 @@ enum FirewallCommand {
     /// Show the managed table and its rules.
     #[command(alias = "list")]
     Status,
-    /// Allow traffic to a port by removing a managed deny rule.
+    /// Allow traffic to a port by adding an accept rule.
     Allow(FirewallAddArgs),
     /// Deny traffic to a port.
     Deny(FirewallAddArgs),
+    /// Edit one managed rule: action, target and comment.
+    Edit(FirewallEditArgs),
+    /// Change the default policy of the input or output chain.
+    Policy(FirewallPolicyArgs),
     /// Delete one rule by its nftables handle.
     Delete(FirewallDeleteArgs),
-    /// Remove every rule from the managed chain.
+    /// Remove every rule from one managed chain.
     Flush(FirewallFlushArgs),
 }
 
@@ -426,9 +433,43 @@ impl std::str::FromStr for PortSpec {
 struct FirewallAddArgs {
     /// Port to allow or deny, optionally suffixed with `/tcp` or `/udp`.
     spec: PortSpec,
+    /// Chain to manage: input or output.
+    #[arg(long, default_value = "input")]
+    chain: FirewallChain,
     /// Optional comment: letters, digits, dot, underscore and dash.
     #[arg(long)]
     comment: Option<String>,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct FirewallEditArgs {
+    /// Rule handle shown by `firewall status`.
+    handle: u64,
+    /// New port, optionally suffixed with `/tcp` or `/udp`. Defaults to the current target.
+    spec: Option<PortSpec>,
+    /// Chain to move the rule to. Defaults to the current chain.
+    #[arg(long)]
+    chain: Option<FirewallChain>,
+    /// New action: allow or deny. Defaults to the current action.
+    #[arg(long)]
+    action: Option<String>,
+    /// New comment; an empty string clears it. Defaults to the current comment.
+    #[arg(long)]
+    comment: Option<String>,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct FirewallPolicyArgs {
+    /// Chain whose default policy changes: input or output.
+    chain: FirewallChain,
+    /// New policy: allow (accept) or deny (drop).
+    policy: FirewallAction,
     /// Do not ask for confirmation.
     #[arg(long)]
     yes: bool,
@@ -445,6 +486,9 @@ struct FirewallDeleteArgs {
 
 #[derive(Args, Debug)]
 struct FirewallFlushArgs {
+    /// Chain to empty: input or output.
+    #[arg(long, default_value = "input")]
+    chain: FirewallChain,
     /// Do not ask for confirmation.
     #[arg(long)]
     yes: bool,
@@ -578,8 +622,9 @@ async fn serve(
         let state = AppState::new(Arc::clone(&daemon), auth, logger);
         let router = api::router(state);
         eprintln!(
-            "anth-panel {} listening on http://{addr} and {}",
+            "anth-panel {} (wire {}) listening on http://{addr} and {}",
             env!("CARGO_PKG_VERSION"),
+            PROTOCOL_VERSION,
             paths.socket.display()
         );
         let http = axum::serve(
@@ -593,8 +638,9 @@ async fn serve(
         }
     } else {
         eprintln!(
-            "anth-panel {} listening on {}",
+            "anth-panel {} (wire {}) listening on {}",
             env!("CARGO_PKG_VERSION"),
+            PROTOCOL_VERSION,
             paths.socket.display()
         );
         socket::serve(socket_listener, daemon)
@@ -1102,13 +1148,14 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
         FirewallCommand::Allow(args) => {
             if !args.yes {
                 confirm(&format!(
-                    "Allow {}/{} traffic?",
-                    args.spec.protocol, args.spec.port
+                    "Allow {}/{} traffic on {}?",
+                    args.spec.protocol, args.spec.port, args.chain
                 ))?;
             }
             firewall_change(
                 &mut client,
                 Request::FirewallAdd {
+                    chain: args.chain,
                     action: FirewallAction::Allow,
                     protocol: args.spec.protocol,
                     port: args.spec.port,
@@ -1120,17 +1167,101 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
         FirewallCommand::Deny(args) => {
             if !args.yes {
                 confirm(&format!(
-                    "Deny {}/{} traffic?",
-                    args.spec.protocol, args.spec.port
+                    "Deny {}/{} traffic on {}?",
+                    args.spec.protocol, args.spec.port, args.chain
                 ))?;
             }
             firewall_change(
                 &mut client,
                 Request::FirewallAdd {
+                    chain: args.chain,
                     action: FirewallAction::Deny,
                     protocol: args.spec.protocol,
                     port: args.spec.port,
                     comment: args.comment.clone(),
+                },
+            )
+            .await
+        }
+        FirewallCommand::Edit(args) => {
+            let snapshot = match client
+                .call(&Request::FirewallStatus)
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?
+            {
+                Response::FirewallSnapshot(snapshot) => snapshot,
+                Response::Error(error) => return Err((error.kind.exit_code(), error.to_string())),
+                other => return Err((1, format!("unexpected response: {other:?}"))),
+            };
+            let rule = snapshot
+                .rules
+                .iter()
+                .find(|rule| rule.handle == args.handle)
+                .ok_or_else(|| (1, format!("no firewall rule with handle {}", args.handle)))?;
+            if rule.action == "custom" {
+                return Err((2, "custom rules can be deleted but not edited".to_string()));
+            }
+            let action = match &args.action {
+                Some(value) => value
+                    .parse::<FirewallAction>()
+                    .map_err(|message| (2, message))?,
+                None => rule
+                    .action
+                    .parse::<FirewallAction>()
+                    .map_err(|_| (1, format!("rule #{} has no editable action", args.handle)))?,
+            };
+            let (protocol, port) = match args.spec {
+                Some(spec) => (spec.protocol, spec.port),
+                None => (
+                    rule.protocol.ok_or_else(|| {
+                        (1, format!("rule #{} has no editable protocol", args.handle))
+                    })?,
+                    rule.port.ok_or_else(|| {
+                        (1, format!("rule #{} has no editable port", args.handle))
+                    })?,
+                ),
+            };
+            let comment = match &args.comment {
+                Some(value) => Some(value.clone()).filter(|text| !text.trim().is_empty()),
+                None => rule.comment.clone(),
+            };
+            let chain = args.chain.unwrap_or(rule.chain);
+            if !args.yes {
+                confirm(&format!(
+                    "Update firewall rule {} on {chain} to {action} {protocol}/{port}?",
+                    args.handle
+                ))?;
+            }
+            firewall_change(
+                &mut client,
+                Request::FirewallUpdate {
+                    handle: args.handle,
+                    chain,
+                    action,
+                    protocol,
+                    port,
+                    comment,
+                },
+            )
+            .await
+        }
+        FirewallCommand::Policy(args) => {
+            if !args.yes {
+                let warning = if args.policy == FirewallAction::Deny {
+                    " Unmatched traffic will be dropped, which can lock you out."
+                } else {
+                    ""
+                };
+                confirm(&format!(
+                    "Set the {} policy to {}?{warning}",
+                    args.chain, args.policy
+                ))?;
+            }
+            firewall_change(
+                &mut client,
+                Request::FirewallSetPolicy {
+                    chain: args.chain,
+                    policy: args.policy,
                 },
             )
             .await
@@ -1149,9 +1280,12 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
         }
         FirewallCommand::Flush(args) => {
             if !args.yes {
-                confirm("Flush every rule from the managed firewall chain?")?;
+                confirm(&format!(
+                    "Flush every rule from the {} chain of the managed firewall?",
+                    args.chain
+                ))?;
             }
-            firewall_change(&mut client, Request::FirewallFlush).await
+            firewall_change(&mut client, Request::FirewallFlush { chain: args.chain }).await
         }
     }
 }

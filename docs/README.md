@@ -14,7 +14,7 @@ describes.
 | [terminal.md](terminal.md) | PTY sessions, policy, socket/WebSocket contract and mobile UI |
 | [processes.md](processes.md) | Process table, signals, spawn policy, SSE, CLI and the flat/tree UI |
 | [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, guarded up/down/create/edit/rename/delete, SSE, CLI and the Interfaces tab |
-| [firewall.md](firewall.md) | Managed nftables table, deny/allow/delete/flush, guards, HTTP/socket/CLI and the Firewall tab |
+| [firewall.md](firewall.md) | Managed nftables table with input/output chains, allow/deny/edit/delete/flush rules, default policies, guards, HTTP/socket/CLI and the Firewall tab |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

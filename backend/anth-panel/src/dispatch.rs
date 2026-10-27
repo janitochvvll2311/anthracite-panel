@@ -263,15 +263,32 @@ impl Daemon {
                 ))
             }
             Request::FirewallAdd {
+                chain,
                 action,
                 protocol,
                 port,
                 comment,
             } => {
                 let firewall = self.firewall.clone();
-                let message =
-                    blocking(move || firewall.add(action, protocol, port, comment.as_deref()))
-                        .await?;
+                let message = blocking(move || {
+                    firewall.add(chain, action, protocol, port, comment.as_deref())
+                })
+                .await?;
+                Ok(Response::FirewallChanged { message })
+            }
+            Request::FirewallUpdate {
+                handle,
+                chain,
+                action,
+                protocol,
+                port,
+                comment,
+            } => {
+                let firewall = self.firewall.clone();
+                let message = blocking(move || {
+                    firewall.update(handle, chain, action, protocol, port, comment.as_deref())
+                })
+                .await?;
                 Ok(Response::FirewallChanged { message })
             }
             Request::FirewallDelete { handle } => {
@@ -279,9 +296,14 @@ impl Daemon {
                 let message = blocking(move || firewall.delete(handle)).await?;
                 Ok(Response::FirewallChanged { message })
             }
-            Request::FirewallFlush => {
+            Request::FirewallFlush { chain } => {
                 let firewall = self.firewall.clone();
-                let message = blocking(move || firewall.flush()).await?;
+                let message = blocking(move || firewall.flush(chain)).await?;
+                Ok(Response::FirewallChanged { message })
+            }
+            Request::FirewallSetPolicy { chain, policy } => {
+                let firewall = self.firewall.clone();
+                let message = blocking(move || firewall.set_policy(chain, policy)).await?;
                 Ok(Response::FirewallChanged { message })
             }
             Request::Restart => {
@@ -514,8 +536,10 @@ fn operation_of(request: &Request) -> &'static str {
         Request::NetworkDelete { .. } => "network-delete",
         Request::FirewallStatus => "firewall-status",
         Request::FirewallAdd { .. } => "firewall-add",
+        Request::FirewallUpdate { .. } => "firewall-update",
         Request::FirewallDelete { .. } => "firewall-delete",
-        Request::FirewallFlush => "firewall-flush",
+        Request::FirewallFlush { .. } => "firewall-flush",
+        Request::FirewallSetPolicy { .. } => "firewall-set-policy",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 
 use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
-    FileWritten, FirewallAction, FirewallProtocol, FirewallSnapshot, NetworkCreate, NetworkEdit,
-    NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request, Response,
-    TerminalSize, TrashListing, WireError,
+    FileWritten, FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot, NetworkCreate,
+    NetworkEdit, NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request,
+    Response, TerminalSize, TrashListing, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -94,8 +94,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/network/delete", post(network_delete))
         .route("/api/firewall", get(firewall_status))
         .route("/api/firewall/rule", post(firewall_add))
+        .route("/api/firewall/update", post(firewall_update))
         .route("/api/firewall/delete", post(firewall_delete))
         .route("/api/firewall/flush", post(firewall_flush))
+        .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
         .route(
@@ -909,6 +911,20 @@ async fn network_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<V
 
 #[derive(Debug, Deserialize)]
 struct FirewallAddBody {
+    #[serde(default)]
+    chain: FirewallChain,
+    action: String,
+    protocol: String,
+    port: u16,
+    #[serde(default)]
+    comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirewallUpdateBody {
+    handle: u64,
+    #[serde(default)]
+    chain: FirewallChain,
     action: String,
     protocol: String,
     port: u16,
@@ -919,6 +935,18 @@ struct FirewallAddBody {
 #[derive(Debug, Deserialize)]
 struct FirewallDeleteBody {
     handle: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirewallFlushBody {
+    #[serde(default)]
+    chain: FirewallChain,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirewallPolicyBody {
+    chain: FirewallChain,
+    policy: String,
 }
 
 async fn firewall_status(
@@ -951,6 +979,35 @@ async fn firewall_add(
     firewall_change(
         &state.daemon,
         Request::FirewallAdd {
+            chain: body.chain,
+            action,
+            protocol,
+            port: body.port,
+            comment: body.comment,
+        },
+    )
+    .await
+}
+
+async fn firewall_update(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<FirewallUpdateBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let action = body
+        .action
+        .parse::<FirewallAction>()
+        .map_err(ApiError::invalid)?;
+    let protocol = body
+        .protocol
+        .parse::<FirewallProtocol>()
+        .map_err(ApiError::invalid)?;
+    firewall_change(
+        &state.daemon,
+        Request::FirewallUpdate {
+            handle: body.handle,
+            chain: body.chain,
             action,
             protocol,
             port: body.port,
@@ -978,8 +1035,30 @@ async fn firewall_delete(
 async fn firewall_flush(
     State(state): State<AppState>,
     _authed: Authed,
+    body: Result<Json<FirewallFlushBody>, JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
-    firewall_change(&state.daemon, Request::FirewallFlush).await
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    firewall_change(&state.daemon, Request::FirewallFlush { chain: body.chain }).await
+}
+
+async fn firewall_policy(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<FirewallPolicyBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let policy = body
+        .policy
+        .parse::<FirewallAction>()
+        .map_err(ApiError::invalid)?;
+    firewall_change(
+        &state.daemon,
+        Request::FirewallSetPolicy {
+            chain: body.chain,
+            policy,
+        },
+    )
+    .await
 }
 
 async fn firewall_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<Value>, ApiError> {

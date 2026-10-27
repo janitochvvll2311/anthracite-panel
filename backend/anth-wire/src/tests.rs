@@ -80,7 +80,7 @@ fn hello_and_welcome_round_trip() {
     let text = serde_json::to_string(&hello).expect("serialize");
     assert_eq!(
         text,
-        r#"{"type":"hello","data":{"protocol_version":2,"client":"cli/0.3.0","features":[]}}"#
+        r#"{"type":"hello","data":{"protocol_version":3,"client":"cli/0.3.0","features":[]}}"#
     );
     assert_eq!(
         serde_json::from_str::<Request>(&text).expect("parse"),
@@ -96,7 +96,7 @@ fn hello_and_welcome_round_trip() {
     let text = serde_json::to_string(&welcome).expect("serialize");
     assert_eq!(
         text,
-        r#"{"type":"welcome","data":{"protocol_version":2,"server":"anth-panel","version":"0.3.0","features":[]}}"#
+        r#"{"type":"welcome","data":{"protocol_version":3,"server":"anth-panel","version":"0.3.0","features":[]}}"#
     );
     assert_eq!(
         serde_json::from_str::<Response>(&text).expect("parse"),

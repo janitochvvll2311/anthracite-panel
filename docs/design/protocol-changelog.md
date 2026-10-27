@@ -5,14 +5,21 @@ so an operator can tell which side to update.
 
 | Version | Release | State | Notes |
 | --- | --- | --- | --- |
-| 2 | v0.3.0 (draft) | current | 4-byte length-prefixed JSON, mandatory `Hello`/`Welcome`, pagination, files/trash/archive/terminal/process/network/firewall operations, one `WireError` |
+| 3 | v0.3.0 (draft) | current | Firewall gained `input`/`output` chains, editable rules, per-chain policies and `firewall_update`/`firewall_set_policy`; `firewall_flush` now carries `{ "chain": "input" or "output" }` |
+| 2 | v0.3.0 (draft) | superseded | 4-byte length-prefixed JSON, mandatory `Hello`/`Welcome`, pagination, files/trash/archive/terminal/process/network/firewall operations, one `WireError` |
 | 1 | v0.2.0 | superseded | length-prefixed JSON, `Hello`, per-feature wire types |
 | unversioned | v0.1.0 | legacy | newline-delimited JSON, 1 MiB line cap, `type`/`data` envelope |
 
 Version 2 gained files, terminal, process, network and firewall operations during the rewrite.
 Those are additive variants: no existing frame changed shape, and a peer that
 does not know a variant fails loudly at that frame instead of misreading it, so
-the version stays 2.
+that version stayed 2.
+
+Version 3 changes the firewall model. `firewall_flush` is no longer a unit
+variant and requires a chain, `firewall_add` and `firewall_update` carry a
+chain, snapshots gained `chains` with per-chain policies, and
+`firewall_update`/`firewall_set_policy` are new. An older CLI must be upgraded
+with the daemon.
 
 ## Rules before 1.0.0
 

@@ -1,39 +1,82 @@
 //! Pure parsing of `nft -j list table inet anthracite`.
 //!
-//! The panel only manages the `input` chain of its own table. A rule in another
-//! chain is ignored, and a comment the panel did not write becomes `custom`
-//! without inventing a protocol, port or verdict.
+//! The panel only manages the `input` and `output` base chains of its own
+//! table. A rule in another chain is ignored, and a comment the panel did not
+//! write becomes `custom` without inventing a protocol, port or verdict.
 
-use anth_wire::{FirewallProtocol, FirewallRule};
+use anth_wire::{
+    FirewallAction, FirewallChain, FirewallChainState, FirewallProtocol, FirewallRule,
+};
 use serde_json::Value;
 
 pub const COMMENT_PREFIX: &str = "anth:";
 
-/// Parses every rule of the managed `input` chain, sorted by handle.
-pub fn parse_rules(json: &str) -> Result<Vec<FirewallRule>, String> {
+/// The parsed managed table: rules plus the presence and policy of each chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedTable {
+    pub rules: Vec<FirewallRule>,
+    pub chains: Vec<FirewallChainState>,
+}
+
+/// The state shown for a table that does not exist yet.
+pub fn default_chains() -> Vec<FirewallChainState> {
+    FirewallChain::ALL
+        .iter()
+        .map(|chain| FirewallChainState {
+            chain: *chain,
+            initialized: false,
+            policy: FirewallAction::Allow,
+        })
+        .collect()
+}
+
+/// Parses every rule and chain of the managed table.
+///
+/// Rules are sorted by chain then handle so the UI shows input before output
+/// and keeps a stable order within each chain.
+pub fn parse_table(json: &str) -> Result<ParsedTable, String> {
     let value: Value =
         serde_json::from_str(json).map_err(|error| format!("could not parse nft JSON: {error}"))?;
 
+    let mut chains = default_chains();
     let mut rules = Vec::new();
     let Some(items) = value.get("nftables").and_then(Value::as_array) else {
-        return Ok(rules);
+        return Ok(ParsedTable { rules, chains });
     };
 
     for item in items {
+        if let Some(chain) = item.get("chain") {
+            let Some(name) = chain.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let Ok(chain_id) = name.parse::<FirewallChain>() else {
+                continue;
+            };
+            let policy = chain
+                .get("policy")
+                .and_then(Value::as_str)
+                .and_then(|policy| policy.parse::<FirewallAction>().ok())
+                .unwrap_or(FirewallAction::Allow);
+            if let Some(state) = chains.iter_mut().find(|state| state.chain == chain_id) {
+                state.initialized = true;
+                state.policy = policy;
+            }
+            continue;
+        }
+
         let Some(rule) = item.get("rule") else {
             continue;
         };
         let Some(handle) = rule.get("handle").and_then(Value::as_u64) else {
             continue;
         };
-        let chain = rule
+        let Some(chain) = rule
             .get("chain")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        if chain != "input" {
+            .and_then(|name| name.parse::<FirewallChain>().ok())
+        else {
             continue;
-        }
+        };
         let raw_comment = rule.get("comment").and_then(Value::as_str);
         let (action, protocol, port, comment) = parse_comment(raw_comment);
         rules.push(FirewallRule {
@@ -46,8 +89,15 @@ pub fn parse_rules(json: &str) -> Result<Vec<FirewallRule>, String> {
         });
     }
 
-    rules.sort_by_key(|rule| rule.handle);
-    Ok(rules)
+    rules.sort_by_key(|rule| (chain_rank(rule.chain), rule.handle));
+    Ok(ParsedTable { rules, chains })
+}
+
+fn chain_rank(chain: FirewallChain) -> u8 {
+    match chain {
+        FirewallChain::Input => 0,
+        FirewallChain::Output => 1,
+    }
 }
 
 /// Splits `anth:<action>:<protocol>:<port>[|<comment>]`.
@@ -104,7 +154,17 @@ mod tests {
             "nftables": [
                 {"metainfo": {}},
                 {"table": {"family": "inet", "name": "anthracite"}},
-                {"chain": {"family": "inet", "table": "anthracite", "name": "input"}},
+                {
+                    "chain": {
+                        "family": "inet",
+                        "table": "anthracite",
+                        "name": "input",
+                        "type": "filter",
+                        "hook": "input",
+                        "policy": "drop"
+                    }
+                },
+                {"chain": {"family": "inet", "table": "anthracite", "name": "output"}},
                 {
                     "rule": {
                         "family": "inet",
@@ -127,7 +187,7 @@ mod tests {
                     "rule": {
                         "family": "inet",
                         "table": "anthracite",
-                        "chain": "input",
+                        "chain": "output",
                         "handle": 3,
                         "comment": "anth:allow:tcp:8080"
                     }
@@ -136,7 +196,7 @@ mod tests {
                     "rule": {
                         "family": "inet",
                         "table": "anthracite",
-                        "chain": "output",
+                        "chain": "forward",
                         "handle": 11,
                         "comment": "anth:deny:tcp:25|smtp"
                     }
@@ -148,25 +208,43 @@ mod tests {
 
     #[test]
     fn managed_custom_and_other_chains_are_separated() {
-        let rules = parse_rules(&sample()).expect("parse");
-        assert_eq!(rules.len(), 3);
-        assert_eq!(rules[0].handle, 3);
-        assert_eq!(rules[0].action, "allow");
-        assert_eq!(rules[0].protocol, Some(FirewallProtocol::Tcp));
-        assert_eq!(rules[0].port, Some(8080));
-        assert_eq!(rules[0].comment, None);
+        let parsed = parse_table(&sample()).expect("parse");
+        assert_eq!(parsed.rules.len(), 3);
 
-        assert_eq!(rules[1].handle, 4);
-        assert_eq!(rules[1].action, "deny");
-        assert_eq!(rules[1].protocol, Some(FirewallProtocol::Udp));
-        assert_eq!(rules[1].port, Some(53));
-        assert_eq!(rules[1].comment.as_deref(), Some("dns"));
+        assert_eq!(parsed.rules[0].handle, 4);
+        assert_eq!(parsed.rules[0].chain, FirewallChain::Input);
+        assert_eq!(parsed.rules[0].action, "deny");
+        assert_eq!(parsed.rules[0].protocol, Some(FirewallProtocol::Udp));
+        assert_eq!(parsed.rules[0].port, Some(53));
+        assert_eq!(parsed.rules[0].comment.as_deref(), Some("dns"));
 
-        assert_eq!(rules[2].handle, 9);
-        assert_eq!(rules[2].action, "custom");
-        assert_eq!(rules[2].protocol, None);
-        assert_eq!(rules[2].port, None);
-        assert_eq!(rules[2].comment.as_deref(), Some("manual rule"));
+        assert_eq!(parsed.rules[1].handle, 9);
+        assert_eq!(parsed.rules[1].action, "custom");
+        assert_eq!(parsed.rules[1].protocol, None);
+        assert_eq!(parsed.rules[1].port, None);
+        assert_eq!(parsed.rules[1].comment.as_deref(), Some("manual rule"));
+
+        assert_eq!(parsed.rules[2].handle, 3);
+        assert_eq!(parsed.rules[2].chain, FirewallChain::Output);
+        assert_eq!(parsed.rules[2].action, "allow");
+        assert_eq!(parsed.rules[2].protocol, Some(FirewallProtocol::Tcp));
+        assert_eq!(parsed.rules[2].port, Some(8080));
+    }
+
+    #[test]
+    fn chain_policies_are_parsed_and_missing_chains_default_to_accept() {
+        let parsed = parse_table(&sample()).expect("parse");
+        assert_eq!(parsed.chains.len(), 2);
+        assert_eq!(parsed.chains[0].chain, FirewallChain::Input);
+        assert!(parsed.chains[0].initialized);
+        assert_eq!(parsed.chains[0].policy, FirewallAction::Deny);
+        assert_eq!(parsed.chains[1].chain, FirewallChain::Output);
+        assert!(parsed.chains[1].initialized);
+        assert_eq!(parsed.chains[1].policy, FirewallAction::Allow);
+
+        let empty = parse_table("{}").expect("empty");
+        assert!(!empty.chains[0].initialized);
+        assert_eq!(empty.chains[0].policy, FirewallAction::Allow);
     }
 
     #[test]
@@ -189,12 +267,13 @@ mod tests {
 
     #[test]
     fn a_missing_or_empty_nftables_list_is_empty() {
-        assert!(parse_rules("{}").expect("empty object").is_empty());
+        assert!(parse_table("{}").expect("empty object").rules.is_empty());
         assert!(
-            parse_rules(r#"{"nftables":[]}"#)
+            parse_table(r#"{"nftables":[]}"#)
                 .expect("empty list")
+                .rules
                 .is_empty()
         );
-        assert!(parse_rules("not json").is_err());
+        assert!(parse_table("not json").is_err());
     }
 }

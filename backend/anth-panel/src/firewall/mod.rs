@@ -1,20 +1,23 @@
 //! The managed nftables firewall.
 //!
-//! The daemon owns exactly one table and one chain:
+//! The daemon owns exactly one table with two base chains:
 //!
 //! ```text
 //! inet anthracite
-//! └── input (type filter hook input priority filter; policy accept)
+//! ├── input  (type filter hook input priority filter; policy <accept|drop>)
+//! └── output (type filter hook output priority filter; policy <accept|drop>)
 //! ```
 //!
 //! Every read and write is scoped to that table. `nft` is invoked directly with
 //! an argument vector; nothing goes through a shell. Managed rules carry an
 //! `anth:` comment so their intent and handle can be recovered from nft alone.
 //!
-//! The chain is a blocklist with an accept policy. `allow` therefore removes a
-//! matching managed `drop` rule instead of adding an `accept` rule: an accept
-//! in this table cannot override a drop in another table, so pretending
-//! otherwise would be misleading.
+//! Both chains keep `accept` and `drop` rules, so the panel shows the whole
+//! allow/deny list instead of silently removing allowed ports, and each chain
+//! has an editable default policy. One managed rule exists per protocol/port
+//! pair within a chain: adding a rule for a target that is already managed
+//! replaces that rule, which keeps the list unambiguous. An accept verdict ends
+//! this chain, but it cannot override a drop in another table.
 
 mod parse;
 
@@ -23,14 +26,14 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_wire::{
-    ErrorKind, FirewallAction, FirewallProtocol, FirewallRule, FirewallSnapshot, WireError,
+    ErrorKind, FirewallAction, FirewallChain, FirewallProtocol, FirewallRule, FirewallSnapshot,
+    WireError,
 };
 
-use parse::{COMMENT_PREFIX, parse_rules};
+use parse::{COMMENT_PREFIX, ParsedTable, default_chains, parse_table};
 
 const FAMILY: &str = "inet";
 const TABLE: &str = "anthracite";
-const CHAIN: &str = "input";
 const MAX_COMMENT_CHARS: usize = 32;
 
 /// One `nft` invocation result, decoupled from `std::process::Output`.
@@ -93,11 +96,12 @@ impl FirewallService {
     }
 
     pub fn snapshot(&self) -> Result<FirewallSnapshot, WireError> {
-        let Some((rules, ruleset)) = self.read_table()? else {
+        let Some((table, ruleset)) = self.read_table()? else {
             return Ok(FirewallSnapshot {
                 initialized: false,
                 control_enabled: self.control,
                 rules: Vec::new(),
+                chains: default_chains(),
                 ruleset: String::new(),
                 timestamp_ms: now_ms(),
             });
@@ -105,74 +109,127 @@ impl FirewallService {
         Ok(FirewallSnapshot {
             initialized: true,
             control_enabled: self.control,
-            rules,
+            rules: table.rules,
+            chains: table.chains,
             ruleset,
             timestamp_ms: now_ms(),
         })
     }
 
-    /// Adds a deny rule, or removes the matching managed deny rules for allow.
+    /// Adds an allow or deny rule to one chain. A managed rule for the same
+    /// protocol/port in that chain is replaced in place, so a target never has
+    /// two conflicting verdicts.
     pub fn add(
         &self,
+        chain: FirewallChain,
         action: FirewallAction,
         protocol: FirewallProtocol,
         port: u16,
         comment: Option<&str>,
     ) -> Result<String, WireError> {
         self.require_control()?;
-        if port == 0 {
-            return Err(WireError::new(
-                ErrorKind::Invalid,
-                "firewall_port",
-                "port must be between 1 and 65535",
-            ));
-        }
+        validate_port(port)?;
         let comment = normalize_comment(comment)?;
 
-        if action == FirewallAction::Allow {
-            let Some((rules, _)) = self.read_table()? else {
-                return Ok(already_allowed(protocol, port));
-            };
-            let handles: Vec<u64> = rules
-                .iter()
-                .filter(|rule| {
-                    rule.action == "deny"
-                        && rule.protocol == Some(protocol)
-                        && rule.port == Some(port)
-                })
-                .map(|rule| rule.handle)
-                .collect();
-            if handles.is_empty() {
-                return Ok(already_allowed(protocol, port));
-            }
-            for handle in handles {
-                self.delete_handle(handle)?;
-            }
-            return Ok(format!("allowed {protocol}/{port}"));
-        }
+        self.ensure_chain(chain)?;
+        let Some(table) = self.read_state()? else {
+            return Err(WireError::new(
+                ErrorKind::Internal,
+                "firewall_state",
+                "the managed firewall table disappeared after it was created",
+            ));
+        };
 
-        self.ensure_chain()?;
-        let encoded = encode_comment(action, protocol, port, comment.as_deref());
-        let quoted = format!("\"{encoded}\"");
-        let port_text = port.to_string();
-        let args = [
-            "add",
-            "rule",
-            FAMILY,
-            TABLE,
-            CHAIN,
-            protocol.as_str(),
-            "dport",
-            port_text.as_str(),
-            action.verdict(),
-            "comment",
-            quoted.as_str(),
-        ];
-        self.run_ok(&args, "could not add the firewall rule")?;
-        Ok(format!("denied {protocol}/{port}"))
+        let mut matches = matching_handles(&table.rules, chain, protocol, port).into_iter();
+        if let Some(handle) = matches.next() {
+            self.replace_handle(chain, handle, action, protocol, port, comment.as_deref())?;
+            for extra in matches {
+                self.delete_handle(chain, extra)?;
+            }
+        } else {
+            self.add_rule(chain, action, protocol, port, comment.as_deref())?;
+        }
+        Ok(format!(
+            "{} {protocol}/{port} on {chain}",
+            action_past(action)
+        ))
     }
 
-    /// Deletes one rule in the managed chain by its handle.
+    /// Rewrites one managed rule in place, preserving its position in the
+    /// chain. Moving it to the other chain deletes the old rule and adds a new
+    /// one there.
+    pub fn update(
+        &self,
+        handle: u64,
+        chain: FirewallChain,
+        action: FirewallAction,
+        protocol: FirewallProtocol,
+        port: u16,
+        comment: Option<&str>,
+    ) -> Result<String, WireError> {
+        self.require_control()?;
+        if handle == 0 {
+            return Err(WireError::new(
+                ErrorKind::Invalid,
+                "firewall_handle",
+                "rule handle must be greater than zero",
+            ));
+        }
+        validate_port(port)?;
+        let comment = normalize_comment(comment)?;
+
+        let Some(table) = self.read_state()? else {
+            return Err(WireError::new(
+                ErrorKind::NotFound,
+                "firewall_not_found",
+                "the managed firewall table does not exist",
+            ));
+        };
+        let Some(rule) = table.rules.iter().find(|rule| rule.handle == handle) else {
+            return Err(WireError::new(
+                ErrorKind::NotFound,
+                "firewall_rule_not_found",
+                format!("no firewall rule with handle {handle} in the managed chains"),
+            ));
+        };
+        if rule.action == "custom" {
+            return Err(WireError::new(
+                ErrorKind::Invalid,
+                "firewall_custom_rule",
+                "custom rules can be deleted but not edited",
+            ));
+        }
+        if let Some(other) = table.rules.iter().find(|other| {
+            other.handle != handle
+                && other.chain == chain
+                && other.action != "custom"
+                && other.protocol == Some(protocol)
+                && other.port == Some(port)
+        }) {
+            return Err(WireError::new(
+                ErrorKind::Invalid,
+                "firewall_duplicate",
+                format!(
+                    "rule #{} already manages {protocol}/{port} on {chain}; edit or delete it first",
+                    other.handle
+                ),
+            ));
+        }
+
+        if rule.chain == chain {
+            self.replace_handle(chain, handle, action, protocol, port, comment.as_deref())?;
+        } else {
+            self.ensure_chain(chain)?;
+            self.add_rule(chain, action, protocol, port, comment.as_deref())?;
+            self.delete_handle(rule.chain, handle)?;
+        }
+        Ok(format!(
+            "updated firewall rule {handle} to {} {protocol}/{port} on {chain}",
+            action.as_str()
+        ))
+    }
+
+    /// Deletes one rule from the managed table by its handle.
     pub fn delete(&self, handle: u64) -> Result<String, WireError> {
         self.require_control()?;
         if handle == 0 {
@@ -182,25 +239,73 @@ impl FirewallService {
                 "rule handle must be greater than zero",
             ));
         }
-        self.delete_handle(handle)?;
+        let Some(table) = self.read_state()? else {
+            return Err(WireError::new(
+                ErrorKind::NotFound,
+                "firewall_not_found",
+                "the managed firewall table does not exist",
+            ));
+        };
+        let Some(rule) = table.rules.iter().find(|rule| rule.handle == handle) else {
+            return Err(WireError::new(
+                ErrorKind::NotFound,
+                "firewall_rule_not_found",
+                format!("no firewall rule with handle {handle} in the managed chains"),
+            ));
+        };
+        self.delete_handle(rule.chain, handle)?;
         Ok(format!("deleted firewall rule {handle}"))
     }
 
-    /// Removes every rule from the managed chain.
-    pub fn flush(&self) -> Result<String, WireError> {
+    /// Removes every rule from one managed chain.
+    pub fn flush(&self, chain: FirewallChain) -> Result<String, WireError> {
         self.require_control()?;
-        let Some((rules, _)) = self.read_table()? else {
+        let Some(table) = self.read_state()? else {
             return Ok("firewall table is not initialized".to_string());
         };
+        let Some(state) = table.chains.iter().find(|state| state.chain == chain) else {
+            return Ok(format!("{chain} chain is not initialized"));
+        };
+        if !state.initialized {
+            return Ok(format!("{chain} chain is not initialized"));
+        }
+        let count = table
+            .rules
+            .iter()
+            .filter(|rule| rule.chain == chain)
+            .count();
         self.run_ok(
-            &["flush", "chain", FAMILY, TABLE, CHAIN],
+            &["flush", "chain", FAMILY, TABLE, chain.as_str()],
             "could not flush the firewall chain",
         )?;
         Ok(format!(
-            "flushed {} firewall rule{}",
-            rules.len(),
-            if rules.len() == 1 { "" } else { "s" }
+            "flushed {count} firewall rule{} from {chain}",
+            if count == 1 { "" } else { "s" }
         ))
+    }
+
+    /// Changes the default verdict of one base chain. Setting `drop` without
+    /// enough accept rules can lock the operator out; the CLI and the web UI
+    /// ask for confirmation before calling this.
+    pub fn set_policy(
+        &self,
+        chain: FirewallChain,
+        policy: FirewallAction,
+    ) -> Result<String, WireError> {
+        self.require_control()?;
+        self.ensure_chain(chain)?;
+        let current = self
+            .read_state()?
+            .and_then(|table| table.chains.into_iter().find(|state| state.chain == chain));
+        if current.as_ref().is_some_and(|state| state.policy == policy) {
+            return Ok(format!("{chain} policy is already {}", policy.as_str()));
+        }
+        let spec = format!("{{ policy {}; }}", policy.verdict());
+        self.run_ok(
+            &["add", "chain", FAMILY, TABLE, chain.as_str(), spec.as_str()],
+            "could not change the default firewall policy",
+        )?;
+        Ok(format!("set {chain} policy to {}", policy.as_str()))
     }
 
     fn require_control(&self) -> Result<(), WireError> {
@@ -215,9 +320,23 @@ impl FirewallService {
         }
     }
 
-    /// Reads the managed chain and its textual ruleset. A missing table is
+    /// Reads the managed table and its textual ruleset. A missing table is
     /// `None`; any other refusal is an error.
-    fn read_table(&self) -> Result<Option<(Vec<FirewallRule>, String)>, WireError> {
+    fn read_table(&self) -> Result<Option<(ParsedTable, String)>, WireError> {
+        let Some(table) = self.read_state()? else {
+            return Ok(None);
+        };
+
+        let text = self.run(&["list", "table", FAMILY, TABLE])?;
+        if !text.ok {
+            return Err(nft_error("could not read the firewall table", &text));
+        }
+
+        Ok(Some((table, text.stdout.trim_end().to_string())))
+    }
+
+    /// Reads the parsed rules and chain policies. A missing table is `None`.
+    fn read_state(&self) -> Result<Option<ParsedTable>, WireError> {
         let json = self.run(&["-j", "list", "table", FAMILY, TABLE])?;
         if !json.ok {
             if is_missing(&json.stderr) {
@@ -226,17 +345,72 @@ impl FirewallService {
             return Err(nft_error("could not read the firewall table", &json));
         }
 
-        let text = self.run(&["list", "table", FAMILY, TABLE])?;
-        if !text.ok {
-            return Err(nft_error("could not read the firewall table", &text));
-        }
-
-        let rules = parse_rules(&json.stdout)
-            .map_err(|message| WireError::new(ErrorKind::Internal, "nft_parse", message))?;
-        Ok(Some((rules, text.stdout.trim_end().to_string())))
+        parse_table(&json.stdout)
+            .map(Some)
+            .map_err(|message| WireError::new(ErrorKind::Internal, "nft_parse", message))
     }
 
-    fn delete_handle(&self, handle: u64) -> Result<(), WireError> {
+    fn add_rule(
+        &self,
+        chain: FirewallChain,
+        action: FirewallAction,
+        protocol: FirewallProtocol,
+        port: u16,
+        comment: Option<&str>,
+    ) -> Result<(), WireError> {
+        let encoded = quoted_comment(action, protocol, port, comment);
+        let port_text = port.to_string();
+        self.run_ok(
+            &[
+                "add",
+                "rule",
+                FAMILY,
+                TABLE,
+                chain.as_str(),
+                protocol.as_str(),
+                "dport",
+                port_text.as_str(),
+                action.verdict(),
+                "comment",
+                encoded.as_str(),
+            ],
+            "could not add the firewall rule",
+        )
+    }
+
+    fn replace_handle(
+        &self,
+        chain: FirewallChain,
+        handle: u64,
+        action: FirewallAction,
+        protocol: FirewallProtocol,
+        port: u16,
+        comment: Option<&str>,
+    ) -> Result<(), WireError> {
+        let handle_text = handle.to_string();
+        let port_text = port.to_string();
+        let encoded = quoted_comment(action, protocol, port, comment);
+        self.run_ok(
+            &[
+                "replace",
+                "rule",
+                FAMILY,
+                TABLE,
+                chain.as_str(),
+                "handle",
+                handle_text.as_str(),
+                protocol.as_str(),
+                "dport",
+                port_text.as_str(),
+                action.verdict(),
+                "comment",
+                encoded.as_str(),
+            ],
+            "could not update the firewall rule",
+        )
+    }
+
+    fn delete_handle(&self, chain: FirewallChain, handle: u64) -> Result<(), WireError> {
         let handle_text = handle.to_string();
         self.run_ok(
             &[
@@ -244,7 +418,7 @@ impl FirewallService {
                 "rule",
                 FAMILY,
                 TABLE,
-                CHAIN,
+                chain.as_str(),
                 "handle",
                 handle_text.as_str(),
             ],
@@ -252,7 +426,7 @@ impl FirewallService {
         )
     }
 
-    fn ensure_chain(&self) -> Result<(), WireError> {
+    fn ensure_chain(&self, chain: FirewallChain) -> Result<(), WireError> {
         let table = self.run(&["list", "table", FAMILY, TABLE])?;
         if !table.ok {
             if !is_missing(&table.stderr) {
@@ -264,19 +438,23 @@ impl FirewallService {
             )?;
         }
 
-        let chain = self.run(&["list", "chain", FAMILY, TABLE, CHAIN])?;
-        if !chain.ok {
-            if !is_missing(&chain.stderr) {
-                return Err(nft_error("could not read the firewall chain", &chain));
+        let listed = self.run(&["list", "chain", FAMILY, TABLE, chain.as_str()])?;
+        if !listed.ok {
+            if !is_missing(&listed.stderr) {
+                return Err(nft_error("could not read the firewall chain", &listed));
             }
+            let definition = format!(
+                "{{ type filter hook {} priority filter; policy accept; }}",
+                chain.hook()
+            );
             self.run_ok(
                 &[
                     "add",
                     "chain",
                     FAMILY,
                     TABLE,
-                    CHAIN,
-                    "{ type filter hook input priority filter; policy accept; }",
+                    chain.as_str(),
+                    definition.as_str(),
                 ],
                 "could not create the firewall chain",
             )?;
@@ -305,8 +483,40 @@ impl FirewallService {
     }
 }
 
-fn already_allowed(protocol: FirewallProtocol, port: u16) -> String {
-    format!("no managed deny rule for {protocol}/{port}; traffic is already allowed")
+fn action_past(action: FirewallAction) -> &'static str {
+    match action {
+        FirewallAction::Allow => "allowed",
+        FirewallAction::Deny => "denied",
+    }
+}
+
+fn validate_port(port: u16) -> Result<(), WireError> {
+    if port == 0 {
+        return Err(WireError::new(
+            ErrorKind::Invalid,
+            "firewall_port",
+            "port must be between 1 and 65535",
+        ));
+    }
+    Ok(())
+}
+
+fn matching_handles(
+    rules: &[FirewallRule],
+    chain: FirewallChain,
+    protocol: FirewallProtocol,
+    port: u16,
+) -> Vec<u64> {
+    rules
+        .iter()
+        .filter(|rule| {
+            rule.chain == chain
+                && rule.action != "custom"
+                && rule.protocol == Some(protocol)
+                && rule.port == Some(port)
+        })
+        .map(|rule| rule.handle)
+        .collect()
 }
 
 fn normalize_comment(comment: Option<&str>) -> Result<Option<String>, WireError> {
@@ -341,6 +551,15 @@ fn encode_comment(
         encoded.push_str(comment);
     }
     encoded
+}
+
+fn quoted_comment(
+    action: FirewallAction,
+    protocol: FirewallProtocol,
+    port: u16,
+    comment: Option<&str>,
+) -> String {
+    format!("\"{}\"", encode_comment(action, protocol, port, comment))
 }
 
 fn is_missing(stderr: &str) -> bool {
@@ -454,16 +673,19 @@ mod tests {
     fn json_with_rules() -> String {
         serde_json::json!({
             "nftables": [
+                {"chain": {"family": "inet", "table": "anthracite", "name": "input", "type": "filter", "hook": "input", "policy": "drop"}},
+                {"chain": {"family": "inet", "table": "anthracite", "name": "output", "type": "filter", "hook": "output", "policy": "accept"}},
                 {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 3, "comment": "anth:deny:tcp:80|http"}},
                 {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 4, "comment": "anth:deny:udp:53|dns"}},
-                {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 5, "comment": "manual"}}
+                {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 5, "comment": "manual"}},
+                {"rule": {"family": "inet", "table": "anthracite", "chain": "output", "handle": 6, "comment": "anth:allow:tcp:443|https"}}
             ]
         })
         .to_string()
     }
 
     #[test]
-    fn status_parses_rules_and_reads_the_raw_ruleset() {
+    fn status_parses_rules_chains_and_the_raw_ruleset() {
         let (service, _nft) = build_service(
             true,
             vec![
@@ -475,9 +697,16 @@ mod tests {
         assert!(snapshot.initialized);
         assert!(snapshot.control_enabled);
         assert!(snapshot.timestamp_ms > 0);
-        assert_eq!(snapshot.rules.len(), 3);
+        assert_eq!(snapshot.rules.len(), 4);
         assert_eq!(snapshot.rules[0].handle, 3);
+        assert_eq!(snapshot.rules[0].chain, FirewallChain::Input);
         assert_eq!(snapshot.rules[2].action, "custom");
+        assert_eq!(snapshot.rules[3].handle, 6);
+        assert_eq!(snapshot.rules[3].chain, FirewallChain::Output);
+        assert_eq!(snapshot.chains.len(), 2);
+        assert_eq!(snapshot.chains[0].chain, FirewallChain::Input);
+        assert_eq!(snapshot.chains[0].policy, FirewallAction::Deny);
+        assert_eq!(snapshot.chains[1].policy, FirewallAction::Allow);
         assert!(snapshot.ruleset.contains("table inet anthracite"));
     }
 
@@ -489,10 +718,18 @@ mod tests {
         assert!(!snapshot.control_enabled);
         assert!(snapshot.rules.is_empty());
         assert!(snapshot.ruleset.is_empty());
+        assert_eq!(snapshot.chains.len(), 2);
+        assert!(snapshot.chains.iter().all(|state| !state.initialized));
+        assert!(
+            snapshot
+                .chains
+                .iter()
+                .all(|state| state.policy == FirewallAction::Allow)
+        );
     }
 
     #[test]
-    fn deny_creates_the_table_and_chain_before_the_rule() {
+    fn deny_creates_the_table_and_input_chain_before_the_rule() {
         let (service, nft) = build_service(
             true,
             vec![
@@ -500,18 +737,20 @@ mod tests {
                 ok(""),
                 fail("No such file or directory"),
                 ok(""),
+                ok(r#"{"nftables":[]}"#),
                 ok(""),
             ],
         );
         let message = service
             .add(
+                FirewallChain::Input,
                 FirewallAction::Deny,
                 FirewallProtocol::Tcp,
                 80,
                 Some("http"),
             )
             .expect("deny");
-        assert_eq!(message, "denied tcp/80");
+        assert_eq!(message, "denied tcp/80 on input");
         assert_eq!(
             nft.calls(),
             vec![
@@ -526,6 +765,7 @@ mod tests {
                     "input",
                     "{ type filter hook input priority filter; policy accept; }"
                 ],
+                vec!["-j", "list", "table", "inet", "anthracite"],
                 vec![
                     "add",
                     "rule",
@@ -544,54 +784,164 @@ mod tests {
     }
 
     #[test]
-    fn allow_removes_matching_denies_and_never_adds_an_accept_rule() {
-        let (service, nft) = build_service(true, vec![ok(&json_with_rules()), ok("text"), ok("")]);
+    fn allow_adds_an_accept_rule() {
+        let (service, nft) =
+            build_service(true, vec![ok(""), ok(""), ok(r#"{"nftables":[]}"#), ok("")]);
         let message = service
-            .add(FirewallAction::Allow, FirewallProtocol::Tcp, 80, None)
+            .add(
+                FirewallChain::Input,
+                FirewallAction::Allow,
+                FirewallProtocol::Tcp,
+                80,
+                Some("http"),
+            )
             .expect("allow");
-        assert_eq!(message, "allowed tcp/80");
+        assert_eq!(message, "allowed tcp/80 on input");
         assert_eq!(
-            nft.calls(),
-            vec![
-                vec!["-j", "list", "table", "inet", "anthracite"],
-                vec!["list", "table", "inet", "anthracite"],
-                vec![
-                    "delete",
-                    "rule",
-                    "inet",
-                    "anthracite",
-                    "input",
-                    "handle",
-                    "3"
-                ],
+            nft.calls().last().expect("add"),
+            &vec![
+                "add",
+                "rule",
+                "inet",
+                "anthracite",
+                "input",
+                "tcp",
+                "dport",
+                "80",
+                "accept",
+                "comment",
+                "\"anth:allow:tcp:80|http\""
             ]
         );
     }
 
     #[test]
-    fn allow_without_a_matching_deny_is_a_no_op() {
-        let (service, nft) = build_service(true, vec![ok(r#"{"nftables":[]}"#), ok("text")]);
+    fn add_on_output_creates_the_output_chain_with_its_own_hook() {
+        let (service, nft) = build_service(
+            true,
+            vec![
+                fail("No such file or directory"),
+                ok(""),
+                fail("No such file or directory"),
+                ok(""),
+                ok(r#"{"nftables":[]}"#),
+                ok(""),
+            ],
+        );
         let message = service
-            .add(FirewallAction::Allow, FirewallProtocol::Udp, 123, None)
-            .expect("allow");
-        assert!(message.contains("already allowed"));
-        assert_eq!(nft.calls().len(), 2);
+            .add(
+                FirewallChain::Output,
+                FirewallAction::Deny,
+                FirewallProtocol::Udp,
+                53,
+                Some("dns"),
+            )
+            .expect("deny");
+        assert_eq!(message, "denied udp/53 on output");
+        let calls = nft.calls();
+        assert_eq!(
+            calls[3],
+            vec![
+                "add",
+                "chain",
+                "inet",
+                "anthracite",
+                "output",
+                "{ type filter hook output priority filter; policy accept; }"
+            ]
+        );
+        assert_eq!(calls[5][4], "output");
     }
 
     #[test]
-    fn delete_and_flush_use_the_managed_chain_only() {
-        let (service, nft) = build_service(
-            true,
-            vec![ok(""), ok(&json_with_rules()), ok("text"), ok("")],
-        );
+    fn adding_an_existing_target_replaces_the_rule_in_place() {
+        let (service, nft) =
+            build_service(true, vec![ok(""), ok(""), ok(&json_with_rules()), ok("")]);
+        let message = service
+            .add(
+                FirewallChain::Input,
+                FirewallAction::Allow,
+                FirewallProtocol::Tcp,
+                80,
+                Some("web"),
+            )
+            .expect("allow");
+        assert_eq!(message, "allowed tcp/80 on input");
         assert_eq!(
-            service.delete(7).expect("delete"),
-            "deleted firewall rule 7"
+            nft.calls().last().expect("replace"),
+            &vec![
+                "replace",
+                "rule",
+                "inet",
+                "anthracite",
+                "input",
+                "handle",
+                "3",
+                "tcp",
+                "dport",
+                "80",
+                "accept",
+                "comment",
+                "\"anth:allow:tcp:80|web\""
+            ]
         );
-        assert_eq!(service.flush().expect("flush"), "flushed 3 firewall rules");
+    }
+
+    #[test]
+    fn the_same_target_in_the_other_chain_is_added_separately() {
+        let (service, nft) =
+            build_service(true, vec![ok(""), ok(""), ok(&json_with_rules()), ok("")]);
+        service
+            .add(
+                FirewallChain::Output,
+                FirewallAction::Allow,
+                FirewallProtocol::Tcp,
+                80,
+                None,
+            )
+            .expect("allow");
         let calls = nft.calls();
         assert_eq!(
-            calls[0],
+            calls.last().expect("add"),
+            &vec![
+                "add",
+                "rule",
+                "inet",
+                "anthracite",
+                "output",
+                "tcp",
+                "dport",
+                "80",
+                "accept",
+                "comment",
+                "\"anth:allow:tcp:80\""
+            ]
+        );
+    }
+
+    #[test]
+    fn extra_duplicate_rules_are_removed_after_the_replace() {
+        let rules = serde_json::json!({
+            "nftables": [
+                {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 3, "comment": "anth:deny:tcp:80|http"}},
+                {"rule": {"family": "inet", "table": "anthracite", "chain": "input", "handle": 7, "comment": "anth:deny:tcp:80|old"}}
+            ]
+        })
+        .to_string();
+        let (service, nft) = build_service(true, vec![ok(""), ok(""), ok(&rules), ok(""), ok("")]);
+        service
+            .add(
+                FirewallChain::Input,
+                FirewallAction::Allow,
+                FirewallProtocol::Tcp,
+                80,
+                None,
+            )
+            .expect("allow");
+        let calls = nft.calls();
+        assert_eq!(calls[3][0], "replace");
+        assert_eq!(
+            calls[4],
             vec![
                 "delete",
                 "rule",
@@ -602,9 +952,299 @@ mod tests {
                 "7"
             ]
         );
+    }
+
+    #[test]
+    fn update_rewrites_one_managed_rule() {
+        let (service, nft) = build_service(true, vec![ok(&json_with_rules()), ok("")]);
+        let message = service
+            .update(
+                3,
+                FirewallChain::Input,
+                FirewallAction::Allow,
+                FirewallProtocol::Tcp,
+                443,
+                Some("https"),
+            )
+            .expect("update");
+        assert_eq!(message, "updated firewall rule 3 to allow tcp/443 on input");
         assert_eq!(
-            calls.last().expect("flush"),
+            nft.calls(),
+            vec![
+                vec!["-j", "list", "table", "inet", "anthracite"],
+                vec![
+                    "replace",
+                    "rule",
+                    "inet",
+                    "anthracite",
+                    "input",
+                    "handle",
+                    "3",
+                    "tcp",
+                    "dport",
+                    "443",
+                    "accept",
+                    "comment",
+                    "\"anth:allow:tcp:443|https\""
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn update_moves_a_rule_to_the_other_chain() {
+        let (service, nft) = build_service(
+            true,
+            vec![ok(&json_with_rules()), ok(""), ok(""), ok(""), ok("")],
+        );
+        let message = service
+            .update(
+                3,
+                FirewallChain::Output,
+                FirewallAction::Allow,
+                FirewallProtocol::Tcp,
+                8443,
+                Some("admin"),
+            )
+            .expect("update");
+        assert_eq!(
+            message,
+            "updated firewall rule 3 to allow tcp/8443 on output"
+        );
+        let calls = nft.calls();
+        assert_eq!(calls[1], vec!["list", "table", "inet", "anthracite"]);
+        assert_eq!(
+            calls[2],
+            vec!["list", "chain", "inet", "anthracite", "output"]
+        );
+        assert_eq!(
+            calls[3],
+            vec![
+                "add",
+                "rule",
+                "inet",
+                "anthracite",
+                "output",
+                "tcp",
+                "dport",
+                "8443",
+                "accept",
+                "comment",
+                "\"anth:allow:tcp:8443|admin\""
+            ]
+        );
+        assert_eq!(
+            calls[4],
+            vec![
+                "delete",
+                "rule",
+                "inet",
+                "anthracite",
+                "input",
+                "handle",
+                "3"
+            ]
+        );
+    }
+
+    #[test]
+    fn update_refuses_unknown_custom_and_duplicate_rules() {
+        let (service, nft) = build_service(true, vec![fail("No such file or directory")]);
+        assert_eq!(
+            service
+                .update(
+                    3,
+                    FirewallChain::Input,
+                    FirewallAction::Allow,
+                    FirewallProtocol::Tcp,
+                    80,
+                    None
+                )
+                .expect_err("missing table")
+                .code,
+            "firewall_not_found"
+        );
+        assert_eq!(nft.calls().len(), 1);
+
+        let (service, nft) = build_service(true, vec![ok(&json_with_rules())]);
+        assert_eq!(
+            service
+                .update(
+                    5,
+                    FirewallChain::Input,
+                    FirewallAction::Allow,
+                    FirewallProtocol::Tcp,
+                    80,
+                    None
+                )
+                .expect_err("custom")
+                .code,
+            "firewall_custom_rule"
+        );
+        assert_eq!(nft.calls().len(), 1);
+
+        let (service, nft) = build_service(true, vec![ok(&json_with_rules())]);
+        assert_eq!(
+            service
+                .update(
+                    99,
+                    FirewallChain::Input,
+                    FirewallAction::Allow,
+                    FirewallProtocol::Tcp,
+                    80,
+                    None
+                )
+                .expect_err("unknown")
+                .code,
+            "firewall_rule_not_found"
+        );
+        assert_eq!(nft.calls().len(), 1);
+
+        let (service, nft) = build_service(true, vec![ok(&json_with_rules())]);
+        assert_eq!(
+            service
+                .update(
+                    3,
+                    FirewallChain::Input,
+                    FirewallAction::Deny,
+                    FirewallProtocol::Udp,
+                    53,
+                    None
+                )
+                .expect_err("duplicate")
+                .code,
+            "firewall_duplicate"
+        );
+        assert_eq!(nft.calls().len(), 1);
+    }
+
+    #[test]
+    fn delete_finds_the_rule_chain_before_deleting() {
+        let (service, nft) = build_service(true, vec![ok(&json_with_rules()), ok("")]);
+        assert_eq!(
+            service.delete(6).expect("delete"),
+            "deleted firewall rule 6"
+        );
+        assert_eq!(
+            nft.calls().last().expect("delete"),
+            &vec![
+                "delete",
+                "rule",
+                "inet",
+                "anthracite",
+                "output",
+                "handle",
+                "6"
+            ]
+        );
+
+        let (service, _nft) = build_service(true, vec![ok(&json_with_rules())]);
+        assert_eq!(
+            service.delete(99).expect_err("unknown").code,
+            "firewall_rule_not_found"
+        );
+    }
+
+    #[test]
+    fn flush_targets_one_chain() {
+        let (service, nft) = build_service(true, vec![ok(&json_with_rules()), ok("")]);
+        assert_eq!(
+            service.flush(FirewallChain::Input).expect("flush"),
+            "flushed 3 firewall rules from input"
+        );
+        assert_eq!(
+            nft.calls().last().expect("flush"),
             &vec!["flush", "chain", "inet", "anthracite", "input"]
+        );
+
+        let (service, nft) = build_service(true, vec![ok(&json_with_rules()), ok("")]);
+        assert_eq!(
+            service.flush(FirewallChain::Output).expect("flush"),
+            "flushed 1 firewall rule from output"
+        );
+        assert_eq!(
+            nft.calls().last().expect("flush"),
+            &vec!["flush", "chain", "inet", "anthracite", "output"]
+        );
+    }
+
+    #[test]
+    fn set_policy_redefines_the_chain_policy_without_touching_rules() {
+        let (service, nft) =
+            build_service(true, vec![ok(""), ok(""), ok(&json_with_rules()), ok("")]);
+        let message = service
+            .set_policy(FirewallChain::Input, FirewallAction::Allow)
+            .expect("policy");
+        assert_eq!(message, "set input policy to allow");
+        assert_eq!(
+            nft.calls().last().expect("policy"),
+            &vec![
+                "add",
+                "chain",
+                "inet",
+                "anthracite",
+                "input",
+                "{ policy accept; }"
+            ]
+        );
+    }
+
+    #[test]
+    fn setting_the_same_policy_is_a_no_op() {
+        let (service, nft) = build_service(true, vec![ok(""), ok(""), ok(&json_with_rules())]);
+        let message = service
+            .set_policy(FirewallChain::Input, FirewallAction::Deny)
+            .expect("policy");
+        assert_eq!(message, "input policy is already deny");
+        assert_eq!(nft.calls().len(), 3);
+    }
+
+    #[test]
+    fn flush_of_a_missing_chain_is_a_no_op() {
+        let (service, nft) = build_service(true, vec![ok(r#"{"nftables":[]}"#)]);
+        assert_eq!(
+            service.flush(FirewallChain::Output).expect("flush"),
+            "output chain is not initialized"
+        );
+        assert_eq!(nft.calls().len(), 1);
+    }
+
+    #[test]
+    fn set_policy_creates_a_missing_chain_before_changing_it() {
+        let after_create = serde_json::json!({
+            "nftables": [
+                {"chain": {"family": "inet", "table": "anthracite", "name": "output", "type": "filter", "hook": "output", "policy": "accept"}}
+            ]
+        })
+        .to_string();
+        let (service, nft) = build_service(
+            true,
+            vec![
+                ok(""),
+                fail("No such file or directory"),
+                ok(""),
+                ok(&after_create),
+                ok(""),
+            ],
+        );
+        assert_eq!(
+            service
+                .set_policy(FirewallChain::Output, FirewallAction::Deny)
+                .expect("policy"),
+            "set output policy to deny"
+        );
+        let calls = nft.calls();
+        assert_eq!(calls[2][4], "output");
+        assert_eq!(
+            calls.last().expect("policy"),
+            &vec![
+                "add",
+                "chain",
+                "inet",
+                "anthracite",
+                "output",
+                "{ policy drop; }"
+            ]
         );
     }
 
@@ -613,8 +1253,21 @@ mod tests {
         let (disabled, nft) = build_service(false, vec![]);
         assert_eq!(
             disabled
-                .add(FirewallAction::Deny, FirewallProtocol::Tcp, 80, None)
+                .add(
+                    FirewallChain::Input,
+                    FirewallAction::Deny,
+                    FirewallProtocol::Tcp,
+                    80,
+                    None
+                )
                 .expect_err("disabled")
+                .code,
+            "firewall_control_disabled"
+        );
+        assert_eq!(
+            disabled
+                .set_policy(FirewallChain::Input, FirewallAction::Deny)
+                .expect_err("disabled policy")
                 .code,
             "firewall_control_disabled"
         );
@@ -623,7 +1276,13 @@ mod tests {
         let (service, nft) = build_service(true, vec![]);
         assert_eq!(
             service
-                .add(FirewallAction::Deny, FirewallProtocol::Tcp, 0, None)
+                .add(
+                    FirewallChain::Input,
+                    FirewallAction::Deny,
+                    FirewallProtocol::Tcp,
+                    0,
+                    None
+                )
                 .expect_err("port")
                 .code,
             "firewall_port"
@@ -631,6 +1290,7 @@ mod tests {
         assert_eq!(
             service
                 .add(
+                    FirewallChain::Input,
                     FirewallAction::Deny,
                     FirewallProtocol::Tcp,
                     80,
@@ -643,6 +1303,48 @@ mod tests {
         assert_eq!(
             service.delete(0).expect_err("handle").code,
             "firewall_handle"
+        );
+        assert_eq!(
+            service
+                .update(
+                    0,
+                    FirewallChain::Input,
+                    FirewallAction::Allow,
+                    FirewallProtocol::Tcp,
+                    80,
+                    None
+                )
+                .expect_err("update handle")
+                .code,
+            "firewall_handle"
+        );
+        assert_eq!(
+            service
+                .update(
+                    3,
+                    FirewallChain::Input,
+                    FirewallAction::Allow,
+                    FirewallProtocol::Tcp,
+                    0,
+                    None
+                )
+                .expect_err("update port")
+                .code,
+            "firewall_port"
+        );
+        assert_eq!(
+            service
+                .update(
+                    3,
+                    FirewallChain::Input,
+                    FirewallAction::Allow,
+                    FirewallProtocol::Tcp,
+                    80,
+                    Some("bad comment;")
+                )
+                .expect_err("update comment")
+                .code,
+            "firewall_comment"
         );
         assert!(nft.calls().is_empty());
     }

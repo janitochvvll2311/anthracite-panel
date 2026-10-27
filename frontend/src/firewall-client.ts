@@ -1,13 +1,14 @@
 import { responseError } from './http'
 
 export type FirewallAction = 'allow' | 'deny'
+export type FirewallChain = 'input' | 'output'
 export type FirewallProtocol = 'tcp' | 'udp'
 export type FirewallRuleAction = 'allow' | 'deny' | 'custom'
 
-/** One rule in the managed `inet anthracite input` chain. */
+/** One rule in the managed `inet anthracite` table. */
 export interface FirewallRule {
   handle: number
-  chain: string
+  chain: FirewallChain
   action: FirewallRuleAction
   protocol?: FirewallProtocol
   port?: number
@@ -15,11 +16,19 @@ export interface FirewallRule {
   comment?: string
 }
 
+/** The presence and default policy of one managed base chain. */
+export interface FirewallChainState {
+  chain: FirewallChain
+  initialized: boolean
+  policy: FirewallAction
+}
+
 /** One point-in-time view of the managed table. */
 export interface FirewallSnapshot {
   initialized: boolean
   control_enabled: boolean
   rules: FirewallRule[]
+  chains: FirewallChainState[]
   ruleset: string
   timestamp_ms: number
 }
@@ -28,13 +37,23 @@ export interface FirewallClient {
   get(): Promise<FirewallSnapshot>
   /** Resolves to the daemon message. */
   add(
+    chain: FirewallChain,
+    action: FirewallAction,
+    protocol: FirewallProtocol,
+    port: number,
+    comment?: string,
+  ): Promise<string>
+  update(
+    handle: number,
+    chain: FirewallChain,
     action: FirewallAction,
     protocol: FirewallProtocol,
     port: number,
     comment?: string,
   ): Promise<string>
   remove(handle: number): Promise<string>
-  flush(): Promise<string>
+  flush(chain: FirewallChain): Promise<string>
+  setPolicy(chain: FirewallChain, policy: FirewallAction): Promise<string>
 }
 
 export class HttpFirewallClient implements FirewallClient {
@@ -52,12 +71,32 @@ export class HttpFirewallClient implements FirewallClient {
   }
 
   async add(
+    chain: FirewallChain,
     action: FirewallAction,
     protocol: FirewallProtocol,
     port: number,
     comment?: string,
   ): Promise<string> {
     return this.action('/api/firewall/rule', {
+      chain,
+      action,
+      protocol,
+      port,
+      ...(comment ? { comment } : {}),
+    })
+  }
+
+  async update(
+    handle: number,
+    chain: FirewallChain,
+    action: FirewallAction,
+    protocol: FirewallProtocol,
+    port: number,
+    comment?: string,
+  ): Promise<string> {
+    return this.action('/api/firewall/update', {
+      handle,
+      chain,
       action,
       protocol,
       port,
@@ -69,8 +108,12 @@ export class HttpFirewallClient implements FirewallClient {
     return this.action('/api/firewall/delete', { handle })
   }
 
-  async flush(): Promise<string> {
-    return this.action('/api/firewall/flush', {})
+  async flush(chain: FirewallChain): Promise<string> {
+    return this.action('/api/firewall/flush', { chain })
+  }
+
+  async setPolicy(chain: FirewallChain, policy: FirewallAction): Promise<string> {
+    return this.action('/api/firewall/policy', { chain, policy })
   }
 
   private async action(path: string, body: unknown): Promise<string> {
