@@ -126,6 +126,13 @@ shell on `:8080` has no HMR either.
 ANTH_HMR=on ./scripts/dev.sh restart   # desktop fast refresh
 ```
 
+Network mutations and the firewall need a daemon with `CAP_NET_ADMIN`. On a
+host where root has that capability, run the whole development script with
+`sudo ./scripts/dev.sh start` or `ANTH_SUDO=1 ./scripts/dev.sh start`, and use
+the same form for `stop` and `restart`. The `ANTH_SUDO` form re-executes the
+script under `sudo`; it is a development convenience, not a privilege boundary,
+and it cannot add a capability the container's bounding set excludes.
+
 Inside an OpenCode session the same commands are available as `/dev-start`,
 `/dev-stop`, `/dev-status` and `/dev-restart` (from `.opencode/commands/`).
 

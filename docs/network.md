@@ -41,6 +41,9 @@ manage = false
 - The daemon's process needs `CAP_NET_ADMIN`. Being uid 0 is not enough inside a
   container whose bounding set excludes it. In Docker, start the container with
   `--cap-add=NET_ADMIN` (or run the daemon on the host with the right account).
+  `sudo ./scripts/dev.sh ...` and `ANTH_SUDO=1 ./scripts/dev.sh ...` elevate the
+  whole development helper on a host where root has the capability; sudo cannot
+  add one the container's bounding set excludes.
 - `tun` creation additionally needs `/dev/net/tun`. In Docker, pass
   `--device /dev/net/tun`; a missing device is `501 tun_unavailable`.
 - The firewall cut will add `nftables` and the same capability. It is not needed

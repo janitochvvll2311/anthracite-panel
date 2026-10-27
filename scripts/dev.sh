@@ -7,6 +7,11 @@
 #   ./scripts/dev.sh status
 #   ./scripts/dev.sh restart
 #
+# Network mutations and the firewall need a daemon with CAP_NET_ADMIN. On a
+# normal host that means either `sudo ./scripts/dev.sh start` or
+# `ANTH_SUDO=1 ./scripts/dev.sh start`; use the same form for stop/restart.
+# Sudo does not add a capability the container's bounding set excludes.
+#
 # Set ANTH_HMR=on for Vite fast refresh on desktop. HMR is off by default
 # because Android drops the HMR socket while the native file picker is open and
 # Vite reloads the page when it reconnects, losing the selected file.
@@ -15,6 +20,26 @@ export ANTH_HMR=${ANTH_HMR:-off}
 # PIDs, logs and the debug config live under /tmp/anthracite-panel/dev, so the
 # tree stays clean and a run never inherits a stale socket from another one.
 set -euo pipefail
+
+# `sudo` resets PATH on many hosts. Source the toolchain paths here and again
+# in the elevated process, so the cargo and bun wrappers are found either way.
+if [ -r /tools/env.sh ]; then
+  # shellcheck disable=SC1091
+  . /tools/env.sh
+fi
+
+# Re-exec once under sudo when the caller asked for an elevated daemon. Running
+# the whole script as root keeps stop/restart symmetrical; this is a development
+# helper, not a privilege-separation boundary. Use `sudo ./scripts/dev.sh ...`
+# directly if you already have a root shell.
+if [ "${ANTH_SUDO:-0}" = "1" ] && [ "$(id -u)" -ne 0 ]; then
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "error: ANTH_SUDO=1 needs sudo on PATH" >&2
+    exit 2
+  fi
+  script_path=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
+  exec sudo -E "$script_path" "$@"
+fi
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 run=/tmp/anthracite-panel/dev
@@ -42,7 +67,14 @@ read_pid() {
 
 alive() {
   local pid=$1
-  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  local state
+  [ -n "$pid" ] || return 1
+  # `/proc` is readable across uids, so status sees a daemon started under sudo.
+  # A zombie still has a /proc entry but cannot be stopped; treat it as gone so
+  # a stale pid file does not block the next start.
+  [ -r "/proc/$pid/stat" ] || return 1
+  state=$(cut -d' ' -f3 "/proc/$pid/stat" 2>/dev/null || true)
+  [ "$state" != "Z" ] && [ "$state" != "X" ]
 }
 
 # Lists the direct children of a pid from /proc, so a killed `cargo run` does
@@ -132,6 +164,10 @@ stop_one() {
   if alive "$pid"; then
     kill_tree KILL "$pid"
   fi
+  if alive "$pid"; then
+    echo "$name: still running (pid $pid); rerun with ANTH_SUDO=1 or as root" >&2
+    return 1
+  fi
   rm -f "$file"
   echo "$name: stopped"
 }
@@ -182,8 +218,10 @@ start() {
 }
 
 stop() {
-  stop_one frontend
-  stop_one backend
+  local code=0
+  stop_one frontend || code=1
+  stop_one backend || code=1
+  return "$code"
 }
 
 status() {
