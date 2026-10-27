@@ -54,10 +54,6 @@ impl FileService {
         })
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// Lists one page of a directory: directories first, then everything else,
     /// each group by name.
     pub fn list(&self, path: &str, request: &PageRequest) -> Result<Page<FileEntry>, WireError> {
@@ -327,14 +323,8 @@ impl FileService {
     /// Only raster formats plus SVG are accepted. SVG is served with a
     /// sandboxing CSP so opening the URL directly cannot run scripts.
     pub fn image(&self, path: &str) -> Result<(Vec<u8>, &'static str), WireError> {
-        let display = display_path(path);
-        let resolved = self.resolve(path)?;
-        let metadata = fs::metadata(&resolved).map_err(|error| io_error(&display, error))?;
-        if !metadata.is_file() {
-            return Err(WireError::invalid(format!(
-                "{display} is not a regular file"
-            )));
-        }
+        let limit = self.max_write_bytes.min(32 * 1024 * 1024);
+        let (resolved, display) = self.regular_file(path, limit, "image")?;
         let extension = resolved
             .extension()
             .and_then(|extension| extension.to_str())
@@ -357,20 +347,23 @@ impl FileService {
                 ));
             }
         };
-        let limit = self.max_write_bytes.min(32 * 1024 * 1024);
-        if metadata.len() > limit {
-            return Err(WireError::new(
-                ErrorKind::TooLarge,
-                "too_large",
-                format!("{display} is larger than the {limit} byte image limit"),
-            ));
-        }
         let bytes = fs::read(&resolved).map_err(|error| io_error(&display, error))?;
         Ok((bytes, content_type))
     }
 
     /// Reads any regular file as raw bytes for the download route.
     pub fn download(&self, path: &str) -> Result<Vec<u8>, WireError> {
+        let (resolved, display) = self.regular_file(path, self.max_write_bytes, "download")?;
+        fs::read(&resolved).map_err(|error| io_error(&display, error))
+    }
+
+    /// Resolves `path` to a regular file and enforces `limit`.
+    fn regular_file(
+        &self,
+        path: &str,
+        limit: u64,
+        kind: &str,
+    ) -> Result<(PathBuf, String), WireError> {
         let display = display_path(path);
         let resolved = self.resolve(path)?;
         let metadata = fs::metadata(&resolved).map_err(|error| io_error(&display, error))?;
@@ -379,15 +372,14 @@ impl FileService {
                 "{display} is not a regular file"
             )));
         }
-        let limit = self.max_write_bytes;
         if metadata.len() > limit {
             return Err(WireError::new(
                 ErrorKind::TooLarge,
                 "too_large",
-                format!("{display} is larger than the {limit} byte download limit"),
+                format!("{display} is larger than the {limit} byte {kind} limit"),
             ));
         }
-        fs::read(&resolved).map_err(|error| io_error(&display, error))
+        Ok((resolved, display))
     }
 
     /// Resolves a request path to a canonical path under the root.

@@ -260,11 +260,6 @@ struct FileReadQuery {
 }
 
 #[derive(Debug, Deserialize)]
-struct FileDeleteQuery {
-    path: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct FileWriteBody {
     path: String,
     content: String,
@@ -517,11 +512,7 @@ async fn logout(
         .map_err(|error| ApiError::internal(format!("the logout task failed: {error}")))?
         .map_err(ApiError::from)?;
     let mut response = Json(json!({ "ok": true })).into_response();
-    for cookie in state.auth.clear_cookies() {
-        if let Ok(value) = HeaderValue::from_str(&cookie) {
-            response.headers_mut().append(header::SET_COOKIE, value);
-        }
-    }
+    append_cookies(&mut response, state.auth.clear_cookies());
     Ok(response)
 }
 
@@ -540,11 +531,7 @@ async fn password(
     .map_err(|error| ApiError::internal(format!("the password task failed: {error}")))?
     .map_err(ApiError::from)?;
     let mut response = Json(json!({ "ok": true })).into_response();
-    for cookie in state.auth.clear_cookies() {
-        if let Ok(value) = HeaderValue::from_str(&cookie) {
-            response.headers_mut().append(header::SET_COOKIE, value);
-        }
-    }
+    append_cookies(&mut response, state.auth.clear_cookies());
     Ok(response)
 }
 
@@ -646,7 +633,7 @@ async fn read_file(
 async fn delete_file(
     State(state): State<AppState>,
     _authed: Authed,
-    query: Result<Query<FileDeleteQuery>, QueryRejection>,
+    query: Result<Query<FilePathQuery>, QueryRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
     match state
@@ -715,17 +702,7 @@ async fn image_file(
 ) -> Result<HttpResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
     let (bytes, content_type) = state.daemon.image(&query.path).map_err(ApiError::from)?;
-    let mut response = HttpResponse::new(Body::from(bytes));
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response.headers_mut().insert(
-        HeaderName::from_static("x-content-type-options"),
-        HeaderValue::from_static("nosniff"),
-    );
+    let mut response = binary_response(bytes, content_type);
     response.headers_mut().insert(
         HeaderName::from_static("content-security-policy"),
         HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"),
@@ -740,21 +717,10 @@ async fn download_file(
 ) -> Result<HttpResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
     let bytes = state.daemon.download(&query.path).map_err(ApiError::from)?;
-    let mut response = HttpResponse::new(Body::from(bytes));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let mut response = binary_response(bytes, "application/octet-stream");
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_static("attachment"),
-    );
-    response.headers_mut().insert(
-        HeaderName::from_static("x-content-type-options"),
-        HeaderValue::from_static("nosniff"),
     );
     Ok(response)
 }
@@ -774,19 +740,7 @@ fn serve_static(path: &str) -> HttpResponse {
 
     let path = if path.is_empty() { "index.html" } else { path };
     if let Some(asset) = www::get(path) {
-        let mut response = HttpResponse::new(Body::from(asset.bytes.into_owned()));
-        response.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(asset.content_type),
-        );
-        response.headers_mut().insert(
-            HeaderName::from_static("x-content-type-options"),
-            HeaderValue::from_static("nosniff"),
-        );
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-        return response;
+        return asset_response(asset);
     }
 
     if www::looks_like_file(path) {
@@ -794,20 +748,43 @@ fn serve_static(path: &str) -> HttpResponse {
     }
 
     match www::get("index.html") {
-        Some(asset) => {
-            let mut response = HttpResponse::new(Body::from(asset.bytes.into_owned()));
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static(asset.content_type),
-            );
-            response.headers_mut().insert(
-                HeaderName::from_static("x-content-type-options"),
-                HeaderValue::from_static("nosniff"),
-            );
-            response
-        }
+        Some(asset) => asset_response(asset),
         None => ApiError::not_found("the web UI is not built").into_response(),
     }
+}
+
+/// Serves one shell asset. The shell is tiny and changes between builds, so
+/// every asset revalidates instead of relying on a stale cache.
+fn asset_response(asset: www::Asset) -> HttpResponse {
+    let mut response = HttpResponse::new(Body::from(asset.bytes.into_owned()));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(asset.content_type),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    response
+}
+
+/// A binary file response with the headers every file route shares.
+fn binary_response(bytes: Vec<u8>, content_type: &'static str) -> HttpResponse {
+    let mut response = HttpResponse::new(Body::from(bytes));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 fn grant_response(auth: &AuthService, status: StatusCode, grant: Grant) -> HttpResponse {
@@ -819,12 +796,17 @@ fn grant_response(auth: &AuthService, status: StatusCode, grant: Grant) -> HttpR
         })),
     )
         .into_response();
-    for cookie in auth.set_cookies(&grant) {
+    append_cookies(&mut response, auth.set_cookies(&grant));
+    response
+}
+
+/// Appends each cookie as its own `Set-Cookie` header.
+fn append_cookies(response: &mut HttpResponse, cookies: Vec<String>) {
+    for cookie in cookies {
         if let Ok(value) = HeaderValue::from_str(&cookie) {
             response.headers_mut().append(header::SET_COOKIE, value);
         }
     }
-    response
 }
 
 fn bearer_or_cookie(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
