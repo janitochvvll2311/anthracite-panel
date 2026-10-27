@@ -34,6 +34,7 @@ async fn serve_connection(mut stream: UnixStream, daemon: Arc<Daemon>) -> Result
             credentials.uid()
         )));
     }
+    let owner = format!("socket:{}", credentials.uid());
 
     let Some(payload) = read_frame(&mut stream).await? else {
         return Ok(());
@@ -55,7 +56,7 @@ async fn serve_connection(mut stream: UnixStream, daemon: Arc<Daemon>) -> Result
         return Ok(());
     }
 
-    let response = daemon.execute(request).await;
+    let response = daemon.execute_as(&owner, request).await;
     let close = response
         .error()
         .is_some_and(|error| error.code == "protocol_mismatch" || error.code == "invalid_hello");
@@ -86,7 +87,7 @@ async fn serve_connection(mut stream: UnixStream, daemon: Arc<Daemon>) -> Result
             write_response(&mut stream, &response).await?;
             continue;
         }
-        let response = daemon.execute(request).await;
+        let response = daemon.execute_as(&owner, request).await;
         write_response(&mut stream, &response).await?;
     }
     Ok(())

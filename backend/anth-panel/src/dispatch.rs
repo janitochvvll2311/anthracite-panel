@@ -4,8 +4,12 @@
 //! [`Daemon::execute`], so a transport cannot answer a request differently.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use anth_wire::{ErrorKind, PROTOCOL_VERSION, PageRequest, Request, Response, WireError};
+use anth_wire::{
+    ErrorKind, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
+    TerminalOpened, TerminalOutput, TerminalSize, WireError,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
@@ -13,6 +17,7 @@ use crate::config::{Config, Paths};
 use crate::files::FileService;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
+use crate::terminal::{OpenError, Sessions, supports_line_editing};
 
 /// Everything a request may need from the process.
 pub struct Daemon {
@@ -21,6 +26,7 @@ pub struct Daemon {
     logger: Arc<Logger>,
     lifecycle: Arc<Lifecycle>,
     files: Result<FileService, String>,
+    terminal: Arc<Sessions>,
 }
 
 impl Daemon {
@@ -55,13 +61,38 @@ impl Daemon {
                 .with_trash(config.files.trash, config.files.max_trash_bytes)
                 .with_archive_limit(config.files.max_archive_bytes)
         });
+        let terminal = Arc::new(Sessions::new(
+            config.terminal.enabled,
+            config.terminal.max_sessions,
+            Duration::from_secs(config.terminal.idle_seconds),
+        ));
         Self {
             config,
             paths,
             logger,
             lifecycle,
             files,
+            terminal,
         }
+    }
+
+    pub fn terminals(&self) -> &Arc<Sessions> {
+        &self.terminal
+    }
+
+    pub fn close_terminals(&self, owner: &str) -> usize {
+        self.terminal.close_owner(owner)
+    }
+
+    /// Reaps idle terminals forever. Called once by the serving command.
+    pub fn spawn_terminal_reaper(self: &Arc<Self>) {
+        let daemon = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                daemon.terminal.reap();
+            }
+        });
     }
 
     pub fn config(&self) -> &Config {
@@ -101,16 +132,32 @@ impl Daemon {
 
     /// Handles one request.
     pub async fn execute(&self, request: Request) -> Response {
+        self.execute_as("daemon", request).await
+    }
+
+    /// Handles one request for a named owner.
+    ///
+    /// The socket passes its peer identity; the browser bridge passes the
+    /// authenticated session id, so one panel session cannot touch another's
+    /// terminal handle.
+    pub async fn execute_as(&self, owner: &str, request: Request) -> Response {
         let operation = operation_of(&request);
         let started = std::time::Instant::now();
-        let response = match self.dispatch(request).await {
+        let response = match self.dispatch(owner, request).await {
             Ok(response) => response,
             Err(error) => Response::Error(error),
         };
         let failed = response.error().is_some();
         let ms = started.elapsed().as_millis().to_string();
+        let level = if failed {
+            Level::Warn
+        } else if operation == "terminal-read" {
+            Level::Debug
+        } else {
+            Level::Info
+        };
         self.logger.event(
-            if failed { Level::Warn } else { Level::Info },
+            level,
             "request",
             if failed { "failed" } else { "answered" },
             &[("op", operation), ("ms", &ms)],
@@ -118,7 +165,22 @@ impl Daemon {
         response
     }
 
-    async fn dispatch(&self, request: Request) -> Result<Response, WireError> {
+    async fn dispatch(&self, owner: &str, request: Request) -> Result<Response, WireError> {
+        if matches!(
+            &request,
+            Request::TerminalOpen { .. }
+                | Request::TerminalRead { .. }
+                | Request::TerminalWrite { .. }
+                | Request::TerminalResize { .. }
+                | Request::TerminalClose { .. }
+        ) && !self.terminal.enabled()
+        {
+            return Err(WireError::new(
+                ErrorKind::Forbidden,
+                "terminal_disabled",
+                "the terminal is disabled; set `[terminal] enabled = true`",
+            ));
+        }
         match request {
             Request::Hello {
                 protocol_version,
@@ -219,6 +281,73 @@ impl Daemon {
                 let (path, entries) = self.files()?.extract_archive(&path, into.as_deref())?;
                 Ok(Response::FilesArchiveExtracted { path, entries })
             }
+            Request::TerminalOpen { cols, rows } => {
+                let program = crate::terminal::resolve_shell(&self.config.terminal.shell).map_err(
+                    |detail| WireError::new(ErrorKind::Forbidden, "terminal_shell", detail),
+                )?;
+                let size = TerminalSize { cols, rows };
+                let line_editing = supports_line_editing(&program);
+                let sessions = Arc::clone(&self.terminal);
+                let owner = owner.to_string();
+                let asked = program.clone();
+                let id = tokio::task::spawn_blocking(move || sessions.open(&owner, &asked, size))
+                    .await
+                    .map_err(|error| {
+                        WireError::internal(format!("the terminal open task failed: {error}"))
+                    })?
+                    .map_err(OpenError::into_wire)?;
+                Ok(Response::TerminalOpened(TerminalOpened {
+                    id,
+                    program,
+                    cols,
+                    rows,
+                    line_editing,
+                }))
+            }
+            Request::TerminalRead { id, wait_ms } => {
+                let chunk = self.terminal.read(owner, &id, wait_ms).await?;
+                Ok(Response::TerminalOutput(TerminalOutput {
+                    id,
+                    seq: chunk.seq,
+                    bytes_base64: STANDARD.encode(chunk.bytes),
+                    eof: chunk.eof,
+                    exit_code: chunk.exit_code,
+                }))
+            }
+            Request::TerminalWrite { id, bytes_base64 } => {
+                let bytes = STANDARD
+                    .decode(bytes_base64.as_bytes())
+                    .map_err(|_| WireError::invalid("the terminal input is not valid base64"))?;
+                if bytes.len() > MAX_TERMINAL_INPUT {
+                    return Err(WireError::too_large(format!(
+                        "terminal input is {} bytes, over the {MAX_TERMINAL_INPUT} byte limit",
+                        bytes.len()
+                    )));
+                }
+                let sessions = Arc::clone(&self.terminal);
+                let owner = owner.to_string();
+                tokio::task::spawn_blocking(move || sessions.write(&owner, &id, &bytes))
+                    .await
+                    .map_err(|error| {
+                        WireError::internal(format!("the terminal write task failed: {error}"))
+                    })??;
+                Ok(Response::Accepted)
+            }
+            Request::TerminalResize { id, cols, rows } => {
+                self.terminal
+                    .resize(owner, &id, TerminalSize { cols, rows })?;
+                Ok(Response::Accepted)
+            }
+            Request::TerminalClose { id } => {
+                let sessions = Arc::clone(&self.terminal);
+                let owner = owner.to_string();
+                tokio::task::spawn_blocking(move || sessions.close(&owner, &id))
+                    .await
+                    .map_err(|error| {
+                        WireError::internal(format!("the terminal close task failed: {error}"))
+                    })??;
+                Ok(Response::Accepted)
+            }
         }
     }
 }
@@ -274,6 +403,11 @@ fn operation_of(request: &Request) -> &'static str {
         Request::FilesArchive { .. } => "files-archive",
         Request::FilesArchiveList { .. } => "files-archive-list",
         Request::FilesArchiveExtract { .. } => "files-archive-extract",
+        Request::TerminalOpen { .. } => "terminal-open",
+        Request::TerminalRead { .. } => "terminal-read",
+        Request::TerminalWrite { .. } => "terminal-write",
+        Request::TerminalResize { .. } => "terminal-resize",
+        Request::TerminalClose { .. } => "terminal-close",
     }
 }
 

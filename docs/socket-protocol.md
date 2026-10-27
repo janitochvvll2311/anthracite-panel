@@ -287,6 +287,51 @@ archive-created symlink, and it enforces `files.max_archive_bytes` while
 writing. A refused member fails the request instead of leaving a partial tree
 that looks complete.
 
+### Terminal
+
+```json
+{ "type": "terminal_open", "data": { "cols": 80, "rows": 24 } }
+```
+
+```json
+{
+  "type": "terminal_opened",
+  "data": {
+    "id": "t1a",
+    "program": "/bin/sh",
+    "cols": 80,
+    "rows": 24,
+    "line_editing": false
+  }
+}
+```
+
+```json
+{ "type": "terminal_read", "data": { "id": "t1a", "wait_ms": 10000 } }
+```
+
+```json
+{
+  "type": "terminal_output",
+  "data": { "id": "t1a", "seq": 1, "bytes_base64": "aGkK", "eof": false }
+}
+```
+
+```json
+{ "type": "terminal_write", "data": { "id": "t1a", "bytes_base64": "bHMK" } }
+{ "type": "terminal_resize", "data": { "id": "t1a", "cols": 120, "rows": 40 } }
+{ "type": "terminal_close", "data": { "id": "t1a" } }
+```
+
+A write, resize or close answers `{"type":"accepted"}`. A read waits at most
+`wait_ms` (capped at 30 seconds); an empty answer means the wait expired. `seq`
+starts at zero and advances only when bytes are returned. `eof: true` marks the
+end and carries `exit_code` when available. Sizes are 1..500 columns/rows;
+output chunks are at most 16 KiB and input is capped at 16 KiB after decoding.
+Handles are owner-scoped: a handle from another auth session or socket uid is
+`not_found`. With `[terminal] enabled = false`, every terminal request answers
+`forbidden` with code `terminal_disabled`.
+
 ## Errors
 
 ```json

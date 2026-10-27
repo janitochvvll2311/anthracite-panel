@@ -146,14 +146,15 @@ test('the sidebar and the drawer share the sections, and the strip is bare there
   const root = element.shadowRoot!
 
   const sidebar = root.querySelector('[data-sidebar]')!
-  expect(sidebar.querySelectorAll('a')).toHaveLength(3)
+  expect(sidebar.querySelectorAll('a')).toHaveLength(4)
   expect(sidebar.querySelector('a[data-section="home"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="files"]')).not.toBeNull()
+  expect(sidebar.querySelector('a[data-section="terminal"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="settings"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="home"] anth-icon')).not.toBeNull()
 
   const drawer = root.querySelector('anth-nav-drawer')!
-  expect(drawer.querySelectorAll('a')).toHaveLength(3)
+  expect(drawer.querySelectorAll('a')).toHaveLength(4)
 
   const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
   expect(outer.active).toBe('home')

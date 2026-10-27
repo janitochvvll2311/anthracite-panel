@@ -11,6 +11,9 @@ pub mod log;
 pub mod render;
 pub mod socket;
 pub mod state;
+pub mod terminal;
+pub mod terminal_client;
+pub(crate) mod ws;
 pub mod www;
 
 pub use config::Config;

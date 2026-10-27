@@ -10,8 +10,8 @@
 
 import { msg } from '@lit/localize'
 
-export type SectionId = 'home' | 'files' | 'settings'
-export type PanelId = 'general' | 'files'
+export type SectionId = 'home' | 'files' | 'terminal' | 'settings'
+export type PanelId = 'general' | 'files' | 'terminal'
 
 export interface Section {
   /** Stable id. It is the route and the hash, so it never changes. */
@@ -38,6 +38,7 @@ export function sections(): Section[] {
   return [
     { id: 'home', label: msg('Home'), icon: 'home' },
     { id: 'files', label: msg('Files'), icon: 'files' },
+    { id: 'terminal', label: msg('Terminal'), icon: 'terminal' },
     { id: 'settings', label: msg('Settings'), icon: 'settings' },
   ]
 }
@@ -61,6 +62,9 @@ export function routeFrom(hash: string): Route {
   if (parts[0] === 'files') {
     return { section: 'files', panel: 'files' }
   }
+  if (parts[0] === 'terminal') {
+    return { section: 'terminal', panel: 'terminal' }
+  }
   if (parts[0] === 'settings') {
     return { section: 'settings', panel: 'general' }
   }
@@ -72,6 +76,8 @@ export function hashForSection(section: SectionId): string {
   switch (section) {
     case 'files':
       return '#/files'
+    case 'terminal':
+      return '#/terminal'
     case 'settings':
       return '#/settings'
     default:
@@ -81,5 +87,7 @@ export function hashForSection(section: SectionId): string {
 
 /** The hash for one panel. */
 export function hashForPanel(panel: PanelId): string {
-  return panel === 'files' ? '#/files' : '#/settings'
+  if (panel === 'files') return '#/files'
+  if (panel === 'terminal') return '#/terminal'
+  return '#/settings'
 }

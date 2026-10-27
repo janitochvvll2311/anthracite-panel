@@ -11,14 +11,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anth_wire::{
-    ArchiveFormat, ArchiveListing, ErrorKind, FileChunk, FileEntry, FileWritten, Page, Request,
-    Response, TrashListing, WireError,
+    ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
+    FileWritten, Page, Request, Response, TerminalSize, TrashListing, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{
     ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path as AxumPath, Query,
-    Request as AxumRequest, State,
+    Request as AxumRequest, State, ws::WebSocketUpgrade,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
@@ -102,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/files/archive", post(create_archive))
         .route("/api/files/archive/list", get(list_archive))
         .route("/api/files/archive/extract", post(extract_archive))
+        .route("/api/terminal", get(ws_terminal))
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
         .route("/api/settings", get(get_settings).patch(patch_settings))
@@ -291,6 +292,14 @@ struct FilePathQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct TerminalQuery {
+    #[serde(default)]
+    cols: Option<u16>,
+    #[serde(default)]
+    rows: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
 struct TrashPathBody {
     path: String,
 }
@@ -441,6 +450,17 @@ async fn revoke_session(
     let current = authed.sid.clone();
     let sid = body.sid.clone();
     let others = body.others || sid.is_none();
+    let targets: Vec<String> = if others {
+        state
+            .auth
+            .list_sessions(&current)
+            .into_iter()
+            .filter(|session| !session.current)
+            .map(|session| session.sid)
+            .collect()
+    } else {
+        sid.clone().into_iter().collect()
+    };
     let result = tokio::task::spawn_blocking(move || {
         if others {
             auth.revoke_others(&current).map(|count| (count, "others"))
@@ -452,6 +472,11 @@ async fn revoke_session(
     .await
     .map_err(|error| ApiError::internal(format!("the revoke task failed: {error}")))?;
     let (revoked, scope) = result.map_err(ApiError::from)?;
+    for sid in targets {
+        if !sid.is_empty() {
+            state.daemon.close_terminals(&sid);
+        }
+    }
     Ok(Json(
         json!({ "ok": true, "revoked": revoked, "scope": scope }),
     ))
@@ -541,9 +566,11 @@ async fn refresh(
 
 async fn logout(
     State(state): State<AppState>,
+    authed: Authed,
     headers: HeaderMap,
 ) -> Result<HttpResponse, ApiError> {
     same_origin(&headers)?;
+    state.daemon.close_terminals(&authed.sid);
     let auth = Arc::clone(&state.auth);
     tokio::task::spawn_blocking(move || auth.logout())
         .await
@@ -556,11 +583,12 @@ async fn logout(
 
 async fn password(
     State(state): State<AppState>,
-    _authed: Authed,
+    authed: Authed,
     headers: HeaderMap,
     ApiJson(body): ApiJson<PasswordBody>,
 ) -> Result<HttpResponse, ApiError> {
     same_origin(&headers)?;
+    state.daemon.close_terminals(&authed.sid);
     let auth = Arc::clone(&state.auth);
     tokio::task::spawn_blocking(move || {
         auth.change_password(&body.current_password, &body.new_password)
@@ -894,6 +922,35 @@ async fn extract_archive(
             "extracting an archive answered unexpectedly: {other:?}"
         ))),
     }
+}
+
+async fn ws_terminal(
+    authed: Authed,
+    headers: HeaderMap,
+    query: Result<Query<TerminalQuery>, QueryRejection>,
+    websocket: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ApiError> {
+    same_origin(&headers)?;
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let size = match (query.cols, query.rows) {
+        (None, None) => DEFAULT_TERMINAL_SIZE,
+        (Some(cols), Some(rows)) => TerminalSize { cols, rows },
+        _ => return Err(ApiError::invalid("cols and rows must be provided together")),
+    };
+    if !size.is_sane() {
+        return Err(ApiError::invalid(format!(
+            "terminal size {}x{} is outside the allowed range",
+            size.cols, size.rows
+        )));
+    }
+
+    let daemon = Arc::clone(&state.daemon);
+    let owner = authed.sid.clone();
+    Ok(websocket
+        .max_message_size(crate::terminal::web::MAX_WEB_MESSAGE)
+        .max_frame_size(crate::terminal::web::MAX_WEB_MESSAGE)
+        .on_upgrade(move |socket| crate::terminal::web::serve_socket(socket, daemon, owner, size)))
 }
 
 async fn index() -> HttpResponse {

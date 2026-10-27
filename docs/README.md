@@ -1,14 +1,16 @@
 # Documentation
 
-This branch is the v0.3.0 rewrite. The Phase 1 host-info slice is implemented;
-the remaining feature documentation is added with the code it describes.
+This branch is the v0.3.0 rewrite. Phases 0–3 and the terminal slice of Phase 4
+are implemented; the remaining feature documentation is added with the code it
+describes.
 
 ## User contract
 
 | Document | Contents |
 | --- | --- |
 | [cli.md](cli.md) | Commands, flags, output, exit codes and bootstrap |
-| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, host-info, SSE and error shape |
+| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, SSE and error shape |
+| [terminal.md](terminal.md) | PTY sessions, policy, socket/WebSocket contract and mobile UI |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

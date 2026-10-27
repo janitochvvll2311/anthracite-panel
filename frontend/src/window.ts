@@ -59,6 +59,10 @@ export class AnthWindow extends LitElement {
   @property({ type: Boolean, reflect: true })
   minimized = false
 
+  /** Keep the page interactive outside the frame (used by the terminal). */
+  @property({ type: Boolean, reflect: true })
+  nonmodal = false
+
   /** Pixel offset of the frame, relative to its centered position. */
   @state()
   private offset = { x: 0, y: 0 }
@@ -229,11 +233,13 @@ export class AnthWindow extends LitElement {
 
   override render() {
     return html`
-      <div class="backdrop" @click=${() => this.close()}></div>
+      ${this.nonmodal
+        ? nothing
+        : html`<div class="backdrop" @click=${() => this.close()}></div>`}
       <section
         class="frame"
         role="dialog"
-        aria-modal="true"
+        aria-modal=${this.nonmodal ? 'false' : 'true'}
         aria-label=${this.label}
         style="--window-x: ${this.offset.x}px; --window-y: ${this.offset.y}px"
       >
@@ -291,6 +297,12 @@ export class AnthWindow extends LitElement {
     :host(:not([open])),
     :host([minimized]) { display: none; }
     :host([maximized]) { padding: 0; }
+    :host([nonmodal]) {
+      pointer-events: none;
+      align-items: center;
+      justify-items: end;
+    }
+    :host([nonmodal]) .frame { pointer-events: auto; }
 
     .backdrop {
       position: absolute;
@@ -302,7 +314,7 @@ export class AnthWindow extends LitElement {
       display: flex;
       flex-direction: column;
       gap: 8px;
-      width: min(100%, 56rem);
+      width: var(--anth-window-width, min(100%, 56rem));
       height: min(100%, 40rem);
       min-width: 0;
       max-width: 100%;

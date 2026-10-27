@@ -5,7 +5,7 @@ so an operator can tell which side to update.
 
 | Version | Release | State | Notes |
 | --- | --- | --- | --- |
-| 2 | v0.3.0 (draft) | current | 4-byte length-prefixed JSON, mandatory `Hello`/`Welcome`, pagination, one `WireError` |
+| 2 | v0.3.0 (draft) | current | 4-byte length-prefixed JSON, mandatory `Hello`/`Welcome`, pagination, files/trash/archive/terminal operations, one `WireError` |
 | 1 | v0.2.0 | superseded | length-prefixed JSON, `Hello`, per-feature wire types |
 | unversioned | v0.1.0 | legacy | newline-delimited JSON, 1 MiB line cap, `type`/`data` envelope |
 

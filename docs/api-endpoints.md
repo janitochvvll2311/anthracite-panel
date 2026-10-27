@@ -442,6 +442,35 @@ It has the same `files.write` gate, `create`/`exists` behavior, size cap and
 path guards as the text write. The body limit allows for the base64 expansion
 of `files.max_upload_bytes`.
 
+## Terminal
+
+`GET /api/terminal?cols=80&rows=24` upgrades to a WebSocket. It requires a live
+panel session unless auth is disabled, and the `Origin` header must match
+`Host`. `cols` and `rows` are optional together; omitted means 80×24, and a
+single one is `400`. Sizes outside 1..500 are `400`.
+
+The browser and server exchange JSON text frames; bytes are base64:
+
+```jsonc
+// browser -> server
+{ "type": "input", "data": "<base64>" }
+{ "type": "resize", "cols": 120, "rows": 40 }
+{ "type": "ping" }
+
+// server -> browser
+{ "type": "ready", "shell": "/bin/sh", "cols": 80, "rows": 24, "line_editing": false }
+{ "type": "output", "data": "<base64>" }
+{ "type": "exit", "code": 0 }
+{ "type": "error", "detail": "the terminal is disabled; set `[terminal] enabled = true`" }
+{ "type": "pong" }
+```
+
+`ready` is sent before any output. An exit carries the remote code when the
+platform reports it. The WebSocket frame cap is 128 KiB. One socket owns one
+PTY; closing it kills the process group. `terminal_disabled`,
+`terminal_capacity` and invalid-size errors are also delivered as an `error`
+frame when they happen after the upgrade.
+
 ## Static UI
 
 `GET /` and `GET /{*path}` serve the embedded shell. A missing file is `404`; an

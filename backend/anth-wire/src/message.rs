@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
 use crate::page::Page;
+use crate::terminal::{TerminalOpened, TerminalOutput};
 
 /// Bumped when a change would make an older peer misread a message.
 ///
@@ -110,6 +111,16 @@ pub enum Request {
         #[serde(default)]
         into: Option<String>,
     },
+    /// Opens one PTY and returns its opaque handle.
+    TerminalOpen { cols: u16, rows: u16 },
+    /// Waits at most `wait_ms` for output from one session.
+    TerminalRead { id: String, wait_ms: u32 },
+    /// Sends keystrokes to one session.
+    TerminalWrite { id: String, bytes_base64: String },
+    /// Updates the window size and signals the process group.
+    TerminalResize { id: String, cols: u16, rows: u16 },
+    /// Ends one session. Closing an already-closed handle is not an error.
+    TerminalClose { id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,6 +184,12 @@ pub enum Response {
         path: String,
         entries: Vec<String>,
     },
+    /// A terminal now exists under its opaque handle.
+    TerminalOpened(TerminalOpened),
+    /// One read from a terminal, or the end of the program.
+    TerminalOutput(TerminalOutput),
+    /// A write, resize or close succeeded and has no value to return.
+    Accepted,
     Error(WireError),
 }
 

@@ -153,6 +153,19 @@ daemon caps the uncompressed size with `files.max_archive_bytes`, counts members
 against `files.max_entries`, and refuses absolute members, `..`, backslashes and
 writes through archive-created symlinks.
 
+## `terminal`
+
+```bash
+anth-panel terminal
+anth-panel terminal --cols 100 --rows 30
+```
+
+Opens an interactive shell on a pseudo-terminal. It puts the local terminal in
+raw mode, forwards window changes, restores the local terminal on exit and
+returns the remote exit code. The daemon must have `[terminal] enabled = true`.
+The shell is the one configured by `[terminal] shell`; the CLI cannot choose a
+different program.
+
 ## `config`
 
 ```bash

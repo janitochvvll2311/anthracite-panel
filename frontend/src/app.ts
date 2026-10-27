@@ -38,6 +38,7 @@ import type { AnthSettings } from './settings'
 import type { SettingsClient } from './settings-client'
 import { TAB_CHANGE_EVENT } from './tab-panel'
 import type { AnthTabPanel, TabChangeDetail } from './tab-panel'
+import { closeTerminalWindow, openTerminalWindow } from './terminal-window'
 
 // The shell renders these, so it imports them: a test that mounts `anth-app`
 // on its own must still get working custom elements.
@@ -70,6 +71,7 @@ export class AnthApp extends HTMLElement {
   #settingsPanel?: AnthTabPanel
   #homeSection?: HTMLElement
   #filesSection?: HTMLElement
+  #terminalSection?: HTMLElement
   #settingsSection?: HTMLElement
   #filesTabSection?: HTMLElement
   #generalTabSection?: HTMLElement
@@ -361,10 +363,22 @@ export class AnthApp extends HTMLElement {
         </section>
       </section>
       <section data-tab="files" label="${escape(msg('Files'))}"></section>
+      <section data-tab="terminal" label="${escape(msg('Terminal'))}">
+        <section class="card terminal-launcher">
+          <h2>${msg('Terminal')}</h2>
+          <p class="muted">${msg('Open a shell on this host. Sessions stay open while you use the panel.')}</p>
+          <button type="button" class="launch-terminal" data-open-terminal>
+            <anth-icon name="terminal"></anth-icon>
+            <span class="btn-label">${msg('Open terminal')}</span>
+          </button>
+        </section>
+      </section>
       <section data-tab="settings" label="${escape(msg('Settings'))}"></section>
     `
     const homeSection = outer.querySelector<HTMLElement>('[data-tab="home"]') ?? undefined
     const filesSection = outer.querySelector<HTMLElement>('[data-tab="files"]') ?? undefined
+    const terminalSection =
+      outer.querySelector<HTMLElement>('[data-tab="terminal"]') ?? undefined
     const settingsSection = outer.querySelector<HTMLElement>('[data-tab="settings"]') ?? undefined
 
     const filesPanel = document.createElement('anth-tab-panel') as AnthTabPanel
@@ -416,6 +430,7 @@ export class AnthApp extends HTMLElement {
     this.#settingsPanel = settingsPanel
     this.#homeSection = homeSection
     this.#filesSection = filesSection
+    this.#terminalSection = terminalSection
     this.#settingsSection = settingsSection
     this.#filesTabSection = filesTabSection
     this.#generalTabSection = generalTabSection
@@ -423,6 +438,9 @@ export class AnthApp extends HTMLElement {
     homeSection
       ?.querySelector('anth-fab')
       ?.addEventListener('click', () => void host?.refresh())
+    terminalSection
+      ?.querySelector('[data-open-terminal]')
+      ?.addEventListener('click', () => void openTerminalWindow())
     filesPanel.addEventListener(TAB_CHANGE_EVENT, (event) => {
       const { id } = (event as CustomEvent<TabChangeDetail>).detail
       // The hash stays the source of truth, so back and forward walk panels.
@@ -446,6 +464,7 @@ export class AnthApp extends HTMLElement {
     this.#settingsPanel = undefined
     this.#homeSection = undefined
     this.#filesSection = undefined
+    this.#terminalSection = undefined
     this.#settingsSection = undefined
     this.#filesTabSection = undefined
     this.#generalTabSection = undefined
@@ -458,6 +477,7 @@ export class AnthApp extends HTMLElement {
     }
     this.#homeSection?.setAttribute('label', msg('Home'))
     this.#filesSection?.setAttribute('label', msg('Files'))
+    this.#terminalSection?.setAttribute('label', msg('Terminal'))
     this.#settingsSection?.setAttribute('label', msg('Settings'))
     this.#filesTabSection?.setAttribute('label', msg('Files'))
     this.#generalTabSection?.setAttribute('label', msg('General'))
@@ -480,6 +500,9 @@ export class AnthApp extends HTMLElement {
     this.#tabPanel.refresh()
     this.#filesPanel?.refresh()
     this.#settingsPanel?.refresh()
+    if (this.#route.section === 'terminal') {
+      void openTerminalWindow()
+    }
   }
 
   readonly #onHashChange = (): void => {
@@ -528,7 +551,10 @@ export class AnthApp extends HTMLElement {
   }
 
   async #logout(): Promise<void> {
-    await this.#perform(() => AnthApp.authClient!.logout())
+    await this.#perform(async () => {
+      closeTerminalWindow()
+      await AnthApp.authClient!.logout()
+    })
   }
 }
 
@@ -641,6 +667,23 @@ const STYLE = `
           border-radius: var(--radius, 10px); padding: 1rem 1.15rem; }
   .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; }
   .label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted, #8b9bad); }
+  .terminal-launcher { display: grid; gap: 0.75rem; justify-items: start; max-width: 34rem; }
+  .terminal-launcher h2 { margin: 0; font: 600 1.15rem/1.2 var(--mono, monospace); }
+  .terminal-launcher p { margin: 0; }
+  .launch-terminal {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 40px;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid var(--accent, #7dd3fc);
+    border-radius: 7px;
+    background: rgba(125, 211, 252, 0.12);
+    color: var(--text, #dbe6f2);
+    font: 13px/1.4 var(--mono, monospace);
+    cursor: pointer;
+  }
+  .launch-terminal:hover { background: rgba(125, 211, 252, 0.2); }
 
   .auth { display: grid; place-items: center; min-height: 100%; }
   .auth-card { display: grid; gap: 0.7rem; width: min(100%, 380px); padding: 1.2rem;

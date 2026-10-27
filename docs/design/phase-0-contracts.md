@@ -13,7 +13,9 @@ and revocation, the settings surface and restart/reboot. Phase 3 is in place:
 file listing, text and image previews, a tabbed create/edit/save editor, a
 transfer queue for uploads and downloads, deletion behind `files.write`, the
 freedesktop.org trash and in-process archives, over socket, HTTP, CLI and the
-web Files section. The remaining feature phases are still pending.
+web Files section. Phase 4 has started with the terminal slice: PTY sessions,
+owner/seq/idle limits, the WebSocket bridge and the tabbed web terminal. The
+remaining feature phases are still pending.
 
 Reference: [v0.3.0.md](v0.3.0.md).
 

@@ -75,6 +75,15 @@ enum Command {
         #[command(subcommand)]
         command: FilesCommand,
     },
+    /// Open an interactive shell on a pseudo-terminal.
+    Terminal {
+        /// Initial columns; defaults to the local terminal.
+        #[arg(long, value_name = "COLS")]
+        cols: Option<u16>,
+        /// Initial rows; defaults to the local terminal.
+        #[arg(long, value_name = "ROWS")]
+        rows: Option<u16>,
+    },
     /// Print a snapshot of the host the daemon runs on.
     HostInfo {
         /// Keep reading every INTERVAL instead of printing once.
@@ -216,7 +225,9 @@ async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err((code, message)) => {
-            eprintln!("{message}");
+            if !message.is_empty() {
+                eprintln!("{message}");
+            }
             ExitCode::from(code)
         }
     }
@@ -238,6 +249,9 @@ async fn run() -> CliResult {
             lifecycle_command(&path, LifecycleRequest::Reboot(*delay)).await
         }
         Command::Files { command } => files_command(&path, command).await,
+        Command::Terminal { cols, rows } => anth_panel::terminal_client::run(&path, *cols, *rows)
+            .await
+            .map_err(|code| (code, String::new())),
         Command::Run { addr, allow_reboot } => {
             serve(&path, Some(addr.clone()), *allow_reboot, &cli).await
         }
@@ -304,6 +318,7 @@ async fn serve(
         Arc::clone(&logger),
         Arc::new(Lifecycle::new(Arc::new(lifecycle::System), allow_reboot)),
     ));
+    daemon.spawn_terminal_reaper();
     let socket_listener =
         socket::bind(&paths.socket).map_err(|error| (1, format!("socket: {error}")))?;
 

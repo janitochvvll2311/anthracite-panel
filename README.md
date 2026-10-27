@@ -28,6 +28,9 @@ auth/lifecycle slice are in place:
 - A transfer queue with status, progress, cancellation and completion for
   single or multi-file uploads and downloads, independent of the Files panel
   lifecycle.
+- Terminal: one PTY per session with owner/seq/idle limits, a socket read
+  contract, a browser WebSocket bridge, a global tabbed xterm window and a
+  mobile extended keyboard with gestures. Requires `[terminal] enabled = true`.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
