@@ -548,12 +548,15 @@ export class AnthTransfers extends LitElement {
     }
     .meta .error { color: var(--err, #f87171); }
     @media (max-width: 48rem) {
+      /* Keep the FAB corner clear: a full-width panel at this height would
+         swallow taps meant for the FAB and its menu. */
       :host {
-        right: max(0.75rem, env(safe-area-inset-right));
-        bottom: calc(5rem + env(safe-area-inset-bottom));
+        right: auto;
+        bottom: calc(1rem + env(safe-area-inset-bottom));
         left: max(0.75rem, env(safe-area-inset-left));
-        width: auto;
+        width: min(20rem, calc(100vw - 6.5rem));
       }
+      .panel { max-height: min(45vh, 20rem); }
     }
     @media (prefers-reduced-motion: reduce) {
       .progress span { transition: none; }
