@@ -19,6 +19,7 @@ import {
   ANTH_TERMINAL_RETRY_EVENT,
   ANTH_TERMINAL_STATUS_EVENT,
 } from './terminal-view'
+import { applyStickyModifiers } from './lib/terminal/modifiers'
 import { WebSocketTerminalTransport } from './lib/terminal/websocket-transport'
 import type { TerminalStatus } from './lib/terminal/transport'
 
@@ -39,6 +40,12 @@ interface Hotkey {
   data: string
 }
 
+interface Point {
+  x: number
+  y: number
+}
+
+/** Special keys, in the order the bar shows them. */
 const HOTKEYS: Hotkey[] = [
   { label: 'Esc', data: '\x1b' },
   { label: 'Tab', data: '\t' },
@@ -62,6 +69,28 @@ const HOTKEYS: Hotkey[] = [
   { label: '*', data: '*' },
 ]
 
+const FONT_SIZE = { min: 10, max: 20, step: 1 }
+
+/** Touch thresholds in pixels and milliseconds. */
+const GESTURE = {
+  longPressMs: 450,
+  tapMs: 300,
+  doubleTapMs: 350,
+  tapSlop: 12,
+  doubleTapSlop: 40,
+  dragStep: 22,
+  pinchStep: 18,
+  hotkeySlop: 10,
+}
+
+const STATUS_LABELS: Record<TerminalStatus, () => string> = {
+  idle: () => msg('Idle'),
+  connecting: () => msg('Connecting'),
+  open: () => msg('Connected'),
+  closed: () => msg('Closed'),
+  error: () => msg('Error'),
+}
+
 let nextKey = 0
 
 /**
@@ -78,6 +107,9 @@ export class AnthTerminalTabs extends LitElement {
   private active = ''
 
   @state()
+  private notice = ''
+
+  @state()
   private ctrl = false
 
   @state()
@@ -89,20 +121,14 @@ export class AnthTerminalTabs extends LitElement {
   @query('.screens')
   private screens!: HTMLElement
 
+  private opening = false
   private pinchDistance = 0
   private longPress?: ReturnType<typeof setTimeout>
-  private gestureOrigin?: { x: number; y: number }
+  private gestureOrigin?: Point
   private gestureActive = false
-  private opening = false
-
-  private newTransport(): WebSocketTerminalTransport {
-    return new WebSocketTerminalTransport({
-      url: (size) => `/api/terminal?cols=${size.cols}&rows=${size.rows}`,
-    })
-  }
-  private tapStart?: { at: number; x: number; y: number }
-  private lastTap?: { at: number; x: number; y: number }
-  private touchHotkey?: { x: number; y: number; action: () => void }
+  private tapStart?: Point & { at: number }
+  private lastTap?: Point & { at: number }
+  private touchHotkey?: Point & { action: () => void }
 
   /** Number of open tabs. */
   get sessionCount(): number {
@@ -111,7 +137,7 @@ export class AnthTerminalTabs extends LitElement {
 
   /** Focuses the active terminal after the window is shown. */
   focusActive(): void {
-    this.sessions.find((session) => session.key === this.active)?.terminal.focus()
+    this.activeSession?.terminal.focus()
   }
 
   /** Opens a new session and makes it active. */
@@ -127,7 +153,6 @@ export class AnthTerminalTabs extends LitElement {
     const key = `terminal-${++nextKey}`
     const wrapper = document.createElement('div')
     wrapper.className = 'screen-slot'
-    wrapper.dataset.key = key
 
     const terminal = document.createElement('anth-terminal') as AnthTerminal
     terminal.chromeless = true
@@ -138,29 +163,25 @@ export class AnthTerminalTabs extends LitElement {
     terminal.transport = transport
 
     terminal.addEventListener(ANTH_TERMINAL_READY_EVENT, (event) => {
-      const detail = (event as CustomEvent<AnthTerminalReadyDetail>).detail
+      const { program } = (event as CustomEvent<AnthTerminalReadyDetail>).detail
       this.notice = ''
-      this.sessions = this.sessions.map((session) =>
-        session.key === key
-          ? { ...session, label: programLabel(detail.program), status: 'open' }
-          : session,
-      )
+      this.updateSession(key, { label: programLabel(program), status: 'open' })
     })
     terminal.addEventListener(ANTH_TERMINAL_STATUS_EVENT, (event) => {
-      const detail = (event as CustomEvent<AnthTerminalStatusDetail>).detail
-      this.setStatus(key, detail.status)
+      const { status } = (event as CustomEvent<AnthTerminalStatusDetail>).detail
+      this.updateSession(key, { status })
     })
     terminal.addEventListener(ANTH_TERMINAL_EXIT_EVENT, (event) => {
-      const detail = (event as CustomEvent<AnthTerminalExitDetail>).detail
-      this.setStatus(key, 'closed')
+      const { code } = (event as CustomEvent<AnthTerminalExitDetail>).detail
+      this.updateSession(key, { status: 'closed' })
       this.notice = msg(
-        str`Shell exited with code ${detail.code}. Press Enter to reconnect.`,
+        str`Shell exited with code ${code}. Press Enter to reconnect.`,
       )
     })
     terminal.addEventListener(ANTH_TERMINAL_ERROR_EVENT, (event) => {
-      const detail = (event as CustomEvent<AnthTerminalErrorDetail>).detail
-      this.setStatus(key, 'error')
-      this.notice = msg(str`${detail.message}. Press Enter to reconnect.`)
+      const { message } = (event as CustomEvent<AnthTerminalErrorDetail>).detail
+      this.updateSession(key, { status: 'error' })
+      this.notice = msg(str`${message}. Press Enter to reconnect.`)
     })
     terminal.addEventListener(ANTH_TERMINAL_RETRY_EVENT, () => {
       void this.reconnect(key)
@@ -172,55 +193,46 @@ export class AnthTerminalTabs extends LitElement {
 
     wrapper.append(terminal)
     this.screens.append(wrapper)
-    const session: TerminalSession = {
-      key,
-      label: msg('Terminal'),
-      status: 'connecting',
-      terminal,
-      transport,
-      wrapper,
-    }
-    this.sessions = [...this.sessions, session]
-    this.activate(key)
+    this.sessions = [
+      ...this.sessions,
+      {
+        key,
+        label: msg('Terminal'),
+        status: 'connecting',
+        terminal,
+        transport,
+        wrapper,
+      },
+    ]
+    this.select(key)
     this.opening = false
   }
 
-  @state()
-  private notice = ''
-
-  private setStatus(key: string, status: TerminalStatus): void {
-    this.sessions = this.sessions.map((session) =>
-      session.key === key ? { ...session, status } : session,
-    )
-  }
-
-  private activate(key: string): void {
+  /** Makes `key` the visible tab and focuses its terminal. */
+  private select(key: string): void {
     this.active = key
     for (const session of this.sessions) {
       session.wrapper.hidden = session.key !== key
     }
-    const session = this.sessions.find((item) => item.key === key)
-    session?.terminal.focus()
+    this.activeSession?.terminal.focus()
     this.pushModifiers()
   }
 
   private async reconnect(key: string): Promise<void> {
-    const session = this.sessions.find((item) => item.key === key)
+    const session = this.sessionByKey(key)
     if (!session || session.status === 'connecting' || session.status === 'open') {
       return
     }
     const transport = this.newTransport()
     session.terminal.transport = transport
-    this.sessions = this.sessions.map((item) =>
-      item.key === key ? { ...item, transport, status: 'connecting' } : item,
-    )
+    this.updateSession(key, { transport, status: 'connecting' })
     this.notice = msg('Reconnecting…')
     session.terminal.focus()
     this.pushModifiers()
   }
 
   private closeSession(key: string): void {
-    const session = this.sessions.find((item) => item.key === key)
+    const session = this.sessionByKey(key)
     if (!session) return
     session.transport.close()
     session.wrapper.remove()
@@ -228,30 +240,60 @@ export class AnthTerminalTabs extends LitElement {
     this.sessions = remaining
     if (remaining.length === 0) {
       this.dispatchEvent(
-        new CustomEvent(TERMINAL_TABS_EMPTY_EVENT, { bubbles: true, composed: true }),
+        new CustomEvent(TERMINAL_TABS_EMPTY_EVENT, {
+          bubbles: true,
+          composed: true,
+        }),
       )
       return
     }
     if (this.active === key) {
-      this.activate(remaining[remaining.length - 1].key)
+      this.select(remaining[remaining.length - 1].key)
     }
   }
 
+  private newTransport(): WebSocketTerminalTransport {
+    return new WebSocketTerminalTransport({
+      url: (size) => `/api/terminal?cols=${size.cols}&rows=${size.rows}`,
+    })
+  }
+
+  private get activeSession(): TerminalSession | undefined {
+    return this.sessionByKey(this.active)
+  }
+
+  private sessionByKey(key: string): TerminalSession | undefined {
+    return this.sessions.find((session) => session.key === key)
+  }
+
+  private updateSession(key: string, patch: Partial<TerminalSession>): void {
+    this.sessions = this.sessions.map((session) =>
+      session.key === key ? { ...session, ...patch } : session,
+    )
+  }
+
   private send(data: string): void {
-    const session = this.sessions.find((item) => item.key === this.active)
-    session?.terminal.send(data)
+    this.activeSession?.terminal.send(data)
     this.ctrl = false
     this.alt = false
     this.pushModifiers()
   }
 
-  private sendHotkey(key: Hotkey): void {
-    this.send(key.data)
+  /**
+   * Sends one key from the bar. Character keys honour the sticky modifiers;
+   * escape sequences go through unchanged.
+   */
+  private sendKey(key: Hotkey): void {
+    this.send(
+      key.data.length === 1
+        ? applyStickyModifiers(key.data, this.ctrl, this.alt)
+        : key.data,
+    )
   }
 
   /** Mirrors the sticky buttons into the active terminal. */
   private pushModifiers(): void {
-    const session = this.sessions.find((item) => item.key === this.active)
+    const session = this.activeSession
     if (!session) return
     session.terminal.stickyCtrl = this.ctrl
     session.terminal.stickyAlt = this.alt
@@ -293,11 +335,7 @@ export class AnthTerminalTabs extends LitElement {
     this.touchHotkey = undefined
     if (!pending) return
     const touch = event.changedTouches[0]
-    if (touch) {
-      const movedX = Math.abs(touch.clientX - pending.x)
-      const movedY = Math.abs(touch.clientY - pending.y)
-      if (movedX > 10 || movedY > 10) return
-    }
+    if (touch && moved(pointOf(touch), pending, GESTURE.hotkeySlop)) return
     event.preventDefault()
     this.activateHotkey(pending.action)
   }
@@ -309,15 +347,11 @@ export class AnthTerminalTabs extends LitElement {
   }
 
   private activateHotkey(action: () => void): void {
-    this.sessions.find((session) => session.key === this.active)?.terminal.focus()
+    this.activeSession?.terminal.focus()
     action()
   }
 
-  private renderHotkey(
-    label: string,
-    action: () => void,
-    pressed?: boolean,
-  ) {
+  private renderHotkey(label: string, action: () => void, pressed?: boolean) {
     return html`
       <button
         type="button"
@@ -348,20 +382,11 @@ export class AnthTerminalTabs extends LitElement {
     this.pushModifiers()
   }
 
-  /** Applies a sticky modifier to the next character hotkey. */
-  private sendCharacter(value: string): void {
-    if (this.ctrl && value.length === 1) {
-      const code = value.toUpperCase().charCodeAt(0)
-      if (code >= 64 && code <= 95) {
-        this.send(String.fromCharCode(code & 0x1f))
-        return
-      }
-    }
-    this.send(this.alt ? `\x1b${value}` : value)
-  }
-
   private changeFont(delta: number): void {
-    this.fontSize = Math.min(20, Math.max(10, this.fontSize + delta))
+    this.fontSize = Math.min(
+      FONT_SIZE.max,
+      Math.max(FONT_SIZE.min, this.fontSize + delta * FONT_SIZE.step),
+    )
     for (const session of this.sessions) {
       session.terminal.fontSize = this.fontSize
       session.terminal.fit()
@@ -399,7 +424,7 @@ export class AnthTerminalTabs extends LitElement {
    * The listener sits on the host, so `event.target` is retargeted to
    * `anth-terminal-tabs`; the real element comes from `composedPath()`.
    */
-  private static isControlTarget(event: Event): boolean {
+  private static touchesControl(event: Event): boolean {
     const target = event.composedPath()[0]
     return (
       target instanceof Element &&
@@ -408,96 +433,90 @@ export class AnthTerminalTabs extends LitElement {
   }
 
   private readonly onTouchStart = (event: TouchEvent): void => {
-    if (AnthTerminalTabs.isControlTarget(event)) {
-      this.tapStart = undefined
-      this.cancelLongPress()
+    if (AnthTerminalTabs.touchesControl(event)) {
+      this.resetGesture()
       return
     }
     if (event.touches.length === 2) {
+      this.resetGesture()
       this.pinchDistance = touchDistance(event.touches)
-      this.tapStart = undefined
-      this.cancelLongPress()
       return
     }
     if (event.touches.length !== 1 || !this.active) return
     const touch = event.touches[0]
-    this.gestureOrigin = { x: touch.clientX, y: touch.clientY }
-    this.tapStart = { at: Date.now(), x: touch.clientX, y: touch.clientY }
+    this.gestureOrigin = pointOf(touch)
+    this.tapStart = { ...pointOf(touch), at: Date.now() }
     this.gestureActive = false
     this.longPress = setTimeout(() => {
       this.gestureActive = true
       this.tapStart = undefined
-      this.gestureOrigin = { x: touch.clientX, y: touch.clientY }
-      event.preventDefault()
-    }, 450)
+      this.gestureOrigin = pointOf(touch)
+    }, GESTURE.longPressMs)
   }
 
   private readonly onTouchMove = (event: TouchEvent): void => {
     if (event.touches.length === 2) {
       const distance = touchDistance(event.touches)
-      if (this.pinchDistance > 0 && Math.abs(distance - this.pinchDistance) > 18) {
+      if (
+        this.pinchDistance > 0 &&
+        Math.abs(distance - this.pinchDistance) > GESTURE.pinchStep
+      ) {
         this.changeFont(distance > this.pinchDistance ? 1 : -1)
         this.pinchDistance = distance
       }
       event.preventDefault()
       return
     }
-    if (!this.gestureActive || event.touches.length !== 1 || !this.gestureOrigin) {
-      if (this.tapStart && event.touches[0]) {
-        const touch = event.touches[0]
-        if (
-          Math.abs(touch.clientX - this.tapStart.x) > 12 ||
-          Math.abs(touch.clientY - this.tapStart.y) > 12
-        ) {
-          this.tapStart = undefined
-        }
+
+    const touch = event.touches[0]
+    if (!this.gestureActive || !touch || !this.gestureOrigin) {
+      // A moving finger is a scroll or a selection, not a tap.
+      if (touch && this.tapStart && moved(pointOf(touch), this.tapStart, GESTURE.tapSlop)) {
+        this.tapStart = undefined
       }
-      if (this.longPress) {
-        const touch = event.touches[0]
-        if (
-          touch &&
-          (Math.abs(touch.clientX - (this.gestureOrigin?.x ?? touch.clientX)) > 12 ||
-            Math.abs(touch.clientY - (this.gestureOrigin?.y ?? touch.clientY)) > 12)
-        ) {
-          this.cancelLongPress()
-        }
+      if (touch && moved(pointOf(touch), this.gestureOrigin ?? pointOf(touch), GESTURE.tapSlop)) {
+        this.cancelLongPress()
       }
       return
     }
-    const touch = event.touches[0]
+
     const dx = touch.clientX - this.gestureOrigin.x
     const dy = touch.clientY - this.gestureOrigin.y
-    const threshold = 22
-    if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return
+    if (Math.abs(dx) < GESTURE.dragStep && Math.abs(dy) < GESTURE.dragStep) {
+      return
+    }
     if (Math.abs(dx) > Math.abs(dy)) {
       this.send(dx > 0 ? '\x1b[C' : '\x1b[D')
     } else {
       this.send(dy > 0 ? '\x1b[B' : '\x1b[A')
     }
-    this.gestureOrigin = { x: touch.clientX, y: touch.clientY }
+    this.gestureOrigin = pointOf(touch)
     event.preventDefault()
   }
 
   private readonly onTouchEnd = (event: TouchEvent): void => {
-    if (AnthTerminalTabs.isControlTarget(event)) return
+    if (AnthTerminalTabs.touchesControl(event)) return
     if (!this.gestureActive && this.tapStart && event.touches.length === 0) {
       const now = Date.now()
-      const elapsed = now - this.tapStart.at
-      if (elapsed < 300) {
+      if (now - this.tapStart.at < GESTURE.tapMs) {
         const last = this.lastTap
         if (
           last &&
-          now - last.at < 350 &&
-          Math.hypot(this.tapStart.x - last.x, this.tapStart.y - last.y) < 40
+          now - last.at < GESTURE.doubleTapMs &&
+          !moved(this.tapStart, last, GESTURE.doubleTapSlop)
         ) {
           this.send('\t')
           event.preventDefault()
           this.lastTap = undefined
         } else {
-          this.lastTap = { at: now, x: this.tapStart.x, y: this.tapStart.y }
+          this.lastTap = { ...this.tapStart }
         }
       }
     }
+    this.resetGesture()
+  }
+
+  private resetGesture(): void {
     this.tapStart = undefined
     this.cancelLongPress()
     this.gestureOrigin = undefined
@@ -509,21 +528,6 @@ export class AnthTerminalTabs extends LitElement {
     if (this.longPress) {
       clearTimeout(this.longPress)
       this.longPress = undefined
-    }
-  }
-
-  private statusLabel(status: TerminalStatus): string {
-    switch (status) {
-      case 'idle':
-        return msg('Idle')
-      case 'connecting':
-        return msg('Connecting')
-      case 'open':
-        return msg('Connected')
-      case 'closed':
-        return msg('Closed')
-      case 'error':
-        return msg('Error')
     }
   }
 
@@ -540,11 +544,11 @@ export class AnthTerminalTabs extends LitElement {
                     class="tab-main"
                     role="tab"
                     aria-selected=${session.key === this.active}
-                    @click=${() => this.activate(session.key)}
+                    @click=${() => this.select(session.key)}
                   >
                     <span class="dot" data-status=${session.status}></span>
                     <span class="tab-label">${session.label}</span>
-                    <span class="tab-status">${this.statusLabel(session.status)}</span>
+                    <span class="tab-status">${STATUS_LABELS[session.status]()}</span>
                   </button>
                   <button
                     type="button"
@@ -608,17 +612,8 @@ export class AnthTerminalTabs extends LitElement {
           <div class="hotkey-row">
             ${this.renderHotkey('Ctrl', () => this.toggleModifier('ctrl'), this.ctrl)}
             ${this.renderHotkey('Alt', () => this.toggleModifier('alt'), this.alt)}
-            ${HOTKEYS.slice(0, 2).map((key) =>
-              this.renderHotkey(key.label, () => this.sendHotkey(key)),
-            )}
-            ${['Up', 'Dn', 'Rt', 'Lt'].map((label) => {
-              const key = HOTKEYS.find((item) => item.label === label)!
-              return this.renderHotkey(label, () => this.sendHotkey(key))
-            })}
-            ${HOTKEYS.slice(6).map((key) =>
-              this.renderHotkey(key.label, () =>
-                key.data.length === 1 ? this.sendCharacter(key.data) : this.sendHotkey(key),
-              ),
+            ${HOTKEYS.map((key) =>
+              this.renderHotkey(key.label, () => this.sendKey(key)),
             )}
           </div>
         </div>
@@ -767,6 +762,7 @@ export class AnthTerminalTabs extends LitElement {
       border-radius: 5px;
       background: rgba(125, 211, 252, 0.06);
       font-family: var(--sans, system-ui, sans-serif);
+      touch-action: manipulation;
     }
     .hotkey:active { background: rgba(125, 211, 252, 0.18); }
     .hotkey[aria-pressed='true'] {
@@ -774,7 +770,6 @@ export class AnthTerminalTabs extends LitElement {
       background: rgba(125, 211, 252, 0.2);
       color: var(--accent, #7dd3fc);
     }
-    .hotkey { touch-action: manipulation; }
     @media (max-width: 48rem) {
       .tab-status { display: none; }
       .tab-main { max-width: 9rem; }
@@ -785,6 +780,17 @@ export class AnthTerminalTabs extends LitElement {
 function programLabel(program: string): string {
   const name = program.split('/').filter(Boolean).pop()
   return name && name !== '' ? name : program
+}
+
+function pointOf(touch: Touch): Point {
+  return { x: touch.clientX, y: touch.clientY }
+}
+
+/** Whether `touch` is farther than `slop` pixels from `origin`. */
+function moved(touch: Point, origin: Point, slop: number): boolean {
+  return (
+    Math.abs(touch.x - origin.x) > slop || Math.abs(touch.y - origin.y) > slop
+  )
 }
 
 function touchDistance(touches: TouchList): number {

@@ -19,8 +19,7 @@ use tokio::sync::mpsc;
 use super::session::{PtySession, Session};
 
 /// What the reader thread reports.
-#[derive(Debug)]
-pub enum Output {
+enum Output {
     Data(Vec<u8>),
     Closed,
     Failed,
@@ -63,6 +62,7 @@ pub struct Chunk {
     pub exit_code: Option<i32>,
 }
 
+/// A running PTY plus the bookkeeping its handle needs.
 struct Live {
     session: Mutex<Box<dyn Session>>,
     reader: tokio::sync::Mutex<mpsc::Receiver<Output>>,
@@ -72,9 +72,68 @@ struct Live {
     exit_code: Mutex<Option<i32>>,
 }
 
+impl Live {
+    fn session(&self) -> MutexGuard<'_, Box<dyn Session>> {
+        lock(&self.session)
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        *lock(&self.exit_code)
+    }
+
+    fn touch(&self, now: Instant) {
+        *lock(&self.last_used) = now;
+    }
+
+    fn idle_for(&self, now: Instant) -> Duration {
+        now.duration_since(*lock(&self.last_used))
+    }
+
+    fn is_live(&self, now: Instant, idle: Duration) -> bool {
+        idle.is_zero() || self.idle_for(now) < idle
+    }
+
+    /// Marks the session as finished and records the exit code once.
+    fn end(&self) {
+        self.ended.store(true, Ordering::Relaxed);
+        let code = self.session().try_exit().ok().flatten();
+        *lock(&self.exit_code) = code;
+    }
+
+    fn kill(&self) {
+        self.session().kill();
+    }
+
+    /// An empty answer that keeps the sequence where it is.
+    fn snapshot(&self) -> Chunk {
+        Chunk {
+            seq: self.seq.load(Ordering::Relaxed),
+            bytes: Vec::new(),
+            eof: false,
+            exit_code: None,
+        }
+    }
+
+    /// The final answer: nothing more will arrive.
+    fn finished(&self) -> Chunk {
+        Chunk {
+            seq: self.seq.load(Ordering::Relaxed),
+            bytes: Vec::new(),
+            eof: true,
+            exit_code: self.exit_code(),
+        }
+    }
+}
+
 struct Loan {
     owner: String,
     live: Arc<Live>,
+}
+
+impl Loan {
+    fn kill(self) {
+        self.live.kill();
+    }
 }
 
 /// The open terminals, by opaque handle.
@@ -113,7 +172,7 @@ impl Sessions {
     }
 
     pub fn len(&self) -> usize {
-        self.lock().len()
+        self.open_map().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -130,12 +189,12 @@ impl Sessions {
         if !self.enabled {
             return Err(OpenError::Disabled);
         }
-        if !size.is_sane() {
+        if size.validate().is_err() {
             return Err(OpenError::BadSize);
         }
 
         self.reap();
-        let mut open = self.lock();
+        let mut open = self.open_map();
         if open.len() >= self.max {
             return Err(OpenError::AtCapacity);
         }
@@ -146,7 +205,6 @@ impl Sessions {
         let (sender, receiver) = mpsc::channel(64);
         spawn_output_task(&id, reader, sender);
 
-        let now = (self.now)();
         open.insert(
             id.clone(),
             Loan {
@@ -155,7 +213,7 @@ impl Sessions {
                     session: Mutex::new(Box::new(session)),
                     reader: tokio::sync::Mutex::new(receiver),
                     seq: AtomicU64::new(0),
-                    last_used: Mutex::new(now),
+                    last_used: Mutex::new((self.now)()),
                     ended: AtomicBool::new(false),
                     exit_code: Mutex::new(None),
                 }),
@@ -170,21 +228,16 @@ impl Sessions {
     /// actually returned, so a transport may race it against input.
     pub async fn read(&self, owner: &str, id: &str, wait_ms: u32) -> Result<Chunk, WireError> {
         let live = self.live(owner, id)?;
-        self.touch(&live);
+        live.touch((self.now)());
 
         if live.ended.load(Ordering::Relaxed) {
-            return Ok(Chunk {
-                seq: live.seq.load(Ordering::Relaxed),
-                bytes: Vec::new(),
-                eof: true,
-                exit_code: *live.exit_code.lock().unwrap_or_else(|e| e.into_inner()),
-            });
+            return Ok(live.finished());
         }
 
         let wait = Duration::from_millis(u64::from(wait_ms.min(MAX_TERMINAL_WAIT_MS)));
         let mut reader = live.reader.lock().await;
         if live.ended.load(Ordering::Relaxed) {
-            return Ok(self.finished(&live));
+            return Ok(live.finished());
         }
 
         match tokio::time::timeout(wait, reader.recv()).await {
@@ -198,27 +251,14 @@ impl Sessions {
                 })
             }
             Ok(Some(Output::Closed)) | Ok(None) => {
-                live.ended.store(true, Ordering::Relaxed);
-                let code = live
-                    .session
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .try_exit()
-                    .ok()
-                    .flatten();
-                *live.exit_code.lock().unwrap_or_else(|e| e.into_inner()) = code;
-                Ok(self.finished(&live))
+                live.end();
+                Ok(live.finished())
             }
             Ok(Some(Output::Failed)) => {
                 live.ended.store(true, Ordering::Relaxed);
                 Err(WireError::internal("the terminal reader failed"))
             }
-            Err(_) => Ok(Chunk {
-                seq: live.seq.load(Ordering::Relaxed),
-                bytes: Vec::new(),
-                eof: false,
-                exit_code: None,
-            }),
+            Err(_) => Ok(live.snapshot()),
         }
     }
 
@@ -230,33 +270,21 @@ impl Sessions {
             )));
         }
         let live = self.live(owner, id)?;
-        self.touch(&live);
-        live.session
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .write(bytes)
-            .map_err(WireError::internal)
+        live.touch((self.now)());
+        live.session().write(bytes).map_err(WireError::internal)
     }
 
     pub fn resize(&self, owner: &str, id: &str, size: TerminalSize) -> Result<(), WireError> {
-        if !size.is_sane() {
-            return Err(WireError::invalid(
-                "the terminal size is outside the allowed range",
-            ));
-        }
+        size.validate().map_err(WireError::invalid)?;
         let live = self.live(owner, id)?;
-        self.touch(&live);
-        live.session
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .resize(size)
-            .map_err(WireError::internal)
+        live.touch((self.now)());
+        live.session().resize(size).map_err(WireError::internal)
     }
 
     /// Ends one session. A handle that is already gone is not an error.
     pub fn close(&self, owner: &str, id: &str) -> Result<(), WireError> {
         let loan = {
-            let mut open = self.lock();
+            let mut open = self.open_map();
             match open.get(id) {
                 Some(loan) if loan.owner == owner => open.remove(id),
                 Some(_) => return Err(no_such(id)),
@@ -264,35 +292,14 @@ impl Sessions {
             }
         };
         if let Some(loan) = loan {
-            loan.live
-                .session
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .kill();
+            loan.kill();
         }
         Ok(())
     }
 
     /// Closes every session belonging to one authenticated browser session.
     pub fn close_owner(&self, owner: &str) -> usize {
-        let loans: Vec<Loan> = {
-            let mut open = self.lock();
-            let ids: Vec<String> = open
-                .iter()
-                .filter(|(_, loan)| loan.owner == owner)
-                .map(|(id, _)| id.clone())
-                .collect();
-            ids.into_iter().filter_map(|id| open.remove(&id)).collect()
-        };
-        let count = loans.len();
-        for loan in loans {
-            loan.live
-                .session
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .kill();
-        }
-        count
+        kill_all(self.take_matching(|loan| loan.owner == owner))
     }
 
     /// Drops sessions idle longer than the configured limit.
@@ -301,66 +308,48 @@ impl Sessions {
             return 0;
         }
         let now = (self.now)();
-        let expired: Vec<Loan> = {
-            let mut open = self.lock();
-            let ids: Vec<String> = open
-                .iter()
-                .filter(|(_, loan)| !is_live(loan, now, self.idle))
-                .map(|(id, _)| id.clone())
-                .collect();
-            ids.into_iter().filter_map(|id| open.remove(&id)).collect()
-        };
-        let count = expired.len();
-        for loan in expired {
-            loan.live
-                .session
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .kill();
-        }
-        count
+        kill_all(self.take_matching(|loan| !loan.live.is_live(now, self.idle)))
     }
 
-    fn finished(&self, live: &Live) -> Chunk {
-        Chunk {
-            seq: live.seq.load(Ordering::Relaxed),
-            bytes: Vec::new(),
-            eof: true,
-            exit_code: *live.exit_code.lock().unwrap_or_else(|e| e.into_inner()),
-        }
-    }
-
-    fn touch(&self, live: &Live) {
-        *live.last_used.lock().unwrap_or_else(|e| e.into_inner()) = (self.now)();
+    /// Removes and returns the loans matching `predicate`.
+    fn take_matching(&self, predicate: impl Fn(&Loan) -> bool) -> Vec<Loan> {
+        let mut open = self.open_map();
+        let ids: Vec<String> = open
+            .iter()
+            .filter(|(_, loan)| predicate(loan))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter().filter_map(|id| open.remove(&id)).collect()
     }
 
     fn live(&self, owner: &str, id: &str) -> Result<Arc<Live>, WireError> {
         let now = (self.now)();
-        let open = self.lock();
+        let open = self.open_map();
         match open.get(id) {
-            Some(loan) if loan.owner == owner && is_live(loan, now, self.idle) => {
+            Some(loan) if loan.owner == owner && loan.live.is_live(now, self.idle) => {
                 Ok(Arc::clone(&loan.live))
             }
             _ => Err(no_such(id)),
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Loan>> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    fn open_map(&self) -> MutexGuard<'_, HashMap<String, Loan>> {
+        lock(&self.inner)
     }
 }
 
-fn is_live(loan: &Loan, now: Instant, idle: Duration) -> bool {
-    if idle.is_zero() {
-        return true;
+/// A lock that ignores poisoning: a panicked request must not take the daemon
+/// down with it.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn kill_all(loans: Vec<Loan>) -> usize {
+    let count = loans.len();
+    for loan in loans {
+        loan.kill();
     }
-    now.duration_since(
-        *loan
-            .live
-            .last_used
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()),
-    ) < idle
+    count
 }
 
 fn no_such(id: &str) -> WireError {

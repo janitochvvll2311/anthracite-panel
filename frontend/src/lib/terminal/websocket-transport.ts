@@ -14,6 +14,9 @@ import type {
   TerminalTransportHandlers,
 } from './transport'
 
+/** Input chunk carried by one frame; the daemon caps decoded input at 16 KiB. */
+const INPUT_CHUNK = 16 * 1024
+
 export interface WebSocketTerminalTransportOptions {
   /** Endpoint URL, or a function that receives the requested initial size. */
   url: string | ((size: TerminalSize) => string)
@@ -96,11 +99,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     } catch (error) {
       const wrapped =
         error instanceof Error ? error : new Error(String(error))
-      this.intentionalClose = true
-      this.pendingOpen = undefined
-      this.clearOpenTimer()
-      this.closeSocket()
-      this.setStatus('error')
+      this.reportError(wrapped)
       throw wrapped
     }
 
@@ -108,13 +107,12 @@ export class WebSocketTerminalTransport implements TerminalTransport {
   }
 
   sendInput(data: Uint8Array): void {
-    // A paste can be larger than the daemon's 64 KiB frame cap. Chunk it so a
-    // single large paste never becomes one rejected frame.
-    const chunkSize = 16 * 1024
-    for (let offset = 0; offset < data.length; offset += chunkSize) {
+    // A paste can be larger than the daemon's frame cap. Chunk it so a single
+    // large paste never becomes one rejected frame.
+    for (let offset = 0; offset < data.length; offset += INPUT_CHUNK) {
       this.send({
         type: 'input',
-        data: encodeBase64(data.subarray(offset, offset + chunkSize)),
+        data: encodeBase64(data.subarray(offset, offset + INPUT_CHUNK)),
       })
     }
   }
@@ -135,9 +133,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     const wasActive = this.socket !== undefined || this.pendingOpen !== undefined
     this.intentionalClose = true
     this.pendingOpen?.reject(new Error('terminal closed before it was ready'))
-    this.pendingOpen = undefined
-    this.clearOpenTimer()
-    this.closeSocket()
+    this.teardown()
     if (wasActive) {
       this.setStatus('closed')
     }
@@ -175,9 +171,7 @@ export class WebSocketTerminalTransport implements TerminalTransport {
         break
       case 'exit':
         this.handlers?.onExit(message.code)
-        this.intentionalClose = true
-        this.closeSocket()
-        this.setStatus('closed')
+        this.close()
         break
       case 'error': {
         this.reportError(new Error(message.detail))
@@ -212,15 +206,20 @@ export class WebSocketTerminalTransport implements TerminalTransport {
     // While `open()` is still pending, the rejection of that promise is the
     // error signal; only report through the callback once the session is live.
     const opening = this.pendingOpen !== undefined
-    this.clearOpenTimer()
     this.pendingOpen?.reject(error)
-    this.pendingOpen = undefined
     this.intentionalClose = true
-    this.closeSocket()
+    this.teardown()
     if (!opening) {
       this.handlers?.onError(error)
     }
     this.setStatus('error')
+  }
+
+  /** Forgets a pending open and drops the socket, leaving the status alone. */
+  private teardown(): void {
+    this.pendingOpen = undefined
+    this.clearOpenTimer()
+    this.closeSocket()
   }
 
   private clearOpenTimer(): void {

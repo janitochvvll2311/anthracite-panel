@@ -7,12 +7,8 @@
 
 use std::sync::Arc;
 
-use anth_wire::{
-    MAX_TERMINAL_INPUT, MAX_TERMINAL_WAIT_MS, Request, Response, TerminalSize, WireError,
-};
+use anth_wire::{MAX_TERMINAL_WAIT_MS, Request, Response, TerminalSize, WireError};
 use axum::extract::ws::WebSocket;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use crate::dispatch::Daemon;
@@ -102,18 +98,13 @@ async fn bridge(
                 match incoming.map_err(|error| format!("invalid client message: {error}"))? {
                     None => break Ok(()),
                     Some(ClientMessage::Input { data }) => {
-                        let bytes = STANDARD.decode(data.as_bytes())
-                            .map_err(|error| format!("invalid base64 input: {error}"))?;
-                        if bytes.len() > MAX_TERMINAL_INPUT {
-                            break Err(format!(
-                                "terminal input is {} bytes, over the {MAX_TERMINAL_INPUT} byte limit",
-                                bytes.len()
-                            ));
-                        }
+                        // The dispatcher decodes and bounds the bytes. Passing the
+                        // frame through avoids a decode/encode round trip on every
+                        // keystroke.
                         if let Response::Error(error) = daemon
                             .execute_as(owner, Request::TerminalWrite {
                                 id: id.clone(),
-                                bytes_base64: STANDARD.encode(&bytes),
+                                bytes_base64: data,
                             })
                             .await
                         {
@@ -123,11 +114,7 @@ async fn bridge(
                     }
                     Some(ClientMessage::Resize { cols, rows }) => {
                         let size = TerminalSize { cols, rows };
-                        if !size.is_sane() {
-                            break Err(format!(
-                                "terminal size {cols}x{rows} is outside the allowed range"
-                            ));
-                        }
+                        size.validate()?;
                         if let Response::Error(error) = daemon
                             .execute_as(owner, Request::TerminalResize {
                                 id: id.clone(),

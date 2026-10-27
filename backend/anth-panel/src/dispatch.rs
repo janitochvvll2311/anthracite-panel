@@ -17,7 +17,7 @@ use crate::config::{Config, Paths};
 use crate::files::FileService;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
-use crate::terminal::{OpenError, Sessions, supports_line_editing};
+use crate::terminal::{OpenError, Sessions, resolve_shell, supports_line_editing};
 
 /// Everything a request may need from the process.
 pub struct Daemon {
@@ -282,20 +282,20 @@ impl Daemon {
                 Ok(Response::FilesArchiveExtracted { path, entries })
             }
             Request::TerminalOpen { cols, rows } => {
-                let program = crate::terminal::resolve_shell(&self.config.terminal.shell).map_err(
-                    |detail| WireError::new(ErrorKind::Forbidden, "terminal_shell", detail),
-                )?;
+                let program = resolve_shell(&self.config.terminal.shell).map_err(|detail| {
+                    WireError::new(ErrorKind::Forbidden, "terminal_shell", detail)
+                })?;
                 let size = TerminalSize { cols, rows };
                 let line_editing = supports_line_editing(&program);
                 let sessions = Arc::clone(&self.terminal);
                 let owner = owner.to_string();
                 let asked = program.clone();
-                let id = tokio::task::spawn_blocking(move || sessions.open(&owner, &asked, size))
-                    .await
-                    .map_err(|error| {
-                        WireError::internal(format!("the terminal open task failed: {error}"))
-                    })?
-                    .map_err(OpenError::into_wire)?;
+                let id = blocking(move || {
+                    sessions
+                        .open(&owner, &asked, size)
+                        .map_err(OpenError::into_wire)
+                })
+                .await?;
                 Ok(Response::TerminalOpened(TerminalOpened {
                     id,
                     program,
@@ -326,11 +326,7 @@ impl Daemon {
                 }
                 let sessions = Arc::clone(&self.terminal);
                 let owner = owner.to_string();
-                tokio::task::spawn_blocking(move || sessions.write(&owner, &id, &bytes))
-                    .await
-                    .map_err(|error| {
-                        WireError::internal(format!("the terminal write task failed: {error}"))
-                    })??;
+                blocking(move || sessions.write(&owner, &id, &bytes)).await?;
                 Ok(Response::Accepted)
             }
             Request::TerminalResize { id, cols, rows } => {
@@ -341,11 +337,7 @@ impl Daemon {
             Request::TerminalClose { id } => {
                 let sessions = Arc::clone(&self.terminal);
                 let owner = owner.to_string();
-                tokio::task::spawn_blocking(move || sessions.close(&owner, &id))
-                    .await
-                    .map_err(|error| {
-                        WireError::internal(format!("the terminal close task failed: {error}"))
-                    })??;
+                blocking(move || sessions.close(&owner, &id)).await?;
                 Ok(Response::Accepted)
             }
         }
@@ -383,6 +375,20 @@ fn hello(protocol_version: u16, client: &str, features: &[String]) -> Result<Res
         version: env!("CARGO_PKG_VERSION").to_string(),
         features: Vec::new(),
     })
+}
+
+/// Runs a blocking PTY operation on the blocking pool.
+///
+/// `portable-pty` spawns processes and reaps them with `waitpid`; doing that on
+/// a reactor thread would stall every other request.
+async fn blocking<T, F>(task: F) -> Result<T, WireError>
+where
+    F: FnOnce() -> Result<T, WireError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|error| WireError::internal(format!("the terminal task failed: {error}")))?
 }
 
 fn operation_of(request: &Request) -> &'static str {

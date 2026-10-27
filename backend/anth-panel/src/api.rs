@@ -938,12 +938,7 @@ async fn ws_terminal(
         (Some(cols), Some(rows)) => TerminalSize { cols, rows },
         _ => return Err(ApiError::invalid("cols and rows must be provided together")),
     };
-    if !size.is_sane() {
-        return Err(ApiError::invalid(format!(
-            "terminal size {}x{} is outside the allowed range",
-            size.cols, size.rows
-        )));
-    }
+    size.validate().map_err(ApiError::invalid)?;
 
     let daemon = Arc::clone(&state.daemon);
     let owner = authed.sid.clone();

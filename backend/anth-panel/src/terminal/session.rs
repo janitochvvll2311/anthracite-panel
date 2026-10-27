@@ -49,17 +49,7 @@ impl PtySession {
     /// Returns the control half and the read half. The read half blocks, so it
     /// belongs on a dedicated thread.
     pub fn spawn(program: &str, size: TerminalSize) -> SessionResult<(Self, Box<dyn Read + Send>)> {
-        if !size.is_sane() {
-            return Err(format!(
-                "terminal size {}x{} is outside {}x{}..{}x{}",
-                size.cols,
-                size.rows,
-                TerminalSize::MIN.cols,
-                TerminalSize::MIN.rows,
-                TerminalSize::MAX.cols,
-                TerminalSize::MAX.rows
-            ));
-        }
+        size.validate()?;
 
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -137,12 +127,7 @@ impl Session for PtySession {
     }
 
     fn resize(&mut self, size: TerminalSize) -> SessionResult<()> {
-        if !size.is_sane() {
-            return Err(format!(
-                "refusing to resize to {}x{}: outside the sane range",
-                size.cols, size.rows
-            ));
-        }
+        size.validate()?;
         self.master
             .resize(PtySize {
                 rows: size.rows,

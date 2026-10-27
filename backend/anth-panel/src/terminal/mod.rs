@@ -10,6 +10,6 @@ mod session;
 mod shell;
 pub(crate) mod web;
 
-pub use registry::{Chunk, OpenError, Output, Sessions};
+pub use registry::{Chunk, OpenError, Sessions};
 pub use session::{PtySession, Session, SessionResult};
 pub use shell::{resolve_shell, supports_line_editing};

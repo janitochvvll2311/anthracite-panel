@@ -24,6 +24,22 @@ impl TerminalSize {
         (Self::MIN.cols..=Self::MAX.cols).contains(&self.cols)
             && (Self::MIN.rows..=Self::MAX.rows).contains(&self.rows)
     }
+
+    /// Rejects an out-of-range size with the message every transport uses.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.is_sane() {
+            return Ok(());
+        }
+        Err(format!(
+            "terminal size {}x{} is outside {}x{}..{}x{}",
+            self.cols,
+            self.rows,
+            Self::MIN.cols,
+            Self::MIN.rows,
+            Self::MAX.cols,
+            Self::MAX.rows
+        ))
+    }
 }
 
 /// Size used when a client does not state one.
@@ -73,4 +89,29 @@ pub struct TerminalOutput {
     /// Exit code when `eof` is true, when the platform reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_dimension_is_rejected_with_the_shared_message() {
+        let error = TerminalSize { cols: 0, rows: 24 }.validate().unwrap_err();
+        assert_eq!(error, "terminal size 0x24 is outside 1x1..500x500");
+    }
+
+    #[test]
+    fn sizes_at_the_bounds_are_accepted() {
+        assert!(TerminalSize::MIN.validate().is_ok());
+        assert!(TerminalSize::MAX.validate().is_ok());
+        assert!(
+            TerminalSize {
+                cols: 501,
+                rows: 24
+            }
+            .validate()
+            .is_err()
+        );
+    }
 }

@@ -28,15 +28,7 @@ fn resolve_size(cols: Option<u16>, rows: Option<u16>) -> Result<TerminalSize, St
         .or(detected.map(|(_, rows)| rows))
         .unwrap_or(DEFAULT_TERMINAL_SIZE.rows);
     let size = TerminalSize { cols, rows };
-    if !size.is_sane() {
-        return Err(format!(
-            "terminal size {cols}x{rows} is outside {}x{}..{}x{}",
-            TerminalSize::MIN.cols,
-            TerminalSize::MIN.rows,
-            TerminalSize::MAX.cols,
-            TerminalSize::MAX.rows
-        ));
-    }
+    size.validate()?;
     Ok(size)
 }
 
@@ -105,7 +97,6 @@ pub async fn run(socket_path: &Path, cols: Option<u16>, rows: Option<u16>) -> Re
             return Err(1);
         }
     };
-
     let config = crate::config::Config::load_or_default(socket_path);
     let paths = match config.paths(socket_path) {
         Ok(paths) => paths,
@@ -116,32 +107,10 @@ pub async fn run(socket_path: &Path, cols: Option<u16>, rows: Option<u16>) -> Re
     };
     let socket = paths.socket.as_path();
 
-    let mut control = match Client::connect(socket).await {
-        Ok(mut client) => {
-            if let Err(error) = client.hello().await {
-                eprintln!("[ERROR] {error}");
-                return Err(1);
-            }
-            client
-        }
-        Err(error) => {
-            eprintln!("Failed to connect to the daemon: {error}");
-            return Err(1);
-        }
-    };
-    let mut output = match Client::connect(socket).await {
-        Ok(mut client) => {
-            if let Err(error) = client.hello().await {
-                eprintln!("[ERROR] {error}");
-                return Err(1);
-            }
-            client
-        }
-        Err(error) => {
-            eprintln!("Failed to connect to the daemon: {error}");
-            return Err(1);
-        }
-    };
+    // Two connections to the same peer uid: one carries input, resize and
+    // close, the other parks in the long-poll read.
+    let mut output = connect(socket).await?;
+    let mut control = connect(socket).await?;
 
     let opened = match control
         .call(&Request::TerminalOpen {
@@ -168,103 +137,13 @@ pub async fn run(socket_path: &Path, cols: Option<u16>, rows: Option<u16>) -> Re
     let id = opened.id;
     let _raw = RawMode::enable();
     let control = Arc::new(Mutex::new(control));
+    forward_input(Arc::clone(&control), id.clone());
+    forward_resize(Arc::clone(&control), id.clone());
 
-    {
-        let control = Arc::clone(&control);
-        let id = id.clone();
-        tokio::spawn(async move {
-            let mut stdin = tokio::io::stdin();
-            let mut buffer = [0u8; 4096];
-            loop {
-                let read = match stdin.read(&mut buffer).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => n,
-                };
-                let mut client = control.lock().await;
-                if client
-                    .call(&Request::TerminalWrite {
-                        id: id.clone(),
-                        bytes_base64: STANDARD.encode(&buffer[..read]),
-                    })
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-    }
+    let status = pump_output(&mut output, &id).await;
 
-    if let Ok(mut signal) =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
-    {
-        let control = Arc::clone(&control);
-        let id = id.clone();
-        tokio::spawn(async move {
-            while signal.recv().await.is_some() {
-                if let Some((cols, rows)) = terminal_size() {
-                    let mut client = control.lock().await;
-                    let _ = client
-                        .call(&Request::TerminalResize {
-                            id: id.clone(),
-                            cols,
-                            rows,
-                        })
-                        .await;
-                }
-            }
-        });
-    }
-
-    let mut status = -1;
-    let mut stdout = std::io::stdout();
-    loop {
-        let response = match output
-            .call(&Request::TerminalRead {
-                id: id.clone(),
-                wait_ms: MAX_TERMINAL_WAIT_MS,
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                eprintln!("[ERROR] {error}");
-                break;
-            }
-        };
-        match response {
-            Response::TerminalOutput(chunk) => {
-                if !chunk.bytes_base64.is_empty() {
-                    let bytes = STANDARD.decode(&chunk.bytes_base64);
-                    if let Ok(bytes) = bytes
-                        && let Err(error) = stdout.write_all(&bytes).and_then(|()| stdout.flush())
-                    {
-                        if error.kind() != std::io::ErrorKind::BrokenPipe {
-                            eprintln!("Failed to write terminal output: {error}");
-                        }
-                        break;
-                    }
-                }
-                if chunk.eof {
-                    status = chunk.exit_code.unwrap_or(-1);
-                    break;
-                }
-            }
-            Response::Error(error) => {
-                eprintln!("[ERROR] {error}");
-                break;
-            }
-            other => {
-                eprintln!("[ERROR] unexpected terminal response: {other:?}");
-                break;
-            }
-        }
-    }
-
-    {
-        let mut client = control.lock().await;
-        let _ = client.call(&Request::TerminalClose { id }).await;
-    }
+    let mut client = control.lock().await;
+    let _ = client.call(&Request::TerminalClose { id }).await;
 
     if status == 0 {
         Ok(())
@@ -272,5 +151,114 @@ pub async fn run(socket_path: &Path, cols: Option<u16>, rows: Option<u16>) -> Re
         Err(status as u8)
     } else {
         Err(1)
+    }
+}
+
+/// Opens one socket connection and completes the handshake.
+async fn connect(socket: &Path) -> Result<Client, u8> {
+    let mut client = match Client::connect(socket).await {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("Failed to connect to the daemon: {error}");
+            return Err(1);
+        }
+    };
+    if let Err(error) = client.hello().await {
+        eprintln!("[ERROR] {error}");
+        return Err(1);
+    }
+    Ok(client)
+}
+
+/// Forwards local keystrokes to the daemon until stdin closes.
+fn forward_input(control: Arc<Mutex<Client>>, id: String) {
+    tokio::spawn(async move {
+        let mut stdin = tokio::io::stdin();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let read = match stdin.read(&mut buffer).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            let mut client = control.lock().await;
+            if client
+                .call(&Request::TerminalWrite {
+                    id: id.clone(),
+                    bytes_base64: STANDARD.encode(&buffer[..read]),
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+}
+
+/// Sends the local window size whenever the terminal reports a change.
+fn forward_resize(control: Arc<Mutex<Client>>, id: String) {
+    tokio::spawn(async move {
+        let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+        else {
+            return;
+        };
+        while signal.recv().await.is_some() {
+            let Some((cols, rows)) = terminal_size() else {
+                continue;
+            };
+            let mut client = control.lock().await;
+            let _ = client
+                .call(&Request::TerminalResize {
+                    id: id.clone(),
+                    cols,
+                    rows,
+                })
+                .await;
+        }
+    });
+}
+
+/// Copies daemon output to stdout and returns the shell's exit status.
+async fn pump_output(client: &mut Client, id: &str) -> i32 {
+    let mut stdout = std::io::stdout();
+    loop {
+        let response = match client
+            .call(&Request::TerminalRead {
+                id: id.to_string(),
+                wait_ms: MAX_TERMINAL_WAIT_MS,
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                return -1;
+            }
+        };
+        match response {
+            Response::TerminalOutput(chunk) => {
+                if !chunk.bytes_base64.is_empty()
+                    && let Ok(bytes) = STANDARD.decode(&chunk.bytes_base64)
+                    && let Err(error) = stdout.write_all(&bytes).and_then(|()| stdout.flush())
+                {
+                    if error.kind() != std::io::ErrorKind::BrokenPipe {
+                        eprintln!("Failed to write terminal output: {error}");
+                    }
+                    return -1;
+                }
+                if chunk.eof {
+                    return chunk.exit_code.unwrap_or(-1);
+                }
+            }
+            Response::Error(error) => {
+                eprintln!("[ERROR] {error}");
+                return -1;
+            }
+            other => {
+                eprintln!("[ERROR] unexpected terminal response: {other:?}");
+                return -1;
+            }
+        }
     }
 }

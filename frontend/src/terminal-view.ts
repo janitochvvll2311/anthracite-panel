@@ -53,6 +53,16 @@ export interface AnthTerminalStatusDetail {
 const DEFAULT_FONT =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace'
 
+const ENCODER = new TextEncoder()
+
+const STATUS_LABELS: Record<TerminalStatus, string> = {
+  idle: 'idle',
+  connecting: 'connecting',
+  open: 'connected',
+  closed: 'closed',
+  error: 'error',
+}
+
 const DEFAULT_THEME: ITheme = {
   background: '#0b0f14',
   foreground: '#d7e2ee',
@@ -75,21 +85,6 @@ const DEFAULT_THEME: ITheme = {
   brightMagenta: '#d8b4fe',
   brightCyan: '#a5f3fc',
   brightWhite: '#f8fafc',
-}
-
-function statusLabel(status: TerminalStatus): string {
-  switch (status) {
-    case 'idle':
-      return 'idle'
-    case 'connecting':
-      return 'connecting'
-    case 'open':
-      return 'connected'
-    case 'closed':
-      return 'closed'
-    case 'error':
-      return 'error'
-  }
 }
 
 function commonPrefix(values: string[]): string {
@@ -252,36 +247,12 @@ export class AnthTerminal extends LitElement {
     index: number
   }
 
-  /** Current connection status. */
-  get status(): TerminalStatus {
-    return this.connectionStatus
-  }
-
-  /** Session reported by the last successful `ready` frame. */
-  get session(): TerminalSessionInfo | undefined {
-    return this.sessionInfo
-  }
-
   /** Resolved keyboard source after applying `auto`. */
   get effectiveKeyboardMode(): 'shell' | 'local' {
     if (this.keyboardMode === 'shell' || this.keyboardMode === 'local') {
       return this.keyboardMode
     }
     return this.sessionInfo?.lineEditing ? 'shell' : 'local'
-  }
-
-  /** Commands remembered for Up/Down, oldest first. */
-  get commandHistory(): readonly string[] {
-    return this.history
-  }
-
-  /** Forget the local command history and any in-progress line. */
-  clearHistory(): void {
-    this.history = []
-    this.historyIndex = -1
-    this.historyDraft = ''
-    this.currentLine = ''
-    this.completion = undefined
   }
 
   override connectedCallback(): void {
@@ -352,19 +323,6 @@ export class AnthTerminal extends LitElement {
     }
   }
 
-  /** Convenience wrapper that appends a CRLF. */
-  writeln(text = ''): void {
-    this.write(`${text}\r\n`)
-  }
-
-  clear(): void {
-    this.terminal?.clear()
-  }
-
-  reset(): void {
-    this.terminal?.reset()
-  }
-
   focus(): void {
     this.terminal?.focus()
   }
@@ -372,7 +330,7 @@ export class AnthTerminal extends LitElement {
   /** Sends literal bytes, used by the extended keyboard. */
   send(data: string): void {
     if (this.readOnly || this.connectionStatus !== 'open') return
-    this.connectedTransport?.sendInput(new TextEncoder().encode(data))
+    this.connectedTransport?.sendInput(ENCODER.encode(data))
   }
 
   /** Hides the soft keyboard on mobile without closing the session. */
@@ -419,17 +377,11 @@ export class AnthTerminal extends LitElement {
       this.fit()
       // The container may have changed size while the handshake was in flight.
       this.connectedTransport?.resize(this.currentSize())
-      this.dispatchEvent(
-        new CustomEvent<AnthTerminalReadyDetail>(ANTH_TERMINAL_READY_EVENT, {
-          detail: {
-            program: info.program,
-            size: info.size,
-            lineEditing: info.lineEditing,
-          },
-          bubbles: true,
-          composed: true,
-        }),
-      )
+      this.emit<AnthTerminalReadyDetail>(ANTH_TERMINAL_READY_EVENT, {
+        program: info.program,
+        size: info.size,
+        lineEditing: info.lineEditing,
+      })
       if (this.autoFocus) this.focus()
     } catch (error) {
       this.handleTransportError(
@@ -472,7 +424,7 @@ export class AnthTerminal extends LitElement {
                     title=${this.statusTitle()}
                   >
                     <span class="status-dot" aria-hidden="true"></span>
-                    ${statusLabel(this.connectionStatus)}
+                    ${STATUS_LABELS[this.connectionStatus]}
                   </span>
                 </span>
               </header>
@@ -791,23 +743,18 @@ export class AnthTerminal extends LitElement {
     if (this.readOnly) return
     if (this.connectionStatus !== 'open') {
       if (data.includes('\r') || data.includes('\n')) {
-        this.dispatchEvent(
-          new CustomEvent(ANTH_TERMINAL_RETRY_EVENT, {
-            bubbles: true,
-            composed: true,
-          }),
-        )
+        this.emit(ANTH_TERMINAL_RETRY_EVENT)
       }
       return
     }
-    data = this.applyStickyModifiers(data)
+    data = this.modifyInput(data)
     if (
       this.commandHistoryEnabled &&
       this.effectiveKeyboardMode === 'local'
     ) {
       this.trackCommandLine(data)
     }
-    this.connectedTransport?.sendInput(new TextEncoder().encode(data))
+    this.connectedTransport?.sendInput(ENCODER.encode(data))
   }
 
   /**
@@ -819,48 +766,45 @@ export class AnthTerminal extends LitElement {
    * applied to the bar's own character buttons and `Ctrl+C` never reached the
    * shell.
    */
-  private applyStickyModifiers(data: string): string {
+  private modifyInput(data: string): string {
     if (!this.stickyCtrl && !this.stickyAlt) return data
     const modified = applyStickyModifiers(data, this.stickyCtrl, this.stickyAlt)
     if (modified === data) return data
     this.stickyCtrl = false
     this.stickyAlt = false
-    this.dispatchEvent(
-      new CustomEvent<AnthTerminalModifierDetail>(ANTH_TERMINAL_MODIFIER_EVENT, {
-        detail: { ctrl: false, alt: false },
-        bubbles: true,
-        composed: true,
-      }),
-    )
+    this.emit(ANTH_TERMINAL_MODIFIER_EVENT, { ctrl: false, alt: false })
     return modified
   }
 
   private handleKeyEvent(event: KeyboardEvent): boolean {
     if (event.type !== 'keydown') return true
     if (this.effectiveKeyboardMode === 'shell') return true
-    if (event.key === 'Tab') return this.handleTabCompletion(event)
-    if (!this.commandHistoryEnabled || this.historyLimit <= 0) return true
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return true
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
       return true
     }
-    if (this.readOnly || this.connectionStatus !== 'open') return true
-    if (!this.normalBufferActive() || this.history.length === 0) return true
-    if (this.terminal?.modes.applicationCursorKeysMode) return true
+    if (!this.acceptsLocalKeys()) return true
+    if (event.key === 'Tab') return this.handleTabCompletion(event)
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return true
+    if (!this.commandHistoryEnabled || this.historyLimit <= 0) return true
+    if (this.history.length === 0) return true
     if (!this.navigateHistory(event.key === 'ArrowUp' ? -1 : 1)) return true
 
     event.preventDefault()
     return false
   }
 
+  /** Whether Up/Down and Tab are handled here instead of by the shell. */
+  private acceptsLocalKeys(): boolean {
+    return (
+      !this.readOnly &&
+      this.connectionStatus === 'open' &&
+      this.normalBufferActive() &&
+      !this.terminal?.modes.applicationCursorKeysMode
+    )
+  }
+
   private handleTabCompletion(event: KeyboardEvent): boolean {
     if (!this.tabCompletionEnabled) return true
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
-      return true
-    }
-    if (this.readOnly || this.connectionStatus !== 'open') return true
-    if (!this.normalBufferActive()) return true
-    if (this.terminal?.modes.applicationCursorKeysMode) return true
 
     if (this.completion) {
       const matches = this.completion.matches
@@ -986,9 +930,7 @@ export class AnthTerminal extends LitElement {
     // Ctrl-U kills the canonical input line (VKILL) and also works in common
     // line editors, so the shell replaces the visible command with the one
     // selected from history.
-    this.connectedTransport?.sendInput(
-      new TextEncoder().encode(`\u0015${next}`),
-    )
+    this.connectedTransport?.sendInput(ENCODER.encode(`\u0015${next}`))
     this.currentLine = next
   }
 
@@ -1015,13 +957,7 @@ export class AnthTerminal extends LitElement {
     this.sessionInfo = undefined
     this.setStatus('closed')
     this.focus()
-    this.dispatchEvent(
-      new CustomEvent<AnthTerminalExitDetail>(ANTH_TERMINAL_EXIT_EVENT, {
-        detail: { code },
-        bubbles: true,
-        composed: true,
-      }),
-    )
+    this.emit<AnthTerminalExitDetail>(ANTH_TERMINAL_EXIT_EVENT, { code })
   }
 
   private handleTransportError(error: Error): void {
@@ -1029,24 +965,20 @@ export class AnthTerminal extends LitElement {
     this.write(`\r\n\x1b[31m[terminal error: ${error.message}]\x1b[0m\r\n`)
     this.setStatus('error')
     this.focus()
-    this.dispatchEvent(
-      new CustomEvent<AnthTerminalErrorDetail>(ANTH_TERMINAL_ERROR_EVENT, {
-        detail: { message: error.message },
-        bubbles: true,
-        composed: true,
-      }),
-    )
+    this.emit<AnthTerminalErrorDetail>(ANTH_TERMINAL_ERROR_EVENT, {
+      message: error.message,
+    })
   }
 
   private setStatus(status: TerminalStatus): void {
     if (this.connectionStatus === status) return
     this.connectionStatus = status
+    this.emit<AnthTerminalStatusDetail>(ANTH_TERMINAL_STATUS_EVENT, { status })
+  }
+
+  private emit<T>(type: string, detail?: T): void {
     this.dispatchEvent(
-      new CustomEvent<AnthTerminalStatusDetail>(ANTH_TERMINAL_STATUS_EVENT, {
-        detail: { status },
-        bubbles: true,
-        composed: true,
-      }),
+      new CustomEvent<T>(type, { detail, bubbles: true, composed: true }),
     )
   }
 
@@ -1071,7 +1003,7 @@ export class AnthTerminal extends LitElement {
     if (this.sessionInfo) {
       return `${this.sessionInfo.program} · ${this.sessionInfo.size.cols}x${this.sessionInfo.size.rows}`
     }
-    return statusLabel(this.connectionStatus)
+    return STATUS_LABELS[this.connectionStatus]
   }
 }
 
@@ -1085,5 +1017,7 @@ declare global {
     'anth-terminal-exit': CustomEvent<AnthTerminalExitDetail>
     'anth-terminal-error': CustomEvent<AnthTerminalErrorDetail>
     'anth-terminal-status': CustomEvent<AnthTerminalStatusDetail>
+    'anth-terminal-retry': CustomEvent
+    'anth-terminal-modifier': CustomEvent<AnthTerminalModifierDetail>
   }
 }

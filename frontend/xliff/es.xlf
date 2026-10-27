@@ -715,12 +715,12 @@
   <target>Teclas del terminal</target>
 </trans-unit>
 <trans-unit id="s65f21480f9b8d132">
-  <source>Shell exited with code <x id="0" equiv-text="${detail.code}"/>. Press Enter to reconnect.</source>
-  <target>El shell terminó con código <x id="0" equiv-text="${detail.code}"/>. Presioná Enter para reconectar.</target>
+  <source>Shell exited with code <x id="0" equiv-text="${code}"/>. Press Enter to reconnect.</source>
+  <target>El shell terminó con código <x id="0" equiv-text="${code}"/>. Presioná Enter para reconectar.</target>
 </trans-unit>
 <trans-unit id="s88052d4771d35a66">
-  <source><x id="0" equiv-text="${detail.message}"/>. Press Enter to reconnect.</source>
-  <target><x id="0" equiv-text="${detail.message}"/>. Presioná Enter para reconectar.</target>
+  <source><x id="0" equiv-text="${message}"/>. Press Enter to reconnect.</source>
+  <target><x id="0" equiv-text="${message}"/>. Presioná Enter para reconectar.</target>
 </trans-unit>
 <trans-unit id="sc999fade9ee65d44">
   <source>Reconnecting…</source>
