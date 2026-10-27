@@ -385,6 +385,12 @@ export class AnthSettings extends LitElement {
     code { font: 12px/1.4 var(--mono, monospace); }
     @media (max-width: 48rem) {
       .btn-label { display: none; }
+      button:has(.btn-label) {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        justify-content: center;
+      }
     }
   `
 }

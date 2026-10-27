@@ -205,7 +205,10 @@ export class AnthApp extends HTMLElement {
           <span class="version">v${VERSION}</span>
         </div>
         <div class="header-actions">
-          <select data-locale aria-label="${msg('Language')}"></select>
+          <label class="locale">
+            <anth-icon name="globe"></anth-icon>
+            <select data-locale aria-label="${msg('Language')}"></select>
+          </label>
           <button data-signout type="button" aria-label="${msg('Sign out')}" hidden><anth-icon name="logout"></anth-icon><span class="btn-label">${msg('Sign out')}</span></button>
         </div>
       </header>
@@ -267,7 +270,13 @@ export class AnthApp extends HTMLElement {
     }
     const signout = root.querySelector<HTMLButtonElement>('[data-signout]')
     if (signout) {
-      signout.textContent = msg('Sign out')
+      const label = signout.querySelector('.btn-label')
+      if (label) {
+        label.textContent = msg('Sign out')
+      } else {
+        signout.textContent = msg('Sign out')
+      }
+      signout.setAttribute('aria-label', msg('Sign out'))
       signout.toggleAttribute('hidden', !this.ready())
       signout.disabled = this.#busy
     }
@@ -575,6 +584,17 @@ const STYLE = `
     background: var(--widget-bg, rgba(16, 23, 33, 0.5)); }
   .header-actions button { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
   .header-actions anth-icon, .auth-card anth-icon, .retry anth-icon { font-size: 14px; }
+  .locale {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
+    padding: 0 10px; border-radius: 7px; box-sizing: border-box;
+    color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
+    background: var(--widget-bg, rgba(16, 23, 33, 0.5)); }
+  .locale anth-icon { font-size: 14px; }
+  .locale select {
+    min-width: 0; margin: 0; padding: 0; border: 0; color: inherit;
+    background: transparent; font: 12px/1.4 var(--mono, monospace); cursor: pointer; }
+  .locale select:focus-visible, .locale:focus-within {
+    outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
   .header-actions button:hover { border-color: var(--accent, #7dd3fc); }
   .header-actions button:disabled { opacity: 0.55; cursor: progress; }
   .header-actions select:focus-visible, .header-actions button:focus-visible,
@@ -658,6 +678,29 @@ const STYLE = `
     .sidebar { display: none; }
     .menu { display: grid; }
     .btn-label { display: none; }
+    .locale {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+      justify-content: center;
+    }
+    .locale select {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+    }
+    .header-actions button:has(.btn-label),
+    .auth-card button:has(.btn-label),
+    .retry:has(.btn-label) {
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      justify-content: center;
+    }
     header { gap: 0.5rem;
              padding: 0.7rem max(0.8rem, env(safe-area-inset-right)) 0.7rem max(0.8rem, env(safe-area-inset-left));
              padding-top: max(0.7rem, env(safe-area-inset-top)); }

@@ -120,6 +120,12 @@ test('the frame keeps the header outside the scroll container', async () => {
   const hostCard = root.querySelector('[data-host-card]')
   expect(hostCard?.querySelector('[data-refresh]')).toBeNull()
   expect(hostCard?.querySelector('anth-fab')).not.toBeNull()
+  const signout = root.querySelector<HTMLButtonElement>('[data-signout]')
+  expect(signout?.querySelector('anth-icon')).not.toBeNull()
+  expect(signout?.querySelector('.btn-label')?.textContent).toContain('Sign out')
+  const locale = root.querySelector('.locale')
+  expect(locale?.querySelector('anth-icon')).not.toBeNull()
+  expect(locale?.querySelector('select[data-locale]')).not.toBeNull()
 })
 
 test('the sidebar and the drawer share the sections, and the strip is bare there', async () => {

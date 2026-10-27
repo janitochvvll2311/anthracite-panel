@@ -199,7 +199,12 @@ const MENU_STYLE = `
   }
   @media (max-width: 48rem) {
     .menu { min-width: 0; }
-    ::slotted(button), ::slotted(a) { justify-content: center; min-width: 48px; }
+    ::slotted(button), ::slotted(a) {
+      justify-content: center;
+      min-width: 44px;
+      min-height: 44px;
+      padding: 0;
+    }
   }
 `
 

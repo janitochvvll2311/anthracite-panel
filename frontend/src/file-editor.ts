@@ -466,6 +466,12 @@ export class AnthFileEditor extends LitElement {
     @media (max-width: 48rem) {
       textarea { resize: none; }
       .btn-label { display: none; }
+      .save:has(.btn-label) {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        justify-content: center;
+      }
     }
     @media (pointer: coarse) {
       .save { min-height: 44px; }

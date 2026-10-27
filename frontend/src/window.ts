@@ -354,7 +354,7 @@ export class AnthWindow extends LitElement {
       display: grid;
       place-items: center;
       width: 30px;
-      height: 26px;
+      height: 30px;
       box-sizing: border-box;
       border: 1px solid var(--panel-border, #223041);
       border-radius: 6px;
@@ -496,14 +496,15 @@ export class AnthWindowDock extends LitElement {
     }
     .restore:hover { background: rgba(125, 211, 252, 0.14); }
     .dismiss {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
       border: 0;
       border-left: 1px solid var(--panel-border, #223041);
       background: transparent;
       color: var(--muted, #8b9bad);
-      padding: 6px 9px;
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
@@ -516,6 +517,7 @@ export class AnthWindowDock extends LitElement {
     }
     @media (pointer: coarse) {
       .restore, .dismiss { min-height: 44px; }
+      .dismiss { width: 44px; min-width: 44px; }
     }
   `
 }

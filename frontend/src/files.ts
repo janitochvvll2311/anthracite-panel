@@ -792,6 +792,16 @@ export class AnthFiles extends LitElement {
       }
       .btn-label { display: none; }
       .fab-action { justify-content: center; }
+      .tools button:has(.btn-label),
+      .more:has(.btn-label),
+      .preview button:has(.btn-label),
+      .confirm button:has(.btn-label),
+      .fab-action:has(.btn-label) {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        justify-content: center;
+      }
       .layout.preview-open { grid-template-columns: minmax(0, 1fr); }
       .layout.preview-open .listing { display: none; }
       .preview { max-height: none; height: var(--pane-height); }

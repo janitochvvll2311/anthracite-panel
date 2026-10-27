@@ -235,14 +235,15 @@ export class AnthFileTabs extends LitElement {
     }
     .tab[data-active] .tab-button { color: var(--text, #dbe6f2); }
     .tab-close {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
       border: 0;
       border-left: 1px solid var(--panel-border, #223041);
       background: transparent;
       color: var(--muted, #8b9bad);
-      padding: 5px 7px;
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
@@ -268,6 +269,7 @@ export class AnthFileTabs extends LitElement {
     anth-file-editor[hidden] { display: none !important; }
     @media (pointer: coarse) {
       .tab-button, .tab-close { min-height: 44px; }
+      .tab-close { width: 44px; }
     }
   `
 }
