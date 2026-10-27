@@ -109,8 +109,17 @@ cargo test --workspace --release
 ```
 
 Debug builds default to relative paths (`./config.toml`, `./anth.sock`,
-`./state`). Release builds default to `/etc/anth/config.toml` and
-`/var/lib/anth`.
+`./state`) and a development profile that turns every policy switch on, including
+the sensitive ones: terminal, process control and spawn, network management, the
+firewall, volume mount/partition/format, account management with passwords,
+system and privileged groups, unsigned plugin installs, file writes and trash.
+Release builds default to `/etc/anth/config.toml` and `/var/lib/anth` with every
+switch closed.
+
+`volumes.disk_allow` stays empty in the development profile on purpose: it lists
+the devices an operator is willing to repartition, so the panel never guesses.
+Point it at a throwaway disk (or a loop device) before exercising partition
+edits; the boot disk remains protected even if it is listed.
 
 Run the panel in development:
 

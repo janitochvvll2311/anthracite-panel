@@ -296,13 +296,20 @@ impl Config {
         }
     }
 
-    /// Local defaults: relative paths and the controls needed to exercise UI.
+    /// Local defaults: relative paths and every policy switch on, including the
+    /// sensitive ones, so a debug run can exercise every feature. Release builds
+    /// never see this profile.
+    ///
+    /// `disk_allow` stays empty on purpose: it is the list of devices the
+    /// operator is willing to repartition, not a policy switch, and the panel
+    /// must not guess one. Add a throwaway disk before testing partition edits.
     pub fn dev_default() -> Self {
         let mut config = Self {
             socket_path: "./anth.sock".to_string(),
             state_dir: "./state".to_string(),
             ..Self::default()
         };
+        config.terminal.enabled = true;
         config.process.control = true;
         config.process.spawn = true;
         config.process.spawn_allow = vec![
@@ -314,11 +321,18 @@ impl Config {
         config.network.manage = true;
         config.firewall.control = true;
         config.volumes.control = true;
+        config.volumes.partition = true;
+        config.volumes.format = true;
         config.accounts.control = true;
+        config.accounts.manage_passwords = true;
+        config.accounts.allow_system = true;
+        config.accounts.allow_privileged_groups = true;
         config.plugins.enabled = true;
         config.plugins.root = "./plugins".to_string();
         config.plugins.install_from_web = true;
+        config.plugins.require_signature = false;
         config.files.write = true;
+        config.files.trash = true;
         config
     }
 
@@ -598,6 +612,44 @@ mod tests {
         assert_eq!(release.socket_path, RELEASE_SOCKET_PATH);
         assert_eq!(release.state_dir, RELEASE_STATE_DIR);
         assert_eq!(release.plugins.root, RELEASE_PLUGIN_ROOT);
+    }
+
+    #[test]
+    fn the_dev_profile_enables_every_policy_switch() {
+        let dev = Config::dev_default();
+        assert!(dev.terminal.enabled);
+        assert!(dev.process.control);
+        assert!(dev.process.spawn);
+        assert!(!dev.process.spawn_allow.is_empty());
+        assert!(dev.network.control);
+        assert!(dev.network.manage);
+        assert!(dev.firewall.control);
+        assert!(dev.volumes.control);
+        assert!(dev.volumes.partition);
+        assert!(dev.volumes.format);
+        assert!(dev.accounts.control);
+        assert!(dev.accounts.manage_passwords);
+        assert!(dev.accounts.allow_system);
+        assert!(dev.accounts.allow_privileged_groups);
+        assert!(dev.plugins.enabled);
+        assert!(dev.plugins.install_from_web);
+        assert!(!dev.plugins.require_signature);
+        assert!(dev.files.write);
+        assert!(dev.files.trash);
+        assert!(
+            dev.volumes.disk_allow.is_empty(),
+            "the device allowlist stays an explicit operator choice"
+        );
+
+        let release = Config::default();
+        assert!(!release.process.spawn);
+        assert!(!release.network.manage);
+        assert!(!release.volumes.partition);
+        assert!(!release.volumes.format);
+        assert!(!release.accounts.manage_passwords);
+        assert!(!release.accounts.allow_system);
+        assert!(release.plugins.require_signature);
+        assert!(!release.files.write);
     }
 
     #[test]
