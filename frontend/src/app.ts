@@ -30,6 +30,8 @@ import type { AnthFiles } from './files'
 import type { AnthHostInfo } from './host-info'
 import type { FilesClient } from './files-client'
 import type { HostInfoClient } from './host-info-client'
+import type { ProcessesClient } from './processes-client'
+import type { AnthProcesses } from './processes'
 import { changeLocale, currentLocale } from './i18n'
 import type { PanelLocale } from './i18n'
 import { DRAWER_CLOSE_EVENT } from './nav-drawer'
@@ -46,6 +48,7 @@ import './fab'
 import './files'
 import './host-info'
 import './nav-drawer'
+import './processes'
 import './settings'
 import './tab-panel'
 
@@ -56,6 +59,7 @@ export class AnthApp extends HTMLElement {
   static authClient: AuthClient | undefined
   static hostClient: HostInfoClient | undefined
   static filesClient: FilesClient | undefined
+  static processesClient: ProcessesClient | undefined
   static settingsClient: SettingsClient | undefined
 
   #auth?: AuthState
@@ -72,6 +76,7 @@ export class AnthApp extends HTMLElement {
   #homeSection?: HTMLElement
   #filesSection?: HTMLElement
   #terminalSection?: HTMLElement
+  #processesSection?: HTMLElement
   #settingsSection?: HTMLElement
   #filesTabSection?: HTMLElement
   #generalTabSection?: HTMLElement
@@ -384,12 +389,17 @@ export class AnthApp extends HTMLElement {
           </button>
         </section>
       </section>
+      <section data-tab="processes" label="${escape(msg('Processes'))}">
+        <anth-processes></anth-processes>
+      </section>
       <section data-tab="settings" label="${escape(msg('Settings'))}"></section>
     `
     const homeSection = outer.querySelector<HTMLElement>('[data-tab="home"]') ?? undefined
     const filesSection = outer.querySelector<HTMLElement>('[data-tab="files"]') ?? undefined
     const terminalSection =
       outer.querySelector<HTMLElement>('[data-tab="terminal"]') ?? undefined
+    const processesSection =
+      outer.querySelector<HTMLElement>('[data-tab="processes"]') ?? undefined
     const settingsSection = outer.querySelector<HTMLElement>('[data-tab="settings"]') ?? undefined
 
     const filesPanel = document.createElement('anth-tab-panel') as AnthTabPanel
@@ -430,6 +440,10 @@ export class AnthApp extends HTMLElement {
     if (files) {
       files.client = AnthApp.filesClient
     }
+    const processes = processesSection?.querySelector<AnthProcesses>('anth-processes')
+    if (processes) {
+      processes.client = AnthApp.processesClient
+    }
     for (const settings of settingsPanel.querySelectorAll<AnthSettings>('anth-settings')) {
       settings.client = AnthApp.settingsClient
     }
@@ -442,6 +456,7 @@ export class AnthApp extends HTMLElement {
     this.#homeSection = homeSection
     this.#filesSection = filesSection
     this.#terminalSection = terminalSection
+    this.#processesSection = processesSection
     this.#settingsSection = settingsSection
     this.#filesTabSection = filesTabSection
     this.#generalTabSection = generalTabSection
@@ -476,6 +491,7 @@ export class AnthApp extends HTMLElement {
     this.#homeSection = undefined
     this.#filesSection = undefined
     this.#terminalSection = undefined
+    this.#processesSection = undefined
     this.#settingsSection = undefined
     this.#filesTabSection = undefined
     this.#generalTabSection = undefined
@@ -489,6 +505,7 @@ export class AnthApp extends HTMLElement {
     this.#homeSection?.setAttribute('label', msg('Home'))
     this.#filesSection?.setAttribute('label', msg('Files'))
     this.#terminalSection?.setAttribute('label', msg('Terminal'))
+    this.#processesSection?.setAttribute('label', msg('Processes'))
     this.#settingsSection?.setAttribute('label', msg('Settings'))
     this.#filesTabSection?.setAttribute('label', msg('Files'))
     this.#generalTabSection?.setAttribute('label', msg('General'))

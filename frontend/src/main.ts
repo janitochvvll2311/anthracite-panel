@@ -3,6 +3,7 @@ import { AnthApp } from './app'
 import { HttpAuthClient } from './auth-client'
 import { HttpFilesClient } from './files-client'
 import { HttpHostInfoClient } from './host-info-client'
+import { HttpProcessesClient } from './processes-client'
 import { HttpSettingsClient } from './settings-client'
 
 setupLocalization()
@@ -10,6 +11,7 @@ setupLocalization()
 AnthApp.authClient = new HttpAuthClient()
 AnthApp.hostClient = new HttpHostInfoClient()
 AnthApp.filesClient = new HttpFilesClient()
+AnthApp.processesClient = new HttpProcessesClient()
 AnthApp.settingsClient = new HttpSettingsClient()
 
 await applyInitialLocale()

@@ -726,6 +726,182 @@
   <source>Reconnecting…</source>
   <target>Reconectando…</target>
 </trans-unit>
+<trans-unit id="sfdd447bcde2c13ba">
+  <source>Processes</source>
+  <target>Procesos</target>
+</trans-unit>
+<trans-unit id="se7c68117f7ad2d06">
+  <source>Sent <x id="0" equiv-text="${name}"/> to the group led by <x id="1" equiv-text="${process.pid}"/></source>
+  <target>Se envió <x id="0" equiv-text="${name}"/> al grupo liderado por <x id="1" equiv-text="${process.pid}"/></target>
+</trans-unit>
+<trans-unit id="sadc94119c1f03d69">
+  <source>Sent <x id="0" equiv-text="${name}"/> to process <x id="1" equiv-text="${process.pid}"/></source>
+  <target>Se envió <x id="0" equiv-text="${name}"/> al proceso <x id="1" equiv-text="${process.pid}"/></target>
+</trans-unit>
+<trans-unit id="s163b75989a47fa4a">
+  <source>Started <x id="0" equiv-text="${started.program}"/> (pid <x id="1" equiv-text="${started.pid}"/>)</source>
+  <target>Se inició <x id="0" equiv-text="${started.program}"/> (pid <x id="1" equiv-text="${started.pid}"/>)</target>
+</trans-unit>
+<trans-unit id="sda06a41860a5a4aa">
+  <source>Filter processes</source>
+  <target>Filtrar procesos</target>
+</trans-unit>
+<trans-unit id="s05ccfc6906124ae2">
+  <source>Start process</source>
+  <target>Iniciar proceso</target>
+</trans-unit>
+<trans-unit id="sae1c7f13b7c0c47f">
+  <source>Start</source>
+  <target>Iniciar</target>
+</trans-unit>
+<trans-unit id="sab71164df3792a56">
+  <source>No program is allowed. Add one to `[process] spawn_allow`.</source>
+  <target>No hay ningún programa permitido. Agregá uno a `[process] spawn_allow`.</target>
+</trans-unit>
+<trans-unit id="s38cba0a354bb3929">
+  <source>Signal</source>
+  <target>Señal</target>
+</trans-unit>
+<trans-unit id="sd181aed1191e94ad">
+  <source>No process matches the filter.</source>
+  <target>Ningún proceso coincide con el filtro.</target>
+</trans-unit>
+<trans-unit id="s8d4bb019f3bc7202">
+  <source>PID</source>
+  <target>PID</target>
+</trans-unit>
+<trans-unit id="sa48f81f001b893d2">
+  <source>User</source>
+  <target>Usuario</target>
+</trans-unit>
+<trans-unit id="sae239213b7c70376">
+  <source>State</source>
+  <target>Estado</target>
+</trans-unit>
+<trans-unit id="s8b60bf2db1580306">
+  <source>Threads</source>
+  <target>Hilos</target>
+</trans-unit>
+<trans-unit id="s8bea2885ff2d1272">
+  <source>Command</source>
+  <target>Comando</target>
+</trans-unit>
+<trans-unit id="s85994a70cd39166c">
+  <source>Running</source>
+  <target>En ejecución</target>
+</trans-unit>
+<trans-unit id="s2235aa06343ab6e0">
+  <source>Sleeping</source>
+  <target>Durmiendo</target>
+</trans-unit>
+<trans-unit id="sf4d1a47358fe4b64">
+  <source>Disk</source>
+  <target>En espera de disco</target>
+</trans-unit>
+<trans-unit id="sb3708edf8c3c5c9f">
+  <source>Zombie</source>
+  <target>Zombi</target>
+</trans-unit>
+<trans-unit id="sc5fcb9351a03ab2e">
+  <source>Stopped</source>
+  <target>Detenido</target>
+</trans-unit>
+<trans-unit id="sda9460e569c0e139">
+  <source>Tracing</source>
+  <target>En traza</target>
+</trans-unit>
+<trans-unit id="sd049237343c44e47">
+  <source>Dead</source>
+  <target>Muerto</target>
+</trans-unit>
+<trans-unit id="s8409678ab740f99d">
+  <source>Send <x id="0" equiv-text="${this.signal.toUpperCase()}"/> to PID <x id="1" equiv-text="${process.pid}"/> (<x id="2" equiv-text="${label}"/>)?</source>
+  <target>¿Enviar <x id="0" equiv-text="${this.signal.toUpperCase()}"/> al PID <x id="1" equiv-text="${process.pid}"/> (<x id="2" equiv-text="${label}"/>)?</target>
+</trans-unit>
+<trans-unit id="sed808587cf9308b3">
+  <source>Enter a program to start.</source>
+  <target>Escribí un programa para iniciar.</target>
+</trans-unit>
+<trans-unit id="s14b2cc46f96575f6">
+  <source>The program must be an absolute path, for example /bin/ls.</source>
+  <target>El programa debe ser una ruta absoluta, por ejemplo /bin/ls.</target>
+</trans-unit>
+<trans-unit id="s1f6b15d607a67b15">
+  <source>The working directory must be an absolute path.</source>
+  <target>El directorio de trabajo debe ser una ruta absoluta.</target>
+</trans-unit>
+<trans-unit id="sc5ed3a7fae63a022">
+  <source>Start <x id="0" equiv-text="${line}"/>?</source>
+  <target>¿Iniciar <x id="0" equiv-text="${line}"/>?</target>
+</trans-unit>
+<trans-unit id="saee49dc66c73b95a">
+  <source>processes</source>
+  <target>procesos</target>
+</trans-unit>
+<trans-unit id="s1cbfa21184979dcf">
+  <source>Process view</source>
+  <target>Vista de procesos</target>
+</trans-unit>
+<trans-unit id="sfd1ae285071972da">
+  <source>Flat</source>
+  <target>Plana</target>
+</trans-unit>
+<trans-unit id="s85b3b9fb528f2775">
+  <source>Tree</source>
+  <target>Árbol</target>
+</trans-unit>
+<trans-unit id="s225725d715c82da3">
+  <source>Filter by pid, user, name or command</source>
+  <target>Filtrar por pid, usuario, nombre o comando</target>
+</trans-unit>
+<trans-unit id="s99d9a9c73c6350b0">
+  <source>The daemon only starts programs listed in</source>
+  <target>El daemon solo inicia programas listados en</target>
+</trans-unit>
+<trans-unit id="s46fb773b01e91486">
+  <source>Working directory (optional)</source>
+  <target>Directorio de trabajo (opcional)</target>
+</trans-unit>
+<trans-unit id="s8b24ddd2ceff68d4">
+  <source>Allowed programs</source>
+  <target>Programas permitidos</target>
+</trans-unit>
+<trans-unit id="sf96e5892f9ec390d">
+  <source>Starting…</source>
+  <target>Iniciando…</target>
+</trans-unit>
+<trans-unit id="se333bcb4a8549817">
+  <source>Select a process to send a signal.</source>
+  <target>Seleccioná un proceso para enviar una señal.</target>
+</trans-unit>
+<trans-unit id="s98b1cb8fb62909ec">
+  <source>Group</source>
+  <target>Grupo</target>
+</trans-unit>
+<trans-unit id="s6ead281adf0d371d">
+  <source>Sending…</source>
+  <target>Enviando…</target>
+</trans-unit>
+<trans-unit id="s8409af42498bcdf1">
+  <source>Send signal</source>
+  <target>Enviar señal</target>
+</trans-unit>
+<trans-unit id="s548bacf8cc5126ba">
+  <source>Control is disabled by the daemon.</source>
+  <target>El control está desactivado por el daemon.</target>
+</trans-unit>
+<trans-unit id="sa3c3ad181d5cdac1">
+  <source>Collapse process <x id="0" equiv-text="${process.pid}"/></source>
+  <target>Contraer el proceso <x id="0" equiv-text="${process.pid}"/></target>
+</trans-unit>
+<trans-unit id="s6dd2785dd4fb16f2">
+  <source>Expand process <x id="0" equiv-text="${process.pid}"/></source>
+  <target>Expandir el proceso <x id="0" equiv-text="${process.pid}"/></target>
+</trans-unit>
+<trans-unit id="s3b32dd23d086c992">
+  <source>Process tree</source>
+  <target>Árbol de procesos</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

@@ -10,7 +10,7 @@
 
 import { msg } from '@lit/localize'
 
-export type SectionId = 'home' | 'files' | 'terminal' | 'settings'
+export type SectionId = 'home' | 'files' | 'terminal' | 'processes' | 'settings'
 export type PanelId = 'general' | 'files' | 'terminal'
 
 export interface Section {
@@ -39,6 +39,7 @@ export function sections(): Section[] {
     { id: 'home', label: msg('Home'), icon: 'home' },
     { id: 'files', label: msg('Files'), icon: 'files' },
     { id: 'terminal', label: msg('Terminal'), icon: 'terminal' },
+    { id: 'processes', label: msg('Processes'), icon: 'process' },
     { id: 'settings', label: msg('Settings'), icon: 'settings' },
   ]
 }
@@ -65,6 +66,9 @@ export function routeFrom(hash: string): Route {
   if (parts[0] === 'terminal') {
     return { section: 'terminal', panel: 'terminal' }
   }
+  if (parts[0] === 'processes') {
+    return { section: 'processes', panel: 'general' }
+  }
   if (parts[0] === 'settings') {
     return { section: 'settings', panel: 'general' }
   }
@@ -78,6 +82,8 @@ export function hashForSection(section: SectionId): string {
       return '#/files'
     case 'terminal':
       return '#/terminal'
+    case 'processes':
+      return '#/processes'
     case 'settings':
       return '#/settings'
     default:
