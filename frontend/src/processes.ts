@@ -1152,9 +1152,11 @@ export class AnthProcesses extends LitElement {
     .tree-head { padding: 0.45rem 0.6rem; }
     .head-cell { padding: 0; }
     .head-cell.number .sort { justify-content: flex-end; }
-    .grid .cell {
+    /* Keep this unprefixed: .tree-cell overrides the padding below, and a
+       more specific .grid .cell would win and leave a gap in the guides. */
+    .cell {
       min-width: 0;
-      padding: 0.3rem 0.5rem;
+      padding: 0.2rem 0.5rem;
       white-space: nowrap;
     }
     .grid .row {
