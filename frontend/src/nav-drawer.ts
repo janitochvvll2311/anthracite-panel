@@ -84,6 +84,7 @@ export class AnthNavDrawer extends HTMLElement {
           <button class="close" type="button" aria-label="${msg('Close navigation')}"><anth-icon name="close"></anth-icon></button>
         </div>
         <div class="body"><slot></slot></div>
+        <div class="foot"><slot name="footer"></slot></div>
       </dialog>
     `
     this.#wireInner()
@@ -162,6 +163,9 @@ const STYLE = `
   .close:hover, .close:focus-visible { border-color: var(--accent, #7dd3fc); outline: none; }
   .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
           padding: 1rem 0.75rem; padding-left: max(0.75rem, env(safe-area-inset-left)); }
+  .foot { flex: 0 0 auto; padding: 0.75rem max(1rem, env(safe-area-inset-right))
+          max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+          border-top: 1px solid var(--panel-border, #223041); }
   @media (min-width: 48.0625rem) { dialog { display: none !important; } }
 `
 

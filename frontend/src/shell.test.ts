@@ -132,12 +132,39 @@ test('the frame keeps the header outside the scroll container', async () => {
   const hostCard = root.querySelector('[data-host-card]')
   expect(hostCard?.querySelector('[data-refresh]')).toBeNull()
   expect(hostCard?.querySelector('anth-fab')).not.toBeNull()
-  const signout = root.querySelector<HTMLButtonElement>('[data-signout]')
-  expect(signout?.querySelector('anth-icon')).not.toBeNull()
-  expect(signout?.querySelector('.btn-label')?.textContent).toContain('Sign out')
-  const locale = root.querySelector('.locale')
+  // The header only names the app; session controls live in the navigation.
+  expect(header!.querySelector('[data-signout]')).toBeNull()
+  expect(header!.querySelector('[data-locale]')).toBeNull()
+})
+
+test('language and sign-out sit at the bottom of the sidebar and the drawer', async () => {
+  const element = mountShell(OPEN)
+  await flush()
+  const root = element.shadowRoot!
+
+  const feet = root.querySelectorAll('[data-nav-foot]')
+  expect(feet).toHaveLength(2)
+
+  const sidebarFoot = root.querySelector('.sidebar [data-nav-foot]')
+  expect(sidebarFoot).not.toBeNull()
+  const locale = sidebarFoot!.querySelector('.locale')
   expect(locale?.querySelector('anth-icon')).not.toBeNull()
   expect(locale?.querySelector('select[data-locale]')).not.toBeNull()
+  expect(
+    sidebarFoot!.querySelector('option[value="es"]')?.textContent,
+  ).toContain('Spanish')
+
+  const drawerFoot = root.querySelector('anth-nav-drawer [data-nav-foot]')
+  expect(drawerFoot).not.toBeNull()
+  const signout = sidebarFoot!.querySelector<HTMLButtonElement>('[data-signout]')!
+  expect(signout.querySelector('anth-icon')).not.toBeNull()
+  expect(signout.querySelector('.btn-label')?.textContent).toContain('Sign out')
+  expect(drawerFoot!.querySelector('[data-signout]')).not.toBeNull()
+  expect(drawerFoot !== sidebarFoot).toBe(true)
+
+  signout.click()
+  await flush()
+  expect(AnthApp.authClient!.logout).toHaveBeenCalled()
 })
 
 test('the sidebar and the drawer share the sections, and the strip is bare there', async () => {

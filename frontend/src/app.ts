@@ -151,8 +151,8 @@ export class AnthApp extends HTMLElement {
     if (!ready) {
       this.#setDrawer(false)
     }
-    this.#paintHeader()
     this.#paintNav()
+    this.#paintFoot()
 
     const errorEl = this.shadowRoot.querySelector<HTMLElement>('[data-error]')
     const authEl = this.shadowRoot.querySelector<HTMLElement>('[data-auth]')
@@ -206,23 +206,22 @@ export class AnthApp extends HTMLElement {
           <h1>Anthracite Panel</h1>
           <span class="version">v${VERSION}</span>
         </div>
-        <div class="header-actions">
-          <label class="locale">
-            <anth-icon name="globe"></anth-icon>
-            <select data-locale aria-label="${msg('Language')}"></select>
-          </label>
-          <button data-signout type="button" aria-label="${msg('Sign out')}" hidden><anth-icon name="logout"></anth-icon><span class="btn-label">${msg('Sign out')}</span></button>
-        </div>
       </header>
       <div class="shell">
-        <aside class="sidebar"><nav aria-label="${msg('Sections')}" data-sidebar></nav></aside>
+        <aside class="sidebar">
+          <nav aria-label="${msg('Sections')}" data-sidebar></nav>
+          <div class="nav-foot" data-nav-foot></div>
+        </aside>
         <main id="main" tabindex="-1">
           <p class="error" data-error role="alert" hidden></p>
           <div class="auth" data-auth></div>
           <div data-shell hidden></div>
         </main>
       </div>
-      <anth-nav-drawer id="app-navigation"><nav aria-label="${msg('Sections')}" data-drawer></nav></anth-nav-drawer>
+      <anth-nav-drawer id="app-navigation">
+        <nav aria-label="${msg('Sections')}" data-drawer></nav>
+        <div class="nav-foot" slot="footer" data-nav-foot></div>
+      </anth-nav-drawer>
     `
     this.#frameMounted = true
     this.#drawer = root.querySelector('anth-nav-drawer') as AnthNavDrawer | null ?? undefined
@@ -242,10 +241,24 @@ export class AnthApp extends HTMLElement {
     })
     root.querySelector('.menu')?.addEventListener('click', () => this.#setDrawer(true))
     this.#drawer?.addEventListener(DRAWER_CLOSE_EVENT, () => this.#setDrawer(false))
-    root.querySelector('[data-signout]')?.addEventListener('click', () => void this.#logout())
-    root.querySelector('[data-locale]')?.addEventListener('change', (event) => {
-      void this.#switchLocale(event)
-    })
+    // The sidebar and the drawer are repainted on every render, so the footer
+    // controls are handled once, by delegation.
+    root.addEventListener('click', this.#onFrameClick)
+    root.addEventListener('change', this.#onFrameChange)
+  }
+
+  readonly #onFrameClick = (event: Event): void => {
+    const target = event.composedPath()[0]
+    if (target instanceof Element && target.closest('[data-signout]')) {
+      void this.#logout()
+    }
+  }
+
+  readonly #onFrameChange = (event: Event): void => {
+    const target = event.composedPath()[0]
+    if (target instanceof HTMLSelectElement && target.matches('[data-locale]')) {
+      void this.#switchLocale(target.value as PanelLocale)
+    }
   }
 
   #setDrawer(open: boolean): void {
@@ -255,32 +268,30 @@ export class AnthApp extends HTMLElement {
     this.shadowRoot?.querySelector('.menu')?.setAttribute('aria-expanded', String(open))
   }
 
-  #paintHeader(): void {
+  /** Language and sign-out, pinned to the bottom of the sidebar and the drawer. */
+  #paintFoot(): void {
     const root = this.shadowRoot
     if (!root) {
       return
     }
-    const select = root.querySelector<HTMLSelectElement>('[data-locale]')
-    if (select && select.options.length === 0) {
-      select.innerHTML = `
-        <option value="en">${msg('English')}</option>
-        <option value="es">${msg('Spanish')}</option>
-      `
-    }
-    if (select) {
-      select.value = this.#locale
-    }
-    const signout = root.querySelector<HTMLButtonElement>('[data-signout]')
-    if (signout) {
-      const label = signout.querySelector('.btn-label')
-      if (label) {
-        label.textContent = msg('Sign out')
-      } else {
-        signout.textContent = msg('Sign out')
+    const markup = `
+      <label class="locale">
+        <anth-icon name="globe"></anth-icon>
+        <select data-locale aria-label="${msg('Language')}">
+          <option value="en">${msg('English')}</option>
+          <option value="es">${msg('Spanish')}</option>
+        </select>
+      </label>
+      <button data-signout type="button" aria-label="${msg('Sign out')}"
+        ${this.ready() ? '' : 'hidden'} ${this.#busy ? 'disabled' : ''}>
+        <anth-icon name="logout"></anth-icon><span class="btn-label">${msg('Sign out')}</span>
+      </button>`
+    for (const foot of root.querySelectorAll<HTMLElement>('[data-nav-foot]')) {
+      foot.innerHTML = markup
+      const select = foot.querySelector<HTMLSelectElement>('select[data-locale]')
+      if (select) {
+        select.value = this.#locale
       }
-      signout.setAttribute('aria-label', msg('Sign out'))
-      signout.toggleAttribute('hidden', !this.ready())
-      signout.disabled = this.#busy
     }
   }
 
@@ -517,8 +528,7 @@ export class AnthApp extends HTMLElement {
     this.render()
   }
 
-  async #switchLocale(event: Event): Promise<void> {
-    const locale = (event.currentTarget as HTMLSelectElement).value as PanelLocale
+  async #switchLocale(locale: PanelLocale): Promise<void> {
     await changeLocale(locale)
     this.#locale = locale
     this.render()
@@ -600,27 +610,32 @@ const STYLE = `
   h1 { margin: 0; font: 600 16px/1.2 var(--mono, monospace); letter-spacing: 0.02em; }
   .version { color: var(--muted, #8b9bad); font: 12px/1.4 var(--mono, monospace); }
 
-  .header-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-  .header-actions select, .header-actions button {
-    min-height: 36px; padding: 4px 10px; border-radius: 7px; font: 12px/1.4 var(--mono, monospace);
-    color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
-    background: var(--widget-bg, rgba(16, 23, 33, 0.5)); }
-  .header-actions button { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-  .header-actions anth-icon, .auth-card anth-icon, .retry anth-icon { font-size: 14px; }
-  .locale {
+  /* Language and sign-out close the sidebar and the drawer. The auto top
+     margin is what pins them to the bottom edge of a short sidebar. */
+  .nav-foot { display: grid; gap: 0.5rem; margin-top: auto; padding-top: 0.75rem;
+              border-top: 1px solid var(--panel-border, #223041); }
+  .nav-foot .locale {
     display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
     padding: 0 10px; border-radius: 7px; box-sizing: border-box;
     color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
     background: var(--widget-bg, rgba(16, 23, 33, 0.5)); }
-  .locale anth-icon { font-size: 14px; }
-  .locale select {
-    min-width: 0; margin: 0; padding: 0; border: 0; color: inherit;
+  .nav-foot .locale select {
+    flex: 1 1 auto; min-width: 0; margin: 0; padding: 0; border: 0; color: inherit;
     background: transparent; font: 12px/1.4 var(--mono, monospace); cursor: pointer; }
-  .locale select:focus-visible, .locale:focus-within {
+  .nav-foot .locale select:focus-visible, .nav-foot .locale:focus-within {
     outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
-  .header-actions button:hover { border-color: var(--accent, #7dd3fc); }
-  .header-actions button:disabled { opacity: 0.55; cursor: progress; }
-  .header-actions select:focus-visible, .header-actions button:focus-visible,
+  .nav-foot button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 36px; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+    font: 12px/1.4 var(--mono, monospace); color: var(--text, #dbe6f2);
+    border: 1px solid var(--panel-border, #223041);
+    background: var(--widget-bg, rgba(16, 23, 33, 0.5)); }
+  .nav-foot button:hover { border-color: var(--accent, #7dd3fc); }
+  .nav-foot button:disabled { opacity: 0.55; cursor: progress; }
+  .nav-foot button:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
+  /* The drawer is the narrow-layout sidebar, so its labels stay readable. */
+  .nav-foot .btn-label { display: inline; }
+  .nav-foot anth-icon, .auth-card anth-icon, .retry anth-icon { font-size: 14px; }
   .menu:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
 
   .menu { display: none; place-items: center; width: 44px; height: 44px; padding: 0;
@@ -631,13 +646,15 @@ const STYLE = `
   .shell { display: grid; grid-template-columns: clamp(200px, 17vw, 240px) minmax(0, 1fr);
            flex: 1 1 auto; min-height: 0; overflow: hidden; }
 
-  .sidebar { align-self: stretch; height: 100%; min-height: 0; overflow-y: auto;
-             overscroll-behavior: contain; padding: 1.1rem 0.75rem;
+  .sidebar { display: flex; flex-direction: column; align-self: stretch; min-height: 0;
+             box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; padding: 1.1rem 0.75rem;
              padding-left: max(0.75rem, env(safe-area-inset-left));
+             padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
              border-right: 1px solid var(--panel-border, #223041);
              background: rgba(12, 17, 24, 0.72); }
 
   .sidebar nav, anth-nav-drawer nav { display: grid; gap: 0.25rem; }
+  .sidebar nav { flex: 0 0 auto; }
 
   .nav-item { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.65rem;
               color: var(--muted, #8b9bad); text-decoration: none;
@@ -718,22 +735,8 @@ const STYLE = `
     .sidebar { display: none; }
     .menu { display: grid; }
     .btn-label { display: none; }
-    .locale {
-      position: relative;
-      width: 44px;
-      height: 44px;
-      min-height: 44px;
-      padding: 0;
-      justify-content: center;
-    }
-    .locale select {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      opacity: 0;
-    }
-    .header-actions button:has(.btn-label),
+    .nav-foot .locale { min-height: 44px; }
+    .nav-foot button { min-height: 44px; }
     .auth-card button:has(.btn-label),
     .retry:has(.btn-label) {
       width: 44px;
