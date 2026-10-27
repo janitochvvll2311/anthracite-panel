@@ -20,6 +20,7 @@ documentation is added with the code it describes.
 | Document | Contents |
 | --- | --- |
 | [design/reference-v0.1-v0.2.md](design/reference-v0.1-v0.2.md) | What v0.1.0 and v0.2.0 built, what worked, and what failed |
+| [design/ui-reference.md](design/ui-reference.md) | Approved Network-section UI as the template for new feature sections |
 | [design/v0.3.0.md](design/v0.3.0.md) | Architecture draft, decisions, target layout and phases |
 | [design/phase-0-contracts.md](design/phase-0-contracts.md) | Phase 0 contracts: wire, config/state, bootstrap, HTTP/CLI, logging, git |
 | [design/protocol-changelog.md](design/protocol-changelog.md) | Wire versions and the pre-1.0.0 compatibility scaffold |

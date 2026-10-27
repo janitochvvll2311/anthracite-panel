@@ -69,6 +69,7 @@ Debug builds default to relative paths (`./config.toml`, `./anth.sock`, `./state
 - The Phase 0 contracts are accepted; implement against them and update the file if a decision changes.
 - Use `/tmp/anthracite-panel` for test scratch and manual run state, never the shared `/tmp` root and never `.tmp`.
 - `./scripts/dev.sh start|stop|status` runs the daemon and Vite together; its config, logs and PIDs live under `/tmp/anthracite-panel/dev`. `ANTH_ADDR`, `ANTH_VITE_HOST` and `ANTH_VITE_PORT` override the defaults. HMR is off by default so phone testing survives the native file picker (Android drops the HMR socket and Vite reloads on return); set `ANTH_HMR=on` for desktop fast refresh.
+- `docs/design/ui-reference.md` records the approved Network section as the template for new feature sections: one feed, toolbar state/count/interval/pause, a context strip, a local filter, responsive entity cards and client-derived values. Start Firewall, Volumes and Accounts from it.
 - Docs are written in English, matching the previous trees. Keep them in sync with code as it lands.
 - The root `.gitignore` covers local debug config, secrets, state, plugin directories, `frontend/node_modules`, `frontend/dist` and the staged `www/`.
 - License is Apache-2.0 (`LICENSE`).
