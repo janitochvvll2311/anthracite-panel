@@ -174,16 +174,17 @@ test('the sidebar and the drawer share the sections, and the strip is bare there
   const root = element.shadowRoot!
 
   const sidebar = root.querySelector('[data-sidebar]')!
-  expect(sidebar.querySelectorAll('a')).toHaveLength(5)
+  expect(sidebar.querySelectorAll('a')).toHaveLength(6)
   expect(sidebar.querySelector('a[data-section="home"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="files"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="terminal"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="processes"]')).not.toBeNull()
+  expect(sidebar.querySelector('a[data-section="network"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="settings"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="home"] anth-icon')).not.toBeNull()
 
   const drawer = root.querySelector('anth-nav-drawer')!
-  expect(drawer.querySelectorAll('a')).toHaveLength(5)
+  expect(drawer.querySelectorAll('a')).toHaveLength(6)
 
   const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
   expect(outer.active).toBe('home')
@@ -225,6 +226,27 @@ test('the files section owns its own Files tab', async () => {
   ])
   expect(
     inner.querySelector('[data-tab="files"]')?.querySelector('anth-files'),
+  ).not.toBeNull()
+})
+
+test('the network section owns an Interfaces tab and routes to it', async () => {
+  const element = mountShell(OPEN)
+  await flush()
+  const root = element.shadowRoot!
+  const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
+
+  location.hash = '#/network'
+  window.dispatchEvent(new Event('hashchange'))
+  await flush()
+
+  expect(outer.active).toBe('network')
+  const inner = outer.querySelector('anth-tab-panel') as AnthTabPanel
+  expect(inner.active).toBe('interfaces')
+  expect([...inner.shadowRoot!.querySelectorAll('.tab')].map((tab) => tab.textContent)).toEqual([
+    'Interfaces',
+  ])
+  expect(
+    inner.querySelector('[data-tab="interfaces"]')?.querySelector('anth-network'),
   ).not.toBeNull()
 })
 

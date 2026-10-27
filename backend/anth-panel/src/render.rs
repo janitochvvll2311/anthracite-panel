@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 
-use anth_wire::{FileEntry, HostInfo, Page, ProcessInfo};
+use anth_wire::{FileEntry, HostInfo, NetworkSnapshot, Page, ProcessInfo};
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -145,6 +145,60 @@ pub fn file_list(page: &Page<FileEntry>) -> String {
     }
     if let Some(next) = &page.next {
         let _ = writeln!(out, "next: {next}");
+    }
+    out.trim_end().to_string()
+}
+
+/// Formats one network snapshot: one row per address, counters on the first.
+pub fn network(snapshot: &NetworkSnapshot) -> String {
+    if snapshot.interfaces.is_empty() {
+        return "(no interfaces)".to_string();
+    }
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{:<15} {:<8} {:<8} {:>5}  {:<39} {:>10} {:>10}",
+        "INTERFACE", "STATE", "KIND", "MTU", "ADDRESS", "RX", "TX"
+    );
+    for interface in &snapshot.interfaces {
+        let mut addresses = interface.addresses.iter();
+        let first = addresses
+            .next()
+            .map(|address| format!("{}/{}", address.address, address.prefix))
+            .unwrap_or_else(|| "-".to_string());
+        let _ = writeln!(
+            out,
+            "{:<15} {:<8} {:<8} {:>5}  {:<39} {:>10} {:>10}",
+            safe(&interface.name),
+            safe(&interface.state),
+            safe(&interface.kind),
+            interface.mtu,
+            first,
+            format_bytes(interface.rx_bytes),
+            format_bytes(interface.tx_bytes),
+        );
+        for address in addresses {
+            let _ = writeln!(
+                out,
+                "{:<15} {:<8} {:<8} {:>5}  {:<39}",
+                "",
+                "",
+                "",
+                "",
+                format!("{}/{}", address.address, address.prefix),
+            );
+        }
+    }
+    if !snapshot.routes.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "DEFAULT ROUTES");
+        for route in &snapshot.routes {
+            let _ = writeln!(
+                out,
+                "  {} via {} dev {}",
+                route.family, route.gateway, route.interface
+            );
+        }
     }
     out.trim_end().to_string()
 }

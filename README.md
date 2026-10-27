@@ -6,9 +6,10 @@ and a web UI. Apache-2.0.
 ## Status
 
 `v0.3.0` is a rewrite in progress. Phases 0–4 are in place: foundation,
-host-info, auth/lifecycle, files and the terminal and process slices. The
-remaining phases are network/firewall, volumes/partitions/accounts, plugins and
-hardening/release.
+host-info, auth/lifecycle, files and the terminal and process slices. Phase 5
+has started with the read-only network inventory; interface mutations and the
+firewall are next. The remaining phases are volumes/partitions/accounts,
+plugins and hardening/release.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
@@ -36,6 +37,9 @@ hardening/release.
 - Processes: paginated `/proc` snapshots, an SSE watch feed, allowlisted
   signals guarded by `pid + start_ticks`, allowlisted detached spawns, and a
   flat/tree manager with live CPU/memory in the web UI.
+- Network: read-only interface inventory from sysfs and `getifaddrs` with
+  IPv4/IPv6 addresses, cumulative counters, default routes and client-derived
+  rates, over socket, HTTP, SSE, CLI and the Network section.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
@@ -49,9 +53,9 @@ hardening/release.
 - Config/secrets/state path mapping, atomic writes and comment-preserving
   `config set`; CI for backend and frontend.
 
-The remaining phases (network/firewall, volumes/partitions/accounts, plugins and
-hardening/release) arrive later. The settings page covers policy switches,
-sessions and lifecycle; it is not a full config editor. The plan is
+The remaining work (network mutations, firewall, volumes/partitions/accounts,
+plugins and hardening/release) arrives later. The settings page covers policy
+switches, sessions and lifecycle; it is not a full config editor. The plan is
 [docs/design/v0.3.0.md](docs/design/v0.3.0.md); the accepted Phase 0 contracts
 are [docs/design/phase-0-contracts.md](docs/design/phase-0-contracts.md).
 

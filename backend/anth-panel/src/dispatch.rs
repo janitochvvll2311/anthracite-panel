@@ -17,6 +17,7 @@ use crate::config::{Config, Paths};
 use crate::files::FileService;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
+use crate::network::NetworkService;
 use crate::process::ProcessService;
 use crate::terminal::{OpenError, Sessions, resolve_shell, supports_line_editing};
 
@@ -29,6 +30,7 @@ pub struct Daemon {
     files: Result<FileService, String>,
     terminal: Arc<Sessions>,
     process: ProcessService,
+    network: NetworkService,
 }
 
 impl Daemon {
@@ -73,6 +75,7 @@ impl Daemon {
             config.process.spawn,
             config.process.spawn_allow.clone(),
         );
+        let network = NetworkService::new(config.network.control, config.network.manage);
         Self {
             config,
             paths,
@@ -81,6 +84,7 @@ impl Daemon {
             files,
             terminal,
             process,
+            network,
         }
     }
 
@@ -202,6 +206,12 @@ impl Daemon {
                         WireError::internal(format!("the host-info task failed: {error}"))
                     })?;
                 Ok(Response::HostInfo(info))
+            }
+            Request::Network => {
+                let network = self.network.clone();
+                Ok(Response::Network(
+                    blocking(move || network.snapshot()).await?,
+                ))
             }
             Request::Restart => {
                 let lifecycle = Arc::clone(&self.lifecycle);
@@ -418,13 +428,14 @@ where
 {
     tokio::task::spawn_blocking(task)
         .await
-        .map_err(|error| WireError::internal(format!("the terminal task failed: {error}")))?
+        .map_err(|error| WireError::internal(format!("the blocking task failed: {error}")))?
 }
 
 fn operation_of(request: &Request) -> &'static str {
     match request {
         Request::Hello { .. } => "hello",
         Request::HostInfo => "host-info",
+        Request::Network => "network",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

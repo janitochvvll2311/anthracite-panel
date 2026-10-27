@@ -100,6 +100,17 @@ enum Command {
         )]
         watch: Option<String>,
     },
+    /// Print the network interfaces, addresses and default routes.
+    Network {
+        /// Keep reading every INTERVAL instead of printing once.
+        #[arg(
+            long,
+            value_name = "INTERVAL",
+            num_args = 0..=1,
+            default_missing_value = anth_wire::DEFAULT_INTERVAL
+        )]
+        watch: Option<String>,
+    },
     /// Read, validate or change the configuration.
     Config {
         #[command(subcommand)]
@@ -294,6 +305,7 @@ async fn run() -> CliResult {
     match &cli.command {
         Command::Config { command } => config_command(&path, command, &cli),
         Command::HostInfo { watch } => host_info(&path, watch.clone()).await,
+        Command::Network { watch } => network_command(&path, watch.clone()).await,
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
         Command::Reboot { delay } => {
@@ -728,6 +740,29 @@ async fn host_info(path: &std::path::Path, watch: Option<String>) -> CliResult {
 fn print_host_info(response: &Response) -> CliResult {
     println!("{}", render_response(response)?);
     Ok(())
+}
+
+async fn network_command(path: &std::path::Path, watch: Option<String>) -> CliResult {
+    let mut client = connect(path).await?;
+
+    let Some(interval) = watch else {
+        let response = client
+            .call(&Request::Network)
+            .await
+            .map_err(|error| (1, error.to_string()))?;
+        println!("{}", render_network(&response)?);
+        return Ok(());
+    };
+
+    watch_loop(&mut client, &interval, &Request::Network, render_network).await
+}
+
+fn render_network(response: &Response) -> Result<String, (u8, String)> {
+    match response {
+        Response::Network(snapshot) => Ok(render::network(snapshot)),
+        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+        other => Err((1, format!("unexpected response: {other:?}"))),
+    }
 }
 
 /// Repeats one request on an interval until Ctrl-C.

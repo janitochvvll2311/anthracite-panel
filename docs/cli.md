@@ -166,6 +166,19 @@ returns the remote exit code. The daemon must have `[terminal] enabled = true`.
 The shell is the one configured by `[terminal] shell`; the CLI cannot choose a
 different program.
 
+## `network`
+
+```bash
+anth-panel network
+anth-panel network --watch
+anth-panel network --watch 2s
+```
+
+Prints the interfaces, one row per address, then the default routes. The
+counters are cumulative bytes; the CLI does not derive rates. `--watch` repeats
+the table until Ctrl-C, and a bare `--watch` uses `2s`. Reading works regardless
+of `[network] control` and `[network] manage`; this slice has no mutations.
+
 ## `process`
 
 ```bash

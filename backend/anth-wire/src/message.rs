@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
+use crate::network::NetworkSnapshot;
 use crate::page::Page;
 use crate::process::{ProcessSignal, ProcessSnapshot, ProcessStarted};
 use crate::terminal::{TerminalOpened, TerminalOutput};
@@ -31,6 +32,8 @@ pub enum Request {
     },
     /// One snapshot of the host the daemon runs on.
     HostInfo,
+    /// One snapshot of the host's network interfaces and default routes.
+    Network,
     /// Replaces this process with a fresh copy of the same command line, which
     /// re-reads the configuration.
     Restart,
@@ -166,6 +169,8 @@ pub enum Response {
         features: Vec<String>,
     },
     HostInfo(HostInfo),
+    /// One network inventory snapshot.
+    Network(NetworkSnapshot),
     /// The restart was accepted; this process is about to be replaced.
     Restarting {
         /// The pid the new image keeps.

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
-    FileWritten, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request, Response,
-    TerminalSize, TrashListing, WireError,
+    FileWritten, NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request,
+    Response, TerminalSize, TrashListing, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -84,6 +84,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/sessions/revoke", post(revoke_session))
         .route("/api/host-info", get(host_info))
         .route("/api/host-info/watch", get(watch_host_info))
+        .route("/api/network", get(network))
+        .route("/api/network/watch", get(watch_network))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
         .route(
@@ -679,6 +681,58 @@ async fn watch_host_info(
                     ))
                 });
             logger.debug("host-info", "frame");
+            Some((Ok::<_, Infallible>(event), ticker))
+        }
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+async fn network(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<NetworkSnapshot>, ApiError> {
+    match state.daemon.execute(Request::Network).await {
+        Response::Network(snapshot) => Ok(Json(snapshot)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a network snapshot answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn watch_network(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<WatchQuery>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let interval = watch_interval(query.interval.as_deref())?;
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let daemon = Arc::clone(&state.daemon);
+    let logger = Arc::clone(&state.logger);
+    let stream = stream::unfold(ticker, move |mut ticker| {
+        let daemon = Arc::clone(&daemon);
+        let logger = Arc::clone(&logger);
+        async move {
+            ticker.tick().await;
+            let event = match daemon.execute(Request::Network).await {
+                Response::Network(snapshot) => Event::default()
+                    .event("network")
+                    .id(snapshot.timestamp_ms.to_string())
+                    .retry(Duration::from_secs(3))
+                    .json_data(snapshot)
+                    .unwrap_or_else(|error| {
+                        sse_error(&WireError::internal(format!(
+                            "the network snapshot could not be encoded: {error}"
+                        )))
+                    }),
+                Response::Error(error) => sse_error(&error),
+                other => sse_error(&WireError::internal(format!(
+                    "a network snapshot answered unexpectedly: {other:?}"
+                ))),
+            };
+            logger.debug("network", "frame");
             Some((Ok::<_, Infallible>(event), ticker))
         }
     });

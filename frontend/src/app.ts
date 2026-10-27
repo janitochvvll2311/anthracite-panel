@@ -18,6 +18,7 @@ import {
   filesPanels,
   hashForPanel,
   hashForSection,
+  networkPanels,
   routeFrom,
   sections,
   settingsPanels,
@@ -32,6 +33,8 @@ import type { FilesClient } from './files-client'
 import type { HostInfoClient } from './host-info-client'
 import type { ProcessesClient } from './processes-client'
 import type { AnthProcesses } from './processes'
+import type { NetworkClient } from './network-client'
+import type { AnthNetwork } from './network'
 import { changeLocale, currentLocale } from './i18n'
 import type { PanelLocale } from './i18n'
 import { DRAWER_CLOSE_EVENT } from './nav-drawer'
@@ -48,6 +51,7 @@ import './fab'
 import './files'
 import './host-info'
 import './nav-drawer'
+import './network'
 import './processes'
 import './settings'
 import './tab-panel'
@@ -61,6 +65,7 @@ export class AnthApp extends HTMLElement {
   static hostClient: HostInfoClient | undefined
   static filesClient: FilesClient | undefined
   static processesClient: ProcessesClient | undefined
+  static networkClient: NetworkClient | undefined
   static settingsClient: SettingsClient | undefined
 
   #auth?: AuthState
@@ -74,13 +79,16 @@ export class AnthApp extends HTMLElement {
   #shellMounted = false
   #tabPanel?: AnthTabPanel
   #filesPanel?: AnthTabPanel
+  #networkPanel?: AnthTabPanel
   #settingsPanel?: AnthTabPanel
   #homeSection?: HTMLElement
   #filesSection?: HTMLElement
   #terminalSection?: HTMLElement
   #processesSection?: HTMLElement
+  #networkSection?: HTMLElement
   #settingsSection?: HTMLElement
   #filesTabSection?: HTMLElement
+  #interfacesTabSection?: HTMLElement
   #generalTabSection?: HTMLElement
   #drawer?: AnthNavDrawer
 
@@ -446,6 +454,7 @@ export class AnthApp extends HTMLElement {
       <section data-tab="processes" label="${escape(msg('Processes'))}">
         <anth-processes></anth-processes>
       </section>
+      <section data-tab="network" label="${escape(msg('Network'))}"></section>
       <section data-tab="settings" label="${escape(msg('Settings'))}"></section>
     `
     const homeSection = outer.querySelector<HTMLElement>('[data-tab="home"]') ?? undefined
@@ -454,6 +463,8 @@ export class AnthApp extends HTMLElement {
       outer.querySelector<HTMLElement>('[data-tab="terminal"]') ?? undefined
     const processesSection =
       outer.querySelector<HTMLElement>('[data-tab="processes"]') ?? undefined
+    const networkSection =
+      outer.querySelector<HTMLElement>('[data-tab="network"]') ?? undefined
     const settingsSection = outer.querySelector<HTMLElement>('[data-tab="settings"]') ?? undefined
 
     const filesPanel = document.createElement('anth-tab-panel') as AnthTabPanel
@@ -468,6 +479,20 @@ export class AnthApp extends HTMLElement {
       .join('')
     const filesTabSection = filesPanel.querySelector<HTMLElement>(':scope > section') ?? undefined
     filesSection?.append(filesPanel)
+
+    const networkPanel = document.createElement('anth-tab-panel') as AnthTabPanel
+    networkPanel.setAttribute('active', 'interfaces')
+    networkPanel.innerHTML = networkPanels()
+      .map(
+        (panel) => `
+          <section data-tab="${panel.id}" label="${escape(panel.label)}">
+            <anth-network></anth-network>
+          </section>`,
+      )
+      .join('')
+    const interfacesTabSection =
+      networkPanel.querySelector<HTMLElement>(':scope > section') ?? undefined
+    networkSection?.append(networkPanel)
 
     const settingsPanel = document.createElement('anth-tab-panel') as AnthTabPanel
     settingsPanel.setAttribute('active', 'general')
@@ -498,6 +523,10 @@ export class AnthApp extends HTMLElement {
     if (processes) {
       processes.client = AnthApp.processesClient
     }
+    const network = networkPanel.querySelector<AnthNetwork>('anth-network')
+    if (network) {
+      network.client = AnthApp.networkClient
+    }
     for (const settings of settingsPanel.querySelectorAll<AnthSettings>('anth-settings')) {
       settings.client = AnthApp.settingsClient
     }
@@ -506,13 +535,16 @@ export class AnthApp extends HTMLElement {
 
     this.#tabPanel = outer
     this.#filesPanel = filesPanel
+    this.#networkPanel = networkPanel
     this.#settingsPanel = settingsPanel
     this.#homeSection = homeSection
     this.#filesSection = filesSection
     this.#terminalSection = terminalSection
     this.#processesSection = processesSection
+    this.#networkSection = networkSection
     this.#settingsSection = settingsSection
     this.#filesTabSection = filesTabSection
+    this.#interfacesTabSection = interfacesTabSection
     this.#generalTabSection = generalTabSection
 
     homeSection
@@ -524,6 +556,10 @@ export class AnthApp extends HTMLElement {
     filesPanel.addEventListener(TAB_CHANGE_EVENT, (event) => {
       const { id } = (event as CustomEvent<TabChangeDetail>).detail
       // The hash stays the source of truth, so back and forward walk panels.
+      location.hash = hashForPanel(id as PanelId)
+    })
+    networkPanel.addEventListener(TAB_CHANGE_EVENT, (event) => {
+      const { id } = (event as CustomEvent<TabChangeDetail>).detail
       location.hash = hashForPanel(id as PanelId)
     })
     settingsPanel.addEventListener(TAB_CHANGE_EVENT, (event) => {
@@ -541,13 +577,16 @@ export class AnthApp extends HTMLElement {
     this.#shellMounted = false
     this.#tabPanel = undefined
     this.#filesPanel = undefined
+    this.#networkPanel = undefined
     this.#settingsPanel = undefined
     this.#homeSection = undefined
     this.#filesSection = undefined
     this.#terminalSection = undefined
     this.#processesSection = undefined
+    this.#networkSection = undefined
     this.#settingsSection = undefined
     this.#filesTabSection = undefined
+    this.#interfacesTabSection = undefined
     this.#generalTabSection = undefined
     container.innerHTML = ''
   }
@@ -560,8 +599,10 @@ export class AnthApp extends HTMLElement {
     this.#filesSection?.setAttribute('label', msg('Files'))
     this.#terminalSection?.setAttribute('label', msg('Terminal'))
     this.#processesSection?.setAttribute('label', msg('Processes'))
+    this.#networkSection?.setAttribute('label', msg('Network'))
     this.#settingsSection?.setAttribute('label', msg('Settings'))
     this.#filesTabSection?.setAttribute('label', msg('Files'))
+    this.#interfacesTabSection?.setAttribute('label', msg('Interfaces'))
     this.#generalTabSection?.setAttribute('label', msg('General'))
     const card = this.#homeSection?.querySelector('[data-host-card]')
     const label = card?.querySelector('.card-head .label')
@@ -576,11 +617,15 @@ export class AnthApp extends HTMLElement {
     if (this.#filesPanel) {
       this.#filesPanel.active = 'files'
     }
+    if (this.#networkPanel) {
+      this.#networkPanel.active = this.#route.section === 'network' ? this.#route.panel : 'interfaces'
+    }
     if (this.#settingsPanel) {
       this.#settingsPanel.active = 'general'
     }
     this.#tabPanel.refresh()
     this.#filesPanel?.refresh()
+    this.#networkPanel?.refresh()
     this.#settingsPanel?.refresh()
   }
 

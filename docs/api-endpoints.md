@@ -173,6 +173,64 @@ A bad interval is a `400` before the stream opens. After the first byte, a
 failure is an `event: error` with the error JSON and the stream closes.
 `interval` accepts `ms`, `s`, `m` and `h` suffixes and is at least `10ms`.
 
+## Network
+
+The read-only inventory; policy and the contract are in [network.md](network.md).
+Both routes require a live access token unless auth is disabled.
+
+### `GET /api/network`
+
+```json
+{
+  "interfaces": [
+    {
+      "name": "eth0",
+      "index": 2,
+      "kind": "ether",
+      "mac": "00:11:22:33:44:55",
+      "mtu": 1500,
+      "state": "up",
+      "up": true,
+      "loopback": false,
+      "addresses": [
+        { "family": "inet", "address": "192.168.1.10", "prefix": 24, "scope": "global" }
+      ],
+      "rx_bytes": 123456,
+      "tx_bytes": 654321,
+      "rx_packets": 1000,
+      "tx_packets": 900,
+      "rx_errors": 0,
+      "tx_errors": 0,
+      "rx_dropped": 0,
+      "tx_dropped": 0,
+      "speed_mbps": 1000
+    }
+  ],
+  "routes": [
+    { "family": "inet", "gateway": "192.168.1.1", "interface": "eth0" }
+  ],
+  "timestamp_ms": 1790000000000,
+  "control_enabled": false,
+  "manage_enabled": false
+}
+```
+
+Counters are cumulative. `control_enabled` and `manage_enabled` report
+`[network] control` and `[network] manage`; the inventory itself is always
+readable. `speed_mbps` is omitted when the driver reports none.
+
+### `GET /api/network/watch?interval=2s`
+
+Server-Sent Events, the same shape as `host-info/watch`:
+
+- `event: network`
+- `id`: `timestamp_ms`
+- `data`: one snapshot
+- `retry: 3000`
+- keep-alive comments every 15 seconds.
+
+A bad interval is a `400` before the stream opens.
+
 ## Settings and lifecycle
 
 All four routes require a live access token unless auth is disabled. The two

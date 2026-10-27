@@ -332,6 +332,54 @@ Handles are owner-scoped: a handle from another auth session or socket uid is
 `not_found`. With `[terminal] enabled = false`, every terminal request answers
 `forbidden` with code `terminal_disabled`.
 
+### Network
+
+```json
+{ "type": "network" }
+```
+
+```json
+{
+  "type": "network",
+  "data": {
+    "interfaces": [
+      {
+        "name": "eth0",
+        "index": 2,
+        "kind": "ether",
+        "mac": "00:11:22:33:44:55",
+        "mtu": 1500,
+        "state": "up",
+        "up": true,
+        "loopback": false,
+        "addresses": [
+          { "family": "inet", "address": "192.168.1.10", "prefix": 24, "scope": "global" }
+        ],
+        "rx_bytes": 123456,
+        "tx_bytes": 654321,
+        "rx_packets": 1000,
+        "tx_packets": 900,
+        "rx_errors": 0,
+        "tx_errors": 0,
+        "rx_dropped": 0,
+        "tx_dropped": 0,
+        "speed_mbps": 1000
+      }
+    ],
+    "routes": [
+      { "family": "inet", "gateway": "192.168.1.1", "interface": "eth0" }
+    ],
+    "timestamp_ms": 1790000000000,
+    "control_enabled": false,
+    "manage_enabled": false
+  }
+}
+```
+
+Counters are cumulative; a client derives a rate from two snapshots. The
+address `scope` is `host`, `link` or `global`. `speed_mbps` is omitted when the
+driver reports no positive speed. See [network.md](network.md).
+
 ### Processes
 
 ```json

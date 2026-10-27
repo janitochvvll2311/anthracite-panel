@@ -10,8 +10,14 @@
 
 import { msg } from '@lit/localize'
 
-export type SectionId = 'home' | 'files' | 'terminal' | 'processes' | 'settings'
-export type PanelId = 'general' | 'files' | 'terminal'
+export type SectionId =
+  | 'home'
+  | 'files'
+  | 'terminal'
+  | 'processes'
+  | 'network'
+  | 'settings'
+export type PanelId = 'general' | 'files' | 'terminal' | 'interfaces'
 
 export interface Section {
   /** Stable id. It is the route and the hash, so it never changes. */
@@ -40,6 +46,7 @@ export function sections(): Section[] {
     { id: 'files', label: msg('Files'), icon: 'files' },
     { id: 'terminal', label: msg('Terminal'), icon: 'terminal' },
     { id: 'processes', label: msg('Processes'), icon: 'process' },
+    { id: 'network', label: msg('Network'), icon: 'network' },
     { id: 'settings', label: msg('Settings'), icon: 'settings' },
   ]
 }
@@ -47,6 +54,11 @@ export function sections(): Section[] {
 /** The single panel the Files section owns. */
 export function filesPanels(): Panel[] {
   return [{ id: 'files', label: msg('Files') }]
+}
+
+/** The panels the Network section owns. The firewall joins them next. */
+export function networkPanels(): Panel[] {
+  return [{ id: 'interfaces', label: msg('Interfaces') }]
 }
 
 /** The single panel the Settings section owns. */
@@ -69,6 +81,9 @@ export function routeFrom(hash: string): Route {
   if (parts[0] === 'processes') {
     return { section: 'processes', panel: 'general' }
   }
+  if (parts[0] === 'network') {
+    return { section: 'network', panel: 'interfaces' }
+  }
   if (parts[0] === 'settings') {
     return { section: 'settings', panel: 'general' }
   }
@@ -84,6 +99,8 @@ export function hashForSection(section: SectionId): string {
       return '#/terminal'
     case 'processes':
       return '#/processes'
+    case 'network':
+      return '#/network'
     case 'settings':
       return '#/settings'
     default:
@@ -95,5 +112,6 @@ export function hashForSection(section: SectionId): string {
 export function hashForPanel(panel: PanelId): string {
   if (panel === 'files') return '#/files'
   if (panel === 'terminal') return '#/terminal'
+  if (panel === 'interfaces') return '#/network'
   return '#/settings'
 }

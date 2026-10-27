@@ -926,6 +926,86 @@
   <source>Expand sidebar</source>
   <target>Expandir barra lateral</target>
 </trans-unit>
+<trans-unit id="s9feb1a1345ccc3e5">
+  <source>Network</source>
+  <target>Red</target>
+</trans-unit>
+<trans-unit id="s5ecea394de533c99">
+  <source>Interfaces</source>
+  <target>Interfaces</target>
+</trans-unit>
+<trans-unit id="s3c1faa5e8dc9e54d">
+  <source><x id="0" equiv-text="${this.rows.length}"/> interfaces · <x id="1" equiv-text="${countUp(this.rows)}"/> up</source>
+  <target><x id="0" equiv-text="${this.rows.length}"/> interfaces · <x id="1" equiv-text="${countUp(this.rows)}"/> activas</target>
+</trans-unit>
+<trans-unit id="see36105acf8c5bfb">
+  <source>Default route</source>
+  <target>Ruta predeterminada</target>
+</trans-unit>
+<trans-unit id="s3c0d17bad169557b">
+  <source>none</source>
+  <target>ninguna</target>
+</trans-unit>
+<trans-unit id="sed2fc6fae1c9eede">
+  <source>No addresses</source>
+  <target>Sin direcciones</target>
+</trans-unit>
+<trans-unit id="s1e594819b55d7da3">
+  <source>MTU</source>
+  <target>MTU</target>
+</trans-unit>
+<trans-unit id="s09496c07b5d89237">
+  <source>RX</source>
+  <target>RX</target>
+</trans-unit>
+<trans-unit id="s09352807b5c775a1">
+  <source>TX</source>
+  <target>TX</target>
+</trans-unit>
+<trans-unit id="s3b5a836435f20159">
+  <source><x id="0" equiv-text="${iface.rx_errors + iface.tx_errors}"/> errors · <x id="1" equiv-text="${iface.rx_dropped + iface.tx_dropped}"/> dropped</source>
+  <target><x id="0" equiv-text="${iface.rx_errors + iface.tx_errors}"/> errores · <x id="1" equiv-text="${iface.rx_dropped + iface.tx_dropped}"/> descartados</target>
+</trans-unit>
+<trans-unit id="s875d7d41e50a95a1">
+  <source>Paused — press Resume to read the interfaces again.</source>
+  <target>En pausa — pulsa Reanudar para volver a leer las interfaces.</target>
+</trans-unit>
+<trans-unit id="sfd42b63a0f4dae02">
+  <source>Reading the interfaces…</source>
+  <target>Leyendo las interfaces…</target>
+</trans-unit>
+<trans-unit id="s3a39a466143aaeee">
+  <source>No network information yet.</source>
+  <target>Aún no hay información de red.</target>
+</trans-unit>
+<trans-unit id="s35cb14406d1b2e88">
+  <source>Filter by interface, address, MAC or state</source>
+  <target>Filtrar por interfaz, dirección, MAC o estado</target>
+</trans-unit>
+<trans-unit id="sa9ef9aeaac113787">
+  <source>Filter network interfaces</source>
+  <target>Filtrar interfaces de red</target>
+</trans-unit>
+<trans-unit id="sb3c11fab3101b924">
+  <source><x id="0" equiv-text="${visible.length}"/> of <x id="1" equiv-text="${this.rows.length}"/> interfaces</source>
+  <target><x id="0" equiv-text="${visible.length}"/> de <x id="1" equiv-text="${this.rows.length}"/> interfaces</target>
+</trans-unit>
+<trans-unit id="sfd1b96f463a26391">
+  <source>No interfaces match the current filter.</source>
+  <target>Ninguna interfaz coincide con el filtro actual.</target>
+</trans-unit>
+<trans-unit id="s4077f8cc7eaf4d6f">
+  <source>host</source>
+  <target>host</target>
+</trans-unit>
+<trans-unit id="sbf4b9bad694f4809">
+  <source>link</source>
+  <target>enlace</target>
+</trans-unit>
+<trans-unit id="s7fb43557b54149ce">
+  <source>global</source>
+  <target>global</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
