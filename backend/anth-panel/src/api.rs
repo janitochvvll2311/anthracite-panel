@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
-    FileWritten, Page, Request, Response, TerminalSize, TrashListing, WireError,
+    FileWritten, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request, Response,
+    TerminalSize, TrashListing, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -103,6 +104,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/files/archive/list", get(list_archive))
         .route("/api/files/archive/extract", post(extract_archive))
         .route("/api/terminal", get(ws_terminal))
+        .route("/api/processes", get(processes))
+        .route("/api/processes/watch", get(watch_processes))
+        .route("/api/processes/signal", post(process_signal))
+        .route("/api/processes/spawn", post(process_spawn))
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
         .route("/api/settings", get(get_settings).patch(patch_settings))
@@ -259,6 +264,40 @@ struct FilesQuery {
     limit: Option<u16>,
     #[serde(default)]
     cursor: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ProcessesQuery {
+    #[serde(default)]
+    limit: Option<u16>,
+    #[serde(default)]
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProcessWatchQuery {
+    #[serde(default)]
+    interval: Option<String>,
+    #[serde(default)]
+    limit: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProcessSignalBody {
+    pid: u32,
+    start_ticks: u64,
+    signal: String,
+    #[serde(default)]
+    group: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProcessSpawnBody {
+    program: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -618,11 +657,7 @@ async fn watch_host_info(
     query: Result<Query<WatchQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
-    let interval = match query.interval.as_deref() {
-        Some(raw) => anth_wire::parse_interval(raw).map_err(ApiError::invalid)?,
-        None => anth_wire::parse_interval(anth_wire::DEFAULT_INTERVAL)
-            .expect("the default interval parses"),
-    };
+    let interval = watch_interval(query.interval.as_deref())?;
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let logger = Arc::clone(&state.logger);
@@ -648,6 +683,158 @@ async fn watch_host_info(
         }
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// Validates the `interval` query shared by the SSE routes.
+fn watch_interval(value: Option<&str>) -> Result<Duration, ApiError> {
+    match value {
+        Some(raw) => anth_wire::parse_interval(raw).map_err(ApiError::invalid),
+        None => Ok(anth_wire::parse_interval(anth_wire::DEFAULT_INTERVAL)
+            .expect("the default interval parses")),
+    }
+}
+
+/// One SSE `error` frame for a failed tick.
+fn sse_error(error: &WireError) -> Event {
+    Event::default().event("error").data(
+        json!({
+            "kind": error.kind.as_str(),
+            "code": error.code,
+            "message": error.message,
+        })
+        .to_string(),
+    )
+}
+
+async fn processes(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<ProcessesQuery>, QueryRejection>,
+) -> Result<Json<ProcessSnapshot>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::Processes {
+            limit: query.limit,
+            cursor: query.cursor,
+        })
+        .await
+    {
+        Response::Processes(snapshot) => Ok(Json(snapshot)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a process listing answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn watch_processes(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<ProcessWatchQuery>, QueryRejection>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let interval = watch_interval(query.interval.as_deref())?;
+    let request = PageRequest {
+        limit: Some(query.limit.unwrap_or(500)),
+        cursor: None,
+    };
+    if !request.valid() {
+        return Err(ApiError::invalid("the page limit is out of bounds"));
+    }
+
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let daemon = Arc::clone(&state.daemon);
+    let logger = Arc::clone(&state.logger);
+    let stream = stream::unfold(ticker, move |mut ticker| {
+        let daemon = Arc::clone(&daemon);
+        let logger = Arc::clone(&logger);
+        let request = request.clone();
+        async move {
+            ticker.tick().await;
+            let event = match daemon
+                .execute(Request::Processes {
+                    limit: request.limit,
+                    cursor: None,
+                })
+                .await
+            {
+                Response::Processes(snapshot) => Event::default()
+                    .event("processes")
+                    .id(snapshot.timestamp_ms.to_string())
+                    .retry(Duration::from_secs(3))
+                    .json_data(snapshot)
+                    .unwrap_or_else(|error| {
+                        sse_error(&WireError::internal(format!(
+                            "the process snapshot could not be encoded: {error}"
+                        )))
+                    }),
+                Response::Error(error) => sse_error(&error),
+                other => sse_error(&WireError::internal(format!(
+                    "a process snapshot answered unexpectedly: {other:?}"
+                ))),
+            };
+            logger.debug("processes", "frame");
+            Some((Ok::<_, Infallible>(event), ticker))
+        }
+    });
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+async fn process_signal(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<ProcessSignalBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let signal = ProcessSignal::parse(&body.signal)
+        .ok_or_else(|| ApiError::invalid(format!("`{}` is not an allowed signal", body.signal)))?;
+    match state
+        .daemon
+        .execute(Request::ProcessSignal {
+            pid: body.pid,
+            start_ticks: body.start_ticks,
+            signal,
+            group: body.group,
+        })
+        .await
+    {
+        Response::ProcessSignalled { pid, signal } => {
+            Ok(Json(json!({ "pid": pid, "signal": signal.as_str() })))
+        }
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a process signal answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn process_spawn(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<ProcessSpawnBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::ProcessSpawn {
+            program: body.program,
+            args: body.args,
+            cwd: body.cwd,
+        })
+        .await
+    {
+        Response::ProcessStarted(started) => Ok(Json(json!({
+            "pid": started.pid,
+            "program": started.program,
+            "args": started.args,
+        }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a process spawn answered unexpectedly: {other:?}"
+        ))),
+    }
 }
 
 async fn list_files(

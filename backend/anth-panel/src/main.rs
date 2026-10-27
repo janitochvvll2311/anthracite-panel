@@ -84,6 +84,11 @@ enum Command {
         #[arg(long, value_name = "ROWS")]
         rows: Option<u16>,
     },
+    /// Inspect the process table, signal a process or start one.
+    Process {
+        #[command(subcommand)]
+        command: ProcessCommand,
+    },
     /// Print a snapshot of the host the daemon runs on.
     HostInfo {
         /// Keep reading every INTERVAL instead of printing once.
@@ -205,6 +210,52 @@ enum FilesCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum ProcessCommand {
+    /// List processes, busiest first.
+    #[command(alias = "ls")]
+    List {
+        /// Maximum rows in this page (1-1000).
+        #[arg(long)]
+        limit: Option<u16>,
+        /// Opaque cursor from a previous page.
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Keep refreshing every INTERVAL instead of printing once.
+        #[arg(
+            long,
+            value_name = "INTERVAL",
+            num_args = 0..=1,
+            default_missing_value = anth_wire::DEFAULT_INTERVAL
+        )]
+        watch: Option<String>,
+    },
+    /// Deliver an allowlisted signal to one process.
+    Signal {
+        /// Process id from `process list`.
+        pid: u32,
+        /// term, kill, hup, int, quit, stop or cont.
+        signal: String,
+        /// Signal the process group led by PID.
+        #[arg(long)]
+        group: bool,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Start a program from `[process] spawn_allow`.
+    Spawn {
+        /// Absolute path of the program.
+        program: String,
+        /// Arguments, passed through without a shell.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+        /// Absolute working directory.
+        #[arg(long)]
+        cwd: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum TrashBinCommand {
     /// List every trashed entry.
     List,
@@ -252,6 +303,7 @@ async fn run() -> CliResult {
         Command::Terminal { cols, rows } => anth_panel::terminal_client::run(&path, *cols, *rows)
             .await
             .map_err(|code| (code, String::new())),
+        Command::Process { command } => process_command(&path, command).await,
         Command::Run { addr, allow_reboot } => {
             serve(&path, Some(addr.clone()), *allow_reboot, &cli).await
         }
@@ -670,7 +722,25 @@ async fn host_info(path: &std::path::Path, watch: Option<String>) -> CliResult {
         return Ok(());
     };
 
-    let interval = parse_interval(&interval).map_err(|error| (2, error))?;
+    watch_loop(&mut client, &interval, &Request::HostInfo, render_response).await
+}
+
+fn print_host_info(response: &Response) -> CliResult {
+    println!("{}", render_response(response)?);
+    Ok(())
+}
+
+/// Repeats one request on an interval until Ctrl-C.
+///
+/// A terminal gets the screen cleared for a stable picture; a pipe gets a blank
+/// line between snapshots so the output stays appendable.
+async fn watch_loop(
+    client: &mut Client,
+    interval: &str,
+    request: &Request,
+    format: fn(&Response) -> Result<String, (u8, String)>,
+) -> CliResult {
+    let interval = parse_interval(interval).map_err(|error| (2, error))?;
     let terminal = std::io::stdout().is_terminal();
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -680,10 +750,10 @@ async fn host_info(path: &std::path::Path, watch: Option<String>) -> CliResult {
             _ = tokio::signal::ctrl_c() => return Ok(()),
             _ = ticker.tick() => {
                 let response = client
-                    .call(&Request::HostInfo)
+                    .call(request)
                     .await
                     .map_err(|error| (1, error.to_string()))?;
-                let text = render_response(&response)?;
+                let text = format(&response)?;
                 if terminal {
                     println!("\x1b[2J\x1b[H{text}");
                 } else {
@@ -699,9 +769,142 @@ async fn host_info(path: &std::path::Path, watch: Option<String>) -> CliResult {
     }
 }
 
-fn print_host_info(response: &Response) -> CliResult {
-    println!("{}", render_response(response)?);
-    Ok(())
+async fn process_command(path: &std::path::Path, command: &ProcessCommand) -> CliResult {
+    let mut client = connect(path).await?;
+
+    match command {
+        ProcessCommand::List {
+            limit,
+            cursor,
+            watch,
+        } => {
+            let request = Request::Processes {
+                limit: *limit,
+                cursor: cursor.clone(),
+            };
+            let Some(interval) = watch else {
+                let response = client
+                    .call(&request)
+                    .await
+                    .map_err(|error| (1, error.to_string()))?;
+                println!("{}", render_processes(&response)?);
+                return Ok(());
+            };
+            watch_loop(&mut client, interval, &request, render_processes).await
+        }
+        ProcessCommand::Signal {
+            pid,
+            signal,
+            group,
+            yes,
+        } => {
+            let signal = anth_wire::ProcessSignal::parse(signal)
+                .ok_or_else(|| (2, format!("`{signal}` is not an allowed signal")))?;
+            let target = find_process(&mut client, *pid).await?;
+            if !yes {
+                confirm(&format!(
+                    "Send {} to process {pid} ({})?",
+                    signal.as_str(),
+                    target.name
+                ))?;
+            }
+            let response = client
+                .call(&Request::ProcessSignal {
+                    pid: *pid,
+                    start_ticks: target.start_ticks,
+                    signal,
+                    group: *group,
+                })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::ProcessSignalled { pid, signal } => {
+                    println!("sent {} to {pid}", signal.as_str());
+                    Ok(())
+                }
+                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        ProcessCommand::Spawn { program, args, cwd } => {
+            let response = client
+                .call(&Request::ProcessSpawn {
+                    program: program.clone(),
+                    args: args.clone(),
+                    cwd: cwd.clone(),
+                })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::ProcessStarted(started) => {
+                    println!("started {} (pid {})", started.program, started.pid);
+                    Ok(())
+                }
+                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+    }
+}
+
+/// Finds one process so a signal can carry its `start_ticks`.
+async fn find_process(
+    client: &mut Client,
+    pid: u32,
+) -> Result<anth_wire::ProcessInfo, (u8, String)> {
+    let mut cursor = None;
+    for _ in 0..20 {
+        let response = client
+            .call(&Request::Processes {
+                limit: Some(1000),
+                cursor: cursor.clone(),
+            })
+            .await
+            .map_err(|error| (1, error.to_string()))?;
+        match response {
+            Response::Processes(snapshot) => {
+                if let Some(found) = snapshot.page.items.iter().find(|row| row.pid == pid) {
+                    return Ok(found.clone());
+                }
+                match snapshot.page.next {
+                    Some(next) => cursor = Some(next),
+                    None => break,
+                }
+            }
+            Response::Error(error) => return Err((error.kind.exit_code(), error.to_string())),
+            other => return Err((1, format!("unexpected response: {other:?}"))),
+        }
+    }
+    Err((1, format!("no process `{pid}`")))
+}
+
+fn render_processes(response: &Response) -> Result<String, (u8, String)> {
+    match response {
+        Response::Processes(snapshot) => Ok(render::process_list(&snapshot.page)),
+        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+        other => Err((1, format!("unexpected response: {other:?}"))),
+    }
+}
+
+/// Asks on a TTY; refuses instead of assuming an answer anywhere else.
+fn confirm(prompt: &str) -> CliResult {
+    if !std::io::stdin().is_terminal() {
+        return Err((
+            2,
+            "refusing to continue without --yes when stdin is not a terminal".to_string(),
+        ));
+    }
+    print!("{prompt} [y/N] ");
+    std::io::stdout().flush().ok();
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|error| (1, error.to_string()))?;
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        Ok(())
+    } else {
+        Err((1, "aborted".to_string()))
+    }
 }
 
 fn render_response(response: &Response) -> Result<String, (u8, String)> {

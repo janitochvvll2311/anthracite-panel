@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
 use crate::page::Page;
+use crate::process::{ProcessSignal, ProcessSnapshot, ProcessStarted};
 use crate::terminal::{TerminalOpened, TerminalOutput};
 
 /// Bumped when a change would make an older peer misread a message.
@@ -121,6 +122,34 @@ pub enum Request {
     TerminalResize { id: String, cols: u16, rows: u16 },
     /// Ends one session. Closing an already-closed handle is not an error.
     TerminalClose { id: String },
+    /// One page of the process table, sorted by accumulated CPU.
+    Processes {
+        #[serde(default)]
+        limit: Option<u16>,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    /// Delivers an allowlisted signal to one process. Requires
+    /// `process.control`.
+    ProcessSignal {
+        pid: u32,
+        /// The value the caller saw; a mismatch means the pid was recycled.
+        start_ticks: u64,
+        signal: ProcessSignal,
+        /// Signal the process group led by `pid` instead of only the process.
+        #[serde(default)]
+        group: bool,
+    },
+    /// Starts a program from `process.spawn_allow`. Requires `process.spawn`.
+    ProcessSpawn {
+        /// Absolute path of the program.
+        program: String,
+        #[serde(default)]
+        args: Vec<String>,
+        /// Absolute working directory, or the daemon's own.
+        #[serde(default)]
+        cwd: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -188,6 +217,15 @@ pub enum Response {
     TerminalOpened(TerminalOpened),
     /// One read from a terminal, or the end of the program.
     TerminalOutput(TerminalOutput),
+    /// One page of the process table with the policy the caller must respect.
+    Processes(ProcessSnapshot),
+    /// The signal was delivered.
+    ProcessSignalled {
+        pid: u32,
+        signal: ProcessSignal,
+    },
+    /// The program was started; it is not supervised.
+    ProcessStarted(ProcessStarted),
     /// A write, resize or close succeeded and has no value to return.
     Accepted,
     Error(WireError),

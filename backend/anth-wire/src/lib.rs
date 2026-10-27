@@ -9,6 +9,7 @@ mod frame;
 mod interval;
 mod message;
 mod page;
+mod process;
 mod terminal;
 
 pub use error::{ErrorKind, WireError};
@@ -20,6 +21,10 @@ pub use message::{
     TrashListing,
 };
 pub use page::{DEFAULT_PAGE_LIMIT, MAX_CURSOR_LEN, MAX_PAGE_LIMIT, Page, PageRequest};
+pub use process::{
+    MAX_SPAWN_ARG_BYTES, MAX_SPAWN_ARGS, ProcessInfo, ProcessSignal, ProcessSnapshot,
+    ProcessStarted,
+};
 pub use terminal::{
     DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_CHUNK, MAX_TERMINAL_DIMENSION, MAX_TERMINAL_INPUT,
     MAX_TERMINAL_WAIT_MS, MIN_TERMINAL_DIMENSION, TerminalOpened, TerminalOutput, TerminalSize,

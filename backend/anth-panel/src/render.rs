@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 
-use anth_wire::{FileEntry, HostInfo, Page};
+use anth_wire::{FileEntry, HostInfo, Page, ProcessInfo};
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -149,6 +149,61 @@ pub fn file_list(page: &Page<FileEntry>) -> String {
     out.trim_end().to_string()
 }
 
+/// Formats one page of the process table.
+pub fn process_list(page: &Page<ProcessInfo>) -> String {
+    if page.items.is_empty() {
+        return "(no processes)".to_string();
+    }
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{:>7} {:>7} {:<12} {:<5} {:>10} {:>9} {:>4} COMMAND",
+        "PID", "PPID", "USER", "STATE", "TICKS", "MEM", "THR"
+    );
+    for process in &page.items {
+        let _ = writeln!(
+            out,
+            "{:>7} {:>7} {:<12} {:<5} {:>10} {:>9} {:>4} {}",
+            process.pid,
+            process.ppid,
+            truncate(&safe(&process.user), 12),
+            safe(&process.state),
+            process.cpu_ticks,
+            format_kib(process.rss_kib),
+            process.threads,
+            safe(&process.command),
+        );
+    }
+    if let Some(next) = &page.next {
+        let _ = writeln!(out, "next: {next}");
+    }
+    out.trim_end().to_string()
+}
+
+/// Keeps a terminal escape embedded in a command line from reaching the
+/// operator's terminal.
+fn safe(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                '?'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    text.chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>()
+        + "…"
+}
+
 fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
@@ -251,6 +306,33 @@ mod tests {
         assert_eq!(format_kib(0), "0 KiB");
         assert_eq!(format_kib(2048), "2.0 MiB");
         assert_eq!(format_kib(2 * 1024 * 1024), "2.0 GiB");
+    }
+
+    #[test]
+    fn a_process_list_has_a_header_and_neutralizes_control_characters() {
+        let page = Page::with_next(
+            vec![ProcessInfo {
+                pid: 42,
+                ppid: 1,
+                uid: 0,
+                user: "root".to_string(),
+                name: "sh".to_string(),
+                command: "sh -c \u{1b}[31mred".to_string(),
+                state: "S".to_string(),
+                cpu_ticks: 12,
+                rss_kib: 2048,
+                threads: 1,
+                start_ticks: 99,
+            }],
+            "1",
+        );
+        let text = process_list(&page);
+        assert!(text.starts_with("    PID"));
+        assert!(text.contains("TICKS"));
+        assert!(text.contains("2.0 MiB"));
+        assert!(text.contains("sh -c ?[31mred"));
+        assert!(!text.contains('\u{1b}'));
+        assert!(text.ends_with("next: 1"));
     }
 
     #[test]

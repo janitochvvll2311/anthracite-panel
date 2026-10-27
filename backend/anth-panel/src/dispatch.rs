@@ -17,6 +17,7 @@ use crate::config::{Config, Paths};
 use crate::files::FileService;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
+use crate::process::ProcessService;
 use crate::terminal::{OpenError, Sessions, resolve_shell, supports_line_editing};
 
 /// Everything a request may need from the process.
@@ -27,6 +28,7 @@ pub struct Daemon {
     lifecycle: Arc<Lifecycle>,
     files: Result<FileService, String>,
     terminal: Arc<Sessions>,
+    process: ProcessService,
 }
 
 impl Daemon {
@@ -66,6 +68,11 @@ impl Daemon {
             config.terminal.max_sessions,
             Duration::from_secs(config.terminal.idle_seconds),
         ));
+        let process = ProcessService::new(
+            config.process.control,
+            config.process.spawn,
+            config.process.spawn_allow.clone(),
+        );
         Self {
             config,
             paths,
@@ -73,6 +80,7 @@ impl Daemon {
             lifecycle,
             files,
             terminal,
+            process,
         }
     }
 
@@ -340,6 +348,28 @@ impl Daemon {
                 blocking(move || sessions.close(&owner, &id)).await?;
                 Ok(Response::Accepted)
             }
+            Request::Processes { limit, cursor } => {
+                let request = PageRequest { limit, cursor };
+                let process = self.process.clone();
+                let snapshot = blocking(move || process.snapshot(&request)).await?;
+                Ok(Response::Processes(snapshot))
+            }
+            Request::ProcessSignal {
+                pid,
+                start_ticks,
+                signal,
+                group,
+            } => {
+                let process = self.process.clone();
+                blocking(move || process.signal(pid, start_ticks, signal, group)).await?;
+                Ok(Response::ProcessSignalled { pid, signal })
+            }
+            Request::ProcessSpawn { program, args, cwd } => {
+                let process = self.process.clone();
+                let started =
+                    blocking(move || process.spawn(&program, &args, cwd.as_deref())).await?;
+                Ok(Response::ProcessStarted(started))
+            }
         }
     }
 }
@@ -414,6 +444,9 @@ fn operation_of(request: &Request) -> &'static str {
         Request::TerminalWrite { .. } => "terminal-write",
         Request::TerminalResize { .. } => "terminal-resize",
         Request::TerminalClose { .. } => "terminal-close",
+        Request::Processes { .. } => "processes",
+        Request::ProcessSignal { .. } => "process-signal",
+        Request::ProcessSpawn { .. } => "process-spawn",
     }
 }
 

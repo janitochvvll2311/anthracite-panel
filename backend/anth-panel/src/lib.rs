@@ -8,6 +8,7 @@ pub mod dispatch;
 pub mod files;
 pub mod lifecycle;
 pub mod log;
+pub mod process;
 pub mod render;
 pub mod socket;
 pub mod state;
