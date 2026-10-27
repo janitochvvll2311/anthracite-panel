@@ -54,8 +54,8 @@ export class AnthFileTabs extends LitElement {
   /** Adds a tab, or activates the one already open for that path. */
   open(options: OpenFileEditor): string {
     this.client = options.client
-    if (options.mode === 'edit') {
-      const path = join(options.directory, options.name)
+    const path = options.mode === 'edit' ? join(options.directory, options.name) : ''
+    if (path) {
       const existing = this.tabs.find((tab) => tab.path === path)
       if (existing) {
         this.activate(existing.key)
@@ -63,7 +63,6 @@ export class AnthFileTabs extends LitElement {
       }
     }
     const key = `tab-${++tabIds}`
-    const path = options.mode === 'edit' ? join(options.directory, options.name) : ''
     const label = options.mode === 'edit' ? options.name : uniqueNewLabel(this.tabs)
     const title = options.mode === 'edit' ? path : msg('New file')
     this.tabs = [

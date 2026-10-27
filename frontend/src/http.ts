@@ -4,23 +4,44 @@ export interface ResponseError extends Error {
   status?: number
 }
 
-export async function responseError(response: Response): Promise<ResponseError> {
-  let detail = `${response.status} ${response.statusText}`.trim()
-  const error = new Error(detail) as ResponseError
-  error.status = response.status
+/** The `error` object an API response carries, when it has one. */
+export interface ErrorBody {
+  message?: string
+  code?: string
+}
+
+/** Parses an `{ "error": { "message", "code" } }` body without throwing. */
+export function parseErrorBody(raw: string): ErrorBody {
   try {
-    const body = (await response.json()) as {
+    const body = JSON.parse(raw) as {
       error?: { message?: unknown; code?: unknown }
     }
-    if (typeof body.error?.message === 'string') {
-      detail = body.error.message
+    return {
+      message:
+        typeof body.error?.message === 'string' ? body.error.message : undefined,
+      code: typeof body.error?.code === 'string' ? body.error.code : undefined,
     }
-    if (typeof body.error?.code === 'string') {
-      error.code = body.error.code
-    }
+  } catch {
+    return {}
+  }
+}
+
+export async function responseError(response: Response): Promise<ResponseError> {
+  const detail = `${response.status} ${response.statusText}`.trim()
+  const error = new Error(detail) as ResponseError
+  error.status = response.status
+  let raw = ''
+  try {
+    raw = await response.text()
   } catch {
     // Keep the status text.
   }
-  error.message = detail
+  const body = parseErrorBody(raw)
+  if (body.message) {
+    error.message = body.message
+  }
+  if (body.code) {
+    error.code = body.code
+  }
   return error
 }

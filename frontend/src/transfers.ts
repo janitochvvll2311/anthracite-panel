@@ -6,8 +6,9 @@ import { encodeBase64 } from './base64'
 import { describeError } from './errors'
 import { FILES_CHANGED_EVENT } from './file-editor'
 import { formatBytes } from './format'
+import { parseErrorBody } from './http'
 import './icon'
-import { baseName } from './paths'
+import { baseName, join } from './paths'
 
 type Direction = 'upload' | 'download'
 type Status = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
@@ -25,6 +26,8 @@ interface TransferTask {
 
 interface InternalTask extends TransferTask {
   directory?: string
+  /** Encoded body kept for the replace retry, then released. */
+  payload?: string
   xhr?: XMLHttpRequest
   start: () => void
 }
@@ -36,13 +39,12 @@ let nextId = 0
 let panel: AnthTransfers | undefined
 
 /** Registers a queued upload and shows it in the transfer panel. */
-export function queueUpload(file: File, directory: string, path: string): void {
-  ensurePanel()
+export function queueUpload(file: File, directory: string): void {
   const task: InternalTask = {
     id: nextId++,
     direction: 'upload',
     name: file.name,
-    path,
+    path: join(directory, file.name),
     directory,
     status: 'queued',
     loaded: 0,
@@ -50,14 +52,11 @@ export function queueUpload(file: File, directory: string, path: string): void {
     error: '',
     start: () => void performUpload(task, file, true),
   }
-  tasks.push(task)
-  notify()
-  pump()
+  enqueue(task)
 }
 
 /** Registers a queued download and shows it in the transfer panel. */
 export function queueDownload(path: string): void {
-  ensurePanel()
   const task: InternalTask = {
     id: nextId++,
     direction: 'download',
@@ -69,6 +68,12 @@ export function queueDownload(path: string): void {
     error: '',
     start: () => performDownload(task),
   }
+  enqueue(task)
+}
+
+/** Appends a task, shows the panel and starts it when the queue is idle. */
+function enqueue(task: InternalTask): void {
+  ensurePanel()
   tasks.push(task)
   notify()
   pump()
@@ -109,6 +114,27 @@ function notify(): void {
   }
 }
 
+/** The percentage the panel shows, or `null` when it cannot be known. */
+function progressPercent(task: TransferTask): number | null {
+  if (task.status === 'done') {
+    return 100
+  }
+  if (task.total <= 0 || task.status === 'failed' || task.status === 'cancelled') {
+    return null
+  }
+  return Math.min(100, Math.round((task.loaded / task.total) * 100))
+}
+
+/** Stores progress and repaints only when the visible percentage changes. */
+function setProgress(task: InternalTask, loaded: number, total = task.total): void {
+  const before = progressPercent(task)
+  task.loaded = loaded
+  task.total = total
+  if (progressPercent(task) !== before) {
+    notify()
+  }
+}
+
 function pump(): void {
   if (active) {
     return
@@ -128,6 +154,7 @@ function finish(task: InternalTask, status: Status, error = ''): void {
   task.status = status
   task.error = error
   task.xhr = undefined
+  task.payload = undefined
   if (status === 'done') {
     task.loaded = task.total
   }
@@ -142,12 +169,15 @@ async function performUpload(task: InternalTask, file: File, create: boolean): P
   if (task.status !== 'running') {
     return
   }
-  let content: string
-  try {
-    content = encodeBase64(new Uint8Array(await file.arrayBuffer()))
-  } catch (error) {
-    finish(task, 'failed', describeError(error))
-    return
+  let payload = task.payload
+  if (payload === undefined) {
+    try {
+      payload = encodeBase64(new Uint8Array(await file.arrayBuffer()))
+      task.payload = payload
+    } catch (error) {
+      finish(task, 'failed', describeError(error))
+      return
+    }
   }
   if (task.status !== 'running') {
     return
@@ -161,16 +191,14 @@ async function performUpload(task: InternalTask, file: File, create: boolean): P
     if (!event.lengthComputable || event.total === 0) {
       return
     }
-    task.loaded = Math.min(
-      task.total,
-      Math.round((file.size * event.loaded) / event.total),
+    setProgress(
+      task,
+      Math.min(task.total, Math.round((file.size * event.loaded) / event.total)),
     )
-    notify()
   }
   xhr.onload = () => {
     task.xhr = undefined
     if (xhr.status >= 200 && xhr.status < 300) {
-      task.loaded = task.total
       document.dispatchEvent(
         new CustomEvent(FILES_CHANGED_EVENT, {
           detail: { directory: task.directory, path: task.path },
@@ -193,7 +221,7 @@ async function performUpload(task: InternalTask, file: File, create: boolean): P
   }
   xhr.onerror = () => finish(task, 'failed', msg('Network error'))
   xhr.onabort = () => finish(task, 'cancelled')
-  xhr.send(JSON.stringify({ path: task.path, content_base64: content, create }))
+  xhr.send(JSON.stringify({ path: task.path, content_base64: payload, create }))
 }
 
 function performDownload(task: InternalTask): void {
@@ -206,9 +234,7 @@ function performDownload(task: InternalTask): void {
   xhr.responseType = 'blob'
   xhr.onprogress = (event) => {
     if (event.lengthComputable) {
-      task.total = event.total
-      task.loaded = event.loaded
-      notify()
+      setProgress(task, event.loaded, event.total)
     }
   }
   xhr.onload = () => {
@@ -224,45 +250,35 @@ function performDownload(task: InternalTask): void {
       link.remove()
       setTimeout(() => URL.revokeObjectURL(url), 10_000)
       task.total = task.total || blob.size
-      task.loaded = task.total
       finish(task, 'done')
       return
     }
-    void downloadFailure(xhr).then((failure) => finish(task, 'failed', failure.message))
+    void downloadFailure(xhr).then((message) => finish(task, 'failed', message))
   }
   xhr.onerror = () => finish(task, 'failed', msg('Network error'))
   xhr.onabort = () => finish(task, 'cancelled')
   xhr.send()
 }
 
-function xhrFailure(xhr: XMLHttpRequest): { message: string; code?: string } {
-  try {
-    const body = JSON.parse(xhr.responseText) as {
-      error?: { message?: unknown; code?: unknown }
-    }
-    return {
-      message:
-        typeof body.error?.message === 'string'
-          ? body.error.message
-          : `${xhr.status} ${xhr.statusText}`,
-      code: typeof body.error?.code === 'string' ? body.error.code : undefined,
-    }
-  } catch {
-    return { message: `${xhr.status} ${xhr.statusText}` }
+/** The API error a failed XHR carried, or its HTTP status. */
+function xhrFailure(
+  xhr: XMLHttpRequest,
+  raw = xhr.responseText,
+): { message: string; code?: string } {
+  const body = parseErrorBody(raw)
+  return {
+    message: body.message ?? `${xhr.status} ${xhr.statusText}`.trim(),
+    code: body.code,
   }
 }
 
-async function downloadFailure(xhr: XMLHttpRequest): Promise<{ message: string }> {
+/** Downloads answer with a blob, so their error body needs a read first. */
+async function downloadFailure(xhr: XMLHttpRequest): Promise<string> {
   try {
-    const text = await (xhr.response as Blob).text()
-    const body = JSON.parse(text) as { error?: { message?: unknown } }
-    if (typeof body.error?.message === 'string') {
-      return { message: body.error.message }
-    }
+    return xhrFailure(xhr, await (xhr.response as Blob).text()).message
   } catch {
-    // Fall through to the status.
+    return xhrFailure(xhr).message
   }
-  return { message: `${xhr.status} ${xhr.statusText}` }
 }
 
 function cancelTask(id: number): void {
@@ -341,16 +357,6 @@ export class AnthTransfers extends LitElement {
     }
   }
 
-  private percent(task: TransferTask): number | null {
-    if (task.status === 'done') {
-      return 100
-    }
-    if (task.total <= 0 || task.status === 'failed' || task.status === 'cancelled') {
-      return null
-    }
-    return Math.min(100, Math.round((task.loaded / task.total) * 100))
-  }
-
   override render() {
     if (this.snapshot.length === 0) {
       return nothing
@@ -388,7 +394,7 @@ export class AnthTransfers extends LitElement {
           : html`
               <ul>
                 ${this.snapshot.map((task) => {
-                  const percent = this.percent(task)
+                  const percent = progressPercent(task)
                   return html`
                     <li data-status=${task.status}>
                       <div class="row">

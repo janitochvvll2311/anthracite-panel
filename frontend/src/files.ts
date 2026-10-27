@@ -34,6 +34,20 @@ function imageUrl(path: string): string {
   return `/api/files/image?path=${encodeURIComponent(path)}`
 }
 
+function iconFor(kind: string): string {
+  if (kind === 'dir') return 'files'
+  if (kind === 'symlink') return 'link'
+  return 'file'
+}
+
+function sizeLabel(entry: FileEntry): string {
+  return entry.kind === 'file' ? formatBytes(entry.size) : '-'
+}
+
+function modifiedLabel(entry: FileEntry): string {
+  return entry.modified_ms > 0 ? new Date(entry.modified_ms).toLocaleString() : '-'
+}
+
 @customElement('anth-files')
 @localized()
 export class AnthFiles extends LitElement {
@@ -98,16 +112,12 @@ export class AnthFiles extends LitElement {
     }
     this.busy = true
     try {
-      const page: FilePage = await this.client.list(normalize(path))
-      this.path = normalize(path)
+      const target = normalize(path)
+      const page: FilePage = await this.client.list(target)
+      this.path = target
       this.entries = page.items
       this.next = page.next ?? null
-      this.previewEntry = undefined
-      this.chunk = undefined
-      this.previewPath = ''
-      this.previewUnavailable = false
-      this.imageFailed = false
-      this.confirmingDelete = false
+      this.resetPreview()
       this.error = ''
     } catch (error) {
       this.error = describeError(error)
@@ -138,12 +148,9 @@ export class AnthFiles extends LitElement {
       return
     }
     const path = join(this.path, entry.name)
+    this.resetPreview()
     this.previewEntry = entry
     this.previewPath = path
-    this.chunk = undefined
-    this.previewUnavailable = false
-    this.imageFailed = false
-    this.confirmingDelete = false
     this.error = ''
     this.busy = true
     try {
@@ -159,13 +166,18 @@ export class AnthFiles extends LitElement {
     }
   }
 
-  private closePreview(): void {
+  /** Clears the preview and every flag tied to it. */
+  private resetPreview(): void {
     this.previewEntry = undefined
     this.chunk = undefined
     this.previewPath = ''
     this.previewUnavailable = false
     this.imageFailed = false
     this.confirmingDelete = false
+  }
+
+  private closePreview(): void {
+    this.resetPreview()
   }
 
   private async deleteFile(): Promise<void> {
@@ -247,7 +259,7 @@ export class AnthFiles extends LitElement {
     }
     this.error = ''
     for (const file of files) {
-      queueUpload(file, this.path, join(this.path, file.name))
+      queueUpload(file, this.path)
     }
   }
 
@@ -389,16 +401,12 @@ export class AnthFiles extends LitElement {
           (entry) => html`
             <div class="row">
               <button type="button" class="entry" @click=${() => this.activate(entry)}>
-                <anth-icon
-                  name=${entry.kind === 'dir' ? 'files' : entry.kind === 'symlink' ? 'link' : 'file'}
-                ></anth-icon>
+                <anth-icon name=${iconFor(entry.kind)}></anth-icon>
                 <span>${entry.name}${entry.kind === 'dir' ? '/' : ''}</span>
               </button>
               <span>${this.kindLabel(entry.kind)}</span>
-              <span class="num">${entry.kind === 'file' ? formatBytes(entry.size) : '-'}</span>
-              <span class="num">
-                ${entry.modified_ms > 0 ? new Date(entry.modified_ms).toLocaleString() : '-'}
-              </span>
+              <span class="num">${sizeLabel(entry)}</span>
+              <span class="num">${modifiedLabel(entry)}</span>
             </div>
           `,
         )}
@@ -493,13 +501,11 @@ export class AnthFiles extends LitElement {
           </div>
           <div>
             <dt>${msg('Size')}</dt>
-            <dd>${entry.kind === 'file' ? formatBytes(entry.size) : '-'}</dd>
+            <dd>${sizeLabel(entry)}</dd>
           </div>
           <div>
             <dt>${msg('Modified')}</dt>
-            <dd>
-              ${entry.modified_ms > 0 ? new Date(entry.modified_ms).toLocaleString() : '-'}
-            </dd>
+            <dd>${modifiedLabel(entry)}</dd>
           </div>
         </dl>
         <div class="content">

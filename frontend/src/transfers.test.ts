@@ -59,7 +59,7 @@ test('uploads queued files with progress and reports completion', async () => {
   const changed = vi.fn()
   document.addEventListener(FILES_CHANGED_EVENT, changed)
 
-  queueUpload(new File(['hello bytes'], 'note.txt'), '/folder', '/folder/note.txt')
+  queueUpload(new File(['hello bytes'], 'note.txt'), '/folder')
   await tick()
 
   const xhr = FakeXhr.instances[0]
@@ -86,6 +86,57 @@ test('uploads queued files with progress and reports completion', async () => {
     directory: '/folder',
     path: '/folder/note.txt',
   })
+})
+
+test('reports the API message when an upload fails', async () => {
+  queueUpload(new File(['hello'], 'too-big.bin'), '/')
+  await tick()
+
+  const xhr = FakeXhr.instances[0]
+  xhr.status = 413
+  xhr.statusText = 'Payload Too Large'
+  xhr.responseText = JSON.stringify({
+    error: {
+      code: 'too_large',
+      message: 'the content is larger than the 4 byte limit',
+    },
+  })
+  xhr.onload?.()
+
+  expect(transferSnapshot()[0]).toMatchObject({
+    status: 'failed',
+    error: 'the content is larger than the 4 byte limit',
+  })
+})
+
+test('reuses the encoded body when replacing an existing file', async () => {
+  const file = new File(['hello'], 'note.txt')
+  const read = vi.spyOn(file, 'arrayBuffer')
+  vi.stubGlobal('confirm', vi.fn(() => true))
+
+  queueUpload(file, '/')
+  await tick()
+
+  const first = FakeXhr.instances[0]
+  first.status = 409
+  first.responseText = JSON.stringify({
+    error: { code: 'exists', message: 'note.txt already exists' },
+  })
+  first.onload?.()
+  await tick()
+
+  expect(FakeXhr.instances).toHaveLength(2)
+  const second = FakeXhr.instances[1]
+  expect(JSON.parse(second.send.mock.calls[0][0])).toEqual({
+    path: '/note.txt',
+    content_base64: 'aGVsbG8=',
+    create: false,
+  })
+  expect(read).toHaveBeenCalledTimes(1)
+
+  second.status = 200
+  second.onload?.()
+  expect(transferSnapshot()[0].status).toBe('done')
 })
 
 test('downloads queued files and marks them done', async () => {

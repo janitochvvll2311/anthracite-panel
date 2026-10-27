@@ -430,7 +430,7 @@ test('queues uploads from the FAB menu', async () => {
   picker?.dispatchEvent(new Event('change'))
   await settleWindows()
 
-  expect(queueUpload).toHaveBeenCalledWith(file, '/', '/upload.txt')
+  expect(queueUpload).toHaveBeenCalledWith(file, '/')
   expect(menu?.open).toBe(false)
 })
 
@@ -446,8 +446,8 @@ test('queues every file of a multi-file selection', async () => {
   await settleWindows()
 
   expect(queueUpload).toHaveBeenCalledTimes(2)
-  expect(queueUpload).toHaveBeenNthCalledWith(1, files[0], '/', '/one.txt')
-  expect(queueUpload).toHaveBeenNthCalledWith(2, files[1], '/', '/two.txt')
+  expect(queueUpload).toHaveBeenNthCalledWith(1, files[0], '/')
+  expect(queueUpload).toHaveBeenNthCalledWith(2, files[1], '/')
 })
 
 test('queues downloads from the preview', async () => {
