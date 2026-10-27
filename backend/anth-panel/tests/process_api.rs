@@ -211,22 +211,7 @@ async fn spawn_starts_and_signal_stops_an_allowlisted_program() {
     let pid = started["pid"].as_u64().expect("pid") as u32;
     assert_eq!(started["program"], "/bin/sleep");
 
-    let snapshot = match daemon
-        .execute(Request::Processes {
-            limit: Some(1000),
-            cursor: None,
-        })
-        .await
-    {
-        Response::Processes(snapshot) => snapshot,
-        other => panic!("unexpected snapshot: {other:?}"),
-    };
-    let process = snapshot
-        .page
-        .items
-        .iter()
-        .find(|process| process.pid == pid)
-        .expect("the spawned process is in the table");
+    let process = find_process(&daemon, pid).await;
 
     let response = router
         .clone()
@@ -296,4 +281,32 @@ async fn the_dispatch_arm_pages_the_snapshot() {
         }
         .valid()
     );
+}
+async fn find_process(daemon: &Daemon, pid: u32) -> anth_wire::ProcessInfo {
+    let mut cursor = None;
+    loop {
+        let snapshot = match daemon
+            .execute(Request::Processes {
+                limit: Some(1000),
+                cursor,
+            })
+            .await
+        {
+            Response::Processes(snapshot) => snapshot,
+            other => panic!("unexpected snapshot: {other:?}"),
+        };
+        let next = snapshot.page.next.clone();
+        if let Some(process) = snapshot
+            .page
+            .items
+            .iter()
+            .find(|process| process.pid == pid)
+        {
+            return process.clone();
+        }
+        match next {
+            Some(value) => cursor = Some(value),
+            None => panic!("the spawned process is not in the table"),
+        }
+    }
 }

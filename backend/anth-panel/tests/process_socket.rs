@@ -80,23 +80,7 @@ async fn a_socket_snapshot_pages_signals_and_spawns() {
         other => panic!("expected a started process, got {other:?}"),
     };
 
-    let snapshot = match client
-        .call(&Request::Processes {
-            limit: Some(1000),
-            cursor: None,
-        })
-        .await
-        .expect("processes")
-    {
-        Response::Processes(snapshot) => snapshot,
-        other => panic!("expected a snapshot, got {other:?}"),
-    };
-    let process = snapshot
-        .page
-        .items
-        .iter()
-        .find(|process| process.pid == started.pid)
-        .expect("the spawned process is visible");
+    let process = find_process(&mut client, started.pid).await;
 
     let stale = client
         .call(&Request::ProcessSignal {
@@ -198,4 +182,33 @@ async fn process_requests_are_rejected_when_the_switches_are_off() {
     assert_eq!(spawn.code, "process_spawn_disabled");
 
     server.abort();
+}
+async fn find_process(client: &mut Client, pid: u32) -> anth_wire::ProcessInfo {
+    let mut cursor = None;
+    loop {
+        let snapshot = match client
+            .call(&Request::Processes {
+                limit: Some(1000),
+                cursor,
+            })
+            .await
+            .expect("processes")
+        {
+            Response::Processes(snapshot) => snapshot,
+            other => panic!("expected a snapshot, got {other:?}"),
+        };
+        let next = snapshot.page.next.clone();
+        if let Some(process) = snapshot
+            .page
+            .items
+            .iter()
+            .find(|process| process.pid == pid)
+        {
+            return process.clone();
+        }
+        match next {
+            Some(value) => cursor = Some(value),
+            None => panic!("the spawned process is not in the table"),
+        }
+    }
 }

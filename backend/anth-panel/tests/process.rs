@@ -17,13 +17,28 @@ fn page() -> PageRequest {
 }
 
 fn find(service: &ProcessService, pid: u32) -> anth_wire::ProcessInfo {
-    let snapshot = service.snapshot(&page()).expect("snapshot");
-    snapshot
-        .page
-        .items
-        .into_iter()
-        .find(|process| process.pid == pid)
-        .expect("the process is in the table")
+    let mut cursor = None;
+    loop {
+        let snapshot = service
+            .snapshot(&PageRequest {
+                limit: Some(1000),
+                cursor,
+            })
+            .expect("snapshot");
+        let next = snapshot.page.next.clone();
+        if let Some(process) = snapshot
+            .page
+            .items
+            .iter()
+            .find(|process| process.pid == pid)
+        {
+            return process.clone();
+        }
+        match next {
+            Some(value) => cursor = Some(value),
+            None => panic!("the process is in the table"),
+        }
+    }
 }
 
 #[test]
@@ -35,14 +50,8 @@ fn a_snapshot_reports_the_live_table_and_its_policy() {
     assert!(!snapshot.spawn_enabled);
     assert_eq!(snapshot.spawn_allow, vec!["/bin/sleep".to_string()]);
     assert!(snapshot.page.total.unwrap_or(0) > 0);
-    assert!(snapshot.page.next.is_none());
 
-    let own = snapshot
-        .page
-        .items
-        .iter()
-        .find(|process| process.pid == std::process::id())
-        .expect("this test process");
+    let own = find(&service(false, false), std::process::id());
     assert!(own.command.contains("process"));
     assert_eq!(own.uid, unsafe { libc::getuid() });
     assert!(!own.user.is_empty());
