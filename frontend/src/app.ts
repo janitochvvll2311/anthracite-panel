@@ -83,6 +83,7 @@ export class AnthApp extends HTMLElement {
   #filesTabSection?: HTMLElement
   #generalTabSection?: HTMLElement
   #drawer?: AnthNavDrawer
+  #narrowMedia?: MediaQueryList
 
   connectedCallback(): void {
     if (!this.shadowRoot) {
@@ -97,6 +98,8 @@ export class AnthApp extends HTMLElement {
       // Private mode without storage: the rail still works for this session.
     }
     this.classList.toggle('sidebar-collapsed', this.#sidebarCollapsed)
+    this.#narrowMedia = globalThis.matchMedia?.('(max-width: 48rem)')
+    this.#narrowMedia?.addEventListener?.('change', this.#onNarrowChange)
     this.#buildFrame()
     globalThis.addEventListener('hashchange', this.#onHashChange)
     globalThis.addEventListener('lit-localize-status', this.#onLocaleChange)
@@ -109,6 +112,8 @@ export class AnthApp extends HTMLElement {
   disconnectedCallback(): void {
     globalThis.removeEventListener('hashchange', this.#onHashChange)
     globalThis.removeEventListener('lit-localize-status', this.#onLocaleChange)
+    this.#narrowMedia?.removeEventListener?.('change', this.#onNarrowChange)
+    this.#narrowMedia = undefined
   }
 
   /** Re-read the auth state; the shell follows from it. */
@@ -167,7 +172,7 @@ export class AnthApp extends HTMLElement {
     }
     this.#paintNav()
     this.#paintFoot()
-    this.#syncSidebarToggle()
+    this.#syncNavButton()
 
     const errorEl = this.shadowRoot.querySelector<HTMLElement>('[data-error]')
     const authEl = this.shadowRoot.querySelector<HTMLElement>('[data-auth]')
@@ -217,22 +222,14 @@ export class AnthApp extends HTMLElement {
       <header>
         <div class="header-main">
           <button class="menu" type="button" aria-label="${msg('Open navigation')}"
-                  aria-controls="app-navigation" aria-expanded="false"><anth-icon name="menu"></anth-icon></button>
+                  title="${msg('Open navigation')}" aria-controls="app-navigation"
+                  aria-expanded="false"><anth-icon name="menu"></anth-icon></button>
           <h1>Anthracite Panel</h1>
           <span class="version">v${VERSION}</span>
         </div>
       </header>
       <div class="shell">
         <aside class="sidebar" id="sidebar">
-          <button
-            class="sidebar-toggle"
-            type="button"
-            data-sidebar-toggle
-            aria-controls="sidebar"
-            aria-expanded="true"
-            aria-label="${msg('Collapse sidebar')}"
-            title="${msg('Collapse sidebar')}"
-          ><anth-icon name="chevron-left"></anth-icon></button>
           <nav aria-label="${msg('Sections')}" data-sidebar></nav>
           <div class="nav-foot" data-nav-foot></div>
         </aside>
@@ -250,7 +247,7 @@ export class AnthApp extends HTMLElement {
     this.#frameMounted = true
     this.#drawer = root.querySelector('anth-nav-drawer') as AnthNavDrawer | null ?? undefined
     this.#wireFrame()
-    this.#syncSidebarToggle()
+    this.#syncNavButton()
   }
 
   #wireFrame(): void {
@@ -264,10 +261,7 @@ export class AnthApp extends HTMLElement {
       event.preventDefault()
       root.querySelector<HTMLElement>('main')?.focus()
     })
-    root.querySelector('.menu')?.addEventListener('click', () => this.#setDrawer(true))
-    root
-      .querySelector('[data-sidebar-toggle]')
-      ?.addEventListener('click', () => this.#toggleSidebar())
+    root.querySelector('.menu')?.addEventListener('click', () => this.#onMenuClick())
     this.#drawer?.addEventListener(DRAWER_CLOSE_EVENT, () => this.#setDrawer(false))
     // The sidebar and the drawer are repainted on every render, so the footer
     // controls are handled once, by delegation.
@@ -293,7 +287,15 @@ export class AnthApp extends HTMLElement {
     if (this.#drawer) {
       this.#drawer.open = open
     }
-    this.shadowRoot?.querySelector('.menu')?.setAttribute('aria-expanded', String(open))
+    this.#syncNavButton()
+  }
+
+  #onMenuClick(): void {
+    if (this.#narrowNavigation()) {
+      this.#setDrawer(true)
+    } else {
+      this.#toggleSidebar()
+    }
   }
 
   #toggleSidebar(): void {
@@ -308,14 +310,40 @@ export class AnthApp extends HTMLElement {
     } catch {
       // The class already changed; persistence is best effort.
     }
-    this.#syncSidebarToggle()
+    this.#syncNavButton()
   }
 
-  #syncSidebarToggle(): void {
-    const button = this.shadowRoot?.querySelector<HTMLButtonElement>(
-      '[data-sidebar-toggle]',
-    )
+  #narrowNavigation(): boolean {
+    if (this.#narrowMedia) {
+      return this.#narrowMedia.matches
+    }
+    return globalThis.innerWidth <= 48 * 16
+  }
+
+  readonly #onNarrowChange = (): void => {
+    // The drawer is a narrow-layout control; a wide viewport must not leave it
+    // open behind the sidebar.
+    if (!this.#narrowNavigation()) {
+      this.#setDrawer(false)
+    }
+    this.#syncNavButton()
+  }
+
+  /**
+   * The header's three-bar button is the drawer trigger on narrow layouts and
+   * the icon-rail toggle on desktop.
+   */
+  #syncNavButton(): void {
+    const button = this.shadowRoot?.querySelector<HTMLButtonElement>('.menu')
     if (!button) {
+      return
+    }
+    if (this.#narrowNavigation()) {
+      const open = this.#drawer?.open ?? false
+      button.setAttribute('aria-label', msg('Open navigation'))
+      button.setAttribute('title', msg('Open navigation'))
+      button.setAttribute('aria-controls', 'app-navigation')
+      button.setAttribute('aria-expanded', String(open))
       return
     }
     const label = this.#sidebarCollapsed
@@ -323,13 +351,8 @@ export class AnthApp extends HTMLElement {
       : msg('Collapse sidebar')
     button.setAttribute('aria-label', label)
     button.setAttribute('title', label)
+    button.setAttribute('aria-controls', 'sidebar')
     button.setAttribute('aria-expanded', String(!this.#sidebarCollapsed))
-    button
-      .querySelector('anth-icon')
-      ?.setAttribute(
-        'name',
-        this.#sidebarCollapsed ? 'chevron-right' : 'chevron-left',
-      )
   }
 
   /** Language and sign-out, pinned to the bottom of the sidebar and the drawer. */
@@ -715,7 +738,7 @@ const STYLE = `
   .nav-foot anth-icon, .auth-card anth-icon, .retry anth-icon { font-size: 14px; }
   .menu:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
 
-  .menu { display: none; place-items: center; width: 44px; height: 44px; padding: 0;
+  .menu { display: grid; place-items: center; width: 36px; height: 36px; padding: 0;
           color: inherit; border: 1px solid var(--panel-border, #223041); border-radius: 9px;
           background: transparent; font: 400 18px/1 var(--sans, sans-serif); cursor: pointer; }
   .menu:hover { border-color: var(--accent, #7dd3fc); }
@@ -729,26 +752,6 @@ const STYLE = `
              padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
              border-right: 1px solid var(--panel-border, #223041);
              background: rgba(12, 17, 24, 0.72); }
-
-  .sidebar-toggle {
-    display: grid;
-    flex: 0 0 auto;
-    place-items: center;
-    align-self: flex-end;
-    width: 32px;
-    height: 32px;
-    margin-bottom: 0.6rem;
-    padding: 0;
-    color: var(--muted, #8b9bad);
-    border: 1px solid transparent;
-    border-radius: 7px;
-    background: transparent;
-    cursor: pointer;
-    font: inherit;
-  }
-  .sidebar-toggle:hover { color: var(--text, #dbe6f2); border-color: var(--panel-border, #223041); }
-  .sidebar-toggle:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
-  .sidebar-toggle anth-icon { font-size: 14px; }
 
   .sidebar nav, anth-nav-drawer nav { display: grid; gap: 0.25rem; }
   .sidebar nav { flex: 0 0 auto; }
@@ -771,7 +774,6 @@ const STYLE = `
   @media (min-width: 48.0625rem) {
     :host(.sidebar-collapsed) .shell { grid-template-columns: 4.5rem minmax(0, 1fr); }
     :host(.sidebar-collapsed) .sidebar { padding: 0.9rem 0.4rem; }
-    :host(.sidebar-collapsed) .sidebar .sidebar-toggle { align-self: center; }
     :host(.sidebar-collapsed) .sidebar .nav-item {
       justify-content: center;
       gap: 0;
@@ -869,7 +871,7 @@ const STYLE = `
   @media (max-width: 48rem) {
     .shell { grid-template-columns: minmax(0, 1fr); }
     .sidebar { display: none; }
-    .menu { display: grid; }
+    .menu { width: 44px; height: 44px; }
     .btn-label { display: none; }
     .nav-foot .locale { min-height: 44px; }
     .nav-foot button { min-height: 44px; }
