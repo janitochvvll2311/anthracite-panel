@@ -634,6 +634,30 @@
   <source>Extracted into <x id="0" equiv-text="${result.path}"/></source>
   <target>Extraído en <x id="0" equiv-text="${result.path}"/></target>
 </trans-unit>
+<trans-unit id="s01d7a6aea9c35819">
+  <source>Restored <x id="0" equiv-text="${entry.original_path}"/></source>
+  <target>Restaurado <x id="0" equiv-text="${entry.original_path}"/></target>
+</trans-unit>
+<trans-unit id="s1e4c770ff08875e8">
+  <source>Delete everything in the trash?</source>
+  <target>¿Eliminar todo el contenido de la papelera?</target>
+</trans-unit>
+<trans-unit id="s31739a95664e69dd">
+  <source>Trash emptied</source>
+  <target>Papelera vaciada</target>
+</trans-unit>
+<trans-unit id="s9ebb630d372e4145">
+  <source>Trash</source>
+  <target>Papelera</target>
+</trans-unit>
+<trans-unit id="s31acbcff75d8deb0">
+  <source>Empty trash</source>
+  <target>Vaciar papelera</target>
+</trans-unit>
+<trans-unit id="s8931aab144308b53">
+  <source>The trash is empty.</source>
+  <target>La papelera está vacía.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

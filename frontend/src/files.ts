@@ -7,7 +7,15 @@ import { formatBytes } from './format'
 import { describeError } from './errors'
 import { openFileEditor } from './editor-window'
 import { FILES_CHANGED_EVENT } from './file-editor'
-import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
+import type {
+  FileChunk,
+  FileEntry,
+  FilePage,
+  FilesClient,
+  TrashEntry,
+  TrashListing,
+} from './files-client'
+import type { ResponseError } from './http'
 import { join, normalize, parent } from './paths'
 import { queueDownload, queueUpload } from './transfers'
 import './fab-menu'
@@ -106,12 +114,18 @@ export class AnthFiles extends LitElement {
   @state()
   private trashEnabled = false
 
+  @state()
+  private trash?: TrashListing
+
+  @state()
+  private trashView = false
+
   override connectedCallback(): void {
     super.connectedCallback()
     document.addEventListener(FILES_CHANGED_EVENT, this.onFilesChanged)
     queueMicrotask(() => {
       void this.open(this.path)
-      void this.loadTrashCapability()
+      void this.refreshTrash()
     })
   }
 
@@ -126,6 +140,7 @@ export class AnthFiles extends LitElement {
       this.error = msg('No files client was configured')
       return
     }
+    this.trashView = false
     this.busy = true
     this.notice = ''
     try {
@@ -197,17 +212,78 @@ export class AnthFiles extends LitElement {
     this.resetPreview()
   }
 
-  /** Reads whether delete means "move to trash" or "remove for good". */
-  private async loadTrashCapability(): Promise<void> {
+  /** Reads the trash so the toolbar and the trash view stay current. */
+  private async refreshTrash(): Promise<void> {
     const client = this.client
     if (!client) {
       return
     }
     try {
-      this.trashEnabled = (await client.trashList()).enabled
+      const listing = await client.trashList()
+      this.trash = listing
+      this.trashEnabled = listing.enabled
     } catch {
       // An older daemon without the trash route keeps the permanent delete.
       this.trashEnabled = false
+    }
+  }
+
+  private showTrash(): void {
+    this.resetPreview()
+    this.trashView = true
+    this.notice = ''
+    void this.refreshTrash()
+  }
+
+  private async showFiles(): Promise<void> {
+    this.trashView = false
+    await this.open(this.path)
+  }
+
+  private async restoreEntry(entry: TrashEntry): Promise<void> {
+    const client = this.client
+    if (!client) {
+      return
+    }
+    this.busy = true
+    try {
+      try {
+        await client.restore(entry.id, false)
+      } catch (error) {
+        if ((error as ResponseError).code !== 'exists') {
+          throw error
+        }
+        if (!confirm(msg(str`${entry.original_path} already exists. Replace it?`))) {
+          return
+        }
+        await client.restore(entry.id, true)
+      }
+      this.notice = msg(str`Restored ${entry.original_path}`)
+      await this.refreshTrash()
+    } catch (error) {
+      this.error = describeError(error)
+    } finally {
+      this.busy = false
+    }
+  }
+
+  private async emptyTrash(): Promise<void> {
+    const client = this.client
+    if (!client) {
+      return
+    }
+    if (!confirm(msg('Delete everything in the trash?'))) {
+      return
+    }
+    this.busy = true
+    try {
+      await client.emptyTrash()
+      this.notice = msg('Trash emptied')
+      await this.refreshTrash()
+    } catch (error) {
+      this.error = describeError(error)
+    } finally {
+      this.busy = false
     }
   }
 
@@ -229,6 +305,9 @@ export class AnthFiles extends LitElement {
       this.closePreview()
       await this.open(directory)
       this.notice = trashed ? msg(str`Moved ${path} to the trash`) : msg(str`Deleted ${path}`)
+      if (trashed) {
+        await this.refreshTrash()
+      }
     } catch (error) {
       this.error = describeError(error)
     } finally {
@@ -659,16 +738,92 @@ export class AnthFiles extends LitElement {
     `
   }
 
+  private renderTrash() {
+    const listing = this.trash
+    if (!listing) {
+      return html`<p class="empty">${msg('Loading…')}</p>`
+    }
+    const limit = listing.max_bytes ? ` / ${formatBytes(listing.max_bytes)}` : ''
+    return html`
+      <section class="trash" aria-label=${msg('Trash')}>
+        <header>
+          <div>
+            <h2>${msg('Trash')}</h2>
+            <span class="trash-meta">
+              ${formatBytes(listing.used_bytes)}${limit} · ${listing.total}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="danger"
+            aria-label=${msg('Empty trash')}
+            ?disabled=${this.busy || listing.entries.length === 0}
+            @click=${() => void this.emptyTrash()}
+          >
+            <anth-icon name="trash"></anth-icon>
+            <span class="btn-label">${msg('Empty trash')}</span>
+          </button>
+        </header>
+        ${listing.entries.length === 0
+          ? html`<p class="empty">${msg('The trash is empty.')}</p>`
+          : html`
+              <ul>
+                ${listing.entries.map(
+                  (entry) => html`
+                    <li>
+                      <anth-icon name=${iconFor(entry.kind)}></anth-icon>
+                      <div class="trash-meta">
+                        <span class="name" title=${entry.original_path}>${entry.name}</span>
+                        <code>${entry.original_path}</code>
+                        <span class="sub">
+                          ${formatBytes(entry.size)}${entry.deleted_at
+                            ? ` · ${entry.deleted_at}`
+                            : ''}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label=${msg('Restore')}
+                        ?disabled=${this.busy}
+                        @click=${() => void this.restoreEntry(entry)}
+                      >
+                        <anth-icon name="undo"></anth-icon>
+                        <span class="btn-label">${msg('Restore')}</span>
+                      </button>
+                    </li>
+                  `,
+                )}
+              </ul>
+            `}
+        ${listing.warning ? html`<p class="warning">${listing.warning}</p>` : nothing}
+      </section>
+    `
+  }
+
   override render() {
     return html`
       <section class="files">
         <header class="bar">
           ${this.renderPath()}
           <div class="tools">
+            ${this.trashEnabled
+              ? html`<button
+                  type="button"
+                  aria-label=${this.trashView ? msg('Files') : msg('Trash')}
+                  ?disabled=${this.busy}
+                  @click=${() => (this.trashView ? void this.showFiles() : this.showTrash())}
+                >
+                  <anth-icon name=${this.trashView ? 'files' : 'trash'}></anth-icon>
+                  <span class="btn-label">${this.trashView ? msg('Files') : msg('Trash')}</span>
+                  ${!this.trashView && this.trash && this.trash.total > 0
+                    ? html`<span class="badge">${this.trash.total}</span>`
+                    : nothing}
+                </button>`
+              : nothing}
             <button
               type="button"
               aria-label=${msg('Up')}
-              ?disabled=${this.busy || this.path === '/'}
+              ?disabled=${this.busy || this.trashView || this.path === '/'}
               @click=${() => this.up()}
             >
               <anth-icon name="up"></anth-icon>
@@ -678,7 +833,7 @@ export class AnthFiles extends LitElement {
               type="button"
               aria-label=${msg('Reload')}
               ?disabled=${this.busy}
-              @click=${() => this.open(this.path)}
+              @click=${() => (this.trashView ? void this.refreshTrash() : this.open(this.path))}
             >
               <anth-icon name="refresh"></anth-icon>
               <span class="btn-label">${msg('Reload')}</span>
@@ -689,54 +844,62 @@ export class AnthFiles extends LitElement {
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
         ${this.notice ? html`<div class="notice" role="status">${this.notice}</div>` : nothing}
 
-        <div class="layout ${this.previewEntry ? 'preview-open' : ''}">
-          <div class="listing">
-            ${this.busy && this.entries.length === 0
-              ? html`<p class="empty">${msg('Loading…')}</p>`
-              : this.renderListing()}
-            ${this.next
-              ? html`<button
+        ${this.trashView
+          ? this.renderTrash()
+          : html`
+              <div class="layout ${this.previewEntry ? 'preview-open' : ''}">
+                <div class="listing">
+                  ${this.busy && this.entries.length === 0
+                    ? html`<p class="empty">${msg('Loading…')}</p>`
+                    : this.renderListing()}
+                  ${this.next
+                    ? html`<button
+                        type="button"
+                        class="more"
+                        aria-label=${msg('Load more')}
+                        ?disabled=${this.busy}
+                        @click=${() => this.more()}
+                      >
+                        <anth-icon name="chevron-down"></anth-icon>
+                        <span class="btn-label">${msg('Load more')}</span>
+                      </button>`
+                    : nothing}
+                </div>
+                ${this.renderPreview()}
+              </div>
+            `}
+        ${this.trashView
+          ? nothing
+          : html`
+              <anth-fab-menu icon="plus" label=${msg('File actions')}>
+                <button type="button" class="fab-action" aria-label=${msg('New file')} @click=${() => this.create()}>
+                  <anth-icon name="file-plus"></anth-icon>
+                  <span class="btn-label">${msg('New file')}</span>
+                </button>
+                <button
                   type="button"
-                  class="more"
-                  aria-label=${msg('Load more')}
-                  ?disabled=${this.busy}
-                  @click=${() => this.more()}
+                  class="fab-action"
+                  aria-label=${msg('Compress folder')}
+                  ?disabled=${this.path === '/'}
+                  @click=${() => void this.compressCurrent()}
                 >
-                  <anth-icon name="chevron-down"></anth-icon>
-                  <span class="btn-label">${msg('Load more')}</span>
-                </button>`
-              : nothing}
-          </div>
-          ${this.renderPreview()}
-        </div>
-        <anth-fab-menu icon="plus" label=${msg('File actions')}>
-          <button type="button" class="fab-action" aria-label=${msg('New file')} @click=${() => this.create()}>
-            <anth-icon name="file-plus"></anth-icon>
-            <span class="btn-label">${msg('New file')}</span>
-          </button>
-          <button
-            type="button"
-            class="fab-action"
-            aria-label=${msg('Compress folder')}
-            ?disabled=${this.path === '/'}
-            @click=${() => void this.compressCurrent()}
-          >
-            <anth-icon name="archive"></anth-icon>
-            <span class="btn-label">${msg('Compress folder')}</span>
-          </button>
-          <label class="fab-action upload-action">
-            <input
-              class="picker"
-              type="file"
-              multiple
-              aria-label=${msg('Upload from device')}
-              @change=${this.onUpload}
-              @cancel=${() => this.closeFileMenu()}
-            />
-            <anth-icon name="upload"></anth-icon>
-            <span class="btn-label">${msg('Upload from device')}</span>
-          </label>
-        </anth-fab-menu>
+                  <anth-icon name="archive"></anth-icon>
+                  <span class="btn-label">${msg('Compress folder')}</span>
+                </button>
+                <label class="fab-action upload-action">
+                  <input
+                    class="picker"
+                    type="file"
+                    multiple
+                    aria-label=${msg('Upload from device')}
+                    @change=${this.onUpload}
+                    @cancel=${() => this.closeFileMenu()}
+                  />
+                  <anth-icon name="upload"></anth-icon>
+                  <span class="btn-label">${msg('Upload from device')}</span>
+                </label>
+              </anth-fab-menu>
+            `}
       </section>
     `
   }
@@ -762,7 +925,7 @@ export class AnthFiles extends LitElement {
       gap: 8px;
     }
     .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
-    .crumb, .tools button, .more, .preview button, .confirm button {
+    .crumb, .tools button, .more, .preview button, .confirm button, .trash button {
       border: 1px solid transparent;
       border-radius: 6px;
       background: transparent;
@@ -771,7 +934,7 @@ export class AnthFiles extends LitElement {
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
-    .crumb:hover, .tools button:hover, .more:hover, .preview button:hover, .confirm button:hover {
+    .crumb:hover, .tools button:hover, .more:hover, .preview button:hover, .confirm button:hover, .trash button:hover {
       border-color: var(--panel-border, #223041);
       background: rgba(125, 211, 252, 0.06);
     }
@@ -790,7 +953,7 @@ export class AnthFiles extends LitElement {
     }
     .path-edit input:focus { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 1px; }
     .tools { display: flex; gap: 6px; }
-    .tools button, .more, .preview button, .confirm button, .fab-action {
+    .tools button, .more, .preview button, .confirm button, .trash button, .fab-action {
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -884,6 +1047,71 @@ export class AnthFiles extends LitElement {
       background: rgba(52, 211, 153, 0.12);
       color: #a7f3d0;
     }
+    .badge {
+      min-width: 1.1rem;
+      margin-left: 2px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: rgba(125, 211, 252, 0.18);
+      color: var(--accent, #7dd3fc);
+      font: 600 10px/1.5 var(--mono, monospace);
+      text-align: center;
+    }
+    .trash {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: var(--pane-height);
+      padding: 10px;
+      overflow-y: auto;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 8px;
+      background: var(--panel, #101721);
+    }
+    .trash > header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .trash h2 { margin: 0; font-size: 14px; }
+    .trash-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      color: var(--muted, #8b9bad);
+      font: 11px/1.4 var(--mono, monospace);
+    }
+    .trash-meta .name {
+      overflow: hidden;
+      color: var(--text, #dbe6f2);
+      font: 12px/1.4 var(--mono, monospace);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .trash-meta code {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .trash ul {
+      display: grid;
+      gap: 2px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .trash li {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 4px;
+      border-top: 1px solid var(--panel-border, #223041);
+    }
+    .trash li .trash-meta { flex: 1 1 auto; }
+    .trash .warning { margin: 0; color: #fbbf24; font-size: 12px; }
     .preview {
       display: flex;
       flex-direction: column;
@@ -905,8 +1133,8 @@ export class AnthFiles extends LitElement {
       color: var(--text, #dbe6f2);
     }
     .preview .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-    .preview .danger { border-color: rgba(248, 113, 113, 0.4); color: var(--err, #f87171); }
-    .preview .danger:hover { background: rgba(248, 113, 113, 0.12); }
+    .preview .danger, .trash .danger { border-color: rgba(248, 113, 113, 0.4); color: var(--err, #f87171); }
+    .preview .danger:hover, .trash .danger:hover { background: rgba(248, 113, 113, 0.12); }
     .confirm {
       display: flex;
       flex-wrap: wrap;
@@ -1035,6 +1263,7 @@ export class AnthFiles extends LitElement {
       .more:has(.btn-label),
       .preview button:has(.btn-label),
       .confirm button:has(.btn-label),
+      .trash button:has(.btn-label),
       .fab-action:has(.btn-label) {
         width: 44px;
         height: 44px;

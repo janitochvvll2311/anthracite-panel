@@ -514,6 +514,82 @@ test('compresses the selected entry', async () => {
   expect(client.archive).toHaveBeenCalledWith('/note.txt')
 })
 
+test('shows the trash and restores an entry', async () => {
+  const client = fakeClient()
+  client.trashList = vi.fn(async () => ({
+    entries: [
+      {
+        id: 'a.txt',
+        name: 'a.txt',
+        original_path: '/a.txt',
+        deleted_at: '2026-10-27T13:00:00',
+        kind: 'file' as const,
+        size: 3,
+        location: '/trash',
+      },
+    ],
+    total: 1,
+    truncated: false,
+    enabled: true,
+    used_bytes: 3,
+  }))
+  const element = await mount(client)
+
+  const trashButton = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('Trash'),
+  )
+  trashButton?.click()
+  await settle(element)
+
+  expect(element.shadowRoot?.querySelector('.trash')).not.toBeNull()
+  expect(element.shadowRoot?.querySelector('.trash')?.textContent).toContain('/a.txt')
+  const restore = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.trash button') ?? [])].find(
+    (button) => button.textContent?.includes('Restore'),
+  )
+  restore?.click()
+  await settle(element)
+
+  expect(client.restore).toHaveBeenCalledWith('a.txt', false)
+  expect(element.shadowRoot?.querySelector('.notice')?.textContent).toContain(
+    'Restored /a.txt',
+  )
+})
+
+test('empties the trash after confirmation', async () => {
+  const client = fakeClient()
+  client.trashList = vi.fn(async () => ({
+    entries: [
+      {
+        id: 'a.txt',
+        name: 'a.txt',
+        original_path: '/a.txt',
+        kind: 'file' as const,
+        size: 3,
+        location: '/trash',
+      },
+    ],
+    total: 1,
+    truncated: false,
+    enabled: true,
+    used_bytes: 3,
+  }))
+  const element = await mount(client)
+  vi.stubGlobal('confirm', vi.fn(() => true))
+
+  const trashButton = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('Trash'),
+  )
+  trashButton?.click()
+  await settle(element)
+  const empty = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.trash button') ?? [])].find(
+    (button) => button.textContent?.includes('Empty trash'),
+  )
+  empty?.click()
+  await settle(element)
+
+  expect(client.emptyTrash).toHaveBeenCalledTimes(1)
+})
+
 test('queues downloads from the preview', async () => {
   const element = await mount(fakeClient())
 
