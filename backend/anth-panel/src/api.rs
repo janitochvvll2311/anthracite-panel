@@ -90,6 +90,7 @@ pub fn router(state: AppState) -> Router {
             "/api/files/upload",
             post(upload_file).layer(DefaultBodyLimit::max(upload_limit)),
         )
+        .route("/api/files/image", get(image_file))
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
         .route("/api/settings", get(get_settings).patch(patch_settings))
@@ -276,6 +277,11 @@ struct FileUploadBody {
     content_base64: String,
     #[serde(default)]
     create: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileImageQuery {
+    path: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -699,6 +705,31 @@ async fn upload_file(
             "a file upload answered unexpectedly: {other:?}"
         ))),
     }
+}
+
+async fn image_file(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<FileImageQuery>, QueryRejection>,
+) -> Result<HttpResponse, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let (bytes, content_type) = state.daemon.image(&query.path).map_err(ApiError::from)?;
+    let mut response = HttpResponse::new(Body::from(bytes));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+    );
+    Ok(response)
 }
 
 async fn index() -> HttpResponse {

@@ -315,6 +315,53 @@ impl FileService {
         ))
     }
 
+    /// Reads an image under the root for the HTTP preview.
+    ///
+    /// Only raster formats plus SVG are accepted. SVG is served with a
+    /// sandboxing CSP so opening the URL directly cannot run scripts.
+    pub fn image(&self, path: &str) -> Result<(Vec<u8>, &'static str), WireError> {
+        let display = display_path(path);
+        let resolved = self.resolve(path)?;
+        let metadata = fs::metadata(&resolved).map_err(|error| io_error(&display, error))?;
+        if !metadata.is_file() {
+            return Err(WireError::invalid(format!(
+                "{display} is not a regular file"
+            )));
+        }
+        let extension = resolved
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .unwrap_or_default();
+        let content_type = match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" => "image/bmp",
+            "avif" => "image/avif",
+            "ico" => "image/x-icon",
+            "svg" => "image/svg+xml",
+            _ => {
+                return Err(WireError::new(
+                    ErrorKind::Unsupported,
+                    "not_image",
+                    format!("{display} is not a supported image"),
+                ));
+            }
+        };
+        let limit = self.max_write_bytes.min(32 * 1024 * 1024);
+        if metadata.len() > limit {
+            return Err(WireError::new(
+                ErrorKind::TooLarge,
+                "too_large",
+                format!("{display} is larger than the {limit} byte image limit"),
+            ));
+        }
+        let bytes = fs::read(&resolved).map_err(|error| io_error(&display, error))?;
+        Ok((bytes, content_type))
+    }
+
     /// Resolves a request path to a canonical path under the root.
     fn resolve(&self, requested: &str) -> Result<PathBuf, WireError> {
         let display = display_path(requested);
@@ -717,5 +764,27 @@ mod tests {
 
         fs::remove_dir_all(root).expect("cleanup");
         fs::remove_dir_all(outside).expect("cleanup");
+    }
+
+    #[test]
+    fn reading_an_image_returns_its_content_type() {
+        let root = scratch("image");
+        fs::write(root.join("logo.png"), [0x89, b'P', b'N', b'G']).expect("png");
+        fs::write(root.join("note.txt"), b"hello").expect("text");
+        let files = service(&root);
+
+        let (bytes, content_type) = files.image("logo.png").expect("image");
+        assert_eq!(content_type, "image/png");
+        assert_eq!(bytes, [0x89, b'P', b'N', b'G']);
+        assert_eq!(
+            files.image("note.txt").expect_err("not image").code,
+            "not_image"
+        );
+        assert_eq!(
+            files.image("../logo.png").expect_err("escape").code,
+            "path_escape"
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
     }
 }

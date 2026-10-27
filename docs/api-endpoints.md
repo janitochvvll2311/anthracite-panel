@@ -251,6 +251,15 @@ page. The listing is sorted by name; `cursor` is the previous `next` value.
 Only regular UTF-8 text files are accepted. `max_bytes` is capped by
 `files.max_preview_bytes`; `eof` tells the caller whether another chunk exists.
 
+### `GET /api/files/image?path=img/logo.png`
+
+Returns the raw bytes for the image preview. Supported types are `png`, `jpg`,
+`jpeg`, `gif`, `webp`, `bmp`, `avif`, `ico` and `svg`; the response carries the
+matching `Content-Type`, `Cache-Control: no-store`, `X-Content-Type-Options:
+nosniff` and a sandboxing CSP. The size is capped at the smaller of
+`files.max_upload_bytes` and 32 MiB, and the same root containment rules apply.
+This is an HTTP-only binary route; the socket remains JSON.
+
 ### `DELETE /api/files?path=etc/hosts`
 
 Deletes one regular file or a symlink (the link itself, not its target). The

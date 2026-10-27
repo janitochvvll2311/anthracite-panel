@@ -32,6 +32,7 @@ fn app(name: &str, auth_on: bool) -> (axum::Router, PathBuf) {
     let (root, config_path) = scratch(name);
     fs::create_dir(root.join("folder")).expect("folder");
     fs::write(root.join("note.txt"), b"hello files").expect("file");
+    fs::write(root.join("logo.png"), [0x89, b'P', b'N', b'G']).expect("image");
     let config = Config {
         files: FilesConfig {
             root: root.display().to_string(),
@@ -156,6 +157,56 @@ async fn deletes_a_file_and_refuses_a_directory() {
         .expect("delete a directory");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(root.join("folder").exists());
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn serves_images_for_preview() {
+    let (router, root) = app("files-image", false);
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/image?path=logo.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("image");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert_eq!(bytes.as_ref(), [0x89, b'P', b'N', b'G']);
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/image?path=note.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("not image");
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/image?path=..%2Flogo.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("escape");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     fs::remove_dir_all(root).expect("cleanup");
 }

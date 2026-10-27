@@ -81,6 +81,14 @@ impl Daemon {
             .map_err(|error| WireError::internal(format!("the file root is unavailable: {error}")))
     }
 
+    /// Reads an image for the HTTP preview route.
+    ///
+    /// Images are a binary resource rather than a wire command: the socket
+    /// remains a JSON transport, and the HTTP adapter streams the bytes.
+    pub fn image(&self, path: &str) -> Result<(Vec<u8>, &'static str), WireError> {
+        self.files()?.image(path)
+    }
+
     /// Handles one request.
     pub async fn execute(&self, request: Request) -> Response {
         let operation = operation_of(&request);
