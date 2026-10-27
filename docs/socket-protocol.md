@@ -496,10 +496,15 @@ Mount/unmount use the same dispatch:
 ```json
 { "type": "volumes_mount", "data": { "device": "/dev/sdb1", "target": "/mnt/data", "fs_type": "ext4", "read_only": false, "allow_removable": false } }
 { "type": "volumes_unmount", "data": { "target": "/mnt/data" } }
+{ "type": "volume_partition_create", "data": { "disk": "/dev/sdb", "kind": "linux", "size_bytes": 1073741824 } }
+{ "type": "volume_partition_resize", "data": { "disk": "/dev/sdb", "number": 1, "size_bytes": 2147483648 } }
+{ "type": "volume_partition_delete", "data": { "disk": "/dev/sdb", "number": 1 } }
+{ "type": "volume_format", "data": { "partition": "/dev/sdb1", "fs_type": "ext4", "label": "data" } }
 ```
 
-Both answer `{"type":"volume_changed","data":{"message":"..."}}` and require
-`[volumes] control`. See [storage.md](storage.md).
+All answer `{"type":"volume_changed","data":{"message":"..."}}`. Mount/unmount
+require `[volumes] control`; partition edits require `[volumes] partition`;
+format requires `[volumes] format`. See [storage.md](storage.md).
 
 ### Processes
 

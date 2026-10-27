@@ -19,8 +19,10 @@ Version 3 changes the firewall model. `firewall_flush` is no longer a unit
 variant and requires a chain, `firewall_add` and `firewall_update` carry a
 chain, snapshots gained `chains` with per-chain policies, and
 `firewall_update`/`firewall_set_policy` are new. An older CLI must be upgraded
-with the daemon. The `volumes`, `volumes_mount` and `volumes_unmount` requests
-and their responses are additive to version 3.
+with the daemon. The `volumes`, `volumes_mount`, `volumes_unmount`,
+`volume_partition_create`, `volume_partition_resize`,
+`volume_partition_delete` and `volume_format` requests and their responses are
+additive to version 3.
 
 ## Rules before 1.0.0
 

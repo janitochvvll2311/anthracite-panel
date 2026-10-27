@@ -228,13 +228,19 @@ anth-panel volumes list
 anth-panel storage mount /dev/sdb1 /mnt/data --type ext4 --yes
 anth-panel storage mount /dev/sdb1 /mnt/data --read-only --yes
 anth-panel storage unmount /mnt/data --yes
+anth-panel storage partition create /dev/sdb --kind linux --size-bytes 1073741824 --yes
+anth-panel storage partition resize /dev/sdb 1 --size-bytes 2147483648 --yes
+anth-panel storage partition delete /dev/sdb 1 --yes
+anth-panel storage format /dev/sdb1 --type ext4 --label data --yes
 ```
 
 `list` prints the policy flags, the block-device tree, the mounts with
 used/total space and any active swap. `volumes` is an alias for `storage`.
-`mount` and `unmount` require `[volumes] control`, ask for confirmation on a TTY
-and refuse without `--yes` when stdin is not a terminal. `--allow-removable` is
-required for removable media. A missing `lsblk` or mountinfo file prints a
+`mount` and `unmount` require `[volumes] control`, `partition` requires
+`[volumes] partition` and `format` requires `[volumes] format`. They ask for
+confirmation on a TTY and refuse without `--yes` when stdin is not a terminal.
+`--allow-removable` is required for removable media. Partition sizes are bytes
+and must be multiples of 512. A missing `lsblk` or mountinfo file prints a
 warning and keeps the other source.
 
 ## `process`

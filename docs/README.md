@@ -2,8 +2,8 @@
 
 This branch is the v0.3.0 rewrite. Phases 0–4 are implemented; Phase 5 is
 code-complete with real-command validation pending, and Phase 6 is in progress
-with the Storage inventory and guarded mount/unmount. The remaining feature
-documentation is added with the code it describes.
+with the Storage inventory, guarded mount/unmount and partition/format. The
+remaining feature documentation is added with the code it describes.
 
 ## User contract
 
@@ -15,7 +15,7 @@ documentation is added with the code it describes.
 | [processes.md](processes.md) | Process table, signals, spawn policy, SSE, CLI and the flat/tree UI |
 | [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, guarded up/down/create/edit/rename/delete, SSE, CLI and the Interfaces tab |
 | [firewall.md](firewall.md) | Managed nftables table with input/output chains, allow/deny/edit/delete/flush rules, default policies, guards, HTTP/socket/CLI and the Firewall tab |
-| [storage.md](storage.md) | Block devices, mounts, usage, swap and guarded mount/unmount over socket, HTTP, CLI and the Storage tabs |
+| [storage.md](storage.md) | Block devices, mounts, usage, swap, guarded mount/unmount and partition/format over socket, HTTP, CLI and the Storage tabs |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

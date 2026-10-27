@@ -1,8 +1,8 @@
 # Storage
 
-The daemon reads the host's block devices, mounts and swap areas. This slice
-adds **mount and unmount**; partition-table edits and `mkfs` arrive in later
-cuts.
+The daemon reads the host's block devices, mounts and swap areas. It can mount
+and unmount, create/resize/delete partitions and format them with a filesystem.
+The inventory is always available; every mutation is gated and guarded.
 
 Two sources answer two different questions:
 
@@ -29,8 +29,8 @@ The inventory always works. The flags are reported in every snapshot so the UI
 can show what the daemon allows:
 
 - `control` gates mount and unmount.
-- `partition` gates partition-table edits (next cut).
-- `format` gates `mkfs` (next cut).
+- `partition` gates `sfdisk` create/resize/delete.
+- `format` gates `mkfs`/`mkswap`.
 - `mount_root` is the directory new mounts must stay under.
 - `disk_allow` is the list of whole disks partition/format may touch.
 
@@ -40,9 +40,11 @@ can show what the daemon allows:
   only and carries a warning; reads still work.
 - `/proc/self/mountinfo` and `/proc/swaps`. An unreadable source is a warning,
   not a failed snapshot.
-- `mount` and `umount` on `PATH`. A missing binary is `501 mount_unavailable`.
-- `CAP_SYS_ADMIN` (or root) in the daemon's process for mount/unmount. The
-  inventory itself needs no capability.
+- `mount`, `umount`, `sfdisk` and the selected `mkfs`/`mkswap` binaries on
+  `PATH`. A missing command is `501 mount_unavailable` or
+  `501 partition_unavailable`.
+- `CAP_SYS_ADMIN` (or root) in the daemon's process for mount/unmount and
+  partition/format. The inventory itself needs no capability.
 
 ## Data model
 
@@ -164,6 +166,38 @@ failure `403 mount_permission`, a missing mount `404 mount_not_found`, an
 unsupported filesystem/option `400 mount_refused`, and a spawn failure `501
 mount_unavailable`.
 
+### Partition create, resize and delete
+
+All three require `[volumes] partition`. They accept only a whole disk in
+`disk_allow`; an empty `disk_allow` denies every edit. The disk must not carry
+`/` or a panel path, must not be mounted or back active swap, and must not hold
+a whole-disk filesystem. The request is then planned as one `sfdisk` call:
+
+```json
+{ "disk": "/dev/sdb", "kind": "linux", "size_bytes": 1073741824, "start_bytes": 0 }
+{ "disk": "/dev/sdb", "number": 1, "size_bytes": 2147483648 }
+{ "disk": "/dev/sdb", "number": 1 }
+```
+
+Sizes are bytes and must be whole 512-byte sectors. The create script travels on
+stdin (`size=...,type=linux|swap|uefi`), never as a shell string. A disk with
+children gets `--append`, so an existing table is not rewritten. Resize uses
+`sfdisk --no-reread -N N`; delete uses `sfdisk --no-reread --delete DISK N`.
+A partition number that is not present is `404 partition_not_found`.
+
+### Format
+
+Requires `[volumes] format`. The partition must exist, belong to a disk in
+`disk_allow`, not be mounted and not be active swap. The accepted types are
+`ext4`, `xfs`, `vfat`, `exfat`, `btrfs` and `swap`; `swap` uses `mkswap` and the
+rest use their `mkfs.<type>` program. An optional label is limited to 32
+characters (11 for vfat) from letters, digits, `-`, `_` and `.`. The argv is
+`mkfs.<type> [-L|-n LABEL] PARTITION` or `mkswap [-L LABEL] PARTITION`.
+
+Refusals map to `403 protected_disk`, `409 disk_busy`, `404
+partition_not_found`, `400 invalid_partition`, `403 partition_permission`, `501
+partition_unavailable` or `500 partition_failed`.
+
 ## HTTP
 
 `GET /api/volumes` requires a live panel session unless auth is disabled and
@@ -181,6 +215,17 @@ Requires `[volumes] control`.
 ```
 
 `200 {"message":"unmounted /mnt/data"}`. Requires `[volumes] control`.
+
+### Partition and format
+
+| Route | Body | Policy |
+| --- | --- | --- |
+| `POST /api/volumes/partition/create` | `{"disk":"/dev/sdb","kind":"linux","size_bytes":1073741824}` | `[volumes] partition` |
+| `POST /api/volumes/partition/resize` | `{"disk":"/dev/sdb","number":1,"size_bytes":2147483648}` | `[volumes] partition` |
+| `POST /api/volumes/partition/delete` | `{"disk":"/dev/sdb","number":1}` | `[volumes] partition` |
+| `POST /api/volumes/format` | `{"partition":"/dev/sdb1","fs_type":"ext4","label":"data"}` | `[volumes] format` |
+
+All answer `200 {"message":"..."}`.
 
 ## Socket
 
@@ -203,9 +248,13 @@ dispatch:
   }
 }
 { "type": "volumes_unmount", "data": { "target": "/mnt/data" } }
+{ "type": "volume_partition_create", "data": { "disk": "/dev/sdb", "kind": "linux", "size_bytes": 1073741824 } }
+{ "type": "volume_partition_resize", "data": { "disk": "/dev/sdb", "number": 1, "size_bytes": 2147483648 } }
+{ "type": "volume_partition_delete", "data": { "disk": "/dev/sdb", "number": 1 } }
+{ "type": "volume_format", "data": { "partition": "/dev/sdb1", "fs_type": "ext4", "label": "data" } }
 ```
 
-Both answer `{"type":"volume_changed","data":{"message":"..."}}`. Socket and
+All answer `{"type":"volume_changed","data":{"message":"..."}}`. Socket and
 HTTP share the same `Daemon::execute` dispatch.
 
 ## CLI
@@ -217,13 +266,19 @@ anth-panel volumes list
 anth-panel storage mount /dev/sdb1 /mnt/data --type ext4 --yes
 anth-panel storage mount /dev/sdb1 /mnt/data --read-only --yes
 anth-panel storage unmount /mnt/data --yes
+anth-panel storage partition create /dev/sdb --kind linux --size-bytes 1073741824 --yes
+anth-panel storage partition resize /dev/sdb 1 --size-bytes 2147483648 --yes
+anth-panel storage partition delete /dev/sdb 1 --yes
+anth-panel storage format /dev/sdb1 --type ext4 --label data --yes
 ```
 
 `list` prints the policy flags, a device tree, the mounts with used/total space,
 and any active swap. `volumes` is an alias for `storage`. `mount` and `unmount`
-require `[volumes] control`, ask for confirmation on a TTY and refuse without
-`--yes` when stdin is not a terminal. `--allow-removable` is required for
-removable media.
+require `[volumes] control`; `partition` requires `[volumes] partition`;
+`format` requires `[volumes] format`. They ask for confirmation on a TTY and
+refuse without `--yes` when stdin is not a terminal. `--allow-removable` is
+required for removable media. Partition sizes are bytes and must be multiples of
+512.
 
 ## Web UI
 
@@ -245,7 +300,15 @@ reads on connect, after every mutation, and on Refresh; there is no SSE.
     mount gets an Unmount button with an inline confirmation.
   - Swap section when active swap areas exist.
 - Partitions tab: a flat list of partitions with their parent disk, size,
-  filesystem and mountpoints. Partition/format controls arrive later.
+  filesystem and mountpoints.
+  - With `[volumes] partition`, a create form offers an allowed, unmounted disk,
+    kind and size in MiB; each partition gets Resize and Delete with inline
+    confirmations.
+  - With `[volumes] format`, each partition gets Format with a filesystem type
+    and optional label. Delete is an inline confirmation; formatting explains
+    that it destroys the contents.
+  - When `disk_allow` is empty, the tab explains that partition edits are
+    unavailable; the read-only list remains.
 - A degraded source shows a warning above the inventory; an empty inventory has
   its own sentence rather than an error. A mutation error keeps the last good
   snapshot and shows the daemon message above it.

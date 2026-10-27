@@ -419,6 +419,22 @@ never drops the other source silently. `usage` is best-effort per mount.
 `409 mount_busy`; permission is `403 mount_permission`; a missing target is
 `404 mount_not_found`.
 
+### Partition and format
+
+```json
+{ "disk": "/dev/sdb", "kind": "linux", "size_bytes": 1073741824 }
+{ "disk": "/dev/sdb", "number": 1, "size_bytes": 2147483648 }
+{ "disk": "/dev/sdb", "number": 1 }
+{ "partition": "/dev/sdb1", "fs_type": "ext4", "label": "data" }
+```
+
+Routes: `POST /api/volumes/partition/create`, `/resize`, `/delete` and
+`/api/volumes/format`. Create/resize/delete require `[volumes] partition` and a
+whole disk in `disk_allow`; format requires `[volumes] format`. Sizes are bytes
+and multiples of 512. All answer `200 {"message":"..."}`. Refusals include
+`403 protected_disk`, `409 disk_busy`, `404 partition_not_found`, `400
+invalid_partition`, `403 partition_permission` and `501 partition_unavailable`.
+
 ## Settings and lifecycle
 
 All four routes require a live access token unless auth is disabled. The two
