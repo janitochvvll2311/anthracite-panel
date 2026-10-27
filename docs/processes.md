@@ -231,15 +231,19 @@ process manager:
   identity pane scrolls sideways — a long command or a deep tree moves there
   while the metrics stay on screen. Both panes share the vertical scroll.
 - Selecting a row highlights it across both panes and fills the footer with its
-  identity and command. With `process.control`, the footer offers the signal
-  list, a **Group** switch and **Send signal** after a confirmation dialog.
-  Without control it says so and offers nothing.
+  identity, command and fresh metrics: state, thread count, memory and CPU.
+  The footer reads the selected row from the latest snapshot on every SSE
+  frame, so it updates with the table. With `process.control`, it also offers
+  the signal list, a **Group** switch and **Send signal** after a confirmation
+  dialog; without control it says so and offers nothing.
 - **Start process** only appears with `process.spawn`. The form takes a command
   line and an optional working directory, and lists `spawn_allow` as chips that
   replace the program word while keeping the arguments. Arguments follow the
   documented quoting rules — whitespace separates them, quotes group them and
   there is no shell expansion. The daemon validates the allowlist again.
 
-On a phone THREADS and USER are hidden. Switching to the tree starts the
-identity pane at the pid instead of an empty stretch of guide lines; scrolling
-left reveals the full hierarchy.
+On a phone the two panes become two-line cards: the identity (tree gutter, pid
+and command) on the first line, the metrics (user, threads, state, memory and
+CPU) below it. The command wraps instead of forcing a sideways scroll, and a
+sort selector plus a direction button sit next to the filter. The same fresh
+metrics appear in the details footer.

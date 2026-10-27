@@ -81,6 +81,10 @@ export class AnthProcesses extends LitElement {
   @state()
   private view: ProcessView = 'flat'
 
+  /** Phones stack the metrics under each row instead of beside it. */
+  @state()
+  private compact = false
+
   @state()
   private sort: ProcessSortKey = 'cpu'
 
@@ -115,18 +119,36 @@ export class AnthProcesses extends LitElement {
   private spawnError = ''
 
   private unsubscribe?: () => void
+  private media?: MediaQueryList
   private samples = new Map<string, number>()
   private lastTimestamp = 0
 
   override connectedCallback(): void {
     super.connectedCallback()
+    this.watchViewport()
     this.start()
   }
 
   /** Closing here is what stops the stream when the tab is removed. */
   override disconnectedCallback(): void {
     super.disconnectedCallback()
+    this.media?.removeEventListener?.('change', this.onCompactChange)
+    this.media = undefined
     this.stop()
+  }
+
+  private watchViewport(): void {
+    const media = globalThis.matchMedia?.('(max-width: 48rem)')
+    if (!media) {
+      return
+    }
+    this.compact = media.matches
+    this.media = media
+    media.addEventListener?.('change', this.onCompactChange)
+  }
+
+  private readonly onCompactChange = (event: MediaQueryListEvent): void => {
+    this.compact = event.matches
   }
 
   private start(): void {
@@ -532,6 +554,11 @@ export class AnthProcesses extends LitElement {
   }
 
   private renderFilters() {
+    const tree = this.view === 'tree'
+    const columns = processColumns().filter(
+      (column) =>
+        !(tree && (column.key === 'pid' || column.key === 'command')),
+    )
     return html`
       <div class="filters" part="filters">
         <input
@@ -542,6 +569,42 @@ export class AnthProcesses extends LitElement {
           @input=${(event: Event) =>
             (this.query = (event.currentTarget as HTMLInputElement).value)}
         />
+        ${this.compact
+          ? html`
+              <label class="field">
+                <span class="field-label">${msg('Sort')}</span>
+                <select
+                  aria-label=${msg('Sort by')}
+                  @change=${(event: Event) => {
+                    this.sort = (event.currentTarget as HTMLSelectElement)
+                      .value as ProcessSortKey
+                    this.descending = defaultDirection(this.sort) === 'desc'
+                  }}
+                >
+                  ${columns.map(
+                    (column) =>
+                      html`<option
+                        value=${column.key}
+                        ?selected=${column.key === this.sort}
+                      >
+                        ${column.label}
+                      </option>`,
+                  )}
+                </select>
+              </label>
+              <button
+                type="button"
+                class="direction"
+                aria-label=${msg('Toggle sort direction')}
+                title=${msg('Toggle sort direction')}
+                @click=${() => (this.descending = !this.descending)}
+              >
+                <anth-icon
+                  name=${this.descending ? 'chevron-down' : 'chevron-up'}
+                ></anth-icon>
+              </button>
+            `
+          : nothing}
       </div>
     `
   }
@@ -628,11 +691,21 @@ export class AnthProcesses extends LitElement {
     const control = this.snapshot?.control_enabled === true
     const selection = process
       ? html`
-          <span class="pid">PID ${process.pid}</span>
-          <span class="muted">${process.user}</span>
-          <span class="selection-command" title=${process.command}>
-            ${process.command !== '' ? process.command : process.name}
-          </span>
+          <div class="selection-id">
+            <span class="pid">PID ${process.pid}</span>
+            <span class="muted">${process.user}</span>
+            <span class="selection-command" title=${process.command}>
+              ${process.command !== '' ? process.command : process.name}
+            </span>
+          </div>
+          <div class="selection-metrics">
+            <span class="state" data-state=${process.state}>
+              ${stateLabel(process.state)}
+            </span>
+            <span>${msg(str`${process.threads} threads`)}</span>
+            <span>${formatKib(process.rss_kib)}</span>
+            <span class="selection-cpu">${this.cpuText(process)} CPU</span>
+          </div>
         `
       : html`<span class="muted">${msg('Select a process to send a signal.')}</span>`
     return html`
@@ -850,6 +923,57 @@ export class AnthProcesses extends LitElement {
     target.scrollTop = source.scrollTop
   }
 
+  private renderCompactRow(process: ProcessRow, treeRow?: TreeDisplayRow) {
+    const selected = this.isSelected(process)
+    return html`
+      <div
+        class=${`compact-row ${treeRow ? 'tree' : ''} ${selected ? 'selected' : ''}`}
+        role=${treeRow ? 'treeitem' : 'row'}
+        aria-level=${treeRow ? treeRow.depth + 1 : nothing}
+        aria-selected=${selected}
+        aria-expanded=${treeRow?.hasChildren ? treeRow.expanded : nothing}
+        tabindex="0"
+        data-key=${keyOf(process)}
+        data-state=${process.state}
+        @click=${() => this.select(process)}
+        @keydown=${(event: KeyboardEvent) => this.onRowKey(event, process)}
+      >
+        ${treeRow
+          ? html`<div class="compact-tree">${this.renderTreeCell(treeRow)}</div>`
+          : nothing}
+        <div class="compact-identity">
+          <span class="pid mono">${process.pid}</span>
+          <span class="command" title=${process.command}>
+            ${process.command !== '' ? process.command : process.name}
+          </span>
+        </div>
+        <div class="compact-metrics">
+          <span class="metric-user">${process.user}</span>
+          <span>${msg(str`${process.threads} threads`)}</span>
+          <span class="state" data-state=${process.state}>
+            ${stateLabel(process.state)}
+          </span>
+          <span>${formatKib(process.rss_kib)}</span>
+          <span class="metric-cpu">${this.cpuText(process)} CPU</span>
+        </div>
+      </div>
+    `
+  }
+
+  private renderCompact(
+    rows: ProcessRow[],
+    treeRows: TreeDisplayRow[],
+    tree: boolean,
+  ) {
+    return html`
+      <div class="compact-list" part="table">
+        ${rows.map((process, index) =>
+          this.renderCompactRow(process, tree ? treeRows[index] : undefined),
+        )}
+      </div>
+    `
+  }
+
   private renderTable() {
     if (!this.snapshot) {
       return html`<p class="empty">${msg('Loading…')}</p>`
@@ -872,6 +996,9 @@ export class AnthProcesses extends LitElement {
     }
     if (rows.length === 0) {
       return html`<p class="empty">${msg('No process matches the filter.')}</p>`
+    }
+    if (this.compact) {
+      return this.renderCompact(rows, treeRows, tree)
     }
 
     return html`
@@ -996,7 +1123,10 @@ export class AnthProcesses extends LitElement {
       background: var(--widget-bg, rgba(16, 23, 33, 0.5));
       font: 12px/1.4 var(--mono, monospace);
     }
-    .filters input { width: 100%; }
+    .filters input { flex: 1 1 12rem; min-width: 0; }
+    .filters .field { flex: 0 0 auto; }
+    .filters .direction { flex: 0 0 auto; min-width: 36px; }
+    .filters .direction anth-icon { font-size: 14px; }
     .field.column input { width: 100%; }
 
     button {
@@ -1068,10 +1198,16 @@ export class AnthProcesses extends LitElement {
     .selection {
       display: flex;
       flex: 1 1 20rem;
+      flex-direction: column;
+      gap: 0.25rem;
+      min-width: 0;
+      font-size: 12px;
+    }
+    .selection-id {
+      display: flex;
       align-items: baseline;
       gap: 0.6rem;
       min-width: 0;
-      font-size: 12px;
     }
     .selection .pid { font-weight: 600; }
     .selection-command {
@@ -1080,6 +1216,15 @@ export class AnthProcesses extends LitElement {
       white-space: nowrap;
       color: var(--muted, #8b9bad);
     }
+    .selection-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.25rem 0.8rem;
+      color: var(--muted, #8b9bad);
+      font-size: 11px;
+    }
+    .selection-cpu { color: var(--text, #dbe6f2); }
     .signal { display: flex; align-items: center; gap: 0.5rem; }
     .control-off { font-size: 12px; }
 
@@ -1265,6 +1410,77 @@ export class AnthProcesses extends LitElement {
     .state[data-state='Z'] { color: #fca5a5; border-color: rgba(252, 165, 165, 0.35); }
     .state[data-state='T'] { color: #fbbf24; border-color: rgba(251, 191, 36, 0.35); }
 
+    .compact-list {
+      max-height: var(--process-table-height, 34rem);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 8px;
+      background: var(--panel, #101721);
+      scrollbar-width: thin;
+    }
+    .compact-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.15rem 0.45rem;
+      /* No vertical padding on the row: the tree guides must reach the card
+         edges, or the vertical line breaks between rows. */
+      padding: 0;
+      border-top: 1px solid rgba(34, 48, 65, 0.6);
+      cursor: pointer;
+    }
+    .compact-row:first-child { border-top: 0; }
+    .compact-row.tree { grid-template-columns: auto minmax(0, 1fr); }
+    .compact-row:hover { background: rgba(125, 211, 252, 0.06); }
+    .compact-row.selected {
+      background: rgba(125, 211, 252, 0.14);
+      box-shadow: inset 3px 0 0 var(--accent, #7dd3fc);
+    }
+    .compact-tree {
+      grid-row: 1 / span 2;
+      display: flex;
+      align-self: stretch;
+      align-items: stretch;
+    }
+    .compact-tree .tree-cell { height: 100%; }
+    /* The card is two lines tall; the branch points at the identity line, not
+       at the middle of the card. */
+    .compact-tree { --tree-anchor: 1.05rem; }
+    .compact-tree .tree-elbow::after { top: var(--tree-anchor); }
+    .compact-tree .tree-elbow.last::before { bottom: calc(100% - var(--tree-anchor)); }
+    .compact-tree .toggle,
+    .compact-tree .toggle-spacer {
+      align-self: flex-start;
+      margin-top: calc(var(--tree-anchor) - 0.575rem);
+    }
+    .compact-row.tree .compact-identity,
+    .compact-row.tree .compact-metrics { grid-column: 2; }
+    .compact-identity {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      min-width: 0;
+      padding: 0.45rem 0.6rem 0;
+    }
+    .compact-identity .pid { flex: 0 0 auto; }
+    .compact-identity .command {
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    .compact-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.25rem 0.7rem;
+      padding: 0 0.6rem 0.45rem;
+      color: var(--muted, #8b9bad);
+      font: 11px/1.4 var(--mono, monospace);
+    }
+    .compact-row.tree .compact-identity,
+    .compact-row.tree .compact-metrics { padding-left: 0.1rem; }
+    .compact-metrics .metric-cpu { color: var(--text, #dbe6f2); }
+
     .empty {
       margin: 0;
       padding: 1.5rem 0.75rem;
@@ -1294,6 +1510,7 @@ export class AnthProcesses extends LitElement {
         --process-row-height: 30px;
         max-height: 26rem;
       }
+      .compact-list { max-height: 26rem; }
       .selection { flex-basis: 100%; }
     }
   `

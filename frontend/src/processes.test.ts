@@ -348,3 +348,135 @@ test('the HTTP client surfaces the daemon error text', async () => {
   const client = new HttpProcessesClient(fakeFetch)
   await expect(client.signal(1, 1, 'term')).rejects.toThrow('nope')
 })
+
+function compactViewport(): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  )
+}
+
+test('mobile stacks the metrics under each row and the details follow the snapshot', async () => {
+  compactViewport()
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.push(snapshot())
+  await element.updateComplete
+
+  const rows = element.shadowRoot?.querySelectorAll<HTMLElement>('.compact-row') ?? []
+  expect(rows).toHaveLength(2)
+  expect(element.shadowRoot?.querySelector('.pane.identity')).toBeNull()
+  expect(rows[0].querySelector('.compact-metrics')?.textContent).toContain('root')
+  expect(rows[0].querySelector('.compact-metrics')?.textContent).toContain('Sleeping')
+  expect(rows[0].querySelector('.compact-metrics')?.textContent).toContain('2.0 MiB')
+
+  rows[0].click()
+  await element.updateComplete
+  const details = element.shadowRoot?.querySelector('.selection-metrics')
+  expect(details?.textContent).toContain('Sleeping')
+  expect(details?.textContent).toContain('2.0 MiB')
+
+  feed.push(
+    snapshot({
+      timestamp_ms: 2000,
+      items: snapshot().items.map((process) =>
+        process.pid === 42
+          ? { ...process, rss_kib: 4096, state: 'R' }
+          : process,
+      ),
+    }),
+  )
+  await element.updateComplete
+
+  expect(element.shadowRoot?.querySelector('.selection-metrics')?.textContent).toContain(
+    '4.0 MiB',
+  )
+  expect(element.shadowRoot?.querySelector('.selection-metrics')?.textContent).toContain(
+    'Running',
+  )
+  const updated = element.shadowRoot?.querySelector(
+    '.compact-row[data-key="42:5"] .compact-metrics',
+  )
+  expect(updated?.textContent).toContain('4.0 MiB')
+})
+
+test('the compact sort control orders the cards and flips direction', async () => {
+  compactViewport()
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.push(snapshot())
+  await element.updateComplete
+
+  const select = element.shadowRoot?.querySelector<HTMLSelectElement>(
+    '.filters select',
+  )
+  expect(select).not.toBeNull()
+  select!.value = 'pid'
+  select!.dispatchEvent(new Event('change'))
+  await element.updateComplete
+  const pids = () =>
+    [...(element.shadowRoot?.querySelectorAll('.compact-row .pid') ?? [])].map(
+      (cell) => cell.textContent?.trim(),
+    )
+  expect(pids()).toEqual(['42', '77'])
+
+  element.shadowRoot?.querySelector<HTMLButtonElement>('.filters .direction')?.click()
+  await element.updateComplete
+  expect(pids()).toEqual(['77', '42'])
+})
+
+test('the compact tree keeps its gutter and collapses branches', async () => {
+  compactViewport()
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.push(snapshot())
+  await element.updateComplete
+
+  const switches = element.shadowRoot?.querySelectorAll<HTMLButtonElement>(
+    '.view-switch button',
+  )
+  switches?.[1].click()
+  await element.updateComplete
+
+  let rows = element.shadowRoot?.querySelectorAll<HTMLElement>('.compact-row') ?? []
+  expect(rows).toHaveLength(2)
+  expect(rows[0].querySelector('.compact-tree .tree-cell')).not.toBeNull()
+  expect(rows[0].getAttribute('aria-level')).toBe('1')
+
+  rows[0].querySelector<HTMLButtonElement>('.toggle')?.click()
+  await element.updateComplete
+  rows = element.shadowRoot?.querySelectorAll<HTMLElement>('.compact-row') ?? []
+  expect(rows).toHaveLength(1)
+})
+
+test('the details bar mirrors the selected row on every snapshot', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.push(snapshot())
+  await element.updateComplete
+
+  const rows = element.shadowRoot?.querySelectorAll<HTMLElement>('.identity-row') ?? []
+  rows[1].click()
+  await element.updateComplete
+
+  const details = element.shadowRoot?.querySelector('.selection-metrics')
+  expect(details?.textContent).toContain('Running')
+  expect(details?.textContent).toContain('1.0 MiB')
+
+  feed.push(
+    snapshot({
+      timestamp_ms: 2000,
+      items: snapshot().items.map((process) =>
+        process.pid === 77 ? { ...process, cpu_ticks: 140 } : process,
+      ),
+    }),
+  )
+  await element.updateComplete
+  expect(element.shadowRoot?.querySelector('.selection-metrics')?.textContent).toContain(
+    '100.0%',
+  )
+})
