@@ -14,7 +14,7 @@ use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
     FileWritten, FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot, NetworkCreate,
     NetworkEdit, NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request,
-    Response, TerminalSize, TrashListing, WireError,
+    Response, TerminalSize, TrashListing, VolumeSnapshot, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -97,6 +97,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/firewall/update", post(firewall_update))
         .route("/api/firewall/delete", post(firewall_delete))
         .route("/api/firewall/flush", post(firewall_flush))
+        .route("/api/volumes", get(volumes))
         .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
@@ -1067,6 +1068,19 @@ async fn firewall_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<
         Response::Error(error) => Err(ApiError::from(error)),
         other => Err(ApiError::internal(format!(
             "a firewall change answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn volumes(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<VolumeSnapshot>, ApiError> {
+    match state.daemon.execute(Request::Volumes).await {
+        Response::Volumes(snapshot) => Ok(Json(snapshot)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a storage snapshot answered unexpectedly: {other:?}"
         ))),
     }
 }

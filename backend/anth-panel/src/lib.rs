@@ -16,6 +16,7 @@ pub mod socket;
 pub mod state;
 pub mod terminal;
 pub mod terminal_client;
+pub mod volumes;
 pub(crate) mod ws;
 pub mod www;
 

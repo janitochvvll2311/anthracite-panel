@@ -21,6 +21,7 @@ use crate::log::{Level, Logger};
 use crate::network::NetworkService;
 use crate::process::ProcessService;
 use crate::terminal::{OpenError, Sessions, resolve_shell, supports_line_editing};
+use crate::volumes::VolumesService;
 
 /// Everything a request may need from the process.
 pub struct Daemon {
@@ -33,6 +34,7 @@ pub struct Daemon {
     process: ProcessService,
     network: NetworkService,
     firewall: FirewallService,
+    volumes: VolumesService,
 }
 
 impl Daemon {
@@ -79,6 +81,7 @@ impl Daemon {
         );
         let network = NetworkService::new(config.network.control, config.network.manage);
         let firewall = FirewallService::new(config.firewall.control);
+        let volumes = VolumesService::new(config.volumes.clone());
         Self {
             config,
             paths,
@@ -89,6 +92,7 @@ impl Daemon {
             process,
             network,
             firewall,
+            volumes,
         }
     }
 
@@ -103,6 +107,13 @@ impl Daemon {
     /// touching the host.
     pub fn with_firewall(mut self, firewall: FirewallService) -> Self {
         self.firewall = firewall;
+        self
+    }
+
+    /// Replaces the volumes service. Tests use it to script the probe without
+    /// touching the host.
+    pub fn with_volumes(mut self, volumes: VolumesService) -> Self {
+        self.volumes = volumes;
         self
     }
 
@@ -305,6 +316,12 @@ impl Daemon {
                 let firewall = self.firewall.clone();
                 let message = blocking(move || firewall.set_policy(chain, policy)).await?;
                 Ok(Response::FirewallChanged { message })
+            }
+            Request::Volumes => {
+                let volumes = self.volumes.clone();
+                Ok(Response::Volumes(
+                    blocking(move || Ok::<_, WireError>(volumes.snapshot())).await?,
+                ))
             }
             Request::Restart => {
                 let lifecycle = Arc::clone(&self.lifecycle);
@@ -540,6 +557,7 @@ fn operation_of(request: &Request) -> &'static str {
         Request::FirewallDelete { .. } => "firewall-delete",
         Request::FirewallFlush { .. } => "firewall-flush",
         Request::FirewallSetPolicy { .. } => "firewall-set-policy",
+        Request::Volumes => "volumes",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

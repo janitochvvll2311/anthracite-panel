@@ -4,7 +4,9 @@
 
 use std::fmt::Write as _;
 
-use anth_wire::{FileEntry, FirewallSnapshot, HostInfo, NetworkSnapshot, Page, ProcessInfo};
+use anth_wire::{
+    FileEntry, FirewallSnapshot, HostInfo, NetworkSnapshot, Page, ProcessInfo, VolumeSnapshot,
+};
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -260,6 +262,127 @@ pub fn firewall(snapshot: &FirewallSnapshot) -> String {
         );
     }
     out.trim_end().to_string()
+}
+
+/// Formats the storage inventory as a device tree, then mounts and swap.
+pub fn volumes(snapshot: &VolumeSnapshot) -> String {
+    let mut out = String::new();
+    if let Some(warning) = &snapshot.warning {
+        let _ = writeln!(out, "warning: {}", safe(warning));
+        let _ = writeln!(out);
+    }
+    let _ = writeln!(
+        out,
+        "control: {}  partition: {}  format: {}  mount root: {}",
+        on_off(snapshot.control_enabled),
+        on_off(snapshot.partition_enabled),
+        on_off(snapshot.format_enabled),
+        safe(&snapshot.mount_root),
+    );
+    let _ = writeln!(out);
+
+    if snapshot.devices.is_empty() {
+        let _ = writeln!(out, "(no block devices)");
+    } else {
+        let _ = writeln!(
+            out,
+            "{:<20} {:<6} {:>12} {:<12} MOUNTPOINTS",
+            "NAME", "TYPE", "SIZE", "FSTYPE"
+        );
+        let parents: std::collections::HashMap<&str, Option<&str>> = snapshot
+            .devices
+            .iter()
+            .map(|device| (device.name.as_str(), device.parent.as_deref()))
+            .collect();
+        for device in &snapshot.devices {
+            let depth = device_depth(device.parent.as_deref(), &parents);
+            let indent = "  ".repeat(depth);
+            let name = format!("{indent}{}", safe(&device.name));
+            let mountpoints = if device.mountpoints.is_empty() {
+                "-".to_string()
+            } else {
+                device
+                    .mountpoints
+                    .iter()
+                    .map(|point| safe(point))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let _ = writeln!(
+                out,
+                "{:<20} {:<6} {:>12} {:<12} {}",
+                truncate(&name, 20),
+                device.kind.as_str(),
+                format_bytes(device.size_bytes),
+                device
+                    .fstype
+                    .as_deref()
+                    .map(safe)
+                    .unwrap_or_else(|| "-".to_string()),
+                mountpoints,
+            );
+        }
+    }
+
+    let _ = writeln!(out);
+    if snapshot.mounts.is_empty() {
+        let _ = writeln!(out, "(no mounts)");
+    } else {
+        let _ = writeln!(
+            out,
+            "{:<30} {:<24} {:<10} USED / TOTAL",
+            "MOUNT", "SOURCE", "FSTYPE"
+        );
+        for mount in &snapshot.mounts {
+            let usage = mount.usage.map_or_else(
+                || "-".to_string(),
+                |usage| {
+                    format!(
+                        "{} / {}",
+                        format_bytes(usage.used_bytes),
+                        format_bytes(usage.total_bytes)
+                    )
+                },
+            );
+            let _ = writeln!(
+                out,
+                "{:<30} {:<24} {:<10} {}",
+                truncate(&safe(&mount.mountpoint), 30),
+                truncate(&safe(&mount.source), 24),
+                truncate(&safe(&mount.fstype), 10),
+                usage,
+            );
+        }
+    }
+
+    if !snapshot.swap_devices.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "SWAP");
+        for device in &snapshot.swap_devices {
+            let _ = writeln!(out, "  {}", safe(device));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+fn device_depth(
+    parent: Option<&str>,
+    parents: &std::collections::HashMap<&str, Option<&str>>,
+) -> usize {
+    let mut depth = 0;
+    let mut current = parent;
+    while let Some(name) = current {
+        depth += 1;
+        if depth > 16 {
+            break;
+        }
+        current = parents.get(name).copied().flatten();
+    }
+    depth
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
 }
 
 /// Formats one page of the process table.

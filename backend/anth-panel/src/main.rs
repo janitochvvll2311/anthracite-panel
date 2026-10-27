@@ -113,6 +113,12 @@ enum Command {
         #[command(subcommand)]
         command: FirewallCommand,
     },
+    /// Inspect block devices, mounts and swap areas.
+    #[command(alias = "volumes")]
+    Storage {
+        #[command(subcommand)]
+        command: StorageCommand,
+    },
     /// Read, validate or change the configuration.
     Config {
         #[command(subcommand)]
@@ -495,6 +501,13 @@ struct FirewallFlushArgs {
 }
 
 #[derive(Subcommand, Debug)]
+enum StorageCommand {
+    /// List block devices, mounts and swap areas.
+    #[command(alias = "ls")]
+    List,
+}
+
+#[derive(Subcommand, Debug)]
 enum TrashBinCommand {
     /// List every trashed entry.
     List,
@@ -535,6 +548,7 @@ async fn run() -> CliResult {
         Command::HostInfo { watch } => host_info(&path, watch.clone()).await,
         Command::Network { command } => network_command(&path, command).await,
         Command::Firewall { command } => firewall_command(&path, command).await,
+        Command::Storage { command } => storage_command(&path, command).await,
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
         Command::Reboot { delay } => {
@@ -1310,6 +1324,26 @@ fn render_firewall(response: &Response) -> Result<String, (u8, String)> {
         Response::FirewallSnapshot(snapshot) => Ok(render::firewall(snapshot)),
         Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
         other => Err((1, format!("unexpected response: {other:?}"))),
+    }
+}
+
+async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> CliResult {
+    let mut client = connect(path).await?;
+    match command {
+        StorageCommand::List => {
+            let response = client
+                .call(&Request::Volumes)
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::Volumes(snapshot) => {
+                    println!("{}", render::volumes(&snapshot));
+                    Ok(())
+                }
+                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
     }
 }
 
