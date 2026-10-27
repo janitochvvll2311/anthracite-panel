@@ -282,7 +282,8 @@ enum LifecycleRequest {
     Reboot(u32),
 }
 
-async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) -> CliResult {
+/// Opens the socket and performs the handshake; every client command starts here.
+async fn connect(path: &std::path::Path) -> Result<Client, (u8, String)> {
     let config = Config::load_or_default(path);
     let paths = config.paths(path).map_err(|error| (1, error))?;
     let mut client = Client::connect(&paths.socket)
@@ -292,6 +293,11 @@ async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) ->
         .hello()
         .await
         .map_err(|error| (1, error.to_string()))?;
+    Ok(client)
+}
+
+async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) -> CliResult {
+    let mut client = connect(path).await?;
 
     let request = match command {
         LifecycleRequest::Restart => Request::Restart,
@@ -319,15 +325,7 @@ async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) ->
 }
 
 async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliResult {
-    let config = Config::load_or_default(path);
-    let paths = config.paths(path).map_err(|error| (1, error))?;
-    let mut client = Client::connect(&paths.socket)
-        .await
-        .map_err(|error| (1, error.to_string()))?;
-    client
-        .hello()
-        .await
-        .map_err(|error| (1, error.to_string()))?;
+    let mut client = connect(path).await?;
 
     match command {
         FilesCommand::List {
@@ -420,15 +418,7 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
 }
 
 async fn host_info(path: &std::path::Path, watch: Option<String>) -> CliResult {
-    let config = Config::load_or_default(path);
-    let paths = config.paths(path).map_err(|error| (1, error))?;
-    let mut client = Client::connect(&paths.socket)
-        .await
-        .map_err(|error| (1, error.to_string()))?;
-    client
-        .hello()
-        .await
-        .map_err(|error| (1, error.to_string()))?;
+    let mut client = connect(path).await?;
 
     let Some(interval) = watch else {
         let response = client
