@@ -537,9 +537,12 @@ fn classify(error: IpError) -> WireError {
                 || lowercase.contains("must be root")
             {
                 (ErrorKind::Forbidden, "ip_permission")
+            } else if lowercase.contains("usage:") || lowercase.contains("multi-call binary") {
+                (ErrorKind::Unsupported, "ip_unsupported")
+            } else if lowercase.contains("open: no such file") {
+                (ErrorKind::Unsupported, "tun_unavailable")
             } else if lowercase.contains("cannot find device")
                 || lowercase.contains("does not exist")
-                || lowercase.contains("no such")
             {
                 (ErrorKind::NotFound, "interface_not_found")
             } else if lowercase.contains("file exists") || lowercase.contains("already exists") {
@@ -554,6 +557,11 @@ fn classify(error: IpError) -> WireError {
             };
             let detail = if stderr.is_empty() {
                 "`ip` refused the change without a message".to_string()
+            } else if code == "ip_unsupported" {
+                "this `ip` does not support the command; install iproute2".to_string()
+            } else if code == "tun_unavailable" {
+                "`ip tuntap` could not open /dev/net/tun; expose the device to the container"
+                    .to_string()
             } else {
                 format!("`ip` refused the change: {stderr}")
             };
@@ -966,5 +974,19 @@ mod tests {
             set_state(true, &unavailable, &snapshot, "eth0", true).expect_err("unavailable");
         assert_eq!(error.kind, ErrorKind::Internal);
         assert_eq!(error.code, "ip_unavailable");
+
+        let busybox = Recorder::failing(
+            "BusyBox v1.37.0 multi-call binary.\nUsage: ip [OPTIONS] address|route|link",
+        );
+        let error = set_state(true, &busybox, &snapshot, "eth0", true).expect_err("unsupported");
+        assert_eq!(error.kind, ErrorKind::Unsupported);
+        assert_eq!(error.code, "ip_unsupported");
+        assert!(error.message.contains("install iproute2"));
+
+        let no_tun = Recorder::failing("open: No such file or directory");
+        let error = set_state(true, &no_tun, &snapshot, "eth0", true).expect_err("tun");
+        assert_eq!(error.kind, ErrorKind::Unsupported);
+        assert_eq!(error.code, "tun_unavailable");
+        assert!(error.message.contains("/dev/net/tun"));
     }
 }

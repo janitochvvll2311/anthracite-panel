@@ -78,6 +78,27 @@ wait_for() {
   return 1
 }
 
+# Warn once per start when the host cannot exercise the network mutations. The
+# panel still serves the inventory; only ip/nft changes need these.
+check_network_tools() {
+  local warnings=()
+  if ! ip -V 2>&1 | grep -qi iproute2; then
+    warnings+=("ip is not iproute2; network mutations need iproute2 (BusyBox ip cannot add or delete links)")
+  fi
+  if ! command -v nft >/dev/null 2>&1; then
+    warnings+=("nft is not installed; the firewall slice will need nftables")
+  fi
+  local effective
+  effective=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status 2>/dev/null)
+  if [ -n "$effective" ] && [ $((0x$effective & 0x1000)) -eq 0 ]; then
+    warnings+=("CAP_NET_ADMIN is missing; ip and nft changes will be refused (start the container with --cap-add=NET_ADMIN)")
+  fi
+  local warning
+  for warning in "${warnings[@]}"; do
+    echo "warning: $warning" >&2
+  done
+}
+
 launch() {
   local name=$1
   local dir=$2
@@ -128,6 +149,7 @@ start_one() {
 }
 
 start() {
+  check_network_tools
   start_one backend
   if ! alive "$(read_pid "$backend_pid")"; then
     echo "backend: starting on $backend_addr"

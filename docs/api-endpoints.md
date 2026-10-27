@@ -252,8 +252,8 @@ All five routes are `POST`, require a live session, and answer
 address on the server; a `peer` in the body is ignored. Refusals use
 `403 network_control_disabled`, `403 network_manage_disabled`, `403
 protected_interface`, `409 interface_up`, `409 interface_exists`, `404
-interface_not_found`, `400 invalid_interface`, `403 ip_permission` and `500
-ip_failed`/`ip_unavailable`.
+interface_not_found`, `400 invalid_interface`, `403 ip_permission`, `501
+ip_unsupported`, `501 tun_unavailable` and `500 ip_failed`/`ip_unavailable`.
 
 ## Settings and lifecycle
 

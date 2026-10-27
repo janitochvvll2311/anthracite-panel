@@ -32,6 +32,26 @@ manage = false
 - The inventory is always readable, whichever switch is on. The flags are
   reported in every snapshot so a client can hide controls it cannot use.
 
+### Runtime requirements
+
+- Mutations need `ip` from **iproute2**, not the BusyBox applet. BusyBox
+  implements `ip link set`/`show`, `addr` and `route`, but not the `ip link
+  add`, `ip link delete` or `ip tuntap` forms the panel uses. The daemon reports
+  `501 ip_unsupported` for a command the local `ip` does not understand.
+- The daemon's process needs `CAP_NET_ADMIN`. Being uid 0 is not enough inside a
+  container whose bounding set excludes it. In Docker, start the container with
+  `--cap-add=NET_ADMIN` (or run the daemon on the host with the right account).
+- `tun` creation additionally needs `/dev/net/tun`. In Docker, pass
+  `--device /dev/net/tun`; a missing device is `501 tun_unavailable`.
+- The firewall cut will add `nftables` and the same capability. It is not needed
+  for the inventory or interface mutations.
+- A missing `ip` is `500 ip_unavailable`; a refusal from `ip` is `403
+  ip_permission` or another kind from its stderr.
+
+`ip -V` prints `ip utility, iproute2-...` when the right binary is in `PATH`.
+`grep CapEff /proc/self/status` should contain bit 12 (`0x1000`) for the daemon
+process.
+
 ## Sources
 
 The scan is one pass over the kernel's own views:
