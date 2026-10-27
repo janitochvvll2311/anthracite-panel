@@ -471,6 +471,77 @@ PTY; closing it kills the process group. `terminal_disabled`,
 `terminal_capacity` and invalid-size errors are also delivered as an `error`
 frame when they happen after the upgrade.
 
+## Processes
+
+All routes require a live access token unless auth is disabled. `control` and
+`spawn` are independent switches; the details are in
+[processes.md](processes.md).
+
+### `GET /api/processes?limit=5&cursor=...`
+
+One page of the table, busiest first:
+
+```json
+{
+  "items": [
+    {
+      "pid": 42,
+      "ppid": 1,
+      "uid": 0,
+      "user": "root",
+      "name": "sleep",
+      "command": "sleep 30",
+      "state": "S",
+      "cpu_ticks": 12,
+      "rss_kib": 1024,
+      "threads": 1,
+      "start_ticks": 98765
+    }
+  ],
+  "next": null,
+  "total": 793,
+  "clock_ticks": 100,
+  "timestamp_ms": 1790000000000,
+  "control_enabled": true,
+  "spawn_enabled": true,
+  "spawn_allow": ["/bin/sleep"]
+}
+```
+
+`limit` is 1–1000 (default 100) and `next` is opaque. `pid` plus `start_ticks`
+is the stable identity; the client computes CPU percent from two snapshots.
+
+### `GET /api/processes/watch?interval=2s&limit=1000`
+
+Server-Sent Events, the same shape as `host-info/watch`:
+
+- `event: processes`
+- `id`: `timestamp_ms`
+- `data`: one snapshot (the first page)
+- `retry: 3000`
+- keep-alive comments every 15 seconds.
+
+### `POST /api/processes/signal`
+
+```json
+{ "pid": 42, "start_ticks": 98765, "signal": "term", "group": false }
+```
+
+`200 {"pid":42,"signal":"term"}`. Requires `process.control`. Refusals:
+`403 process_control_disabled`, `403 protected_process`, `403 process_not_owned`,
+`409 process_changed`, `400 not_group_leader`.
+
+### `POST /api/processes/spawn`
+
+```json
+{ "program": "/bin/sleep", "args": ["30"], "cwd": "/tmp" }
+```
+
+`200 {"pid":99,"program":"/bin/sleep","args":["30"]}`. Requires `process.spawn`
+and a program in `spawn_allow`. Refusals: `403 process_spawn_disabled`, `403
+program_not_allowed`, `403 program_not_executable`, `404 not_found`, `400
+program_not_absolute`, `400 cwd_not_absolute`, `404 cwd_not_found`.
+
 ## Static UI
 
 `GET /` and `GET /{*path}` serve the embedded shell. A missing file is `404`; an

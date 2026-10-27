@@ -166,6 +166,29 @@ returns the remote exit code. The daemon must have `[terminal] enabled = true`.
 The shell is the one configured by `[terminal] shell`; the CLI cannot choose a
 different program.
 
+## `process`
+
+```bash
+anth-panel process list
+anth-panel process ls --limit 20
+anth-panel process list --watch 2s
+anth-panel process signal 1234 term
+anth-panel process signal 1234 kill --yes
+anth-panel process signal 1234 term --group
+anth-panel process spawn /bin/sleep 30
+anth-panel process spawn --cwd /tmp /bin/uptime
+```
+
+`list` prints PID, PPID, USER, STATE, TICKS, MEM, THR and COMMAND, busiest
+first. `--limit` is 1–1000 and `--cursor` is the `next` value from the previous
+page; `--watch` follows the table until Ctrl-C. `signal` looks up the process to
+read its `start_ticks`, asks for confirmation on a TTY and refuses without
+`--yes` when stdin is not a terminal; `--group` signals the process group led by
+the pid. It requires `[process] control = true`. `spawn` starts an absolute
+program from `[process] spawn_allow`, passes the remaining words as argv without
+a shell, and prints the pid; it requires `[process] spawn = true`. Because the
+words are passed verbatim, put `--cwd` before the program.
+
 ## `config`
 
 ```bash

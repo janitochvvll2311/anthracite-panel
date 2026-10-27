@@ -332,6 +332,78 @@ Handles are owner-scoped: a handle from another auth session or socket uid is
 `not_found`. With `[terminal] enabled = false`, every terminal request answers
 `forbidden` with code `terminal_disabled`.
 
+### Processes
+
+```json
+{ "type": "processes", "data": { "limit": 100, "cursor": null } }
+```
+
+```json
+{
+  "type": "processes",
+  "data": {
+    "items": [
+      {
+        "pid": 42,
+        "ppid": 1,
+        "uid": 0,
+        "user": "root",
+        "name": "sleep",
+        "command": "sleep 30",
+        "state": "S",
+        "cpu_ticks": 12,
+        "rss_kib": 1024,
+        "threads": 1,
+        "start_ticks": 98765
+      }
+    ],
+    "next": null,
+    "total": 793,
+    "clock_ticks": 100,
+    "timestamp_ms": 1790000000000,
+    "control_enabled": true,
+    "spawn_enabled": true,
+    "spawn_allow": ["/bin/sleep"]
+  }
+}
+```
+
+`limit` is 1–1000; `next` is an opaque offset into the sorted snapshot. `pid`
+alone is not an identity: a mutation carries `start_ticks` and a mismatch is
+`conflict` / `process_changed`.
+
+```json
+{
+  "type": "process_signal",
+  "data": { "pid": 42, "start_ticks": 98765, "signal": "term", "group": false }
+}
+```
+
+```json
+{ "type": "process_signalled", "data": { "pid": 42, "signal": "term" } }
+```
+
+Signals are `term`, `kill`, `hup`, `int`, `quit`, `stop` and `cont`; `group:
+true` signals the process group led by `pid`. Requires `[process] control`.
+
+```json
+{
+  "type": "process_spawn",
+  "data": { "program": "/bin/sleep", "args": ["30"], "cwd": null }
+}
+```
+
+```json
+{
+  "type": "process_started",
+  "data": { "pid": 99, "program": "/bin/sleep", "args": ["30"] }
+}
+```
+
+The program must be absolute and appear in `[process] spawn_allow`; it runs
+detached with null stdio and is reaped by a thread. Nothing goes through a
+shell. Requires `[process] spawn`.
+
 ## Errors
 
 ```json
