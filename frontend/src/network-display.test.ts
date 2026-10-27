@@ -20,7 +20,9 @@ function iface(overrides: Partial<NetworkInterface> = {}): NetworkInterface {
     mtu: 1500,
     state: 'up',
     up: true,
+    running: true,
     loopback: false,
+    physical: false,
     addresses: [
       { family: 'inet', address: '192.168.1.10', prefix: 24, scope: 'global' },
     ],

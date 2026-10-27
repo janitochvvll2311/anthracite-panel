@@ -28,7 +28,11 @@ export interface NetworkInterface {
   /** `/sys/class/net/<name>/operstate`. */
   state: string
   up: boolean
+  /** `IFF_RUNNING`; a carrier is present. */
+  running: boolean
   loopback: boolean
+  /** Real hardware: the interface has a `device` link in sysfs. */
+  physical: boolean
   addresses: NetworkAddress[]
   rx_bytes: number
   tx_bytes: number
@@ -64,10 +68,40 @@ export interface NetworkHandlers {
   onStatus?: (status: 'connecting' | 'live' | 'closed') => void
 }
 
+/** The virtual kinds the panel can create. */
+export type NetworkCreateKind =
+  | 'veth'
+  | 'bridge'
+  | 'bond'
+  | 'vlan'
+  | 'dummy'
+  | 'tun'
+
+export interface NetworkCreateRequest {
+  name: string
+  kind: NetworkCreateKind
+  peer?: string
+  link?: string
+  vlan_id?: number
+  mtu?: number
+  up?: boolean
+}
+
+export interface NetworkEditRequest {
+  mtu?: number
+  up?: boolean
+}
+
 export interface NetworkClient {
   get(): Promise<NetworkSnapshot>
   /** Repeats the inventory on an interval until the returned function runs. */
   watch(intervalMs: number, handlers: NetworkHandlers): () => void
+  /** Brings one interface up or down. Resolves to the daemon message. */
+  setState(name: string, up: boolean): Promise<string>
+  create(request: NetworkCreateRequest): Promise<string>
+  edit(name: string, request: NetworkEditRequest): Promise<string>
+  rename(name: string, newName: string): Promise<string>
+  remove(name: string): Promise<string>
 }
 
 export class HttpNetworkClient implements NetworkClient {
@@ -108,5 +142,36 @@ export class HttpNetworkClient implements NetworkClient {
       handlers.onStatus?.('closed')
       source.close()
     }
+  }
+
+  async setState(name: string, up: boolean): Promise<string> {
+    return this.action('/api/network/state', { name, up })
+  }
+
+  async create(request: NetworkCreateRequest): Promise<string> {
+    return this.action('/api/network/create', request)
+  }
+
+  async edit(name: string, request: NetworkEditRequest): Promise<string> {
+    return this.action('/api/network/edit', { name, ...request })
+  }
+
+  async rename(name: string, newName: string): Promise<string> {
+    return this.action('/api/network/rename', { name, new_name: newName })
+  }
+
+  async remove(name: string): Promise<string> {
+    return this.action('/api/network/delete', { name })
+  }
+
+  private async action(path: string, body: unknown): Promise<string> {
+    const response = await this.fetchImpl(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) throw await responseError(response)
+    const result = (await response.json()) as { message?: string }
+    return result.message ?? ''
   }
 }

@@ -28,10 +28,29 @@ import {
   hasErrors,
 } from './lib/network/display'
 import type { NetworkRow } from './lib/network/display'
-import type { NetworkClient, NetworkSnapshot } from './network-client'
+import type {
+  NetworkClient,
+  NetworkCreateKind,
+  NetworkCreateRequest,
+  NetworkSnapshot,
+} from './network-client'
 
 /** The intervals the selector offers, in milliseconds. */
 const INTERVALS = [1000, 2000, 5000, 10000, 30000] as const
+
+/** The virtual kinds the create form offers, in display order. */
+const CREATE_KINDS: NetworkCreateKind[] = [
+  'bridge',
+  'bond',
+  'dummy',
+  'veth',
+  'vlan',
+  'tun',
+]
+
+function kindLabel(kind: NetworkCreateKind): string {
+  return kind === 'tun' ? 'tun/tap' : kind
+}
 
 type FeedStatus = 'idle' | 'connecting' | 'live' | 'paused' | 'stopped' | 'error'
 
@@ -62,6 +81,30 @@ export class AnthNetwork extends LitElement {
   @state()
   private query = ''
 
+  @state()
+  private busy = false
+
+  @state()
+  private actionError = ''
+
+  @state()
+  private notice = ''
+
+  @state()
+  private createOpen = false
+
+  @state()
+  private createKind: NetworkCreateKind = 'bridge'
+
+  @state()
+  private editing?: string
+
+  @state()
+  private renaming?: string
+
+  @state()
+  private confirmingDelete?: string
+
   private previous?: NetworkSnapshot
 
   private unsubscribe?: () => void
@@ -86,6 +129,8 @@ export class AnthNetwork extends LitElement {
     this.paused = false
     this.status = 'connecting'
     this.error = ''
+    this.notice = ''
+    this.actionError = ''
     this.previous = undefined
     this.unsubscribe = this.client.watch(this.interval, {
       onSnapshot: (snapshot) => {
@@ -140,6 +185,154 @@ export class AnthNetwork extends LitElement {
       // SSE carries the schedule in the query, so a new period is a new URL.
       this.start()
     }
+  }
+
+  /** Runs one mutation, refreshes the rows and reports one generic success. */
+  private async run(
+    task: (client: NetworkClient) => Promise<unknown>,
+    done?: () => void,
+  ): Promise<void> {
+    const client = this.client
+    if (!client || this.busy) return
+    this.busy = true
+    this.actionError = ''
+    this.notice = ''
+    try {
+      await task(client)
+      done?.()
+      const snapshot = await client.get()
+      this.rows = computeRows(snapshot, this.previous)
+      this.previous = snapshot
+      this.snapshot = snapshot
+      this.error = ''
+      this.notice = msg('Change applied.')
+    } catch (error) {
+      this.actionError = describeError(error)
+    } finally {
+      this.busy = false
+    }
+  }
+
+  private canManage(): boolean {
+    return this.snapshot?.manage_enabled === true
+  }
+
+  private canControl(): boolean {
+    return this.snapshot?.control_enabled === true
+  }
+
+  private stateBlockReason(iface: NetworkRow): string {
+    if (!this.canControl()) return msg('Network control is disabled.')
+    if (iface.loopback && iface.up) {
+      return msg('Loopback interfaces cannot be brought down.')
+    }
+    return ''
+  }
+
+  private renameBlockReason(iface: NetworkRow): string {
+    if (!this.canManage()) return msg('Network management is disabled.')
+    if (iface.up) return msg('Bring the interface down first.')
+    return ''
+  }
+
+  private deleteBlockReason(iface: NetworkRow): string {
+    if (!this.canManage()) return msg('Network management is disabled.')
+    if (iface.loopback) return msg('Loopback interfaces are protected.')
+    const carriers = new Set(
+      (this.snapshot?.routes ?? []).map((route) => route.interface),
+    )
+    if (carriers.has(iface.name) && carriers.size <= 1) {
+      return msg('This is the last interface carrying the default route.')
+    }
+    return ''
+  }
+
+  private toggleState(iface: NetworkRow): void {
+    if (this.stateBlockReason(iface) !== '') return
+    void this.run((client) => client.setState(iface.name, !iface.up))
+  }
+
+  private submitMtu(event: Event, iface: NetworkRow): void {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    const raw = String(new FormData(form).get('mtu') ?? '').trim()
+    if (raw === '') {
+      this.actionError = msg('The MTU is required.')
+      return
+    }
+    void this.run(
+      (client) => client.edit(iface.name, { mtu: Number(raw) }),
+      () => {
+        this.editing = undefined
+      },
+    )
+  }
+
+  private submitRename(event: Event, iface: NetworkRow): void {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    const newName = String(new FormData(form).get('new_name') ?? '').trim()
+    if (newName === '') {
+      this.actionError = msg('The new name is required.')
+      return
+    }
+    void this.run(
+      (client) => client.rename(iface.name, newName),
+      () => {
+        this.renaming = undefined
+      },
+    )
+  }
+
+  private submitDelete(iface: NetworkRow): void {
+    if (this.deleteBlockReason(iface) !== '') return
+    void this.run(
+      (client) => client.remove(iface.name),
+      () => {
+        this.confirmingDelete = undefined
+      },
+    )
+  }
+
+  private submitCreate(event: Event): void {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    const data = new FormData(form)
+    const name = String(data.get('name') ?? '').trim()
+    const kind = String(data.get('kind') ?? 'bridge') as NetworkCreateKind
+    if (name === '') {
+      this.actionError = msg('The interface name is required.')
+      return
+    }
+
+    const request: NetworkCreateRequest = { name, kind, up: data.get('up') === 'on' }
+    const mtu = String(data.get('mtu') ?? '').trim()
+    if (mtu !== '') request.mtu = Number(mtu)
+    if (kind === 'veth') {
+      const peer = String(data.get('peer') ?? '').trim()
+      if (peer === '') {
+        this.actionError = msg('A veth needs a peer interface name.')
+        return
+      }
+      request.peer = peer
+    }
+    if (kind === 'vlan') {
+      const link = String(data.get('link') ?? '').trim()
+      const vlanId = String(data.get('vlan_id') ?? '').trim()
+      if (link === '' || vlanId === '') {
+        this.actionError = msg('A vlan needs a parent interface and an identifier.')
+        return
+      }
+      request.link = link
+      request.vlan_id = Number(vlanId)
+    }
+
+    void this.run(
+      (client) => client.create(request),
+      () => {
+        this.createOpen = false
+      },
+    )
   }
 
   private statusText(): string {
@@ -199,6 +392,21 @@ export class AnthNetwork extends LitElement {
             )}
           </select>
         </label>
+        ${this.canManage()
+          ? html`
+              <button
+                type="button"
+                aria-expanded=${this.createOpen ? 'true' : 'false'}
+                title=${msg('Create a virtual interface')}
+                @click=${() => {
+                  this.createOpen = !this.createOpen
+                }}
+              >
+                <anth-icon name="plus"></anth-icon>
+                <span class="btn-label">${msg('Create')}</span>
+              </button>
+            `
+          : nothing}
         <button
           type="button"
           aria-label=${this.buttonLabel()}
@@ -229,6 +437,214 @@ export class AnthNetwork extends LitElement {
                 </span>
               `,
             )}
+      </div>
+    `
+  }
+
+  private renderCreateForm() {
+    return html`
+      <form class="create" part="create" @submit=${(event: Event) => this.submitCreate(event)}>
+        <div class="create-grid">
+          <label>
+            <span>${msg('Name')}</span>
+            <input name="name" required maxlength="15" placeholder="br0" ?disabled=${this.busy} />
+          </label>
+          <label>
+            <span>${msg('Kind')}</span>
+            <select
+              name="kind"
+              .value=${this.createKind}
+              ?disabled=${this.busy}
+              @change=${(event: Event) => {
+                this.createKind = (event.currentTarget as HTMLSelectElement)
+                  .value as NetworkCreateKind
+              }}
+            >
+              ${CREATE_KINDS.map(
+                (kind) => html`<option value=${kind}>${kindLabel(kind)}</option>`,
+              )}
+            </select>
+          </label>
+          ${this.createKind === 'veth'
+            ? html`
+                <label>
+                  <span>${msg('Peer')}</span>
+                  <input name="peer" maxlength="15" placeholder="veth1" ?disabled=${this.busy} />
+                </label>
+              `
+            : nothing}
+          ${this.createKind === 'vlan'
+            ? html`
+                <label>
+                  <span>${msg('Parent interface')}</span>
+                  <input name="link" maxlength="15" placeholder="eth0" ?disabled=${this.busy} />
+                </label>
+                <label>
+                  <span>${msg('VLAN identifier')}</span>
+                  <input name="vlan_id" type="number" min="1" max="4094" placeholder="20" ?disabled=${this.busy} />
+                </label>
+              `
+            : nothing}
+          <label>
+            <span>${msg('MTU')}</span>
+            <input name="mtu" type="number" min="68" max="65535" placeholder="1500" ?disabled=${this.busy} />
+          </label>
+          <label class="check">
+            <input type="checkbox" name="up" ?disabled=${this.busy} />
+            <span>${msg('Bring up')}</span>
+          </label>
+        </div>
+        <div class="create-actions">
+          <button type="submit" ?disabled=${this.busy}>${msg('Create')}</button>
+          <button type="button" ?disabled=${this.busy} @click=${() => { this.createOpen = false }}>
+            ${msg('Cancel')}
+          </button>
+        </div>
+        <p class="hint">${msg('Only virtual interfaces can be created. Addresses are not assigned here.')}</p>
+      </form>
+    `
+  }
+
+  private editMtu(iface: NetworkRow) {
+    return html`
+      <form class="inline" @submit=${(event: Event) => this.submitMtu(event, iface)}>
+        <label>
+          <span>${msg('MTU')}</span>
+          <input
+            name="mtu"
+            type="number"
+            min="68"
+            max="65535"
+            .value=${String(iface.mtu)}
+            ?disabled=${this.busy}
+            required
+          />
+        </label>
+        <button type="submit" ?disabled=${this.busy}>${msg('Apply')}</button>
+        <button type="button" ?disabled=${this.busy} @click=${() => { this.editing = undefined }}>
+          ${msg('Cancel')}
+        </button>
+      </form>
+    `
+  }
+
+  private renameForm(iface: NetworkRow) {
+    return html`
+      <form class="inline" @submit=${(event: Event) => this.submitRename(event, iface)}>
+        <label>
+          <span>${msg('New name')}</span>
+          <input
+            name="new_name"
+            maxlength="15"
+            .value=${iface.name}
+            ?disabled=${this.busy}
+            required
+          />
+        </label>
+        <button type="submit" ?disabled=${this.busy}>${msg('Rename')}</button>
+        <button type="button" ?disabled=${this.busy} @click=${() => { this.renaming = undefined }}>
+          ${msg('Cancel')}
+        </button>
+      </form>
+    `
+  }
+
+  private renderActions(iface: NetworkRow) {
+    if (!this.canControl() && !this.canManage()) {
+      return nothing
+    }
+    const stateReason = this.stateBlockReason(iface)
+    const renameReason = this.renameBlockReason(iface)
+    const deleteReason = this.deleteBlockReason(iface)
+    return html`
+      <div class="manage">
+        <div class="actions">
+          ${this.canControl()
+            ? html`
+                <button
+                  type="button"
+                  class=${iface.up ? 'danger' : ''}
+                  title=${stateReason}
+                  ?disabled=${this.busy || stateReason !== ''}
+                  @click=${() => this.toggleState(iface)}
+                >
+                  ${iface.up ? msg('Down') : msg('Up')}
+                </button>
+              `
+            : nothing}
+          ${this.canManage()
+            ? html`
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.editing = this.editing === iface.name ? undefined : iface.name
+                    this.renaming = undefined
+                    this.confirmingDelete = undefined
+                  }}
+                >
+                  ${msg('Edit MTU')}
+                </button>
+                <button
+                  type="button"
+                  title=${renameReason}
+                  ?disabled=${this.busy || renameReason !== ''}
+                  @click=${() => {
+                    this.renaming = this.renaming === iface.name ? undefined : iface.name
+                    this.editing = undefined
+                    this.confirmingDelete = undefined
+                  }}
+                >
+                  ${msg('Rename')}
+                </button>
+                <button
+                  type="button"
+                  class="danger"
+                  title=${deleteReason}
+                  ?disabled=${this.busy || deleteReason !== ''}
+                  @click=${() => {
+                    this.confirmingDelete =
+                      this.confirmingDelete === iface.name ? undefined : iface.name
+                    this.editing = undefined
+                    this.renaming = undefined
+                  }}
+                >
+                  ${msg('Delete')}
+                </button>
+              `
+            : nothing}
+        </div>
+        ${this.editing === iface.name ? this.editMtu(iface) : nothing}
+        ${this.renaming === iface.name ? this.renameForm(iface) : nothing}
+        ${this.confirmingDelete === iface.name
+          ? html`
+              <div class="confirm" role="alert">
+                <span>
+                  ${msg(str`Delete interface ${iface.name}? This cannot be undone.`)}
+                </span>
+                ${iface.physical
+                  ? html`<span class="warning">
+                      ${msg('This is a physical device; the host will lose this link.')}
+                    </span>`
+                  : nothing}
+                <button
+                  type="button"
+                  class="danger"
+                  ?disabled=${this.busy}
+                  @click=${() => this.submitDelete(iface)}
+                >
+                  ${msg('Delete')}
+                </button>
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => { this.confirmingDelete = undefined }}
+                >
+                  ${msg('Cancel')}
+                </button>
+              </div>
+            `
+          : nothing}
       </div>
     `
   }
@@ -292,6 +708,7 @@ export class AnthNetwork extends LitElement {
               </p>
             `
           : nothing}
+        ${this.renderActions(iface)}
       </article>
     `
   }
@@ -312,6 +729,11 @@ export class AnthNetwork extends LitElement {
     }
     return html`
       ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
+      ${this.actionError
+        ? html`<p class="error" role="alert">${this.actionError}</p>`
+        : nothing}
+      ${this.notice ? html`<p class="notice" role="status">${this.notice}</p>` : nothing}
+      ${this.createOpen ? this.renderCreateForm() : nothing}
       ${this.renderRoutes()}
       <div class="filters" part="filters">
         <input
@@ -519,6 +941,113 @@ export class AnthNetwork extends LitElement {
       font: 11px/1.4 var(--mono, monospace);
     }
 
+    .notice {
+      margin: 0;
+      padding: 0.55rem 0.65rem;
+      border: 1px solid rgba(52, 211, 153, 0.35);
+      border-radius: 8px;
+      background: rgba(52, 211, 153, 0.08);
+      color: var(--ok, #34d399);
+      font-size: 13px;
+    }
+
+    .create {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 9px;
+      background: var(--panel, #101721);
+    }
+    .create-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+      gap: 0.5rem 0.75rem;
+    }
+    .create-grid label,
+    .inline label {
+      display: grid;
+      gap: 0.2rem;
+      color: var(--muted, #8b9bad);
+      font: 11px/1.3 var(--mono, monospace);
+    }
+    .create-grid input,
+    .create-grid select,
+    .inline input {
+      min-height: 32px;
+      padding: 0.3rem 0.5rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: 13px/1.4 var(--sans, system-ui, sans-serif);
+    }
+    .create-grid .check {
+      display: flex;
+      grid-auto-flow: column;
+      align-items: center;
+      align-self: end;
+      gap: 0.35rem;
+      min-height: 32px;
+      font-size: 12px;
+    }
+    .create-grid .check input { min-height: 0; width: auto; }
+    .create-actions,
+    .actions,
+    .confirm,
+    .inline {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .create button,
+    .actions button,
+    .inline button,
+    .confirm button {
+      min-height: 30px;
+      padding: 0.25rem 0.6rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: inherit;
+      cursor: pointer;
+    }
+    .create button:hover,
+    .actions button:hover,
+    .inline button:hover,
+    .confirm button:hover { border-color: var(--accent, #7dd3fc); }
+    .create button:disabled,
+    .actions button:disabled,
+    .inline button:disabled,
+    .confirm button:disabled { opacity: 0.55; cursor: progress; }
+    .actions button.danger,
+    .confirm button.danger { color: var(--err, #f87171); }
+    .hint { margin: 0; color: var(--muted, #8b9bad); font-size: 11px; }
+
+    .manage {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--panel-border, #223041);
+    }
+    .actions { justify-content: flex-end; }
+    .inline label { grid-auto-flow: column; align-items: center; gap: 0.35rem; }
+    .inline input { width: 8rem; }
+    .confirm {
+      padding: 0.4rem 0.5rem;
+      border: 1px solid rgba(248, 113, 113, 0.4);
+      border-radius: 7px;
+      background: rgba(248, 113, 113, 0.06);
+      font-size: 12px;
+    }
+    .confirm > span:first-of-type { margin-right: auto; }
+    .confirm .warning { flex-basis: 100%; color: var(--warn, #fbbf24); }
+
     .muted { color: var(--muted, #8b9bad); }
     .empty,
     .error {
@@ -540,6 +1069,15 @@ export class AnthNetwork extends LitElement {
       .toolbar select,
       .toolbar button { min-height: 44px; }
       .filters input { min-height: 44px; }
+      .actions { justify-content: flex-start; }
+      .actions button,
+      .inline button,
+      .confirm button,
+      .create button { min-height: 44px; }
+      .create-grid input,
+      .create-grid select { min-height: 44px; }
+      .inline label { grid-auto-flow: row; }
+      .inline input { width: 100%; }
     }
   `
 }

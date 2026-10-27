@@ -1010,6 +1010,110 @@
   <source>No interfaces found.</source>
   <target>No se encontraron interfaces.</target>
 </trans-unit>
+<trans-unit id="s0797c52fba39fb5a">
+  <source>Change applied.</source>
+  <target>Cambio aplicado.</target>
+</trans-unit>
+<trans-unit id="s70b1be2b89992a5a">
+  <source>Network control is disabled.</source>
+  <target>El control de red está desactivado.</target>
+</trans-unit>
+<trans-unit id="sc51a7b2e015571db">
+  <source>Loopback interfaces cannot be brought down.</source>
+  <target>Las interfaces loopback no se pueden desactivar.</target>
+</trans-unit>
+<trans-unit id="s226c9bdab4c253fe">
+  <source>Network management is disabled.</source>
+  <target>La administración de red está desactivada.</target>
+</trans-unit>
+<trans-unit id="sb33fc203b0063b33">
+  <source>Bring the interface down first.</source>
+  <target>Primero desactiva la interfaz.</target>
+</trans-unit>
+<trans-unit id="s785e3e339a3e959a">
+  <source>Loopback interfaces are protected.</source>
+  <target>Las interfaces loopback están protegidas.</target>
+</trans-unit>
+<trans-unit id="s73f90884d4a93103">
+  <source>This is the last interface carrying the default route.</source>
+  <target>Esta es la última interfaz con la ruta predeterminada.</target>
+</trans-unit>
+<trans-unit id="sa12cc51102365e45">
+  <source>The MTU is required.</source>
+  <target>El MTU es obligatorio.</target>
+</trans-unit>
+<trans-unit id="s9eb853b6c1aafb2e">
+  <source>The new name is required.</source>
+  <target>El nombre nuevo es obligatorio.</target>
+</trans-unit>
+<trans-unit id="sa88bd6004e240cef">
+  <source>The interface name is required.</source>
+  <target>El nombre de la interfaz es obligatorio.</target>
+</trans-unit>
+<trans-unit id="s95562cde7ba1fd6d">
+  <source>A veth needs a peer interface name.</source>
+  <target>Una veth necesita el nombre de la interfaz par.</target>
+</trans-unit>
+<trans-unit id="s774aa157f6c09551">
+  <source>A vlan needs a parent interface and an identifier.</source>
+  <target>Una vlan necesita una interfaz padre y un identificador.</target>
+</trans-unit>
+<trans-unit id="sc15262dcabbc612e">
+  <source>Create a virtual interface</source>
+  <target>Crear una interfaz virtual</target>
+</trans-unit>
+<trans-unit id="s382a2aa3984474dd">
+  <source>Create</source>
+  <target>Crear</target>
+</trans-unit>
+<trans-unit id="s0a857219d8ac0c29">
+  <source>Peer</source>
+  <target>Par</target>
+</trans-unit>
+<trans-unit id="s19b1752d5b5b5f96">
+  <source>Parent interface</source>
+  <target>Interfaz padre</target>
+</trans-unit>
+<trans-unit id="s0dded2d91d370147">
+  <source>VLAN identifier</source>
+  <target>Identificador VLAN</target>
+</trans-unit>
+<trans-unit id="s9cc9c686f6c2fef4">
+  <source>Bring up</source>
+  <target>Activar</target>
+</trans-unit>
+<trans-unit id="s5b78ac75779ca4ec">
+  <source>Only virtual interfaces can be created. Addresses are not assigned here.</source>
+  <target>Solo se pueden crear interfaces virtuales. Aquí no se asignan direcciones.</target>
+</trans-unit>
+<trans-unit id="sb8f855b49234b81b">
+  <source>Apply</source>
+  <target>Aplicar</target>
+</trans-unit>
+<trans-unit id="s1b38c2d6b9b9f248">
+  <source>New name</source>
+  <target>Nombre nuevo</target>
+</trans-unit>
+<trans-unit id="s60320a18282b2b33">
+  <source>Rename</source>
+  <target>Renombrar</target>
+</trans-unit>
+<trans-unit id="s032c13736048bf35">
+  <source>Down</source>
+  <target>Desactivar</target>
+</trans-unit>
+<trans-unit id="s8a7bb419534d871d">
+  <source>Edit MTU</source>
+  <target>Editar MTU</target>
+</trans-unit>
+<trans-unit id="s17bd90d987f93ce3">
+  <source>Delete interface <x id="0" equiv-text="${iface.name}"/>? This cannot be undone.</source>
+  <target>¿Eliminar la interfaz <x id="0" equiv-text="${iface.name}"/>? No se puede deshacer.</target>
+</trans-unit>
+<trans-unit id="sc71bdda201de22fa">
+  <source>This is a physical device; the host will lose this link.</source>
+  <target>Es un dispositivo físico; el host perderá este enlace.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
