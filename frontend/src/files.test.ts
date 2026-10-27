@@ -80,16 +80,36 @@ function lastEditor(): EditorElement | null {
   return tabEditors().at(-1) ?? null
 }
 
-async function openEditor(element: FilesElement, name: string): Promise<void> {
-  const entry = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
+function entryButton(element: FilesElement, name: string): HTMLButtonElement | undefined {
+  return [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
     (button) => button.textContent?.includes(name),
   )
-  entry?.click()
+}
+
+async function previewFile(element: FilesElement, name: string): Promise<void> {
+  entryButton(element, name)?.click()
   await settle(element)
-  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
-    (button) => button.textContent?.includes('Edit'),
+}
+
+async function previewAction(element: FilesElement, label: string): Promise<void> {
+  const button = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes(label),
   )
-  edit?.click()
+  button?.click()
+  await settleWindows()
+}
+
+async function openEditor(element: FilesElement, name: string): Promise<void> {
+  await previewFile(element, name)
+  await previewAction(element, 'Edit')
+}
+
+async function openCreate(element: FilesElement): Promise<void> {
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+    (button) => button.textContent?.includes('New file'),
+  )
+  create?.click()
+  await settle(element)
   await settleWindows()
 }
 
@@ -111,10 +131,7 @@ test('lists the root and navigates into a directory', async () => {
   expect(element.shadowRoot?.textContent).toContain('folder/')
   expect(element.shadowRoot?.textContent).toContain('note.txt')
 
-  const folder = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
-    (button) => button.textContent?.includes('folder'),
-  )
-  folder?.click()
+  entryButton(element, 'folder')?.click()
   await settle(element)
 
   expect(client.list).toHaveBeenLastCalledWith('/folder')
@@ -129,11 +146,7 @@ test('previews a file in place', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
-  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
-    (button) => button.textContent?.includes('note.txt'),
-  )
-  file?.click()
-  await settle(element)
+  await previewFile(element, 'note.txt')
 
   expect(client.read).toHaveBeenCalledWith('/note.txt')
   expect(element.shadowRoot?.querySelector('pre')?.textContent).toBe('hello files')
@@ -150,11 +163,7 @@ test('shows a placeholder when a file cannot be previewed', async () => {
   client.read = vi.fn().mockRejectedValue(new Error('not_text'))
   const element = await mount(client)
 
-  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
-    (button) => button.textContent?.includes('note.txt'),
-  )
-  file?.click()
-  await settle(element)
+  await previewFile(element, 'note.txt')
 
   expect(element.shadowRoot?.querySelector('.placeholder')?.textContent).toContain(
     'Preview not available for this file.',
@@ -167,18 +176,7 @@ test('opens a file in a global editor window', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
-  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
-    (button) => button.textContent?.includes('note.txt'),
-  )
-  file?.click()
-  await settle(element)
-
-  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
-    (button) => button.textContent?.includes('Edit'),
-  )
-  edit?.click()
-  await settle(element)
-  await settleWindows()
+  await openEditor(element, 'note.txt')
 
   expect(client.read).toHaveBeenLastCalledWith('/note.txt')
   const window = lastWindow()
@@ -198,12 +196,7 @@ test('opens a file in a global editor window', async () => {
 test('drags the editor window on desktop', async () => {
   const element = await mount(fakeClient())
 
-  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
-    (button) => button.textContent?.includes('New file'),
-  )
-  create?.click()
-  await settle(element)
-  await settleWindows()
+  await openCreate(element)
 
   const window = lastWindow()
   const frame = window?.shadowRoot.querySelector<HTMLElement>('.frame')
@@ -233,12 +226,7 @@ test('drags the editor window on desktop', async () => {
 test('keeps editor windows alive when the files panel unmounts', async () => {
   const element = await mount(fakeClient())
 
-  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
-    (button) => button.textContent?.includes('New file'),
-  )
-  create?.click()
-  await settle(element)
-  await settleWindows()
+  await openCreate(element)
 
   const window = lastWindow()
   expect(window).not.toBeNull()
@@ -254,24 +242,14 @@ test('restores an existing editor instead of opening a duplicate', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
-  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
-    (button) => button.textContent?.includes('note.txt'),
-  )
-  file?.click()
-  await settle(element)
-  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
-    (button) => button.textContent?.includes('Edit'),
-  )
-  edit?.click()
-  await settleWindows()
+  await openEditor(element, 'note.txt')
 
   const window = lastWindow()
   window?.shadowRoot.querySelector<HTMLButtonElement>('.control-min')?.click()
   await window?.updateComplete
   expect(window?.minimized).toBe(true)
 
-  edit?.click()
-  await settleWindows()
+  await previewAction(element, 'Edit')
   expect(document.querySelectorAll('anth-window')).toHaveLength(1)
   expect(tabEditors()).toHaveLength(1)
   expect(lastWindow()?.minimized).toBe(false)
@@ -358,17 +336,8 @@ test('deletes the previewed file after confirming', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
-  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
-    (button) => button.textContent?.includes('note.txt'),
-  )
-  file?.click()
-  await settle(element)
-
-  const remove = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
-    (button) => button.textContent?.includes('Delete'),
-  )
-  remove?.click()
-  await settle(element)
+  await previewFile(element, 'note.txt')
+  await previewAction(element, 'Delete')
   expect(element.shadowRoot?.querySelector('.confirm')?.textContent).toContain('Delete this file?')
 
   const confirm = element.shadowRoot?.querySelector<HTMLButtonElement>('.confirm .danger')
@@ -383,12 +352,7 @@ test('deletes the previewed file after confirming', async () => {
 test('opens a create window from the toolbar', async () => {
   const element = await mount(fakeClient())
 
-  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
-    (button) => button.textContent?.includes('New file'),
-  )
-  create?.click()
-  await settle(element)
-  await settleWindows()
+  await openCreate(element)
 
   const editor = lastEditor()
   const name = editor?.shadowRoot.querySelector<HTMLInputElement>('input')
@@ -407,17 +371,7 @@ test('saves an edited file and reloads the preview', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
-  const file = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.entry') ?? [])].find(
-    (button) => button.textContent?.includes('note.txt'),
-  )
-  file?.click()
-  await settle(element)
-  const edit = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
-    (button) => button.textContent?.includes('Edit'),
-  )
-  edit?.click()
-  await settle(element)
-  await settleWindows()
+  await openEditor(element, 'note.txt')
 
   const area = lastEditor()?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')
   expect(area).not.toBeNull()
@@ -439,12 +393,7 @@ test('saves an edited file and reloads the preview', async () => {
 test('shows a classic status bar with the cursor position', async () => {
   const element = await mount(fakeClient())
 
-  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
-    (button) => button.textContent?.includes('New file'),
-  )
-  create?.click()
-  await settle(element)
-  await settleWindows()
+  await openCreate(element)
 
   const editor = lastEditor()
   const area = editor?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')
@@ -466,12 +415,7 @@ test('creates a file from the editor', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
-  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
-    (button) => button.textContent?.includes('New file'),
-  )
-  create?.click()
-  await settle(element)
-  await settleWindows()
+  await openCreate(element)
 
   const editor = lastEditor()
   const name = editor?.shadowRoot.querySelector<HTMLInputElement>('input')

@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
 import type { SessionSummary, Settings, SettingsClient } from './settings-client'
+import { describeError } from './errors'
 
 interface Toggle {
   key: string
@@ -57,7 +58,7 @@ export class AnthSettings extends LitElement {
       this.sessions = sessions.sessions
       this.error = ''
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error)
+      this.error = describeError(error)
     } finally {
       this.busy = false
     }
@@ -69,7 +70,7 @@ export class AnthSettings extends LitElement {
       await action()
       this.error = ''
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error)
+      this.error = describeError(error)
     } finally {
       this.busy = false
     }

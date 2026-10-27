@@ -4,7 +4,9 @@ import { live } from 'lit/directives/live.js'
 import { localized, msg } from '@lit/localize'
 
 import { formatBytes } from './format'
-import { openFileEditor, FILES_CHANGED_EVENT } from './file-editor'
+import { describeError } from './errors'
+import { openFileEditor } from './editor-window'
+import { FILES_CHANGED_EVENT } from './file-editor'
 import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
 import { join, normalize, parent } from './paths'
 
@@ -80,7 +82,7 @@ export class AnthFiles extends LitElement {
       this.confirmingDelete = false
       this.error = ''
     } catch (error) {
-      this.error = describe(error)
+      this.error = describeError(error)
     } finally {
       this.busy = false
     }
@@ -97,7 +99,7 @@ export class AnthFiles extends LitElement {
       this.next = page.next ?? null
       this.error = ''
     } catch (error) {
-      this.error = describe(error)
+      this.error = describeError(error)
     } finally {
       this.busy = false
     }
@@ -146,7 +148,7 @@ export class AnthFiles extends LitElement {
       await this.open(directory)
       this.error = ''
     } catch (error) {
-      this.error = describe(error)
+      this.error = describeError(error)
     } finally {
       this.busy = false
     }
@@ -165,7 +167,7 @@ export class AnthFiles extends LitElement {
       this.chunk = { ...next, text: this.chunk.text + next.text }
       this.error = ''
     } catch (error) {
-      this.error = describe(error)
+      this.error = describeError(error)
     } finally {
       this.busy = false
     }
@@ -709,8 +711,4 @@ export class AnthFiles extends LitElement {
       .crumb, .tools button, .more, .preview button, .entry { min-height: 44px; }
     }
   `
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

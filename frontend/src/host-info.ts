@@ -17,6 +17,7 @@ import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
 import type { HostInfo, HostInfoClient } from './host-info-client'
+import { describeError } from './errors'
 import {
   formatKib,
   formatLoad,
@@ -85,7 +86,7 @@ export class AnthHostInfo extends LitElement {
         this.status = 'live'
       }
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error)
+      this.error = describeError(error)
       this.status = 'error'
     } finally {
       this.loading = false

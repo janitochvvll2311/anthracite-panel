@@ -13,3 +13,9 @@ export function parent(path: string): string {
   parts.pop()
   return `/${parts.join('/')}`
 }
+
+/** The final segment of a display path. */
+export function baseName(path: string): string {
+  const parts = path.split('/').filter(Boolean)
+  return parts.at(-1) ?? path
+}

@@ -23,6 +23,7 @@ import {
   settingsPanels,
 } from './destinations'
 import type { PanelId, Route } from './destinations'
+import { describeError } from './errors'
 import { escape } from './html'
 import type { AnthFiles } from './files'
 import type { AnthHostInfo } from './host-info'
@@ -111,7 +112,7 @@ export class AnthApp extends HTMLElement {
       this.#auth = await client.state()
       this.#error = ''
     } catch (error) {
-      this.#error = describe(error)
+      this.#error = describeError(error)
     }
     this.#busy = false
     this.render()
@@ -126,7 +127,7 @@ export class AnthApp extends HTMLElement {
       this.#busy = false
       await this.#load()
     } catch (error) {
-      this.#error = describe(error)
+      this.#error = describeError(error)
       this.#busy = false
       this.render()
     }
@@ -524,10 +525,6 @@ export class AnthApp extends HTMLElement {
   async #logout(): Promise<void> {
     await this.#perform(() => AnthApp.authClient!.logout())
   }
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /*
