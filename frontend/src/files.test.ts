@@ -391,8 +391,10 @@ test('offers create and upload from the FAB menu', async () => {
   picker?.dispatchEvent(new Event('change'))
   await settle(element)
   await settleWindows()
+  await settle(element)
 
   expect(client.upload).toHaveBeenCalledWith('/upload.txt', 'aGVsbG8gYnl0ZXM=', true)
+  expect(element.shadowRoot?.querySelector('.notice')?.textContent).toContain('Uploaded upload.txt')
 })
 
 test('saves an edited file and reloads the preview', async () => {

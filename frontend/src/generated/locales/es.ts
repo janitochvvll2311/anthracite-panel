@@ -65,6 +65,7 @@
 's62c75c025c5c6db1': `Terminal`,
 's642a4070f6bcfee2': `Contenido`,
 's64ef2a6c2dd1d3d1': `Editar`,
+'s666465e460730d4b': str`Subido ${0}`,
 's66dd6a35c1114387': `Las contraseñas no coinciden.`,
 's674c6a1d96d9ebeb': `Swap usado`,
 's67bf5996b8c30a1d': str`Sel ${0}`,

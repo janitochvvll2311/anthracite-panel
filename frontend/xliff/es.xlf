@@ -542,6 +542,10 @@
   <source>Reload settings</source>
   <target>Recargar ajustes</target>
 </trans-unit>
+<trans-unit id="s666465e460730d4b">
+  <source>Uploaded <x id="0" equiv-text="${file.name}"/></source>
+  <target>Subido <x id="0" equiv-text="${file.name}"/></target>
+</trans-unit>
 </body>
 </file>
 </xliff>

@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { live } from 'lit/directives/live.js'
-import { localized, msg } from '@lit/localize'
+import { localized, msg, str } from '@lit/localize'
 
 import { formatBytes } from './format'
 import { encodeBase64 } from './base64'
@@ -47,6 +47,9 @@ export class AnthFiles extends LitElement {
   private error = ''
 
   @state()
+  private notice = ''
+
+  @state()
   private busy = false
 
   @state()
@@ -84,6 +87,7 @@ export class AnthFiles extends LitElement {
       this.previewUnavailable = false
       this.confirmingDelete = false
       this.error = ''
+      this.notice = ''
     } catch (error) {
       this.error = describeError(error)
     } finally {
@@ -204,7 +208,19 @@ export class AnthFiles extends LitElement {
   }
 
   private pickUpload(): void {
-    this.shadowRoot?.querySelector<HTMLInputElement>('.picker')?.click()
+    const input = this.shadowRoot?.querySelector<HTMLInputElement>('.picker')
+    if (!input) {
+      return
+    }
+    if ('showPicker' in input) {
+      try {
+        input.showPicker()
+        return
+      } catch {
+        // Fall back to a click when the browser refuses the picker.
+      }
+    }
+    input.click()
   }
 
   private async onUpload(event: Event): Promise<void> {
@@ -215,11 +231,13 @@ export class AnthFiles extends LitElement {
       return
     }
     this.busy = true
+    this.error = ''
+    this.notice = ''
     try {
       const bytes = new Uint8Array(await file.arrayBuffer())
       await this.client.upload(join(this.path, file.name), encodeBase64(bytes), true)
       await this.open(this.path)
-      this.error = ''
+      this.notice = msg(str`Uploaded ${file.name}`)
     } catch (error) {
       this.error = describeError(error)
     } finally {
@@ -525,6 +543,7 @@ export class AnthFiles extends LitElement {
         </header>
 
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        ${this.notice ? html`<div class="notice" role="status">${this.notice}</div>` : nothing}
 
         <div class="layout ${this.previewEntry ? 'preview-open' : ''}">
           <div class="listing">
@@ -546,7 +565,7 @@ export class AnthFiles extends LitElement {
           </div>
           ${this.renderPreview()}
         </div>
-        <input class="picker" type="file" hidden @change=${this.onUpload} />
+        <input class="picker" type="file" @change=${this.onUpload} />
         <anth-fab-menu icon="plus" label=${msg('File actions')}>
           <button type="button" class="fab-action" aria-label=${msg('New file')} @click=${() => this.create()}>
             <anth-icon name="file-plus"></anth-icon>
@@ -623,7 +642,23 @@ export class AnthFiles extends LitElement {
       background: rgba(125, 211, 252, 0.08);
     }
     .fab-action { min-height: 38px; }
-    .picker { display: none; }
+    .picker {
+      position: fixed;
+      top: 0;
+      left: -100vw;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .notice {
+      margin: 0;
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(52, 211, 153, 0.4);
+      background: rgba(52, 211, 153, 0.12);
+      color: #a7f3d0;
+    }
     anth-icon { font-size: 14px; }
     button:disabled { opacity: 0.5; cursor: default; }
     button:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
