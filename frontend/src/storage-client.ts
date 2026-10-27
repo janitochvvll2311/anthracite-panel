@@ -56,8 +56,18 @@ export interface VolumeSnapshot {
   timestamp_ms: number
 }
 
+export interface VolumeMountRequest {
+  device: string
+  target: string
+  fs_type?: string
+  read_only?: boolean
+  allow_removable?: boolean
+}
+
 export interface StorageClient {
   get(): Promise<VolumeSnapshot>
+  mount(request: VolumeMountRequest): Promise<string>
+  unmount(target: string): Promise<string>
 }
 
 export class HttpStorageClient implements StorageClient {
@@ -72,5 +82,24 @@ export class HttpStorageClient implements StorageClient {
     const response = await this.fetchImpl('/api/volumes')
     if (!response.ok) throw await responseError(response)
     return (await response.json()) as VolumeSnapshot
+  }
+
+  async mount(request: VolumeMountRequest): Promise<string> {
+    return this.action('/api/volumes/mount', request)
+  }
+
+  async unmount(target: string): Promise<string> {
+    return this.action('/api/volumes/unmount', { target })
+  }
+
+  private async action(path: string, body: unknown): Promise<string> {
+    const response = await this.fetchImpl(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) throw await responseError(response)
+    const result = (await response.json()) as { message?: string }
+    return result.message ?? ''
   }
 }

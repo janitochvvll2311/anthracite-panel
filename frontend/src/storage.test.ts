@@ -64,6 +64,11 @@ function snapshot(overrides: Partial<VolumeSnapshot> = {}): VolumeSnapshot {
         virtual_fs: true,
         usage: undefined,
       }),
+      mount({
+        mountpoint: '/mnt/data',
+        source: '/dev/sda1',
+        fstype: 'ext4',
+      }),
     ],
     swap_devices: ['/dev/sda2'],
     control_enabled: true,
@@ -104,7 +109,14 @@ async function mountStorage(
 
 function fakeClient(value = snapshot()) {
   const get = vi.fn().mockResolvedValue(value)
-  return { client: { get } as StorageClient, get }
+  const mount = vi.fn().mockResolvedValue('mounted /dev/sdb1 on /mnt/data as ext4')
+  const unmount = vi.fn().mockResolvedValue('unmounted /mnt/data')
+  return {
+    client: { get, mount, unmount } as StorageClient,
+    get,
+    mount,
+    unmount,
+  }
 }
 
 afterEach(() => {
@@ -128,7 +140,7 @@ test('renders devices, mountpoints, mounts and swap', async () => {
   expect(text).toContain('Swap')
   expect(text).toContain('/dev/sda2')
   expect(element.shadowRoot?.querySelectorAll('.device')).toHaveLength(4)
-  expect(element.shadowRoot?.querySelectorAll('.mount')).toHaveLength(2)
+  expect(element.shadowRoot?.querySelectorAll('.mount')).toHaveLength(3)
 })
 
 test('partitions view filters the same inventory to partitions', async () => {
@@ -157,6 +169,57 @@ test('the filter applies to devices and mounts independently', async () => {
   expect(element.shadowRoot?.textContent).toContain('/proc')
 })
 
+test('mounts an unmounted device through the form', async () => {
+  const feed = fakeClient()
+  const element = await mountStorage(feed.client)
+  const form = element.shadowRoot?.querySelector<HTMLFormElement>('form.mount-form')!
+  expect(form.querySelector<HTMLSelectElement>('select[name="device"]')?.value).toBe('/dev/sda')
+
+  const target = form.querySelector<HTMLInputElement>('input[name="target"]')!
+  target.value = '/mnt/data'
+  target.dispatchEvent(new Event('input'))
+  const fsType = form.querySelector<HTMLInputElement>('input[name="fs_type"]')!
+  fsType.value = 'ext4'
+  fsType.dispatchEvent(new Event('input'))
+  const readOnly = form.querySelector<HTMLInputElement>('input[name="read_only"]')!
+  readOnly.checked = true
+  readOnly.dispatchEvent(new Event('change'))
+  form.dispatchEvent(new Event('submit', { cancelable: true }))
+  await settle(element)
+
+  expect(feed.mount).toHaveBeenCalledWith({
+    device: '/dev/sda',
+    target: '/mnt/data',
+    fs_type: 'ext4',
+    read_only: true,
+    allow_removable: false,
+  })
+  expect(element.shadowRoot?.textContent).toContain('Change applied.')
+  expect(form.querySelector<HTMLInputElement>('input[name="target"]')?.value).toBe('')
+})
+
+test('unmounts a non-virtual mount after confirmation', async () => {
+  const feed = fakeClient()
+  const element = await mountStorage(feed.client)
+  const row = [...(element.shadowRoot?.querySelectorAll<HTMLElement>('.mount') ?? [])].find(
+    (candidate) => candidate.textContent?.includes('/mnt/data'),
+  )!
+  expect(row.querySelector('button.unmount')).not.toBeNull()
+  row.querySelector<HTMLButtonElement>('button.unmount')!.click()
+  await element.updateComplete
+  expect(row.querySelector('.confirm')?.textContent).toContain('Unmount /mnt/data?')
+  row.querySelector<HTMLButtonElement>('.confirm .danger')!.click()
+  await settle(element)
+  expect(feed.unmount).toHaveBeenCalledWith('/mnt/data')
+})
+
+test('control off hides the mount form and the unmount button', async () => {
+  const feed = fakeClient(snapshot({ control_enabled: false }))
+  const element = await mountStorage(feed.client)
+  expect(element.shadowRoot?.querySelector('form.mount-form')).toBeNull()
+  expect(element.shadowRoot?.querySelector('button.unmount')).toBeNull()
+})
+
 test('a warning is shown without hiding the inventory', async () => {
   const feed = fakeClient(snapshot({ warning: 'device inventory unavailable: lsblk is not installed' }))
   const element = await mountStorage(feed.client)
@@ -179,6 +242,41 @@ test('a failed read keeps the error visible', async () => {
   feed.get.mockRejectedValue(new Error('storage is unavailable'))
   const element = await mountStorage(feed.client)
   expect(element.shadowRoot?.textContent).toContain('storage is unavailable')
+})
+
+test('the HTTP client sends mount and unmount bodies', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  const fakeFetch = vi.fn((url: string, init?: RequestInit) => {
+    calls.push({ url, init })
+    return Promise.resolve(new Response(JSON.stringify({ message: 'ok' })))
+  }) as unknown as typeof fetch
+  const client = new HttpStorageClient(fakeFetch)
+
+  await expect(
+    client.mount({
+      device: '/dev/sdb1',
+      target: '/mnt/data',
+      fs_type: 'ext4',
+      read_only: true,
+      allow_removable: false,
+    }),
+  ).resolves.toBe('ok')
+  await expect(client.unmount('/mnt/data')).resolves.toBe('ok')
+
+  expect(calls.map((call) => call.url)).toEqual([
+    '/api/volumes/mount',
+    '/api/volumes/unmount',
+  ])
+  expect(calls.map((call) => JSON.parse(String(call.init?.body)))).toEqual([
+    {
+      device: '/dev/sdb1',
+      target: '/mnt/data',
+      fs_type: 'ext4',
+      read_only: true,
+      allow_removable: false,
+    },
+    { target: '/mnt/data' },
+  ])
 })
 
 test('the HTTP client reads /api/volumes and surfaces errors', async () => {

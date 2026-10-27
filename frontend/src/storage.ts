@@ -24,7 +24,13 @@ import {
   partitionRows,
 } from './lib/storage/display'
 import type { DeviceRow } from './lib/storage/display'
-import type { StorageClient, VolumeDevice, VolumeMount, VolumeSnapshot } from './storage-client'
+import type {
+  StorageClient,
+  VolumeDevice,
+  VolumeMount,
+  VolumeMountRequest,
+  VolumeSnapshot,
+} from './storage-client'
 
 type StorageView = 'volumes' | 'partitions'
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -53,6 +59,33 @@ export class AnthStorage extends LitElement {
   @state()
   private query = ''
 
+  @state()
+  private busy = false
+
+  @state()
+  private actionError = ''
+
+  @state()
+  private notice = ''
+
+  @state()
+  private mountDevice = ''
+
+  @state()
+  private mountTarget = ''
+
+  @state()
+  private mountType = ''
+
+  @state()
+  private mountReadOnly = false
+
+  @state()
+  private mountAllowRemovable = false
+
+  @state()
+  private confirmingUnmount?: string
+
   override connectedCallback(): void {
     super.connectedCallback()
     void this.load()
@@ -68,12 +101,89 @@ export class AnthStorage extends LitElement {
       this.snapshot = await client.get()
       this.status = 'ready'
       this.error = ''
+      this.actionError = ''
+      this.notice = ''
+      this.syncMountDevice()
     } catch (failure) {
       this.error = describeError(failure)
       this.status = 'error'
     } finally {
       this.loading = false
     }
+  }
+
+  /** Keeps the device picker on an unmounted device after a snapshot. */
+  private syncMountDevice(): void {
+    const candidates = this.unmountedDevices()
+    if (!candidates.some((device) => device.path === this.mountDevice)) {
+      this.mountDevice = candidates[0]?.path ?? ''
+    }
+  }
+
+  private unmountedDevices(): VolumeDevice[] {
+    if (!this.snapshot) return []
+    return this.snapshot.devices.filter(
+      (device) => device.mountpoints.length === 0 && device.kind !== 'loop',
+    )
+  }
+
+  private async run(
+    task: (client: StorageClient) => Promise<unknown>,
+    done?: () => void,
+  ): Promise<void> {
+    const client = this.client
+    if (!client || this.busy) return
+    this.busy = true
+    this.actionError = ''
+    this.notice = ''
+    try {
+      await task(client)
+      done?.()
+      this.snapshot = await client.get()
+      this.status = 'ready'
+      this.error = ''
+      this.notice = msg('Change applied.')
+      this.syncMountDevice()
+    } catch (failure) {
+      this.actionError = describeError(failure)
+    } finally {
+      this.busy = false
+    }
+  }
+
+  private submitMount(event: Event): void {
+    event.preventDefault()
+    if (this.busy) return
+    if (this.mountDevice === '' || this.mountTarget.trim() === '') {
+      this.actionError = msg('Select a device and a target directory.')
+      return
+    }
+    const request: VolumeMountRequest = {
+      device: this.mountDevice,
+      target: this.mountTarget.trim(),
+      read_only: this.mountReadOnly,
+      allow_removable: this.mountAllowRemovable,
+    }
+    const fsType = this.mountType.trim()
+    if (fsType !== '') request.fs_type = fsType
+    void this.run(
+      (client) => client.mount(request),
+      () => {
+        this.mountTarget = ''
+        this.mountType = ''
+        this.mountReadOnly = false
+        this.mountAllowRemovable = false
+      },
+    )
+  }
+
+  private unmount(target: string): void {
+    void this.run(
+      (client) => client.unmount(target),
+      () => {
+        this.confirmingUnmount = undefined
+      },
+    )
   }
 
   private statusLabel(): string {
@@ -201,6 +311,7 @@ export class AnthStorage extends LitElement {
   private renderMount(mount: VolumeMount) {
     const usage = mount.usage
     const percent = usage ? mountUsagePercent(usage) : 0
+    const control = this.snapshot?.control_enabled === true
     return html`
       <article class="mount" part="mount">
         <div class="mount-name">
@@ -225,7 +336,135 @@ export class AnthStorage extends LitElement {
               `
             : html`<p class="muted">—</p>`}
         </div>
+        ${control && !mount.virtual_fs && mount.mountpoint !== '/'
+          ? html`
+              <button
+                type="button"
+                class="danger unmount"
+                ?disabled=${this.busy}
+                title=${msg(str`Unmount ${mount.mountpoint}`)}
+                @click=${() => {
+                  this.confirmingUnmount =
+                    this.confirmingUnmount === mount.mountpoint ? undefined : mount.mountpoint
+                }}
+              >
+                ${msg('Unmount')}
+              </button>
+            `
+          : nothing}
+        ${this.confirmingUnmount === mount.mountpoint
+          ? html`
+              <div class="confirm" role="alert">
+                <span>${msg(str`Unmount ${mount.mountpoint}?`)}</span>
+                <button
+                  type="button"
+                  class="danger"
+                  ?disabled=${this.busy}
+                  @click=${() => this.unmount(mount.mountpoint)}
+                >
+                  ${msg('Unmount')}
+                </button>
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.confirmingUnmount = undefined
+                  }}
+                >
+                  ${msg('Cancel')}
+                </button>
+              </div>
+            `
+          : nothing}
       </article>
+    `
+  }
+
+  private renderMountForm(snapshot: VolumeSnapshot) {
+    const candidates = this.unmountedDevices()
+    return html`
+      <form class="mount-form" part="mount-form" @submit=${(event: Event) => this.submitMount(event)}>
+        <label>
+          <span>${msg('Device')}</span>
+          <select
+            name="device"
+            .value=${this.mountDevice}
+            ?disabled=${this.busy || candidates.length === 0}
+            @change=${(event: Event) => {
+              this.mountDevice = (event.currentTarget as HTMLSelectElement).value
+            }}
+          >
+            ${candidates.length === 0
+              ? html`<option value="">${msg('No unmounted devices')}</option>`
+              : candidates.map(
+                  (device) => html`
+                    <option value=${device.path}>
+                      ${device.name} · ${formatBytes(device.size_bytes)}${device.fstype
+                        ? ` · ${device.fstype}`
+                        : ''}
+                    </option>
+                  `,
+                )}
+          </select>
+        </label>
+        <label>
+          <span>${msg('Target directory')}</span>
+          <input
+            name="target"
+            .value=${this.mountTarget}
+            placeholder=${`${snapshot.mount_root}/data`}
+            ?disabled=${this.busy}
+            @input=${(event: Event) => {
+              this.mountTarget = (event.currentTarget as HTMLInputElement).value
+            }}
+          />
+        </label>
+        <label>
+          <span>${msg('Type (optional)')}</span>
+          <input
+            name="fs_type"
+            .value=${this.mountType}
+            placeholder=${msg('auto')}
+            ?disabled=${this.busy}
+            @input=${(event: Event) => {
+              this.mountType = (event.currentTarget as HTMLInputElement).value
+            }}
+          />
+        </label>
+        <label class="check">
+          <input
+            name="read_only"
+            type="checkbox"
+            .checked=${this.mountReadOnly}
+            ?disabled=${this.busy}
+            @change=${(event: Event) => {
+              this.mountReadOnly = (event.currentTarget as HTMLInputElement).checked
+            }}
+          />
+          <span>${msg('Read-only')}</span>
+        </label>
+        <label class="check">
+          <input
+            name="allow_removable"
+            type="checkbox"
+            .checked=${this.mountAllowRemovable}
+            ?disabled=${this.busy}
+            @change=${(event: Event) => {
+              this.mountAllowRemovable = (event.currentTarget as HTMLInputElement).checked
+            }}
+          />
+          <span>${msg('Allow removable')}</span>
+        </label>
+        <button
+          type="submit"
+          ?disabled=${this.busy || candidates.length === 0 || this.mountTarget.trim() === ''}
+        >
+          ${msg('Mount')}
+        </button>
+      </form>
+      <p class="hint">
+        ${msg('The target must be an existing directory under the configured mount root.')}
+      </p>
     `
   }
 
@@ -233,6 +472,7 @@ export class AnthStorage extends LitElement {
     const rows = filterDevices(deviceRows(snapshot.devices), this.query)
     const mounts = filterMounts(snapshot.mounts, this.query)
     return html`
+      ${snapshot.control_enabled ? this.renderMountForm(snapshot) : nothing}
       ${this.renderFilter(msg('Filter devices or mounts'))}
       ${rows.length === 0
         ? html`<p class="empty">
@@ -312,6 +552,10 @@ export class AnthStorage extends LitElement {
         ? html`<p class="warning" role="status">${snapshot.warning}</p>`
         : nothing}
       ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
+      ${this.actionError
+        ? html`<p class="error" role="alert">${this.actionError}</p>`
+        : nothing}
+      ${this.notice ? html`<p class="notice" role="status">${this.notice}</p>` : nothing}
       ${this.renderContext()}
       ${this.view === 'partitions' ? this.renderPartitions(snapshot) : this.renderVolumes(snapshot)}
     `
@@ -413,6 +657,55 @@ export class AnthStorage extends LitElement {
     }
     .policy[data-on='yes'] { color: var(--ok, #34d399); }
 
+    .mount-form {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+      align-items: end;
+      gap: 0.5rem 0.75rem;
+      padding: 0.6rem 0.7rem;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 9px;
+      background: var(--panel, #101721);
+    }
+    .mount-form label {
+      display: grid;
+      gap: 0.2rem;
+      color: var(--muted, #8b9bad);
+      font: 11px/1.3 var(--mono, monospace);
+    }
+    .mount-form input,
+    .mount-form select {
+      min-height: 32px;
+      padding: 0.3rem 0.5rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: 13px/1.4 var(--sans, system-ui, sans-serif);
+    }
+    .mount-form .check {
+      display: flex;
+      grid-auto-flow: column;
+      align-items: center;
+      align-self: end;
+      gap: 0.35rem;
+      min-height: 32px;
+    }
+    .mount-form .check input { min-height: 0; width: auto; }
+    .mount-form button {
+      min-height: 32px;
+      padding: 0.3rem 0.65rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: inherit;
+      cursor: pointer;
+    }
+    .mount-form button:hover { border-color: var(--accent, #7dd3fc); }
+    .mount-form button:disabled { opacity: 0.55; cursor: progress; }
+    .hint { margin: -0.25rem 0 0; color: var(--muted, #8b9bad); font-size: 11px; }
+
     .filters { display: flex; }
     .filters input {
       flex: 1 1 16rem;
@@ -491,7 +784,7 @@ export class AnthStorage extends LitElement {
     .mount-list { display: flex; flex-direction: column; gap: 0.4rem; }
     .mount {
       display: grid;
-      grid-template-columns: minmax(14rem, 1.2fr) minmax(12rem, 1fr);
+      grid-template-columns: minmax(14rem, 1.2fr) minmax(12rem, 1fr) auto;
       gap: 0.4rem 1rem;
       align-items: center;
       padding: 0.5rem 0.65rem;
@@ -510,7 +803,53 @@ export class AnthStorage extends LitElement {
     .bar span { display: block; height: 100%; background: var(--accent, #7dd3fc); }
     .usage-text { margin: 0; color: var(--muted, #8b9bad); font: 11px/1.4 var(--mono, monospace); }
 
+    .unmount {
+      min-height: 30px;
+      padding: 0.2rem 0.5rem;
+      color: var(--err, #f87171);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel, #101721);
+      font: inherit;
+      cursor: pointer;
+    }
+    .unmount:hover { border-color: var(--err, #f87171); }
+    .unmount:disabled { opacity: 0.55; cursor: progress; }
+    .mount .confirm { grid-column: 1 / -1; }
+    .confirm {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid rgba(248, 113, 113, 0.4);
+      border-radius: 7px;
+      background: rgba(248, 113, 113, 0.06);
+      font-size: 12px;
+    }
+    .confirm > span { margin-right: auto; }
+    .confirm button {
+      min-height: 30px;
+      padding: 0.25rem 0.6rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: inherit;
+      cursor: pointer;
+    }
+    .confirm button.danger { color: var(--err, #f87171); }
+    .confirm button:disabled { opacity: 0.55; cursor: progress; }
+
     .muted { color: var(--muted, #8b9bad); }
+    .notice {
+      margin: 0;
+      padding: 0.75rem;
+      border: 1px solid rgba(52, 211, 153, 0.35);
+      border-radius: 8px;
+      background: var(--panel, #101721);
+      color: var(--ok, #34d399);
+    }
     .empty,
     .error,
     .warning {
@@ -527,11 +866,17 @@ export class AnthStorage extends LitElement {
     @media (max-width: 44rem) {
       .toolbar button { min-height: 44px; }
       .filters input { min-height: 44px; }
+      .mount-form { grid-template-columns: 1fr 1fr; }
+      .mount-form button { min-height: 44px; }
+      .mount-form input,
+      .mount-form select { min-height: 44px; }
       .device,
       .mount { grid-template-columns: 1fr; align-items: start; }
       .device .identity { padding-left: 0 !important; }
       .path { text-align: left; }
       .policies { margin-left: 0; }
+      .unmount,
+      .confirm button { min-height: 44px; }
     }
   `
 }

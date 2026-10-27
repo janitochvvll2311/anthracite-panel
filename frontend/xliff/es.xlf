@@ -1378,6 +1378,58 @@
   <source>No storage information yet.</source>
   <target>Aún no hay información de almacenamiento.</target>
 </trans-unit>
+<trans-unit id="sbc6d05e7555d814e">
+  <source>Select a device and a target directory.</source>
+  <target>Seleccioná un dispositivo y un directorio destino.</target>
+</trans-unit>
+<trans-unit id="se6f45df5e415a7fd">
+  <source>Unmount <x id="0" equiv-text="${mount.mountpoint}"/></source>
+  <target>Desmontar <x id="0" equiv-text="${mount.mountpoint}"/></target>
+</trans-unit>
+<trans-unit id="sb08509410aed578b">
+  <source>Unmount</source>
+  <target>Desmontar</target>
+</trans-unit>
+<trans-unit id="s86e36ad290cc0ea6">
+  <source>Unmount <x id="0" equiv-text="${mount.mountpoint}"/>?</source>
+  <target>¿Desmontar <x id="0" equiv-text="${mount.mountpoint}"/>?</target>
+</trans-unit>
+<trans-unit id="s0b0a02a4470de153">
+  <source>Device</source>
+  <target>Dispositivo</target>
+</trans-unit>
+<trans-unit id="s56455ac1315686ac">
+  <source>No unmounted devices</source>
+  <target>No hay dispositivos sin montar</target>
+</trans-unit>
+<trans-unit id="s95a03ef9efcaec9b">
+  <source>Target directory</source>
+  <target>Directorio destino</target>
+</trans-unit>
+<trans-unit id="s96f5060fde7ec6e8">
+  <source>Type (optional)</source>
+  <target>Tipo (opcional)</target>
+</trans-unit>
+<trans-unit id="s5dc77784260a7236">
+  <source>auto</source>
+  <target>automático</target>
+</trans-unit>
+<trans-unit id="sc70cb5a0fb8377ea">
+  <source>Read-only</source>
+  <target>Solo lectura</target>
+</trans-unit>
+<trans-unit id="s0b3ec03e227041df">
+  <source>Allow removable</source>
+  <target>Permitir extraíbles</target>
+</trans-unit>
+<trans-unit id="sc9af69f95c8205da">
+  <source>Mount</source>
+  <target>Montar</target>
+</trans-unit>
+<trans-unit id="s60f1ef7e034e6f7c">
+  <source>The target must be an existing directory under the configured mount root.</source>
+  <target>El destino debe ser un directorio existente dentro de la raíz de montaje configurada.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
