@@ -174,17 +174,18 @@ test('the sidebar and the drawer share the sections, and the strip is bare there
   const root = element.shadowRoot!
 
   const sidebar = root.querySelector('[data-sidebar]')!
-  expect(sidebar.querySelectorAll('a')).toHaveLength(6)
+  expect(sidebar.querySelectorAll('a')).toHaveLength(7)
   expect(sidebar.querySelector('a[data-section="home"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="files"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="terminal"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="processes"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="network"]')).not.toBeNull()
+  expect(sidebar.querySelector('a[data-section="storage"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="settings"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="home"] anth-icon')).not.toBeNull()
 
   const drawer = root.querySelector('anth-nav-drawer')!
-  expect(drawer.querySelectorAll('a')).toHaveLength(6)
+  expect(drawer.querySelectorAll('a')).toHaveLength(7)
 
   const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
   expect(outer.active).toBe('home')
@@ -256,6 +257,36 @@ test('the network section owns Interfaces and Firewall tabs', async () => {
   expect(inner.active).toBe('firewall')
   expect(
     inner.querySelector('[data-tab="firewall"]')?.querySelector('anth-firewall'),
+  ).not.toBeNull()
+})
+
+test('the storage section owns Volumes and Partitions tabs', async () => {
+  const element = mountShell(OPEN)
+  await flush()
+  const root = element.shadowRoot!
+  const outer = root.querySelector('anth-tab-panel') as AnthTabPanel
+
+  location.hash = '#/storage'
+  window.dispatchEvent(new Event('hashchange'))
+  await flush()
+
+  expect(outer.active).toBe('storage')
+  const inner = outer.querySelector('anth-tab-panel') as AnthTabPanel
+  expect(inner.active).toBe('volumes')
+  expect([...inner.shadowRoot!.querySelectorAll('.tab')].map((tab) => tab.textContent)).toEqual([
+    'Volumes',
+    'Partitions',
+  ])
+  expect(
+    inner.querySelector('[data-tab="volumes"]')?.querySelector('anth-storage'),
+  ).not.toBeNull()
+
+  location.hash = '#/storage/partitions'
+  window.dispatchEvent(new Event('hashchange'))
+  await flush()
+  expect(inner.active).toBe('partitions')
+  expect(
+    inner.querySelector('[data-tab="partitions"]')?.querySelector('anth-storage'),
   ).not.toBeNull()
 })
 

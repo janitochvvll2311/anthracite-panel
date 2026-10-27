@@ -7,6 +7,7 @@ import { HttpHostInfoClient } from './host-info-client'
 import { HttpNetworkClient } from './network-client'
 import { HttpProcessesClient } from './processes-client'
 import { HttpSettingsClient } from './settings-client'
+import { HttpStorageClient } from './storage-client'
 
 setupLocalization()
 
@@ -16,6 +17,7 @@ AnthApp.filesClient = new HttpFilesClient()
 AnthApp.processesClient = new HttpProcessesClient()
 AnthApp.networkClient = new HttpNetworkClient()
 AnthApp.firewallClient = new HttpFirewallClient()
+AnthApp.storageClient = new HttpStorageClient()
 AnthApp.settingsClient = new HttpSettingsClient()
 
 await applyInitialLocale()

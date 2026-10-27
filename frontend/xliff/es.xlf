@@ -1274,6 +1274,110 @@
   <source>No managed rules in this direction. Adding a rule creates one.</source>
   <target>No hay reglas gestionadas en esta dirección. Añadir una regla crea una.</target>
 </trans-unit>
+<trans-unit id="sf49525241bba3b06">
+  <source>Storage</source>
+  <target>Almacenamiento</target>
+</trans-unit>
+<trans-unit id="s3982328498d235d4">
+  <source>Volumes</source>
+  <target>Volúmenes</target>
+</trans-unit>
+<trans-unit id="se9d5b2cdcbc14a2e">
+  <source>Partitions</source>
+  <target>Particiones</target>
+</trans-unit>
+<trans-unit id="s8935baf305f374b4">
+  <source>ready</source>
+  <target>listo</target>
+</trans-unit>
+<trans-unit id="sa180a0d4762af382">
+  <source>1 partition</source>
+  <target>1 partición</target>
+</trans-unit>
+<trans-unit id="sd4124c7ebc49c74c">
+  <source><x id="0" equiv-text="${count}"/> partitions</source>
+  <target><x id="0" equiv-text="${count}"/> particiones</target>
+</trans-unit>
+<trans-unit id="sca21e51fb7c6ae18">
+  <source>1 device · 1 mounted</source>
+  <target>1 dispositivo · 1 montado</target>
+</trans-unit>
+<trans-unit id="s64f2851c97052e3d">
+  <source>1 device · <x id="0" equiv-text="${mounted}"/> mounted</source>
+  <target>1 dispositivo · <x id="0" equiv-text="${mounted}"/> montados</target>
+</trans-unit>
+<trans-unit id="s2dc721ad9b573ddd">
+  <source><x id="0" equiv-text="${devices}"/> devices · <x id="1" equiv-text="${mounted}"/> mounted</source>
+  <target><x id="0" equiv-text="${devices}"/> dispositivos · <x id="1" equiv-text="${mounted}"/> montados</target>
+</trans-unit>
+<trans-unit id="s13bdf433c1894d5a">
+  <source>Mount root</source>
+  <target>Raíz de montaje</target>
+</trans-unit>
+<trans-unit id="s09468996aba3e709">
+  <source>partition</source>
+  <target>partición</target>
+</trans-unit>
+<trans-unit id="s64db608eefff5c72">
+  <source>format</source>
+  <target>formatear</target>
+</trans-unit>
+<trans-unit id="s6b4fa75fe34d8e4e">
+  <source>removable</source>
+  <target>extraíble</target>
+</trans-unit>
+<trans-unit id="sa49a2f191736ba0e">
+  <source>swap</source>
+  <target>swap</target>
+</trans-unit>
+<trans-unit id="s3a8bdbd8e17b835c">
+  <source>virtual</source>
+  <target>virtual</target>
+</trans-unit>
+<trans-unit id="s9e54d8737657dee9">
+  <source>Filter devices or mounts</source>
+  <target>Filtrar dispositivos o montajes</target>
+</trans-unit>
+<trans-unit id="sad8c5575d3c3964a">
+  <source>No block devices found.</source>
+  <target>No se encontraron dispositivos de bloque.</target>
+</trans-unit>
+<trans-unit id="s868803fe44529c5b">
+  <source>No devices match the filter.</source>
+  <target>Ningún dispositivo coincide con el filtro.</target>
+</trans-unit>
+<trans-unit id="s3716bbb830ef9e2b">
+  <source>Mounts</source>
+  <target>Montajes</target>
+</trans-unit>
+<trans-unit id="s90ebfc245f80d51a">
+  <source>No mounts found.</source>
+  <target>No se encontraron montajes.</target>
+</trans-unit>
+<trans-unit id="sa369c812856fe952">
+  <source>No mounts match the filter.</source>
+  <target>Ningún montaje coincide con el filtro.</target>
+</trans-unit>
+<trans-unit id="s833922c14683513e">
+  <source>Filter partitions</source>
+  <target>Filtrar particiones</target>
+</trans-unit>
+<trans-unit id="sbcc1cf66dfc50e1d">
+  <source>No partitions found.</source>
+  <target>No se encontraron particiones.</target>
+</trans-unit>
+<trans-unit id="s7a7bcc4fa1668d4f">
+  <source>No partitions match the filter.</source>
+  <target>Ninguna partición coincide con el filtro.</target>
+</trans-unit>
+<trans-unit id="sb09c1fee9430af64">
+  <source>Reading storage…</source>
+  <target>Leyendo el almacenamiento…</target>
+</trans-unit>
+<trans-unit id="s63c2a9dbbfe428b3">
+  <source>No storage information yet.</source>
+  <target>Aún no hay información de almacenamiento.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

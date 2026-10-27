@@ -16,8 +16,16 @@ export type SectionId =
   | 'terminal'
   | 'processes'
   | 'network'
+  | 'storage'
   | 'settings'
-export type PanelId = 'general' | 'files' | 'terminal' | 'interfaces' | 'firewall'
+export type PanelId =
+  | 'general'
+  | 'files'
+  | 'terminal'
+  | 'interfaces'
+  | 'firewall'
+  | 'volumes'
+  | 'partitions'
 
 export interface Section {
   /** Stable id. It is the route and the hash, so it never changes. */
@@ -47,6 +55,7 @@ export function sections(): Section[] {
     { id: 'terminal', label: msg('Terminal'), icon: 'terminal' },
     { id: 'processes', label: msg('Processes'), icon: 'process' },
     { id: 'network', label: msg('Network'), icon: 'network' },
+    { id: 'storage', label: msg('Storage'), icon: 'storage' },
     { id: 'settings', label: msg('Settings'), icon: 'settings' },
   ]
 }
@@ -61,6 +70,14 @@ export function networkPanels(): Panel[] {
   return [
     { id: 'interfaces', label: msg('Interfaces') },
     { id: 'firewall', label: msg('Firewall') },
+  ]
+}
+
+/** The panels the Storage section owns. */
+export function storagePanels(): Panel[] {
+  return [
+    { id: 'volumes', label: msg('Volumes') },
+    { id: 'partitions', label: msg('Partitions') },
   ]
 }
 
@@ -90,6 +107,12 @@ export function routeFrom(hash: string): Route {
       panel: parts[1] === 'firewall' ? 'firewall' : 'interfaces',
     }
   }
+  if (parts[0] === 'storage') {
+    return {
+      section: 'storage',
+      panel: parts[1] === 'partitions' ? 'partitions' : 'volumes',
+    }
+  }
   if (parts[0] === 'settings') {
     return { section: 'settings', panel: 'general' }
   }
@@ -107,6 +130,8 @@ export function hashForSection(section: SectionId): string {
       return '#/processes'
     case 'network':
       return '#/network'
+    case 'storage':
+      return '#/storage'
     case 'settings':
       return '#/settings'
     default:
@@ -120,5 +145,7 @@ export function hashForPanel(panel: PanelId): string {
   if (panel === 'terminal') return '#/terminal'
   if (panel === 'interfaces') return '#/network'
   if (panel === 'firewall') return '#/network/firewall'
+  if (panel === 'volumes') return '#/storage'
+  if (panel === 'partitions') return '#/storage/partitions'
   return '#/settings'
 }
