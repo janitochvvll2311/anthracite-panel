@@ -59,10 +59,14 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    // The write route accepts a text body; keep the limit tied to the config
+    // The write routes accept JSON bodies; keep the limits tied to the config
     // so a larger upload cap is not silently capped by the extractor default.
-    let write_limit = usize::try_from(state.daemon.config().files.max_upload_bytes)
-        .unwrap_or(usize::MAX)
+    let max_upload =
+        usize::try_from(state.daemon.config().files.max_upload_bytes).unwrap_or(usize::MAX);
+    let write_limit = max_upload.saturating_add(1024 * 1024);
+    let upload_limit = max_upload
+        .saturating_mul(4)
+        .saturating_div(3)
         .saturating_add(1024 * 1024);
     Router::new()
         .route("/healthz", get(healthz))
@@ -81,6 +85,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/files/write",
             post(write_file).layer(DefaultBodyLimit::max(write_limit)),
+        )
+        .route(
+            "/api/files/upload",
+            post(upload_file).layer(DefaultBodyLimit::max(upload_limit)),
         )
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
@@ -258,6 +266,14 @@ struct FileDeleteQuery {
 struct FileWriteBody {
     path: String,
     content: String,
+    #[serde(default)]
+    create: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct FileUploadBody {
+    path: String,
+    content_base64: String,
     #[serde(default)]
     create: bool,
 }
@@ -658,6 +674,29 @@ async fn write_file(
         Response::Error(error) => Err(ApiError::from(error)),
         other => Err(ApiError::internal(format!(
             "a file write answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn upload_file(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<FileUploadBody>, JsonRejection>,
+) -> Result<Json<FileWritten>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesUpload {
+            path: body.path,
+            content_base64: body.content_base64,
+            create: body.create,
+        })
+        .await
+    {
+        Response::FilesWritten(written) => Ok(Json(written)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a file upload answered unexpectedly: {other:?}"
         ))),
     }
 }

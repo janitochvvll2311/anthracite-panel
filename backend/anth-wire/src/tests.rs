@@ -177,6 +177,17 @@ fn file_messages_round_trip() {
         write
     );
 
+    let upload = Request::FilesUpload {
+        path: "etc/logo.png".to_string(),
+        content_base64: "iVBORw0KGgo=".to_string(),
+        create: true,
+    };
+    let text = serde_json::to_string(&upload).expect("serialize");
+    assert_eq!(
+        serde_json::from_str::<Request>(&text).expect("parse"),
+        upload
+    );
+
     let entry = FileEntry {
         name: "hosts".to_string(),
         kind: "file".to_string(),

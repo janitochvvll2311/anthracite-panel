@@ -70,6 +70,17 @@ pub enum Request {
         #[serde(default)]
         create: bool,
     },
+    /// Uploads arbitrary bytes under the configured root. Requires
+    /// `files.write`.
+    FilesUpload {
+        path: String,
+        /// The file content, base64 encoded.
+        content_base64: String,
+        /// Fail with `conflict` when the file already exists instead of
+        /// replacing it.
+        #[serde(default)]
+        create: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

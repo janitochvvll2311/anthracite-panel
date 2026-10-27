@@ -285,6 +285,22 @@ existing file; the default replaces it. Writing requires `files.write = true`
 symlinks that leave the root are rejected. The request body limit follows
 `files.max_upload_bytes` plus room for the JSON envelope.
 
+### `POST /api/files/upload`
+
+```json
+{ "path": "img/logo.png", "content_base64": "iVBORw0KGgo=", "create": true }
+```
+
+Writes arbitrary bytes decoded from base64 and answers like the text write:
+
+```json
+{ "path": "img/logo.png", "size": 8 }
+```
+
+It has the same `files.write` gate, `create`/`exists` behavior, size cap and
+path guards as the text write. The body limit allows for the base64 expansion
+of `files.max_upload_bytes`.
+
 ## Static UI
 
 `GET /` and `GET /{*path}` serve the embedded shell. A missing file is `404`; an

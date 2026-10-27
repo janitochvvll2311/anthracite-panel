@@ -113,6 +113,7 @@ anth-panel files read --path big.log --offset 4096 --max-bytes 8192
 anth-panel files delete --path /tmp/old.log
 anth-panel files write --path /tmp/motd < motd.txt
 anth-panel files write --path /tmp/note.txt --create < note.txt
+anth-panel files upload --path /tmp/logo.png --create < logo.png
 ```
 
 `list` reads one page of a directory under `[files] root` (`/` by default),
@@ -120,10 +121,12 @@ sorted by name. `--limit` is 1–1000; `--cursor` is the `next` value from the
 previous page. `read` prints a UTF-8 text file, capped by
 `files.max_preview_bytes`; when it stops early, the next offset is printed to
 stderr. `delete` removes one file or symlink and requires `files.write = true`;
-directories and the root are refused. `write` reads the new content from stdin
+directories and the root are refused. `write` reads UTF-8 content from stdin
 (up to `files.max_upload_bytes`) and requires `files.write`; `--create` fails
-instead of replacing an existing file. Paths are relative to the root; `..` and
-paths that escape it through a symlink are refused.
+instead of replacing an existing file. `upload` sends any bytes from stdin
+through the same write path; the daemon caps the decoded size with
+`files.max_upload_bytes`. Paths are relative to the root; `..` and paths that
+escape it through a symlink are refused.
 
 ## `config`
 

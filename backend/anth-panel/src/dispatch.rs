@@ -6,6 +6,8 @@
 use std::sync::Arc;
 
 use anth_wire::{ErrorKind, PROTOCOL_VERSION, PageRequest, Request, Response, WireError};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
 use crate::config::{Config, Paths};
 use crate::files::FileService;
@@ -159,6 +161,18 @@ impl Daemon {
             } => Ok(Response::FilesWritten(
                 self.files()?.write(&path, &content, create)?,
             )),
+            Request::FilesUpload {
+                path,
+                content_base64,
+                create,
+            } => {
+                let bytes = STANDARD
+                    .decode(content_base64.as_bytes())
+                    .map_err(|_| WireError::invalid("the upload content is not valid base64"))?;
+                Ok(Response::FilesWritten(
+                    self.files()?.write_bytes(&path, &bytes, create)?,
+                ))
+            }
         }
     }
 }
@@ -206,6 +220,7 @@ fn operation_of(request: &Request) -> &'static str {
         Request::FilesRead { .. } => "files-read",
         Request::FilesDelete { .. } => "files-delete",
         Request::FilesWrite { .. } => "files-write",
+        Request::FilesUpload { .. } => "files-upload",
     }
 }
 

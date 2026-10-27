@@ -1,4 +1,4 @@
-//! End-to-end checks for the read-only files API.
+//! End-to-end checks for the files API.
 
 use std::fs;
 use std::path::PathBuf;
@@ -12,6 +12,8 @@ use anth_panel::log::{Logger, Settings};
 use anth_wire::{FileChunk, FileEntry, Page};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -154,6 +156,36 @@ async fn deletes_a_file_and_refuses_a_directory() {
         .expect("delete a directory");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(root.join("folder").exists());
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn uploads_arbitrary_bytes() {
+    let (router, root) = app("files-upload", false);
+    let encoded = STANDARD.encode([0x89, b'P', b'N', b'G', 0x00, 0xff]);
+
+    let body = serde_json::json!({
+        "path": "logo.bin",
+        "content_base64": encoded,
+        "create": true,
+    });
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/upload")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("upload");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        fs::read(root.join("logo.bin")).expect("read"),
+        [0x89, b'P', b'N', b'G', 0x00, 0xff]
+    );
 
     fs::remove_dir_all(root).expect("cleanup");
 }

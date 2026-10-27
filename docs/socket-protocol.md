@@ -165,6 +165,13 @@ started with `--allow-reboot`. Both actions answer before they run.
 { "type": "files_written", "data": { "path": "etc/motd", "size": 6 } }
 ```
 
+```json
+{
+  "type": "files_upload",
+  "data": { "path": "img/logo.png", "content_base64": "iVBORw0KGgo=", "create": true }
+}
+```
+
 Paths are relative to the configured file root. `..`, absolute names and
 symlinks that leave the root are refused with `forbidden`; a non-UTF-8 file is
 `unsupported`. `files_delete` removes one regular file or a symlink (the link,
@@ -172,7 +179,9 @@ not its target), refuses directories and requires `files.write`; with writes
 disabled it answers `forbidden` and code `write_disabled`. `files_write` writes
 one UTF-8 text file, caps the content at `files.max_upload_bytes`, requires
 `files.write`, and answers `conflict` with code `exists` when `create` is true
-and the file is already there.
+and the file is already there. `files_upload` does the same for arbitrary bytes
+carried as base64 in `content_base64`, and answers with the same
+`files_written`.
 
 ## Errors
 

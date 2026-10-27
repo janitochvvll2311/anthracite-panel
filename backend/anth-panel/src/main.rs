@@ -14,6 +14,8 @@ use anth_panel::lifecycle::{self, Lifecycle};
 use anth_panel::log::{Format, Level, Logger, Out, Settings};
 use anth_panel::{render, socket};
 use anth_wire::{Request, Response, parse_interval};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
 
@@ -140,6 +142,15 @@ enum FilesCommand {
     },
     /// Write a UTF-8 file under the file root; the content comes from stdin.
     Write {
+        /// Path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// Fail instead of replacing an existing file.
+        #[arg(long)]
+        create: bool,
+    },
+    /// Upload arbitrary bytes from stdin. Requires files.write.
+    Upload {
         /// Path relative to the file root.
         #[arg(long, value_name = "PATH")]
         path: String,
@@ -402,6 +413,27 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
                 .call(&Request::FilesWrite {
                     path: path.clone(),
                     content,
+                    create: *create,
+                })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::FilesWritten(written) => {
+                    println!("wrote {} ({} bytes)", written.path, written.size);
+                    Ok(())
+                }
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        FilesCommand::Upload { path, create } => {
+            let mut content = Vec::new();
+            std::io::stdin()
+                .read_to_end(&mut content)
+                .map_err(|error| (1, format!("reading stdin: {error}")))?;
+            let response = client
+                .call(&Request::FilesUpload {
+                    path: path.clone(),
+                    content_base64: STANDARD.encode(&content),
                     create: *create,
                 })
                 .await

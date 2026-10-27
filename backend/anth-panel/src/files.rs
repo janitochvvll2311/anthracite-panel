@@ -218,9 +218,18 @@ impl FileService {
     /// Symlinks that resolve outside the root are refused, and the final
     /// component is resolved before writing so a link cannot redirect it.
     pub fn write(&self, path: &str, content: &str, create: bool) -> Result<FileWritten, WireError> {
+        self.write_bytes(path, content.as_bytes(), create)
+    }
+
+    /// Writes arbitrary bytes. Used by uploads; the guards are the same.
+    pub fn write_bytes(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        create: bool,
+    ) -> Result<FileWritten, WireError> {
         self.require_write()?;
         let display = display_path(path);
-        let bytes = content.as_bytes();
         let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         if size > self.max_write_bytes {
             return Err(WireError::new(
