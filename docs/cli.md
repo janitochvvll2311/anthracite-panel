@@ -225,12 +225,17 @@ without `--yes` when stdin is not a terminal.
 anth-panel storage list
 anth-panel storage ls
 anth-panel volumes list
+anth-panel storage mount /dev/sdb1 /mnt/data --type ext4 --yes
+anth-panel storage mount /dev/sdb1 /mnt/data --read-only --yes
+anth-panel storage unmount /mnt/data --yes
 ```
 
-Prints the policy flags, the block-device tree, the mounts with used/total space
-and any active swap. `volumes` is an alias for `storage`. The inventory is
-read-only in this slice; a missing `lsblk` or mountinfo file prints a warning
-and keeps the other source.
+`list` prints the policy flags, the block-device tree, the mounts with
+used/total space and any active swap. `volumes` is an alias for `storage`.
+`mount` and `unmount` require `[volumes] control`, ask for confirmation on a TTY
+and refuse without `--yes` when stdin is not a terminal. `--allow-removable` is
+required for removable media. A missing `lsblk` or mountinfo file prints a
+warning and keeps the other source.
 
 ## `process`
 

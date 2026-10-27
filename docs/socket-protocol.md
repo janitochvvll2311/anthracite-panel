@@ -490,8 +490,16 @@ omitted on add, update and flush. See [firewall.md](firewall.md).
 }
 ```
 
-This is read-only in the current slice. A degraded source adds `warning`; the
-other source is still returned. See [storage.md](storage.md).
+A degraded source adds `warning`; the other source is still returned.
+Mount/unmount use the same dispatch:
+
+```json
+{ "type": "volumes_mount", "data": { "device": "/dev/sdb1", "target": "/mnt/data", "fs_type": "ext4", "read_only": false, "allow_removable": false } }
+{ "type": "volumes_unmount", "data": { "target": "/mnt/data" } }
+```
+
+Both answer `{"type":"volume_changed","data":{"message":"..."}}` and require
+`[volumes] control`. See [storage.md](storage.md).
 
 ### Processes
 

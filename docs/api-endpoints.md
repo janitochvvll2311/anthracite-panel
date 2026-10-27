@@ -392,6 +392,33 @@ The inventory always works; `control_enabled`, `partition_enabled` and
 `lsblk`, mountinfo or swaps file degrades the snapshot and adds `warning`; it
 never drops the other source silently. `usage` is best-effort per mount.
 
+### `POST /api/volumes/mount`
+
+```json
+{
+  "device": "/dev/sdb1",
+  "target": "/mnt/data",
+  "fs_type": "ext4",
+  "read_only": false,
+  "allow_removable": false
+}
+```
+
+`200 {"message":"mounted /dev/sdb1 on /mnt/data as ext4"}`. Requires
+`[volumes] control`. The target must be an existing directory under
+`mount_root`; the device must be known and unmounted.
+
+### `POST /api/volumes/unmount`
+
+```json
+{ "target": "/mnt/data" }
+```
+
+`200 {"message":"unmounted /mnt/data"}`. Requires `[volumes] control`; refuses
+`/`, virtual filesystems and paths containing panel data. A busy target is
+`409 mount_busy`; permission is `403 mount_permission`; a missing target is
+`404 mount_not_found`.
+
 ## Settings and lifecycle
 
 All four routes require a live access token unless auth is disabled. The two
