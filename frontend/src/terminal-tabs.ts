@@ -101,6 +101,7 @@ export class AnthTerminalTabs extends LitElement {
   }
   private tapStart?: { at: number; x: number; y: number }
   private lastTap?: { at: number; x: number; y: number }
+  private lastPointerHotkey = 0
 
   /** Number of open tabs. */
   get sessionCount(): number {
@@ -240,6 +241,44 @@ export class AnthTerminalTabs extends LitElement {
     this.send(key.data)
   }
 
+  /**
+   * Sends a hotkey from a pointer event before the browser can suppress the
+   * click or move focus away from xterm.
+   */
+  private readonly pressHotkey = (event: PointerEvent, action: () => void): void => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    this.lastPointerHotkey = Date.now()
+    this.sessions.find((session) => session.key === this.active)?.terminal.focus()
+    action()
+  }
+
+  /** Keyboard activation still arrives as a detail-0 click. */
+  private readonly clickHotkey = (event: MouseEvent, action: () => void): void => {
+    if (Date.now() - this.lastPointerHotkey < 600) return
+    if (event.detail !== 0) return
+    this.sessions.find((session) => session.key === this.active)?.terminal.focus()
+    action()
+  }
+
+  private renderHotkey(
+    label: string,
+    action: () => void,
+    pressed?: boolean,
+  ) {
+    return html`
+      <button
+        type="button"
+        class=${pressed === undefined ? 'hotkey' : 'hotkey modifier'}
+        aria-pressed=${pressed === undefined ? nothing : pressed}
+        @pointerdown=${(event: PointerEvent) => this.pressHotkey(event, action)}
+        @click=${(event: MouseEvent) => this.clickHotkey(event, action)}
+      >
+        ${label}
+      </button>
+    `
+  }
+
   private toggleModifier(which: 'ctrl' | 'alt'): void {
     if (which === 'ctrl') {
       this.ctrl = !this.ctrl
@@ -274,17 +313,6 @@ export class AnthTerminalTabs extends LitElement {
     for (const session of this.sessions) {
       session.terminal.blur()
     }
-  }
-
-  /**
-   * Keeps the xterm textarea focused while a hotkey is pressed.
-   *
-   * Without this, Android closes the soft keyboard as soon as the button takes
-   * focus, so the following click has nowhere to send `Ctrl-C`.
-   */
-  private readonly keepTerminalFocus = (event: Event): void => {
-    event.preventDefault()
-    this.sessions.find((session) => session.key === this.active)?.terminal.focus()
   }
 
   override connectedCallback(): void {
@@ -497,48 +525,21 @@ export class AnthTerminalTabs extends LitElement {
 
         <div class="screens"></div>
 
-        <div
-          class="hotkeys"
-          role="toolbar"
-          aria-label=${msg('Terminal keys')}
-          @pointerdown=${this.keepTerminalFocus}
-        >
+        <div class="hotkeys" role="toolbar" aria-label=${msg('Terminal keys')}>
           <div class="hotkey-row">
-            <button
-              type="button"
-              class="hotkey modifier"
-              aria-pressed=${this.ctrl}
-              @click=${() => this.toggleModifier('ctrl')}
-            >
-              Ctrl
-            </button>
-            <button
-              type="button"
-              class="hotkey modifier"
-              aria-pressed=${this.alt}
-              @click=${() => this.toggleModifier('alt')}
-            >
-              Alt
-            </button>
-            ${HOTKEYS.slice(0, 2).map(
-              (key) => html`<button type="button" class="hotkey" @click=${() => this.sendHotkey(key)}>${key.label}</button>`,
+            ${this.renderHotkey('Ctrl', () => this.toggleModifier('ctrl'), this.ctrl)}
+            ${this.renderHotkey('Alt', () => this.toggleModifier('alt'), this.alt)}
+            ${HOTKEYS.slice(0, 2).map((key) =>
+              this.renderHotkey(key.label, () => this.sendHotkey(key)),
             )}
-            ${['Up', 'Dn', 'Rt', 'Lt'].map(
-              (label) => {
-                const key = HOTKEYS.find((item) => item.label === label)!
-                return html`<button type="button" class="hotkey" @click=${() => this.sendHotkey(key)}>${label}</button>`
-              },
-            )}
-            ${HOTKEYS.slice(6).map(
-              (key) =>
-                html`<button
-                  type="button"
-                  class="hotkey"
-                  @click=${() =>
-                    key.data.length === 1 ? this.sendCharacter(key.data) : this.sendHotkey(key)}
-                >
-                  ${key.label}
-                </button>`,
+            ${['Up', 'Dn', 'Rt', 'Lt'].map((label) => {
+              const key = HOTKEYS.find((item) => item.label === label)!
+              return this.renderHotkey(label, () => this.sendHotkey(key))
+            })}
+            ${HOTKEYS.slice(6).map((key) =>
+              this.renderHotkey(key.label, () =>
+                key.data.length === 1 ? this.sendCharacter(key.data) : this.sendHotkey(key),
+              ),
             )}
           </div>
         </div>
@@ -697,6 +698,19 @@ export class AnthTerminalTabs extends LitElement {
     @media (max-width: 48rem) {
       .tab-status { display: none; }
       .tab-main { max-width: 9rem; }
+      /* Wrap the special keys instead of hiding half of them behind a
+         horizontal scroll that competes with the terminal's touch gestures. */
+      .hotkeys { overflow-x: visible; }
+      .hotkey-row {
+        flex-wrap: wrap;
+        min-width: 0;
+      }
+      .hotkey {
+        flex: 0 0 auto;
+        min-width: 40px;
+        min-height: 40px;
+        touch-action: manipulation;
+      }
     }
   `
 }
