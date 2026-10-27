@@ -138,7 +138,10 @@ export class AnthFabMenu extends HTMLElement {
     }
     const path = event.composedPath()
     const chose = path.some(
-      (node) => node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement,
+      (node) =>
+        node instanceof HTMLButtonElement ||
+        node instanceof HTMLAnchorElement ||
+        node instanceof HTMLLabelElement,
     )
     if (chose && !path.includes(this.shadowRoot?.querySelector('.fab') ?? this)) {
       this.open = false
@@ -175,7 +178,7 @@ const MENU_STYLE = `
   .menu[hidden] { display: none; }
   button > anth-icon { transition: transform 150ms ease; }
   :host([data-open]) button > anth-icon { transform: rotate(45deg); }
-  ::slotted(button), ::slotted(a) {
+  ::slotted(button), ::slotted(a), ::slotted(label) {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -189,8 +192,10 @@ const MENU_STYLE = `
     text-align: left;
     cursor: pointer;
   }
-  ::slotted(button:hover), ::slotted(a:hover) { background: rgba(125, 211, 252, 0.14); }
-  ::slotted(button:focus-visible), ::slotted(a:focus-visible) {
+  ::slotted(button:hover), ::slotted(a:hover), ::slotted(label:hover) {
+    background: rgba(125, 211, 252, 0.14);
+  }
+  ::slotted(button:focus-visible), ::slotted(a:focus-visible), ::slotted(label:focus-visible) {
     outline: 2px solid var(--accent, #7dd3fc);
     outline-offset: -2px;
   }
@@ -199,7 +204,7 @@ const MENU_STYLE = `
   }
   @media (max-width: 48rem) {
     .menu { min-width: 0; }
-    ::slotted(button), ::slotted(a) {
+    ::slotted(button), ::slotted(a), ::slotted(label) {
       justify-content: center;
       min-width: 44px;
       min-height: 44px;

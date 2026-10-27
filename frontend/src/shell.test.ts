@@ -78,7 +78,6 @@ function mountShell(state: AuthState): AnthApp {
     read: vi.fn(),
     delete: vi.fn(),
     write: vi.fn(),
-    upload: vi.fn(),
   }
   AnthApp.settingsClient = settingsClient()
   const element = document.createElement('anth-app') as AnthApp

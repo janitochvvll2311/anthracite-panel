@@ -1,16 +1,15 @@
 import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { live } from 'lit/directives/live.js'
-import { localized, msg, str } from '@lit/localize'
+import { localized, msg } from '@lit/localize'
 
 import { formatBytes } from './format'
-import { encodeBase64 } from './base64'
 import { describeError } from './errors'
 import { openFileEditor } from './editor-window'
 import { FILES_CHANGED_EVENT } from './file-editor'
 import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
-import type { ResponseError } from './http'
 import { join, normalize, parent } from './paths'
+import { queueDownload, queueUpload } from './transfers'
 import './fab-menu'
 import './icon'
 
@@ -35,11 +34,20 @@ function imageUrl(path: string): string {
   return `/api/files/image?path=${encodeURIComponent(path)}`
 }
 
+let uploadIds = 0
+
+function nextUploadId(): number {
+  uploadIds += 1
+  return uploadIds
+}
+
 @customElement('anth-files')
 @localized()
 export class AnthFiles extends LitElement {
   @property({ attribute: false })
   client?: FilesClient
+
+  private readonly uploadId = `files-upload-${nextUploadId()}`
 
   @state()
   private path = '/'
@@ -70,9 +78,6 @@ export class AnthFiles extends LitElement {
 
   @state()
   private error = ''
-
-  @state()
-  private notice = ''
 
   @state()
   private busy = false
@@ -113,7 +118,6 @@ export class AnthFiles extends LitElement {
       this.imageFailed = false
       this.confirmingDelete = false
       this.error = ''
-      this.notice = ''
     } catch (error) {
       this.error = describeError(error)
     } finally {
@@ -253,38 +257,22 @@ export class AnthFiles extends LitElement {
     input.click()
   }
 
-  private async onUpload(event: Event): Promise<void> {
+  private onUploadKey(event: KeyboardEvent): void {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      this.pickUpload()
+    }
+  }
+
+  private onUpload(event: Event): void {
     const input = event.target as HTMLInputElement
     const file = input.files?.[0]
     input.value = ''
-    if (!file || !this.client) {
+    if (!file) {
       return
     }
-    this.busy = true
     this.error = ''
-    this.notice = ''
-    const path = join(this.path, file.name)
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer())
-      const content = encodeBase64(bytes)
-      try {
-        await this.client.upload(path, content, true)
-      } catch (error) {
-        if ((error as ResponseError).code !== 'exists') {
-          throw error
-        }
-        if (!confirm(msg(str`${file.name} already exists. Replace it?`))) {
-          return
-        }
-        await this.client.upload(path, content, false)
-      }
-      await this.open(this.path)
-      this.notice = msg(str`Uploaded ${file.name}`)
-    } catch (error) {
-      this.error = describeError(error)
-    } finally {
-      this.busy = false
-    }
+    queueUpload(file, this.path, join(this.path, file.name))
   }
 
   /** A global editor wrote a file; reload the listing and its preview. */
@@ -453,6 +441,16 @@ export class AnthFiles extends LitElement {
         <header>
           <span class="title" title=${this.previewPath}>${entry.name}</span>
           <div class="actions">
+            ${entry.kind === 'file'
+              ? html`<button
+                  type="button"
+                  aria-label=${msg('Download')}
+                  @click=${() => queueDownload(this.previewPath)}
+                >
+                  <anth-icon name="download"></anth-icon>
+                  <span class="btn-label">${msg('Download')}</span>
+                </button>`
+              : nothing}
             ${entry.kind === 'file' && !image
               ? html`<button
                   type="button"
@@ -603,7 +601,6 @@ export class AnthFiles extends LitElement {
         </header>
 
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
-        ${this.notice ? html`<div class="notice" role="status">${this.notice}</div>` : nothing}
 
         <div class="layout ${this.previewEntry ? 'preview-open' : ''}">
           <div class="listing">
@@ -625,21 +622,23 @@ export class AnthFiles extends LitElement {
           </div>
           ${this.renderPreview()}
         </div>
-        <input class="picker" type="file" @change=${this.onUpload} />
+        <input class="picker" id=${this.uploadId} type="file" @change=${this.onUpload} />
         <anth-fab-menu icon="plus" label=${msg('File actions')}>
           <button type="button" class="fab-action" aria-label=${msg('New file')} @click=${() => this.create()}>
             <anth-icon name="file-plus"></anth-icon>
             <span class="btn-label">${msg('New file')}</span>
           </button>
-          <button
-            type="button"
+          <label
             class="fab-action"
+            for=${this.uploadId}
+            role="button"
+            tabindex="0"
             aria-label=${msg('Upload from device')}
-            @click=${() => this.pickUpload()}
+            @keydown=${(event: KeyboardEvent) => this.onUploadKey(event)}
           >
             <anth-icon name="upload"></anth-icon>
             <span class="btn-label">${msg('Upload from device')}</span>
-          </button>
+          </label>
         </anth-fab-menu>
       </section>
     `
@@ -710,14 +709,6 @@ export class AnthFiles extends LitElement {
       height: 1px;
       opacity: 0;
       pointer-events: none;
-    }
-    .notice {
-      margin: 0;
-      padding: 0.6rem 0.75rem;
-      border-radius: 8px;
-      border: 1px solid rgba(52, 211, 153, 0.4);
-      background: rgba(52, 211, 153, 0.12);
-      color: #a7f3d0;
     }
     anth-icon { font-size: 14px; }
     button:disabled { opacity: 0.5; cursor: default; }

@@ -542,13 +542,61 @@
   <source>Reload settings</source>
   <target>Recargar ajustes</target>
 </trans-unit>
-<trans-unit id="s666465e460730d4b">
-  <source>Uploaded <x id="0" equiv-text="${file.name}"/></source>
-  <target>Subido <x id="0" equiv-text="${file.name}"/></target>
-</trans-unit>
 <trans-unit id="s073167242a6c50f5">
   <source><x id="0" equiv-text="${file.name}"/> already exists. Replace it?</source>
   <target><x id="0" equiv-text="${file.name}"/> ya existe. ¿Reemplazarlo?</target>
+</trans-unit>
+<trans-unit id="sd3386a2ef42e80b9">
+  <source>Download</source>
+  <target>Descargar</target>
+</trans-unit>
+<trans-unit id="s53553e93c3b4056f">
+  <source>Network error</source>
+  <target>Error de red</target>
+</trans-unit>
+<trans-unit id="s3ec4da71c1a62754">
+  <source>Queued</source>
+  <target>En cola</target>
+</trans-unit>
+<trans-unit id="s66f0d2ff46b33ffc">
+  <source>Uploading</source>
+  <target>Subiendo</target>
+</trans-unit>
+<trans-unit id="s7c557a9cb9a109c7">
+  <source>Downloading</source>
+  <target>Descargando</target>
+</trans-unit>
+<trans-unit id="s0379fc73608ab971">
+  <source>Done</source>
+  <target>Completado</target>
+</trans-unit>
+<trans-unit id="sbf9c5c5a8e5efad4">
+  <source>Failed</source>
+  <target>Falló</target>
+</trans-unit>
+<trans-unit id="s3bb786d3b55ba37c">
+  <source>Cancelled</source>
+  <target>Cancelado</target>
+</trans-unit>
+<trans-unit id="s6b0248f3257f658f">
+  <source>Transfers</source>
+  <target>Transferencias</target>
+</trans-unit>
+<trans-unit id="s3b151ca64eb26ec1">
+  <source>Expand</source>
+  <target>Expandir</target>
+</trans-unit>
+<trans-unit id="s4993444bfd3f3e5e">
+  <source>Collapse</source>
+  <target>Contraer</target>
+</trans-unit>
+<trans-unit id="s6d9adf35cd87f768">
+  <source>Clear finished</source>
+  <target>Limpiar completadas</target>
+</trans-unit>
+<trans-unit id="sb4f1dffbb6be6302">
+  <source>Clear</source>
+  <target>Quitar</target>
 </trans-unit>
 </body>
 </file>

@@ -3,6 +3,13 @@ import { afterEach, expect, test, vi } from 'vitest'
 import './files'
 import type { FilePage, FilesClient } from './files-client'
 
+vi.mock('./transfers', () => ({
+  queueUpload: vi.fn(),
+  queueDownload: vi.fn(),
+}))
+
+import { queueDownload, queueUpload } from './transfers'
+
 const ROOT_PAGE: FilePage = {
   items: [
     { name: 'folder', kind: 'dir', size: 0, modified_ms: 0 },
@@ -30,7 +37,6 @@ function fakeClient(): FilesClient {
     })),
     delete: vi.fn(async () => {}),
     write: vi.fn(async (path: string) => ({ path, size: 0 })),
-    upload: vi.fn(async (path: string) => ({ path, size: 0 })),
   }
 }
 
@@ -107,7 +113,7 @@ async function openEditor(element: FilesElement, name: string): Promise<void> {
 }
 
 async function openCreate(element: FilesElement): Promise<void> {
-  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.fab-action') ?? [])].find(
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLElement>('.fab-action') ?? [])].find(
     (button) => button.textContent?.includes('New file'),
   )
   create?.click()
@@ -126,6 +132,7 @@ async function mount(client: FilesClient): Promise<FilesElement> {
 afterEach(() => {
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
+  vi.clearAllMocks()
 })
 
 test('lists the root and navigates into a directory', async () => {
@@ -392,7 +399,7 @@ test('opens a create window from the toolbar', async () => {
   expect(editor?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('')
 })
 
-test('offers create and upload from the FAB menu', async () => {
+test('queues uploads from the FAB menu', async () => {
   const client = fakeClient()
   const element = await mount(client)
 
@@ -403,7 +410,7 @@ test('offers create and upload from the FAB menu', async () => {
   menu?.shadowRoot.querySelector<HTMLButtonElement>('.fab')?.click()
   expect(menu?.open).toBe(true)
 
-  const actions = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.fab-action') ?? [])]
+  const actions = [...(element.shadowRoot?.querySelectorAll<HTMLElement>('.fab-action') ?? [])]
   expect(actions.map((button) => button.textContent?.trim())).toEqual([
     'New file',
     'Upload from device',
@@ -413,35 +420,21 @@ test('offers create and upload from the FAB menu', async () => {
   const picker = element.shadowRoot?.querySelector<HTMLInputElement>('.picker')
   Object.defineProperty(picker, 'files', { configurable: true, value: [file] })
   picker?.dispatchEvent(new Event('change'))
-  await settle(element)
   await settleWindows()
-  await settle(element)
 
-  expect(client.upload).toHaveBeenCalledWith('/upload.txt', 'aGVsbG8gYnl0ZXM=', true)
-  expect(element.shadowRoot?.querySelector('.notice')?.textContent).toContain('Uploaded upload.txt')
+  expect(queueUpload).toHaveBeenCalledWith(file, '/', '/upload.txt')
 })
 
-test('asks before replacing an uploaded file that exists', async () => {
-  const client = fakeClient()
-  const upload = vi
-    .fn()
-    .mockRejectedValueOnce(Object.assign(new Error('already exists'), { code: 'exists' }))
-    .mockResolvedValueOnce({ path: '/upload.txt', size: 5 })
-  client.upload = upload
-  const element = await mount(client)
-  vi.stubGlobal('confirm', vi.fn(() => true))
+test('queues downloads from the preview', async () => {
+  const element = await mount(fakeClient())
 
-  const file = new File(['hello'], 'upload.txt', { type: 'text/plain' })
-  const picker = element.shadowRoot?.querySelector<HTMLInputElement>('.picker')
-  Object.defineProperty(picker, 'files', { configurable: true, value: [file] })
-  picker?.dispatchEvent(new Event('change'))
-  await settle(element)
-  await settleWindows()
-  await settle(element)
+  await previewFile(element, 'note.txt')
+  const download = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Download'),
+  )
+  download?.click()
 
-  expect(upload).toHaveBeenNthCalledWith(1, '/upload.txt', 'aGVsbG8=', true)
-  expect(upload).toHaveBeenNthCalledWith(2, '/upload.txt', 'aGVsbG8=', false)
-  expect(element.shadowRoot?.querySelector('.notice')?.textContent).toContain('Uploaded upload.txt')
+  expect(queueDownload).toHaveBeenCalledWith('/note.txt')
 })
 
 test('saves an edited file and reloads the preview', async () => {

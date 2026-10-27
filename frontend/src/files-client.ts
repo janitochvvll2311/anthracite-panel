@@ -31,7 +31,6 @@ export interface FilesClient {
   read(path: string, offset?: number, maxBytes?: number): Promise<FileChunk>
   delete(path: string): Promise<void>
   write(path: string, content: string, create: boolean): Promise<FileWritten>
-  upload(path: string, contentBase64: string, create: boolean): Promise<FileWritten>
 }
 
 export class HttpFilesClient implements FilesClient {
@@ -70,16 +69,6 @@ export class HttpFilesClient implements FilesClient {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path, content, create }),
-    })
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as FileWritten
-  }
-
-  async upload(path: string, contentBase64: string, create: boolean): Promise<FileWritten> {
-    const response = await this.fetchImpl('/api/files/upload', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path, content_base64: contentBase64, create }),
     })
     if (!response.ok) throw await responseError(response)
     return (await response.json()) as FileWritten

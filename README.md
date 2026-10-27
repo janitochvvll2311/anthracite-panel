@@ -21,8 +21,10 @@ auth/lifecycle slice are in place:
 - File browsing and editing UI: paginated listing, text and image previews with
   details and a generic placeholder, a tabbed CodeMirror editor with syntax
   highlighting, a position/encoding status bar, saving, uploading from the
-  device and deletion behind `files.write`, over socket, HTTP, CLI and the web
-  Files section, with root containment and `..`/symlink guards.
+  device, downloading and deletion behind `files.write`, over socket, HTTP, CLI
+  and the web Files section, with root containment and `..`/symlink guards.
+- A transfer queue with status, progress, cancellation and completion for
+  uploads and downloads, independent of the Files panel lifecycle.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
