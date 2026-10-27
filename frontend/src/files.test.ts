@@ -8,6 +8,7 @@ const ROOT_PAGE: FilePage = {
     { name: 'folder', kind: 'dir', size: 0, modified_ms: 0 },
     { name: 'note.txt', kind: 'file', size: 11, modified_ms: 0 },
     { name: 'other.txt', kind: 'file', size: 3, modified_ms: 0 },
+    { name: 'photo.png', kind: 'file', size: 4, modified_ms: 0 },
   ],
   next: null,
 }
@@ -158,6 +159,28 @@ test('previews a file in place', async () => {
   expect(details).toContain('/note.txt')
   expect(details).toContain('File')
   expect(details).toContain('11 B')
+})
+
+test('previews images from the image endpoint', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  await previewFile(element, 'photo.png')
+
+  const image = element.shadowRoot?.querySelector<HTMLImageElement>('.preview .image img')
+  expect(image?.getAttribute('src')).toBe('/api/files/image?path=%2Fphoto.png')
+  expect(client.read).not.toHaveBeenCalled()
+  expect(
+    [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].some(
+      (button) => button.textContent?.includes('Edit'),
+    ),
+  ).toBe(false)
+
+  image?.dispatchEvent(new Event('error'))
+  await settle(element)
+  expect(element.shadowRoot?.querySelector('.placeholder')?.textContent).toContain(
+    'Preview not available for this file.',
+  )
 })
 
 test('shows a placeholder when a file cannot be previewed', async () => {

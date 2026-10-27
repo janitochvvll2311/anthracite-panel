@@ -14,6 +14,27 @@ import { join, normalize, parent } from './paths'
 import './fab-menu'
 import './icon'
 
+const IMAGE_EXTENSIONS = new Set([
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'bmp',
+  'avif',
+  'ico',
+  'svg',
+])
+
+function isImage(name: string): boolean {
+  const extension = name.split('.').pop()?.toLowerCase() ?? ''
+  return IMAGE_EXTENSIONS.has(extension)
+}
+
+function imageUrl(path: string): string {
+  return `/api/files/image?path=${encodeURIComponent(path)}`
+}
+
 @customElement('anth-files')
 @localized()
 export class AnthFiles extends LitElement {
@@ -40,6 +61,9 @@ export class AnthFiles extends LitElement {
 
   @state()
   private previewUnavailable = false
+
+  @state()
+  private imageFailed = false
 
   @state()
   private confirmingDelete = false
@@ -86,6 +110,7 @@ export class AnthFiles extends LitElement {
       this.chunk = undefined
       this.previewPath = ''
       this.previewUnavailable = false
+      this.imageFailed = false
       this.confirmingDelete = false
       this.error = ''
       this.notice = ''
@@ -122,11 +147,14 @@ export class AnthFiles extends LitElement {
     this.previewPath = path
     this.chunk = undefined
     this.previewUnavailable = false
+    this.imageFailed = false
     this.confirmingDelete = false
     this.error = ''
     this.busy = true
     try {
-      this.chunk = await this.client.read(path)
+      if (!isImage(entry.name)) {
+        this.chunk = await this.client.read(path)
+      }
     } catch {
       // Binary files, permissions and transport errors all land on the same
       // generic placeholder; the details and the actions still work.
@@ -141,6 +169,7 @@ export class AnthFiles extends LitElement {
     this.chunk = undefined
     this.previewPath = ''
     this.previewUnavailable = false
+    this.imageFailed = false
     this.confirmingDelete = false
   }
 
@@ -418,12 +447,13 @@ export class AnthFiles extends LitElement {
     if (!entry) {
       return nothing
     }
+    const image = entry.kind === 'file' && isImage(entry.name)
     return html`
       <aside class="preview">
         <header>
           <span class="title" title=${this.previewPath}>${entry.name}</span>
           <div class="actions">
-            ${entry.kind === 'file'
+            ${entry.kind === 'file' && !image
               ? html`<button
                   type="button"
                   aria-label=${msg('Edit')}
@@ -499,30 +529,47 @@ export class AnthFiles extends LitElement {
           </div>
         </dl>
         <div class="content">
-          ${this.chunk
-            ? html`
-                <pre>${this.chunk.text}</pre>
-                ${this.chunk.eof
-                  ? nothing
-                  : html`<button
-                      type="button"
-                      class="more"
-                      aria-label=${msg('Load more')}
-                      ?disabled=${this.busy}
-                      @click=${() => this.morePreview()}
-                    >
-                      <anth-icon name="chevron-down"></anth-icon>
-                      <span class="btn-label">${msg('Load more')}</span>
-                    </button>`}
-              `
-            : this.previewUnavailable
+          ${image
+            ? this.imageFailed
               ? html`
                   <div class="placeholder" role="status">
                     <span class="glyph" aria-hidden="true">▤</span>
                     <p>${msg('Preview not available for this file.')}</p>
                   </div>
                 `
-              : html`<p class="placeholder">${msg('Loading…')}</p>`}
+              : html`
+                  <div class="image">
+                    <img
+                      src=${imageUrl(this.previewPath)}
+                      alt=${entry.name}
+                      @error=${() => (this.imageFailed = true)}
+                    />
+                  </div>
+                `
+            : this.chunk
+              ? html`
+                  <pre>${this.chunk.text}</pre>
+                  ${this.chunk.eof
+                    ? nothing
+                    : html`<button
+                        type="button"
+                        class="more"
+                        aria-label=${msg('Load more')}
+                        ?disabled=${this.busy}
+                        @click=${() => this.morePreview()}
+                      >
+                        <anth-icon name="chevron-down"></anth-icon>
+                        <span class="btn-label">${msg('Load more')}</span>
+                      </button>`}
+                `
+              : this.previewUnavailable
+                ? html`
+                    <div class="placeholder" role="status">
+                      <span class="glyph" aria-hidden="true">▤</span>
+                      <p>${msg('Preview not available for this file.')}</p>
+                    </div>
+                  `
+                : html`<p class="placeholder">${msg('Loading…')}</p>`}
         </div>
       </aside>
     `
@@ -787,6 +834,24 @@ export class AnthFiles extends LitElement {
       overscroll-behavior: contain;
       margin-top: 8px;
     }
+    .preview .image {
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      min-height: 0;
+    }
+    .preview .image img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px;
+      background:
+        linear-gradient(45deg, rgba(139, 155, 173, 0.08) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(139, 155, 173, 0.08) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(139, 155, 173, 0.08) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(139, 155, 173, 0.08) 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    }
     .preview pre {
       margin: 0;
       white-space: pre-wrap;
@@ -812,6 +877,29 @@ export class AnthFiles extends LitElement {
 
     @media (min-width: 48rem) {
       .layout.preview-open { grid-template-columns: minmax(0, 1fr) minmax(18rem, 32rem); }
+      /* With the preview open the listing loses width; keep names readable and
+         move the metadata to a second line instead of squeezing the table. */
+      .layout.preview-open .row.head { display: none; }
+      .layout.preview-open .row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "name name"
+          "kind modified";
+        row-gap: 0.15rem;
+        padding: 0.5rem 0.35rem;
+      }
+      .layout.preview-open .row > :nth-child(1) { grid-area: name; }
+      .layout.preview-open .row > :nth-child(2) {
+        grid-area: kind;
+        color: var(--muted, #8b9bad);
+        font-size: 11px;
+      }
+      .layout.preview-open .row > :nth-child(3) { display: none; }
+      .layout.preview-open .row > :nth-child(4) {
+        grid-area: modified;
+        color: var(--muted, #8b9bad);
+        font-size: 11px;
+      }
     }
     @media (max-width: 48rem) {
       /* Below this width the listing stacks so a name keeps the full row, and

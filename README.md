@@ -18,8 +18,8 @@ auth/lifecycle slice are in place:
   watch.
 - Minimal auth: `auto`/`generated`/`web` bootstrap, Argon2id, HS256 access
   tokens, rotating refresh tokens, cookies.
-- File browsing and editing UI: paginated listing, UTF-8 preview with details
-  and a generic placeholder, a tabbed CodeMirror editor with syntax
+- File browsing and editing UI: paginated listing, text and image previews with
+  details and a generic placeholder, a tabbed CodeMirror editor with syntax
   highlighting, a position/encoding status bar, saving, uploading from the
   device and deletion behind `files.write`, over socket, HTTP, CLI and the web
   Files section, with root containment and `..`/symlink guards.
