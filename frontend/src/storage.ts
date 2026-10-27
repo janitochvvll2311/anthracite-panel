@@ -15,24 +15,35 @@ import './icon'
 import { describeError } from './errors'
 import { formatBytes, formatPercent } from './format'
 import {
+  allowedDisks,
   deviceRows,
   filterDevices,
   filterMounts,
   isSwap,
   mountUsagePercent,
   mountedCount,
+  partitionAllowed,
+  partitionNumber,
   partitionRows,
 } from './lib/storage/display'
 import type { DeviceRow } from './lib/storage/display'
 import type {
+  PartitionKind,
   StorageClient,
   VolumeDevice,
+  VolumeFormatRequest,
   VolumeMount,
   VolumeMountRequest,
+  VolumePartitionCreate,
+  VolumePartitionDelete,
+  VolumePartitionResize,
   VolumeSnapshot,
 } from './storage-client'
 
 type StorageView = 'volumes' | 'partitions'
+
+/** Filesystems the panel may create. */
+const FORMAT_TYPES = ['ext4', 'xfs', 'vfat', 'exfat', 'btrfs', 'swap'] as const
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 @customElement('anth-storage')
@@ -86,6 +97,27 @@ export class AnthStorage extends LitElement {
   @state()
   private confirmingUnmount?: string
 
+  @state()
+  private createDisk = ''
+
+  @state()
+  private createKind: PartitionKind = 'linux'
+
+  @state()
+  private createSize = ''
+
+  @state()
+  private resizing?: string
+
+  @state()
+  private formatting?: string
+
+  @state()
+  private formatType = 'ext4'
+
+  @state()
+  private confirmingPartitionDelete?: string
+
   override connectedCallback(): void {
     super.connectedCallback()
     void this.load()
@@ -104,12 +136,40 @@ export class AnthStorage extends LitElement {
       this.actionError = ''
       this.notice = ''
       this.syncMountDevice()
+      this.syncCreateDisk()
     } catch (failure) {
       this.error = describeError(failure)
       this.status = 'error'
     } finally {
       this.loading = false
     }
+  }
+
+  private syncCreateDisk(): void {
+    const disks = this.editableDisks()
+    if (!disks.some((disk) => disk.path === this.createDisk)) {
+      this.createDisk = disks[0]?.path ?? ''
+    }
+  }
+
+  private editableDisks(): VolumeDevice[] {
+    if (!this.snapshot) return []
+    return allowedDisks(this.snapshot.devices, this.snapshot.disk_allow)
+  }
+
+  private canPartition(device: VolumeDevice): boolean {
+    return (
+      this.snapshot?.partition_enabled === true &&
+      partitionAllowed(device, this.snapshot.disk_allow) &&
+      partitionNumber(device.name) !== undefined
+    )
+  }
+
+  private canFormat(device: VolumeDevice): boolean {
+    return (
+      this.snapshot?.format_enabled === true &&
+      partitionAllowed(device, this.snapshot.disk_allow)
+    )
   }
 
   /** Keeps the device picker on an unmounted device after a snapshot. */
@@ -144,6 +204,7 @@ export class AnthStorage extends LitElement {
       this.error = ''
       this.notice = msg('Change applied.')
       this.syncMountDevice()
+      this.syncCreateDisk()
     } catch (failure) {
       this.actionError = describeError(failure)
     } finally {
@@ -182,6 +243,97 @@ export class AnthStorage extends LitElement {
       (client) => client.unmount(target),
       () => {
         this.confirmingUnmount = undefined
+      },
+    )
+  }
+
+  private sizeBytes(value: string): number | undefined {
+    const mib = Number(value)
+    if (!Number.isSafeInteger(mib) || mib <= 0) return undefined
+    const bytes = mib * 1024 * 1024
+    return Number.isSafeInteger(bytes) ? bytes : undefined
+  }
+
+  private parentDisk(device: VolumeDevice): VolumeDevice | undefined {
+    return this.snapshot?.devices.find(
+      (candidate) => candidate.kind === 'disk' && candidate.name === device.parent,
+    )
+  }
+
+  private submitCreatePartition(event: Event): void {
+    event.preventDefault()
+    if (this.busy) return
+    const size = this.sizeBytes(this.createSize)
+    if (this.createDisk === '' || size === undefined) {
+      this.actionError = msg('Choose an allowed disk and a positive size in MiB.')
+      return
+    }
+    const request: VolumePartitionCreate = {
+      disk: this.createDisk,
+      kind: this.createKind,
+      size_bytes: size,
+    }
+    void this.run(
+      (client) => client.createPartition(request),
+      () => {
+        this.createSize = ''
+      },
+    )
+  }
+
+  private submitResize(event: Event, device: VolumeDevice): void {
+    event.preventDefault()
+    if (this.busy) return
+    const number = partitionNumber(device.name)
+    const disk = this.parentDisk(device)
+    const form = event.currentTarget as HTMLFormElement
+    const size = this.sizeBytes(
+      String(new FormData(form).get('size_mib') ?? ''),
+    )
+    if (!number || !disk || size === undefined) {
+      this.actionError = msg('Choose a positive new size in MiB.')
+      return
+    }
+    const request: VolumePartitionResize = {
+      disk: disk.path,
+      number,
+      size_bytes: size,
+    }
+    void this.run(
+      (client) => client.resizePartition(request),
+      () => {
+        this.resizing = undefined
+      },
+    )
+  }
+
+  private submitFormat(event: Event, device: VolumeDevice): void {
+    event.preventDefault()
+    if (this.busy) return
+    const form = event.currentTarget as HTMLFormElement
+    const request: VolumeFormatRequest = {
+      partition: device.path,
+      fs_type: this.formatType,
+    }
+    const label = String(new FormData(form).get('label') ?? '').trim()
+    if (label !== '') request.label = label
+    void this.run(
+      (client) => client.formatPartition(request),
+      () => {
+        this.formatting = undefined
+      },
+    )
+  }
+
+  private submitPartitionDelete(device: VolumeDevice): void {
+    const number = partitionNumber(device.name)
+    const disk = this.parentDisk(device)
+    if (!number || !disk) return
+    const request: VolumePartitionDelete = { disk: disk.path, number }
+    void this.run(
+      (client) => client.deletePartition(request),
+      () => {
+        this.confirmingPartitionDelete = undefined
       },
     )
   }
@@ -500,11 +652,236 @@ export class AnthStorage extends LitElement {
     `
   }
 
+  private renderPartitionCreate(snapshot: VolumeSnapshot) {
+    if (!snapshot.partition_enabled) return nothing
+    const disks = this.editableDisks()
+    if (disks.length === 0) {
+      return html`
+        <p class="empty">
+          ${msg('No disk is listed in disk_allow, so partition edits are unavailable.')}
+        </p>
+      `
+    }
+    return html`
+      <form
+        class="partition-create"
+        part="partition-create"
+        @submit=${(event: Event) => this.submitCreatePartition(event)}
+      >
+        <label>
+          <span>${msg('Disk device')}</span>
+          <select
+            name="disk"
+            .value=${this.createDisk}
+            ?disabled=${this.busy}
+            @change=${(event: Event) => {
+              this.createDisk = (event.currentTarget as HTMLSelectElement).value
+            }}
+          >
+            ${disks.map(
+              (disk) => html`<option value=${disk.path}>
+                ${disk.name} · ${formatBytes(disk.size_bytes)}
+              </option>`,
+            )}
+          </select>
+        </label>
+        <label>
+          <span>${msg('Kind')}</span>
+          <select
+            name="kind"
+            .value=${this.createKind}
+            ?disabled=${this.busy}
+            @change=${(event: Event) => {
+              this.createKind = (event.currentTarget as HTMLSelectElement)
+                .value as PartitionKind
+            }}
+          >
+            <option value="linux">linux</option>
+            <option value="swap">swap</option>
+            <option value="efi">efi</option>
+          </select>
+        </label>
+        <label>
+          <span>${msg('Size (MiB)')}</span>
+          <input
+            name="size_mib"
+            type="number"
+            min="1"
+            .value=${this.createSize}
+            ?disabled=${this.busy}
+            @input=${(event: Event) => {
+              this.createSize = (event.currentTarget as HTMLInputElement).value
+            }}
+          />
+        </label>
+        <button
+          type="submit"
+          ?disabled=${this.busy || this.createSize.trim() === ''}
+        >
+          ${msg('Create partition')}
+        </button>
+      </form>
+      <p class="hint">
+        ${msg('Sizes are whole MiB. The disk must be in disk_allow and unmounted.')}
+      </p>
+    `
+  }
+
+  private renderPartitionActions(device: VolumeDevice) {
+    const resize = this.canPartition(device)
+    const format = this.canFormat(device)
+    if (!resize && !format) return nothing
+    return html`
+      <div class="manage">
+        <div class="actions">
+          ${resize
+            ? html`
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.resizing =
+                      this.resizing === device.path ? undefined : device.path
+                    this.formatting = undefined
+                    this.confirmingPartitionDelete = undefined
+                  }}
+                >
+                  ${msg('Resize')}
+                </button>
+                <button
+                  type="button"
+                  class="danger"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.confirmingPartitionDelete =
+                      this.confirmingPartitionDelete === device.path
+                        ? undefined
+                        : device.path
+                    this.resizing = undefined
+                    this.formatting = undefined
+                  }}
+                >
+                  ${msg('Delete')}
+                </button>
+              `
+            : nothing}
+          ${format
+            ? html`
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.formatting =
+                      this.formatting === device.path ? undefined : device.path
+                    this.resizing = undefined
+                    this.confirmingPartitionDelete = undefined
+                  }}
+                >
+                  ${msg('Format')}
+                </button>
+              `
+            : nothing}
+        </div>
+        ${this.resizing === device.path
+          ? html`
+              <form
+                class="partition-inline"
+                @submit=${(event: Event) => this.submitResize(event, device)}
+              >
+                <label>
+                  <span>${msg('New size (MiB)')}</span>
+                  <input
+                    name="size_mib"
+                    type="number"
+                    min="1"
+                    ?disabled=${this.busy}
+                  />
+                </label>
+                <button type="submit" ?disabled=${this.busy}>${msg('Apply')}</button>
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.resizing = undefined
+                  }}
+                >
+                  ${msg('Cancel')}
+                </button>
+              </form>
+            `
+          : nothing}
+        ${this.formatting === device.path
+          ? html`
+              <form
+                class="partition-inline"
+                @submit=${(event: Event) => this.submitFormat(event, device)}
+              >
+                <label>
+                  <span>${msg('Filesystem')}</span>
+                  <select
+                    .value=${this.formatType}
+                    ?disabled=${this.busy}
+                    @change=${(event: Event) => {
+                      this.formatType = (event.currentTarget as HTMLSelectElement).value
+                    }}
+                  >
+                    ${FORMAT_TYPES.map((type) => html`<option value=${type}>${type}</option>`)}
+                  </select>
+                </label>
+                <label>
+                  <span>${msg('Label (optional)')}</span>
+                  <input
+                    name="label"
+                    ?disabled=${this.busy}
+                  />
+                </label>
+                <button type="submit" ?disabled=${this.busy}>${msg('Format')}</button>
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.formatting = undefined
+                  }}
+                >
+                  ${msg('Cancel')}
+                </button>
+              </form>
+            `
+          : nothing}
+        ${this.confirmingPartitionDelete === device.path
+          ? html`
+              <div class="confirm" role="alert">
+                <span>${msg(str`Delete partition ${device.name}? This cannot be undone.`)}</span>
+                <button
+                  type="button"
+                  class="danger"
+                  ?disabled=${this.busy}
+                  @click=${() => this.submitPartitionDelete(device)}
+                >
+                  ${msg('Delete')}
+                </button>
+                <button
+                  type="button"
+                  ?disabled=${this.busy}
+                  @click=${() => {
+                    this.confirmingPartitionDelete = undefined
+                  }}
+                >
+                  ${msg('Cancel')}
+                </button>
+              </div>
+            `
+          : nothing}
+      </div>
+    `
+  }
+
   private renderPartitions(snapshot: VolumeSnapshot) {
     const all = deviceRows(snapshot.devices)
     const filtered = filterDevices(all, this.query).filter((device) => device.kind === 'part')
     const parent = new Map(snapshot.devices.map((device) => [device.name, device.path]))
     return html`
+      ${this.renderPartitionCreate(snapshot)}
       ${this.renderFilter(msg('Filter partitions'))}
       ${filtered.length === 0
         ? html`<p class="empty">
@@ -532,6 +909,7 @@ export class AnthStorage extends LitElement {
                     </div>
                     <div class="mounts-cell">${this.mountChips(device)}</div>
                     <code class="path">${device.path}</code>
+                    ${this.renderPartitionActions(device)}
                   </article>
                 `,
               )}
@@ -706,6 +1084,65 @@ export class AnthStorage extends LitElement {
     .mount-form button:disabled { opacity: 0.55; cursor: progress; }
     .hint { margin: -0.25rem 0 0; color: var(--muted, #8b9bad); font-size: 11px; }
 
+    .partition-create {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+      align-items: end;
+      gap: 0.5rem 0.75rem;
+      padding: 0.6rem 0.7rem;
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 9px;
+      background: var(--panel, #101721);
+    }
+    .partition-create label,
+    .partition-inline label {
+      display: grid;
+      gap: 0.2rem;
+      color: var(--muted, #8b9bad);
+      font: 11px/1.3 var(--mono, monospace);
+    }
+    .partition-create input,
+    .partition-create select,
+    .partition-inline input,
+    .partition-inline select {
+      min-height: 32px;
+      padding: 0.3rem 0.5rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: 13px/1.4 var(--sans, system-ui, sans-serif);
+    }
+    .partition-create button,
+    .partition-inline button,
+    .actions button {
+      min-height: 32px;
+      padding: 0.3rem 0.6rem;
+      color: var(--text, #dbe6f2);
+      border: 1px solid var(--panel-border, #223041);
+      border-radius: 7px;
+      background: var(--panel-2, #0b121b);
+      font: inherit;
+      cursor: pointer;
+    }
+    .partition-create button:hover,
+    .partition-inline button:hover,
+    .actions button:hover { border-color: var(--accent, #7dd3fc); }
+    .partition-create button:disabled,
+    .partition-inline button:disabled,
+    .actions button:disabled { opacity: 0.55; cursor: progress; }
+    .actions button.danger { color: var(--err, #f87171); }
+    .manage {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--panel-border, #223041);
+    }
+    .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.4rem; }
+    .partition-inline { display: flex; flex-wrap: wrap; align-items: end; gap: 0.4rem; }
+
     .filters { display: flex; }
     .filters input {
       flex: 1 1 16rem;
@@ -866,10 +1303,19 @@ export class AnthStorage extends LitElement {
     @media (max-width: 44rem) {
       .toolbar button { min-height: 44px; }
       .filters input { min-height: 44px; }
-      .mount-form { grid-template-columns: 1fr 1fr; }
-      .mount-form button { min-height: 44px; }
+      .mount-form,
+      .partition-create { grid-template-columns: 1fr 1fr; }
+      .mount-form button,
+      .partition-create button { min-height: 44px; }
       .mount-form input,
-      .mount-form select { min-height: 44px; }
+      .mount-form select,
+      .partition-create input,
+      .partition-create select,
+      .partition-inline input,
+      .partition-inline select { min-height: 44px; }
+      .actions { justify-content: flex-start; }
+      .actions button,
+      .partition-inline button { min-height: 44px; }
       .device,
       .mount { grid-template-columns: 1fr; align-items: start; }
       .device .identity { padding-left: 0 !important; }

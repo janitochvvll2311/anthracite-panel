@@ -1430,6 +1430,58 @@
   <source>The target must be an existing directory under the configured mount root.</source>
   <target>El destino debe ser un directorio existente dentro de la raíz de montaje configurada.</target>
 </trans-unit>
+<trans-unit id="sbfbab44d7e3b8a85">
+  <source>Choose an allowed disk and a positive size in MiB.</source>
+  <target>Elegí un disco permitido y un tamaño positivo en MiB.</target>
+</trans-unit>
+<trans-unit id="s9ae17cf55a288d5e">
+  <source>Choose a positive new size in MiB.</source>
+  <target>Elegí un tamaño nuevo positivo en MiB.</target>
+</trans-unit>
+<trans-unit id="sdbac7b6b4e34601d">
+  <source>No disk is listed in disk_allow, so partition edits are unavailable.</source>
+  <target>No hay ningún disco en disk_allow, así que las ediciones de particiones no están disponibles.</target>
+</trans-unit>
+<trans-unit id="s594c66e4c435e62f">
+  <source>Size (MiB)</source>
+  <target>Tamaño (MiB)</target>
+</trans-unit>
+<trans-unit id="s413258e90477b603">
+  <source>Create partition</source>
+  <target>Crear partición</target>
+</trans-unit>
+<trans-unit id="sbd4d026511b6c0e4">
+  <source>Sizes are whole MiB. The disk must be in disk_allow and unmounted.</source>
+  <target>Los tamaños son MiB enteros. El disco debe estar en disk_allow y sin montar.</target>
+</trans-unit>
+<trans-unit id="sa9df513a8df776c1">
+  <source>Resize</source>
+  <target>Redimensionar</target>
+</trans-unit>
+<trans-unit id="sa3c9339de23c1752">
+  <source>Format</source>
+  <target>Formatear</target>
+</trans-unit>
+<trans-unit id="sb4670c0f19e504a1">
+  <source>New size (MiB)</source>
+  <target>Tamaño nuevo (MiB)</target>
+</trans-unit>
+<trans-unit id="s2eaf05060578608a">
+  <source>Filesystem</source>
+  <target>Sistema de archivos</target>
+</trans-unit>
+<trans-unit id="se470048a914599d8">
+  <source>Label (optional)</source>
+  <target>Etiqueta (opcional)</target>
+</trans-unit>
+<trans-unit id="s9c514a92e0377e42">
+  <source>Delete partition <x id="0" equiv-text="${device.name}"/>? This cannot be undone.</source>
+  <target>¿Eliminar la partición <x id="0" equiv-text="${device.name}"/>? No se puede deshacer.</target>
+</trans-unit>
+<trans-unit id="se01060a5945af366">
+  <source>Disk device</source>
+  <target>Disco</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

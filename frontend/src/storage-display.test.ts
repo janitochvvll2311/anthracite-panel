@@ -1,12 +1,15 @@
 import { expect, test } from 'vitest'
 
 import {
+  allowedDisks,
   deviceRows,
   filterDevices,
   filterMounts,
   isSwap,
   mountUsagePercent,
   mountedCount,
+  partitionAllowed,
+  partitionNumber,
   partitionRows,
 } from './lib/storage/display'
 import type { VolumeDevice, VolumeMount } from './storage-client'
@@ -79,6 +82,22 @@ test('filters match device metadata and mount sources', () => {
   expect(filterMounts(mounts, '/proc')).toHaveLength(1)
   expect(filterMounts(mounts, 'ext4')).toHaveLength(1)
   expect(filterMounts(mounts, 'nope')).toHaveLength(0)
+})
+
+test('partition numbers, allowed disks and parent checks follow the device names', () => {
+  expect(partitionNumber('sda3')).toBe(3)
+  expect(partitionNumber('nvme0n1p14')).toBe(14)
+  expect(partitionNumber('sda')).toBeUndefined()
+
+  const devices = [
+    device(),
+    device({ name: 'sdb', path: '/dev/sdb', kind: 'disk' }),
+    device({ name: 'sda1', path: '/dev/sda1', kind: 'part', parent: 'sda' }),
+  ]
+  expect(allowedDisks(devices, ['/dev/sda']).map((row) => row.name)).toEqual(['sda'])
+  expect(allowedDisks(devices, [])).toHaveLength(0)
+  expect(partitionAllowed(devices[2], ['/dev/sda'])).toBe(true)
+  expect(partitionAllowed(devices[2], ['/dev/sdb'])).toBe(false)
 })
 
 test('usage percent is clamped and safe with an empty filesystem', () => {

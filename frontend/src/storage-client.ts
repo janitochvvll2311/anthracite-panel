@@ -64,10 +64,40 @@ export interface VolumeMountRequest {
   allow_removable?: boolean
 }
 
+export type PartitionKind = 'linux' | 'swap' | 'efi'
+
+export interface VolumePartitionCreate {
+  disk: string
+  kind: PartitionKind
+  start_bytes?: number
+  size_bytes: number
+}
+
+export interface VolumePartitionResize {
+  disk: string
+  number: number
+  size_bytes: number
+}
+
+export interface VolumePartitionDelete {
+  disk: string
+  number: number
+}
+
+export interface VolumeFormatRequest {
+  partition: string
+  fs_type: string
+  label?: string
+}
+
 export interface StorageClient {
   get(): Promise<VolumeSnapshot>
   mount(request: VolumeMountRequest): Promise<string>
   unmount(target: string): Promise<string>
+  createPartition(request: VolumePartitionCreate): Promise<string>
+  resizePartition(request: VolumePartitionResize): Promise<string>
+  deletePartition(request: VolumePartitionDelete): Promise<string>
+  formatPartition(request: VolumeFormatRequest): Promise<string>
 }
 
 export class HttpStorageClient implements StorageClient {
@@ -90,6 +120,22 @@ export class HttpStorageClient implements StorageClient {
 
   async unmount(target: string): Promise<string> {
     return this.action('/api/volumes/unmount', { target })
+  }
+
+  async createPartition(request: VolumePartitionCreate): Promise<string> {
+    return this.action('/api/volumes/partition/create', request)
+  }
+
+  async resizePartition(request: VolumePartitionResize): Promise<string> {
+    return this.action('/api/volumes/partition/resize', request)
+  }
+
+  async deletePartition(request: VolumePartitionDelete): Promise<string> {
+    return this.action('/api/volumes/partition/delete', request)
+  }
+
+  async formatPartition(request: VolumeFormatRequest): Promise<string> {
+    return this.action('/api/volumes/format', request)
   }
 
   private async action(path: string, body: unknown): Promise<string> {

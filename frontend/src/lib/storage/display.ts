@@ -40,6 +40,33 @@ export function partitionRows(devices: VolumeDevice[]): VolumeDevice[] {
   return devices.filter((device) => device.kind === 'part')
 }
 
+/** The whole disks the panel may edit, from `disk_allow`. */
+export function allowedDisks(
+  devices: VolumeDevice[],
+  diskAllow: string[],
+): VolumeDevice[] {
+  return devices.filter(
+    (device) => device.kind === 'disk' && diskAllow.includes(device.path),
+  )
+}
+
+/** The partition number at the end of a kernel name. */
+export function partitionNumber(name: string): number | undefined {
+  const match = /(\d+)$/.exec(name)
+  if (!match) return undefined
+  const value = Number(match[1])
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+/** Whether a partition belongs to a disk in the allowlist. */
+export function partitionAllowed(
+  device: VolumeDevice,
+  diskAllow: string[],
+): boolean {
+  if (!device.parent) return false
+  return diskAllow.some((path) => path.split('/').pop() === device.parent)
+}
+
 /** How many devices have at least one mountpoint. */
 export function mountedCount(devices: VolumeDevice[]): number {
   return devices.filter((device) => device.mountpoints.length > 0).length

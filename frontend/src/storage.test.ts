@@ -95,6 +95,14 @@ async function settle(element: StorageElement): Promise<void> {
   }
 }
 
+function button(container: ParentNode, label: string): HTMLButtonElement {
+  const found = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  )
+  if (!found) throw new Error(`missing button: ${label}`)
+  return found
+}
+
 async function mountStorage(
   client: StorageClient,
   view: 'volumes' | 'partitions' = 'volumes',
@@ -111,11 +119,27 @@ function fakeClient(value = snapshot()) {
   const get = vi.fn().mockResolvedValue(value)
   const mount = vi.fn().mockResolvedValue('mounted /dev/sdb1 on /mnt/data as ext4')
   const unmount = vi.fn().mockResolvedValue('unmounted /mnt/data')
+  const createPartition = vi.fn().mockResolvedValue('created partition')
+  const resizePartition = vi.fn().mockResolvedValue('resized partition')
+  const deletePartition = vi.fn().mockResolvedValue('deleted partition')
+  const formatPartition = vi.fn().mockResolvedValue('formatted partition')
   return {
-    client: { get, mount, unmount } as StorageClient,
+    client: {
+      get,
+      mount,
+      unmount,
+      createPartition,
+      resizePartition,
+      deletePartition,
+      formatPartition,
+    } as StorageClient,
     get,
     mount,
     unmount,
+    createPartition,
+    resizePartition,
+    deletePartition,
+    formatPartition,
   }
 }
 
@@ -220,6 +244,85 @@ test('control off hides the mount form and the unmount button', async () => {
   expect(element.shadowRoot?.querySelector('button.unmount')).toBeNull()
 })
 
+test('creates a partition on an allowed disk', async () => {
+  const feed = fakeClient(
+    snapshot({ partition_enabled: true, format_enabled: true }),
+  )
+  const element = await mountStorage(feed.client, 'partitions')
+  const form = element.shadowRoot?.querySelector<HTMLFormElement>('.partition-create')!
+  const size = form.querySelector<HTMLInputElement>('input[name="size_mib"]')!
+  size.value = '16'
+  size.dispatchEvent(new Event('input'))
+  form.dispatchEvent(new Event('submit', { cancelable: true }))
+  await settle(element)
+
+  expect(feed.createPartition).toHaveBeenCalledWith({
+    disk: '/dev/sda',
+    kind: 'linux',
+    size_bytes: 16 * 1024 * 1024,
+  })
+  expect(element.shadowRoot?.textContent).toContain('Change applied.')
+})
+
+test('resizes, formats and deletes a partition with confirmations', async () => {
+  const feed = fakeClient(
+    snapshot({ partition_enabled: true, format_enabled: true }),
+  )
+  const element = await mountStorage(feed.client, 'partitions')
+  const card = () =>
+    [...(element.shadowRoot?.querySelectorAll<HTMLElement>('.partition') ?? [])].find(
+      (candidate) => candidate.querySelector('h3')?.textContent === 'sda1',
+    )!
+  const wait = async () => {
+    await element.updateComplete
+  }
+
+  button(card(), 'Resize').click()
+  await wait()
+  const resize = card().querySelector<HTMLFormElement>('.partition-inline')!
+  const resizeSize = resize.querySelector<HTMLInputElement>('input[name="size_mib"]')!
+  resizeSize.value = '32'
+  resize.dispatchEvent(new Event('submit', { cancelable: true }))
+  await settle(element)
+  expect(feed.resizePartition).toHaveBeenCalledWith({
+    disk: '/dev/sda',
+    number: 1,
+    size_bytes: 32 * 1024 * 1024,
+  })
+
+  button(card(), 'Format').click()
+  await wait()
+  const format = card().querySelector<HTMLFormElement>('.partition-inline')!
+  const label = format.querySelector<HTMLInputElement>('input[name="label"]')!
+  label.value = 'root'
+  format.dispatchEvent(new Event('submit', { cancelable: true }))
+  await settle(element)
+  expect(feed.formatPartition).toHaveBeenCalledWith({
+    partition: '/dev/sda1',
+    fs_type: 'ext4',
+    label: 'root',
+  })
+
+  button(card(), 'Delete').click()
+  await wait()
+  expect(card().querySelector('.confirm')?.textContent).toContain('Delete partition sda1?')
+  button(card().querySelector('.confirm')!, 'Delete').click()
+  await settle(element)
+  expect(feed.deletePartition).toHaveBeenCalledWith({
+    disk: '/dev/sda',
+    number: 1,
+  })
+})
+
+test('partition actions are absent when their policy is off', async () => {
+  const feed = fakeClient(
+    snapshot({ partition_enabled: false, format_enabled: false }),
+  )
+  const element = await mountStorage(feed.client, 'partitions')
+  expect(element.shadowRoot?.querySelector('.partition-create')).toBeNull()
+  expect(element.shadowRoot?.querySelector('.partition .manage')).toBeNull()
+})
+
 test('a warning is shown without hiding the inventory', async () => {
   const feed = fakeClient(snapshot({ warning: 'device inventory unavailable: lsblk is not installed' }))
   const element = await mountStorage(feed.client)
@@ -262,10 +365,26 @@ test('the HTTP client sends mount and unmount bodies', async () => {
     }),
   ).resolves.toBe('ok')
   await expect(client.unmount('/mnt/data')).resolves.toBe('ok')
+  await expect(
+    client.createPartition({ disk: '/dev/sdb', kind: 'linux', size_bytes: 1024 }),
+  ).resolves.toBe('ok')
+  await expect(
+    client.resizePartition({ disk: '/dev/sdb', number: 1, size_bytes: 2048 }),
+  ).resolves.toBe('ok')
+  await expect(
+    client.deletePartition({ disk: '/dev/sdb', number: 1 }),
+  ).resolves.toBe('ok')
+  await expect(
+    client.formatPartition({ partition: '/dev/sdb1', fs_type: 'ext4' }),
+  ).resolves.toBe('ok')
 
   expect(calls.map((call) => call.url)).toEqual([
     '/api/volumes/mount',
     '/api/volumes/unmount',
+    '/api/volumes/partition/create',
+    '/api/volumes/partition/resize',
+    '/api/volumes/partition/delete',
+    '/api/volumes/format',
   ])
   expect(calls.map((call) => JSON.parse(String(call.init?.body)))).toEqual([
     {
@@ -276,6 +395,10 @@ test('the HTTP client sends mount and unmount bodies', async () => {
       allow_removable: false,
     },
     { target: '/mnt/data' },
+    { disk: '/dev/sdb', kind: 'linux', size_bytes: 1024 },
+    { disk: '/dev/sdb', number: 1, size_bytes: 2048 },
+    { disk: '/dev/sdb', number: 1 },
+    { partition: '/dev/sdb1', fs_type: 'ext4' },
   ])
 })
 
