@@ -143,6 +143,18 @@ test('filters the visible interfaces and keeps the count of the whole set', asyn
   expect(element.shadowRoot?.textContent).toContain('1 of 2 interfaces')
 })
 
+test('an empty inventory has its own sentence, distinct from an empty filter', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client)
+  feed.push(snapshot({ interfaces: [], routes: [] }))
+  await element.updateComplete
+
+  const text = element.shadowRoot?.textContent ?? ''
+  expect(text).toContain('No interfaces found.')
+  expect(text).not.toContain('No interfaces match the current filter.')
+  expect(text).toContain('0 interfaces · 0 up')
+})
+
 test('pausing closes the feed, resuming opens it again and an error is shown', async () => {
   const feed = fakeClient()
   const element = await mount(feed.client)

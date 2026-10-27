@@ -1006,6 +1006,10 @@
   <source>global</source>
   <target>global</target>
 </trans-unit>
+<trans-unit id="s6e2d3db2e16c6954">
+  <source>No interfaces found.</source>
+  <target>No se encontraron interfaces.</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

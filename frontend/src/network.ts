@@ -332,7 +332,11 @@ export class AnthNetwork extends LitElement {
           : nothing}
       </div>
       ${visible.length === 0
-        ? html`<p class="empty">${msg('No interfaces match the current filter.')}</p>`
+        ? html`<p class="empty">
+            ${this.rows.length === 0
+              ? msg('No interfaces found.')
+              : msg('No interfaces match the current filter.')}
+          </p>`
         : html`<div class="list" part="list">${visible.map((iface) => this.renderCard(iface))}</div>`}
     `
   }
@@ -533,6 +537,9 @@ export class AnthNetwork extends LitElement {
       .counters div { justify-items: start; }
       .field { margin-left: 0; }
       .field-label { display: none; }
+      .toolbar select,
+      .toolbar button { min-height: 44px; }
+      .filters input { min-height: 44px; }
     }
   `
 }

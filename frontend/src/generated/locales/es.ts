@@ -121,6 +121,7 @@
 's6d9adf35cd87f768': `Limpiar completadas`,
 's6dbbe2646b239ca5': `Cerrado`,
 's6dd2785dd4fb16f2': str`Expandir el proceso ${0}`,
+'s6e2d3db2e16c6954': `No se encontraron interfaces.`,
 's6ead281adf0d371d': `Enviando…`,
 's6ebc9bd6feae62a3': `Cargando…`,
 's70af97de3ad8fb23': `Tipo`,
