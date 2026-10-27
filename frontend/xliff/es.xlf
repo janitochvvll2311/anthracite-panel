@@ -1114,6 +1114,134 @@
   <source>This is a physical device; the host will lose this link.</source>
   <target>Es un dispositivo físico; el host perderá este enlace.</target>
 </trans-unit>
+<trans-unit id="s1b98c44242bc9e51">
+  <source>Firewall</source>
+  <target>Cortafuegos</target>
+</trans-unit>
+<trans-unit id="s6566f488a34e8fc3">
+  <source>The port must be between 1 and 65535.</source>
+  <target>El puerto debe estar entre 1 y 65535.</target>
+</trans-unit>
+<trans-unit id="s248ed9756a4bce17">
+  <source>loading</source>
+  <target>cargando</target>
+</trans-unit>
+<trans-unit id="s134fa99ab31cd7d6">
+  <source>managed</source>
+  <target>gestionado</target>
+</trans-unit>
+<trans-unit id="s93d19234792429f0">
+  <source>not initialized</source>
+  <target>sin inicializar</target>
+</trans-unit>
+<trans-unit id="sc8eab80a1e0c22d1">
+  <source>No rules</source>
+  <target>Sin reglas</target>
+</trans-unit>
+<trans-unit id="sbe9a58cad721c5ca">
+  <source>1 rule</source>
+  <target>1 regla</target>
+</trans-unit>
+<trans-unit id="sb5f2b9bc9470919a">
+  <source><x id="0" equiv-text="${count}"/> rules</source>
+  <target><x id="0" equiv-text="${count}"/> reglas</target>
+</trans-unit>
+<trans-unit id="sedfc3b46fa3b672a">
+  <source>Flush the managed chain</source>
+  <target>Vaciar la cadena gestionada</target>
+</trans-unit>
+<trans-unit id="s96dc700b4bc9239d">
+  <source>Flush</source>
+  <target>Vaciar</target>
+</trans-unit>
+<trans-unit id="sdfd1c0de9c76f7ec">
+  <source>Flush every rule from the managed chain?</source>
+  <target>¿Vaciar todas las reglas de la cadena gestionada?</target>
+</trans-unit>
+<trans-unit id="sfdf1cca4e8a5f056">
+  <source>Managed table</source>
+  <target>Tabla gestionada</target>
+</trans-unit>
+<trans-unit id="s084e1cb596b7e53e">
+  <source>control</source>
+  <target>control</target>
+</trans-unit>
+<trans-unit id="sb86e5e28f719630a">
+  <source>read-only</source>
+  <target>solo lectura</target>
+</trans-unit>
+<trans-unit id="sa442044b586ec8bf">
+  <source>Action</source>
+  <target>Acción</target>
+</trans-unit>
+<trans-unit id="sd0680e7343dedb27">
+  <source>Deny</source>
+  <target>Denegar</target>
+</trans-unit>
+<trans-unit id="s2ee366cbb0141712">
+  <source>Allow</source>
+  <target>Permitir</target>
+</trans-unit>
+<trans-unit id="sb354dc19a7208a86">
+  <source>Port</source>
+  <target>Puerto</target>
+</trans-unit>
+<trans-unit id="s61e136c0658e27d5">
+  <source>Protocol</source>
+  <target>Protocolo</target>
+</trans-unit>
+<trans-unit id="s2135fe01ed73149d">
+  <source>Comment (optional)</source>
+  <target>Comentario (opcional)</target>
+</trans-unit>
+<trans-unit id="sad489663eaa69cc2">
+  <source>Add rule</source>
+  <target>Añadir regla</target>
+</trans-unit>
+<trans-unit id="s78ea3e07e6b16eee">
+  <source>Allow removes a matching managed deny rule; it does not add an accept rule.</source>
+  <target>Permitir elimina una regla de denegación gestionada coincidente; no añade una regla de aceptación.</target>
+</trans-unit>
+<trans-unit id="s69cf87bb73bb55b2">
+  <source>allow</source>
+  <target>permitir</target>
+</trans-unit>
+<trans-unit id="sa5da0d67426e6747">
+  <source>deny</source>
+  <target>denegar</target>
+</trans-unit>
+<trans-unit id="s0862df34652cf74e">
+  <source>custom</source>
+  <target>personalizada</target>
+</trans-unit>
+<trans-unit id="s757d50f39a8fd10d">
+  <source>Delete rule #<x id="0" equiv-text="${rule.handle}"/></source>
+  <target>Eliminar la regla #<x id="0" equiv-text="${rule.handle}"/></target>
+</trans-unit>
+<trans-unit id="s33c1bfefa26077f6">
+  <source>Delete rule #<x id="0" equiv-text="${rule.handle}"/>?</source>
+  <target>¿Eliminar la regla #<x id="0" equiv-text="${rule.handle}"/>?</target>
+</trans-unit>
+<trans-unit id="s3e4e7c3c8d7d8402">
+  <source>Reading the firewall…</source>
+  <target>Leyendo el cortafuegos…</target>
+</trans-unit>
+<trans-unit id="scc26f6b361ed602c">
+  <source>No firewall information yet.</source>
+  <target>Aún no hay información del cortafuegos.</target>
+</trans-unit>
+<trans-unit id="sdb606841f7c360d0">
+  <source>The managed table does not exist yet. Denying a port creates it.</source>
+  <target>La tabla gestionada todavía no existe. Denegar un puerto la crea.</target>
+</trans-unit>
+<trans-unit id="s55952ffc4ab34b28">
+  <source>No managed rules. Denying a port adds one.</source>
+  <target>No hay reglas gestionadas. Denegar un puerto añade una.</target>
+</trans-unit>
+<trans-unit id="s92ef95b71575a04b">
+  <source>Raw ruleset</source>
+  <target>Reglas nft en bruto</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

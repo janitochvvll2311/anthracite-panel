@@ -17,7 +17,7 @@ export type SectionId =
   | 'processes'
   | 'network'
   | 'settings'
-export type PanelId = 'general' | 'files' | 'terminal' | 'interfaces'
+export type PanelId = 'general' | 'files' | 'terminal' | 'interfaces' | 'firewall'
 
 export interface Section {
   /** Stable id. It is the route and the hash, so it never changes. */
@@ -56,9 +56,12 @@ export function filesPanels(): Panel[] {
   return [{ id: 'files', label: msg('Files') }]
 }
 
-/** The panels the Network section owns. The firewall joins them next. */
+/** The panels the Network section owns. */
 export function networkPanels(): Panel[] {
-  return [{ id: 'interfaces', label: msg('Interfaces') }]
+  return [
+    { id: 'interfaces', label: msg('Interfaces') },
+    { id: 'firewall', label: msg('Firewall') },
+  ]
 }
 
 /** The single panel the Settings section owns. */
@@ -82,7 +85,10 @@ export function routeFrom(hash: string): Route {
     return { section: 'processes', panel: 'general' }
   }
   if (parts[0] === 'network') {
-    return { section: 'network', panel: 'interfaces' }
+    return {
+      section: 'network',
+      panel: parts[1] === 'firewall' ? 'firewall' : 'interfaces',
+    }
   }
   if (parts[0] === 'settings') {
     return { section: 'settings', panel: 'general' }
@@ -113,5 +119,6 @@ export function hashForPanel(panel: PanelId): string {
   if (panel === 'files') return '#/files'
   if (panel === 'terminal') return '#/terminal'
   if (panel === 'interfaces') return '#/network'
+  if (panel === 'firewall') return '#/network/firewall'
   return '#/settings'
 }

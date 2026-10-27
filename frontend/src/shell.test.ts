@@ -229,7 +229,7 @@ test('the files section owns its own Files tab', async () => {
   ).not.toBeNull()
 })
 
-test('the network section owns an Interfaces tab and routes to it', async () => {
+test('the network section owns Interfaces and Firewall tabs', async () => {
   const element = mountShell(OPEN)
   await flush()
   const root = element.shadowRoot!
@@ -244,9 +244,18 @@ test('the network section owns an Interfaces tab and routes to it', async () => 
   expect(inner.active).toBe('interfaces')
   expect([...inner.shadowRoot!.querySelectorAll('.tab')].map((tab) => tab.textContent)).toEqual([
     'Interfaces',
+    'Firewall',
   ])
   expect(
     inner.querySelector('[data-tab="interfaces"]')?.querySelector('anth-network'),
+  ).not.toBeNull()
+
+  location.hash = '#/network/firewall'
+  window.dispatchEvent(new Event('hashchange'))
+  await flush()
+  expect(inner.active).toBe('firewall')
+  expect(
+    inner.querySelector('[data-tab="firewall"]')?.querySelector('anth-firewall'),
   ).not.toBeNull()
 })
 

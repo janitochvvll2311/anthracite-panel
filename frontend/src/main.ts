@@ -2,6 +2,7 @@ import { applyInitialLocale, setupLocalization } from './i18n'
 import { AnthApp } from './app'
 import { HttpAuthClient } from './auth-client'
 import { HttpFilesClient } from './files-client'
+import { HttpFirewallClient } from './firewall-client'
 import { HttpHostInfoClient } from './host-info-client'
 import { HttpNetworkClient } from './network-client'
 import { HttpProcessesClient } from './processes-client'
@@ -14,6 +15,7 @@ AnthApp.hostClient = new HttpHostInfoClient()
 AnthApp.filesClient = new HttpFilesClient()
 AnthApp.processesClient = new HttpProcessesClient()
 AnthApp.networkClient = new HttpNetworkClient()
+AnthApp.firewallClient = new HttpFirewallClient()
 AnthApp.settingsClient = new HttpSettingsClient()
 
 await applyInitialLocale()

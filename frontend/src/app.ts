@@ -30,6 +30,8 @@ import { escape } from './html'
 import type { AnthFiles } from './files'
 import type { AnthHostInfo } from './host-info'
 import type { FilesClient } from './files-client'
+import type { FirewallClient } from './firewall-client'
+import type { AnthFirewall } from './firewall'
 import type { HostInfoClient } from './host-info-client'
 import type { ProcessesClient } from './processes-client'
 import type { AnthProcesses } from './processes'
@@ -49,6 +51,7 @@ import { closeTerminalWindow, openTerminalWindow } from './terminal-window'
 // on its own must still get working custom elements.
 import './fab'
 import './files'
+import './firewall'
 import './host-info'
 import './nav-drawer'
 import './network'
@@ -66,6 +69,7 @@ export class AnthApp extends HTMLElement {
   static filesClient: FilesClient | undefined
   static processesClient: ProcessesClient | undefined
   static networkClient: NetworkClient | undefined
+  static firewallClient: FirewallClient | undefined
   static settingsClient: SettingsClient | undefined
 
   #auth?: AuthState
@@ -89,6 +93,7 @@ export class AnthApp extends HTMLElement {
   #settingsSection?: HTMLElement
   #filesTabSection?: HTMLElement
   #interfacesTabSection?: HTMLElement
+  #firewallTabSection?: HTMLElement
   #generalTabSection?: HTMLElement
   #drawer?: AnthNavDrawer
 
@@ -486,12 +491,14 @@ export class AnthApp extends HTMLElement {
       .map(
         (panel) => `
           <section data-tab="${panel.id}" label="${escape(panel.label)}">
-            <anth-network></anth-network>
+            ${panel.id === 'firewall' ? '<anth-firewall></anth-firewall>' : '<anth-network></anth-network>'}
           </section>`,
       )
       .join('')
     const interfacesTabSection =
-      networkPanel.querySelector<HTMLElement>(':scope > section') ?? undefined
+      networkPanel.querySelector<HTMLElement>('[data-tab="interfaces"]') ?? undefined
+    const firewallTabSection =
+      networkPanel.querySelector<HTMLElement>('[data-tab="firewall"]') ?? undefined
     networkSection?.append(networkPanel)
 
     const settingsPanel = document.createElement('anth-tab-panel') as AnthTabPanel
@@ -527,6 +534,10 @@ export class AnthApp extends HTMLElement {
     if (network) {
       network.client = AnthApp.networkClient
     }
+    const firewall = networkPanel.querySelector<AnthFirewall>('anth-firewall')
+    if (firewall) {
+      firewall.client = AnthApp.firewallClient
+    }
     for (const settings of settingsPanel.querySelectorAll<AnthSettings>('anth-settings')) {
       settings.client = AnthApp.settingsClient
     }
@@ -545,6 +556,7 @@ export class AnthApp extends HTMLElement {
     this.#settingsSection = settingsSection
     this.#filesTabSection = filesTabSection
     this.#interfacesTabSection = interfacesTabSection
+    this.#firewallTabSection = firewallTabSection
     this.#generalTabSection = generalTabSection
 
     homeSection
@@ -587,6 +599,7 @@ export class AnthApp extends HTMLElement {
     this.#settingsSection = undefined
     this.#filesTabSection = undefined
     this.#interfacesTabSection = undefined
+    this.#firewallTabSection = undefined
     this.#generalTabSection = undefined
     container.innerHTML = ''
   }
@@ -603,6 +616,7 @@ export class AnthApp extends HTMLElement {
     this.#settingsSection?.setAttribute('label', msg('Settings'))
     this.#filesTabSection?.setAttribute('label', msg('Files'))
     this.#interfacesTabSection?.setAttribute('label', msg('Interfaces'))
+    this.#firewallTabSection?.setAttribute('label', msg('Firewall'))
     this.#generalTabSection?.setAttribute('label', msg('General'))
     const card = this.#homeSection?.querySelector('[data-host-card]')
     const label = card?.querySelector('.card-head .label')
