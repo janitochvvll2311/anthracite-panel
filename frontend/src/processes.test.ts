@@ -84,10 +84,31 @@ function fakeClient() {
   }
 }
 
-async function mount(client: ProcessesClient): Promise<ProcessesElement> {
+function sizedRect(width: number): DOMRect {
+  return {
+    width,
+    height: 600,
+    top: 0,
+    left: 0,
+    bottom: 600,
+    right: width,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect
+}
+
+async function mount(
+  client: ProcessesClient,
+  width?: number,
+): Promise<ProcessesElement> {
   const element = document.createElement('anth-processes') as ProcessesElement
+  if (width !== undefined) {
+    element.getBoundingClientRect = () => sizedRect(width)
+  }
   element.client = client
   document.body.append(element)
+  await element.updateComplete
   await element.updateComplete
   return element
 }
@@ -349,21 +370,9 @@ test('the HTTP client surfaces the daemon error text', async () => {
   await expect(client.signal(1, 1, 'term')).rejects.toThrow('nope')
 })
 
-function compactViewport(): void {
-  vi.stubGlobal(
-    'matchMedia',
-    vi.fn(() => ({
-      matches: true,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })),
-  )
-}
-
 test('mobile stacks the metrics under each row and the details follow the snapshot', async () => {
-  compactViewport()
   const feed = fakeClient()
-  const element = await mount(feed.client)
+  const element = await mount(feed.client, 700)
   feed.push(snapshot())
   await element.updateComplete
 
@@ -405,9 +414,8 @@ test('mobile stacks the metrics under each row and the details follow the snapsh
 })
 
 test('the compact sort control orders the cards and flips direction', async () => {
-  compactViewport()
   const feed = fakeClient()
-  const element = await mount(feed.client)
+  const element = await mount(feed.client, 700)
   feed.push(snapshot())
   await element.updateComplete
 
@@ -430,9 +438,8 @@ test('the compact sort control orders the cards and flips direction', async () =
 })
 
 test('the compact tree keeps its gutter and collapses branches', async () => {
-  compactViewport()
   const feed = fakeClient()
-  const element = await mount(feed.client)
+  const element = await mount(feed.client, 700)
   feed.push(snapshot())
   await element.updateComplete
 
@@ -479,4 +486,25 @@ test('the details bar mirrors the selected row on every snapshot', async () => {
   expect(element.shadowRoot?.querySelector('.selection-metrics')?.textContent).toContain(
     '100.0%',
   )
+})
+
+test('the layout switches when the identity side would be narrower than the metrics', async () => {
+  const feed = fakeClient()
+  const element = await mount(feed.client, 700)
+  feed.push(snapshot())
+  await element.updateComplete
+  expect(element.shadowRoot?.querySelector('.compact-list')).not.toBeNull()
+
+  element.getBoundingClientRect = () => sizedRect(1200)
+  feed.push(snapshot({ timestamp_ms: 2000 }))
+  await element.updateComplete
+  await element.updateComplete
+  expect(element.shadowRoot?.querySelector('.compact-list')).toBeNull()
+  expect(element.shadowRoot?.querySelector('.pane.identity')).not.toBeNull()
+
+  element.getBoundingClientRect = () => sizedRect(700)
+  feed.push(snapshot({ timestamp_ms: 3000 }))
+  await element.updateComplete
+  await element.updateComplete
+  expect(element.shadowRoot?.querySelector('.compact-list')).not.toBeNull()
 })

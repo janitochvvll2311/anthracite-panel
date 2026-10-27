@@ -226,10 +226,15 @@ process manager:
   `pid:start_ticks`; the first frame shows `—`. States read as words (`running`,
   `sleeping`, `zombie`, ...) with colour for running, stopped and zombie.
 - The filter matches pid, user, name, command and state.
-- The table is split into two panes: the **identity** pane (tree gutter, pid and
-  command) and the **metric** pane (threads, user, state, memory, CPU). Only the
-  identity pane scrolls sideways — a long command or a deep tree moves there
-  while the metrics stay on screen. Both panes share the vertical scroll.
+- On wide containers the table is split into two panes: the **identity** pane
+  (tree gutter, pid and command) and the **metric** pane (threads, user, state,
+  memory, CPU). Only the identity pane scrolls sideways — a long command or a
+  deep tree moves there while the metrics stay on screen. Both panes share the
+  vertical scroll.
+- The component chooses its layout by its own width, not the viewport: when the
+  identity side would be narrower than the metric side (about 960 px at the
+  default font), it switches to the stacked cards. A narrow window on a desktop
+  therefore gets the compact layout too.
 - Selecting a row highlights it across both panes and fills the footer with its
   identity, command and fresh metrics: state, thread count, memory and CPU.
   The footer reads the selected row from the latest snapshot on every SSE
@@ -242,8 +247,8 @@ process manager:
   documented quoting rules — whitespace separates them, quotes group them and
   there is no shell expansion. The daemon validates the allowlist again.
 
-On a phone the two panes become two-line cards: the identity (tree gutter, pid
-and command) on the first line, the metrics (user, threads, state, memory and
-CPU) below it. The command wraps instead of forcing a sideways scroll, and a
-sort selector plus a direction button sit next to the filter. The same fresh
-metrics appear in the details footer.
+In the compact layout each process is a two-line card: the identity (tree
+gutter, pid and command) on the first line, the metrics (user, threads, state,
+memory and CPU) below it. The command wraps to at most two lines instead of
+forcing a sideways scroll, and a sort selector plus a direction button sit next
+to the filter. The same fresh metrics appear in the details footer.

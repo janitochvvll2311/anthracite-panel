@@ -119,36 +119,59 @@ export class AnthProcesses extends LitElement {
   private spawnError = ''
 
   private unsubscribe?: () => void
-  private media?: MediaQueryList
+  private resizeObserver?: ResizeObserver
+  /** Last measured width of the metric pane; 480px is 30rem at the default. */
+  private metricsWidth = 480
   private samples = new Map<string, number>()
   private lastTimestamp = 0
 
   override connectedCallback(): void {
     super.connectedCallback()
-    this.watchViewport()
+    // A phone starts compact before the first measurement, so it never flashes
+    // the two-pane layout. The width rule below overrides this hint.
+    this.compact = globalThis.matchMedia?.('(max-width: 48rem)').matches ?? false
+    this.observeWidth()
     this.start()
   }
 
   /** Closing here is what stops the stream when the tab is removed. */
   override disconnectedCallback(): void {
     super.disconnectedCallback()
-    this.media?.removeEventListener?.('change', this.onCompactChange)
-    this.media = undefined
+    this.resizeObserver?.disconnect()
+    this.resizeObserver = undefined
     this.stop()
   }
 
-  private watchViewport(): void {
-    const media = globalThis.matchMedia?.('(max-width: 48rem)')
-    if (!media) {
+  private observeWidth(): void {
+    if (typeof ResizeObserver === 'undefined') {
       return
     }
-    this.compact = media.matches
-    this.media = media
-    media.addEventListener?.('change', this.onCompactChange)
+    this.resizeObserver = new ResizeObserver(() => this.updateLayout())
+    this.resizeObserver.observe(this)
   }
 
-  private readonly onCompactChange = (event: MediaQueryListEvent): void => {
-    this.compact = event.matches
+  /**
+   * The component's own breakpoint: the two-pane layout only fits while the
+   * identity side is at least as wide as the metric side. A narrow window or a
+   * narrow parent switches to the stacked cards even on a desktop viewport.
+   */
+  private updateLayout(): void {
+    const width = this.getBoundingClientRect().width
+    if (width <= 0) {
+      return
+    }
+    const pane = this.renderRoot.querySelector<HTMLElement>('.pane.metrics')
+    if (pane) {
+      const measured = pane.getBoundingClientRect().width
+      if (measured > 0) {
+        this.metricsWidth = measured
+      }
+    }
+    this.compact = width - this.metricsWidth < this.metricsWidth
+  }
+
+  protected override updated(): void {
+    this.updateLayout()
   }
 
   private start(): void {
@@ -1464,7 +1487,12 @@ export class AnthProcesses extends LitElement {
     }
     .compact-identity .pid { flex: 0 0 auto; }
     .compact-identity .command {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
       min-width: 0;
+      overflow: hidden;
       white-space: normal;
       overflow-wrap: anywhere;
     }
