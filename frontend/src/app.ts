@@ -232,7 +232,7 @@ export class AnthApp extends HTMLElement {
             aria-expanded="true"
             aria-label="${msg('Collapse sidebar')}"
             title="${msg('Collapse sidebar')}"
-          ><anth-icon name="chevron-left"></anth-icon></button>
+          ><anth-icon name="menu"></anth-icon></button>
           <nav aria-label="${msg('Sections')}" data-sidebar></nav>
           <div class="nav-foot" data-nav-foot></div>
         </aside>
@@ -324,12 +324,6 @@ export class AnthApp extends HTMLElement {
     button.setAttribute('aria-label', label)
     button.setAttribute('title', label)
     button.setAttribute('aria-expanded', String(!this.#sidebarCollapsed))
-    button
-      .querySelector('anth-icon')
-      ?.setAttribute(
-        'name',
-        this.#sidebarCollapsed ? 'chevron-right' : 'chevron-left',
-      )
   }
 
   /** Language and sign-out, pinned to the bottom of the sidebar and the drawer. */
@@ -748,7 +742,7 @@ const STYLE = `
   }
   .sidebar-toggle:hover { color: var(--text, #dbe6f2); border-color: var(--panel-border, #223041); }
   .sidebar-toggle:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
-  .sidebar-toggle anth-icon { font-size: 14px; }
+  .sidebar-toggle anth-icon { font-size: 16px; }
 
   .sidebar nav, anth-nav-drawer nav { display: grid; gap: 0.25rem; }
   .sidebar nav { flex: 0 0 auto; }

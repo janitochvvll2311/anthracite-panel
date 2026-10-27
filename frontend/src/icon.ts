@@ -50,8 +50,6 @@ const ICONS: Record<string, string> = {
   undo: '<path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 7"/>',
   'chevron-down': '<path d="m6 9 6 6 6-6"/>',
   'chevron-up': '<path d="m18 15-6-6-6 6"/>',
-  'chevron-left': '<path d="m15 18-6-6 6-6"/>',
-  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
   power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>',
   login:
     '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>',
