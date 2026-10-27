@@ -1,8 +1,8 @@
 # Documentation
 
-This branch is the v0.3.0 rewrite. Phases 0–4 are implemented and Phase 5 has
-started with the read-only network inventory; the remaining feature
-documentation is added with the code it describes.
+This branch is the v0.3.0 rewrite. Phases 0–4 are implemented and Phase 5 is in
+progress with the network inventory and its guarded mutations; the remaining
+feature documentation is added with the code it describes.
 
 ## User contract
 
@@ -12,7 +12,7 @@ documentation is added with the code it describes.
 | [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, processes, network, SSE and error shape |
 | [terminal.md](terminal.md) | PTY sessions, policy, socket/WebSocket contract and mobile UI |
 | [processes.md](processes.md) | Process table, signals, spawn policy, SSE, CLI and the flat/tree UI |
-| [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, SSE, CLI and the Interfaces tab |
+| [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, guarded up/down/create/edit/rename/delete, SSE, CLI and the Interfaces tab |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

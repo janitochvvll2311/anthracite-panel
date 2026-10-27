@@ -103,6 +103,26 @@ root filesystem, or the current account. It is not a card and does not grow.
   first and the cumulative total second in muted text.
 - A problem (errors, drops) is one muted-warning line under the card.
 
+### 6b. Mutations, when the feature has them
+
+The approved Network section later gained mutations without changing the read
+anatomy. The pattern for a section with write actions:
+
+- Add **Create** to the toolbar only when the manage policy is on, with an
+  `aria-expanded` toggle and one form under the toolbar. The form uses the same
+  panel surface as the cards and switches its kind-specific fields.
+- Append one full-width **manage row** under the card's read content, separated
+  by a top border. It contains the state action (if the control policy is on)
+  and edit/rename/delete (if manage is on).
+- Disabled actions explain themselves in `title`; do not hide a whole row
+  because one target is protected.
+- Open one inline form at a time per card for MTU and rename, and one inline
+  confirmation for delete. A physical entity adds its stronger warning.
+- A mutation refreshes the snapshot and shows one localized success sentence;
+  a refusal keeps the last good data and shows the daemon message above the
+  list. Do not restart the stream.
+- Controls are absent, not disabled, when the policy is off.
+
 ### 7. Responsive rule
 
 - Wide: `grid-template-columns: minmax(11rem, 0.9fr) minmax(13rem, 1.1fr) auto`.

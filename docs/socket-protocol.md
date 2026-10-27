@@ -351,7 +351,9 @@ Handles are owner-scoped: a handle from another auth session or socket uid is
         "mtu": 1500,
         "state": "up",
         "up": true,
+        "running": true,
         "loopback": false,
+        "physical": true,
         "addresses": [
           { "family": "inet", "address": "192.168.1.10", "prefix": 24, "scope": "global" }
         ],
@@ -379,6 +381,21 @@ Handles are owner-scoped: a handle from another auth session or socket uid is
 Counters are cumulative; a client derives a rate from two snapshots. The
 address `scope` is `host`, `link` or `global`. `speed_mbps` is omitted when the
 driver reports no positive speed. See [network.md](network.md).
+
+Mutations use the same dispatch as HTTP:
+
+```json
+{ "type": "network_set_state", "data": { "name": "eth0", "up": false } }
+{ "type": "network_create", "data": { "name": "br0", "kind": "bridge", "mtu": 1500 } }
+{ "type": "network_edit", "data": { "name": "eth0", "mtu": 1400 } }
+{ "type": "network_rename", "data": { "name": "eth0", "new_name": "lan0" } }
+{ "type": "network_delete", "data": { "name": "eth0" } }
+```
+
+Each answers `{"type":"network_changed","data":{"message":"..."}}`. A socket
+request has no peer address, so the delete path guard is skipped; loopback and
+last-default-route guards still apply. `[network] control` and
+`[network] manage` are independent.
 
 ### Processes
 

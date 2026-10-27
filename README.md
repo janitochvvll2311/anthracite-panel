@@ -6,10 +6,10 @@ and a web UI. Apache-2.0.
 ## Status
 
 `v0.3.0` is a rewrite in progress. Phases 0–4 are in place: foundation,
-host-info, auth/lifecycle, files and the terminal and process slices. Phase 5
-has started with the read-only network inventory; interface mutations and the
-firewall are next. The remaining phases are volumes/partitions/accounts,
-plugins and hardening/release.
+host-info, auth/lifecycle, files and the terminal and process slices. Phase 5 is
+in progress: the network inventory and its guarded interface mutations are in
+place; the firewall is next. The remaining phases are
+volumes/partitions/accounts, plugins and hardening/release.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
@@ -37,9 +37,10 @@ plugins and hardening/release.
 - Processes: paginated `/proc` snapshots, an SSE watch feed, allowlisted
   signals guarded by `pid + start_ticks`, allowlisted detached spawns, and a
   flat/tree manager with live CPU/memory in the web UI.
-- Network: read-only interface inventory from sysfs and `getifaddrs` with
-  IPv4/IPv6 addresses, cumulative counters, default routes and client-derived
-  rates, over socket, HTTP, SSE, CLI and the Network section.
+- Network: interface inventory from sysfs and `getifaddrs` with IPv4/IPv6
+  addresses, cumulative counters, default routes and client-derived rates, plus
+  policy-gated up/down, create, edit, rename and delete through direct `ip`
+  argv, over socket, HTTP, SSE, CLI and the Network section.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused

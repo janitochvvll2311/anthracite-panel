@@ -169,15 +169,29 @@ different program.
 ## `network`
 
 ```bash
-anth-panel network
-anth-panel network --watch
-anth-panel network --watch 2s
+anth-panel network list
+anth-panel network ls --watch
+anth-panel network ls --watch 2s
+anth-panel network up eth0
+anth-panel network down eth0
+anth-panel network create br0 --kind bridge --mtu 1500 --up --yes
+anth-panel network edit eth0 --mtu 1400 --yes
+anth-panel network rename eth0 lan0 --yes
+anth-panel network delete eth0 --yes
 ```
 
-Prints the interfaces, one row per address, then the default routes. The
-counters are cumulative bytes; the CLI does not derive rates. `--watch` repeats
-the table until Ctrl-C, and a bare `--watch` uses `2s`. Reading works regardless
-of `[network] control` and `[network] manage`; this slice has no mutations.
+`list` (alias `ls`) prints the interfaces, one row per address, then the default
+routes. The counters are cumulative bytes; the CLI does not derive rates.
+`--watch` repeats the table until Ctrl-C, and a bare `--watch` uses `2s`.
+
+`up` and `down` need `[network] control`. `create`, `edit`, `rename` and
+`delete` need `[network] manage`; `edit --up/--down` also needs `control`.
+They ask for confirmation on a TTY and refuse without `--yes` when stdin is not
+a terminal. `create` accepts `--kind` (`veth`, `bridge`, `bond`, `vlan`,
+`dummy` or `tun-tap`), `--peer`, `--link`, `--vlan-id`, `--mtu` and `--up`.
+`edit` takes `--mtu`, `--up` or `--down`.
+Mutations print the daemon's one-line message. Reading works regardless of both
+switches.
 
 ## `process`
 

@@ -175,8 +175,9 @@ failure is an `event: error` with the error JSON and the stream closes.
 
 ## Network
 
-The read-only inventory; policy and the contract are in [network.md](network.md).
-Both routes require a live access token unless auth is disabled.
+The inventory and its guarded mutations; policy and the contract are in
+[network.md](network.md). Every route requires a live access token unless auth
+is disabled.
 
 ### `GET /api/network`
 
@@ -191,7 +192,9 @@ Both routes require a live access token unless auth is disabled.
       "mtu": 1500,
       "state": "up",
       "up": true,
+      "running": true,
       "loopback": false,
+      "physical": true,
       "addresses": [
         { "family": "inet", "address": "192.168.1.10", "prefix": 24, "scope": "global" }
       ],
@@ -230,6 +233,27 @@ Server-Sent Events, the same shape as `host-info/watch`:
 - keep-alive comments every 15 seconds.
 
 A bad interval is a `400` before the stream opens.
+
+### Network mutations
+
+All five routes are `POST`, require a live session, and answer
+`200 {"message":"..."}`. The bodies and guards are in [network.md](network.md).
+
+| Route | Body | Policy |
+| --- | --- | --- |
+| `/api/network/state` | `{"name":"eth0","up":false}` | `[network] control` |
+| `/api/network/create` | `{"name":"br0","kind":"bridge","mtu":1500,"up":false}` | `[network] manage` |
+| `/api/network/edit` | `{"name":"eth0","mtu":1400,"up":false}` | `[network] manage`; `up` also needs `control` |
+| `/api/network/rename` | `{"name":"eth0","new_name":"lan0"}` | `[network] manage` |
+| `/api/network/delete` | `{"name":"eth0"}` | `[network] manage` |
+
+`create` accepts `veth` (with `peer`), `vlan` (with `link` and `vlan_id`),
+`bridge`, `bond`, `dummy` and `tun`. The delete route adds the request's peer
+address on the server; a `peer` in the body is ignored. Refusals use
+`403 network_control_disabled`, `403 network_manage_disabled`, `403
+protected_interface`, `409 interface_up`, `409 interface_exists`, `404
+interface_not_found`, `400 invalid_interface`, `403 ip_permission` and `500
+ip_failed`/`ip_unavailable`.
 
 ## Settings and lifecycle
 
