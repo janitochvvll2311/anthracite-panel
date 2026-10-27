@@ -276,6 +276,17 @@ export class AnthTerminalTabs extends LitElement {
     }
   }
 
+  /**
+   * Keeps the xterm textarea focused while a hotkey is pressed.
+   *
+   * Without this, Android closes the soft keyboard as soon as the button takes
+   * focus, so the following click has nowhere to send `Ctrl-C`.
+   */
+  private readonly keepTerminalFocus = (event: Event): void => {
+    event.preventDefault()
+    this.sessions.find((session) => session.key === this.active)?.terminal.focus()
+  }
+
   override connectedCallback(): void {
     super.connectedCallback()
     this.addEventListener('touchstart', this.onTouchStart, { passive: false })
@@ -486,7 +497,12 @@ export class AnthTerminalTabs extends LitElement {
 
         <div class="screens"></div>
 
-        <div class="hotkeys" role="toolbar" aria-label=${msg('Terminal keys')}>
+        <div
+          class="hotkeys"
+          role="toolbar"
+          aria-label=${msg('Terminal keys')}
+          @pointerdown=${this.keepTerminalFocus}
+        >
           <div class="hotkey-row">
             <button
               type="button"

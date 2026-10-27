@@ -120,6 +120,9 @@ Sessions survive navigating to Files or Settings because the window lives on
 - Mobile extended keyboard above the soft keyboard: `Ctrl`, `Alt`, `Esc`, `Tab`,
   arrows, `Home/End`, `PgUp/PgDn`, `^C`, `^D`, `^L`, `^Z` and common symbols.
   `Ctrl`/`Alt` are sticky for the next character key.
+- The window follows `visualViewport` and the viewport declares
+  `interactive-widget=resizes-content`, so the key bar stays above the soft
+  keyboard. Hotkey presses keep xterm focused instead of closing the keyboard.
 - Double-tap sends Tab; pinch changes font size; long-press and drag sends
   arrow keys; long-press selects text with the normal mobile selection UI.
 - `A−`/`A+` change font size; the keyboard button hides the soft keyboard.

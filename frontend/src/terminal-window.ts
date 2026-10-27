@@ -7,6 +7,37 @@ import type { AnthWindow } from './window'
 
 let terminalWindow: AnthWindow | undefined
 let terminalHost: AnthTerminalTabs | undefined
+let viewportTarget: AnthWindow | undefined
+
+/**
+ * Keeps the terminal inside the *visual* viewport.
+ *
+ * On Android the layout viewport can stay full height while the soft keyboard
+ * covers its lower half; the hotkey bar would end up behind the keyboard.
+ * `visualViewport` reports the visible rectangle, including the keyboard.
+ */
+function syncViewport(): void {
+  const target = viewportTarget
+  const viewport = globalThis.visualViewport
+  if (!target || !viewport) return
+  target.style.top = `${viewport.offsetTop}px`
+  target.style.height = `${viewport.height}px`
+  target.style.bottom = 'auto'
+}
+
+function startViewportSync(target: AnthWindow): void {
+  stopViewportSync()
+  viewportTarget = target
+  globalThis.visualViewport?.addEventListener('resize', syncViewport)
+  globalThis.visualViewport?.addEventListener('scroll', syncViewport)
+  syncViewport()
+}
+
+function stopViewportSync(): void {
+  globalThis.visualViewport?.removeEventListener('resize', syncViewport)
+  globalThis.visualViewport?.removeEventListener('scroll', syncViewport)
+  viewportTarget = undefined
+}
 
 /**
  * Opens the one global terminal window, or focuses it when it exists.
@@ -26,6 +57,7 @@ export async function openTerminalWindow(): Promise<void> {
     host.addEventListener(TERMINAL_TABS_EMPTY_EVENT, () => window.close())
     window.addEventListener(WINDOW_CLOSE_EVENT, () => {
       window.remove()
+      stopViewportSync()
       if (terminalWindow === window) {
         terminalWindow = undefined
         terminalHost = undefined
@@ -41,6 +73,7 @@ export async function openTerminalWindow(): Promise<void> {
   if (!window || !host) {
     throw new Error('the terminal window could not be created')
   }
+  startViewportSync(window)
   window.restore()
   window.open = true
   await host.updateComplete
