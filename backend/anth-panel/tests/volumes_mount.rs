@@ -76,6 +76,7 @@ impl Probe for FakeProbe {
 
 struct FakeMountRunner {
     calls: Mutex<Vec<(String, Vec<String>)>>,
+    stdin_calls: Mutex<Vec<String>>,
     output: Mutex<VecDeque<MountOutput>>,
 }
 
@@ -83,6 +84,7 @@ impl FakeMountRunner {
     fn new(outputs: Vec<MountOutput>) -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
+            stdin_calls: Mutex::new(Vec::new()),
             output: Mutex::new(outputs.into()),
         }
     }
@@ -108,15 +110,28 @@ impl MountRunner for FakeMountRunner {
                 stderr: String::new(),
             }))
     }
+
+    fn run_with_stdin(
+        &self,
+        program: &str,
+        args: &[String],
+        stdin: &str,
+    ) -> Result<MountOutput, String> {
+        self.stdin_calls
+            .lock()
+            .expect("lock")
+            .push(stdin.to_string());
+        self.run(program, args)
+    }
 }
 
 fn volumes_config(control: bool) -> VolumesConfig {
     VolumesConfig {
         control,
-        partition: false,
-        format: false,
+        partition: true,
+        format: true,
         mount_root: "/tmp".to_string(),
-        disk_allow: Vec::new(),
+        disk_allow: vec!["/dev/sda".to_string()],
     }
 }
 
@@ -323,6 +338,76 @@ async fn the_socket_mount_uses_the_same_dispatch() {
     }
     server.abort();
     let _ = fs::remove_dir_all(target);
+}
+
+#[tokio::test]
+async fn the_http_partition_create_and_format_routes_use_the_scripted_runner() {
+    let runner = Arc::new(FakeMountRunner::new(vec![]));
+    let (daemon, _paths) = daemon(
+        "partition-api",
+        true,
+        Arc::new(FakeProbe::new()),
+        Arc::clone(&runner),
+    );
+    let router = api::router(state(daemon));
+
+    let response = router
+        .clone()
+        .oneshot(post(
+            "/api/volumes/partition/create",
+            json!({ "disk": "/dev/sda", "kind": "linux", "size_bytes": 512 }),
+        ))
+        .await
+        .expect("create partition");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["message"],
+        "created a linux partition of 512 bytes on /dev/sda"
+    );
+    let calls = runner.calls();
+    assert_eq!(calls[0].0, "sfdisk");
+    assert_eq!(calls[0].1, vec!["--no-reread", "--append", "/dev/sda"]);
+    assert_eq!(
+        runner.stdin_calls.lock().expect("lock").as_slice(),
+        &["size=1,type=linux".to_string()]
+    );
+
+    let response = router
+        .oneshot(post(
+            "/api/volumes/format",
+            json!({ "partition": "/dev/sda2", "fs_type": "ext4" }),
+        ))
+        .await
+        .expect("format");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(response).await["message"],
+        "formatted /dev/sda2 as ext4"
+    );
+    let calls = runner.calls();
+    assert_eq!(calls[1].0, "mkfs.ext4");
+    assert_eq!(calls[1].1, vec!["/dev/sda2"]);
+}
+
+#[tokio::test]
+async fn the_partition_route_refuses_a_disk_outside_the_allowlist() {
+    let runner = Arc::new(FakeMountRunner::new(vec![]));
+    let (daemon, _paths) = daemon(
+        "partition-api-denied",
+        true,
+        Arc::new(FakeProbe::new()),
+        Arc::clone(&runner),
+    );
+    let router = api::router(state(daemon));
+    let response = router
+        .oneshot(post(
+            "/api/volumes/partition/delete",
+            json!({ "disk": "/dev/sdb", "number": 1 }),
+        ))
+        .await
+        .expect("delete");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(runner.calls().is_empty());
 }
 
 #[test]

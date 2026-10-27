@@ -348,6 +348,26 @@ impl Daemon {
                 let message = blocking(move || volumes.unmount(&request)).await?;
                 Ok(Response::VolumeChanged { message })
             }
+            Request::VolumePartitionCreate(request) => {
+                let volumes = self.volumes.clone();
+                let message = blocking(move || volumes.create_partition(&request)).await?;
+                Ok(Response::VolumeChanged { message })
+            }
+            Request::VolumePartitionResize(request) => {
+                let volumes = self.volumes.clone();
+                let message = blocking(move || volumes.resize_partition(&request)).await?;
+                Ok(Response::VolumeChanged { message })
+            }
+            Request::VolumePartitionDelete(request) => {
+                let volumes = self.volumes.clone();
+                let message = blocking(move || volumes.delete_partition(&request)).await?;
+                Ok(Response::VolumeChanged { message })
+            }
+            Request::VolumeFormat(request) => {
+                let volumes = self.volumes.clone();
+                let message = blocking(move || volumes.format_partition(&request)).await?;
+                Ok(Response::VolumeChanged { message })
+            }
             Request::Restart => {
                 let lifecycle = Arc::clone(&self.lifecycle);
                 tokio::spawn(async move {
@@ -585,6 +605,10 @@ fn operation_of(request: &Request) -> &'static str {
         Request::Volumes => "volumes",
         Request::VolumesMount(_) => "volumes-mount",
         Request::VolumesUnmount(_) => "volumes-unmount",
+        Request::VolumePartitionCreate(_) => "volume-partition-create",
+        Request::VolumePartitionResize(_) => "volume-partition-resize",
+        Request::VolumePartitionDelete(_) => "volume-partition-delete",
+        Request::VolumeFormat(_) => "volume-format",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

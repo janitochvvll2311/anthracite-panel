@@ -14,8 +14,8 @@ use anth_panel::lifecycle::{self, Lifecycle};
 use anth_panel::log::{Format, Level, Logger, Out, Settings};
 use anth_panel::{render, socket};
 use anth_wire::{
-    FirewallAction, FirewallChain, FirewallProtocol, PROTOCOL_VERSION, Request, Response,
-    parse_interval,
+    FirewallAction, FirewallChain, FirewallProtocol, PROTOCOL_VERSION, PartitionKind, Request,
+    Response, parse_interval,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -509,6 +509,108 @@ enum StorageCommand {
     Mount(StorageMountArgs),
     /// Unmount one current mountpoint.
     Unmount(StorageUnmountArgs),
+    /// Create, resize or delete a partition.
+    Partition {
+        #[command(subcommand)]
+        command: StoragePartitionCommand,
+    },
+    /// Format one partition with a filesystem.
+    Format(StorageFormatArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum StoragePartitionCommand {
+    /// Create one partition on a whole disk.
+    Create(StoragePartitionCreateArgs),
+    /// Resize one existing partition.
+    Resize(StoragePartitionResizeArgs),
+    /// Delete one existing partition.
+    Delete(StoragePartitionDeleteArgs),
+}
+
+#[derive(Args, Debug)]
+struct StoragePartitionCreateArgs {
+    /// Whole disk, for example /dev/sdb.
+    disk: String,
+    /// Partition kind.
+    #[arg(long, value_enum, default_value_t = PartitionKindArg::Linux)]
+    kind: PartitionKindArg,
+    /// Size in bytes; must be a multiple of 512.
+    #[arg(long)]
+    size_bytes: u64,
+    /// Offset in bytes; 0 lets sfdisk choose.
+    #[arg(long, default_value_t = 0)]
+    start_bytes: u64,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct StoragePartitionResizeArgs {
+    /// Whole disk, for example /dev/sdb.
+    disk: String,
+    /// Partition number.
+    number: u32,
+    /// New size in bytes; must be a multiple of 512.
+    #[arg(long)]
+    size_bytes: u64,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct StoragePartitionDeleteArgs {
+    /// Whole disk, for example /dev/sdb.
+    disk: String,
+    /// Partition number.
+    number: u32,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct StorageFormatArgs {
+    /// Partition path, for example /dev/sdb1.
+    partition: String,
+    /// ext4, xfs, vfat, exfat, btrfs or swap.
+    #[arg(long = "type", value_name = "FS")]
+    fs_type: String,
+    /// Optional filesystem label.
+    #[arg(long)]
+    label: Option<String>,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum PartitionKindArg {
+    Linux,
+    Swap,
+    Efi,
+}
+
+impl PartitionKindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Swap => "swap",
+            Self::Efi => "efi",
+        }
+    }
+}
+
+impl From<PartitionKindArg> for PartitionKind {
+    fn from(value: PartitionKindArg) -> Self {
+        match value {
+            PartitionKindArg::Linux => Self::Linux,
+            PartitionKindArg::Swap => Self::Swap,
+            PartitionKindArg::Efi => Self::Efi,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -1406,6 +1508,78 @@ async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> Cl
                 &mut client,
                 Request::VolumesUnmount(anth_wire::VolumeUnmountRequest {
                     target: args.target.clone(),
+                }),
+            )
+            .await
+        }
+        StorageCommand::Partition { command } => match command {
+            StoragePartitionCommand::Create(args) => {
+                if !args.yes {
+                    confirm(&format!(
+                        "Create a {} partition of {} bytes on {}?",
+                        args.kind.as_str(),
+                        args.size_bytes,
+                        args.disk
+                    ))?;
+                }
+                volume_change(
+                    &mut client,
+                    Request::VolumePartitionCreate(anth_wire::VolumePartitionCreate {
+                        disk: args.disk.clone(),
+                        kind: args.kind.into(),
+                        start_bytes: args.start_bytes,
+                        size_bytes: args.size_bytes,
+                    }),
+                )
+                .await
+            }
+            StoragePartitionCommand::Resize(args) => {
+                if !args.yes {
+                    confirm(&format!(
+                        "Resize partition {} on {} to {} bytes?",
+                        args.number, args.disk, args.size_bytes
+                    ))?;
+                }
+                volume_change(
+                    &mut client,
+                    Request::VolumePartitionResize(anth_wire::VolumePartitionResize {
+                        disk: args.disk.clone(),
+                        number: args.number,
+                        size_bytes: args.size_bytes,
+                    }),
+                )
+                .await
+            }
+            StoragePartitionCommand::Delete(args) => {
+                if !args.yes {
+                    confirm(&format!(
+                        "Delete partition {} on {}? This cannot be undone.",
+                        args.number, args.disk
+                    ))?;
+                }
+                volume_change(
+                    &mut client,
+                    Request::VolumePartitionDelete(anth_wire::VolumePartitionDelete {
+                        disk: args.disk.clone(),
+                        number: args.number,
+                    }),
+                )
+                .await
+            }
+        },
+        StorageCommand::Format(args) => {
+            if !args.yes {
+                confirm(&format!(
+                    "Format {} as {}? This destroys its contents.",
+                    args.partition, args.fs_type
+                ))?;
+            }
+            volume_change(
+                &mut client,
+                Request::VolumeFormat(anth_wire::VolumeFormatRequest {
+                    partition: args.partition.clone(),
+                    fs_type: args.fs_type.clone(),
+                    label: args.label.clone(),
                 }),
             )
             .await

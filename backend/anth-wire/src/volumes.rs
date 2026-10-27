@@ -133,6 +133,91 @@ pub struct VolumeMount {
     pub usage: Option<VolumeUsage>,
 }
 
+/// The partition-table type the panel may create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PartitionKind {
+    Linux,
+    Swap,
+    Efi,
+}
+
+impl PartitionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Swap => "swap",
+            Self::Efi => "efi",
+        }
+    }
+
+    /// The value `sfdisk` expects in its input script.
+    pub fn script_type(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Swap => "swap",
+            Self::Efi => "uefi",
+        }
+    }
+}
+
+impl FromStr for PartitionKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "linux" => Ok(Self::Linux),
+            "swap" => Ok(Self::Swap),
+            "efi" | "uefi" => Ok(Self::Efi),
+            _ => Err(format!(
+                "unknown partition kind `{value}`; expected linux, swap or efi"
+            )),
+        }
+    }
+}
+
+impl fmt::Display for PartitionKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Create one partition on a whole disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumePartitionCreate {
+    pub disk: String,
+    pub kind: PartitionKind,
+    /// Offset from the start; `0` lets sfdisk choose.
+    #[serde(default)]
+    pub start_bytes: u64,
+    pub size_bytes: u64,
+}
+
+/// Resize one existing partition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumePartitionResize {
+    pub disk: String,
+    pub number: u32,
+    pub size_bytes: u64,
+}
+
+/// Delete one existing partition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumePartitionDelete {
+    pub disk: String,
+    pub number: u32,
+}
+
+/// Format one partition with a filesystem.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeFormatRequest {
+    pub partition: String,
+    /// `ext4`, `xfs`, `vfat`, `exfat`, `btrfs` or `swap`.
+    pub fs_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
 /// A request to mount one device under the configured mount root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VolumeMountRequest {

@@ -12,7 +12,10 @@ use crate::network::{NetworkCreate, NetworkEdit, NetworkSnapshot};
 use crate::page::Page;
 use crate::process::{ProcessSignal, ProcessSnapshot, ProcessStarted};
 use crate::terminal::{TerminalOpened, TerminalOutput};
-use crate::volumes::{VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest};
+use crate::volumes::{
+    VolumeFormatRequest, VolumeMountRequest, VolumePartitionCreate, VolumePartitionDelete,
+    VolumePartitionResize, VolumeSnapshot, VolumeUnmountRequest,
+};
 
 /// Bumped when a change would make an older peer misread a message.
 ///
@@ -98,6 +101,14 @@ pub enum Request {
     VolumesMount(VolumeMountRequest),
     /// Unmount one current mountpoint. Requires `[volumes] control`.
     VolumesUnmount(VolumeUnmountRequest),
+    /// Create one partition. Requires `[volumes] partition` and `disk_allow`.
+    VolumePartitionCreate(VolumePartitionCreate),
+    /// Resize one partition. Requires `[volumes] partition` and `disk_allow`.
+    VolumePartitionResize(VolumePartitionResize),
+    /// Delete one partition. Requires `[volumes] partition` and `disk_allow`.
+    VolumePartitionDelete(VolumePartitionDelete),
+    /// Format one partition. Requires `[volumes] format` and `disk_allow`.
+    VolumeFormat(VolumeFormatRequest),
     /// Replaces this process with a fresh copy of the same command line, which
     /// re-reads the configuration.
     Restart,

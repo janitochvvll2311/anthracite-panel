@@ -13,9 +13,10 @@ use std::time::{Duration, Instant};
 use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
     FileWritten, FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot, NetworkCreate,
-    NetworkEdit, NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request,
-    Response, TerminalSize, TrashListing, VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest,
-    WireError,
+    NetworkEdit, NetworkSnapshot, Page, PageRequest, PartitionKind, ProcessSignal, ProcessSnapshot,
+    Request, Response, TerminalSize, TrashListing, VolumeFormatRequest, VolumeMountRequest,
+    VolumePartitionCreate, VolumePartitionDelete, VolumePartitionResize, VolumeSnapshot,
+    VolumeUnmountRequest, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -101,6 +102,19 @@ pub fn router(state: AppState) -> Router {
         .route("/api/volumes", get(volumes))
         .route("/api/volumes/mount", post(volumes_mount))
         .route("/api/volumes/unmount", post(volumes_unmount))
+        .route(
+            "/api/volumes/partition/create",
+            post(volume_partition_create),
+        )
+        .route(
+            "/api/volumes/partition/resize",
+            post(volume_partition_resize),
+        )
+        .route(
+            "/api/volumes/partition/delete",
+            post(volume_partition_delete),
+        )
+        .route("/api/volumes/format", post(volume_format))
         .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
@@ -1147,6 +1161,108 @@ async fn volume_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<Va
             "a storage change answered unexpectedly: {other:?}"
         ))),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumePartitionCreateBody {
+    disk: String,
+    kind: String,
+    #[serde(default)]
+    start_bytes: u64,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumePartitionResizeBody {
+    disk: String,
+    number: u32,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumePartitionDeleteBody {
+    disk: String,
+    number: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumeFormatBody {
+    partition: String,
+    fs_type: String,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+async fn volume_partition_create(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<VolumePartitionCreateBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let kind = body
+        .kind
+        .parse::<PartitionKind>()
+        .map_err(ApiError::invalid)?;
+    volume_change(
+        &state.daemon,
+        Request::VolumePartitionCreate(VolumePartitionCreate {
+            disk: body.disk,
+            kind,
+            start_bytes: body.start_bytes,
+            size_bytes: body.size_bytes,
+        }),
+    )
+    .await
+}
+
+async fn volume_partition_resize(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<VolumePartitionResizeBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    volume_change(
+        &state.daemon,
+        Request::VolumePartitionResize(VolumePartitionResize {
+            disk: body.disk,
+            number: body.number,
+            size_bytes: body.size_bytes,
+        }),
+    )
+    .await
+}
+
+async fn volume_partition_delete(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<VolumePartitionDeleteBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    volume_change(
+        &state.daemon,
+        Request::VolumePartitionDelete(VolumePartitionDelete {
+            disk: body.disk,
+            number: body.number,
+        }),
+    )
+    .await
+}
+
+async fn volume_format(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<VolumeFormatBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    volume_change(
+        &state.daemon,
+        Request::VolumeFormat(VolumeFormatRequest {
+            partition: body.partition,
+            fs_type: body.fs_type,
+            label: body.label,
+        }),
+    )
+    .await
 }
 
 /// Validates the `interval` query shared by the SSE routes.

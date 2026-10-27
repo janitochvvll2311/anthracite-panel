@@ -40,7 +40,8 @@ pub use terminal::{
     MAX_TERMINAL_WAIT_MS, MIN_TERMINAL_DIMENSION, TerminalOpened, TerminalOutput, TerminalSize,
 };
 pub use volumes::{
-    VolumeDevice, VolumeKind, VolumeMount, VolumeMountRequest, VolumeSnapshot,
+    PartitionKind, VolumeDevice, VolumeFormatRequest, VolumeKind, VolumeMount, VolumeMountRequest,
+    VolumePartitionCreate, VolumePartitionDelete, VolumePartitionResize, VolumeSnapshot,
     VolumeUnmountRequest, VolumeUsage,
 };
 

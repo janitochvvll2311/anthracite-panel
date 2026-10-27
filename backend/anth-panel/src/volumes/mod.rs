@@ -4,10 +4,12 @@
 //! operations arrive in later slices and validate against a fresh snapshot.
 
 mod parse;
+mod partition;
 
 use std::ffi::CString;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,22 +73,65 @@ pub trait MountRunner: Send + Sync {
     /// `Err` means the program could not be executed; a refusal is
     /// `Ok(MountOutput { ok: false, .. })`.
     fn run(&self, program: &str, args: &[String]) -> Result<MountOutput, String>;
+
+    /// Runs a command with a script on stdin. `sfdisk` takes its partition
+    /// script this way so a size cannot become a second argv element.
+    fn run_with_stdin(
+        &self,
+        program: &str,
+        args: &[String],
+        _stdin: &str,
+    ) -> Result<MountOutput, String> {
+        self.run(program, args)
+    }
 }
 
 /// The real `mount`/`umount` binaries, invoked directly.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemMountRunner;
 
-impl MountRunner for SystemMountRunner {
-    fn run(&self, program: &str, args: &[String]) -> Result<MountOutput, String> {
-        let output = Command::new(program)
-            .args(args)
-            .output()
-            .map_err(|error| error.to_string())?;
+impl SystemMountRunner {
+    fn run_with_input(
+        &self,
+        program: &str,
+        args: &[String],
+        stdin: Option<&str>,
+    ) -> Result<MountOutput, String> {
+        let mut command = Command::new(program);
+        command.args(args);
+        let output = match stdin {
+            Some(script) => {
+                command.stdin(Stdio::piped()).stdout(Stdio::null());
+                let mut child = command.spawn().map_err(|error| error.to_string())?;
+                if let Some(mut pipe) = child.stdin.take() {
+                    pipe.write_all(script.as_bytes())
+                        .map_err(|error| error.to_string())?;
+                }
+                child
+                    .wait_with_output()
+                    .map_err(|error| error.to_string())?
+            }
+            None => command.output().map_err(|error| error.to_string())?,
+        };
         Ok(MountOutput {
             ok: output.status.success(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         })
+    }
+}
+
+impl MountRunner for SystemMountRunner {
+    fn run(&self, program: &str, args: &[String]) -> Result<MountOutput, String> {
+        self.run_with_input(program, args, None)
+    }
+
+    fn run_with_stdin(
+        &self,
+        program: &str,
+        args: &[String],
+        stdin: &str,
+    ) -> Result<MountOutput, String> {
+        self.run_with_input(program, args, Some(stdin))
     }
 }
 
