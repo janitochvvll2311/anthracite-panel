@@ -546,6 +546,10 @@
   <source>Uploaded <x id="0" equiv-text="${file.name}"/></source>
   <target>Subido <x id="0" equiv-text="${file.name}"/></target>
 </trans-unit>
+<trans-unit id="s073167242a6c50f5">
+  <source><x id="0" equiv-text="${file.name}"/> already exists. Replace it?</source>
+  <target><x id="0" equiv-text="${file.name}"/> ya existe. ¿Reemplazarlo?</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

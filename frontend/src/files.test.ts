@@ -124,6 +124,7 @@ async function mount(client: FilesClient): Promise<FilesElement> {
 
 afterEach(() => {
   document.body.innerHTML = ''
+  vi.unstubAllGlobals()
 })
 
 test('lists the root and navigates into a directory', async () => {
@@ -394,6 +395,29 @@ test('offers create and upload from the FAB menu', async () => {
   await settle(element)
 
   expect(client.upload).toHaveBeenCalledWith('/upload.txt', 'aGVsbG8gYnl0ZXM=', true)
+  expect(element.shadowRoot?.querySelector('.notice')?.textContent).toContain('Uploaded upload.txt')
+})
+
+test('asks before replacing an uploaded file that exists', async () => {
+  const client = fakeClient()
+  const upload = vi
+    .fn()
+    .mockRejectedValueOnce(Object.assign(new Error('already exists'), { code: 'exists' }))
+    .mockResolvedValueOnce({ path: '/upload.txt', size: 5 })
+  client.upload = upload
+  const element = await mount(client)
+  vi.stubGlobal('confirm', vi.fn(() => true))
+
+  const file = new File(['hello'], 'upload.txt', { type: 'text/plain' })
+  const picker = element.shadowRoot?.querySelector<HTMLInputElement>('.picker')
+  Object.defineProperty(picker, 'files', { configurable: true, value: [file] })
+  picker?.dispatchEvent(new Event('change'))
+  await settle(element)
+  await settleWindows()
+  await settle(element)
+
+  expect(upload).toHaveBeenNthCalledWith(1, '/upload.txt', 'aGVsbG8=', true)
+  expect(upload).toHaveBeenNthCalledWith(2, '/upload.txt', 'aGVsbG8=', false)
   expect(element.shadowRoot?.querySelector('.notice')?.textContent).toContain('Uploaded upload.txt')
 })
 

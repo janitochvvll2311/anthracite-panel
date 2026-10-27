@@ -9,6 +9,7 @@ import { describeError } from './errors'
 import { openFileEditor } from './editor-window'
 import { FILES_CHANGED_EVENT } from './file-editor'
 import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
+import type { ResponseError } from './http'
 import { join, normalize, parent } from './paths'
 import './fab-menu'
 import './icon'
@@ -233,9 +234,21 @@ export class AnthFiles extends LitElement {
     this.busy = true
     this.error = ''
     this.notice = ''
+    const path = join(this.path, file.name)
     try {
       const bytes = new Uint8Array(await file.arrayBuffer())
-      await this.client.upload(join(this.path, file.name), encodeBase64(bytes), true)
+      const content = encodeBase64(bytes)
+      try {
+        await this.client.upload(path, content, true)
+      } catch (error) {
+        if ((error as ResponseError).code !== 'exists') {
+          throw error
+        }
+        if (!confirm(msg(str`${file.name} already exists. Replace it?`))) {
+          return
+        }
+        await this.client.upload(path, content, false)
+      }
       await this.open(this.path)
       this.notice = msg(str`Uploaded ${file.name}`)
     } catch (error) {
