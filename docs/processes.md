@@ -212,11 +212,13 @@ the started program; because every remaining word is passed as an argument, put
 **Processes** sits next to **Terminal** in the sidebar. It follows v0.1's
 process manager:
 
-- Two views share one sorted row set: **Flat** (PID, COMMAND, THREADS, USER,
-  STATE, MEM, CPU) and **Tree** (the same columns, nested by `ppid` with guide
-  lines and a chevron per branch). Header clicks sort by any metric except PID
-  and COMMAND in the tree, where the hierarchy owns the order. Branches
-  collapse independently and stay collapsed across refreshes.
+- Two views share one sorted row set. **Flat** has PID, COMMAND, THREADS, USER,
+  STATE, MEM and CPU as columns. **Tree** nests by `ppid`; each node carries its
+  pid and command immediately after its guides, so they follow the indentation
+  instead of sharing a fixed column with the rest of the table. Branches have a
+  chevron, collapse independently and stay collapsed across refreshes. Header
+  clicks sort by any metric; PID and COMMAND are not sortable in the tree,
+  where the hierarchy owns the order.
 - The feed is SSE: the refresh selector offers 1, 2, 5, 10 and 30 seconds, and
   Pause/Resume stops and restarts the stream. A manual Refresh fetches one page
   without restarting it.

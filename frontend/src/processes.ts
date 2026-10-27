@@ -286,37 +286,11 @@ export class AnthProcesses extends LitElement {
       this.descending = true
     }
     void this.updateComplete.then(() => {
-      if (view === 'flat') {
-        // The tree may have been scrolled right to show its pid; the flat pane
-        // starts at the pid again.
-        const pane = this.renderRoot.querySelector<HTMLElement>('.pane.identity')
-        if (pane) pane.scrollLeft = 0
-        return
-      }
-      this.revealIdentity()
+      // Both views start at the left edge: the tree shows its roots with their
+      // own pid and command next to each node.
+      const pane = this.renderRoot.querySelector<HTMLElement>('.pane.identity')
+      if (pane) pane.scrollLeft = 0
     })
-  }
-
-  /**
-   * On a phone the tree gutter can be wider than the identity pane. Start the
-   * pane at the pid instead of an empty stretch of guide lines; scrolling left
-   * still reveals the full hierarchy.
-   */
-  private revealIdentity(): void {
-    if (this.view !== 'tree') {
-      return
-    }
-    const pane = this.renderRoot.querySelector<HTMLElement>('.pane.identity')
-    if (!pane) {
-      return
-    }
-    const indent =
-      Number.parseFloat(
-        getComputedStyle(pane).getPropertyValue('--tree-indent'),
-      ) || 0
-    if (indent > pane.clientWidth) {
-      pane.scrollLeft = indent - 8
-    }
   }
 
   private select(process: ProcessInfo): void {
@@ -731,16 +705,22 @@ export class AnthProcesses extends LitElement {
   }
 
   private renderIdentityHead(tree: boolean) {
+    if (tree) {
+      // A node carries its own pid and command, so there is no shared column
+      // to head: one label covers the identity pane.
+      return html`
+        <div class="row head identity-head" role="row">
+          <div class="cell tree-head" role="columnheader">${msg('Tree')}</div>
+        </div>
+      `
+    }
     const columns = processColumns()
     const pid = columns.find((column) => column.key === 'pid')!
     const command = columns.find((column) => column.key === 'command')!
     return html`
       <div class="row head identity-head" role="row">
-        ${tree
-          ? html`<div class="cell tree-head" role="columnheader">${msg('Tree')}</div>`
-          : nothing}
-        ${this.renderHeadCell(pid, !tree)}
-        ${this.renderHeadCell(command, !tree)}
+        ${this.renderHeadCell(pid, true)}
+        ${this.renderHeadCell(command, true)}
       </div>
     `
   }
@@ -894,13 +874,10 @@ export class AnthProcesses extends LitElement {
       return html`<p class="empty">${msg('No process matches the filter.')}</p>`
     }
 
-    const depth = treeRows.reduce((max, row) => Math.max(max, row.depth), 0)
-    const style = tree ? `--tree-indent: ${depth * 14 + 50}px` : nothing
     return html`
       <div
         class=${`table-shell ${tree ? 'tree-view' : 'flat-view'}`}
         part="table"
-        style=${style}
       >
         <div class="pane identity" role="rowgroup" @scroll=${this.syncVertical}>
           ${this.renderIdentityHead(tree)}
@@ -1129,9 +1106,6 @@ export class AnthProcesses extends LitElement {
       overflow-x: auto;
       --identity-columns: 4.5rem minmax(10rem, max-content);
     }
-    .table-shell.tree-view .pane.identity {
-      --identity-columns: var(--tree-indent) 4.5rem minmax(10rem, max-content);
-    }
     .pane.metrics {
       flex: 0 0 auto;
       overflow-x: hidden;
@@ -1150,6 +1124,25 @@ export class AnthProcesses extends LitElement {
     }
     .identity .row { grid-template-columns: var(--identity-columns); }
     .metrics .row { grid-template-columns: var(--metrics-columns); }
+
+    /* In the tree each node carries its own pid and command right after its
+       guides, instead of sharing fixed columns with every other row. */
+    .table-shell.tree-view .identity-row,
+    .table-shell.tree-view .identity-head {
+      display: flex;
+      gap: 0.35rem;
+      width: max-content;
+      min-width: 100%;
+    }
+    .table-shell.tree-view .identity-row .tree-cell,
+    .table-shell.tree-view .identity-row .pid,
+    .table-shell.tree-view .identity-row .command,
+    .table-shell.tree-view .identity-head .tree-head {
+      flex: 0 0 auto;
+    }
+    .table-shell.tree-view .identity-row .pid { padding: 0 0.15rem; }
+    .table-shell.tree-view .identity-row .command { padding-right: 1rem; }
+    .table-shell.tree-view .identity-head .tree-head { padding: 0 0.5rem; }
     .row.head {
       position: sticky;
       top: 0;
@@ -1284,9 +1277,6 @@ export class AnthProcesses extends LitElement {
     @media (max-width: 48rem) {
       .pane.metrics { --metrics-columns: 5.2rem 5.5rem 4.5rem; }
       .pane.identity { --identity-columns: 4rem minmax(8rem, max-content); }
-      .table-shell.tree-view .pane.identity {
-        --identity-columns: var(--tree-indent) 4rem minmax(8rem, max-content);
-      }
       /* Hidden header and row cells both leave their track, so the remaining
          columns still line up. */
       .col-threads,
