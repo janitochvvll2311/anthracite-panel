@@ -58,7 +58,8 @@ impl FileService {
         &self.root
     }
 
-    /// Lists one page of a directory, sorted by name.
+    /// Lists one page of a directory: directories first, then everything else,
+    /// each group by name.
     pub fn list(&self, path: &str, request: &PageRequest) -> Result<Page<FileEntry>, WireError> {
         if !request.valid() {
             return Err(WireError::invalid(
@@ -118,16 +119,22 @@ impl FileService {
             ));
         }
 
-        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        entries.sort_by(|left, right| entry_key(left).cmp(&entry_key(right)));
         let limit = usize::from(request.limit());
         let start = match request.cursor.as_deref() {
-            Some(cursor) => entries.partition_point(|entry| entry.name.as_str() <= cursor),
+            Some(cursor) => {
+                let key = cursor_key(cursor);
+                entries.partition_point(|entry| entry_key(entry) <= key)
+            }
             None => 0,
         };
         let end = start.saturating_add(limit).min(entries.len());
         let items: Vec<FileEntry> = entries[start..end].to_vec();
         if end < entries.len() {
-            let next = items.last().map(|entry| entry.name.clone());
+            let next = items.last().map(|entry| {
+                let group = if entry.kind == "dir" { 'd' } else { 'f' };
+                format!("{group}:{}", entry.name)
+            });
             if let Some(next) = next {
                 return Ok(Page::with_next(items, next));
             }
@@ -448,6 +455,24 @@ fn escape(message: &str) -> WireError {
     WireError::new(ErrorKind::Forbidden, "path_escape", message)
 }
 
+/// Directories sort before every other kind; names break ties.
+fn entry_key(entry: &FileEntry) -> (u8, &str) {
+    (u8::from(entry.kind != "dir"), entry.name.as_str())
+}
+
+/// Cursors carry the group and the name so a page boundary stays correct even
+/// if the last entry disappears between pages. A cursor without a group is a
+/// legacy name and sorts before the file group.
+fn cursor_key(cursor: &str) -> (u8, &str) {
+    if let Some(name) = cursor.strip_prefix("d:") {
+        (0, name)
+    } else if let Some(name) = cursor.strip_prefix("f:") {
+        (1, name)
+    } else {
+        (0, cursor)
+    }
+}
+
 fn modified_ms(metadata: &fs::Metadata) -> u64 {
     metadata
         .modified()
@@ -493,11 +518,13 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_lists_in_name_order_and_pages() {
+    fn a_directory_lists_directories_first_and_pages() {
         let root = scratch("list");
         fs::write(root.join("b.txt"), b"b").expect("write");
         fs::write(root.join("a.txt"), b"a").expect("write");
+        fs::write(root.join("0.txt"), b"0").expect("write");
         fs::create_dir(root.join("dir")).expect("dir");
+        fs::create_dir(root.join("zdir")).expect("dir");
         let files = service(&root);
 
         let first = files
@@ -515,9 +542,9 @@ mod tests {
                 .iter()
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["a.txt", "b.txt"]
+            vec!["dir", "zdir"]
         );
-        assert_eq!(first.next.as_deref(), Some("b.txt"));
+        assert_eq!(first.next.as_deref(), Some("d:zdir"));
 
         let second = files
             .list(
@@ -534,9 +561,28 @@ mod tests {
                 .iter()
                 .map(|entry| entry.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["dir"]
+            vec!["0.txt", "a.txt"]
         );
-        assert_eq!(second.next, None);
+        assert_eq!(second.next.as_deref(), Some("f:a.txt"));
+
+        let third = files
+            .list(
+                "/",
+                &PageRequest {
+                    limit: Some(2),
+                    cursor: second.next.clone(),
+                },
+            )
+            .expect("third");
+        assert_eq!(
+            third
+                .items
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b.txt"]
+        );
+        assert_eq!(third.next, None);
 
         fs::remove_dir_all(root).expect("cleanup");
     }

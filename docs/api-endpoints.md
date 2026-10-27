@@ -229,12 +229,13 @@ refused.
     { "name": "etc", "kind": "dir", "size": 0, "modified_ms": 1790000000000 },
     { "name": "hosts", "kind": "file", "size": 220, "modified_ms": 1790000000000 }
   ],
-  "next": "hosts"
+  "next": "f:hosts"
 }
 ```
 
 `kind` is `file`, `dir`, `symlink` or `other`. `next` is absent on the last
-page. The listing is sorted by name; `cursor` is the previous `next` value.
+page. The listing puts every directory first and then the remaining entries,
+each group sorted by name. `cursor` is the previous `next` value and is opaque.
 
 ### `GET /api/files/read?path=etc/hosts&offset=0&max_bytes=...`
 

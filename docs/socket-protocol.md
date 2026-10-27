@@ -212,7 +212,7 @@ Lists will use:
 ```
 
 and answer with `items`, `next` and optional `total`. `next = null` is the only
-end signal. A cursor is opaque. No list uses it yet.
+end signal. A cursor is opaque; the Files listing uses it.
 
 ## Peer credentials
 

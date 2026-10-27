@@ -117,8 +117,9 @@ anth-panel files upload --path /tmp/logo.png --create < logo.png
 ```
 
 `list` reads one page of a directory under `[files] root` (`/` by default),
-sorted by name. `--limit` is 1–1000; `--cursor` is the `next` value from the
-previous page. `read` prints a UTF-8 text file, capped by
+with directories first and then the rest, each group sorted by name. `--limit`
+is 1–1000; `--cursor` is the `next` value from the previous page. `read` prints
+a UTF-8 text file, capped by
 `files.max_preview_bytes`; when it stops early, the next offset is printed to
 stderr. `delete` removes one file or symlink and requires `files.write = true`;
 directories and the root are refused. `write` reads UTF-8 content from stdin
