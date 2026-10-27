@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 
 use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
-    FileWritten, NetworkCreate, NetworkEdit, NetworkSnapshot, Page, PageRequest, ProcessSignal,
-    ProcessSnapshot, Request, Response, TerminalSize, TrashListing, WireError,
+    FileWritten, FirewallAction, FirewallProtocol, FirewallSnapshot, NetworkCreate, NetworkEdit,
+    NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request, Response,
+    TerminalSize, TrashListing, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -91,6 +92,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/network/edit", post(network_edit))
         .route("/api/network/rename", post(network_rename))
         .route("/api/network/delete", post(network_delete))
+        .route("/api/firewall", get(firewall_status))
+        .route("/api/firewall/rule", post(firewall_add))
+        .route("/api/firewall/delete", post(firewall_delete))
+        .route("/api/firewall/flush", post(firewall_flush))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
         .route(
@@ -898,6 +903,91 @@ async fn network_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<V
         Response::Error(error) => Err(ApiError::from(error)),
         other => Err(ApiError::internal(format!(
             "a network change answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FirewallAddBody {
+    action: String,
+    protocol: String,
+    port: u16,
+    #[serde(default)]
+    comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FirewallDeleteBody {
+    handle: u64,
+}
+
+async fn firewall_status(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<FirewallSnapshot>, ApiError> {
+    match state.daemon.execute(Request::FirewallStatus).await {
+        Response::FirewallSnapshot(snapshot) => Ok(Json(snapshot)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a firewall snapshot answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn firewall_add(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<FirewallAddBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let action = body
+        .action
+        .parse::<FirewallAction>()
+        .map_err(ApiError::invalid)?;
+    let protocol = body
+        .protocol
+        .parse::<FirewallProtocol>()
+        .map_err(ApiError::invalid)?;
+    firewall_change(
+        &state.daemon,
+        Request::FirewallAdd {
+            action,
+            protocol,
+            port: body.port,
+            comment: body.comment,
+        },
+    )
+    .await
+}
+
+async fn firewall_delete(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<FirewallDeleteBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    firewall_change(
+        &state.daemon,
+        Request::FirewallDelete {
+            handle: body.handle,
+        },
+    )
+    .await
+}
+
+async fn firewall_flush(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<Value>, ApiError> {
+    firewall_change(&state.daemon, Request::FirewallFlush).await
+}
+
+async fn firewall_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<Value>, ApiError> {
+    match daemon.execute(request).await {
+        Response::FirewallChanged { message } => Ok(Json(json!({ "message": message }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a firewall change answered unexpectedly: {other:?}"
         ))),
     }
 }

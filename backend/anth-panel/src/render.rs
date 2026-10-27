@@ -4,7 +4,7 @@
 
 use std::fmt::Write as _;
 
-use anth_wire::{FileEntry, HostInfo, NetworkSnapshot, Page, ProcessInfo};
+use anth_wire::{FileEntry, FirewallSnapshot, HostInfo, NetworkSnapshot, Page, ProcessInfo};
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -199,6 +199,42 @@ pub fn network(snapshot: &NetworkSnapshot) -> String {
                 route.family, route.gateway, route.interface
             );
         }
+    }
+    out.trim_end().to_string()
+}
+
+/// Formats the managed firewall chain. A missing table is a normal state: the
+/// daemon has simply never created it.
+pub fn firewall(snapshot: &FirewallSnapshot) -> String {
+    if !snapshot.initialized {
+        return "Firewall table is not initialized. Deny a port to create it.".to_string();
+    }
+    if snapshot.rules.is_empty() {
+        return "Managed firewall chain is empty.".to_string();
+    }
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{:>6} {:<6} {:<6} {:>5}  COMMENT",
+        "HANDLE", "ACTION", "PROTO", "PORT"
+    );
+    for rule in &snapshot.rules {
+        let _ = writeln!(
+            out,
+            "{:>6} {:<6} {:<6} {:>5}  {}",
+            rule.handle,
+            safe(&rule.action).to_uppercase(),
+            rule.protocol
+                .map(|protocol| protocol.as_str())
+                .unwrap_or("-"),
+            rule.port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            rule.comment
+                .as_deref()
+                .map(safe)
+                .unwrap_or_else(|| "-".to_string()),
+        );
     }
     out.trim_end().to_string()
 }

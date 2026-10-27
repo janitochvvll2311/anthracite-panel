@@ -13,10 +13,10 @@ use anth_panel::dispatch::Daemon;
 use anth_panel::lifecycle::{self, Lifecycle};
 use anth_panel::log::{Format, Level, Logger, Out, Settings};
 use anth_panel::{render, socket};
-use anth_wire::{Request, Response, parse_interval};
+use anth_wire::{FirewallAction, FirewallProtocol, Request, Response, parse_interval};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use tokio::net::TcpListener;
 
 type CliResult = Result<(), (u8, String)>;
@@ -104,6 +104,11 @@ enum Command {
     Network {
         #[command(subcommand)]
         command: NetworkCommand,
+    },
+    /// Inspect and configure the managed nftables firewall.
+    Firewall {
+        #[command(subcommand)]
+        command: FirewallCommand,
     },
     /// Read, validate or change the configuration.
     Config {
@@ -379,6 +384,73 @@ impl NetworkKind {
 }
 
 #[derive(Subcommand, Debug)]
+enum FirewallCommand {
+    /// Show the managed table and its rules.
+    #[command(alias = "list")]
+    Status,
+    /// Allow traffic to a port by removing a managed deny rule.
+    Allow(FirewallAddArgs),
+    /// Deny traffic to a port.
+    Deny(FirewallAddArgs),
+    /// Delete one rule by its nftables handle.
+    Delete(FirewallDeleteArgs),
+    /// Remove every rule from the managed chain.
+    Flush(FirewallFlushArgs),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PortSpec {
+    port: u16,
+    protocol: FirewallProtocol,
+}
+
+impl std::str::FromStr for PortSpec {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (port, protocol) = match value.split_once('/') {
+            Some((port, protocol)) => (port, protocol.parse()?),
+            None => (value, FirewallProtocol::Tcp),
+        };
+        let port = port
+            .parse::<u16>()
+            .map_err(|_| format!("invalid port `{port}`; expected a number between 1 and 65535"))?;
+        if port == 0 {
+            return Err("port must be between 1 and 65535".to_string());
+        }
+        Ok(Self { port, protocol })
+    }
+}
+
+#[derive(Args, Debug)]
+struct FirewallAddArgs {
+    /// Port to allow or deny, optionally suffixed with `/tcp` or `/udp`.
+    spec: PortSpec,
+    /// Optional comment: letters, digits, dot, underscore and dash.
+    #[arg(long)]
+    comment: Option<String>,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct FirewallDeleteArgs {
+    /// Rule handle shown by `firewall status`.
+    handle: u64,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct FirewallFlushArgs {
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Subcommand, Debug)]
 enum TrashBinCommand {
     /// List every trashed entry.
     List,
@@ -418,6 +490,7 @@ async fn run() -> CliResult {
         Command::Config { command } => config_command(&path, command, &cli),
         Command::HostInfo { watch } => host_info(&path, watch.clone()).await,
         Command::Network { command } => network_command(&path, command).await,
+        Command::Firewall { command } => firewall_command(&path, command).await,
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
         Command::Reboot { delay } => {
@@ -1009,6 +1082,98 @@ async fn network_change(client: &mut Client, request: Request) -> CliResult {
 fn render_network(response: &Response) -> Result<String, (u8, String)> {
     match response {
         Response::Network(snapshot) => Ok(render::network(snapshot)),
+        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+        other => Err((1, format!("unexpected response: {other:?}"))),
+    }
+}
+
+async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> CliResult {
+    let mut client = connect(path).await?;
+
+    match command {
+        FirewallCommand::Status => {
+            let response = client
+                .call(&Request::FirewallStatus)
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            println!("{}", render_firewall(&response)?);
+            Ok(())
+        }
+        FirewallCommand::Allow(args) => {
+            if !args.yes {
+                confirm(&format!(
+                    "Allow {}/{} traffic?",
+                    args.spec.protocol, args.spec.port
+                ))?;
+            }
+            firewall_change(
+                &mut client,
+                Request::FirewallAdd {
+                    action: FirewallAction::Allow,
+                    protocol: args.spec.protocol,
+                    port: args.spec.port,
+                    comment: args.comment.clone(),
+                },
+            )
+            .await
+        }
+        FirewallCommand::Deny(args) => {
+            if !args.yes {
+                confirm(&format!(
+                    "Deny {}/{} traffic?",
+                    args.spec.protocol, args.spec.port
+                ))?;
+            }
+            firewall_change(
+                &mut client,
+                Request::FirewallAdd {
+                    action: FirewallAction::Deny,
+                    protocol: args.spec.protocol,
+                    port: args.spec.port,
+                    comment: args.comment.clone(),
+                },
+            )
+            .await
+        }
+        FirewallCommand::Delete(args) => {
+            if !args.yes {
+                confirm(&format!("Delete firewall rule {}?", args.handle))?;
+            }
+            firewall_change(
+                &mut client,
+                Request::FirewallDelete {
+                    handle: args.handle,
+                },
+            )
+            .await
+        }
+        FirewallCommand::Flush(args) => {
+            if !args.yes {
+                confirm("Flush every rule from the managed firewall chain?")?;
+            }
+            firewall_change(&mut client, Request::FirewallFlush).await
+        }
+    }
+}
+
+async fn firewall_change(client: &mut Client, request: Request) -> CliResult {
+    let response = client
+        .call(&request)
+        .await
+        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+    match response {
+        Response::FirewallChanged { message } => {
+            println!("{message}");
+            Ok(())
+        }
+        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+        other => Err((1, format!("unexpected response: {other:?}"))),
+    }
+}
+
+fn render_firewall(response: &Response) -> Result<String, (u8, String)> {
+    match response {
+        Response::FirewallSnapshot(snapshot) => Ok(render::firewall(snapshot)),
         Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
         other => Err((1, format!("unexpected response: {other:?}"))),
     }

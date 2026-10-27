@@ -15,6 +15,7 @@ use base64::engine::general_purpose::STANDARD;
 
 use crate::config::{Config, Paths};
 use crate::files::FileService;
+use crate::firewall::FirewallService;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::NetworkService;
@@ -31,6 +32,7 @@ pub struct Daemon {
     terminal: Arc<Sessions>,
     process: ProcessService,
     network: NetworkService,
+    firewall: FirewallService,
 }
 
 impl Daemon {
@@ -76,6 +78,7 @@ impl Daemon {
             config.process.spawn_allow.clone(),
         );
         let network = NetworkService::new(config.network.control, config.network.manage);
+        let firewall = FirewallService::new(config.firewall.control);
         Self {
             config,
             paths,
@@ -85,6 +88,7 @@ impl Daemon {
             terminal,
             process,
             network,
+            firewall,
         }
     }
 
@@ -92,6 +96,13 @@ impl Daemon {
     /// touching the host; the transport still goes through `execute`.
     pub fn with_network(mut self, network: NetworkService) -> Self {
         self.network = network;
+        self
+    }
+
+    /// Replaces the firewall service. Tests use it to script `nft` without
+    /// touching the host.
+    pub fn with_firewall(mut self, firewall: FirewallService) -> Self {
+        self.firewall = firewall;
         self
     }
 
@@ -244,6 +255,34 @@ impl Daemon {
                 let network = self.network.clone();
                 let message = blocking(move || network.delete(&name, peer.as_deref())).await?;
                 Ok(Response::NetworkChanged { message })
+            }
+            Request::FirewallStatus => {
+                let firewall = self.firewall.clone();
+                Ok(Response::FirewallSnapshot(
+                    blocking(move || firewall.snapshot()).await?,
+                ))
+            }
+            Request::FirewallAdd {
+                action,
+                protocol,
+                port,
+                comment,
+            } => {
+                let firewall = self.firewall.clone();
+                let message =
+                    blocking(move || firewall.add(action, protocol, port, comment.as_deref()))
+                        .await?;
+                Ok(Response::FirewallChanged { message })
+            }
+            Request::FirewallDelete { handle } => {
+                let firewall = self.firewall.clone();
+                let message = blocking(move || firewall.delete(handle)).await?;
+                Ok(Response::FirewallChanged { message })
+            }
+            Request::FirewallFlush => {
+                let firewall = self.firewall.clone();
+                let message = blocking(move || firewall.flush()).await?;
+                Ok(Response::FirewallChanged { message })
             }
             Request::Restart => {
                 let lifecycle = Arc::clone(&self.lifecycle);
@@ -473,6 +512,10 @@ fn operation_of(request: &Request) -> &'static str {
         Request::NetworkEdit(_) => "network-edit",
         Request::NetworkRename { .. } => "network-rename",
         Request::NetworkDelete { .. } => "network-delete",
+        Request::FirewallStatus => "firewall-status",
+        Request::FirewallAdd { .. } => "firewall-add",
+        Request::FirewallDelete { .. } => "firewall-delete",
+        Request::FirewallFlush => "firewall-flush",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

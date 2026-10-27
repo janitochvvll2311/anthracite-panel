@@ -5,6 +5,7 @@
 //! of panel code so an alternative client or daemon can implement it.
 
 mod error;
+mod firewall;
 mod frame;
 mod interval;
 mod message;
@@ -14,6 +15,7 @@ mod process;
 mod terminal;
 
 pub use error::{ErrorKind, WireError};
+pub use firewall::{FirewallAction, FirewallProtocol, FirewallRule, FirewallSnapshot};
 pub use frame::{MAX_FRAME_LEN, read_frame, read_frame_limited, write_frame, write_frame_limited};
 pub use interval::{DEFAULT_INTERVAL, MAX_INTERVAL, MIN_INTERVAL, parse_interval};
 pub use message::{

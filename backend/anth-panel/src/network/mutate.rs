@@ -562,6 +562,8 @@ fn classify(error: IpError) -> WireError {
             } else if code == "tun_unavailable" {
                 "`ip tuntap` could not open /dev/net/tun; expose the device to the container"
                     .to_string()
+            } else if code == "ip_permission" {
+                format!("network changes need CAP_NET_ADMIN; `ip` said: {stderr}")
             } else {
                 format!("`ip` refused the change: {stderr}")
             };

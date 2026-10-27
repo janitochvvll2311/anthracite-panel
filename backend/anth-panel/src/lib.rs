@@ -6,6 +6,7 @@ pub mod client;
 pub mod config;
 pub mod dispatch;
 pub mod files;
+pub mod firewall;
 pub mod lifecycle;
 pub mod log;
 pub mod network;

@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
+use crate::firewall::{FirewallAction, FirewallProtocol, FirewallSnapshot};
 use crate::network::{NetworkCreate, NetworkEdit, NetworkSnapshot};
 use crate::page::Page;
 use crate::process::{ProcessSignal, ProcessSnapshot, ProcessStarted};
@@ -52,6 +53,21 @@ pub enum Request {
         #[serde(default)]
         peer: Option<String>,
     },
+    /// One snapshot of the managed `inet anthracite` firewall table.
+    FirewallStatus,
+    /// Add one allow/deny rule for a port. Requires `firewall.control`.
+    FirewallAdd {
+        action: FirewallAction,
+        protocol: FirewallProtocol,
+        port: u16,
+        /// Optional comment, letters/digits/`.`/`_`/`-`, at most 32 chars.
+        #[serde(default)]
+        comment: Option<String>,
+    },
+    /// Delete one rule from the managed chain by its nftables handle.
+    FirewallDelete { handle: u64 },
+    /// Remove every rule from the managed chain.
+    FirewallFlush,
     /// Replaces this process with a fresh copy of the same command line, which
     /// re-reads the configuration.
     Restart,
@@ -191,6 +207,12 @@ pub enum Response {
     Network(NetworkSnapshot),
     /// A network mutation succeeded. The message is ready for the CLI.
     NetworkChanged {
+        message: String,
+    },
+    /// The managed firewall table and its rules.
+    FirewallSnapshot(FirewallSnapshot),
+    /// A firewall mutation succeeded. The message is ready for the CLI.
+    FirewallChanged {
         message: String,
     },
     /// The restart was accepted; this process is about to be replaced.
