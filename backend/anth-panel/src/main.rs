@@ -158,6 +158,57 @@ enum FilesCommand {
         #[arg(long)]
         create: bool,
     },
+    /// Move one entry to the freedesktop trash. Requires files.trash.
+    Trash {
+        /// Path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+    },
+    /// Inspect or empty the trash.
+    TrashBin {
+        #[command(subcommand)]
+        command: TrashBinCommand,
+    },
+    /// Compress one entry.
+    Archive {
+        /// Path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// Archive path; defaults beside the entry.
+        #[arg(long, value_name = "PATH")]
+        destination: Option<String>,
+        /// zip, tar, tar.gz, tar.xz or 7z.
+        #[arg(long, value_name = "FORMAT")]
+        format: Option<String>,
+    },
+    /// List or extract an archive.
+    Unarchive {
+        /// Archive path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// Print the members without extracting.
+        #[arg(long)]
+        list: bool,
+        /// Destination directory; defaults beside the archive.
+        #[arg(long, value_name = "PATH")]
+        into: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TrashBinCommand {
+    /// List every trashed entry.
+    List,
+    /// Put one entry back at its recorded path.
+    Restore {
+        /// Identifier from `trash-bin list`.
+        id: String,
+        /// Replace an existing target.
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Delete everything the trash holds.
+    Empty,
 }
 
 #[tokio::main]
@@ -446,6 +497,149 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
                 other => Err((1, format!("unexpected response: {other:?}"))),
             }
         }
+        FilesCommand::Trash { path } => {
+            let response = client
+                .call(&Request::FilesTrash { path: path.clone() })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::FilesTrashed { path, id } => {
+                    println!("trashed {path} as {id}");
+                    Ok(())
+                }
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        FilesCommand::TrashBin { command } => match command {
+            TrashBinCommand::List => {
+                let response = client
+                    .call(&Request::FilesTrashList)
+                    .await
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                match response {
+                    Response::FilesTrashList(listing) => {
+                        println!(
+                            "trash: {} entries, {} used",
+                            listing.total, listing.used_bytes
+                        );
+                        for entry in &listing.entries {
+                            println!(
+                                "{}\t{}\t{}",
+                                entry.id,
+                                entry.original_path,
+                                entry.deleted_at.as_deref().unwrap_or("-")
+                            );
+                        }
+                        Ok(())
+                    }
+                    other => Err((1, format!("unexpected response: {other:?}"))),
+                }
+            }
+            TrashBinCommand::Restore { id, overwrite } => {
+                let response = client
+                    .call(&Request::FilesTrashRestore {
+                        id: id.clone(),
+                        overwrite: *overwrite,
+                    })
+                    .await
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                match response {
+                    Response::FilesRestored { id, path } => {
+                        println!("restored {id} to {path}");
+                        Ok(())
+                    }
+                    other => Err((1, format!("unexpected response: {other:?}"))),
+                }
+            }
+            TrashBinCommand::Empty => {
+                let response = client
+                    .call(&Request::FilesTrashEmpty)
+                    .await
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                match response {
+                    Response::FilesTrashEmptied { removed } => {
+                        println!("removed {removed} trashed entries");
+                        Ok(())
+                    }
+                    other => Err((1, format!("unexpected response: {other:?}"))),
+                }
+            }
+        },
+        FilesCommand::Archive {
+            path,
+            destination,
+            format,
+        } => {
+            let format = format.as_deref().map(parse_archive_format).transpose()?;
+            let response = client
+                .call(&Request::FilesArchive {
+                    path: path.clone(),
+                    destination: destination.clone(),
+                    format,
+                })
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::FilesArchiveCreated { path } => {
+                    println!("created {path}");
+                    Ok(())
+                }
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        FilesCommand::Unarchive { path, list, into } => {
+            if *list {
+                let response = client
+                    .call(&Request::FilesArchiveList { path: path.clone() })
+                    .await
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                match response {
+                    Response::FilesArchiveList(listing) => {
+                        if let Some(format) = listing.format {
+                            println!("{} ({})", listing.path, format.label());
+                        }
+                        for entry in &listing.entries {
+                            println!("{}\t{}", entry.name, entry.size);
+                        }
+                        if let Some(warning) = listing.warning {
+                            eprintln!("{warning}");
+                        }
+                        Ok(())
+                    }
+                    other => Err((1, format!("unexpected response: {other:?}"))),
+                }
+            } else {
+                let response = client
+                    .call(&Request::FilesArchiveExtract {
+                        path: path.clone(),
+                        into: into.clone(),
+                    })
+                    .await
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                match response {
+                    Response::FilesArchiveExtracted { path, entries } => {
+                        println!("extracted {path} ({} entries)", entries.len());
+                        Ok(())
+                    }
+                    other => Err((1, format!("unexpected response: {other:?}"))),
+                }
+            }
+        }
+    }
+}
+
+fn parse_archive_format(value: &str) -> Result<anth_wire::ArchiveFormat, (u8, String)> {
+    use anth_wire::ArchiveFormat;
+    match value {
+        "zip" => Ok(ArchiveFormat::Zip),
+        "tar" => Ok(ArchiveFormat::Tar),
+        "tar.gz" | "tgz" => Ok(ArchiveFormat::TarGz),
+        "tar.xz" | "txz" => Ok(ArchiveFormat::TarXz),
+        "7z" => Ok(ArchiveFormat::SevenZ),
+        other => Err((
+            2,
+            format!("unknown archive format `{other}`; use zip, tar, tar.gz, tar.xz or 7z"),
+        )),
     }
 }
 

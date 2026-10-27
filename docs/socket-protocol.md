@@ -124,7 +124,7 @@ started with `--allow-reboot`. Both actions answer before they run.
     "items": [
       { "name": "hosts", "kind": "file", "size": 220, "modified_ms": 1790000000000 }
     ],
-    "next": "hosts"
+    "next": "f:hosts"
   }
 }
 ```
@@ -182,6 +182,110 @@ one UTF-8 text file, caps the content at `files.max_upload_bytes`, requires
 and the file is already there. `files_upload` does the same for arbitrary bytes
 carried as base64 in `content_base64`, and answers with the same
 `files_written`.
+
+```json
+{ "type": "files_trash", "data": { "path": "etc/hosts" } }
+```
+
+```json
+{ "type": "files_trashed", "data": { "path": "etc/hosts", "id": "hosts" } }
+```
+
+```json
+{ "type": "files_trash_list" }
+```
+
+```json
+{
+  "type": "files_trash_list",
+  "data": {
+    "entries": [
+      {
+        "id": "hosts",
+        "name": "hosts",
+        "original_path": "/etc/hosts",
+        "deleted_at": "2026-10-27T13:03:01Z",
+        "kind": "file",
+        "size": 220,
+        "location": "/root/.local/share/Trash"
+      }
+    ],
+    "total": 1,
+    "truncated": false,
+    "enabled": true,
+    "used_bytes": 220,
+    "max_bytes": 1073741824
+  }
+}
+```
+
+```json
+{ "type": "files_trash_restore", "data": { "id": "hosts", "overwrite": false } }
+```
+
+```json
+{ "type": "files_restored", "data": { "id": "hosts", "path": "etc/hosts" } }
+```
+
+```json
+{ "type": "files_trash_empty" }
+```
+
+```json
+{ "type": "files_trash_emptied", "data": { "removed": 1 } }
+```
+
+`files_trash` moves one entry to the freedesktop.org trash of its own volume and
+needs both `files.write` and `files.trash`; a disabled trash answers `forbidden`
+with code `trash_disabled`, and a volume without a writable trash directory
+answers `trash_unavailable` instead of deleting permanently. `files_trash_list`
+reports the entries any desktop would see, skipping malformed `.trashinfo`
+files. `files_trash_restore` re-validates the recorded `Path=` against the
+configured root; an existing target is `conflict`/`exists` unless `overwrite` is
+true, and `overwrite` never replaces a directory.
+
+```json
+{ "type": "files_archive", "data": { "path": "var/log", "format": "tar.gz", "destination": null } }
+```
+
+```json
+{ "type": "files_archive_created", "data": { "path": "var/log.tar.gz" } }
+```
+
+```json
+{ "type": "files_archive_list", "data": { "path": "var/log.tar.gz" } }
+```
+
+```json
+{
+  "type": "files_archive_list",
+  "data": {
+    "path": "var/log.tar.gz",
+    "format": "tar.gz",
+    "entries": [
+      { "name": "log/", "kind": "dir", "size": 0 },
+      { "name": "log/auth.log", "kind": "file", "size": 12 }
+    ],
+    "total": 2,
+    "truncated": false
+  }
+}
+```
+
+```json
+{ "type": "files_archive_extract", "data": { "path": "var/log.tar.gz", "into": null } }
+```
+
+```json
+{ "type": "files_archive_extracted", "data": { "path": "var/log", "entries": ["log/", "log/auth.log"] } }
+```
+
+Archives are handled in-process. `zip`, `tar`, `tar.gz` and `tar.xz` can be
+created and read; `7z` is read-only. Extraction refuses absolute members, `..`,
+Windows drive letters, backslashes, NUL bytes and writes through an
+archive-created symlink, and it enforces `files.max_archive_bytes` while
+writing. A refused member fails the request instead of leaving a partial tree
+that looks complete.
 
 ## Errors
 

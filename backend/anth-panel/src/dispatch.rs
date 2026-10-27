@@ -49,7 +49,12 @@ impl Daemon {
             config.files.max_entries,
             config.files.max_preview_bytes,
             config.files.max_upload_bytes,
-        );
+        )
+        .map(|service| {
+            service
+                .with_trash(config.files.trash, config.files.max_trash_bytes)
+                .with_archive_limit(config.files.max_archive_bytes)
+        });
         Self {
             config,
             paths,
@@ -186,6 +191,34 @@ impl Daemon {
                     self.files()?.write_bytes(&path, &bytes, create)?,
                 ))
             }
+            Request::FilesTrash { path } => {
+                let (path, id) = self.files()?.trash(&path)?;
+                Ok(Response::FilesTrashed { path, id })
+            }
+            Request::FilesTrashList => Ok(Response::FilesTrashList(self.files()?.trash_listing()?)),
+            Request::FilesTrashRestore { id, overwrite } => {
+                let (id, path) = self.files()?.restore(&id, overwrite)?;
+                Ok(Response::FilesRestored { id, path })
+            }
+            Request::FilesTrashEmpty => Ok(Response::FilesTrashEmptied {
+                removed: self.files()?.empty_trash()?,
+            }),
+            Request::FilesArchive {
+                path,
+                destination,
+                format,
+            } => Ok(Response::FilesArchiveCreated {
+                path: self
+                    .files()?
+                    .create_archive(&path, destination.as_deref(), format)?,
+            }),
+            Request::FilesArchiveList { path } => Ok(Response::FilesArchiveList(
+                self.files()?.list_archive(&path)?,
+            )),
+            Request::FilesArchiveExtract { path, into } => {
+                let (path, entries) = self.files()?.extract_archive(&path, into.as_deref())?;
+                Ok(Response::FilesArchiveExtracted { path, entries })
+            }
         }
     }
 }
@@ -234,6 +267,13 @@ fn operation_of(request: &Request) -> &'static str {
         Request::FilesDelete { .. } => "files-delete",
         Request::FilesWrite { .. } => "files-write",
         Request::FilesUpload { .. } => "files-upload",
+        Request::FilesTrash { .. } => "files-trash",
+        Request::FilesTrashList => "files-trash-list",
+        Request::FilesTrashRestore { .. } => "files-trash-restore",
+        Request::FilesTrashEmpty => "files-trash-empty",
+        Request::FilesArchive { .. } => "files-archive",
+        Request::FilesArchiveList { .. } => "files-archive-list",
+        Request::FilesArchiveExtract { .. } => "files-archive-extract",
     }
 }
 

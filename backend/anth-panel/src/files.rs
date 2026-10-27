@@ -12,11 +12,23 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use anth_wire::{ErrorKind, FileChunk, FileEntry, FileWritten, Page, PageRequest, WireError};
+use anth_wire::{
+    ArchiveFormat, ArchiveListing, ErrorKind, FileChunk, FileEntry, FileWritten, Page, PageRequest,
+    TrashListing, WireError,
+};
+
+pub mod archive;
+mod error;
+mod trash;
+mod volumes;
+
+pub use trash::{TrashDirectory, TrashService};
+
+use error::{FileError, FileErrorKind};
 
 pub struct FileService {
     root: PathBuf,
@@ -24,6 +36,22 @@ pub struct FileService {
     max_entries: usize,
     max_preview_bytes: u64,
     max_write_bytes: u64,
+    /// Whether `[files] trash` is on. Separate from `write`: trashing removes
+    /// an entry from its directory, so it is its own permission.
+    trash: bool,
+    max_trash_bytes: Option<u64>,
+    /// Ceiling on the uncompressed size one extraction may produce.
+    max_archive_bytes: u64,
+    /// Overrides where the trash lives, so tests stay inside their fixture.
+    trash_paths: Option<TrashPaths>,
+}
+
+/// The volumes and directories the trash resolves against.
+#[derive(Debug, Clone)]
+pub struct TrashPaths {
+    pub topdirs: Vec<PathBuf>,
+    pub home: PathBuf,
+    pub data_home: PathBuf,
 }
 
 impl FileService {
@@ -51,7 +79,53 @@ impl FileService {
             max_entries: max_entries.max(1),
             max_preview_bytes: max_preview_bytes.max(1),
             max_write_bytes: max_write_bytes.max(1),
+            trash: false,
+            max_trash_bytes: Some(1024 * 1024 * 1024),
+            max_archive_bytes: 4 * 1024 * 1024 * 1024,
+            trash_paths: None,
         })
+    }
+
+    /// Enables the trash and its retention ceiling (`0` keeps every entry).
+    pub fn with_trash(mut self, enabled: bool, max_bytes: u64) -> Self {
+        self.trash = enabled;
+        self.max_trash_bytes = (max_bytes > 0).then_some(max_bytes);
+        self
+    }
+
+    /// Sets the uncompressed ceiling for one archive extraction.
+    pub fn with_archive_limit(mut self, max_bytes: u64) -> Self {
+        self.max_archive_bytes = max_bytes.max(1);
+        self
+    }
+
+    /// Pins the trash view; production reads mountinfo and the XDG variables.
+    pub fn with_trash_paths(mut self, paths: TrashPaths) -> Self {
+        self.trash_paths = Some(paths);
+        self
+    }
+
+    fn topdirs(&self) -> Vec<PathBuf> {
+        match &self.trash_paths {
+            Some(paths) => paths.topdirs.clone(),
+            None => volumes::live_topdirs(),
+        }
+    }
+
+    /// The trash service, bound to the current mount table.
+    pub fn trash_service(&self) -> TrashService {
+        let (home, data_home) = match &self.trash_paths {
+            Some(paths) => (paths.home.clone(), paths.data_home.clone()),
+            None => volumes::home_paths(),
+        };
+        TrashService::new(
+            self.trash,
+            self.max_trash_bytes,
+            self.max_entries,
+            home,
+            data_home,
+            self.topdirs(),
+        )
     }
 
     /// Lists one page of a directory: directories first, then everything else,
@@ -213,6 +287,311 @@ impl FileService {
         }
         fs::remove_file(&target).map_err(|error| io_error(&display, error))?;
         Ok(display)
+    }
+
+    /// Moves one entry to the trash of the volume holding it.
+    ///
+    /// Refuses when the volume has no usable trash directory rather than
+    /// quietly making the delete permanent.
+    pub fn trash(&self, path: &str) -> Result<(String, String), WireError> {
+        self.require_write()?;
+        if !self.trash {
+            return Err(WireError::new(
+                ErrorKind::Forbidden,
+                "trash_disabled",
+                "the trash is disabled; enable `[files] trash`",
+            ));
+        }
+        let display = display_path(path);
+        if display == "/" {
+            return Err(WireError::invalid("the file root cannot be trashed"));
+        }
+        if display.split('/').any(|part| part == "..") {
+            return Err(escape("the path may not contain `..`"));
+        }
+
+        let host = self.host_entry(&display).map_err(trash_wire)?;
+        // `symlink_metadata` so a dangling symlink can be trashed, and so a
+        // symlink is moved rather than the directory it points at.
+        fs::symlink_metadata(&host)
+            .map_err(|error| file_io_error(&display, error))
+            .map_err(trash_wire)?;
+
+        let topdir = self.topdir_of(&host).ok_or_else(|| {
+            WireError::new(
+                ErrorKind::Forbidden,
+                "trash_unavailable",
+                format!("no mount point covers {display}, so it has no trash"),
+            )
+        })?;
+
+        let id = self
+            .trash_service()
+            .move_to_trash(&host, &format!("/{display}"), &topdir)
+            .map_err(trash_wire)?;
+        Ok((display, id))
+    }
+
+    /// Restores one trashed entry to its recorded path.
+    ///
+    /// The recorded path comes from whichever application deleted the entry,
+    /// so it is untrusted: `display_path` and the host resolution below keep it
+    /// inside the configured root.
+    pub fn restore(&self, id: &str, overwrite: bool) -> Result<(String, String), WireError> {
+        self.require_write()?;
+        let service = self.trash_service();
+        let entry = service.find(id).map_err(trash_wire)?;
+        let path = display_path(&entry.original_path);
+        if path == "/" {
+            return Err(WireError::invalid("the file root is not a restore target"));
+        }
+        let host_target = self.host_create(&path).map_err(trash_wire)?;
+        service
+            .restore(id, &host_target, overwrite)
+            .map_err(trash_wire)?;
+        Ok((id.to_string(), path))
+    }
+
+    /// Empties every trash directory the daemon can see.
+    pub fn empty_trash(&self) -> Result<usize, WireError> {
+        self.require_write()?;
+        self.trash_service().empty().map_err(trash_wire)
+    }
+
+    /// Lists every trash directory the daemon can see.
+    pub fn trash_listing(&self) -> Result<TrashListing, WireError> {
+        self.trash_service().list().map_err(trash_wire)
+    }
+
+    /// The longest mount point that contains `host`.
+    fn topdir_of(&self, host: &Path) -> Option<PathBuf> {
+        let mut best: Option<PathBuf> = None;
+        for topdir in self.topdirs() {
+            if host.starts_with(&topdir) {
+                let longer = best.as_ref().is_none_or(|current| {
+                    topdir.components().count() > current.components().count()
+                });
+                if longer {
+                    best = Some(topdir);
+                }
+            }
+        }
+        best
+    }
+
+    /// Compresses one entry.
+    pub fn create_archive(
+        &self,
+        path: &str,
+        destination: Option<&str>,
+        format: Option<ArchiveFormat>,
+    ) -> Result<String, WireError> {
+        self.require_write()?;
+        let path = display_path(path);
+        let source = self.host_existing(&path).map_err(archive_wire)?;
+
+        let (destination, format) = match destination {
+            Some(given) => {
+                let destination = display_path(given);
+                let format = format
+                    .or_else(|| archive::detect(Path::new(&destination), None))
+                    .ok_or_else(|| {
+                        WireError::new(
+                            ErrorKind::Invalid,
+                            "archive_format",
+                            format!("cannot tell the archive format of {destination}"),
+                        )
+                    })?;
+                (destination, format)
+            }
+            None => {
+                let format = format.unwrap_or(ArchiveFormat::TarGz);
+                let suffix = match format {
+                    ArchiveFormat::Zip => "zip",
+                    ArchiveFormat::Tar => "tar",
+                    ArchiveFormat::TarGz => "tar.gz",
+                    ArchiveFormat::TarXz => "tar.xz",
+                    ArchiveFormat::SevenZ => {
+                        return Err(WireError::new(
+                            ErrorKind::Unsupported,
+                            "archive_format",
+                            "creating a .7z archive is not supported; extract it instead",
+                        ));
+                    }
+                };
+                (format!("{path}.{suffix}"), format)
+            }
+        };
+
+        if destination == path {
+            return Err(WireError::invalid(
+                "an archive cannot be written over its own source",
+            ));
+        }
+        let host_destination = self.host_create(&destination).map_err(archive_wire)?;
+        match fs::symlink_metadata(&host_destination) {
+            Ok(_) => {
+                return Err(WireError::new(
+                    ErrorKind::Conflict,
+                    "exists",
+                    format!("{destination} already exists"),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(WireError::from(file_io_error(&destination, error))),
+        }
+
+        archive::create(&source, &host_destination, format)
+            .map_err(|error| archive_wire(replace_path(error, &destination)))?;
+        Ok(destination)
+    }
+
+    /// Lists one archive without extracting it.
+    pub fn list_archive(&self, path: &str) -> Result<ArchiveListing, WireError> {
+        let path = display_path(path);
+        let host = self.host_existing(&path).map_err(archive_wire)?;
+        let magic = read_magic(&host);
+        let format = archive::detect(Path::new(&path), magic.as_deref()).ok_or_else(|| {
+            WireError::new(
+                ErrorKind::Invalid,
+                "archive_format",
+                format!("{path} is not an archive this daemon can read"),
+            )
+        })?;
+
+        let entries = archive::list(&host, format, self.max_entries)
+            .map_err(|error| archive_wire(replace_path(error, &path)))?;
+        let total = entries.len();
+        let truncated = total >= self.max_entries;
+        Ok(ArchiveListing {
+            path,
+            format: Some(format),
+            entries,
+            total,
+            truncated,
+            warning: truncated.then(|| {
+                format!("showing the first {total} entries; raise files.max_entries to see more")
+            }),
+        })
+    }
+
+    /// Extracts one archive into a directory.
+    pub fn extract_archive(
+        &self,
+        path: &str,
+        into: Option<&str>,
+    ) -> Result<(String, Vec<String>), WireError> {
+        self.require_write()?;
+        let path = display_path(path);
+        let host = self.host_existing(&path).map_err(archive_wire)?;
+        let magic = read_magic(&host);
+        let format = archive::detect(Path::new(&path), magic.as_deref()).ok_or_else(|| {
+            WireError::new(
+                ErrorKind::Invalid,
+                "archive_format",
+                format!("{path} is not an archive this daemon can read"),
+            )
+        })?;
+
+        let destination = match into {
+            Some(given) => display_path(given),
+            None => {
+                let stem = path.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(&path);
+                let stem = stem.strip_suffix(".tar").unwrap_or(stem);
+                if stem.is_empty() {
+                    path.clone()
+                } else {
+                    stem.to_string()
+                }
+            }
+        };
+        if destination == "/" {
+            return Err(WireError::invalid(
+                "refusing to extract an archive over the file root",
+            ));
+        }
+
+        let host_destination = self.host_create_any(&destination).map_err(archive_wire)?;
+        fs::create_dir_all(&host_destination)
+            .map_err(|error| file_io_error(&destination, error))
+            .map_err(archive_wire)?;
+
+        let limits = archive::ArchiveLimits {
+            max_total_bytes: self.max_archive_bytes,
+            max_entries: self.max_entries,
+            max_entry_bytes: self.max_archive_bytes,
+        };
+        let expected_root = Path::new(&destination)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        let written = archive::extract_with(
+            &host,
+            format,
+            &host_destination,
+            limits,
+            expected_root.as_deref(),
+        )
+        .map_err(|error| archive_wire(replace_path(error, &destination)))?;
+
+        Ok((destination, written))
+    }
+
+    /// Resolves an existing path and follows symlinks, rejecting escapes.
+    fn host_existing(&self, path: &str) -> Result<PathBuf, FileError> {
+        let relative = path.trim_start_matches('/');
+        let candidate = if relative.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(relative)
+        };
+        let canonical = fs::canonicalize(&candidate).map_err(|error| file_io_error(path, error))?;
+        if !canonical.starts_with(&self.root) {
+            return Err(FileError::new(
+                FileErrorKind::InvalidPath,
+                format!("{path} escapes the configured file root"),
+            ));
+        }
+        Ok(canonical)
+    }
+
+    /// Resolves the parent without following the entry itself.
+    fn host_entry(&self, path: &str) -> Result<PathBuf, FileError> {
+        let (parent, name) = split_virtual(path)?;
+        Ok(self.host_existing(&parent.to_string_lossy())?.join(name))
+    }
+
+    /// Resolves a destination whose final component may not exist yet.
+    fn host_create(&self, path: &str) -> Result<PathBuf, FileError> {
+        let (parent, name) = split_virtual(path)?;
+        Ok(self.host_existing(&parent.to_string_lossy())?.join(name))
+    }
+
+    /// Resolves a path whose intermediate components may not exist.
+    fn host_create_any(&self, path: &str) -> Result<PathBuf, FileError> {
+        let relative = path.trim_start_matches('/');
+        if relative.is_empty() {
+            return Ok(self.root.clone());
+        }
+        let mut current = self.root.clone();
+        for component in relative.split('/') {
+            let candidate = current.join(component);
+            match fs::canonicalize(&candidate) {
+                Ok(canonical) => {
+                    if !canonical.starts_with(&self.root) {
+                        return Err(FileError::new(
+                            FileErrorKind::InvalidPath,
+                            format!("{path} escapes the configured file root"),
+                        ));
+                    }
+                    current = canonical;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    current = candidate;
+                }
+                Err(error) => return Err(file_io_error(path, error)),
+            }
+        }
+        Ok(current)
     }
 
     /// Writes one UTF-8 text file under the root.
@@ -441,6 +820,84 @@ fn display_path(requested: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// Splits a request path for the trash and archive helpers.
+fn split_virtual(requested: &str) -> Result<(PathBuf, OsString), FileError> {
+    let relative = Path::new(requested.trim_start_matches('/'));
+    let mut parent = PathBuf::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(part) => parent.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(FileError::new(
+                    FileErrorKind::InvalidPath,
+                    "the path may not contain `..`",
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(FileError::new(
+                    FileErrorKind::InvalidPath,
+                    "the path must be relative to the file root",
+                ));
+            }
+        }
+    }
+    let Some(name) = parent.file_name().map(OsString::from) else {
+        return Err(FileError::new(
+            FileErrorKind::InvalidPath,
+            "the file root cannot be changed",
+        ));
+    };
+    parent.pop();
+    Ok((parent, name))
+}
+
+fn file_io_error(path: &str, error: io::Error) -> FileError {
+    let kind = match error.kind() {
+        io::ErrorKind::NotFound => FileErrorKind::NotFound,
+        io::ErrorKind::PermissionDenied => FileErrorKind::PermissionDenied,
+        io::ErrorKind::AlreadyExists => FileErrorKind::AlreadyExists,
+        _ => match error.raw_os_error() {
+            Some(libc::ENOTDIR) => FileErrorKind::NotADirectory,
+            Some(libc::EISDIR) => FileErrorKind::IsADirectory,
+            Some(libc::ENOTEMPTY) => FileErrorKind::DirectoryNotEmpty,
+            _ => FileErrorKind::Io,
+        },
+    };
+    FileError::new(kind, format!("{path}: {error}"))
+}
+
+fn trash_wire(error: FileError) -> WireError {
+    if error.kind == FileErrorKind::Disabled {
+        WireError::new(ErrorKind::Forbidden, "trash_disabled", error.detail)
+    } else {
+        error.into()
+    }
+}
+
+fn archive_wire(error: FileError) -> WireError {
+    if error.kind == FileErrorKind::Disabled {
+        WireError::new(ErrorKind::Unsupported, "archive_format", error.detail)
+    } else {
+        error.into()
+    }
+}
+
+fn read_magic(path: &Path) -> Option<Vec<u8>> {
+    let mut buffer = [0u8; 512];
+    let mut file = File::open(path).ok()?;
+    let read = file.read(&mut buffer).ok()?;
+    Some(buffer[..read].to_vec())
+}
+
+/// Rewrites the host path inside an archive error to the virtual path.
+fn replace_path(mut error: FileError, virtual_path: &str) -> FileError {
+    if let Some(index) = error.detail.find("`: ") {
+        error.detail = format!("`{virtual_path}`: {}", &error.detail[index + 3..]);
+    }
+    error
 }
 
 fn escape(message: &str) -> WireError {

@@ -280,9 +280,132 @@ daemon answers with 200:
 
 Deletion requires `files.write = true`; otherwise the daemon answers `403
 forbidden` with code `write_disabled`. Directories are `400 invalid`, and the
-file root cannot be deleted. This is a permanent delete; trash and archives are
-part of the next files slice, so the caller confirms before sending the
-request.
+file root cannot be deleted. This is always a permanent delete: the trash is a
+separate route, so a caller that wants a reversible delete must ask for it.
+
+### `POST /api/files/trash`
+
+```json
+{ "path": "etc/hosts" }
+```
+
+Moves one file, symlink or directory to the freedesktop.org trash of its own
+volume and answers:
+
+```json
+{ "path": "etc/hosts", "id": "hosts" }
+```
+
+Requires both `files.write` and `files.trash`. With the trash off the daemon
+answers `403` with code `trash_disabled`; a volume with no writable trash
+directory answers `403` with `trash_unavailable` instead of silently deleting
+permanently. The home volume uses `$XDG_DATA_HOME/Trash`; any other volume uses
+`<topdir>/.Trash/$uid` when it is a safe shared trash, otherwise
+`<topdir>/.Trash-$uid`. Entries keep their original name with a numbered suffix
+on collision.
+
+### `GET /api/files/trash/list`
+
+Returns every entry the daemon can see:
+
+```json
+{
+  "entries": [
+    {
+      "id": "hosts",
+      "name": "hosts",
+      "original_path": "/etc/hosts",
+      "deleted_at": "2026-10-27T13:03:01Z",
+      "kind": "file",
+      "size": 220,
+      "location": "/root/.local/share/Trash",
+      "stored_ms": 1790000000000
+    }
+  ],
+  "total": 1,
+  "truncated": false,
+  "enabled": true,
+  "used_bytes": 220,
+  "max_bytes": 1073741824
+}
+```
+
+`enabled` tells the web UI whether Delete should move to the trash. A malformed
+`.trashinfo` written by another desktop is skipped, not guessed at. The listing
+is capped by `files.max_entries`; `max_bytes` is absent when retention is off.
+
+### `POST /api/files/trash/restore`
+
+```json
+{ "id": "hosts", "overwrite": false }
+```
+
+Restores one entry to its recorded path and answers `{ "id": "...", "path":
+"..." }`. `Path=` comes from whichever application deleted the entry, so it is
+percent-decoded, normalized without `..` and resolved inside `files.root`
+again. An existing target is refused with `409` (code `exists`) unless
+`overwrite` is true; `overwrite` never replaces a directory. The `.trashinfo`
+is removed only after the move succeeds, so a failed restore stays retryable.
+
+### `POST /api/files/trash/empty`
+
+Deletes every trashed entry and answers `{ "removed": 3 }`. Requires
+`files.write` and `files.trash`.
+
+### `POST /api/files/archive`
+
+```json
+{ "path": "var/log", "destination": "var/log.tar.gz", "format": "tar.gz" }
+```
+
+Compresses one entry and answers `{ "path": "var/log.tar.gz" }`. Both fields are
+optional: the destination defaults beside the entry and the format defaults to
+`tar.gz`. Supported creation formats are `zip`, `tar`, `tar.gz` and `tar.xz`;
+creating a `7z` is refused with `501 unsupported` (code `archive_format`). The
+source is archived under its own name, so `var/log` becomes `log/...` inside the
+archive. The archive is written in-process, never through a shell utility, and
+refuses to overwrite an existing destination.
+
+### `GET /api/files/archive/list?path=var/log.tar.gz`
+
+Returns the members without writing anything:
+
+```json
+{
+  "path": "var/log.tar.gz",
+  "format": "tar.gz",
+  "entries": [
+    { "name": "log/", "kind": "dir", "size": 0 },
+    { "name": "log/auth.log", "kind": "file", "size": 12 }
+  ],
+  "total": 2,
+  "truncated": false
+}
+```
+
+The format comes from the name and then from the leading bytes (`PK`, `7z`,
+`\xfd7zXZ`, `\x1f\x8b`, `ustar`). Listing stops at `files.max_entries` and sets
+`truncated` plus `warning` when it does.
+
+### `POST /api/files/archive/extract`
+
+```json
+{ "path": "var/log.tar.gz", "into": "var/log-restored" }
+```
+
+Extracts an archive and answers `{ "path": "...", "entries": ["log/..."] }`.
+`into` defaults to the archive name with its format suffix removed.
+`files.max_archive_bytes` caps the total uncompressed size and each member, and
+`files.max_entries` caps the member count; the limits are checked while writing,
+not after. Absolute members, `..`, Windows drive letters, backslashes, NUL bytes
+and writes through an archive-created symlink are refused, and a refused member
+fails the whole request. A single wrapper directory is unwrapped when the
+destination already has that name.
+
+The supported formats follow the v0.1 contract: `zip`, `tar`, `tar.gz`/`tgz`,
+`tar.xz`/`txz` and `7z` for reading; the first four for writing. `tar.xz` is
+decoded as a stream and its block checks are verified; BCJ and delta filters are
+refused.
 
 ### `POST /api/files/write`
 

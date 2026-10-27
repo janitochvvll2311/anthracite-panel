@@ -179,6 +179,7 @@ pub struct FilesConfig {
     pub max_entries: usize,
     pub max_preview_bytes: u64,
     pub max_upload_bytes: u64,
+    pub max_trash_bytes: u64,
     pub max_archive_bytes: u64,
 }
 
@@ -191,6 +192,7 @@ impl Default for FilesConfig {
             max_entries: 5_000,
             max_preview_bytes: 1024 * 1024,
             max_upload_bytes: 64 * 1024 * 1024,
+            max_trash_bytes: 1024 * 1024 * 1024,
             max_archive_bytes: 4 * 1024 * 1024 * 1024,
         }
     }

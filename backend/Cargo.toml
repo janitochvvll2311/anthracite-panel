@@ -28,4 +28,14 @@ sha2 = "0.11"
 base64 = "0.23"
 rust-embed = "8.13"
 tower = { version = "0.5", features = ["util"] }
+# Archives are handled in-tree: the runtime image has no `7z` or `xz`, and its
+# `tar` is BusyBox, whose escape handling is not the guard this daemon needs.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+lzma-rs = "0.3"
+lzma-rust2 = { version = "0.2", default-features = false }
+crc32fast = "1"
+crc = "3"
+sevenz-rust2 = "0.13"
+flate2 = "1"
 http-body-util = "0.1"

@@ -10,7 +10,10 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anth_wire::{ErrorKind, FileChunk, FileEntry, FileWritten, Page, Request, Response, WireError};
+use anth_wire::{
+    ArchiveFormat, ArchiveListing, ErrorKind, FileChunk, FileEntry, FileWritten, Page, Request,
+    Response, TrashListing, WireError,
+};
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{
@@ -92,6 +95,13 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/files/image", get(image_file))
         .route("/api/files/download", get(download_file))
+        .route("/api/files/trash", post(trash_file))
+        .route("/api/files/trash/list", get(list_trash))
+        .route("/api/files/trash/restore", post(restore_trash))
+        .route("/api/files/trash/empty", post(empty_trash))
+        .route("/api/files/archive", post(create_archive))
+        .route("/api/files/archive/list", get(list_archive))
+        .route("/api/files/archive/extract", post(extract_archive))
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
         .route("/api/settings", get(get_settings).patch(patch_settings))
@@ -278,6 +288,34 @@ struct FileUploadBody {
 #[derive(Debug, Deserialize)]
 struct FilePathQuery {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrashPathBody {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrashRestoreBody {
+    id: String,
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArchiveCreateBody {
+    path: String,
+    #[serde(default)]
+    destination: Option<String>,
+    #[serde(default)]
+    format: Option<ArchiveFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArchiveExtractBody {
+    path: String,
+    #[serde(default)]
+    into: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -723,6 +761,139 @@ async fn download_file(
         HeaderValue::from_static("attachment"),
     );
     Ok(response)
+}
+
+async fn trash_file(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<TrashPathBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesTrash { path: body.path })
+        .await
+    {
+        Response::FilesTrashed { path, id } => Ok(Json(json!({ "path": path, "id": id }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a file trash answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn list_trash(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<TrashListing>, ApiError> {
+    match state.daemon.execute(Request::FilesTrashList).await {
+        Response::FilesTrashList(listing) => Ok(Json(listing)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a trash listing answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn restore_trash(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<TrashRestoreBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesTrashRestore {
+            id: body.id,
+            overwrite: body.overwrite,
+        })
+        .await
+    {
+        Response::FilesRestored { id, path } => Ok(Json(json!({ "id": id, "path": path }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a trash restore answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn empty_trash(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<Value>, ApiError> {
+    match state.daemon.execute(Request::FilesTrashEmpty).await {
+        Response::FilesTrashEmptied { removed } => Ok(Json(json!({ "removed": removed }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "emptying the trash answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn create_archive(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<ArchiveCreateBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesArchive {
+            path: body.path,
+            destination: body.destination,
+            format: body.format,
+        })
+        .await
+    {
+        Response::FilesArchiveCreated { path } => Ok(Json(json!({ "path": path }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "creating an archive answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn list_archive(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<FilePathQuery>, QueryRejection>,
+) -> Result<Json<ArchiveListing>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesArchiveList { path: query.path })
+        .await
+    {
+        Response::FilesArchiveList(listing) => Ok(Json(listing)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "an archive listing answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+async fn extract_archive(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<ArchiveExtractBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    match state
+        .daemon
+        .execute(Request::FilesArchiveExtract {
+            path: body.path,
+            into: body.into,
+        })
+        .await
+    {
+        Response::FilesArchiveExtracted { path, entries } => {
+            Ok(Json(json!({ "path": path, "entries": entries })))
+        }
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "extracting an archive answered unexpectedly: {other:?}"
+        ))),
+    }
 }
 
 async fn index() -> HttpResponse {

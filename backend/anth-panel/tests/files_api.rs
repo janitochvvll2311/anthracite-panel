@@ -337,6 +337,64 @@ async fn writes_and_creates_files() {
 }
 
 #[tokio::test]
+async fn creates_lists_and_extracts_an_archive() {
+    let (router, root) = app("files-archive", false);
+
+    let create = serde_json::json!({ "path": "note.txt" });
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/archive")
+                .header("content-type", "application/json")
+                .body(Body::from(create.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("archive");
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = body_json(response).await;
+    assert_eq!(created["path"], "note.txt.tar.gz");
+    assert!(root.join("note.txt.tar.gz").exists());
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/archive/list?path=note.txt.tar.gz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("list archive");
+    assert_eq!(response.status(), StatusCode::OK);
+    let listing = body_json(response).await;
+    assert_eq!(listing["format"], "tar.gz");
+    assert_eq!(listing["entries"][0]["name"], "note.txt");
+
+    let extract = serde_json::json!({ "path": "note.txt.tar.gz", "into": "unpacked" });
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/files/archive/extract")
+                .header("content-type", "application/json")
+                .body(Body::from(extract.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("extract");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        fs::read_to_string(root.join("unpacked/note.txt")).expect("extracted"),
+        "hello files"
+    );
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
 async fn files_require_a_session_when_auth_is_on() {
     let (router, root) = app("files-auth", true);
     let response = router

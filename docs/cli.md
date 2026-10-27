@@ -114,6 +114,15 @@ anth-panel files delete --path /tmp/old.log
 anth-panel files write --path /tmp/motd < motd.txt
 anth-panel files write --path /tmp/note.txt --create < note.txt
 anth-panel files upload --path /tmp/logo.png --create < logo.png
+anth-panel files trash --path /tmp/old.log
+anth-panel files trash-bin list
+anth-panel files trash-bin restore old.log
+anth-panel files trash-bin restore old.log --overwrite
+anth-panel files trash-bin empty
+anth-panel files archive --path /var/log
+anth-panel files archive --path /var/log --format zip --destination /tmp/log.zip
+anth-panel files unarchive --path /var/log.tar.gz --list
+anth-panel files unarchive --path /var/log.tar.gz
 ```
 
 `list` reads one page of a directory under `[files] root` (`/` by default),
@@ -128,6 +137,21 @@ instead of replacing an existing file. `upload` sends any bytes from stdin
 through the same write path; the daemon caps the decoded size with
 `files.max_upload_bytes`. Paths are relative to the root; `..` and paths that
 escape it through a symlink are refused.
+
+`trash` moves one entry to the freedesktop.org trash and needs both
+`files.write` and `files.trash`; `trash-bin list` prints the identifier, the
+original path and the deletion date, `restore` puts one entry back (refusing an
+existing target unless `--overwrite`), and `empty` deletes everything the trash
+holds. `delete` stays permanent and is never silently converted into a trash
+move.
+
+`archive` compresses one entry. The destination defaults beside it and the
+format defaults to `tar.gz`; `zip`, `tar`, `tar.gz` and `tar.xz` can be created,
+while `7z` is read-only. `unarchive --list` inspects an archive without writing,
+and `unarchive` extracts it into the archive's name without the suffix. The
+daemon caps the uncompressed size with `files.max_archive_bytes`, counts members
+against `files.max_entries`, and refuses absolute members, `..`, backslashes and
+writes through archive-created symlinks.
 
 ## `config`
 

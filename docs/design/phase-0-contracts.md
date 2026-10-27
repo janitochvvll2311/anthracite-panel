@@ -9,10 +9,11 @@ Implementation status: Phase 0 and the Phase 1 host-info slice have landed —
 workspace, `anth-wire`, `anth-host`, config/state atomic writes, logger, CI,
 Unix socket with `Hello`, HTTP + SSE, CLI `host-info`, minimal auth and the Lit
 shell with its embed guard. Phase 2 adds login rate limiting, session listing
-and revocation, the settings surface and restart/reboot. Phase 3 has started
-with file listing, text and image previews, a tabbed create/edit/save editor,
-a transfer queue for uploads and downloads, and deletion behind `files.write`,
-including its web panel. The remaining feature phases are still pending.
+and revocation, the settings surface and restart/reboot. Phase 3 is in place:
+file listing, text and image previews, a tabbed create/edit/save editor, a
+transfer queue for uploads and downloads, deletion behind `files.write`, the
+freedesktop.org trash and in-process archives, over socket, HTTP, CLI and the
+web Files section. The remaining feature phases are still pending.
 
 Reference: [v0.3.0.md](v0.3.0.md).
 
@@ -289,6 +290,7 @@ trash = false
 max_entries = 5000
 max_preview_bytes = 1048576
 max_upload_bytes = 67108864
+max_trash_bytes = 1073741824
 max_archive_bytes = 4294967296
 
 [auth]
