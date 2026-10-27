@@ -81,6 +81,35 @@ pub enum Request {
         #[serde(default)]
         create: bool,
     },
+    /// Moves one entry to the freedesktop.org trash. Requires `files.write`
+    /// and `files.trash`.
+    FilesTrash { path: String },
+    /// Lists every trash directory the daemon can see.
+    FilesTrashList,
+    /// Restores one trashed entry to its recorded path.
+    FilesTrashRestore {
+        id: String,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// Deletes everything the trash holds.
+    FilesTrashEmpty,
+    /// Compresses one entry. `destination` and `format` default from `path`.
+    FilesArchive {
+        path: String,
+        #[serde(default)]
+        destination: Option<String>,
+        #[serde(default)]
+        format: Option<ArchiveFormat>,
+    },
+    /// Lists one archive without extracting it.
+    FilesArchiveList { path: String },
+    /// Extracts one archive. `into` defaults beside the archive.
+    FilesArchiveExtract {
+        path: String,
+        #[serde(default)]
+        into: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -117,6 +146,33 @@ pub enum Response {
     },
     /// The file was written.
     FilesWritten(FileWritten),
+    /// The entry moved to the trash.
+    FilesTrashed {
+        path: String,
+        id: String,
+    },
+    /// The contents of every trash directory.
+    FilesTrashList(TrashListing),
+    /// The trash entry was restored.
+    FilesRestored {
+        id: String,
+        path: String,
+    },
+    /// The trash was emptied.
+    FilesTrashEmptied {
+        removed: usize,
+    },
+    /// The archive was created.
+    FilesArchiveCreated {
+        path: String,
+    },
+    /// The members of one archive.
+    FilesArchiveList(ArchiveListing),
+    /// The archive was extracted.
+    FilesArchiveExtracted {
+        path: String,
+        entries: Vec<String>,
+    },
     Error(WireError),
 }
 
@@ -220,4 +276,105 @@ pub struct FileWritten {
     pub path: String,
     /// Bytes written.
     pub size: u64,
+}
+
+/// The kind of one entry inside an archive or the trash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileKind {
+    #[serde(rename = "file")]
+    File,
+    #[serde(rename = "dir")]
+    Directory,
+    #[serde(rename = "symlink")]
+    Symlink,
+    #[serde(rename = "other")]
+    Other,
+}
+
+/// Archive formats the daemon can read or write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArchiveFormat {
+    #[serde(rename = "zip")]
+    Zip,
+    #[serde(rename = "tar")]
+    Tar,
+    #[serde(rename = "tar.gz")]
+    TarGz,
+    #[serde(rename = "tar.xz")]
+    TarXz,
+    #[serde(rename = "7z")]
+    SevenZ,
+}
+
+impl ArchiveFormat {
+    /// The name clients and the CLI print.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Zip => "zip",
+            Self::Tar => "tar",
+            Self::TarGz => "tar.gz",
+            Self::TarXz => "tar.xz",
+            Self::SevenZ => "7z",
+        }
+    }
+}
+
+/// One member of an archive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchiveEntry {
+    pub name: String,
+    pub kind: FileKind,
+    /// Uncompressed size in bytes.
+    pub size: u64,
+    /// Size on disk inside the archive, when the format reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed: Option<u64>,
+}
+
+/// One archive and the members it holds.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ArchiveListing {
+    pub path: String,
+    pub format: Option<ArchiveFormat>,
+    pub entries: Vec<ArchiveEntry>,
+    pub total: usize,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// One entry held by the freedesktop trash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrashEntry {
+    /// Identifier under the trash `files/` and `info/` directories.
+    pub id: String,
+    /// Name the entry had before it was deleted.
+    pub name: String,
+    /// Path the entry is restored to.
+    pub original_path: String,
+    /// Raw `DeletionDate` from the `.trashinfo` file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<String>,
+    pub kind: FileKind,
+    pub size: u64,
+    /// Host path of the trash directory holding the entry.
+    pub location: String,
+    /// Modification time of the stored entry, used to order the listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored_ms: Option<u64>,
+}
+
+/// The contents of every trash directory the daemon can see.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TrashListing {
+    pub entries: Vec<TrashEntry>,
+    pub total: usize,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    /// Whether `[files] trash` is on, so the panel knows if trashing works.
+    pub enabled: bool,
+    /// Bytes currently held, and the retention ceiling when one is set.
+    pub used_bytes: u64,
+    pub max_bytes: Option<u64>,
 }
