@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::WireError;
-use crate::network::NetworkSnapshot;
+use crate::network::{NetworkCreate, NetworkEdit, NetworkSnapshot};
 use crate::page::Page;
 use crate::process::{ProcessSignal, ProcessSnapshot, ProcessStarted};
 use crate::terminal::{TerminalOpened, TerminalOutput};
@@ -34,6 +34,24 @@ pub enum Request {
     HostInfo,
     /// One snapshot of the host's network interfaces and default routes.
     Network,
+    /// Bring one interface up or down. Requires `network.control`.
+    NetworkSetState { name: String, up: bool },
+    /// Create one virtual interface. Requires `network.manage`.
+    NetworkCreate(NetworkCreate),
+    /// Change the MTU or the administrative state. Requires `network.manage`.
+    NetworkEdit(NetworkEdit),
+    /// Rename an interface. It has to be down first.
+    NetworkRename { name: String, new_name: String },
+    /// Delete an interface. Requires `network.manage`.
+    ///
+    /// `peer` is the address the operation arrived from, when the transport
+    /// knows it. The daemon refuses to delete the interface that address is
+    /// routed through, because that is the connection in use.
+    NetworkDelete {
+        name: String,
+        #[serde(default)]
+        peer: Option<String>,
+    },
     /// Replaces this process with a fresh copy of the same command line, which
     /// re-reads the configuration.
     Restart,
@@ -171,6 +189,10 @@ pub enum Response {
     HostInfo(HostInfo),
     /// One network inventory snapshot.
     Network(NetworkSnapshot),
+    /// A network mutation succeeded. The message is ready for the CLI.
+    NetworkChanged {
+        message: String,
+    },
     /// The restart was accepted; this process is about to be replaced.
     Restarting {
         /// The pid the new image keeps.

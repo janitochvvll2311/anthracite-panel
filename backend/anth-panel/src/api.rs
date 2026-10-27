@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use anth_wire::{
     ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
-    FileWritten, NetworkSnapshot, Page, PageRequest, ProcessSignal, ProcessSnapshot, Request,
-    Response, TerminalSize, TrashListing, WireError,
+    FileWritten, NetworkCreate, NetworkEdit, NetworkSnapshot, Page, PageRequest, ProcessSignal,
+    ProcessSnapshot, Request, Response, TerminalSize, TrashListing, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -86,6 +86,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/host-info/watch", get(watch_host_info))
         .route("/api/network", get(network))
         .route("/api/network/watch", get(watch_network))
+        .route("/api/network/state", post(network_state))
+        .route("/api/network/create", post(network_create))
+        .route("/api/network/edit", post(network_edit))
+        .route("/api/network/rename", post(network_rename))
+        .route("/api/network/delete", post(network_delete))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
         .route(
@@ -737,6 +742,164 @@ async fn watch_network(
         }
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkStateBody {
+    name: String,
+    up: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkCreateBody {
+    name: String,
+    kind: String,
+    #[serde(default)]
+    peer: Option<String>,
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    vlan_id: Option<u16>,
+    #[serde(default)]
+    mtu: Option<u32>,
+    #[serde(default)]
+    up: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkEditBody {
+    name: String,
+    #[serde(default)]
+    mtu: Option<u32>,
+    #[serde(default)]
+    up: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkRenameBody {
+    name: String,
+    new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetworkDeleteBody {
+    name: String,
+}
+
+/// The caller's address, or `None` when the router was built without it.
+///
+/// Only the delete guard uses it, and a missing peer degrades to "unknown"
+/// instead of failing the request.
+struct PeerAddress(Option<String>);
+
+impl<S: Send + Sync> FromRequestParts<S> for PeerAddress {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ConnectInfo(address)| address.ip().to_string()),
+        ))
+    }
+}
+
+async fn network_state(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<NetworkStateBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    network_change(
+        &state.daemon,
+        Request::NetworkSetState {
+            name: body.name,
+            up: body.up,
+        },
+    )
+    .await
+}
+
+async fn network_create(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<NetworkCreateBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    network_change(
+        &state.daemon,
+        Request::NetworkCreate(NetworkCreate {
+            name: body.name,
+            kind: body.kind,
+            peer: body.peer,
+            link: body.link,
+            vlan_id: body.vlan_id,
+            mtu: body.mtu,
+            up: body.up,
+        }),
+    )
+    .await
+}
+
+async fn network_edit(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<NetworkEditBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    network_change(
+        &state.daemon,
+        Request::NetworkEdit(NetworkEdit {
+            name: body.name,
+            mtu: body.mtu,
+            up: body.up,
+        }),
+    )
+    .await
+}
+
+async fn network_rename(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<NetworkRenameBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    network_change(
+        &state.daemon,
+        Request::NetworkRename {
+            name: body.name,
+            new_name: body.new_name,
+        },
+    )
+    .await
+}
+
+async fn network_delete(
+    State(state): State<AppState>,
+    _authed: Authed,
+    peer: PeerAddress,
+    body: Result<Json<NetworkDeleteBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    network_change(
+        &state.daemon,
+        Request::NetworkDelete {
+            name: body.name,
+            peer: peer.0,
+        },
+    )
+    .await
+}
+
+async fn network_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<Value>, ApiError> {
+    match daemon.execute(request).await {
+        Response::NetworkChanged { message } => Ok(Json(json!({ "message": message }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "a network change answered unexpectedly: {other:?}"
+        ))),
+    }
 }
 
 /// Validates the `interval` query shared by the SSE routes.

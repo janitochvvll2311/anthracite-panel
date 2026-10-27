@@ -16,7 +16,7 @@ use anth_panel::{render, socket};
 use anth_wire::{Request, Response, parse_interval};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use tokio::net::TcpListener;
 
 type CliResult = Result<(), (u8, String)>;
@@ -100,16 +100,10 @@ enum Command {
         )]
         watch: Option<String>,
     },
-    /// Print the network interfaces, addresses and default routes.
+    /// Inspect network interfaces and optionally change them.
     Network {
-        /// Keep reading every INTERVAL instead of printing once.
-        #[arg(
-            long,
-            value_name = "INTERVAL",
-            num_args = 0..=1,
-            default_missing_value = anth_wire::DEFAULT_INTERVAL
-        )]
-        watch: Option<String>,
+        #[command(subcommand)]
+        command: NetworkCommand,
     },
     /// Read, validate or change the configuration.
     Config {
@@ -267,6 +261,124 @@ enum ProcessCommand {
 }
 
 #[derive(Subcommand, Debug)]
+enum NetworkCommand {
+    /// List interfaces, addresses and default routes.
+    #[command(alias = "ls")]
+    List {
+        /// Keep reading every INTERVAL instead of printing once.
+        #[arg(
+            long,
+            value_name = "INTERVAL",
+            num_args = 0..=1,
+            default_missing_value = anth_wire::DEFAULT_INTERVAL
+        )]
+        watch: Option<String>,
+    },
+    /// Bring one interface up.
+    Up {
+        /// Interface name.
+        name: String,
+    },
+    /// Bring one interface down.
+    Down {
+        /// Interface name.
+        name: String,
+    },
+    /// Create one virtual interface.
+    Create {
+        /// Interface name.
+        name: String,
+        /// veth, bridge, bond, vlan, dummy or tun-tap.
+        #[arg(long, value_enum, default_value_t = NetworkKind::Dummy)]
+        kind: NetworkKind,
+        /// Peer interface, required for a veth.
+        #[arg(long)]
+        peer: Option<String>,
+        /// Parent interface, required for a vlan.
+        #[arg(long)]
+        link: Option<String>,
+        /// VLAN identifier, 1-4094, required for a vlan.
+        #[arg(long)]
+        vlan_id: Option<u16>,
+        /// MTU, 68-65535.
+        #[arg(long)]
+        mtu: Option<u32>,
+        /// Bring the interface up once it exists.
+        #[arg(long)]
+        up: bool,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Change the MTU or the administrative state of an interface.
+    Edit {
+        /// Interface name.
+        name: String,
+        /// MTU, 68-65535.
+        #[arg(long)]
+        mtu: Option<u32>,
+        /// Bring the interface up.
+        #[arg(long, conflicts_with = "down")]
+        up: bool,
+        /// Bring the interface down.
+        #[arg(long)]
+        down: bool,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Rename an interface that is down.
+    Rename {
+        /// Current interface name.
+        name: String,
+        /// New interface name.
+        new_name: String,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Delete an interface.
+    Delete {
+        /// Interface name.
+        name: String,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum NetworkKind {
+    Veth,
+    Bridge,
+    Bond,
+    Vlan,
+    Dummy,
+    #[value(name = "tun-tap")]
+    TunTap,
+}
+
+impl NetworkKind {
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Veth => "veth",
+            Self::Bridge => "bridge",
+            Self::Bond => "bond",
+            Self::Vlan => "vlan",
+            Self::Dummy => "dummy",
+            Self::TunTap => "tun",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::TunTap => "tun/tap",
+            other => other.as_wire(),
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
 enum TrashBinCommand {
     /// List every trashed entry.
     List,
@@ -305,7 +417,7 @@ async fn run() -> CliResult {
     match &cli.command {
         Command::Config { command } => config_command(&path, command, &cli),
         Command::HostInfo { watch } => host_info(&path, watch.clone()).await,
-        Command::Network { watch } => network_command(&path, watch.clone()).await,
+        Command::Network { command } => network_command(&path, command).await,
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
         Command::Reboot { delay } => {
@@ -742,19 +854,156 @@ fn print_host_info(response: &Response) -> CliResult {
     Ok(())
 }
 
-async fn network_command(path: &std::path::Path, watch: Option<String>) -> CliResult {
+async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> CliResult {
     let mut client = connect(path).await?;
 
-    let Some(interval) = watch else {
-        let response = client
-            .call(&Request::Network)
+    match command {
+        NetworkCommand::List { watch } => {
+            let Some(interval) = watch else {
+                let response = client
+                    .call(&Request::Network)
+                    .await
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                println!("{}", render_network(&response)?);
+                return Ok(());
+            };
+            watch_loop(&mut client, interval, &Request::Network, render_network).await
+        }
+        NetworkCommand::Up { name } => {
+            network_change(
+                &mut client,
+                Request::NetworkSetState {
+                    name: name.clone(),
+                    up: true,
+                },
+            )
             .await
-            .map_err(|error| (1, error.to_string()))?;
-        println!("{}", render_network(&response)?);
-        return Ok(());
-    };
+        }
+        NetworkCommand::Down { name } => {
+            network_change(
+                &mut client,
+                Request::NetworkSetState {
+                    name: name.clone(),
+                    up: false,
+                },
+            )
+            .await
+        }
+        NetworkCommand::Create {
+            name,
+            kind,
+            peer,
+            link,
+            vlan_id,
+            mtu,
+            up,
+            yes,
+        } => {
+            if !*yes {
+                confirm(&format!("Create {} interface `{name}`?", kind.label()))?;
+            }
+            network_change(
+                &mut client,
+                Request::NetworkCreate(anth_wire::NetworkCreate {
+                    name: name.clone(),
+                    kind: kind.as_wire().to_string(),
+                    peer: peer.clone(),
+                    link: link.clone(),
+                    vlan_id: *vlan_id,
+                    mtu: *mtu,
+                    up: *up,
+                }),
+            )
+            .await
+        }
+        NetworkCommand::Edit {
+            name,
+            mtu,
+            up,
+            down,
+            yes,
+        } => {
+            if mtu.is_none() && !*up && !*down {
+                return Err((
+                    2,
+                    "nothing to change: pass --mtu, --up or --down".to_string(),
+                ));
+            }
+            if !*yes {
+                let change = match (mtu, up, down) {
+                    (Some(mtu), true, _) => format!("set the MTU to {mtu} and bring it up"),
+                    (Some(mtu), _, true) => format!("set the MTU to {mtu} and bring it down"),
+                    (Some(mtu), _, _) => format!("set the MTU to {mtu}"),
+                    (None, true, _) => "bring it up".to_string(),
+                    (None, _, true) => "bring it down".to_string(),
+                    (None, false, false) => "change nothing".to_string(),
+                };
+                confirm(&format!("{change} on interface `{name}`?"))?;
+            }
+            network_change(
+                &mut client,
+                Request::NetworkEdit(anth_wire::NetworkEdit {
+                    name: name.clone(),
+                    mtu: *mtu,
+                    up: if *up {
+                        Some(true)
+                    } else if *down {
+                        Some(false)
+                    } else {
+                        None
+                    },
+                }),
+            )
+            .await
+        }
+        NetworkCommand::Rename {
+            name,
+            new_name,
+            yes,
+        } => {
+            if !*yes {
+                confirm(&format!("Rename `{name}` to `{new_name}`?"))?;
+            }
+            network_change(
+                &mut client,
+                Request::NetworkRename {
+                    name: name.clone(),
+                    new_name: new_name.clone(),
+                },
+            )
+            .await
+        }
+        NetworkCommand::Delete { name, yes } => {
+            if !*yes {
+                confirm(&format!(
+                    "Delete interface `{name}`? This cannot be undone and may disconnect the host."
+                ))?;
+            }
+            network_change(
+                &mut client,
+                Request::NetworkDelete {
+                    name: name.clone(),
+                    peer: None,
+                },
+            )
+            .await
+        }
+    }
+}
 
-    watch_loop(&mut client, &interval, &Request::Network, render_network).await
+async fn network_change(client: &mut Client, request: Request) -> CliResult {
+    let response = client
+        .call(&request)
+        .await
+        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+    match response {
+        Response::NetworkChanged { message } => {
+            println!("{message}");
+            Ok(())
+        }
+        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+        other => Err((1, format!("unexpected response: {other:?}"))),
+    }
 }
 
 fn render_network(response: &Response) -> Result<String, (u8, String)> {
@@ -836,7 +1085,7 @@ async fn process_command(path: &std::path::Path, command: &ProcessCommand) -> Cl
             let signal = anth_wire::ProcessSignal::parse(signal)
                 .ok_or_else(|| (2, format!("`{signal}` is not an allowed signal")))?;
             let target = find_process(&mut client, *pid).await?;
-            if !yes {
+            if !*yes {
                 confirm(&format!(
                     "Send {} to process {pid} ({})?",
                     signal.as_str(),

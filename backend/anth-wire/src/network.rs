@@ -1,7 +1,8 @@
-//! Network interface inventory values.
+//! Network interface inventory and mutation values.
 //!
-//! The daemon reads the kernel view (sysfs, `/proc/net/dev` and `getifaddrs`);
-//! this module carries it without any policy. Mutations are a later slice.
+//! The daemon reads the kernel view (sysfs, `/proc/net/dev` and `getifaddrs`)
+//! and turns the validated mutations into `ip` argv. This module only carries
+//! the transport shape; no policy or command line lives here.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +23,8 @@ pub struct NetworkAddress {
 pub struct NetworkInterface {
     pub name: String,
     pub index: u32,
-    /// `loopback`, `ether`, `wifi`, `bridge`, `tun`, `veth` or `other`.
+    /// `loopback`, `ether`, `wifi`, `bridge`, `bond`, `vlan`, `tun`, `veth`,
+    /// `dummy` or `other`.
     pub kind: String,
     /// Hardware address, empty when the interface has none.
     pub mac: String,
@@ -31,7 +33,14 @@ pub struct NetworkInterface {
     pub state: String,
     /// `IFF_UP`, independent of the operational state.
     pub up: bool,
+    /// `IFF_RUNNING`; a carrier is present and the driver considers it running.
+    #[serde(default)]
+    pub running: bool,
     pub loopback: bool,
+    /// The interface has a `device` link in sysfs, so it is real hardware.
+    /// Deleting it removes the card's link, not a virtual device.
+    #[serde(default)]
+    pub physical: bool,
     pub addresses: Vec<NetworkAddress>,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
@@ -53,6 +62,44 @@ pub struct NetworkRoute {
     pub family: String,
     pub gateway: String,
     pub interface: String,
+}
+
+/// One virtual interface to create.
+///
+/// Only the kinds the panel can build are accepted: `veth`, `bridge`, `bond`,
+/// `vlan`, `dummy` and `tun`. Physical and wireless devices cannot be created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkCreate {
+    pub name: String,
+    /// `veth`, `bridge`, `bond`, `vlan`, `dummy` or `tun`.
+    pub kind: String,
+    /// Peer name, required for a veth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer: Option<String>,
+    /// Parent interface, required for a vlan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// VLAN identifier, 1-4094, required for a vlan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vlan_id: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u32>,
+    /// Bring the interface up once it exists.
+    #[serde(default)]
+    pub up: bool,
+}
+
+/// A change to an existing interface.
+///
+/// Absent fields are left alone: sending only `mtu` never touches the
+/// administrative state, so an edit cannot take a link down by omission.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NetworkEdit {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub up: Option<bool>,
 }
 
 /// One network inventory snapshot.

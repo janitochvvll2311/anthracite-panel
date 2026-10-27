@@ -21,7 +21,9 @@ pub use message::{
     HostInfo, LoadAverage, MemoryInfo, OsInfo, PROTOCOL_VERSION, Request, Response, TrashEntry,
     TrashListing,
 };
-pub use network::{NetworkAddress, NetworkInterface, NetworkRoute, NetworkSnapshot};
+pub use network::{
+    NetworkAddress, NetworkCreate, NetworkEdit, NetworkInterface, NetworkRoute, NetworkSnapshot,
+};
 pub use page::{DEFAULT_PAGE_LIMIT, MAX_CURSOR_LEN, MAX_PAGE_LIMIT, Page, PageRequest};
 pub use process::{
     MAX_SPAWN_ARG_BYTES, MAX_SPAWN_ARGS, ProcessInfo, ProcessSignal, ProcessSnapshot,

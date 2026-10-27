@@ -88,6 +88,13 @@ impl Daemon {
         }
     }
 
+    /// Replaces the network service. Tests use it to script `ip` without
+    /// touching the host; the transport still goes through `execute`.
+    pub fn with_network(mut self, network: NetworkService) -> Self {
+        self.network = network;
+        self
+    }
+
     pub fn terminals(&self) -> &Arc<Sessions> {
         &self.terminal
     }
@@ -212,6 +219,31 @@ impl Daemon {
                 Ok(Response::Network(
                     blocking(move || network.snapshot()).await?,
                 ))
+            }
+            Request::NetworkSetState { name, up } => {
+                let network = self.network.clone();
+                let message = blocking(move || network.set_state(&name, up)).await?;
+                Ok(Response::NetworkChanged { message })
+            }
+            Request::NetworkCreate(args) => {
+                let network = self.network.clone();
+                let message = blocking(move || network.create(&args)).await?;
+                Ok(Response::NetworkChanged { message })
+            }
+            Request::NetworkEdit(args) => {
+                let network = self.network.clone();
+                let message = blocking(move || network.edit(&args)).await?;
+                Ok(Response::NetworkChanged { message })
+            }
+            Request::NetworkRename { name, new_name } => {
+                let network = self.network.clone();
+                let message = blocking(move || network.rename(&name, &new_name)).await?;
+                Ok(Response::NetworkChanged { message })
+            }
+            Request::NetworkDelete { name, peer } => {
+                let network = self.network.clone();
+                let message = blocking(move || network.delete(&name, peer.as_deref())).await?;
+                Ok(Response::NetworkChanged { message })
             }
             Request::Restart => {
                 let lifecycle = Arc::clone(&self.lifecycle);
@@ -436,6 +468,11 @@ fn operation_of(request: &Request) -> &'static str {
         Request::Hello { .. } => "hello",
         Request::HostInfo => "host-info",
         Request::Network => "network",
+        Request::NetworkSetState { .. } => "network-set-state",
+        Request::NetworkCreate(_) => "network-create",
+        Request::NetworkEdit(_) => "network-edit",
+        Request::NetworkRename { .. } => "network-rename",
+        Request::NetworkDelete { .. } => "network-delete",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

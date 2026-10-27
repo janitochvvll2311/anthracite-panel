@@ -6,6 +6,7 @@
 //! mutations are a separate slice gated by `[network] control` and
 //! `[network] manage`.
 
+mod mutate;
 mod parse;
 
 use std::collections::HashMap;
@@ -13,22 +14,82 @@ use std::ffi::CStr;
 use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_wire::{NetworkAddress, NetworkInterface, NetworkSnapshot, WireError};
 
+use mutate::{NetworkState, SystemIp};
 use parse::{default_route_v4, default_route_v6, parse_dev, parse_flags};
 
+pub use mutate::{IpError, IpRunner, validate_mtu, validate_name};
+
 /// The network service, built once from the policy the daemon read at startup.
-#[derive(Debug, Clone)]
 pub struct NetworkService {
     control: bool,
     manage: bool,
+    ip: Arc<dyn IpRunner>,
+}
+
+impl Clone for NetworkService {
+    fn clone(&self) -> Self {
+        Self {
+            control: self.control,
+            manage: self.manage,
+            ip: Arc::clone(&self.ip),
+        }
+    }
 }
 
 impl NetworkService {
     pub fn new(control: bool, manage: bool) -> Self {
-        Self { control, manage }
+        Self::with_runner(control, manage, Arc::new(SystemIp))
+    }
+
+    /// Replaces the `ip` runner. Used by tests to record argv without touching
+    /// the host.
+    pub fn with_runner(control: bool, manage: bool, ip: Arc<dyn IpRunner>) -> Self {
+        Self {
+            control,
+            manage,
+            ip,
+        }
+    }
+
+    /// Brings one interface up or down. Requires `network.control`.
+    pub fn set_state(&self, name: &str, up: bool) -> Result<String, WireError> {
+        let state = self.state()?;
+        mutate::set_state(self.control, self.ip.as_ref(), &state, name, up)
+    }
+
+    /// Creates one virtual interface. Requires `network.manage`.
+    pub fn create(&self, args: &anth_wire::NetworkCreate) -> Result<String, WireError> {
+        let state = self.state()?;
+        mutate::create(self.manage, self.ip.as_ref(), &state, args)
+    }
+
+    /// Changes an MTU or the administrative state. Requires `network.manage`;
+    /// changing the state also requires `network.control`.
+    pub fn edit(&self, args: &anth_wire::NetworkEdit) -> Result<String, WireError> {
+        let state = self.state()?;
+        mutate::edit(self.control, self.manage, self.ip.as_ref(), &state, args)
+    }
+
+    /// Renames a down interface. Requires `network.manage`.
+    pub fn rename(&self, name: &str, new_name: &str) -> Result<String, WireError> {
+        let state = self.state()?;
+        mutate::rename(self.manage, self.ip.as_ref(), &state, name, new_name)
+    }
+
+    /// Deletes an interface. Requires `network.manage`. `peer` is the address
+    /// the operation arrived from, when the transport knows it.
+    pub fn delete(&self, name: &str, peer: Option<&str>) -> Result<String, WireError> {
+        let state = self.state()?;
+        mutate::delete(self.manage, self.ip.as_ref(), &state, name, peer)
+    }
+
+    fn state(&self) -> Result<NetworkState, WireError> {
+        Ok(NetworkState::from_snapshot(&self.snapshot()?))
     }
 
     /// One snapshot of every interface and the default routes.
@@ -57,6 +118,7 @@ impl NetworkService {
                 .and_then(|text| parse_flags(&text))
                 .unwrap_or(0);
             let up = flags & libc::IFF_UP as u32 != 0;
+            let running = flags & libc::IFF_RUNNING as u32 != 0;
             let loopback = flags & libc::IFF_LOOPBACK as u32 != 0;
             let state = read_text(path.join("operstate"))
                 .map(|text| text.trim().to_string())
@@ -80,7 +142,9 @@ impl NetworkService {
                 mac,
                 state,
                 up,
+                running,
                 loopback,
+                physical: path.join("device").exists(),
                 addresses: addresses.remove(&name).unwrap_or_default(),
                 rx_bytes: counters.rx_bytes,
                 tx_bytes: counters.tx_bytes,
@@ -119,11 +183,22 @@ fn kind(name: &str, path: &Path, flags: u32) -> String {
     if path.join("bridge").exists() {
         return "bridge".to_string();
     }
+    if path.join("bonding").exists() {
+        return "bond".to_string();
+    }
+    if read_text(path.join("uevent"))
+        .is_some_and(|text| text.lines().any(|line| line == "DEVTYPE=vlan"))
+    {
+        return "vlan".to_string();
+    }
     if name.starts_with("veth") {
         return "veth".to_string();
     }
-    if name.starts_with("tun") || name.starts_with("tap") {
+    if path.join("tun_flags").exists() || name.starts_with("tun") || name.starts_with("tap") {
         return "tun".to_string();
+    }
+    if name.starts_with("dummy") {
+        return "dummy".to_string();
     }
     match read_number(path.join("type")).unwrap_or(0) {
         1 => "ether".to_string(),
