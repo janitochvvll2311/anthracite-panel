@@ -53,6 +53,7 @@ import './settings'
 import './tab-panel'
 
 const VERSION = '0.3.0'
+const SIDEBAR_KEY = 'anth.sidebar'
 
 export class AnthApp extends HTMLElement {
   /** Set before mounting by `main`, or replaced by a test. */
@@ -67,6 +68,7 @@ export class AnthApp extends HTMLElement {
   #busy = false
   #route: Route = routeFrom('')
   #locale: PanelLocale = 'en'
+  #sidebarCollapsed = false
 
   #frameMounted = false
   #shellMounted = false
@@ -88,6 +90,13 @@ export class AnthApp extends HTMLElement {
     }
     this.#locale = currentLocale()
     this.#route = routeFrom(location.hash)
+    try {
+      this.#sidebarCollapsed =
+        localStorage.getItem(SIDEBAR_KEY) === 'collapsed'
+    } catch {
+      // Private mode without storage: the rail still works for this session.
+    }
+    this.classList.toggle('sidebar-collapsed', this.#sidebarCollapsed)
     this.#buildFrame()
     globalThis.addEventListener('hashchange', this.#onHashChange)
     globalThis.addEventListener('lit-localize-status', this.#onLocaleChange)
@@ -158,6 +167,7 @@ export class AnthApp extends HTMLElement {
     }
     this.#paintNav()
     this.#paintFoot()
+    this.#syncSidebarToggle()
 
     const errorEl = this.shadowRoot.querySelector<HTMLElement>('[data-error]')
     const authEl = this.shadowRoot.querySelector<HTMLElement>('[data-auth]')
@@ -213,7 +223,16 @@ export class AnthApp extends HTMLElement {
         </div>
       </header>
       <div class="shell">
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
+          <button
+            class="sidebar-toggle"
+            type="button"
+            data-sidebar-toggle
+            aria-controls="sidebar"
+            aria-expanded="true"
+            aria-label="${msg('Collapse sidebar')}"
+            title="${msg('Collapse sidebar')}"
+          ><anth-icon name="chevron-left"></anth-icon></button>
           <nav aria-label="${msg('Sections')}" data-sidebar></nav>
           <div class="nav-foot" data-nav-foot></div>
         </aside>
@@ -231,6 +250,7 @@ export class AnthApp extends HTMLElement {
     this.#frameMounted = true
     this.#drawer = root.querySelector('anth-nav-drawer') as AnthNavDrawer | null ?? undefined
     this.#wireFrame()
+    this.#syncSidebarToggle()
   }
 
   #wireFrame(): void {
@@ -245,6 +265,9 @@ export class AnthApp extends HTMLElement {
       root.querySelector<HTMLElement>('main')?.focus()
     })
     root.querySelector('.menu')?.addEventListener('click', () => this.#setDrawer(true))
+    root
+      .querySelector('[data-sidebar-toggle]')
+      ?.addEventListener('click', () => this.#toggleSidebar())
     this.#drawer?.addEventListener(DRAWER_CLOSE_EVENT, () => this.#setDrawer(false))
     // The sidebar and the drawer are repainted on every render, so the footer
     // controls are handled once, by delegation.
@@ -271,6 +294,42 @@ export class AnthApp extends HTMLElement {
       this.#drawer.open = open
     }
     this.shadowRoot?.querySelector('.menu')?.setAttribute('aria-expanded', String(open))
+  }
+
+  #toggleSidebar(): void {
+    this.#setSidebarCollapsed(!this.#sidebarCollapsed)
+  }
+
+  #setSidebarCollapsed(collapsed: boolean): void {
+    this.#sidebarCollapsed = collapsed
+    this.classList.toggle('sidebar-collapsed', collapsed)
+    try {
+      localStorage.setItem(SIDEBAR_KEY, collapsed ? 'collapsed' : 'expanded')
+    } catch {
+      // The class already changed; persistence is best effort.
+    }
+    this.#syncSidebarToggle()
+  }
+
+  #syncSidebarToggle(): void {
+    const button = this.shadowRoot?.querySelector<HTMLButtonElement>(
+      '[data-sidebar-toggle]',
+    )
+    if (!button) {
+      return
+    }
+    const label = this.#sidebarCollapsed
+      ? msg('Expand sidebar')
+      : msg('Collapse sidebar')
+    button.setAttribute('aria-label', label)
+    button.setAttribute('title', label)
+    button.setAttribute('aria-expanded', String(!this.#sidebarCollapsed))
+    button
+      .querySelector('anth-icon')
+      ?.setAttribute(
+        'name',
+        this.#sidebarCollapsed ? 'chevron-right' : 'chevron-left',
+      )
   }
 
   /** Language and sign-out, pinned to the bottom of the sidebar and the drawer. */
@@ -310,6 +369,7 @@ export class AnthApp extends HTMLElement {
       .map(
         (section) => `
           <a class="nav-item" href="${hashForSection(section.id)}" data-section="${section.id}"
+             title="${escape(section.label)}" aria-label="${escape(section.label)}"
              ${section.id === this.#route.section ? 'data-active aria-current="page"' : ''}>
             <span class="nav-icon" aria-hidden="true"><anth-icon name="${escape(section.icon)}"></anth-icon></span>
             <span class="nav-label">${escape(section.label)}</span>
@@ -670,6 +730,26 @@ const STYLE = `
              border-right: 1px solid var(--panel-border, #223041);
              background: rgba(12, 17, 24, 0.72); }
 
+  .sidebar-toggle {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    align-self: flex-end;
+    width: 32px;
+    height: 32px;
+    margin-bottom: 0.6rem;
+    padding: 0;
+    color: var(--muted, #8b9bad);
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+  }
+  .sidebar-toggle:hover { color: var(--text, #dbe6f2); border-color: var(--panel-border, #223041); }
+  .sidebar-toggle:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
+  .sidebar-toggle anth-icon { font-size: 14px; }
+
   .sidebar nav, anth-nav-drawer nav { display: grid; gap: 0.25rem; }
   .sidebar nav { flex: 0 0 auto; }
 
@@ -685,6 +765,45 @@ const STYLE = `
   .nav-icon { display: inline-flex; align-items: center; justify-content: center;
               width: 1.2rem; font-size: 1.05rem; line-height: 1; }
   .nav-label { flex: 1; }
+
+  /* Desktop-only icon rail. The drawer keeps its labels, so every selector is
+     scoped through .sidebar and the grid column is desktop-only. */
+  @media (min-width: 48.0625rem) {
+    :host(.sidebar-collapsed) .shell { grid-template-columns: 4.5rem minmax(0, 1fr); }
+    :host(.sidebar-collapsed) .sidebar { padding: 0.9rem 0.4rem; }
+    :host(.sidebar-collapsed) .sidebar .sidebar-toggle { align-self: center; }
+    :host(.sidebar-collapsed) .sidebar .nav-item {
+      justify-content: center;
+      gap: 0;
+      padding: 0.55rem 0;
+    }
+    :host(.sidebar-collapsed) .sidebar .nav-icon { width: auto; font-size: 1.15rem; }
+    :host(.sidebar-collapsed) .sidebar .nav-label { display: none; }
+    :host(.sidebar-collapsed) .sidebar .nav-foot { justify-items: center; }
+    :host(.sidebar-collapsed) .sidebar .nav-foot .locale {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+      justify-content: center;
+    }
+    :host(.sidebar-collapsed) .sidebar .nav-foot .locale select {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: pointer;
+    }
+    :host(.sidebar-collapsed) .sidebar .nav-foot .btn-label { display: none; }
+    :host(.sidebar-collapsed) .sidebar .nav-foot button {
+      width: 44px;
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+    }
+  }
 
   main { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
          -webkit-overflow-scrolling: touch; padding: clamp(1rem, 3vw, 2rem);

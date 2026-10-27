@@ -918,6 +918,14 @@
   <source><x id="0" equiv-text="${process.threads}"/> threads</source>
   <target><x id="0" equiv-text="${process.threads}"/> hilos</target>
 </trans-unit>
+<trans-unit id="s8f10b4e57121e256">
+  <source>Collapse sidebar</source>
+  <target>Contraer barra lateral</target>
+</trans-unit>
+<trans-unit id="s7293d04c5979a8ad">
+  <source>Expand sidebar</source>
+  <target>Expandir barra lateral</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

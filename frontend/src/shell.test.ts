@@ -112,6 +112,7 @@ afterEach(() => {
   AnthApp.hostClient = undefined
   AnthApp.filesClient = undefined
   AnthApp.settingsClient = undefined
+  localStorage.removeItem('anth.sidebar')
   location.hash = ''
 })
 
@@ -260,4 +261,39 @@ test('an unauthenticated shell shows the registration form instead of the tabs',
   expect(root.querySelector('[data-auth] form[data-register]')).not.toBeNull()
   expect(root.querySelector('[data-shell]')!.hasAttribute('hidden')).toBe(true)
   expect(element.classList.contains('auth-only')).toBe(true)
+})
+
+test('the sidebar toggle collapses it to an icon rail and remembers it', async () => {
+  const element = mountShell(OPEN)
+  await flush()
+  const root = element.shadowRoot!
+  const toggle = root.querySelector<HTMLButtonElement>('[data-sidebar-toggle]')!
+  expect(toggle).not.toBeNull()
+  expect(element.classList.contains('sidebar-collapsed')).toBe(false)
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  expect(toggle.getAttribute('aria-label')).toContain('Collapse')
+
+  toggle.click()
+  await flush()
+  expect(element.classList.contains('sidebar-collapsed')).toBe(true)
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(toggle.getAttribute('aria-label')).toContain('Expand')
+  expect(toggle.querySelector('anth-icon')?.getAttribute('name')).toBe('chevron-right')
+  expect(localStorage.getItem('anth.sidebar')).toBe('collapsed')
+
+  toggle.click()
+  await flush()
+  expect(element.classList.contains('sidebar-collapsed')).toBe(false)
+  expect(toggle.querySelector('anth-icon')?.getAttribute('name')).toBe('chevron-left')
+  expect(localStorage.getItem('anth.sidebar')).toBe('expanded')
+})
+
+test('a stored collapsed preference is applied on mount', async () => {
+  localStorage.setItem('anth.sidebar', 'collapsed')
+  const element = mountShell(OPEN)
+  await flush()
+  const toggle = element.shadowRoot?.querySelector('[data-sidebar-toggle]')
+  expect(element.classList.contains('sidebar-collapsed')).toBe(true)
+  expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+  expect(toggle?.querySelector('anth-icon')?.getAttribute('name')).toBe('chevron-right')
 })
