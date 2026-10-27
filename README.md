@@ -131,7 +131,9 @@ host where root has that capability, run the whole development script with
 `sudo ./scripts/dev.sh start` or `ANTH_SUDO=1 ./scripts/dev.sh start`, and use
 the same form for `stop` and `restart`. The `ANTH_SUDO` form re-executes the
 script under `sudo`; it is a development convenience, not a privilege boundary,
-and it cannot add a capability the container's bounding set excludes.
+and it cannot add a capability the container's bounding set excludes. If `sudo`
+needs a password, run it from a terminal or configure NOPASSWD; a
+non-interactive caller gets an error instead of a silent wait.
 
 Inside an OpenCode session the same commands are available as `/dev-start`,
 `/dev-stop`, `/dev-status` and `/dev-restart` (from `.opencode/commands/`).

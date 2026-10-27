@@ -37,6 +37,19 @@ if [ "${ANTH_SUDO:-0}" = "1" ] && [ "$(id -u)" -ne 0 ]; then
     echo "error: ANTH_SUDO=1 needs sudo on PATH" >&2
     exit 2
   fi
+  # Do not sit on an invisible password prompt when the helper is started by a
+  # non-interactive caller. A terminal gets one explicit prompt; anything else
+  # fails with an actionable message instead of looking hung.
+  if ! sudo -n true 2>/dev/null; then
+    if [ -t 0 ] && [ -t 2 ]; then
+      echo "dev: sudo needs a password; asking once..." >&2
+      sudo -v || exit 2
+    else
+      echo "error: sudo needs a password but stdin is not a terminal" >&2
+      echo "       run this from a terminal or configure NOPASSWD for the dev helper" >&2
+      exit 2
+    fi
+  fi
   script_path=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
   exec sudo -E "$script_path" "$@"
 fi
@@ -100,10 +113,16 @@ kill_tree() {
 wait_for() {
   local url=$1
   local attempts=${2:-120}
+  local started=$SECONDS
   local i
   for i in $(seq 1 "$attempts"); do
-    if curl -sf -o /dev/null "$url" 2>/dev/null; then
+    # A server that accepts the socket but never answers must not hang the
+    # helper; each probe is bounded and the whole wait has a deadline.
+    if curl -sf --connect-timeout 1 --max-time 2 -o /dev/null "$url" 2>/dev/null; then
       return 0
+    fi
+    if [ $((SECONDS - started)) -ge 60 ]; then
+      return 1
     fi
     sleep 0.5
   done
@@ -185,6 +204,7 @@ start_one() {
 }
 
 start() {
+  local code=0
   check_network_tools
   start_one backend
   if ! alive "$(read_pid "$backend_pid")"; then
@@ -200,21 +220,26 @@ start() {
       bun run dev --host "$vite_host" --port "$vite_port"
   fi
 
+  echo "backend: waiting for $health_url"
   if wait_for "$health_url"; then
     echo "backend:  $health_url  (log: $backend_log)"
   else
     echo "backend:  not answering yet; see $backend_log" >&2
     tail -n 10 "$backend_log" >&2 || true
+    code=1
   fi
 
+  echo "frontend: waiting for http://127.0.0.1:$vite_port/"
   if wait_for "http://127.0.0.1:$vite_port/"; then
     echo "frontend: http://localhost:$vite_port/  (log: $frontend_log)"
   else
     echo "frontend: not answering yet; see $frontend_log" >&2
     tail -n 10 "$frontend_log" >&2 || true
+    code=1
   fi
 
   echo "stop both with: $0 stop"
+  return "$code"
 }
 
 stop() {
