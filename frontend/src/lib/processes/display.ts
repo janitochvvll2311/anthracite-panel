@@ -69,7 +69,7 @@ export function defaultDirection(key: ProcessSortKey): ProcessSortDirection {
   return key === 'cpu' || key === 'memory' ? 'desc' : 'asc'
 }
 
-export function sortValue(
+function sortValue(
   process: ProcessRow,
   key: ProcessSortKey,
 ): number | string | null {

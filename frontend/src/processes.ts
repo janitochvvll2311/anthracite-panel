@@ -170,7 +170,9 @@ export class AnthProcesses extends LitElement {
     this.compact = width - this.metricsWidth < this.metricsWidth
   }
 
-  protected override updated(): void {
+  protected override willUpdate(): void {
+    // Derived layout state belongs here: setting it in `updated` would schedule
+    // a second update after the first one closed (Lit warns about that).
     this.updateLayout()
   }
 
@@ -294,8 +296,8 @@ export class AnthProcesses extends LitElement {
     )
   }
 
-  private sorted(): ProcessRow[] {
-    return [...this.filtered()].sort((left, right) =>
+  private sorted(rows: ProcessRow[]): ProcessRow[] {
+    return [...rows].sort((left, right) =>
       compareProcesses(left, right, this.sort, this.direction()),
     )
   }
@@ -501,7 +503,23 @@ export class AnthProcesses extends LitElement {
       : formatPercent(process.cpu_percent)
   }
 
-  private renderToolbar() {
+  private commandText(process: ProcessRow): string {
+    return process.command !== '' ? process.command : process.name
+  }
+
+  private stateBadge(process: ProcessRow) {
+    return html`
+      <span class="state" data-state=${process.state}>
+        ${stateLabel(process.state)}
+      </span>
+    `
+  }
+
+  private threadsLabel(process: ProcessRow): string {
+    return msg(str`${process.threads} threads`)
+  }
+
+  private renderToolbar(count: number) {
     const spawn = this.snapshot?.spawn_enabled === true
     return html`
       <div class="toolbar" part="toolbar">
@@ -514,7 +532,7 @@ export class AnthProcesses extends LitElement {
             ? msg(str`Only the first ${this.rows.length} processes are loaded.`)
             : nothing}
         >
-          ${this.filtered().length} / ${this.total} ${msg('processes')}
+          ${count} / ${this.total} ${msg('processes')}
         </span>
         <span class="spacer"></span>
         <div class="view-switch" role="group" aria-label=${msg('Process view')}>
@@ -718,14 +736,12 @@ export class AnthProcesses extends LitElement {
             <span class="pid">PID ${process.pid}</span>
             <span class="muted">${process.user}</span>
             <span class="selection-command" title=${process.command}>
-              ${process.command !== '' ? process.command : process.name}
+              ${this.commandText(process)}
             </span>
           </div>
           <div class="selection-metrics">
-            <span class="state" data-state=${process.state}>
-              ${stateLabel(process.state)}
-            </span>
-            <span>${msg(str`${process.threads} threads`)}</span>
+            ${this.stateBadge(process)}
+            <span>${this.threadsLabel(process)}</span>
             <span>${formatKib(process.rss_kib)}</span>
             <span class="selection-cpu">${this.cpuText(process)} CPU</span>
           </div>
@@ -786,7 +802,7 @@ export class AnthProcesses extends LitElement {
     }
     return html`
       <div
-        class=${`cell head-cell col-${column.key} ${column.numeric ? "number" : ""}`}
+        class=${`cell head-cell ${column.numeric ? "number" : ""}`}
         role="columnheader"
         aria-sort=${this.sortAria(column.key)}
       >
@@ -899,7 +915,7 @@ export class AnthProcesses extends LitElement {
         ${treeRow === undefined ? nothing : this.renderTreeCell(treeRow)}
         <span class="cell pid mono" role="cell">${process.pid}</span>
         <span class="cell command" role="cell" title=${process.command}>
-          ${process.command !== '' ? process.command : process.name}
+          ${this.commandText(process)}
         </span>
       </div>
     `
@@ -915,21 +931,13 @@ export class AnthProcesses extends LitElement {
         data-key=${keyOf(process)}
         @click=${() => this.select(process)}
       >
-        <span class="cell col-threads threads number mono" role="cell">
-          ${process.threads}
-        </span>
-        <span class="cell col-user user" role="cell">${process.user}</span>
-        <span class="cell col-state state-cell" role="cell">
-          <span class="state" data-state=${process.state}>
-            ${stateLabel(process.state)}
-          </span>
-        </span>
-        <span class="cell col-memory number mono" role="cell">
+        <span class="cell number mono" role="cell">${process.threads}</span>
+        <span class="cell user" role="cell">${process.user}</span>
+        <span class="cell state-cell" role="cell">${this.stateBadge(process)}</span>
+        <span class="cell number mono" role="cell">
           ${formatKib(process.rss_kib)}
         </span>
-        <span class="cell col-cpu number mono" role="cell">
-          ${this.cpuText(process)}
-        </span>
+        <span class="cell number mono" role="cell">${this.cpuText(process)}</span>
       </div>
     `
   }
@@ -967,15 +975,13 @@ export class AnthProcesses extends LitElement {
         <div class="compact-identity">
           <span class="pid mono">${process.pid}</span>
           <span class="command" title=${process.command}>
-            ${process.command !== '' ? process.command : process.name}
+            ${this.commandText(process)}
           </span>
         </div>
         <div class="compact-metrics">
           <span class="metric-user">${process.user}</span>
-          <span>${msg(str`${process.threads} threads`)}</span>
-          <span class="state" data-state=${process.state}>
-            ${stateLabel(process.state)}
-          </span>
+          <span>${this.threadsLabel(process)}</span>
+          ${this.stateBadge(process)}
           <span>${formatKib(process.rss_kib)}</span>
           <span class="metric-cpu">${this.cpuText(process)} CPU</span>
         </div>
@@ -997,11 +1003,11 @@ export class AnthProcesses extends LitElement {
     `
   }
 
-  private renderTable() {
+  private renderTable(filtered: ProcessRow[]) {
     if (!this.snapshot) {
       return html`<p class="empty">${msg('Loading…')}</p>`
     }
-    if (this.filtered().length === 0) {
+    if (filtered.length === 0) {
       return html`<p class="empty">${msg('No process matches the filter.')}</p>`
     }
 
@@ -1010,12 +1016,12 @@ export class AnthProcesses extends LitElement {
     let rows: ProcessRow[]
     if (tree) {
       treeRows = visibleTreeRows(
-        buildTree(this.filtered(), this.sort, this.direction()),
+        buildTree(filtered, this.sort, this.direction()),
         this.collapsed,
       )
       rows = treeRows.map((row) => row.process)
     } else {
-      rows = this.sorted()
+      rows = this.sorted(filtered)
     }
     if (rows.length === 0) {
       return html`<p class="empty">${msg('No process matches the filter.')}</p>`
@@ -1051,12 +1057,13 @@ export class AnthProcesses extends LitElement {
   }
 
   override render() {
+    const visible = this.filtered()
     return html`
-      ${this.client ? this.renderToolbar() : nothing}
+      ${this.client ? this.renderToolbar(visible.length) : nothing}
       ${this.renderNotes()}
       ${this.client ? this.renderFilters() : nothing}
       ${this.spawnOpen ? this.renderSpawn() : nothing}
-      ${this.renderTable()}
+      ${this.renderTable(visible)}
       ${this.client ? this.renderActions() : nothing}
     `
   }
@@ -1519,12 +1526,6 @@ export class AnthProcesses extends LitElement {
     }
 
     @media (max-width: 48rem) {
-      .pane.metrics { --metrics-columns: 5.2rem 5.5rem 4.5rem; }
-      .pane.identity { --identity-columns: 4rem minmax(8rem, max-content); }
-      /* Hidden header and row cells both leave their track, so the remaining
-         columns still line up. */
-      .col-threads,
-      .col-user { display: none; }
       .toolbar .spacer { display: none; }
       .field-label { display: none; }
       .btn-label { display: none; }
@@ -1534,10 +1535,6 @@ export class AnthProcesses extends LitElement {
       input[type='text'],
       select { min-height: 40px; }
       .view-switch button { min-height: 40px; }
-      .table-shell {
-        --process-row-height: 30px;
-        max-height: 26rem;
-      }
       .compact-list { max-height: 26rem; }
       .selection { flex-basis: 100%; }
     }
