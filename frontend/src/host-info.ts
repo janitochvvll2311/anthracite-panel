@@ -18,6 +18,7 @@ import { localized, msg } from '@lit/localize'
 
 import type { HostInfo, HostInfoClient } from './host-info-client'
 import { describeError } from './errors'
+import './icon'
 import {
   formatKib,
   formatLoad,
@@ -73,7 +74,7 @@ export class AnthHostInfo extends LitElement {
     this.stop()
   }
 
-  /** Re-reads the snapshot now; the shell's Refresh button and the FAB call it. */
+  /** Re-reads the snapshot now; the panel's FAB calls it. */
   async refresh(): Promise<void> {
     if (!this.client) {
       return
@@ -186,6 +187,16 @@ export class AnthHostInfo extends LitElement {
     return msg('Pause')
   }
 
+  private buttonIcon(): string {
+    if (this.paused) {
+      return 'play'
+    }
+    if (this.status === 'error' || this.status === 'stopped') {
+      return 'refresh'
+    }
+    return 'pause'
+  }
+
   private pair(label: string, value: string) {
     return html`<div><dt>${label}</dt><dd>${value}</dd></div>`
   }
@@ -217,11 +228,14 @@ export class AnthHostInfo extends LitElement {
         </label>
         <button
           type="button"
+          aria-label=${this.buttonLabel()}
+          title=${this.buttonLabel()}
           aria-pressed=${this.paused ? 'true' : 'false'}
           ?disabled=${this.loading}
           @click=${() => this.toggleFeed()}
         >
-          ${this.buttonLabel()}
+          <anth-icon name=${this.buttonIcon()}></anth-icon>
+          <span class="btn-label">${this.buttonLabel()}</span>
         </button>
       </div>
     `
@@ -412,7 +426,9 @@ export class AnthHostInfo extends LitElement {
       background: var(--widget-bg, rgba(16, 23, 33, 0.5));
       font: 12px/1.4 var(--mono, monospace);
     }
-    .toolbar button { cursor: pointer; margin-left: auto; }
+    .toolbar button { display: inline-flex; align-items: center; gap: 0.4rem;
+                      cursor: pointer; margin-left: auto; }
+    .toolbar anth-icon { font-size: 14px; }
     .toolbar button:hover { border-color: var(--accent, #7dd3fc); }
     .toolbar select:focus-visible,
     .toolbar button:focus-visible {
@@ -529,6 +545,9 @@ export class AnthHostInfo extends LitElement {
       color: var(--err, #f87171);
     }
 
+    @media (max-width: 48rem) {
+      .toolbar .btn-label { display: none; }
+    }
     @media (pointer: coarse) {
       .toolbar select,
       .toolbar button { min-height: 44px; font-size: max(16px, 1rem); }

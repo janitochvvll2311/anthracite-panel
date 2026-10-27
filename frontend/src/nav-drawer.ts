@@ -13,6 +13,8 @@
 
 import { msg } from '@lit/localize'
 
+import './icon'
+
 export const DRAWER_CLOSE_EVENT = 'anth-drawer-close'
 
 export type DrawerCloseReason = 'escape' | 'backdrop' | 'close' | 'link'
@@ -79,7 +81,7 @@ export class AnthNavDrawer extends HTMLElement {
       <dialog aria-label="${msg('Navigation')}">
         <div class="head">
           <span class="title">${msg('Navigation')}</span>
-          <button class="close" type="button" aria-label="${msg('Close navigation')}">✕</button>
+          <button class="close" type="button" aria-label="${msg('Close navigation')}"><anth-icon name="close"></anth-icon></button>
         </div>
         <div class="body"><slot></slot></div>
       </dialog>

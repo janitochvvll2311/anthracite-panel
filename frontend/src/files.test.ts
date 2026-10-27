@@ -29,6 +29,7 @@ function fakeClient(): FilesClient {
     })),
     delete: vi.fn(async () => {}),
     write: vi.fn(async (path: string) => ({ path, size: 0 })),
+    upload: vi.fn(async (path: string) => ({ path, size: 0 })),
   }
 }
 
@@ -105,7 +106,7 @@ async function openEditor(element: FilesElement, name: string): Promise<void> {
 }
 
 async function openCreate(element: FilesElement): Promise<void> {
-  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.tools button') ?? [])].find(
+  const create = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.fab-action') ?? [])].find(
     (button) => button.textContent?.includes('New file'),
   )
   create?.click()
@@ -365,6 +366,33 @@ test('opens a create window from the toolbar', async () => {
 
   expect(editor?.shadowRoot.querySelector('.target')?.textContent).toBe('/draft.txt')
   expect(editor?.shadowRoot.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('')
+})
+
+test('offers create and upload from the FAB menu', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  const menu = element.shadowRoot?.querySelector('anth-fab-menu') as
+    | (HTMLElement & { open: boolean; shadowRoot: ShadowRoot })
+    | null
+  expect(menu).not.toBeNull()
+  menu?.shadowRoot.querySelector<HTMLButtonElement>('.fab')?.click()
+  expect(menu?.open).toBe(true)
+
+  const actions = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.fab-action') ?? [])]
+  expect(actions.map((button) => button.textContent?.trim())).toEqual([
+    'New file',
+    'Upload from device',
+  ])
+
+  const file = new File(['hello bytes'], 'upload.txt', { type: 'text/plain' })
+  const picker = element.shadowRoot?.querySelector<HTMLInputElement>('.picker')
+  Object.defineProperty(picker, 'files', { configurable: true, value: [file] })
+  picker?.dispatchEvent(new Event('change'))
+  await settle(element)
+  await settleWindows()
+
+  expect(client.upload).toHaveBeenCalledWith('/upload.txt', 'aGVsbG8gYnl0ZXM=', true)
 })
 
 test('saves an edited file and reloads the preview', async () => {

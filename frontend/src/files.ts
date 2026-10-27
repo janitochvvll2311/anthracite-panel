@@ -4,11 +4,14 @@ import { live } from 'lit/directives/live.js'
 import { localized, msg } from '@lit/localize'
 
 import { formatBytes } from './format'
+import { encodeBase64 } from './base64'
 import { describeError } from './errors'
 import { openFileEditor } from './editor-window'
 import { FILES_CHANGED_EVENT } from './file-editor'
 import type { FileChunk, FileEntry, FilePage, FilesClient } from './files-client'
 import { join, normalize, parent } from './paths'
+import './fab-menu'
+import './icon'
 
 @customElement('anth-files')
 @localized()
@@ -200,6 +203,30 @@ export class AnthFiles extends LitElement {
     openFileEditor({ client: this.client, mode: 'create', directory: this.path, name: '' })
   }
 
+  private pickUpload(): void {
+    this.shadowRoot?.querySelector<HTMLInputElement>('.picker')?.click()
+  }
+
+  private async onUpload(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file || !this.client) {
+      return
+    }
+    this.busy = true
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      await this.client.upload(join(this.path, file.name), encodeBase64(bytes), true)
+      await this.open(this.path)
+      this.error = ''
+    } catch (error) {
+      this.error = describeError(error)
+    } finally {
+      this.busy = false
+    }
+  }
+
   /** A global editor wrote a file; reload the listing and its preview. */
   private readonly onFilesChanged = (event: Event): void => {
     const detail = (event as CustomEvent<{ directory?: string; path?: string }>).detail
@@ -338,7 +365,10 @@ export class AnthFiles extends LitElement {
           (entry) => html`
             <div class="row">
               <button type="button" class="entry" @click=${() => this.activate(entry)}>
-                ${entry.name}${entry.kind === 'dir' ? '/' : ''}
+                <anth-icon
+                  name=${entry.kind === 'dir' ? 'files' : entry.kind === 'symlink' ? 'link' : 'file'}
+                ></anth-icon>
+                <span>${entry.name}${entry.kind === 'dir' ? '/' : ''}</span>
               </button>
               <span>${this.kindLabel(entry.kind)}</span>
               <span class="num">${entry.kind === 'file' ? formatBytes(entry.size) : '-'}</span>
@@ -365,23 +395,30 @@ export class AnthFiles extends LitElement {
             ${entry.kind === 'file'
               ? html`<button
                   type="button"
+                  aria-label=${msg('Edit')}
                   ?disabled=${this.busy}
                   @click=${() => void this.edit(entry)}
                 >
-                  ${msg('Edit')}
+                  <anth-icon name="edit"></anth-icon>
+                  <span class="btn-label">${msg('Edit')}</span>
                 </button>`
               : nothing}
             ${entry.kind === 'file' || entry.kind === 'symlink'
               ? html`<button
                   type="button"
                   class="danger"
+                  aria-label=${msg('Delete')}
                   ?disabled=${this.busy}
                   @click=${() => (this.confirmingDelete = true)}
                 >
-                  ${msg('Delete')}
+                  <anth-icon name="trash"></anth-icon>
+                  <span class="btn-label">${msg('Delete')}</span>
                 </button>`
               : nothing}
-            <button type="button" @click=${() => this.closePreview()}>${msg('Close')}</button>
+            <button type="button" aria-label=${msg('Close')} @click=${() => this.closePreview()}>
+              <anth-icon name="close"></anth-icon>
+              <span class="btn-label">${msg('Close')}</span>
+            </button>
           </div>
         </header>
         ${this.confirmingDelete
@@ -391,17 +428,21 @@ export class AnthFiles extends LitElement {
                 <button
                   type="button"
                   class="danger"
+                  aria-label=${msg('Delete')}
                   ?disabled=${this.busy}
                   @click=${() => void this.deleteFile()}
                 >
-                  ${msg('Delete')}
+                  <anth-icon name="trash"></anth-icon>
+                  <span class="btn-label">${msg('Delete')}</span>
                 </button>
                 <button
                   type="button"
+                  aria-label=${msg('Cancel')}
                   ?disabled=${this.busy}
                   @click=${() => (this.confirmingDelete = false)}
                 >
-                  ${msg('Cancel')}
+                  <anth-icon name="close"></anth-icon>
+                  <span class="btn-label">${msg('Cancel')}</span>
                 </button>
               </div>
             `
@@ -435,10 +476,12 @@ export class AnthFiles extends LitElement {
                   : html`<button
                       type="button"
                       class="more"
+                      aria-label=${msg('Load more')}
                       ?disabled=${this.busy}
                       @click=${() => this.morePreview()}
                     >
-                      ${msg('Load more')}
+                      <anth-icon name="chevron-down"></anth-icon>
+                      <span class="btn-label">${msg('Load more')}</span>
                     </button>`}
               `
             : this.previewUnavailable
@@ -460,14 +503,23 @@ export class AnthFiles extends LitElement {
         <header class="bar">
           ${this.renderPath()}
           <div class="tools">
-            <button type="button" ?disabled=${this.busy} @click=${() => this.create()}>
-              ${msg('New file')}
+            <button
+              type="button"
+              aria-label=${msg('Up')}
+              ?disabled=${this.busy || this.path === '/'}
+              @click=${() => this.up()}
+            >
+              <anth-icon name="up"></anth-icon>
+              <span class="btn-label">${msg('Up')}</span>
             </button>
-            <button type="button" ?disabled=${this.busy || this.path === '/'} @click=${() => this.up()}>
-              ${msg('Up')}
-            </button>
-            <button type="button" ?disabled=${this.busy} @click=${() => this.open(this.path)}>
-              ${msg('Reload')}
+            <button
+              type="button"
+              aria-label=${msg('Reload')}
+              ?disabled=${this.busy}
+              @click=${() => this.open(this.path)}
+            >
+              <anth-icon name="refresh"></anth-icon>
+              <span class="btn-label">${msg('Reload')}</span>
             </button>
           </div>
         </header>
@@ -480,13 +532,36 @@ export class AnthFiles extends LitElement {
               ? html`<p class="empty">${msg('Loading…')}</p>`
               : this.renderListing()}
             ${this.next
-              ? html`<button type="button" class="more" ?disabled=${this.busy} @click=${() => this.more()}>
-                  ${msg('Load more')}
+              ? html`<button
+                  type="button"
+                  class="more"
+                  aria-label=${msg('Load more')}
+                  ?disabled=${this.busy}
+                  @click=${() => this.more()}
+                >
+                  <anth-icon name="chevron-down"></anth-icon>
+                  <span class="btn-label">${msg('Load more')}</span>
                 </button>`
               : nothing}
           </div>
           ${this.renderPreview()}
         </div>
+        <input class="picker" type="file" hidden @change=${this.onUpload} />
+        <anth-fab-menu icon="plus" label=${msg('File actions')}>
+          <button type="button" class="fab-action" aria-label=${msg('New file')} @click=${() => this.create()}>
+            <anth-icon name="file-plus"></anth-icon>
+            <span class="btn-label">${msg('New file')}</span>
+          </button>
+          <button
+            type="button"
+            class="fab-action"
+            aria-label=${msg('Upload from device')}
+            @click=${() => this.pickUpload()}
+          >
+            <anth-icon name="upload"></anth-icon>
+            <span class="btn-label">${msg('Upload from device')}</span>
+          </button>
+        </anth-fab-menu>
       </section>
     `
   }
@@ -540,10 +615,16 @@ export class AnthFiles extends LitElement {
     }
     .path-edit input:focus { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 1px; }
     .tools { display: flex; gap: 6px; }
-    .tools button, .more, .preview button, .confirm button {
+    .tools button, .more, .preview button, .confirm button, .fab-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       border-color: var(--panel-border, #223041);
       background: rgba(125, 211, 252, 0.08);
     }
+    .fab-action { min-height: 38px; }
+    .picker { display: none; }
+    anth-icon { font-size: 14px; }
     button:disabled { opacity: 0.5; cursor: default; }
     button:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
 
@@ -573,6 +654,10 @@ export class AnthFiles extends LitElement {
     .row > :first-child { min-width: 0; }
     .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .entry {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      gap: 6px;
       border: 0;
       padding: 0;
       background: transparent;
@@ -582,6 +667,8 @@ export class AnthFiles extends LitElement {
       overflow-wrap: anywhere;
       cursor: pointer;
     }
+    .entry span { min-width: 0; overflow-wrap: anywhere; }
+    .entry anth-icon { font-size: 14px; color: var(--muted, #8b9bad); }
     .entry:hover { text-decoration: underline; }
     .empty {
       margin: 0;
@@ -703,6 +790,8 @@ export class AnthFiles extends LitElement {
         color: var(--muted, #8b9bad);
         font-size: 11px;
       }
+      .btn-label { display: none; }
+      .fab-action { justify-content: center; }
       .layout.preview-open { grid-template-columns: minmax(0, 1fr); }
       .layout.preview-open .listing { display: none; }
       .preview { max-height: none; height: var(--pane-height); }

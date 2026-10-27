@@ -78,6 +78,7 @@ function mountShell(state: AuthState): AnthApp {
     read: vi.fn(),
     delete: vi.fn(),
     write: vi.fn(),
+    upload: vi.fn(),
   }
   AnthApp.settingsClient = settingsClient()
   const element = document.createElement('anth-app') as AnthApp
@@ -116,6 +117,9 @@ test('the frame keeps the header outside the scroll container', async () => {
   expect(root.querySelectorAll('main')).toHaveLength(1)
   expect(root.querySelector('.sidebar')).not.toBeNull()
   expect(element.classList.contains('auth-only')).toBe(false)
+  const hostCard = root.querySelector('[data-host-card]')
+  expect(hostCard?.querySelector('[data-refresh]')).toBeNull()
+  expect(hostCard?.querySelector('anth-fab')).not.toBeNull()
 })
 
 test('the sidebar and the drawer share the sections, and the strip is bare there', async () => {
@@ -128,6 +132,7 @@ test('the sidebar and the drawer share the sections, and the strip is bare there
   expect(sidebar.querySelector('a[data-section="home"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="files"]')).not.toBeNull()
   expect(sidebar.querySelector('a[data-section="settings"]')).not.toBeNull()
+  expect(sidebar.querySelector('a[data-section="home"] anth-icon')).not.toBeNull()
 
   const drawer = root.querySelector('anth-nav-drawer')!
   expect(drawer.querySelectorAll('a')).toHaveLength(3)

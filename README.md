@@ -20,9 +20,9 @@ auth/lifecycle slice are in place:
   tokens, rotating refresh tokens, cookies.
 - File browsing and editing UI: paginated listing, UTF-8 preview with details
   and a generic placeholder, a tabbed CodeMirror editor with syntax
-  highlighting, a position/encoding status bar, saving and deletion behind
-  `files.write`, over socket, HTTP, CLI and the web Files section, with root
-  containment and `..`/symlink guards.
+  highlighting, a position/encoding status bar, saving, uploading from the
+  device and deletion behind `files.write`, over socket, HTTP, CLI and the web
+  Files section, with root containment and `..`/symlink guards.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused

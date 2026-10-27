@@ -129,3 +129,25 @@ test('the files client posts writes as JSON', async () => {
     },
   ])
 })
+
+test('the files client uploads base64 content', async () => {
+  const calls: { method?: string; body?: string; url: string }[] = []
+  const fake = ((input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ method: init?.method, body: String(init?.body), url: String(input) })
+    return Promise.resolve(
+      new Response(JSON.stringify({ path: 'logo.bin', size: 3 }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  }) as typeof fetch
+  const client = new HttpFilesClient(fake)
+
+  await expect(client.upload('logo.bin', 'AAEC', true)).resolves.toMatchObject({ size: 3 })
+  expect(calls).toEqual([
+    {
+      method: 'POST',
+      body: JSON.stringify({ path: 'logo.bin', content_base64: 'AAEC', create: true }),
+      url: '/api/files/upload',
+    },
+  ])
+})

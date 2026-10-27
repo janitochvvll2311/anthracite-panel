@@ -24,6 +24,7 @@ import {
 } from './destinations'
 import type { PanelId, Route } from './destinations'
 import { describeError } from './errors'
+import './icon'
 import { escape } from './html'
 import type { AnthFiles } from './files'
 import type { AnthHostInfo } from './host-info'
@@ -166,7 +167,7 @@ export class AnthApp extends HTMLElement {
       shellEl.hidden = true
       authEl.hidden = false
       authEl.innerHTML = this.#error
-        ? `<p class="empty"><button class="retry" type="button" data-retry>${msg('Retry')}</button></p>`
+        ? `<p class="empty"><button class="retry" type="button" data-retry aria-label="${msg('Retry')}"><anth-icon name="refresh"></anth-icon><span class="btn-label">${msg('Retry')}</span></button></p>`
         : `<p class="empty">${msg('Loading…')}</p>`
       authEl.querySelector('[data-retry]')?.addEventListener('click', () => void this.#load())
       return
@@ -199,13 +200,13 @@ export class AnthApp extends HTMLElement {
       <header>
         <div class="header-main">
           <button class="menu" type="button" aria-label="${msg('Open navigation')}"
-                  aria-controls="app-navigation" aria-expanded="false">☰</button>
+                  aria-controls="app-navigation" aria-expanded="false"><anth-icon name="menu"></anth-icon></button>
           <h1>Anthracite Panel</h1>
           <span class="version">v${VERSION}</span>
         </div>
         <div class="header-actions">
           <select data-locale aria-label="${msg('Language')}"></select>
-          <button data-signout type="button" hidden>${msg('Sign out')}</button>
+          <button data-signout type="button" aria-label="${msg('Sign out')}" hidden><anth-icon name="logout"></anth-icon><span class="btn-label">${msg('Sign out')}</span></button>
         </div>
       </header>
       <div class="shell">
@@ -283,7 +284,7 @@ export class AnthApp extends HTMLElement {
         (section) => `
           <a class="nav-item" href="${hashForSection(section.id)}" data-section="${section.id}"
              ${section.id === this.#route.section ? 'data-active aria-current="page"' : ''}>
-            <span class="nav-icon" aria-hidden="true">${escape(section.icon)}</span>
+            <span class="nav-icon" aria-hidden="true"><anth-icon name="${escape(section.icon)}"></anth-icon></span>
             <span class="nav-label">${escape(section.label)}</span>
           </a>`,
       )
@@ -314,14 +315,14 @@ export class AnthApp extends HTMLElement {
           <p class="muted">${msg('The operator account is')} <strong>${escape(auth.username)}</strong>.</p>
           <label>${msg('Password')}<input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
           <label>${msg('Confirm password')}<input name="confirm" type="password" minlength="12" required autocomplete="new-password"></label>
-          <button type="submit" ${this.#busy ? 'disabled' : ''}>${msg('Create password')}</button>
+          <button type="submit" ${this.#busy ? 'disabled' : ''} aria-label="${msg('Create password')}"><anth-icon name="key"></anth-icon><span class="btn-label">${msg('Create password')}</span></button>
         </form>`
       : `
         <form class="auth-card" data-login>
           <h2>${msg('Sign in')}</h2>
           <label>${msg('Username')}<input name="username" value="${escape(auth.username)}" autocomplete="username" required></label>
           <label>${msg('Password')}<input name="password" type="password" autocomplete="current-password" required></label>
-          <button type="submit" ${this.#busy ? 'disabled' : ''}>${msg('Sign in')}</button>
+          <button type="submit" ${this.#busy ? 'disabled' : ''} aria-label="${msg('Sign in')}"><anth-icon name="login"></anth-icon><span class="btn-label">${msg('Sign in')}</span></button>
         </form>`
     container
       .querySelector('form')
@@ -345,10 +346,9 @@ export class AnthApp extends HTMLElement {
         <section class="card" data-host-card>
           <div class="card-head">
             <span class="label">${msg('Host')}</span>
-            <button type="button" data-refresh>${msg('Refresh')}</button>
           </div>
           <anth-host-info></anth-host-info>
-          <anth-fab icon="↻" label="${escape(msg('Refresh host information'))}"></anth-fab>
+          <anth-fab icon="refresh" label="${escape(msg('Refresh host information'))}"></anth-fab>
         </section>
       </section>
       <section data-tab="files" label="${escape(msg('Files'))}"></section>
@@ -412,9 +412,6 @@ export class AnthApp extends HTMLElement {
     this.#generalTabSection = generalTabSection
 
     homeSection
-      ?.querySelector('[data-refresh]')
-      ?.addEventListener('click', () => void host?.refresh())
-    homeSection
       ?.querySelector('anth-fab')
       ?.addEventListener('click', () => void host?.refresh())
     filesPanel.addEventListener(TAB_CHANGE_EVENT, (event) => {
@@ -460,11 +457,10 @@ export class AnthApp extends HTMLElement {
     if (label) {
       label.textContent = msg('Host')
     }
-    const refresh = card?.querySelector('[data-refresh]')
+    const refresh = card?.querySelector('anth-fab')
     if (refresh) {
-      refresh.textContent = msg('Refresh')
+      refresh.setAttribute('label', msg('Refresh host information'))
     }
-    card?.querySelector('anth-fab')?.setAttribute('label', msg('Refresh host information'))
     this.#tabPanel.active = this.#route.section
     if (this.#filesPanel) {
       this.#filesPanel.active = 'files'
@@ -577,7 +573,8 @@ const STYLE = `
     min-height: 36px; padding: 4px 10px; border-radius: 7px; font: 12px/1.4 var(--mono, monospace);
     color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
     background: var(--widget-bg, rgba(16, 23, 33, 0.5)); }
-  .header-actions button { cursor: pointer; }
+  .header-actions button { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .header-actions anth-icon, .auth-card anth-icon, .retry anth-icon { font-size: 14px; }
   .header-actions button:hover { border-color: var(--accent, #7dd3fc); }
   .header-actions button:disabled { opacity: 0.55; cursor: progress; }
   .header-actions select:focus-visible, .header-actions button:focus-visible,
@@ -608,7 +605,8 @@ const STYLE = `
   .nav-item:focus-visible { box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.45); }
   .nav-item[data-active] { color: var(--accent, #7dd3fc); border-left-color: var(--accent, #7dd3fc);
               background: rgba(125, 211, 252, 0.1); }
-  .nav-icon { width: 1.2rem; text-align: center; font-size: 0.95rem; line-height: 1; }
+  .nav-icon { display: inline-flex; align-items: center; justify-content: center;
+              width: 1.2rem; font-size: 1.05rem; line-height: 1; }
   .nav-label { flex: 1; }
 
   main { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
@@ -623,12 +621,6 @@ const STYLE = `
           border-radius: var(--radius, 10px); padding: 1rem 1.15rem; }
   .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; }
   .label { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted, #8b9bad); }
-  button[data-refresh] { min-height: 36px; padding: 4px 12px; border-radius: 6px;
-          color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
-          background: rgba(125, 211, 252, 0.08); font: 600 12px/1.4 var(--mono, monospace);
-          cursor: pointer; }
-  button[data-refresh]:hover { border-color: var(--accent, #7dd3fc); }
-  @media (pointer: coarse) { button[data-refresh] { min-height: 44px; font-size: max(16px, 1rem); } }
 
   .auth { display: grid; place-items: center; min-height: 100%; }
   .auth-card { display: grid; gap: 0.7rem; width: min(100%, 380px); padding: 1.2rem;
@@ -642,7 +634,8 @@ const STYLE = `
                      color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
                      border-radius: 6px; background: #172231; font: 16px/1.4 var(--sans, sans-serif); }
   .auth-card input:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
-  .auth-card button, .retry { min-height: 40px; padding: 7px 12px; cursor: pointer;
+  .auth-card button, .retry { display: inline-flex; align-items: center; justify-content: center;
+                     gap: 6px; min-height: 40px; padding: 7px 12px; cursor: pointer;
                      color: var(--text, #dbe6f2); border: 1px solid var(--panel-border, #223041);
                      border-radius: 6px; background: rgba(125, 211, 252, 0.08);
                      font: 600 12px/1.4 var(--mono, monospace); }
@@ -664,6 +657,7 @@ const STYLE = `
     .shell { grid-template-columns: minmax(0, 1fr); }
     .sidebar { display: none; }
     .menu { display: grid; }
+    .btn-label { display: none; }
     header { gap: 0.5rem;
              padding: 0.7rem max(0.8rem, env(safe-area-inset-right)) 0.7rem max(0.8rem, env(safe-area-inset-left));
              padding-top: max(0.7rem, env(safe-area-inset-top)); }

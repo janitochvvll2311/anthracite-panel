@@ -4,6 +4,8 @@ import { localized, msg } from '@lit/localize'
 
 import type { SessionSummary, Settings, SettingsClient } from './settings-client'
 import { describeError } from './errors'
+import './fab'
+import './icon'
 
 interface Toggle {
   key: string
@@ -163,8 +165,9 @@ export class AnthSettings extends LitElement {
           `,
         )}
       </ul>
-      <button type="button" ?disabled=${this.busy} @click=${this.revokeOthers}>
-        ${msg('Sign out other sessions')}
+      <button type="button" aria-label=${msg('Sign out other sessions')} ?disabled=${this.busy} @click=${this.revokeOthers}>
+        <anth-icon name="logout"></anth-icon>
+        <span class="btn-label">${msg('Sign out other sessions')}</span>
       </button>
     `
   }
@@ -236,8 +239,9 @@ export class AnthSettings extends LitElement {
         <h3>${msg('Lifecycle')}</h3>
         <p class="muted">${msg('A restart re-reads the configuration. A reboot is refused unless the daemon was started with --allow-reboot.')}</p>
         <div class="actions">
-          <button type="button" ?disabled=${this.busy} @click=${this.restart}>
-            ${msg('Restart panel')}
+          <button type="button" aria-label=${msg('Restart panel')} ?disabled=${this.busy} @click=${this.restart}>
+            <anth-icon name="refresh"></anth-icon>
+            <span class="btn-label">${msg('Restart panel')}</span>
           </button>
           <label class="delay">
             ${msg('Delay (seconds)')}
@@ -251,8 +255,9 @@ export class AnthSettings extends LitElement {
               }}
             />
           </label>
-          <button class="danger" type="button" ?disabled=${this.busy} @click=${this.reboot}>
-            ${msg('Reboot host')}
+          <button class="danger" type="button" aria-label=${msg('Reboot host')} ?disabled=${this.busy} @click=${this.reboot}>
+            <anth-icon name="power"></anth-icon>
+            <span class="btn-label">${msg('Reboot host')}</span>
           </button>
         </div>
       </article>
@@ -268,9 +273,6 @@ export class AnthSettings extends LitElement {
             <p class="eyebrow">${msg('Settings')}</p>
             <h2>${msg('General')}</h2>
           </div>
-          <button type="button" ?disabled=${this.busy} @click=${this.load}>
-            ${msg('Reload')}
-          </button>
         </header>
 
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
@@ -278,8 +280,9 @@ export class AnthSettings extends LitElement {
         ${this.dirty
           ? html`<div class="banner">
               <span>${msg('Restart the panel to apply the changes.')}</span>
-              <button type="button" ?disabled=${this.busy} @click=${this.restart}>
-                ${msg('Restart now')}
+              <button type="button" aria-label=${msg('Restart now')} ?disabled=${this.busy} @click=${this.restart}>
+                <anth-icon name="refresh"></anth-icon>
+                <span class="btn-label">${msg('Restart now')}</span>
               </button>
             </div>`
           : nothing}
@@ -291,6 +294,11 @@ export class AnthSettings extends LitElement {
               ${this.renderPolicy(settings)} ${this.renderPaths(settings)}
               ${this.renderLifecycle()}
             `}
+        <anth-fab
+          icon="refresh"
+          label=${msg('Reload settings')}
+          @click=${() => void this.load()}
+        ></anth-fab>
       </section>
     `
   }
@@ -369,10 +377,14 @@ export class AnthSettings extends LitElement {
       font: inherit;
     }
     input[type='checkbox'] { accent-color: #34d399; }
-    button { cursor: pointer; }
+    button { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    anth-icon { font-size: 14px; }
     button:disabled { opacity: .45; cursor: default; }
     button.danger { border-color: rgba(248, 113, 113, .5); color: #fecaca; }
     input:focus-visible, button:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
     code { font: 12px/1.4 var(--mono, monospace); }
+    @media (max-width: 48rem) {
+      .btn-label { display: none; }
+    }
   `
 }

@@ -7,6 +7,7 @@ import type { FilesClient } from './files-client'
 import './file-editor'
 import type { AnthFileEditor } from './file-editor'
 import { baseName, join } from './paths'
+import './icon'
 
 /** Fired when the last tab closes, so the window goes away too. */
 export const FILE_TABS_EMPTY_EVENT = 'anth-file-tabs-empty'
@@ -161,7 +162,7 @@ export class AnthFileTabs extends LitElement {
                 aria-label=${msg('Close')}
                 @click=${() => this.closeTab(tab.key)}
               >
-                ×
+                <anth-icon name="close"></anth-icon>
               </button>
             </div>
           `,
@@ -234,6 +235,9 @@ export class AnthFileTabs extends LitElement {
     }
     .tab[data-active] .tab-button { color: var(--text, #dbe6f2); }
     .tab-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border: 0;
       border-left: 1px solid var(--panel-border, #223041);
       background: transparent;
@@ -242,6 +246,7 @@ export class AnthFileTabs extends LitElement {
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
+    .tab-close anth-icon { font-size: 12px; }
     .tab-close:hover { color: var(--err, #f87171); background: rgba(248, 113, 113, 0.12); }
     .tab-button:focus-visible,
     .tab-close:focus-visible {

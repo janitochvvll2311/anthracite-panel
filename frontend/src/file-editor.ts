@@ -8,6 +8,7 @@ import type { CodeEditor } from './code-editor'
 import { describeError } from './errors'
 import type { FilesClient } from './files-client'
 import { join } from './paths'
+import './icon'
 
 /** Fired on `document` after an editor writes a file. */
 export const FILES_CHANGED_EVENT = 'anth-files-changed'
@@ -319,13 +320,15 @@ export class AnthFileEditor extends LitElement {
           <button
             type="button"
             class="save"
+            aria-label=${msg('Save')}
             ?disabled=${this.busy ||
             !this.loaded ||
             this.blocked ||
             (this.mode === 'create' && this.name.trim() === '')}
             @click=${() => void this.save()}
           >
-            ${msg('Save')}
+            <anth-icon name="save"></anth-icon>
+            <span class="btn-label">${msg('Save')}</span>
           </button>
         </footer>
         <div class="statusbar">
@@ -424,6 +427,9 @@ export class AnthFileEditor extends LitElement {
       color: var(--muted, #8b9bad);
     }
     .save {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       border: 1px solid var(--accent, #7dd3fc);
       border-radius: 6px;
       background: rgba(125, 211, 252, 0.16);
@@ -432,6 +438,7 @@ export class AnthFileEditor extends LitElement {
       font: 600 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
+    .save anth-icon { font-size: 14px; }
     .save:hover:not(:disabled) { background: rgba(125, 211, 252, 0.26); }
     .save:disabled { opacity: 0.5; cursor: default; }
     .save:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
@@ -458,6 +465,7 @@ export class AnthFileEditor extends LitElement {
     }
     @media (max-width: 48rem) {
       textarea { resize: none; }
+      .btn-label { display: none; }
     }
     @media (pointer: coarse) {
       .save { min-height: 44px; }

@@ -81,3 +81,21 @@ test('a policy toggle writes the key and asks for a restart', async () => {
   expect(client.update).toHaveBeenCalledWith('process.control', true)
   expect(element.shadowRoot?.textContent).toContain('Restart the panel to apply the changes.')
 })
+
+test('reloads only from the FAB', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+
+  const fab = element.shadowRoot?.querySelector('anth-fab') as
+    | (HTMLElement & { shadowRoot: ShadowRoot })
+    | null
+  expect(fab).not.toBeNull()
+  const reload = [...(element.shadowRoot?.querySelectorAll('button') ?? [])].filter((button) =>
+    button.textContent?.includes('Reload'),
+  )
+  expect(reload).toHaveLength(0)
+
+  fab?.shadowRoot.querySelector<HTMLButtonElement>('button')?.click()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(client.get).toHaveBeenCalledTimes(2)
+})

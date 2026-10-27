@@ -530,6 +530,18 @@
   <source>Sel <x id="0" equiv-text="${this.selected}"/></source>
   <target>Sel <x id="0" equiv-text="${this.selected}"/></target>
 </trans-unit>
+<trans-unit id="sd7c7478edbbcced8">
+  <source>File actions</source>
+  <target>Acciones de archivos</target>
+</trans-unit>
+<trans-unit id="s9b2f1019cfcede3e">
+  <source>Upload from device</source>
+  <target>Subir desde el dispositivo</target>
+</trans-unit>
+<trans-unit id="sd5bf367873855089">
+  <source>Reload settings</source>
+  <target>Recargar ajustes</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

@@ -2,6 +2,8 @@ import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
+import './icon'
+
 /** Fired when the window asks its owner to close it. */
 export const WINDOW_CLOSE_EVENT = 'anth-window-close'
 
@@ -251,7 +253,7 @@ export class AnthWindow extends LitElement {
             aria-label=${msg('Minimize')}
             @click=${() => this.minimize()}
           >
-            <span class="icon icon-min" aria-hidden="true"></span>
+            <anth-icon name="minus"></anth-icon>
           </button>
           <button
             type="button"
@@ -260,7 +262,7 @@ export class AnthWindow extends LitElement {
             aria-label=${this.maximized ? msg('Restore') : msg('Maximize')}
             @click=${() => this.toggleMaximize()}
           >
-            <span class="icon ${this.maximized ? 'icon-restore' : 'icon-max'}" aria-hidden="true"></span>
+            <anth-icon name=${this.maximized ? 'restore' : 'maximize'}></anth-icon>
           </button>
           <button
             type="button"
@@ -269,7 +271,7 @@ export class AnthWindow extends LitElement {
             aria-label=${msg('Close')}
             @click=${() => this.close()}
           >
-            <span class="icon icon-close" aria-hidden="true"></span>
+            <anth-icon name="close"></anth-icon>
           </button>
         </header>
         <div class="body"><slot></slot></div>
@@ -362,49 +364,7 @@ export class AnthWindow extends LitElement {
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
-    .icon {
-      position: relative;
-      display: block;
-      width: 10px;
-      height: 10px;
-    }
-    .icon-min {
-      height: 0;
-      margin-top: 4px;
-      border-top: 1.5px solid currentColor;
-    }
-    .icon-max {
-      border: 1.5px solid currentColor;
-      border-radius: 1px;
-    }
-    .icon-restore {
-      border: 1.5px solid currentColor;
-      border-radius: 1px;
-      transform: translate(1px, -1px);
-    }
-    .icon-restore::before {
-      content: '';
-      position: absolute;
-      top: 2px;
-      left: -4px;
-      width: 8px;
-      height: 8px;
-      border: 1.5px solid currentColor;
-      border-radius: 1px;
-      background: var(--panel, #101721);
-    }
-    .icon-close::before,
-    .icon-close::after {
-      content: '';
-      position: absolute;
-      top: 4px;
-      left: -1px;
-      width: 12px;
-      height: 1.5px;
-      background: currentColor;
-      transform: rotate(45deg);
-    }
-    .icon-close::after { transform: rotate(-45deg); }
+    .control anth-icon { font-size: 14px; }
     .control:hover { background: rgba(125, 211, 252, 0.16); }
     .control:focus-visible { outline: 2px solid var(--accent, #7dd3fc); outline-offset: 2px; }
     .body {
@@ -482,7 +442,7 @@ export class AnthWindowDock extends LitElement {
                 aria-label=${msg('Close')}
                 @click=${item.close}
               >
-                ×
+                <anth-icon name="close"></anth-icon>
               </button>
             </div>
           `,
@@ -536,6 +496,9 @@ export class AnthWindowDock extends LitElement {
     }
     .restore:hover { background: rgba(125, 211, 252, 0.14); }
     .dismiss {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border: 0;
       border-left: 1px solid var(--panel-border, #223041);
       background: transparent;
@@ -544,6 +507,7 @@ export class AnthWindowDock extends LitElement {
       font: 12px/1.4 var(--mono, monospace);
       cursor: pointer;
     }
+    .dismiss anth-icon { font-size: 12px; }
     .dismiss:hover { color: var(--err, #f87171); background: rgba(248, 113, 113, 0.12); }
     .restore:focus-visible,
     .dismiss:focus-visible {

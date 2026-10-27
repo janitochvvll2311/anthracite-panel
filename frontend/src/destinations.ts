@@ -36,9 +36,9 @@ export interface Route {
 /** Labels are built per call so a locale change is picked up by the next paint. */
 export function sections(): Section[] {
   return [
-    { id: 'home', label: msg('Home'), icon: '▤' },
-    { id: 'files', label: msg('Files'), icon: '🗀' },
-    { id: 'settings', label: msg('Settings'), icon: '⚙' },
+    { id: 'home', label: msg('Home'), icon: 'home' },
+    { id: 'files', label: msg('Files'), icon: 'files' },
+    { id: 'settings', label: msg('Settings'), icon: 'settings' },
   ]
 }
 
