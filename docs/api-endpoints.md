@@ -260,6 +260,14 @@ nosniff` and a sandboxing CSP. The size is capped at the smaller of
 `files.max_upload_bytes` and 32 MiB, and the same root containment rules apply.
 This is an HTTP-only binary route; the socket remains JSON.
 
+### `GET /api/files/download?path=etc/hosts`
+
+Returns the raw bytes of any regular file as `application/octet-stream` with
+`Content-Disposition: attachment`, `Cache-Control: no-store` and `nosniff`. The
+same root containment rules apply and the size is capped by
+`files.max_upload_bytes`. The web UI uses it for the transfer queue and names
+the saved file after the request path.
+
 ### `DELETE /api/files?path=etc/hosts`
 
 Deletes one regular file or a symlink (the link itself, not its target). The

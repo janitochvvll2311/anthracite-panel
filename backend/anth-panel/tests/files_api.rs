@@ -162,6 +162,35 @@ async fn deletes_a_file_and_refuses_a_directory() {
 }
 
 #[tokio::test]
+async fn downloads_raw_files() {
+    let (router, root) = app("files-download", false);
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/files/download?path=note.txt")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("download");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/octet-stream"
+    );
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert_eq!(bytes.as_ref(), b"hello files");
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
 async fn serves_images_for_preview() {
     let (router, root) = app("files-image", false);
 

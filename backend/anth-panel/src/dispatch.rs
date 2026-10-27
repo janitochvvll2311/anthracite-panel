@@ -89,6 +89,11 @@ impl Daemon {
         self.files()?.image(path)
     }
 
+    /// Reads a file for the HTTP download route.
+    pub fn download(&self, path: &str) -> Result<Vec<u8>, WireError> {
+        self.files()?.download(path)
+    }
+
     /// Handles one request.
     pub async fn execute(&self, request: Request) -> Response {
         let operation = operation_of(&request);

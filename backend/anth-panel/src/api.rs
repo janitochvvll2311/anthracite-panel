@@ -91,6 +91,7 @@ pub fn router(state: AppState) -> Router {
             post(upload_file).layer(DefaultBodyLimit::max(upload_limit)),
         )
         .route("/api/files/image", get(image_file))
+        .route("/api/files/download", get(download_file))
         .route("/api/restart", post(restart))
         .route("/api/reboot", post(reboot))
         .route("/api/settings", get(get_settings).patch(patch_settings))
@@ -280,7 +281,7 @@ struct FileUploadBody {
 }
 
 #[derive(Debug, Deserialize)]
-struct FileImageQuery {
+struct FilePathQuery {
     path: String,
 }
 
@@ -710,7 +711,7 @@ async fn upload_file(
 async fn image_file(
     State(state): State<AppState>,
     _authed: Authed,
-    query: Result<Query<FileImageQuery>, QueryRejection>,
+    query: Result<Query<FilePathQuery>, QueryRejection>,
 ) -> Result<HttpResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
     let (bytes, content_type) = state.daemon.image(&query.path).map_err(ApiError::from)?;
@@ -728,6 +729,32 @@ async fn image_file(
     response.headers_mut().insert(
         HeaderName::from_static("content-security-policy"),
         HeaderValue::from_static("default-src 'none'; style-src 'unsafe-inline'; sandbox"),
+    );
+    Ok(response)
+}
+
+async fn download_file(
+    State(state): State<AppState>,
+    _authed: Authed,
+    query: Result<Query<FilePathQuery>, QueryRejection>,
+) -> Result<HttpResponse, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let bytes = state.daemon.download(&query.path).map_err(ApiError::from)?;
+    let mut response = HttpResponse::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment"),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
     );
     Ok(response)
 }

@@ -362,6 +362,27 @@ impl FileService {
         Ok((bytes, content_type))
     }
 
+    /// Reads any regular file as raw bytes for the download route.
+    pub fn download(&self, path: &str) -> Result<Vec<u8>, WireError> {
+        let display = display_path(path);
+        let resolved = self.resolve(path)?;
+        let metadata = fs::metadata(&resolved).map_err(|error| io_error(&display, error))?;
+        if !metadata.is_file() {
+            return Err(WireError::invalid(format!(
+                "{display} is not a regular file"
+            )));
+        }
+        let limit = self.max_write_bytes;
+        if metadata.len() > limit {
+            return Err(WireError::new(
+                ErrorKind::TooLarge,
+                "too_large",
+                format!("{display} is larger than the {limit} byte download limit"),
+            ));
+        }
+        fs::read(&resolved).map_err(|error| io_error(&display, error))
+    }
+
     /// Resolves a request path to a canonical path under the root.
     fn resolve(&self, requested: &str) -> Result<PathBuf, WireError> {
         let display = display_path(requested);
