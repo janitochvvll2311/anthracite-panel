@@ -37,6 +37,24 @@ function fakeClient(): FilesClient {
     })),
     delete: vi.fn(async () => {}),
     write: vi.fn(async (path: string) => ({ path, size: 0 })),
+    trash: vi.fn(async (path: string) => ({ path, id: path.split('/').pop() ?? path })),
+    trashList: vi.fn(async () => ({
+      entries: [],
+      total: 0,
+      truncated: false,
+      enabled: false,
+      used_bytes: 0,
+    })),
+    restore: vi.fn(async () => {}),
+    emptyTrash: vi.fn(async () => 0),
+    archive: vi.fn(async (path: string) => `${path}.tar.gz`),
+    archiveList: vi.fn(async (path: string) => ({
+      path,
+      entries: [],
+      total: 0,
+      truncated: false,
+    })),
+    extractArchive: vi.fn(async (path: string) => ({ path, entries: [] })),
   }
 }
 
@@ -413,11 +431,12 @@ test('queues uploads from the FAB menu', async () => {
   const actions = [...(element.shadowRoot?.querySelectorAll<HTMLElement>('.fab-action') ?? [])]
   expect(actions.map((button) => button.textContent?.trim())).toEqual([
     'New file',
+    'Compress folder',
     'Upload from device',
   ])
 
   const picker = element.shadowRoot?.querySelector<HTMLInputElement>('.picker')
-  expect(picker?.closest('label')).toBe(actions[1])
+  expect(picker?.closest('label')).toBe(actions[2])
   expect(picker?.multiple).toBe(true)
 
   // Touching the input starts the picker; the menu must stay mounted until
@@ -448,6 +467,51 @@ test('queues every file of a multi-file selection', async () => {
   expect(queueUpload).toHaveBeenCalledTimes(2)
   expect(queueUpload).toHaveBeenNthCalledWith(1, files[0], '/')
   expect(queueUpload).toHaveBeenNthCalledWith(2, files[1], '/')
+})
+
+test('moves to the trash when the daemon enables it', async () => {
+  const client = fakeClient()
+  client.trashList = vi.fn(async () => ({
+    entries: [],
+    total: 0,
+    truncated: false,
+    enabled: true,
+    used_bytes: 0,
+  }))
+  const element = await mount(client)
+  await previewFile(element, 'note.txt')
+
+  const remove = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Delete'),
+  )
+  remove?.click()
+  await settle(element)
+
+  expect(element.shadowRoot?.querySelector('.confirm')?.textContent).toContain(
+    'Move this file to the trash?',
+  )
+  const confirm = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.confirm button') ?? [])].find(
+    (button) => button.textContent?.includes('Move to trash'),
+  )
+  confirm?.click()
+  await settle(element)
+
+  expect(client.trash).toHaveBeenCalledWith('/note.txt')
+  expect(client.delete).not.toHaveBeenCalled()
+})
+
+test('compresses the selected entry', async () => {
+  const client = fakeClient()
+  const element = await mount(client)
+  await previewFile(element, 'note.txt')
+
+  const compress = [...(element.shadowRoot?.querySelectorAll<HTMLButtonElement>('.preview .actions button') ?? [])].find(
+    (button) => button.textContent?.includes('Compress'),
+  )
+  compress?.click()
+  await settle(element)
+
+  expect(client.archive).toHaveBeenCalledWith('/note.txt')
 })
 
 test('queues downloads from the preview', async () => {

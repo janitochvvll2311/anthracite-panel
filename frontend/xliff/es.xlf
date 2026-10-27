@@ -598,6 +598,42 @@
   <source>Clear</source>
   <target>Quitar</target>
 </trans-unit>
+<trans-unit id="sf4aad856e2fdd02d">
+  <source>Compress</source>
+  <target>Comprimir</target>
+</trans-unit>
+<trans-unit id="sfa0452eea48e7ade">
+  <source>Extract</source>
+  <target>Extraer</target>
+</trans-unit>
+<trans-unit id="sacefba0edecbfc9b">
+  <source>Move this file to the trash?</source>
+  <target>¿Mover este archivo a la papelera?</target>
+</trans-unit>
+<trans-unit id="sa4ec5ac1b17b09db">
+  <source>Move to trash</source>
+  <target>Mover a la papelera</target>
+</trans-unit>
+<trans-unit id="sabe40628654d4343">
+  <source>Compress folder</source>
+  <target>Comprimir carpeta</target>
+</trans-unit>
+<trans-unit id="sa634545c05cc8492">
+  <source>Moved <x id="0" equiv-text="${path}"/> to the trash</source>
+  <target>Movido <x id="0" equiv-text="${path}"/> a la papelera</target>
+</trans-unit>
+<trans-unit id="sc17a67e62ea93300">
+  <source>Deleted <x id="0" equiv-text="${path}"/></source>
+  <target>Eliminado <x id="0" equiv-text="${path}"/></target>
+</trans-unit>
+<trans-unit id="s1d1b04f2d8d51dad">
+  <source>Created <x id="0" equiv-text="${created}"/></source>
+  <target>Creado <x id="0" equiv-text="${created}"/></target>
+</trans-unit>
+<trans-unit id="s67c829aa05ba9aad">
+  <source>Extracted into <x id="0" equiv-text="${result.path}"/></source>
+  <target>Extraído en <x id="0" equiv-text="${result.path}"/></target>
+</trans-unit>
 </body>
 </file>
 </xliff>

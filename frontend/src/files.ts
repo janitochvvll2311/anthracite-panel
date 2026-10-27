@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { live } from 'lit/directives/live.js'
-import { localized, msg } from '@lit/localize'
+import { localized, msg, str } from '@lit/localize'
 
 import { formatBytes } from './format'
 import { describeError } from './errors'
@@ -28,6 +28,13 @@ const IMAGE_EXTENSIONS = new Set([
 function isImage(name: string): boolean {
   const extension = name.split('.').pop()?.toLowerCase() ?? ''
   return IMAGE_EXTENSIONS.has(extension)
+}
+
+const ARCHIVE_SUFFIXES = ['.zip', '.tar', '.tar.gz', '.tgz', '.tar.xz', '.txz', '.7z']
+
+function isArchive(name: string): boolean {
+  const lower = name.toLowerCase()
+  return ARCHIVE_SUFFIXES.some((suffix) => lower.endsWith(suffix))
 }
 
 function imageUrl(path: string): string {
@@ -85,6 +92,9 @@ export class AnthFiles extends LitElement {
   private error = ''
 
   @state()
+  private notice = ''
+
+  @state()
   private busy = false
 
   @state()
@@ -93,10 +103,16 @@ export class AnthFiles extends LitElement {
   @state()
   private pathDraft = ''
 
+  @state()
+  private trashEnabled = false
+
   override connectedCallback(): void {
     super.connectedCallback()
     document.addEventListener(FILES_CHANGED_EVENT, this.onFilesChanged)
-    queueMicrotask(() => void this.open(this.path))
+    queueMicrotask(() => {
+      void this.open(this.path)
+      void this.loadTrashCapability()
+    })
   }
 
   override disconnectedCallback(): void {
@@ -111,6 +127,7 @@ export class AnthFiles extends LitElement {
       return
     }
     this.busy = true
+    this.notice = ''
     try {
       const target = normalize(path)
       const page: FilePage = await this.client.list(target)
@@ -180,17 +197,82 @@ export class AnthFiles extends LitElement {
     this.resetPreview()
   }
 
+  /** Reads whether delete means "move to trash" or "remove for good". */
+  private async loadTrashCapability(): Promise<void> {
+    const client = this.client
+    if (!client) {
+      return
+    }
+    try {
+      this.trashEnabled = (await client.trashList()).enabled
+    } catch {
+      // An older daemon without the trash route keeps the permanent delete.
+      this.trashEnabled = false
+    }
+  }
+
   private async deleteFile(): Promise<void> {
-    if (!this.client || !this.previewPath) {
+    const client = this.client
+    if (!client || !this.previewPath) {
+      return
+    }
+    const path = this.previewPath
+    this.busy = true
+    try {
+      const trashed = this.trashEnabled
+      if (trashed) {
+        await client.trash(path)
+      } else {
+        await client.delete(path)
+      }
+      const directory = this.path
+      this.closePreview()
+      await this.open(directory)
+      this.notice = trashed ? msg(str`Moved ${path} to the trash`) : msg(str`Deleted ${path}`)
+    } catch (error) {
+      this.error = describeError(error)
+    } finally {
+      this.busy = false
+    }
+  }
+
+  /** Compresses the selected entry beside itself. */
+  private async compress(entry: FileEntry): Promise<void> {
+    await this.compressPath(join(this.path, entry.name))
+  }
+
+  private async compressCurrent(): Promise<void> {
+    await this.compressPath(this.path)
+  }
+
+  private async compressPath(path: string): Promise<void> {
+    const client = this.client
+    if (!client) {
       return
     }
     this.busy = true
     try {
-      await this.client.delete(this.previewPath)
-      const directory = this.path
-      this.closePreview()
-      await this.open(directory)
-      this.error = ''
+      const created = await client.archive(path)
+      await this.open(this.path)
+      this.notice = msg(str`Created ${created}`)
+    } catch (error) {
+      this.error = describeError(error)
+    } finally {
+      this.busy = false
+    }
+  }
+
+  /** Extracts an archive beside itself. */
+  private async extract(entry: FileEntry): Promise<void> {
+    const client = this.client
+    if (!client) {
+      return
+    }
+    this.busy = true
+    try {
+      const result = await client.extractArchive(join(this.path, entry.name))
+      await this.open(this.path)
+      this.notice = msg(str`Extracted into ${result.path}`)
     } catch (error) {
       this.error = describeError(error)
     } finally {
@@ -446,6 +528,28 @@ export class AnthFiles extends LitElement {
                   <span class="btn-label">${msg('Edit')}</span>
                 </button>`
               : nothing}
+            ${entry.kind === 'file' || entry.kind === 'dir'
+              ? html`<button
+                  type="button"
+                  aria-label=${msg('Compress')}
+                  ?disabled=${this.busy}
+                  @click=${() => void this.compress(entry)}
+                >
+                  <anth-icon name="archive"></anth-icon>
+                  <span class="btn-label">${msg('Compress')}</span>
+                </button>`
+              : nothing}
+            ${entry.kind === 'file' && isArchive(entry.name)
+              ? html`<button
+                  type="button"
+                  aria-label=${msg('Extract')}
+                  ?disabled=${this.busy}
+                  @click=${() => void this.extract(entry)}
+                >
+                  <anth-icon name="archive"></anth-icon>
+                  <span class="btn-label">${msg('Extract')}</span>
+                </button>`
+              : nothing}
             ${entry.kind === 'file' || entry.kind === 'symlink'
               ? html`<button
                   type="button"
@@ -467,16 +571,16 @@ export class AnthFiles extends LitElement {
         ${this.confirmingDelete
           ? html`
               <div class="confirm" role="alert">
-                <span>${msg('Delete this file?')}</span>
+                <span>${this.trashEnabled ? msg('Move this file to the trash?') : msg('Delete this file?')}</span>
                 <button
                   type="button"
                   class="danger"
-                  aria-label=${msg('Delete')}
+                  aria-label=${this.trashEnabled ? msg('Move to trash') : msg('Delete')}
                   ?disabled=${this.busy}
                   @click=${() => void this.deleteFile()}
                 >
                   <anth-icon name="trash"></anth-icon>
-                  <span class="btn-label">${msg('Delete')}</span>
+                  <span class="btn-label">${this.trashEnabled ? msg('Move to trash') : msg('Delete')}</span>
                 </button>
                 <button
                   type="button"
@@ -583,6 +687,7 @@ export class AnthFiles extends LitElement {
         </header>
 
         ${this.error ? html`<div class="error" role="alert">${this.error}</div>` : nothing}
+        ${this.notice ? html`<div class="notice" role="status">${this.notice}</div>` : nothing}
 
         <div class="layout ${this.previewEntry ? 'preview-open' : ''}">
           <div class="listing">
@@ -608,6 +713,16 @@ export class AnthFiles extends LitElement {
           <button type="button" class="fab-action" aria-label=${msg('New file')} @click=${() => this.create()}>
             <anth-icon name="file-plus"></anth-icon>
             <span class="btn-label">${msg('New file')}</span>
+          </button>
+          <button
+            type="button"
+            class="fab-action"
+            aria-label=${msg('Compress folder')}
+            ?disabled=${this.path === '/'}
+            @click=${() => void this.compressCurrent()}
+          >
+            <anth-icon name="archive"></anth-icon>
+            <span class="btn-label">${msg('Compress folder')}</span>
           </button>
           <label class="fab-action upload-action">
             <input
@@ -760,6 +875,14 @@ export class AnthFiles extends LitElement {
       border: 1px solid rgba(248, 113, 113, 0.4);
       background: rgba(248, 113, 113, 0.12);
       color: var(--err, #f87171);
+    }
+    .notice {
+      margin: 0;
+      padding: 0.6rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(52, 211, 153, 0.4);
+      background: rgba(52, 211, 153, 0.12);
+      color: #a7f3d0;
     }
     .preview {
       display: flex;

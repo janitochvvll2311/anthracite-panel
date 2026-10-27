@@ -18,11 +18,13 @@ auth/lifecycle slice are in place:
   watch.
 - Minimal auth: `auto`/`generated`/`web` bootstrap, Argon2id, HS256 access
   tokens, rotating refresh tokens, cookies.
-- File browsing and editing UI: paginated listing, text and image previews with
-  details and a generic placeholder, a tabbed CodeMirror editor with syntax
-  highlighting, a position/encoding status bar, saving, uploading from the
-  device, downloading and deletion behind `files.write`, over socket, HTTP, CLI
-  and the web Files section, with root containment and `..`/symlink guards.
+- File browsing and editing UI: paginated listing with directories first, text
+  and image previews with details and a generic placeholder, a tabbed
+  CodeMirror editor with syntax highlighting, a position/encoding status bar,
+  saving, uploading from the device, downloading, deletion behind
+  `files.write`, the freedesktop.org trash, and in-process archives, over
+  socket, HTTP, CLI and the web Files section, with root containment and
+  `..`/symlink guards.
 - A transfer queue with status, progress, cancellation and completion for
   single or multi-file uploads and downloads, independent of the Files panel
   lifecycle.
