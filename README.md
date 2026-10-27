@@ -24,7 +24,8 @@ auth/lifecycle slice are in place:
   device, downloading and deletion behind `files.write`, over socket, HTTP, CLI
   and the web Files section, with root containment and `..`/symlink guards.
 - A transfer queue with status, progress, cancellation and completion for
-  uploads and downloads, independent of the Files panel lifecycle.
+  single or multi-file uploads and downloads, independent of the Files panel
+  lifecycle.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused

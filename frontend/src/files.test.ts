@@ -416,13 +416,38 @@ test('queues uploads from the FAB menu', async () => {
     'Upload from device',
   ])
 
-  const file = new File(['hello bytes'], 'upload.txt', { type: 'text/plain' })
   const picker = element.shadowRoot?.querySelector<HTMLInputElement>('.picker')
+  expect(picker?.closest('label')).toBe(actions[1])
+  expect(picker?.multiple).toBe(true)
+
+  // Touching the input starts the picker; the menu must stay mounted until
+  // the selection lands, or mobile browsers cancel the native dialog.
+  picker?.click()
+  expect(menu?.open).toBe(true)
+
+  const file = new File(['hello bytes'], 'upload.txt', { type: 'text/plain' })
   Object.defineProperty(picker, 'files', { configurable: true, value: [file] })
   picker?.dispatchEvent(new Event('change'))
   await settleWindows()
 
   expect(queueUpload).toHaveBeenCalledWith(file, '/', '/upload.txt')
+  expect(menu?.open).toBe(false)
+})
+
+test('queues every file of a multi-file selection', async () => {
+  const element = await mount(fakeClient())
+  const picker = element.shadowRoot?.querySelector<HTMLInputElement>('.picker')
+  const files = [
+    new File(['one'], 'one.txt', { type: 'text/plain' }),
+    new File(['two'], 'two.txt', { type: 'text/plain' }),
+  ]
+  Object.defineProperty(picker, 'files', { configurable: true, value: files })
+  picker?.dispatchEvent(new Event('change'))
+  await settleWindows()
+
+  expect(queueUpload).toHaveBeenCalledTimes(2)
+  expect(queueUpload).toHaveBeenNthCalledWith(1, files[0], '/', '/one.txt')
+  expect(queueUpload).toHaveBeenNthCalledWith(2, files[1], '/', '/two.txt')
 })
 
 test('queues downloads from the preview', async () => {

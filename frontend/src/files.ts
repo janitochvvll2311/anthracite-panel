@@ -34,20 +34,11 @@ function imageUrl(path: string): string {
   return `/api/files/image?path=${encodeURIComponent(path)}`
 }
 
-let uploadIds = 0
-
-function nextUploadId(): number {
-  uploadIds += 1
-  return uploadIds
-}
-
 @customElement('anth-files')
 @localized()
 export class AnthFiles extends LitElement {
   @property({ attribute: false })
   client?: FilesClient
-
-  private readonly uploadId = `files-upload-${nextUploadId()}`
 
   @state()
   private path = '/'
@@ -241,38 +232,23 @@ export class AnthFiles extends LitElement {
     openFileEditor({ client: this.client, mode: 'create', directory: this.path, name: '' })
   }
 
-  private pickUpload(): void {
-    const input = this.shadowRoot?.querySelector<HTMLInputElement>('.picker')
-    if (!input) {
-      return
-    }
-    if ('showPicker' in input) {
-      try {
-        input.showPicker()
-        return
-      } catch {
-        // Fall back to a click when the browser refuses the picker.
-      }
-    }
-    input.click()
+  private closeFileMenu(): void {
+    this.shadowRoot?.querySelector('anth-fab-menu')?.removeAttribute('open')
   }
 
-  private onUploadKey(event: KeyboardEvent): void {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      this.pickUpload()
-    }
-  }
-
+  /** Queues one task per selected file; the picker stays usable. */
   private onUpload(event: Event): void {
     const input = event.target as HTMLInputElement
-    const file = input.files?.[0]
+    const files = [...(input.files ?? [])]
     input.value = ''
-    if (!file) {
+    this.closeFileMenu()
+    if (files.length === 0) {
       return
     }
     this.error = ''
-    queueUpload(file, this.path, join(this.path, file.name))
+    for (const file of files) {
+      queueUpload(file, this.path, join(this.path, file.name))
+    }
   }
 
   /** A global editor wrote a file; reload the listing and its preview. */
@@ -622,20 +598,20 @@ export class AnthFiles extends LitElement {
           </div>
           ${this.renderPreview()}
         </div>
-        <input class="picker" id=${this.uploadId} type="file" @change=${this.onUpload} />
         <anth-fab-menu icon="plus" label=${msg('File actions')}>
           <button type="button" class="fab-action" aria-label=${msg('New file')} @click=${() => this.create()}>
             <anth-icon name="file-plus"></anth-icon>
             <span class="btn-label">${msg('New file')}</span>
           </button>
-          <label
-            class="fab-action"
-            for=${this.uploadId}
-            role="button"
-            tabindex="0"
-            aria-label=${msg('Upload from device')}
-            @keydown=${(event: KeyboardEvent) => this.onUploadKey(event)}
-          >
+          <label class="fab-action upload-action">
+            <input
+              class="picker"
+              type="file"
+              multiple
+              aria-label=${msg('Upload from device')}
+              @change=${this.onUpload}
+              @cancel=${() => this.closeFileMenu()}
+            />
             <anth-icon name="upload"></anth-icon>
             <span class="btn-label">${msg('Upload from device')}</span>
           </label>
@@ -701,14 +677,21 @@ export class AnthFiles extends LitElement {
       background: rgba(125, 211, 252, 0.08);
     }
     .fab-action { min-height: 38px; }
+    .upload-action {
+      position: relative;
+      overflow: hidden;
+    }
     .picker {
-      position: fixed;
-      top: 0;
-      left: -100vw;
-      width: 1px;
-      height: 1px;
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      border: 0;
       opacity: 0;
-      pointer-events: none;
+      cursor: pointer;
+      font-size: 0;
     }
     anth-icon { font-size: 14px; }
     button:disabled { opacity: 0.5; cursor: default; }

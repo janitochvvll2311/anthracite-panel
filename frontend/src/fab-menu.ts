@@ -131,12 +131,25 @@ export class AnthFabMenu extends HTMLElement {
     }
   }
 
-  /** Any button or link in the menu chooses an action. */
+  /**
+   * Any button, link or label in the menu chooses an action.
+   *
+   * A file input keeps the menu open: touching it starts the native picker,
+   * and hiding its ancestor before the picker appears cancels the selection
+   * on mobile browsers. The owner closes the menu on `change` or `cancel`.
+   */
   readonly #onHostClick = (event: MouseEvent): void => {
     if (!this.open) {
       return
     }
     const path = event.composedPath()
+    if (
+      path.some(
+        (node) => node instanceof HTMLInputElement && node.type === 'file',
+      )
+    ) {
+      return
+    }
     const chose = path.some(
       (node) =>
         node instanceof HTMLButtonElement ||
