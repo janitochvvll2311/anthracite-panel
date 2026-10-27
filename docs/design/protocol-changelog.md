@@ -19,7 +19,8 @@ Version 3 changes the firewall model. `firewall_flush` is no longer a unit
 variant and requires a chain, `firewall_add` and `firewall_update` carry a
 chain, snapshots gained `chains` with per-chain policies, and
 `firewall_update`/`firewall_set_policy` are new. An older CLI must be upgraded
-with the daemon.
+with the daemon. The read-only `volumes` request and response are additive to
+version 3.
 
 ## Rules before 1.0.0
 

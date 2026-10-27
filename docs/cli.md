@@ -219,6 +219,19 @@ or `deny`/`drop`, and warns about the lockout risk. Every mutation requires
 `[firewall] control = true`, asks for confirmation on a TTY and refuses
 without `--yes` when stdin is not a terminal.
 
+## `storage`
+
+```bash
+anth-panel storage list
+anth-panel storage ls
+anth-panel volumes list
+```
+
+Prints the policy flags, the block-device tree, the mounts with used/total space
+and any active swap. `volumes` is an alias for `storage`. The inventory is
+read-only in this slice; a missing `lsblk` or mountinfo file prints a warning
+and keeps the other source.
+
 ## `process`
 
 ```bash

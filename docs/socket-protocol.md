@@ -441,6 +441,58 @@ The managed table is `inet anthracite` with its `input` and `output` chains, and
 every operation requires `[firewall] control`. `chain` defaults to `input` when
 omitted on add, update and flush. See [firewall.md](firewall.md).
 
+### Storage
+
+```json
+{ "type": "volumes" }
+```
+
+```json
+{
+  "type": "volumes",
+  "data": {
+    "devices": [
+      {
+        "name": "sda1",
+        "path": "/dev/sda1",
+        "kind": "part",
+        "parent": "sda",
+        "size_bytes": 80396402176,
+        "fstype": "ext4",
+        "mountpoints": ["/"],
+        "read_only": false,
+        "removable": false
+      }
+    ],
+    "mounts": [
+      {
+        "mountpoint": "/",
+        "source": "/dev/sda1",
+        "fstype": "ext4",
+        "options": "rw,relatime",
+        "read_only": false,
+        "virtual_fs": false,
+        "usage": {
+          "total_bytes": 80396402176,
+          "used_bytes": 37537841152,
+          "available_bytes": 38247329792
+        }
+      }
+    ],
+    "swap_devices": ["/dev/sda2"],
+    "control_enabled": false,
+    "partition_enabled": false,
+    "format_enabled": false,
+    "mount_root": "/mnt",
+    "disk_allow": [],
+    "timestamp_ms": 1790000000000
+  }
+}
+```
+
+This is read-only in the current slice. A degraded source adds `warning`; the
+other source is still returned. See [storage.md](storage.md).
+
 ### Processes
 
 ```json

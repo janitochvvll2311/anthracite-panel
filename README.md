@@ -7,9 +7,10 @@ and a web UI. Apache-2.0.
 
 `v0.3.0` is a rewrite in progress. Phases 0–4 are in place: foundation,
 host-info, auth/lifecycle, files and the terminal and process slices. Phase 5 is
-in progress: the network inventory, its guarded interface mutations and the
-managed nftables firewall are in place. The remaining phases are
-volumes/partitions/accounts, plugins and hardening/release.
+code-complete with real-command validation pending: the network inventory, its
+guarded interface mutations and the managed nftables firewall are in place.
+Phase 6 has started with the read-only Storage inventory; mounts, partitions and
+accounts are next. After Phase 6, plugins and hardening/release remain.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
@@ -45,6 +46,10 @@ volumes/partitions/accounts, plugins and hardening/release.
   `output` chains, allow/deny/edit/delete/flush rules and per-chain default
   policies through direct `nft` argv, over socket, HTTP, CLI and the Firewall
   tab.
+- Storage: read-only block devices from `lsblk`, mounts from
+  `/proc/self/mountinfo` with best-effort usage, active swap from
+  `/proc/swaps`, and a warning-degraded snapshot over socket, HTTP, CLI and the
+  Storage section's Volumes and Partitions tabs.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused

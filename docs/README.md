@@ -1,20 +1,21 @@
 # Documentation
 
-This branch is the v0.3.0 rewrite. Phases 0–4 are implemented and Phase 5 is in
-progress with the network inventory, its guarded mutations and the managed
-firewall; the remaining feature documentation is added with the code it
-describes.
+This branch is the v0.3.0 rewrite. Phases 0–4 are implemented; Phase 5 is
+code-complete with real-command validation pending, and Phase 6 has started with
+the read-only Storage inventory. The remaining feature documentation is added
+with the code it describes.
 
 ## User contract
 
 | Document | Contents |
 | --- | --- |
 | [cli.md](cli.md) | Commands, flags, output, exit codes and bootstrap |
-| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, processes, network, SSE and error shape |
+| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, processes, network, firewall, storage, SSE and error shape |
 | [terminal.md](terminal.md) | PTY sessions, policy, socket/WebSocket contract and mobile UI |
 | [processes.md](processes.md) | Process table, signals, spawn policy, SSE, CLI and the flat/tree UI |
 | [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, guarded up/down/create/edit/rename/delete, SSE, CLI and the Interfaces tab |
 | [firewall.md](firewall.md) | Managed nftables table with input/output chains, allow/deny/edit/delete/flush rules, default policies, guards, HTTP/socket/CLI and the Firewall tab |
+| [storage.md](storage.md) | Read-only block devices, mounts, usage and swap over socket, HTTP, CLI and the Storage tabs |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

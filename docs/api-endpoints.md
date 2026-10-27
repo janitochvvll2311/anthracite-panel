@@ -341,6 +341,57 @@ chain. Requires control.
 `deny`/`drop`. Setting a chain to deny can lock the operator out; see
 [firewall.md](firewall.md#changing-the-default-policy). Requires control.
 
+## Storage
+
+The read-only storage inventory; the contract is in [storage.md](storage.md).
+
+### `GET /api/volumes`
+
+```json
+{
+  "devices": [
+    {
+      "name": "sda1",
+      "path": "/dev/sda1",
+      "kind": "part",
+      "parent": "sda",
+      "size_bytes": 80396402176,
+      "fstype": "ext4",
+      "mountpoints": ["/"],
+      "read_only": false,
+      "removable": false
+    }
+  ],
+  "mounts": [
+    {
+      "mountpoint": "/",
+      "source": "/dev/sda1",
+      "fstype": "ext4",
+      "options": "rw,relatime",
+      "read_only": false,
+      "virtual_fs": false,
+      "usage": {
+        "total_bytes": 80396402176,
+        "used_bytes": 37537841152,
+        "available_bytes": 38247329792
+      }
+    }
+  ],
+  "swap_devices": ["/dev/sda2"],
+  "control_enabled": false,
+  "partition_enabled": false,
+  "format_enabled": false,
+  "mount_root": "/mnt",
+  "disk_allow": [],
+  "timestamp_ms": 1790000000000
+}
+```
+
+The inventory always works; `control_enabled`, `partition_enabled` and
+`format_enabled` report `[volumes]` and do not affect the read. A missing
+`lsblk`, mountinfo or swaps file degrades the snapshot and adds `warning`; it
+never drops the other source silently. `usage` is best-effort per mount.
+
 ## Settings and lifecycle
 
 All four routes require a live access token unless auth is disabled. The two
