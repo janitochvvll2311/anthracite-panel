@@ -1,9 +1,8 @@
 # Demo mode
 
 The hosted demo is in progress. The network, firewall, files, process, terminal,
-storage and account backends now live in `anth-host`; network, firewall, files,
-processes, storage and accounts also have deterministic virtual
-implementations. The demo terminal is still pending.
+storage and account backends now live in `anth-host`, and each has a
+deterministic virtual implementation for the demo build.
 
 ## Development switch
 
@@ -16,9 +15,9 @@ ANTH_BACKEND=demo ./scripts/dev.sh start   # no sudo, simulated host
 so it cannot mix state with a real development run. It starts the daemon as the
 calling user, without `sudo`, and sets `ANTH_BACKEND=demo` for the process.
 
-The dev helper prints a warning: network, firewall, files, processes, storage and
-accounts are simulated in this slice. Do not use it as a safety boundary yet;
-terminal operations still target the host.
+The dev helper prints a warning that every host feature is simulated. In this
+mode no privileged command runs and no PTY is opened; the daemon still reads the
+host for `host-info`, because that view is informational.
 
 ## Current demo data
 
@@ -39,6 +38,9 @@ terminal operations still target the host.
 - Accounts start with `root`, `demo` and `www-data` plus their groups. Create and
   delete users/groups and password changes update an in-memory table; the
   control, password, system and privileged-group switches still apply.
+- The terminal is a virtual shell. It echoes input and answers `help`, `whoami`,
+  `pwd`, `ls`, `uname`, `echo`, `date`, `clear` and `exit`; no PTY or signal is
+  involved.
 - Snapshots use the same wire types, so the existing UI and CLI work unchanged.
 
 The state is shared by all clients and lost on restart. Per-session state,

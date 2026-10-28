@@ -75,8 +75,8 @@ if [ "$backend" = real ] && [ "$(id -u)" -ne 0 ]; then
 fi
 
 if [ "$backend" = demo ]; then
-  echo "backend: demo (network/firewall/files/processes/storage/accounts simulated; no sudo)" >&2
-  echo "warning: this slice simulates network, firewall, files, processes, storage and accounts; the terminal still targets the host" >&2
+  echo "backend: demo (all host features simulated; no sudo)" >&2
+  echo "warning: this slice simulates every host feature; no privileged command runs" >&2
 fi
 
 mkdir -p "$run"

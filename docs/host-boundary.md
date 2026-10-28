@@ -27,7 +27,7 @@ implementations are always `System*` or `Demo*`.
 | Processes | `ProcessesService` | `SystemProcesses` | `DemoProcesses` |
 | Volumes | `VolumesService` | `SystemVolumes` | `DemoVolumes` |
 | Accounts | `AccountsService` | `SystemAccounts` | `DemoAccounts` |
-| Terminal | `TerminalService` | `SystemTerminal` | pending |
+| Terminal | `TerminalService` | `SystemTerminal` | `DemoTerminal` |
 | Info | `InfoService` (pending) | `SystemInfo` | pending |
 
 ## Boundary rule

@@ -21,12 +21,13 @@ with the dry-run v0.2 migration, property tests over paths, archives,
 manifests, config and migration, and a release tarball/container workflow.
 `v0.3.0a` is the pre-release marker; the crate version stays `0.3.0`.
 
-Network, firewall, files, processes, the terminal host, storage and accounts now live in
-`anth-host`, behind `<Feature>Service` traits with real `System*` and virtual
-`Demo*` implementations. Files use a seeded sandbox; processes are synthetic.
+Network, firewall, files, processes, the terminal host, storage and accounts now
+live in `anth-host`, behind `<Feature>Service` traits with real `System*` and
+virtual `Demo*` implementations. Files use a seeded sandbox; processes are
+synthetic.
 `ANTH_BACKEND=demo ./scripts/dev.sh start` runs without `sudo` and simulates
-network, firewall, files, processes, storage and accounts; the full hosted demo is in
-progress and still has terminal work pending.
+network, firewall, files, processes, storage, accounts and the terminal; every
+host feature has a demo backend.
 
 ```bash
 cd tests
