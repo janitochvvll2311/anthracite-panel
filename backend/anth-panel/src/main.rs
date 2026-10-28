@@ -135,6 +135,18 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Plan or write a v0.2 to v0.3 configuration migration.
+    Migrate {
+        /// v0.2 configuration file.
+        #[arg(long, value_name = "FILE", default_value = "config.toml")]
+        from: PathBuf,
+        /// Write the result; without it the command is a dry run.
+        #[arg(long)]
+        write: bool,
+        /// Overwrite an existing target and secrets file.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -842,6 +854,7 @@ async fn run() -> CliResult {
         Command::Storage { command } => storage_command(&path, command).await,
         Command::Account { command } => account_command(&path, command).await,
         Command::Plugin { command } => plugin_command(&path, command),
+        Command::Migrate { from, write, force } => migrate_command(&path, from, *write, *force),
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
         Command::Reboot { delay } => {
@@ -993,6 +1006,34 @@ fn resolve_plugin_id(
         ));
     }
     Ok(first.id.clone())
+}
+
+fn migrate_command(
+    target: &std::path::Path,
+    source: &std::path::Path,
+    write: bool,
+    force: bool,
+) -> CliResult {
+    let text = std::fs::read_to_string(source)
+        .map_err(|error| (1, format!("reading {}: {error}", source.display())))?;
+    let plan = anth_panel::migrate::plan(&text).map_err(|error| (2, error))?;
+    for warning in &plan.warnings {
+        eprintln!("warning: {warning}");
+    }
+    if !write {
+        print!("{}", anth_panel::migrate::render(&plan));
+        eprintln!(
+            "dry run: nothing was written; pass --write to create {}",
+            target.display()
+        );
+        return Ok(());
+    }
+    let written = anth_panel::migrate::write(&plan, target, force).map_err(|error| (1, error))?;
+    println!("wrote {}", written.config.display());
+    if let Some(secrets) = written.secrets {
+        println!("wrote {} (0600)", secrets.display());
+    }
+    Ok(())
 }
 
 fn config_command(path: &std::path::Path, command: &ConfigCommand, cli: &Cli) -> CliResult {
