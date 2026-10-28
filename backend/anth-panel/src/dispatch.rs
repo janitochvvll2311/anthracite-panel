@@ -43,6 +43,7 @@ pub struct Daemon {
     volumes: Arc<dyn VolumesService>,
     accounts: Arc<dyn AccountsService>,
     plugins: PluginService,
+    demo: bool,
 }
 
 impl Daemon {
@@ -97,11 +98,18 @@ impl Daemon {
                 ) as Arc<dyn FilesService>
             })
         };
-        let terminal: Arc<dyn TerminalService> = Arc::new(SystemTerminal::new(
-            config.terminal.enabled,
-            config.terminal.max_sessions,
-            Duration::from_secs(config.terminal.idle_seconds),
-        ));
+        let terminal: Arc<dyn TerminalService> = if demo {
+            Arc::new(anth_host::demo::DemoTerminal::new(
+                config.terminal.enabled,
+                config.terminal.max_sessions,
+            ))
+        } else {
+            Arc::new(SystemTerminal::new(
+                config.terminal.enabled,
+                config.terminal.max_sessions,
+                Duration::from_secs(config.terminal.idle_seconds),
+            ))
+        };
         let process: Arc<dyn ProcessesService> = if demo {
             Arc::new(anth_host::demo::DemoProcesses::new(
                 config.process.control,
@@ -175,6 +183,7 @@ impl Daemon {
             volumes,
             accounts,
             plugins,
+            demo,
         }
     }
 
@@ -597,11 +606,20 @@ impl Daemon {
                 Ok(Response::FilesArchiveExtracted { path, entries })
             }
             Request::TerminalOpen { cols, rows } => {
-                let program = resolve_shell(&self.config.terminal.shell).map_err(|detail| {
-                    WireError::new(ErrorKind::Forbidden, "terminal_shell", detail)
-                })?;
+                let program = if self.demo {
+                    let configured = &self.config.terminal.shell;
+                    if configured == "auto" || !std::path::Path::new(configured).is_absolute() {
+                        "/bin/sh".to_string()
+                    } else {
+                        configured.clone()
+                    }
+                } else {
+                    resolve_shell(&self.config.terminal.shell).map_err(|detail| {
+                        WireError::new(ErrorKind::Forbidden, "terminal_shell", detail)
+                    })?
+                };
                 let size = TerminalSize { cols, rows };
-                let line_editing = supports_line_editing(&program);
+                let line_editing = !self.demo && supports_line_editing(&program);
                 let sessions = Arc::clone(&self.terminal);
                 let owner = owner.to_string();
                 let asked = program.clone();
