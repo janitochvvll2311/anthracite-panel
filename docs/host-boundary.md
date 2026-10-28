@@ -26,11 +26,9 @@ implementations are always `System*` or `Demo*`.
 | Files | `FilesService` | `SystemFiles` | `DemoFiles` |
 | Processes | `ProcessesService` | `SystemProcesses` | `DemoProcesses` |
 | Volumes | `VolumesService` | `SystemVolumes` | `DemoVolumes` |
-| Accounts | `AccountsService` (pending) | `SystemAccounts` (pending) | pending |
+| Accounts | `AccountsService` | `SystemAccounts` | `DemoAccounts` |
 | Terminal | `TerminalService` | `SystemTerminal` | pending |
 | Info | `InfoService` (pending) | `SystemInfo` | pending |
-
-`AccountsService` is still a concrete panel type; its rename is the next move.
 
 ## Boundary rule
 

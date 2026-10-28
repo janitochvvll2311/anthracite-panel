@@ -1,10 +1,9 @@
 # Demo mode
 
-The hosted demo is in progress. The network, firewall, files, process, terminal
-and storage backends now live in `anth-host`; network, firewall, files,
-processes and storage also have deterministic virtual implementations. Accounts
-still use the real host until its backend moves, and the demo terminal is
-pending.
+The hosted demo is in progress. The network, firewall, files, process, terminal,
+storage and account backends now live in `anth-host`; network, firewall, files,
+processes, storage and accounts also have deterministic virtual
+implementations. The demo terminal is still pending.
 
 ## Development switch
 
@@ -17,8 +16,8 @@ ANTH_BACKEND=demo ./scripts/dev.sh start   # no sudo, simulated host
 so it cannot mix state with a real development run. It starts the daemon as the
 calling user, without `sudo`, and sets `ANTH_BACKEND=demo` for the process.
 
-The dev helper prints a warning: network, firewall, files, processes and storage
-are simulated in this slice. Do not use it as a safety boundary yet; account and
+The dev helper prints a warning: network, firewall, files, processes, storage and
+accounts are simulated in this slice. Do not use it as a safety boundary yet;
 terminal operations still target the host.
 
 ## Current demo data
@@ -37,6 +36,9 @@ terminal operations still target the host.
 - Storage starts with two demo disks and their partitions. Mount/unmount,
   partition create/resize/delete and format update an in-memory table;
   `/dev/sdb` is the allowed demo disk when `disk_allow` is empty.
+- Accounts start with `root`, `demo` and `www-data` plus their groups. Create and
+  delete users/groups and password changes update an in-memory table; the
+  control, password, system and privileged-group switches still apply.
 - Snapshots use the same wire types, so the existing UI and CLI work unchanged.
 
 The state is shared by all clients and lost on restart. Per-session state,
@@ -45,8 +47,8 @@ are the next phases in `/root/.opencode/plan/anthracite-demo.md`.
 
 ## Host boundary
 
-`network`, `firewall`, `files`, `process`, `terminal` and `volumes` live in
-`anth-host`:
+`network`, `firewall`, `files`, `process`, `terminal`, `volumes` and `accounts`
+live in `anth-host`:
 
 ```text
 anth-host/src/network
@@ -55,6 +57,7 @@ anth-host/src/files
 anth-host/src/process
 anth-host/src/terminal
 anth-host/src/volumes
+anth-host/src/accounts
 anth-host/src/backend.rs   traits used by anth-panel
 anth-host/src/demo         virtual implementations
 ```
