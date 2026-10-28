@@ -1754,6 +1754,30 @@
   <source>Widgets</source>
   <target>Widgets</target>
 </trans-unit>
+<trans-unit id="sd0721c7343e74776">
+  <source>Demo</source>
+  <target>Demo</target>
+</trans-unit>
+<trans-unit id="s3827e27a9abc5fc6">
+  <source>This session is simulated and private to this browser.</source>
+  <target>Esta sesión es simulada y privada para este navegador.</target>
+</trans-unit>
+<trans-unit id="s70a6f44752954f9c">
+  <source>Simulated features</source>
+  <target>Funciones simuladas</target>
+</trans-unit>
+<trans-unit id="s8971884f91f72307">
+  <source>Reset demo</source>
+  <target>Reiniciar demo</target>
+</trans-unit>
+<trans-unit id="sb126dc754f5586b1">
+  <source>Simulated</source>
+  <target>Simulado</target>
+</trans-unit>
+<trans-unit id="sa5e41b674276d396">
+  <source>demo</source>
+  <target>demo</target>
+</trans-unit>
 </body>
 </file>
 </xliff>

@@ -173,3 +173,74 @@ test('the demo terminal answers virtual commands', async ({ page }) => {
   expect(output).toContain('demo')
   expect(output).toContain('logout')
 })
+
+test('the demo status reports the feature matrix', async ({ request }) => {
+  const response = await request.get('/api/demo')
+  expect(response.ok()).toBeTruthy()
+  const body = await response.json()
+  expect(body.mode).toBe('demo')
+  expect(body.status.ttl_seconds).toBe(3600)
+  expect(body.status.features).toMatchObject({
+    network: true,
+    firewall: true,
+    files: true,
+    processes: true,
+    volumes: true,
+    accounts: true,
+    terminal: true,
+  })
+})
+
+test('each demo cookie gets its own state', async ({ playwright, baseURL }) => {
+  const first = await playwright.request.newContext({ baseURL })
+  const second = await playwright.request.newContext({ baseURL })
+  try {
+    await first.get('/api/demo')
+    await second.get('/api/demo')
+
+    const created = await first.post('/api/accounts/groups', {
+      data: { name: 'only-first' },
+    })
+    expect(created.ok()).toBeTruthy()
+    const firstGroups = (await (await first.get('/api/accounts')).json()).groups.map(
+      (group: { name: string }) => group.name,
+    )
+    const secondGroups = (await (await second.get('/api/accounts')).json()).groups.map(
+      (group: { name: string }) => group.name,
+    )
+    expect(firstGroups).toContain('only-first')
+    expect(secondGroups).not.toContain('only-first')
+  } finally {
+    await first.dispose()
+    await second.dispose()
+  }
+})
+
+test('reset restores the seeded demo state', async ({ request }) => {
+  const created = await request.post('/api/files/write', {
+    data: { path: 'reset-me.txt', content: 'temporary\n', create: true },
+  })
+  expect(created.ok()).toBeTruthy()
+
+  const reset = await request.post('/api/demo/reset')
+  expect(reset.ok()).toBeTruthy()
+  expect((await reset.json()).status).toBe('reset')
+
+  const after = await request.get('/api/files/read?path=reset-me.txt')
+  expect(after.status()).toBe(404)
+  const listing = await request.get('/api/files?path=/')
+  expect(listing.ok()).toBeTruthy()
+  expect((await listing.json()).items.some((entry: { name: string }) => entry.name === 'README.md')).toBe(
+    true,
+  )
+})
+
+test('the shell shows the demo banner and simulated chips', async ({ page }) => {
+  await page.goto('/#/')
+  await expect(page.locator('[data-demo]')).toContainText('Demo')
+  await expect(page.locator('[data-demo]')).toContainText(
+    'This session is simulated and private to this browser.',
+  )
+  await expect(page.locator('[data-demo] button')).toHaveText('Reset demo')
+  await expect(page.locator('.sidebar .demo-chip')).toHaveCount(6)
+})

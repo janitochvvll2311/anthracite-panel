@@ -73,6 +73,21 @@ import './tab-panel'
 const VERSION = '0.3.0'
 const SIDEBAR_KEY = 'anth.sidebar'
 
+interface DemoStatus {
+  active: boolean
+  created_ms: number
+  reset_ms: number
+  ttl_seconds: number
+  sessions: number
+  max_sessions: number
+  features: Record<string, boolean>
+}
+
+interface DemoState {
+  mode: 'demo' | 'real'
+  status?: DemoStatus
+}
+
 export class AnthApp extends HTMLElement {
   /** Set before mounting by `main`, or replaced by a test. */
   static authClient: AuthClient | undefined
@@ -92,6 +107,8 @@ export class AnthApp extends HTMLElement {
   #route: Route = routeFrom('')
   #locale: PanelLocale = 'en'
   #sidebarCollapsed = false
+  #demo?: DemoState
+  #demoLoaded = false
 
   #frameMounted = false
   #shellMounted = false
@@ -169,6 +186,33 @@ export class AnthApp extends HTMLElement {
     }
     this.#busy = false
     this.render()
+    if (this.ready() && !this.#demoLoaded) {
+      this.#demoLoaded = true
+      void this.#loadDemo()
+    }
+  }
+
+  async #loadDemo(): Promise<void> {
+    try {
+      const response = await fetch('/api/demo', { credentials: 'same-origin' })
+      if (!response.ok) return
+      this.#demo = (await response.json()) as DemoState
+      this.#paintNav()
+      this.#paintDemo()
+    } catch {
+      // The demo banner is optional; a failed probe must not break the shell.
+    }
+  }
+
+  async #resetDemo(): Promise<void> {
+    try {
+      await fetch('/api/demo/reset', {
+        method: 'POST',
+        credentials: 'same-origin',
+      })
+    } finally {
+      globalThis.location.reload()
+    }
   }
 
   async #perform(action: () => Promise<void>): Promise<void> {
@@ -239,6 +283,7 @@ export class AnthApp extends HTMLElement {
     shellEl.hidden = false
     this.#ensureShell(shellEl)
     this.#paintTabs()
+    this.#paintDemo()
   }
 
   /** The frame's static HTML. It is written once; later paints update it. */
@@ -275,6 +320,7 @@ export class AnthApp extends HTMLElement {
         <main id="main" tabindex="-1">
           <p class="error" data-error role="alert" hidden></p>
           <div class="auth" data-auth></div>
+          <div class="demo-banner" data-demo hidden></div>
           <div data-shell hidden></div>
         </main>
       </div>
@@ -315,6 +361,10 @@ export class AnthApp extends HTMLElement {
     const target = event.composedPath()[0]
     if (target instanceof Element && target.closest('[data-signout]')) {
       void this.#logout()
+      return
+    }
+    if (target instanceof Element && target.closest('[data-demo-reset]')) {
+      void this.#resetDemo()
     }
   }
 
@@ -389,22 +439,72 @@ export class AnthApp extends HTMLElement {
     }
   }
 
+  /** The demo banner and its reset action. */
+  #paintDemo(): void {
+    const banner = this.shadowRoot?.querySelector<HTMLElement>('[data-demo]')
+    if (!banner) return
+    const status = this.#demo?.mode === 'demo' ? this.#demo.status : undefined
+    if (!status) {
+      banner.hidden = true
+      banner.innerHTML = ''
+      return
+    }
+    const labels: Array<[string, string]> = [
+      ['network', msg('Network')],
+      ['firewall', msg('Firewall')],
+      ['files', msg('Files')],
+      ['processes', msg('Processes')],
+      ['volumes', msg('Storage')],
+      ['accounts', msg('Accounts')],
+      ['terminal', msg('Terminal')],
+    ]
+    const features = labels
+      .map(([key, label]) =>
+        status.features[key]
+          ? `<span class="demo-feature">${escape(label)}</span>`
+          : '',
+      )
+      .join('')
+    banner.hidden = false
+    banner.innerHTML = `
+      <span class="demo-badge">${msg('Demo')}</span>
+      <span class="demo-copy">${msg('This session is simulated and private to this browser.')}</span>
+      <span class="demo-features" aria-label="${escape(msg('Simulated features'))}">${features}</span>
+      <button type="button" data-demo-reset>${msg('Reset demo')}</button>`
+  }
+
   /** One set of links, rendered twice: sidebar and drawer. */
   #paintNav(): void {
     const root = this.shadowRoot
     if (!root) {
       return
     }
+    const demo =
+      this.#demo?.mode === 'demo' ? this.#demo.status?.features : undefined
+    const demoFeature: Record<string, string> = {
+      files: 'files',
+      terminal: 'terminal',
+      processes: 'processes',
+      network: 'network',
+      storage: 'volumes',
+      accounts: 'accounts',
+    }
     const links = sections()
-      .map(
-        (section) => `
+      .map((section) => {
+        const feature = demoFeature[section.id]
+        const chip =
+          demo && feature
+            ? `<span class="demo-chip" title="${escape(msg('Simulated'))}">${msg('demo')}</span>`
+            : ''
+        return `
           <a class="nav-item" href="${hashForSection(section.id)}" data-section="${section.id}"
              title="${escape(section.label)}" aria-label="${escape(section.label)}"
              ${section.id === this.#route.section ? 'data-active aria-current="page"' : ''}>
             <span class="nav-icon" aria-hidden="true"><anth-icon name="${escape(section.icon)}"></anth-icon></span>
             <span class="nav-label">${escape(section.label)}</span>
-          </a>`,
-      )
+            ${chip}
+          </a>`
+      })
       .join('')
     const sidebar = root.querySelector('[data-sidebar]')
     const drawer = root.querySelector('[data-drawer]')
@@ -1031,6 +1131,24 @@ const STYLE = `
   .error { margin: 0 0 0.75rem; padding: 0.6rem 0.75rem; border-radius: 8px;
            border: 1px solid rgba(248, 113, 113, 0.4);
            background: rgba(248, 113, 113, 0.12); color: var(--err, #f87171); }
+
+  .demo-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+                 margin: 0 0 0.85rem; padding: 0.55rem 0.75rem; border-radius: 8px;
+                 border: 1px solid rgba(125, 211, 252, 0.35);
+                 background: rgba(125, 211, 252, 0.08); font: 500 12px/1.4 var(--mono, monospace); }
+  .demo-badge { padding: 0.1rem 0.45rem; border-radius: 999px; text-transform: uppercase;
+                letter-spacing: 0.08em; background: rgba(125, 211, 252, 0.2); color: var(--accent, #7dd3fc); }
+  .demo-copy { flex: 1; min-width: 12rem; color: var(--muted, #8b9bad); }
+  .demo-features { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+  .demo-feature { padding: 0.05rem 0.35rem; border-radius: 999px;
+                  background: rgba(148, 163, 184, 0.15); color: var(--muted, #8b9bad); }
+  .demo-banner button { padding: 0.3rem 0.6rem; border-radius: 6px; cursor: pointer;
+                        border: 1px solid rgba(125, 211, 252, 0.35);
+                        background: rgba(125, 211, 252, 0.12); color: var(--text, #dbe6f2);
+                        font: inherit; }
+  .demo-chip { margin-left: auto; padding: 0.05rem 0.3rem; border-radius: 999px;
+               font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
+               background: rgba(125, 211, 252, 0.14); color: var(--accent, #7dd3fc); }
 
   /* The sidebar becomes a drawer by width, never by orientation: width is what
      decides whether two columns fit. */
