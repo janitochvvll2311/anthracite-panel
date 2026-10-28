@@ -98,3 +98,40 @@ test('the demo storage inventory is synthetic and mutable', async ({ page, reque
   })
   expect(deleted.ok()).toBeTruthy()
 })
+
+test('the demo accounts are synthetic and mutable', async ({ page, request }) => {
+  await page.goto('/#/accounts')
+  const accounts = page.locator('anth-accounts').first()
+  await expect(accounts.locator('.count')).toContainText('3 users · 2 system')
+  await expect(accounts.getByRole('heading', { name: 'demo', exact: true })).toBeVisible()
+
+  const created = await request.post('/api/accounts/users', {
+    data: { name: 'e2e-user', gecos: 'E2E User' },
+  })
+  expect(created.ok()).toBeTruthy()
+  const user = (await (await request.get('/api/accounts')).json()).users.find(
+    (entry: { name: string }) => entry.name === 'e2e-user',
+  )
+  expect(user.home).toBe('/home/e2e-user')
+  expect(user.locked).toBe(true)
+
+  const password = await request.post('/api/accounts/users/password', {
+    data: { name: 'e2e-user', password: 'long-enough' },
+  })
+  expect(password.ok()).toBeTruthy()
+
+  const group = await request.post('/api/accounts/groups', { data: { name: 'e2e-group' } })
+  expect(group.ok()).toBeTruthy()
+  const groupDeleted = await request.post('/api/accounts/groups/delete', {
+    data: { name: 'e2e-group' },
+  })
+  expect(groupDeleted.ok()).toBeTruthy()
+
+  const deleted = await request.post('/api/accounts/users/delete', {
+    data: { name: 'e2e-user', remove_home: true },
+  })
+  expect(deleted.ok()).toBeTruthy()
+  const after = await (await request.get('/api/accounts')).json()
+  expect(after.users.some((entry: { name: string }) => entry.name === 'e2e-user')).toBe(false)
+  expect(after.groups.some((entry: { name: string }) => entry.name === 'e2e-user')).toBe(false)
+})
