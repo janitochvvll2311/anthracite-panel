@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_wire::{AccountGroup, AccountSnapshot, AccountSource, AccountUser};
 
-use crate::config::AccountsConfig;
+use super::AccountsSettings;
 
 /// Fallback when `/etc/login.defs` is unreadable or silent. Matches the Debian,
 /// Red Hat and Alpine default.
@@ -274,7 +274,7 @@ pub fn read_login_defs(text: &str) -> IdRanges {
 /// against this, so a stale or shortened view can never hide an entry from a
 /// guard.
 pub fn collect(
-    config: &AccountsConfig,
+    config: &AccountsSettings,
     probe: &dyn HostProbe,
 ) -> (AccountSnapshot, Vec<String>, IdRanges) {
     let files = probe.read();
@@ -556,11 +556,11 @@ alice:!::alice
         }
     }
 
-    fn policy() -> AccountsConfig {
-        AccountsConfig {
+    fn policy() -> AccountsSettings {
+        AccountsSettings {
             control: true,
             manage_passwords: true,
-            ..AccountsConfig::default()
+            ..AccountsSettings::default()
         }
     }
 

@@ -15,7 +15,31 @@ use anth_wire::{
     AccountSnapshot, WireError,
 };
 
-use crate::config::AccountsConfig;
+/// Host-side account policy passed from the panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountsSettings {
+    pub control: bool,
+    pub manage_passwords: bool,
+    pub allow_system: bool,
+    pub allow_privileged_groups: bool,
+    pub home_root: String,
+    pub shells: Vec<String>,
+    pub default_shell: String,
+}
+
+impl Default for AccountsSettings {
+    fn default() -> Self {
+        Self {
+            control: false,
+            manage_passwords: false,
+            allow_system: false,
+            allow_privileged_groups: false,
+            home_root: "/home".to_string(),
+            shells: Vec::new(),
+            default_shell: "/bin/sh".to_string(),
+        }
+    }
+}
 
 pub use inventory::{HostProbe, LocalFiles};
 pub use mutate::{
@@ -25,15 +49,15 @@ pub use mutate::{
 
 /// The account service, built once from the policy the daemon read at startup.
 #[derive(Clone)]
-pub struct AccountsService {
-    config: AccountsConfig,
+pub struct SystemAccounts {
+    config: AccountsSettings,
     probe: Arc<dyn HostProbe>,
     runner: Arc<dyn AccountRunner>,
     daemon_user: String,
 }
 
-impl AccountsService {
-    pub fn new(config: AccountsConfig) -> Self {
+impl SystemAccounts {
+    pub fn new(config: AccountsSettings) -> Self {
         Self {
             config,
             probe: Arc::new(inventory::SystemProbe::new()),

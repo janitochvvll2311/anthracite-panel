@@ -1,6 +1,5 @@
 //! Anthracite Panel: shared library for the daemon, CLI and HTTP API.
 
-pub mod accounts;
 pub mod api;
 pub mod auth;
 pub mod client;
@@ -18,6 +17,6 @@ pub mod terminal_web;
 pub(crate) mod ws;
 pub mod www;
 
-pub use anth_host::{files, firewall, network, process, terminal, volumes};
+pub use anth_host::{accounts, files, firewall, network, process, terminal, volumes};
 pub use config::Config;
 pub use log::{Logger, Settings};

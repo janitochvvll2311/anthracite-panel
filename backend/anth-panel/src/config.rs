@@ -169,6 +169,21 @@ pub struct AccountsConfig {
     pub default_shell: String,
 }
 
+impl AccountsConfig {
+    /// Host-side policy for the account backend.
+    pub fn settings(&self) -> anth_host::accounts::AccountsSettings {
+        anth_host::accounts::AccountsSettings {
+            control: self.control,
+            manage_passwords: self.manage_passwords,
+            allow_system: self.allow_system,
+            allow_privileged_groups: self.allow_privileged_groups,
+            home_root: self.home_root.clone(),
+            shells: self.shells.clone(),
+            default_shell: self.default_shell.clone(),
+        }
+    }
+}
+
 impl Default for AccountsConfig {
     fn default() -> Self {
         Self {

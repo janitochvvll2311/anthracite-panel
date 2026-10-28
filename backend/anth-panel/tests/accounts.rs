@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_panel::accounts::{AccountOutput, AccountRunner, AccountsService, HostProbe, LocalFiles};
+use anth_panel::accounts::{AccountOutput, AccountRunner, HostProbe, LocalFiles, SystemAccounts};
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
 use anth_panel::client::Client;
@@ -148,7 +148,7 @@ fn daemon(
     config.accounts = accounts_config(control);
     let paths = config.paths(&config_path).expect("paths");
     let logger = Arc::new(Logger::buffer(Settings::default()).0);
-    let accounts = AccountsService::new(config.accounts.clone())
+    let accounts = SystemAccounts::new(config.accounts.settings())
         .with_probe(probe)
         .with_runner(runner)
         .with_daemon_user("panel");

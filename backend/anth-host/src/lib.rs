@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_wire::{HostInfo, OsInfo};
 
+pub mod accounts;
 pub mod backend;
 pub mod demo;
 pub mod files;

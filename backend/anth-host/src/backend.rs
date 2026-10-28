@@ -421,3 +421,33 @@ impl VolumesService for crate::volumes::SystemVolumes {
         crate::volumes::SystemVolumes::format_partition(self, request)
     }
 }
+
+pub trait AccountsService: Send + Sync {
+    fn snapshot(&self) -> anth_wire::AccountSnapshot;
+    fn create_user(&self, request: &anth_wire::AccountCreate) -> Result<String, WireError>;
+    fn delete_user(&self, request: &anth_wire::AccountDelete) -> Result<String, WireError>;
+    fn set_password(&self, request: &anth_wire::AccountSetPassword) -> Result<String, WireError>;
+    fn create_group(&self, request: &anth_wire::AccountGroupCreate) -> Result<String, WireError>;
+    fn delete_group(&self, request: &anth_wire::AccountGroupDelete) -> Result<String, WireError>;
+}
+
+impl AccountsService for crate::accounts::SystemAccounts {
+    fn snapshot(&self) -> anth_wire::AccountSnapshot {
+        crate::accounts::SystemAccounts::snapshot(self)
+    }
+    fn create_user(&self, request: &anth_wire::AccountCreate) -> Result<String, WireError> {
+        crate::accounts::SystemAccounts::create_user(self, request)
+    }
+    fn delete_user(&self, request: &anth_wire::AccountDelete) -> Result<String, WireError> {
+        crate::accounts::SystemAccounts::delete_user(self, request)
+    }
+    fn set_password(&self, request: &anth_wire::AccountSetPassword) -> Result<String, WireError> {
+        crate::accounts::SystemAccounts::set_password(self, request)
+    }
+    fn create_group(&self, request: &anth_wire::AccountGroupCreate) -> Result<String, WireError> {
+        crate::accounts::SystemAccounts::create_group(self, request)
+    }
+    fn delete_group(&self, request: &anth_wire::AccountGroupDelete) -> Result<String, WireError> {
+        crate::accounts::SystemAccounts::delete_group(self, request)
+    }
+}

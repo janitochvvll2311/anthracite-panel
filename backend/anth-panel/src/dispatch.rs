@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anth_host::backend::{
-    FilesService, FirewallService, NetworkService, ProcessesService, TerminalService,
-    VolumesService,
+    AccountsService, FilesService, FirewallService, NetworkService, ProcessesService,
+    TerminalService, VolumesService,
 };
 use anth_wire::{
     ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
@@ -17,13 +17,13 @@ use anth_wire::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
-use crate::accounts::AccountsService;
 use crate::config::{Config, Paths};
 use crate::firewall::SystemFirewall;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::SystemNetwork;
 use crate::plugins::PluginService;
+use anth_host::accounts::SystemAccounts;
 use anth_host::files::SystemFiles;
 use anth_host::process::SystemProcesses;
 use anth_host::terminal::{OpenError, SystemTerminal, resolve_shell, supports_line_editing};
@@ -41,7 +41,7 @@ pub struct Daemon {
     network: Arc<dyn NetworkService>,
     firewall: Arc<dyn FirewallService>,
     volumes: Arc<dyn VolumesService>,
-    accounts: AccountsService,
+    accounts: Arc<dyn AccountsService>,
     plugins: PluginService,
 }
 
@@ -150,7 +150,13 @@ impl Daemon {
         } else {
             Arc::new(SystemVolumes::new(config.volumes.settings(), protected))
         };
-        let accounts = AccountsService::new(config.accounts.clone());
+        let accounts: Arc<dyn AccountsService> = if demo {
+            Arc::new(anth_host::demo::DemoAccounts::new(
+                config.accounts.settings(),
+            ))
+        } else {
+            Arc::new(SystemAccounts::new(config.accounts.settings()))
+        };
         let plugins = PluginService::new(
             config.plugins.clone(),
             paths.plugins.clone(),
@@ -207,8 +213,8 @@ impl Daemon {
 
     /// Replaces the accounts service. Tests use it to script `/etc` and the
     /// account tools without touching the host.
-    pub fn with_accounts(mut self, accounts: AccountsService) -> Self {
-        self.accounts = accounts;
+    pub fn with_accounts(mut self, accounts: SystemAccounts) -> Self {
+        self.accounts = Arc::new(accounts);
         self
     }
 

@@ -22,8 +22,8 @@ use anth_wire::{
     AccountSetPassword, AccountSnapshot, AccountUser, ErrorKind, SecretString, WireError,
 };
 
+use super::AccountsSettings;
 use super::inventory::IdRanges;
-use crate::config::AccountsConfig;
 
 /// Groups that grant root-equivalent power. `docker` and `lxd` are on the list
 /// because a member can mount the host filesystem inside a container.
@@ -151,7 +151,7 @@ fn unsupported(detail: impl Into<String>) -> WireError {
 /// itself. `id_ranges` come from the same read as the snapshot.
 pub struct Guard<'a> {
     pub snapshot: &'a AccountSnapshot,
-    pub config: &'a AccountsConfig,
+    pub config: &'a AccountsSettings,
     pub daemon_user: String,
     pub id_ranges: IdRanges,
 }
@@ -159,7 +159,7 @@ pub struct Guard<'a> {
 impl<'a> Guard<'a> {
     pub fn new(
         snapshot: &'a AccountSnapshot,
-        config: &'a AccountsConfig,
+        config: &'a AccountsSettings,
         daemon_user: impl Into<String>,
         id_ranges: IdRanges,
     ) -> Self {
@@ -970,8 +970,8 @@ mod tests {
         }
     }
 
-    fn base_config() -> AccountsConfig {
-        AccountsConfig {
+    fn base_config() -> AccountsSettings {
+        AccountsSettings {
             control: true,
             manage_passwords: true,
             allow_system: true,
@@ -982,7 +982,7 @@ mod tests {
         }
     }
 
-    fn make_guard<'a>(snapshot: &'a AccountSnapshot, config: &'a AccountsConfig) -> Guard<'a> {
+    fn make_guard<'a>(snapshot: &'a AccountSnapshot, config: &'a AccountsSettings) -> Guard<'a> {
         Guard::new(snapshot, config, "panel", IdRanges::default())
     }
 
@@ -1073,7 +1073,7 @@ mod tests {
 
         let mut system = create("carol");
         system.system = true;
-        let strict = AccountsConfig {
+        let strict = AccountsSettings {
             allow_system: false,
             ..base_config()
         };
@@ -1112,7 +1112,7 @@ mod tests {
     #[test]
     fn system_ids_need_the_opt_in_even_without_the_system_flag() {
         let snapshot = snapshot();
-        let config = AccountsConfig {
+        let config = AccountsSettings {
             allow_system: false,
             ..base_config()
         };
@@ -1260,7 +1260,7 @@ mod tests {
             );
         }
 
-        let disabled = AccountsConfig {
+        let disabled = AccountsSettings {
             manage_passwords: false,
             ..base_config()
         };
@@ -1291,7 +1291,7 @@ mod tests {
         assert_eq!(plan.program, "groupadd");
         assert_eq!(plan.args, vec!["--gid", "1500", "builders"]);
 
-        let strict = AccountsConfig {
+        let strict = AccountsSettings {
             allow_privileged_groups: false,
             ..base_config()
         };
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn privileged_groups_need_the_opt_in() {
         let snapshot = snapshot();
-        let config = AccountsConfig {
+        let config = AccountsSettings {
             allow_privileged_groups: false,
             ..base_config()
         };
@@ -1367,7 +1367,7 @@ mod tests {
     #[test]
     fn a_disabled_control_switch_refuses_every_mutation() {
         let snapshot = snapshot();
-        let config = AccountsConfig {
+        let config = AccountsSettings {
             control: false,
             ..base_config()
         };
