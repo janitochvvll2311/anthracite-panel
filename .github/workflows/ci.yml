@@ -85,3 +85,27 @@ jobs:
             exit 1
           fi
           test -f ../backend/anth-panel/www/index.html
+
+  demo-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install the musl toolchain
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Install Playwright
+        working-directory: tests
+        run: |
+          bun install --frozen-lockfile
+          bun run browsers
+
+      - name: Run the demo end-to-end suite
+        run: ./tests/run.sh

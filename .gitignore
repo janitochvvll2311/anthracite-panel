@@ -47,3 +47,6 @@ rustc-ice-*.txt
 !/backend/anth-panel/www/.gitkeep
 
 *.toml.lock
+/tests/node_modules/
+/tests/test-results/
+/tests/playwright-report/
