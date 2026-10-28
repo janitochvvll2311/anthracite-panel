@@ -222,7 +222,7 @@ Proposed defaults:
 | config | `/etc/anth/config.toml` | `./config.toml` |
 | socket | `/var/tmp/anth.sock` | `./anth.sock` |
 | state dir | `/var/lib/anth` | `./state` |
-| plugin root | `/var/lib/anth/plugins` | `./plugins` |
+| plugin root | `/var/lib/anth/plugins` | `./plugins/bundles` |
 | grants | `<config_dir>/plugins.d` | `./plugins.d` |
 | secrets | `<config_dir>/secrets.toml` | `./secrets.toml` |
 
@@ -233,7 +233,7 @@ Relative paths inside `config.toml` resolve against the config file's directory
 (not the process CWD). CLI and environment overrides stay as given.
 
 **Accepted:** debug uses relative defaults (`./config.toml`, `./anth.sock`,
-`./state`, `./plugins`, `./plugins.d`, `./secrets.toml`), so `cargo run` needs no
+`./state`, `./plugins/bundles`, `./plugins.d`, `./secrets.toml`), so `cargo run` needs no
 root or flags. Release uses `/etc/anth/*` and `/var/lib/anth/*` as in the table.
 
 ### `config.toml` v1

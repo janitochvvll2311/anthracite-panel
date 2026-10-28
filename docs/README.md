@@ -5,10 +5,11 @@ code-complete with real-command validation pending, and Phase 6 is code-complete
 with Storage (inventory, guarded mount/unmount and partition/format) and
 Accounts (inventory, guarded create/delete and passwords). Accounts success
 paths were validated on a real host; storage mutations still wait for
-`CAP_SYS_ADMIN`. Phase 7 has started with the signed bundle format, frozen
-grants and the plugin manager over CLI, HTTP and Settings; the wasm runtime,
-anchors, iframe bridge and reference bundles are next. The remaining feature
-documentation is added with the code it describes.
+`CAP_SYS_ADMIN`. Phase 7 is code-complete: signed bundles, frozen grants, the
+plugin manager, the wasm ABI 3 runtime, guarded anchors, the sandboxed iframe
+bridge and the `hello`/read-only WireGuard reference bundles. Phase 8
+hardening/release is next. The remaining feature documentation is added with the
+code it describes.
 
 ## User contract
 
@@ -22,7 +23,7 @@ documentation is added with the code it describes.
 | [firewall.md](firewall.md) | Managed nftables table with input/output chains, allow/deny/edit/delete/flush rules, default policies, guards, HTTP/socket/CLI and the Firewall tab |
 | [storage.md](storage.md) | Block devices, mounts, usage, swap, guarded mount/unmount and partition/format over socket, HTTP, CLI and the Storage tabs |
 | [accounts.md](accounts.md) | Users and groups from local files plus NSS, lock state, guarded create/delete, password changes and the Accounts tabs |
-| [plugins.md](plugins.md) | Signed bundles, manifests, frozen grants, install/list/enable/remove, HTTP/CLI and the Settings → Plugins panel |
+| [plugins.md](plugins.md) | Signed bundles, manifests, frozen grants, install/list/enable/remove, the ABI 3 runtime, anchors, the iframe sandbox, reference plugins and the Settings → Plugins panel |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

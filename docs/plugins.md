@@ -267,9 +267,52 @@ A declared UI slot is mounted by `<anth-plugin-frame>`:
 The module contract is an exported `mount(root, api)` (or a default function).
 It is self-contained: dynamic imports beyond the blob are blocked by the CSP.
 
-## Not yet in this cut
+## Reference plugins
 
-- The `hello` and WireGuard reference bundles and their packaging scripts.
+Two peer projects show the contract end to end. They are not workspace members:
+`backend/` does not build them and `frontend/` does not install their
+dependencies.
 
-The runtime, anchors, asset delivery and iframe bridge already build on the
-frozen grant; the authority model and file formats above are enforced.
+### `plugins/hello`
+
+The smallest complete bundle: one capability (`host.hostname`), two anchors
+(`/greeting`, `/status`) and one UI slot. Its widget calls `/greeting` through
+the iframe bridge.
+
+```bash
+cd plugins/hello
+./package.sh
+# dist/org.anth.hello.zip, dist/hello-public-key.txt
+```
+
+### `plugins/wireguard`
+
+A read-only WireGuard bundle: `wg show interfaces` and `wg show <if>`, with the
+interface validated by the host's `ifname` type. The widget lists interfaces and
+shows one. Interface/peer mutations, config persistence and private-key handling
+are deliberately not in this cut.
+
+```bash
+cd plugins/wireguard
+./package.sh
+# dist/org.anth.wireguard.zip, dist/wireguard-public-key.txt
+```
+
+Each script builds the guest for `wasm32-unknown-unknown`, copies the declared
+UI module, fills both digests, signs the manifest with Ed25519 and writes the
+zip. The key lives under `dist/` and is gitignored; reuse it for upgrades so the
+operator's `[plugins] public_key` stays valid. Set that key before installing.
+
+```bash
+sudo anth-panel plugin install plugins/hello/dist/org.anth.hello.zip
+curl http://127.0.0.1:8080/api/plugins/org.anth.hello/greeting
+```
+
+The hello widget was exercised in the browser with the real runtime: the
+sandboxed iframe called `/greeting`, the host ran `hostname` through the frozen
+grant and the widget displayed `Hola desde <host>`. The WireGuard bundle was
+installed and listed; the container has no `wg` binary, so its anchors report
+the host refusal there.
+
+Phase 7 is code-complete with these two bundles; the WireGuard mutation surface
+is a later feature, not part of the plugin isolation phase.
