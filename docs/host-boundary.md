@@ -11,7 +11,7 @@ invent a fourth convention.
 | Trait/port | `<Feature>Service` in `anth_host::backend` | `NetworkService`, `FilesService` |
 | Real implementation | `System<Feature>` in `anth_host::<feature>` | `SystemNetwork`, `SystemFiles` |
 | Demo implementation | `Demo<Feature>` in `anth_host::demo::<feature>` | `DemoNetwork`, `DemoFirewall` |
-| Module | the feature name, lowercase | `network`, `firewall`, `files`, `process` |
+| Module | the feature name, lowercase | `network`, `firewall`, `files`, `process`, `terminal` |
 | Panel field | `Arc<dyn <Feature>Service>` | `Arc<dyn NetworkService>` |
 
 `Service` therefore means the **port**, not a concrete struct. The concrete
@@ -27,7 +27,7 @@ implementations are always `System*` or `Demo*`.
 | Processes | `ProcessesService` | `SystemProcesses` | pending |
 | Volumes | `VolumesService` (pending) | `SystemVolumes` (pending) | pending |
 | Accounts | `AccountsService` (pending) | `SystemAccounts` (pending) | pending |
-| Terminal | `TerminalService` (pending) | `SystemTerminal` (pending) | pending |
+| Terminal | `TerminalService` | `SystemTerminal` | pending |
 | Info | `InfoService` (pending) | `SystemInfo` | pending |
 
 The existing panel service names (`AccountsService`, `VolumesService`) are

@@ -21,7 +21,7 @@ with the dry-run v0.2 migration, property tests over paths, archives,
 manifests, config and migration, and a release tarball/container workflow.
 `v0.3.0a` is the pre-release marker; the crate version stays `0.3.0`.
 
-Network, firewall, files and processes now live in `anth-host`, behind
+Network, firewall, files, processes and the terminal host now live in `anth-host`, behind
 `<Feature>Service` traits with real `System*` and virtual `Demo*`
 implementations. Files use a seeded sandbox; processes are synthetic.
 `ANTH_BACKEND=demo ./scripts/dev.sh start` runs without `sudo` and simulates
