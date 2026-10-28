@@ -1,0 +1,16 @@
+[package]
+name = "anth-extension-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anth-extension.workspace = true
+anth-wire.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+wait-timeout = "0.2"
+
+[dev-dependencies]
+proptest = "1"
