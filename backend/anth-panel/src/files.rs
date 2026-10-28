@@ -1395,3 +1395,47 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::path::{Component, PathBuf};
+
+    fn text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<char>(), 0..256)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = PathBuf::from("/tmp/anthracite-panel/tests")
+            .join(format!("{name}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&root).expect("scratch");
+        root
+    }
+
+    proptest! {
+        #[test]
+        fn a_resolved_path_never_leaves_the_file_root(raw in text()) {
+            let root = scratch("prop-resolve");
+            fs::create_dir(root.join("dir")).expect("dir");
+            fs::write(root.join("ok.txt"), b"ok").expect("file");
+            let files = FileService::new(&root, false, 100, 64, 1024).expect("service");
+            if let Ok(path) = files.resolve(&raw) {
+                prop_assert!(path.starts_with(&root));
+            }
+            if let Ok((parent, name)) = split_parent(&raw) {
+                prop_assert!(!parent.is_absolute());
+                prop_assert!(parent
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_))));
+                prop_assert!(!name.is_empty());
+            }
+            fs::remove_dir_all(root).expect("cleanup");
+        }
+    }
+}

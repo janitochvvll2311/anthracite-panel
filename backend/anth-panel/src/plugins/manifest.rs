@@ -611,3 +611,30 @@ sha256 = "{}"
         assert!(Manifest::parse(&text).is_err());
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<char>(), 0..512)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_manifest_text_never_panics_and_keeps_invariants(text in text()) {
+            if let Ok(manifest) = Manifest::parse(&text) {
+                prop_assert_eq!(manifest.wasm.path.as_str(), WASM_FILE);
+                prop_assert_eq!(manifest.plugin.abi, ABI_VERSION);
+                prop_assert!(validate_id(&manifest.plugin.id).is_ok());
+                prop_assert_eq!(manifest.wasm.sha256.len(), 64);
+                prop_assert!(manifest
+                    .ui
+                    .iter()
+                    .all(|slot| slot.module.starts_with("web/") && !slot.module.contains("..")));
+            }
+        }
+    }
+}

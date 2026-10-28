@@ -713,3 +713,21 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<char>(), 0..1024)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_config_text_never_panics(text in text()) {
+            let _ = Config::from_toml(&text);
+        }
+    }
+}

@@ -804,3 +804,29 @@ path = "/status"
         fs::remove_dir_all(root).expect("cleanup");
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::safe_member;
+    use proptest::prelude::*;
+    use std::path::{Component, Path};
+
+    fn text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<char>(), 0..256)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn an_accepted_member_never_leaves_the_bundle(raw in text()) {
+            if let Some(relative) = safe_member(&raw) {
+                prop_assert!(!relative.is_absolute());
+                prop_assert!(relative
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_))));
+                prop_assert!(Path::new("/bundle").join(&relative).starts_with("/bundle"));
+                prop_assert!(!raw.contains('\\'));
+            }
+        }
+    }
+}

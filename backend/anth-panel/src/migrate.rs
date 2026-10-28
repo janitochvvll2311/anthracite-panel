@@ -346,3 +346,30 @@ digest = "dd"
         root
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<char>(), 0..1024)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_v02_text_never_panics(text in text()) {
+            if let Ok(plan) = plan(&text) {
+                prop_assert!(plan.config.validate().is_ok());
+                if let Some(secrets) = &plan.secrets {
+                    prop_assert!(
+                        secrets.signing_key.is_empty()
+                            || (secrets.signing_key.len() == 64
+                                && secrets.signing_key.chars().all(|c| c.is_ascii_hexdigit()))
+                    );
+                }
+            }
+        }
+    }
+}

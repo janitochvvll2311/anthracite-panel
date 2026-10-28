@@ -1571,3 +1571,28 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::safe_member;
+    use proptest::prelude::*;
+    use std::path::PathBuf;
+
+    fn text() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<char>(), 0..256)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn an_accepted_archive_member_never_escapes(raw in text()) {
+            if let Some(relative) = safe_member(&raw) {
+                prop_assert!(!relative.is_absolute());
+                prop_assert!(!relative
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir)));
+                prop_assert!(PathBuf::from("/extract").join(&relative).starts_with("/extract"));
+            }
+        }
+    }
+}

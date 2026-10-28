@@ -38,6 +38,7 @@ zip.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+proptest = "1"
 wat = "1"
 tokio-tungstenite.workspace = true
 tower.workspace = true
