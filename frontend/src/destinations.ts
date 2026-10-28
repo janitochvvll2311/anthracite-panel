@@ -17,6 +17,7 @@ export type SectionId =
   | 'processes'
   | 'network'
   | 'storage'
+  | 'accounts'
   | 'settings'
 export type PanelId =
   | 'general'
@@ -26,6 +27,8 @@ export type PanelId =
   | 'firewall'
   | 'volumes'
   | 'partitions'
+  | 'users'
+  | 'groups'
 
 export interface Section {
   /** Stable id. It is the route and the hash, so it never changes. */
@@ -56,6 +59,7 @@ export function sections(): Section[] {
     { id: 'processes', label: msg('Processes'), icon: 'process' },
     { id: 'network', label: msg('Network'), icon: 'network' },
     { id: 'storage', label: msg('Storage'), icon: 'storage' },
+    { id: 'accounts', label: msg('Accounts'), icon: 'accounts' },
     { id: 'settings', label: msg('Settings'), icon: 'settings' },
   ]
 }
@@ -78,6 +82,14 @@ export function storagePanels(): Panel[] {
   return [
     { id: 'volumes', label: msg('Volumes') },
     { id: 'partitions', label: msg('Partitions') },
+  ]
+}
+
+/** The panels the Accounts section owns. */
+export function accountsPanels(): Panel[] {
+  return [
+    { id: 'users', label: msg('Users') },
+    { id: 'groups', label: msg('Groups') },
   ]
 }
 
@@ -113,6 +125,12 @@ export function routeFrom(hash: string): Route {
       panel: parts[1] === 'partitions' ? 'partitions' : 'volumes',
     }
   }
+  if (parts[0] === 'accounts') {
+    return {
+      section: 'accounts',
+      panel: parts[1] === 'groups' ? 'groups' : 'users',
+    }
+  }
   if (parts[0] === 'settings') {
     return { section: 'settings', panel: 'general' }
   }
@@ -132,6 +150,8 @@ export function hashForSection(section: SectionId): string {
       return '#/network'
     case 'storage':
       return '#/storage'
+    case 'accounts':
+      return '#/accounts'
     case 'settings':
       return '#/settings'
     default:
@@ -147,5 +167,7 @@ export function hashForPanel(panel: PanelId): string {
   if (panel === 'firewall') return '#/network/firewall'
   if (panel === 'volumes') return '#/storage'
   if (panel === 'partitions') return '#/storage/partitions'
+  if (panel === 'users') return '#/accounts'
+  if (panel === 'groups') return '#/accounts/groups'
   return '#/settings'
 }

@@ -1482,6 +1482,166 @@
   <source>Disk device</source>
   <target>Disco</target>
 </trans-unit>
+<trans-unit id="s413b4657ebf5e46d">
+  <source>A login name is required.</source>
+  <target>Se requiere un nombre de inicio de sesión.</target>
+</trans-unit>
+<trans-unit id="s2bf49963d69a2b7f">
+  <source>A group name is required.</source>
+  <target>Se requiere un nombre de grupo.</target>
+</trans-unit>
+<trans-unit id="s822a9e8fc4caf27a">
+  <source>The password must have at least 8 characters.</source>
+  <target>La contraseña debe tener al menos 8 caracteres.</target>
+</trans-unit>
+<trans-unit id="s5eeb9c02686f9715">
+  <source>1 group · <x id="0" equiv-text="${system}"/> system</source>
+  <target>1 grupo · <x id="0" equiv-text="${system}"/> del sistema</target>
+</trans-unit>
+<trans-unit id="s89d7cfa154fd66f9">
+  <source><x id="0" equiv-text="${count}"/> groups · <x id="1" equiv-text="${system}"/> system</source>
+  <target><x id="0" equiv-text="${count}"/> grupos · <x id="1" equiv-text="${system}"/> del sistema</target>
+</trans-unit>
+<trans-unit id="s9a3356b8d4b876a5">
+  <source>1 user · <x id="0" equiv-text="${system}"/> system</source>
+  <target>1 usuario · <x id="0" equiv-text="${system}"/> del sistema</target>
+</trans-unit>
+<trans-unit id="s7201d4debc7b616b">
+  <source><x id="0" equiv-text="${count}"/> users · <x id="1" equiv-text="${system}"/> system</source>
+  <target><x id="0" equiv-text="${count}"/> usuarios · <x id="1" equiv-text="${system}"/> del sistema</target>
+</trans-unit>
+<trans-unit id="s514dd01c163eaed1">
+  <source>passwords</source>
+  <target>contraseñas</target>
+</trans-unit>
+<trans-unit id="sbfb559c71c56b4fc">
+  <source>system</source>
+  <target>sistema</target>
+</trans-unit>
+<trans-unit id="s1227e113df069d08">
+  <source>privileged groups</source>
+  <target>grupos privilegiados</target>
+</trans-unit>
+<trans-unit id="s6fd5326b58182985">
+  <source>Account changes are disabled; set accounts.control to enable them.</source>
+  <target>Los cambios de cuentas están deshabilitados; activá accounts.control para habilitarlos.</target>
+</trans-unit>
+<trans-unit id="s1b2f928f53689ee8">
+  <source>UID (optional)</source>
+  <target>UID (opcional)</target>
+</trans-unit>
+<trans-unit id="sc91591e93a9a78e6">
+  <source>GID (optional)</source>
+  <target>GID (opcional)</target>
+</trans-unit>
+<trans-unit id="s4751dfb9fb0442c4">
+  <source>Description (optional)</source>
+  <target>Descripción (opcional)</target>
+</trans-unit>
+<trans-unit id="sd9014f41f0d7d36d">
+  <source>Home (optional)</source>
+  <target>Directorio home (opcional)</target>
+</trans-unit>
+<trans-unit id="sbf706068a1842f5c">
+  <source>Shell (optional)</source>
+  <target>Shell (opcional)</target>
+</trans-unit>
+<trans-unit id="sb76d108b370e06fb">
+  <source>System account</source>
+  <target>Cuenta del sistema</target>
+</trans-unit>
+<trans-unit id="sd600334ec2c39b74">
+  <source>Create user</source>
+  <target>Crear usuario</target>
+</trans-unit>
+<trans-unit id="s1731000d7cc0c5cd">
+  <source>New accounts are created locked. The daemon validates names, ids, homes and shells.</source>
+  <target>Las cuentas nuevas se crean bloqueadas. El daemon valida nombres, ids, homes y shells.</target>
+</trans-unit>
+<trans-unit id="sc6853a12411df807">
+  <source>System group</source>
+  <target>Grupo del sistema</target>
+</trans-unit>
+<trans-unit id="s7c5774fad9d050ce">
+  <source>Create group</source>
+  <target>Crear grupo</target>
+</trans-unit>
+<trans-unit id="s5f3db2b99031f72c">
+  <source>lock unknown</source>
+  <target>bloqueo desconocido</target>
+</trans-unit>
+<trans-unit id="saa616bdfe454ecb3">
+  <source>locked</source>
+  <target>bloqueada</target>
+</trans-unit>
+<trans-unit id="s7a55e1714aecc27c">
+  <source>unlocked</source>
+  <target>desbloqueada</target>
+</trans-unit>
+<trans-unit id="s1e2666b16e631a92">
+  <source>primary group</source>
+  <target>grupo primario</target>
+</trans-unit>
+<trans-unit id="sce8d867ca5f35304">
+  <source>Set password</source>
+  <target>Establecer contraseña</target>
+</trans-unit>
+<trans-unit id="s8e6ad46ed0353768">
+  <source>Delete user <x id="0" equiv-text="${user.name}"/>?</source>
+  <target>¿Eliminar al usuario <x id="0" equiv-text="${user.name}"/>?</target>
+</trans-unit>
+<trans-unit id="sc23713a57f7620c4">
+  <source>Remove the home directory too</source>
+  <target>Eliminar también el directorio home</target>
+</trans-unit>
+<trans-unit id="s0034b2d9c651eb11">
+  <source>no members</source>
+  <target>sin miembros</target>
+</trans-unit>
+<trans-unit id="s1dbfe4a6b642e208">
+  <source>Delete group <x id="0" equiv-text="${group.name}"/>?</source>
+  <target>¿Eliminar el grupo <x id="0" equiv-text="${group.name}"/>?</target>
+</trans-unit>
+<trans-unit id="s3bf8e04097df6023">
+  <source>Filter users</source>
+  <target>Filtrar usuarios</target>
+</trans-unit>
+<trans-unit id="sf91abb3323905dc0">
+  <source>No users found.</source>
+  <target>No se encontraron usuarios.</target>
+</trans-unit>
+<trans-unit id="s76e87800f7cdbf7c">
+  <source>No users match the filter.</source>
+  <target>Ningún usuario coincide con el filtro.</target>
+</trans-unit>
+<trans-unit id="sbd166accd1c35f5d">
+  <source>Filter groups</source>
+  <target>Filtrar grupos</target>
+</trans-unit>
+<trans-unit id="s618bc1300ebc3000">
+  <source>No groups found.</source>
+  <target>No se encontraron grupos.</target>
+</trans-unit>
+<trans-unit id="sbb658129b1234dbc">
+  <source>No groups match the filter.</source>
+  <target>Ningún grupo coincide con el filtro.</target>
+</trans-unit>
+<trans-unit id="sf3f7e28ef2fc5251">
+  <source>Loading accounts…</source>
+  <target>Cargando cuentas…</target>
+</trans-unit>
+<trans-unit id="se48bd9e6c2a3109d">
+  <source>Accounts</source>
+  <target>Cuentas</target>
+</trans-unit>
+<trans-unit id="s586d6bd2eca2da93">
+  <source>Users</source>
+  <target>Usuarios</target>
+</trans-unit>
+<trans-unit id="s9f26843287bb592d">
+  <source>Groups</source>
+  <target>Grupos</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
