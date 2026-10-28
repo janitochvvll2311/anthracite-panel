@@ -13,7 +13,7 @@ use anth_panel::config::{AuthConfig, Config, VolumesConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
-use anth_panel::volumes::{Probe, VolumesService};
+use anth_panel::volumes::{Probe, SystemVolumes};
 use anth_wire::{Request, Response, VolumeUsage};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
@@ -110,7 +110,7 @@ fn daemon(name: &str) -> Built {
     config.volumes = volumes_config();
     let paths = config.paths(&config_path).expect("paths");
     let logger = Arc::new(Logger::buffer(Settings::default()).0);
-    let volumes = VolumesService::with_probe(config.volumes.clone(), Arc::new(FakeProbe::new()));
+    let volumes = SystemVolumes::with_probe(config.volumes.settings(), Arc::new(FakeProbe::new()));
     let daemon = Daemon::new(config, paths.clone(), logger).with_volumes(volumes);
     Built {
         daemon: Arc::new(daemon),
@@ -194,7 +194,7 @@ async fn the_socket_returns_the_same_inventory() {
 
 #[test]
 fn the_live_probe_reports_the_root_mount() {
-    let service = VolumesService::new(VolumesConfig::default(), Vec::new());
+    let service = SystemVolumes::new(VolumesConfig::default().settings(), Vec::new());
     let snapshot = service.snapshot();
     assert!(snapshot.timestamp_ms > 0);
     assert!(

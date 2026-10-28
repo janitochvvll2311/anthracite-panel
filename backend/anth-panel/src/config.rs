@@ -132,6 +132,19 @@ pub struct VolumesConfig {
     pub disk_allow: Vec<String>,
 }
 
+impl VolumesConfig {
+    /// Host-side policy for the storage backend.
+    pub fn settings(&self) -> anth_host::volumes::VolumesSettings {
+        anth_host::volumes::VolumesSettings {
+            control: self.control,
+            partition: self.partition,
+            format: self.format,
+            mount_root: self.mount_root.clone(),
+            disk_allow: self.disk_allow.clone(),
+        }
+    }
+}
+
 impl Default for VolumesConfig {
     fn default() -> Self {
         Self {

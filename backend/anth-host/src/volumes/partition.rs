@@ -13,7 +13,7 @@ use anth_wire::{
     VolumePartitionDelete, VolumePartitionResize, VolumeSnapshot, WireError,
 };
 
-use super::{MountOutput, VolumesService};
+use super::{MountOutput, SystemVolumes};
 
 /// Filesystems `mkfs` may create. The type selects the program, so it is
 /// matched against this list and never interpolated into an argv element.
@@ -357,7 +357,7 @@ fn plan_format(
     })
 }
 
-impl VolumesService {
+impl SystemVolumes {
     pub fn create_partition(&self, args: &VolumePartitionCreate) -> Result<String, WireError> {
         if !self.config.partition {
             return Err(disabled(

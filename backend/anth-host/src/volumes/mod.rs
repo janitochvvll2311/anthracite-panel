@@ -17,8 +17,29 @@ use anth_wire::{
     ErrorKind, VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest, VolumeUsage, WireError,
 };
 
-use crate::config::VolumesConfig;
 use parse::{LSBLK_COLUMNS, LSBLK_COLUMNS_LEGACY, parse_lsblk, parse_mountinfo, swaps_from};
+
+/// Host-side storage policy passed from the panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumesSettings {
+    pub control: bool,
+    pub partition: bool,
+    pub format: bool,
+    pub mount_root: String,
+    pub disk_allow: Vec<String>,
+}
+
+impl Default for VolumesSettings {
+    fn default() -> Self {
+        Self {
+            control: false,
+            partition: false,
+            format: false,
+            mount_root: "/mnt".to_string(),
+            disk_allow: Vec::new(),
+        }
+    }
+}
 
 /// Everything the inventory needs from the host, behind a trait so tests can
 /// script it without spawning `lsblk` or touching the real mounts.
@@ -155,15 +176,15 @@ fn run_lsblk(columns: &str) -> Result<String, String> {
 /// other source with a warning instead of failing the whole request; a minimal
 /// container without `lsblk` can still show its mounts.
 #[derive(Clone)]
-pub struct VolumesService {
-    config: VolumesConfig,
+pub struct SystemVolumes {
+    config: VolumesSettings,
     probe: Arc<dyn Probe>,
     runner: Arc<dyn MountRunner>,
     protected: Vec<PathBuf>,
 }
 
-impl VolumesService {
-    pub fn new(config: VolumesConfig, protected: Vec<PathBuf>) -> Self {
+impl SystemVolumes {
+    pub fn new(config: VolumesSettings, protected: Vec<PathBuf>) -> Self {
         Self::with_parts(
             config,
             Arc::new(SystemProbe),
@@ -173,13 +194,13 @@ impl VolumesService {
     }
 
     /// Replaces only the inventory probe. Used by inventory tests.
-    pub fn with_probe(config: VolumesConfig, probe: Arc<dyn Probe>) -> Self {
+    pub fn with_probe(config: VolumesSettings, probe: Arc<dyn Probe>) -> Self {
         Self::with_parts(config, probe, Arc::new(SystemMountRunner), Vec::new())
     }
 
     /// Replaces the probe and the command runner. Used by mutation tests.
     pub fn with_parts(
-        config: VolumesConfig,
+        config: VolumesSettings,
         probe: Arc<dyn Probe>,
         runner: Arc<dyn MountRunner>,
         protected: Vec<PathBuf>,
@@ -255,7 +276,7 @@ impl VolumesService {
     }
 }
 
-impl VolumesService {
+impl SystemVolumes {
     /// Mounts one known, unmounted device under the configured mount root.
     pub fn mount(&self, request: &VolumeMountRequest) -> Result<String, WireError> {
         self.require_control()?;
@@ -716,8 +737,8 @@ mod tests {
         }
     }
 
-    fn config() -> VolumesConfig {
-        VolumesConfig {
+    fn config() -> VolumesSettings {
+        VolumesSettings {
             control: true,
             partition: true,
             format: true,
@@ -733,8 +754,8 @@ mod tests {
         path
     }
 
-    fn mutation_config(root: &Path) -> VolumesConfig {
-        VolumesConfig {
+    fn mutation_config(root: &Path) -> VolumesSettings {
+        VolumesSettings {
             control: true,
             partition: false,
             format: false,
@@ -745,7 +766,7 @@ mod tests {
 
     #[test]
     fn a_snapshot_links_devices_mounts_swaps_and_policy() {
-        let service = VolumesService::with_probe(config(), Arc::new(FakeProbe::healthy()));
+        let service = SystemVolumes::with_probe(config(), Arc::new(FakeProbe::healthy()));
         let snapshot = service.snapshot();
         assert_eq!(snapshot.devices.len(), 3);
         assert_eq!(snapshot.devices[0].kind, VolumeKind::Disk);
@@ -766,7 +787,7 @@ mod tests {
     fn a_missing_lsblk_keeps_mounts_and_warns() {
         let mut probe = FakeProbe::healthy();
         probe.lsblk = Some(Err("lsblk is not installed".to_string()));
-        let service = VolumesService::with_probe(config(), Arc::new(probe));
+        let service = SystemVolumes::with_probe(config(), Arc::new(probe));
         let snapshot = service.snapshot();
         assert!(snapshot.devices.is_empty());
         assert_eq!(snapshot.mounts.len(), 2);
@@ -777,7 +798,7 @@ mod tests {
     fn a_missing_mountinfo_keeps_devices_and_warns() {
         let mut probe = FakeProbe::healthy();
         probe.mountinfo = Some(Err("no mountinfo".to_string()));
-        let service = VolumesService::with_probe(config(), Arc::new(probe));
+        let service = SystemVolumes::with_probe(config(), Arc::new(probe));
         let snapshot = service.snapshot();
         assert_eq!(snapshot.devices.len(), 3);
         assert!(snapshot.mounts.is_empty());
@@ -788,7 +809,7 @@ mod tests {
     fn unavailable_swap_is_an_unknown_not_an_empty_list() {
         let mut probe = FakeProbe::healthy();
         probe.swaps = None;
-        let service = VolumesService::with_probe(config(), Arc::new(probe));
+        let service = SystemVolumes::with_probe(config(), Arc::new(probe));
         let snapshot = service.snapshot();
         assert!(snapshot.swap_devices.is_empty());
         assert!(snapshot.warning.expect("warning").contains("swap"));
@@ -798,7 +819,7 @@ mod tests {
     fn a_missing_lsblk_fstype_is_filled_from_the_mount_source() {
         let mut probe = FakeProbe::healthy();
         probe.lsblk = Some(Ok(LSBLK.replace("\"fstype\": \"ext4\"", "\"fstype\": null")));
-        let service = VolumesService::with_probe(config(), Arc::new(probe));
+        let service = SystemVolumes::with_probe(config(), Arc::new(probe));
         let snapshot = service.snapshot();
         let partition = snapshot
             .devices
@@ -811,7 +832,7 @@ mod tests {
     #[test]
     fn usage_is_best_effort_per_mountpoint() {
         let probe = FakeProbe::healthy();
-        let service = VolumesService::with_probe(config(), Arc::new(probe));
+        let service = SystemVolumes::with_probe(config(), Arc::new(probe));
         let snapshot = service.snapshot();
         assert!(snapshot.mounts[0].usage.is_none());
         assert_eq!(snapshot.mounts[1].usage.expect("usage").available_bytes, 60);
@@ -822,7 +843,7 @@ mod tests {
         let target = temp_target("mount");
         let target_text = target.to_string_lossy().into_owned();
         let runner = Arc::new(FakeMountRunner::default());
-        let service = VolumesService::with_parts(
+        let service = SystemVolumes::with_parts(
             mutation_config(Path::new("/tmp")),
             Arc::new(FakeProbe::healthy()),
             runner.clone(),
@@ -863,7 +884,7 @@ mod tests {
         let target = temp_target("refuse");
         let target_text = target.to_string_lossy().into_owned();
         let runner = Arc::new(FakeMountRunner::default());
-        let service = VolumesService::with_parts(
+        let service = SystemVolumes::with_parts(
             mutation_config(Path::new("/tmp")),
             Arc::new(FakeProbe::healthy()),
             runner.clone(),
@@ -895,7 +916,7 @@ mod tests {
 
         let mut config = mutation_config(Path::new("/tmp"));
         config.control = false;
-        let disabled = VolumesService::with_parts(
+        let disabled = SystemVolumes::with_parts(
             config,
             Arc::new(FakeProbe::healthy()),
             runner.clone(),
@@ -927,7 +948,7 @@ mod tests {
             }),
             ..FakeMountRunner::default()
         });
-        let service = VolumesService::with_parts(
+        let service = SystemVolumes::with_parts(
             mutation_config(Path::new("/tmp")),
             Arc::new(FakeProbe::healthy()),
             runner,
@@ -958,7 +979,7 @@ mod tests {
         let mut probe = FakeProbe::healthy();
         probe.mountinfo = Some(Ok(mountinfo));
         let runner = Arc::new(FakeMountRunner::default());
-        let service = VolumesService::with_parts(
+        let service = SystemVolumes::with_parts(
             mutation_config(Path::new("/tmp")),
             Arc::new(probe),
             runner.clone(),
@@ -990,7 +1011,7 @@ mod tests {
              37 36 8:1 / {target_text} rw,relatime - ext4 /dev/sda2 rw\n"
         )));
         let protected = target.join("panel-data");
-        let service = VolumesService::with_parts(
+        let service = SystemVolumes::with_parts(
             mutation_config(Path::new("/tmp")),
             Arc::new(probe),
             runner,

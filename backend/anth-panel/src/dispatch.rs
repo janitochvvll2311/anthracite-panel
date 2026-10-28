@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use anth_host::backend::{
     FilesService, FirewallService, NetworkService, ProcessesService, TerminalService,
+    VolumesService,
 };
 use anth_wire::{
     ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
@@ -23,10 +24,10 @@ use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::SystemNetwork;
 use crate::plugins::PluginService;
-use crate::volumes::VolumesService;
 use anth_host::files::SystemFiles;
 use anth_host::process::SystemProcesses;
 use anth_host::terminal::{OpenError, SystemTerminal, resolve_shell, supports_line_editing};
+use anth_host::volumes::SystemVolumes;
 
 /// Everything a request may need from the process.
 pub struct Daemon {
@@ -39,7 +40,7 @@ pub struct Daemon {
     process: Arc<dyn ProcessesService>,
     network: Arc<dyn NetworkService>,
     firewall: Arc<dyn FirewallService>,
-    volumes: VolumesService,
+    volumes: Arc<dyn VolumesService>,
     accounts: AccountsService,
     plugins: PluginService,
 }
@@ -144,7 +145,11 @@ impl Daemon {
         if let Ok(executable) = std::env::current_exe() {
             protected.push(executable);
         }
-        let volumes = VolumesService::new(config.volumes.clone(), protected);
+        let volumes: Arc<dyn VolumesService> = if demo {
+            Arc::new(anth_host::demo::DemoVolumes::new(config.volumes.settings()))
+        } else {
+            Arc::new(SystemVolumes::new(config.volumes.settings(), protected))
+        };
         let accounts = AccountsService::new(config.accounts.clone());
         let plugins = PluginService::new(
             config.plugins.clone(),
@@ -195,8 +200,8 @@ impl Daemon {
 
     /// Replaces the volumes service. Tests use it to script the probe without
     /// touching the host.
-    pub fn with_volumes(mut self, volumes: VolumesService) -> Self {
-        self.volumes = volumes;
+    pub fn with_volumes(mut self, volumes: SystemVolumes) -> Self {
+        self.volumes = Arc::new(volumes);
         self
     }
 

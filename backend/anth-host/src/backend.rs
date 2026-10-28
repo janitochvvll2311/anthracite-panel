@@ -363,3 +363,61 @@ impl TerminalService for crate::terminal::SystemTerminal {
         self.reap()
     }
 }
+
+pub trait VolumesService: Send + Sync {
+    fn snapshot(&self) -> anth_wire::VolumeSnapshot;
+    fn mount(&self, request: &anth_wire::VolumeMountRequest) -> Result<String, WireError>;
+    fn unmount(&self, request: &anth_wire::VolumeUnmountRequest) -> Result<String, WireError>;
+    fn create_partition(
+        &self,
+        request: &anth_wire::VolumePartitionCreate,
+    ) -> Result<String, WireError>;
+    fn resize_partition(
+        &self,
+        request: &anth_wire::VolumePartitionResize,
+    ) -> Result<String, WireError>;
+    fn delete_partition(
+        &self,
+        request: &anth_wire::VolumePartitionDelete,
+    ) -> Result<String, WireError>;
+    fn format_partition(
+        &self,
+        request: &anth_wire::VolumeFormatRequest,
+    ) -> Result<String, WireError>;
+}
+
+impl VolumesService for crate::volumes::SystemVolumes {
+    fn snapshot(&self) -> anth_wire::VolumeSnapshot {
+        crate::volumes::SystemVolumes::snapshot(self)
+    }
+    fn mount(&self, request: &anth_wire::VolumeMountRequest) -> Result<String, WireError> {
+        crate::volumes::SystemVolumes::mount(self, request)
+    }
+    fn unmount(&self, request: &anth_wire::VolumeUnmountRequest) -> Result<String, WireError> {
+        crate::volumes::SystemVolumes::unmount(self, request)
+    }
+    fn create_partition(
+        &self,
+        request: &anth_wire::VolumePartitionCreate,
+    ) -> Result<String, WireError> {
+        crate::volumes::SystemVolumes::create_partition(self, request)
+    }
+    fn resize_partition(
+        &self,
+        request: &anth_wire::VolumePartitionResize,
+    ) -> Result<String, WireError> {
+        crate::volumes::SystemVolumes::resize_partition(self, request)
+    }
+    fn delete_partition(
+        &self,
+        request: &anth_wire::VolumePartitionDelete,
+    ) -> Result<String, WireError> {
+        crate::volumes::SystemVolumes::delete_partition(self, request)
+    }
+    fn format_partition(
+        &self,
+        request: &anth_wire::VolumeFormatRequest,
+    ) -> Result<String, WireError> {
+        crate::volumes::SystemVolumes::format_partition(self, request)
+    }
+}

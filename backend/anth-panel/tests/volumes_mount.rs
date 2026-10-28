@@ -13,7 +13,7 @@ use anth_panel::config::{AuthConfig, Config, VolumesConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
-use anth_panel::volumes::{MountOutput, MountRunner, Probe, VolumesService};
+use anth_panel::volumes::{MountOutput, MountRunner, Probe, SystemVolumes};
 use anth_wire::{
     Request, Response, VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest, VolumeUsage,
 };
@@ -164,7 +164,7 @@ fn daemon(
     config.volumes = volumes_config(control);
     let paths = config.paths(&config_path).expect("paths");
     let logger = Arc::new(Logger::buffer(Settings::default()).0);
-    let volumes = VolumesService::with_parts(config.volumes.clone(), probe, runner, Vec::new());
+    let volumes = SystemVolumes::with_parts(config.volumes.settings(), probe, runner, Vec::new());
     let daemon = Daemon::new(config, paths.clone(), logger).with_volumes(volumes);
     (Arc::new(daemon), paths)
 }
