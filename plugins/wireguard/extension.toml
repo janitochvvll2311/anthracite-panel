@@ -3,17 +3,20 @@
 # Two frozen commands: list interfaces and show one. The guest names the
 # capability; the host renders `wg show ...` and validates the interface name.
 
-manifest_version = 1
+manifest_version = 2
 
-[plugin]
+[extension]
 id = "org.anth.wireguard"
 alias = "wg"
-version = "0.3.0"
+version = "0.4.0"
 name = "WireGuard"
 abi = 3
 
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 [[capability]]

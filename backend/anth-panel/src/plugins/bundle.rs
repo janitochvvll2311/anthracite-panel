@@ -1,7 +1,7 @@
 //! Plugin bundles: extraction, signatures, hashes and installation.
 //!
-//! A bundle is a zip with `plugin.toml`, `plugin.wasm`, an optional
-//! `plugin.sig` and assets under `web/`. Installation is the only moment a
+//! A bundle is a zip with `extension.toml`, `extension.wasm`, an optional
+//! `extension.sig` and assets under `web/`. Installation is the only moment a
 //! plugin gains authority, so every check runs before the directory becomes
 //! visible under its id:
 //!
@@ -24,9 +24,11 @@ use std::path::{Component, Path, PathBuf};
 use anth_wire::WireError;
 use sha2::{Digest as _, Sha256};
 
-use super::grants::{GrantStore, PluginGrant};
-use super::manifest::{MANIFEST_FILE, Manifest, SIGNATURE_FILE, WASM_FILE};
-use super::signature;
+use anth_extension::grants::{ExtensionGrant as PluginGrant, GrantStore};
+use anth_extension::manifest::{
+    ExtensionManifest as Manifest, MANIFEST_FILE, SIGNATURE_FILE, WASM_FILE,
+};
+use anth_extension::signature;
 
 pub const MAX_BUNDLE_BYTES: u64 = 32 * 1024 * 1024;
 pub const MAX_BUNDLE_ENTRIES: usize = 512;
@@ -186,19 +188,19 @@ fn read_manifest(staging: &Path) -> Result<(String, Vec<u8>), WireError> {
     let path = staging.join(MANIFEST_FILE);
     let bytes = fs::read(&path).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
-            WireError::invalid("the bundle has no `plugin.toml`")
+            WireError::invalid("the bundle has no `extension.toml`")
         } else {
             WireError::internal(format!("reading {}: {error}", path.display()))
         }
     })?;
-    if bytes.len() > super::manifest::MAX_MANIFEST_BYTES {
+    if bytes.len() > anth_extension::manifest::MAX_MANIFEST_BYTES {
         return Err(WireError::too_large(format!(
             "the manifest is larger than {} bytes",
-            super::manifest::MAX_MANIFEST_BYTES
+            anth_extension::manifest::MAX_MANIFEST_BYTES
         )));
     }
     let text = String::from_utf8(bytes.clone())
-        .map_err(|_| WireError::invalid("`plugin.toml` is not UTF-8"))?;
+        .map_err(|_| WireError::invalid("`extension.toml` is not UTF-8"))?;
     Ok((text, bytes))
 }
 
@@ -234,7 +236,7 @@ fn verify_signature(
             Ok(Some(hex))
         }
         None if require_signature => Err(WireError::forbidden(
-            "the bundle is not signed; add `plugin.sig` or set `[plugins] require_signature = false`",
+            "the bundle is not signed; add `extension.sig` or set `[plugins] require_signature = false`",
         )),
         None => Ok(None),
     }
@@ -290,7 +292,7 @@ pub fn install_reader<R: Read + Seek>(
         verify_hash(&staging.join(WASM_FILE), &manifest.wasm.sha256, "module")?;
         verify_web_assets(&staging, &manifest)?;
 
-        let existing = grants.read(&manifest.plugin.id)?;
+        let existing = grants.read(&manifest.extension.id)?;
         if let Some(existing) = &existing
             && !existing.approves(&manifest)
             && !accept_capabilities
@@ -315,7 +317,7 @@ pub fn install_reader<R: Read + Seek>(
             return Err(error);
         }
     };
-    let id = manifest.plugin.id.clone();
+    let id = manifest.extension.id.clone();
     let destination = root.join(&id);
     let aside = aside_path(root, "old");
     let had_existing = destination.exists();
@@ -467,7 +469,7 @@ pub fn approve(
 }
 
 pub fn remove(root: &Path, grants: &GrantStore, id: &str) -> Result<(), WireError> {
-    super::manifest::validate_id(id)?;
+    anth_extension::manifest::validate_id(id)?;
     let dir = root.join(id);
     let grant = grants.read(id)?;
     if dir.exists() {
@@ -562,15 +564,18 @@ mod tests {
     fn manifest(wasm: &[u8], capability: &str) -> String {
         format!(
             r#"
-manifest_version = 1
-[plugin]
+manifest_version = 2
+[extension]
 id = "org.anth.hello"
 alias = "hello"
 version = "0.3.0"
 name = "Hello"
 abi = 3
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 
 [[capability]]
@@ -604,12 +609,14 @@ path = "/status"
         let manifest = manifest(wasm, capability);
         let signature =
             sign.then(|| signature::encode_hex(&key().sign(manifest.as_bytes()).to_bytes()));
-        let mut entries: Vec<(&str, &[u8])> =
-            vec![("plugin.toml", manifest.as_bytes()), ("plugin.wasm", wasm)];
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("extension.toml", manifest.as_bytes()),
+            ("extension.wasm", wasm),
+        ];
         let signature_bytes;
         if let Some(signature) = &signature {
             signature_bytes = signature.as_bytes();
-            entries.push(("plugin.sig", signature_bytes));
+            entries.push(("extension.sig", signature_bytes));
         }
         zip(&entries)
     }
@@ -633,7 +640,7 @@ path = "/status"
         assert!(installed.warning.is_none());
         assert_eq!(installed.grant.id, "org.anth.hello");
         assert!(installed.grant.enabled);
-        assert!(root.join("plugins/org.anth.hello/plugin.toml").is_file());
+        assert!(root.join("plugins/org.anth.hello/extension.toml").is_file());
         assert!(root.join("plugins.d/org.anth.hello.toml").is_file());
 
         let view = service.snapshot().expect("snapshot");
@@ -662,9 +669,9 @@ path = "/status"
         let other = SigningKey::from_bytes(&[8u8; 32]);
         let signature = signature::encode_hex(&other.sign(manifest.as_bytes()).to_bytes());
         let bundle = zip(&[
-            ("plugin.toml", manifest.as_bytes()),
-            ("plugin.wasm", wasm),
-            ("plugin.sig", signature.as_bytes()),
+            ("extension.toml", manifest.as_bytes()),
+            ("extension.wasm", wasm),
+            ("extension.sig", signature.as_bytes()),
         ]);
         assert!(service.install_bytes(&bundle, false).is_err());
         fs::remove_dir_all(root).expect("cleanup");
@@ -690,9 +697,9 @@ path = "/status"
         let manifest = manifest(wasm, "host.hostname");
         let signature = signature::encode_hex(&key().sign(manifest.as_bytes()).to_bytes());
         let bundle = zip(&[
-            ("plugin.toml", manifest.as_bytes()),
-            ("plugin.wasm", b"not wasm"),
-            ("plugin.sig", signature.as_bytes()),
+            ("extension.toml", manifest.as_bytes()),
+            ("extension.wasm", b"not wasm"),
+            ("extension.sig", signature.as_bytes()),
         ]);
         let (service, root) = make_service("plugin-tampered", true);
         let error = service.install_bytes(&bundle, false).expect_err("tampered");
@@ -704,13 +711,13 @@ path = "/status"
     fn a_traversal_or_unexpected_member_is_refused() {
         let (service, root) = make_service("plugin-traversal", true);
         let bundle = zip(&[
-            ("plugin.toml", b"x"),
+            ("extension.toml", b"x"),
             ("../escape.wasm", b"x"),
-            ("plugin.sig", b"x"),
+            ("extension.sig", b"x"),
         ]);
         assert!(service.install_bytes(&bundle, false).is_err());
 
-        let bundle = zip(&[("plugin.toml", b"x"), ("run.sh", b"x")]);
+        let bundle = zip(&[("extension.toml", b"x"), ("run.sh", b"x")]);
         let error = service.install_bytes(&bundle, false).expect_err("member");
         assert!(error.message.contains("not part of a bundle"), "{error}");
         fs::remove_dir_all(root).expect("cleanup");
@@ -746,7 +753,7 @@ path = "/status"
             .install_bytes(&signed_bundle(true, "host.hostname"), false)
             .expect("install");
         fs::write(
-            root.join("plugins/org.anth.hello/plugin.wasm"),
+            root.join("plugins/org.anth.hello/extension.wasm"),
             b"different",
         )
         .expect("rewrite");

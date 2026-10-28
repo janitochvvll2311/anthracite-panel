@@ -897,7 +897,7 @@ fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult 
             println!(
                 "installed {} {} ({} capabilities)",
                 installed.grant.id,
-                installed.grant.plugin_version,
+                installed.grant.extension_version,
                 installed.grant.allowed_ids().len()
             );
             for capability in installed.grant.allowed_ids() {
@@ -939,7 +939,7 @@ fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult 
             println!(
                 "approved {} {} ({} capabilities)",
                 grant.id,
-                grant.plugin_version,
+                grant.extension_version,
                 grant.allowed_ids().len()
             );
             for capability in grant.allowed_ids() {

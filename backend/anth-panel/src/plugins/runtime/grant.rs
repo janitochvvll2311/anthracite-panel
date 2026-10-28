@@ -9,7 +9,7 @@ use std::process::Command;
 
 use serde_json::{Map, Value};
 
-use crate::plugins::manifest::{ArgType, Capability, MAX_ARG_LEN, PROGRAM_ALLOWLIST};
+use anth_extension::manifest::{ArgType, Capability, MAX_ARG_LEN, PROGRAM_ALLOWLIST};
 
 /// Runs one granted capability.
 pub fn run(capability: &Capability, args: &Value) -> Result<String, String> {
@@ -182,19 +182,22 @@ fn validate_value(name: &str, value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::manifest::Manifest;
+    use anth_extension::manifest::ExtensionManifest as Manifest;
 
     fn manifest() -> Manifest {
         Manifest::parse(&format!(
             r#"
-manifest_version = 1
-[plugin]
+manifest_version = 2
+[extension]
 id = "org.anth.hello"
 version = "0.3.0"
 name = "Hello"
 abi = 3
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 
 [[capability]]
@@ -266,14 +269,16 @@ accept = [{{ name = "verbose", type = "switch" }}]
     fn an_interface_name_is_validated_before_wg_sees_it() {
         let manifest = Manifest::parse(&format!(
             r#"
-manifest_version = 1
-[plugin]
+manifest_version = 2
+[extension]
 id = "org.anth.wireguard"
 version = "0.3.0"
 name = "WireGuard"
 abi = 3
+[runtime]
+kind = "wasm"
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 [[capability]]
 id = "wg.show"

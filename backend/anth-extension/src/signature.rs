@@ -1,6 +1,6 @@
 //! Ed25519 verification for plugin manifests.
 //!
-//! The author signs the raw bytes of `plugin.toml`. The manifest in turn names
+//! The author signs the raw bytes of `extension.toml`. The manifest in turn names
 //! the sha256 of the module and of every UI asset, so one signature approves the
 //! whole bundle without the packager having to sign files in a particular order.
 //!
@@ -28,7 +28,7 @@ pub fn verify(public_key_hex: &str, signature_hex: &str, message: &[u8]) -> Resu
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| {
             format!(
-                "`plugin.sig` must be {} hex characters",
+                "`extension.sig` must be {} hex characters",
                 SIGNATURE_BYTES * 2
             )
         })?;
@@ -37,7 +37,7 @@ pub fn verify(public_key_hex: &str, signature_hex: &str, message: &[u8]) -> Resu
         .map_err(|_| "`plugins.public_key` is not a valid Ed25519 public key".to_string())?;
     let signature = Signature::from_bytes(&signature_bytes);
     key.verify(message, &signature)
-        .map_err(|_| "the bundle signature does not match `plugin.toml`".to_string())
+        .map_err(|_| "the bundle signature does not match `extension.toml`".to_string())
 }
 
 pub fn decode_hex(text: &str) -> Option<Vec<u8>> {

@@ -59,6 +59,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-extension"
+version = "0.3.0"
+dependencies = [
+ "anth-wire",
+ "ed25519-dalek",
+ "libc",
+ "proptest",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "anth-host"
 version = "0.3.0"
 dependencies = [
@@ -84,6 +96,7 @@ dependencies = [
 name = "anth-panel"
 version = "0.3.0"
 dependencies = [
+ "anth-extension",
  "anth-host",
  "anth-wire",
  "argon2",

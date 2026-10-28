@@ -43,7 +43,7 @@ pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 /// is what makes each invocation's memory and fuel its own.
 #[derive(Debug)]
 pub struct Loaded {
-    pub manifest: crate::plugins::manifest::Manifest,
+    pub manifest: anth_extension::manifest::ExtensionManifest,
     module: Module,
     engine: Engine,
 }
@@ -54,14 +54,14 @@ impl Loaded {
     /// Compiling at load means a malformed module is reported once, with the
     /// plugin's id, instead of on the first request that reaches it.
     pub fn load(
-        manifest: crate::plugins::manifest::Manifest,
+        manifest: anth_extension::manifest::ExtensionManifest,
         wasm: &[u8],
     ) -> Result<Self, WireError> {
         let engine = engine();
         let module = Module::new(&engine, wasm).map_err(|e| {
             WireError::invalid(format!(
                 "plugin `{}` is not a valid module: {e}",
-                manifest.plugin.id
+                manifest.extension.id
             ))
         })?;
 
@@ -71,7 +71,7 @@ impl Loaded {
             if module.get_export(required).is_none() {
                 return Err(WireError::invalid(format!(
                     "plugin `{}` does not export `{required}`",
-                    manifest.plugin.id
+                    manifest.extension.id
                 )));
             }
         }
@@ -81,7 +81,7 @@ impl Loaded {
         {
             return Err(WireError::invalid(format!(
                 "plugin `{}` exports none of anth_http, anth_cli or anth_direct, so no pipe can reach it",
-                manifest.plugin.id
+                manifest.extension.id
             )));
         }
 
@@ -95,7 +95,7 @@ impl Loaded {
     }
 
     pub fn id(&self) -> &str {
-        &self.manifest.plugin.id
+        &self.manifest.extension.id
     }
 
     /// Runs one entry with one payload.
@@ -132,11 +132,11 @@ impl Loaded {
             .call(&mut store, ())
             .map_err(|e| WireError::invalid(format!("anth_abi_version trapped: {e}")))?;
 
-        let expected = crate::plugins::manifest::ABI_VERSION as i32;
+        let expected = anth_extension::manifest::ABI_VERSION as i32;
         if version != expected {
             return Err(WireError::invalid(format!(
                 "plugin `{}` answers ABI {version}, this daemon speaks {expected}",
-                self.manifest.plugin.id
+                self.manifest.extension.id
             )));
         }
         Ok(())
@@ -189,7 +189,9 @@ impl Loaded {
 
         linker
             .instantiate_and_start(&mut *store, &self.module)
-            .map_err(|e| crate::plugins::runtime::instantiation_error(&self.manifest.plugin.id, e))
+            .map_err(|e| {
+                crate::plugins::runtime::instantiation_error(&self.manifest.extension.id, e)
+            })
     }
 }
 

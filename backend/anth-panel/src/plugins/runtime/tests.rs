@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::log::{Logger, Settings};
-use crate::plugins::manifest::Manifest;
+use anth_extension::manifest::ExtensionManifest as Manifest;
 
 /// A guest that answers every HTTP call with a fixed envelope.
 ///
@@ -33,14 +33,17 @@ const REPLY_LEN: usize = 39;
 fn manifest() -> Manifest {
     Manifest::parse(&format!(
         r#"
-manifest_version = 1
-[plugin]
+manifest_version = 2
+[extension]
 id = "org.anth.fixed"
 version = "0.3.0"
 name = "Fixed"
 abi = 3
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 "#,
         "a".repeat(64)

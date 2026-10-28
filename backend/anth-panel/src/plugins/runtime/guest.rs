@@ -13,7 +13,7 @@ use wasmi::{Caller, Extern, Instance, Memory, Store, Val};
 
 use super::{DEADLINE, trap_kind};
 use crate::log::{Level, Logger};
-use crate::plugins::manifest::{Capability, Manifest};
+use anth_extension::manifest::{Capability, ExtensionManifest as Manifest};
 
 /// Capabilities one invocation may run.
 pub const MAX_CAPABILITY_CALLS: u32 = 32;
@@ -137,7 +137,7 @@ impl Host {
         Self {
             capabilities: manifest.capability.clone(),
             log,
-            id: manifest.plugin.id.clone(),
+            id: manifest.extension.id.clone(),
             calls: 0,
             log_bytes: 0,
             started: Instant::now(),

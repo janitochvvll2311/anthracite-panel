@@ -8,10 +8,7 @@
 //! the iframe bridge build on [`PluginService::load`] and the grant stored here.
 
 pub mod bundle;
-pub mod grants;
-pub mod manifest;
 pub mod runtime;
-pub mod signature;
 pub mod web;
 
 use std::collections::BTreeMap;
@@ -24,9 +21,11 @@ use serde::{Deserialize, Serialize};
 use crate::config::PluginsConfig;
 use crate::log::Logger;
 
+pub use anth_extension::{
+    Anchor, Capability, ExtensionGrant as PluginGrant, ExtensionManifest as Manifest, GrantStore,
+    UiSlot, validate_id,
+};
 pub use bundle::{BundleInstall, LoadedBundle};
-pub use grants::{GrantStore, PluginGrant};
-pub use manifest::{Anchor, Capability, Manifest, UiSlot, validate_id};
 
 /// One entry in the catalogue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,7 +139,7 @@ impl PluginService {
             id: grant.id.clone(),
             alias: grant.alias.clone(),
             name: grant.name.clone(),
-            version: grant.plugin_version.clone(),
+            version: grant.extension_version.clone(),
             enabled: grant.enabled,
             state,
             error,

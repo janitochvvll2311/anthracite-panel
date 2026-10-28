@@ -1595,8 +1595,8 @@ async fn plugin_install(
     let installed = plugin_blocking(move || service.install_bytes(&bytes, accepted)).await?;
     Ok(Json(json!({
         "id": installed.grant.id,
-        "name": installed.manifest.plugin.name,
-        "version": installed.grant.plugin_version,
+        "name": installed.manifest.extension.name,
+        "version": installed.grant.extension_version,
         "capabilities": installed.grant.allowed_ids(),
         "warning": installed.warning,
     })))
@@ -1704,7 +1704,7 @@ async fn plugin_frame(
     let mut nonce_bytes = [0u8; 16];
     getrandom::fill(&mut nonce_bytes)
         .map_err(|error| ApiError::internal(format!("reading entropy: {error}")))?;
-    let nonce = crate::plugins::signature::encode_hex(&nonce_bytes);
+    let nonce = anth_extension::signature::encode_hex(&nonce_bytes);
     let code = serde_json::to_string(&source)
         .map_err(|error| ApiError::internal(format!("encoding the module: {error}")))?;
     let id_json = serde_json::to_string(&id)

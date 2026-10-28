@@ -16,21 +16,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anth_wire::WireError;
 use serde::{Deserialize, Serialize};
 
-use super::manifest::{Anchor, Capability, Manifest, ManifestSurface, UiSlot, validate_id};
+use crate::manifest::{
+    Anchor, Capability, ExtensionManifest, ExtensionSurface, RuntimeKind, UiSlot, validate_id,
+};
 
-pub const GRANT_VERSION: u32 = 1;
+pub const GRANT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PluginGrant {
+pub struct ExtensionGrant {
     pub version: u32,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
     pub name: String,
-    pub plugin_version: String,
+    pub extension_version: String,
+    pub runtime: RuntimeKind,
     pub enabled: bool,
-    /// SHA-256 of the raw `plugin.toml` bytes the operator approved.
+    /// SHA-256 of the raw `extension.toml` bytes the operator approved.
     pub manifest_sha256: String,
     /// The detached signature over those bytes, when the bundle had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,18 +45,19 @@ pub struct PluginGrant {
     pub installed_at_ms: u64,
 }
 
-impl PluginGrant {
+impl ExtensionGrant {
     pub fn from_manifest(
-        manifest: &Manifest,
+        manifest: &ExtensionManifest,
         manifest_sha256: String,
         manifest_signature: Option<String>,
     ) -> Self {
         Self {
             version: GRANT_VERSION,
-            id: manifest.plugin.id.clone(),
-            alias: manifest.plugin.alias.clone(),
-            name: manifest.plugin.name.clone(),
-            plugin_version: manifest.plugin.version.clone(),
+            id: manifest.extension.id.clone(),
+            alias: manifest.extension.alias.clone(),
+            name: manifest.extension.name.clone(),
+            extension_version: manifest.extension.version.clone(),
+            runtime: manifest.runtime.kind,
             enabled: true,
             manifest_sha256,
             manifest_signature,
@@ -65,8 +69,9 @@ impl PluginGrant {
         }
     }
 
-    pub fn surface(&self) -> ManifestSurface {
-        ManifestSurface {
+    pub fn surface(&self) -> ExtensionSurface {
+        ExtensionSurface {
+            runtime: self.runtime,
             capability: self.capability.clone(),
             api: self.api.clone(),
             ui: self.ui.clone(),
@@ -74,7 +79,7 @@ impl PluginGrant {
     }
 
     /// Whether a new manifest asks for exactly the authority already approved.
-    pub fn approves(&self, manifest: &Manifest) -> bool {
+    pub fn approves(&self, manifest: &ExtensionManifest) -> bool {
         self.surface() == manifest.surface()
     }
 
@@ -106,7 +111,7 @@ impl GrantStore {
         Ok(self.dir.join(format!("{id}.toml")))
     }
 
-    pub fn read(&self, id: &str) -> Result<Option<PluginGrant>, WireError> {
+    pub fn read(&self, id: &str) -> Result<Option<ExtensionGrant>, WireError> {
         let path = self.path(id)?;
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
@@ -127,7 +132,7 @@ impl GrantStore {
         let text = fs::read_to_string(&path).map_err(|error| {
             WireError::internal(format!("could not read {}: {error}", path.display()))
         })?;
-        let grant: PluginGrant = toml::from_str(&text).map_err(|error| {
+        let grant: ExtensionGrant = toml::from_str(&text).map_err(|error| {
             WireError::invalid(format!("could not parse {}: {error}", path.display()))
         })?;
         if grant.id != id {
@@ -147,7 +152,7 @@ impl GrantStore {
         Ok(Some(grant))
     }
 
-    pub fn load_all(&self) -> Result<Vec<PluginGrant>, WireError> {
+    pub fn load_all(&self) -> Result<Vec<ExtensionGrant>, WireError> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -182,7 +187,7 @@ impl GrantStore {
         Ok(grants)
     }
 
-    pub fn write(&self, grant: &PluginGrant) -> Result<(), WireError> {
+    pub fn write(&self, grant: &ExtensionGrant) -> Result<(), WireError> {
         let path = self.path(&grant.id)?;
         let text = toml::to_string_pretty(grant)
             .map_err(|error| WireError::internal(format!("could not render the grant: {error}")))?;
@@ -214,19 +219,22 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::manifest::Manifest;
+    use crate::manifest::ExtensionManifest;
 
-    fn manifest() -> Manifest {
-        Manifest::parse(&format!(
+    fn manifest() -> ExtensionManifest {
+        ExtensionManifest::parse(&format!(
             r#"
-manifest_version = 1
-[plugin]
+manifest_version = 2
+[extension]
 id = "org.anth.hello"
 version = "0.3.0"
 name = "Hello"
 abi = 3
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 "#,
             "a".repeat(64)
@@ -251,7 +259,7 @@ sha256 = "{}"
 
         let root = scratch("grant");
         let store = GrantStore::new(&root);
-        let grant = PluginGrant::from_manifest(&manifest(), "b".repeat(64), None);
+        let grant = ExtensionGrant::from_manifest(&manifest(), "b".repeat(64), None);
         store.write(&grant).expect("write");
 
         let loaded = store.read("org.anth.hello").expect("read").expect("grant");
@@ -267,19 +275,21 @@ sha256 = "{}"
 
     #[test]
     fn a_manifest_with_a_new_surface_needs_approval() {
-        let grant = PluginGrant::from_manifest(&manifest(), "b".repeat(64), None);
+        let grant = ExtensionGrant::from_manifest(&manifest(), "b".repeat(64), None);
         assert!(grant.approves(&manifest()));
 
-        let changed = Manifest::parse(&format!(
+        let changed = ExtensionManifest::parse(&format!(
             r#"
-manifest_version = 1
-[plugin]
+manifest_version = 2
+[extension]
 id = "org.anth.hello"
 version = "0.3.0"
 name = "Hello"
 abi = 3
+[runtime]
+kind = "wasm"
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 [[capability]]
 id = "host.uname"
@@ -295,7 +305,7 @@ program = "uname"
     fn a_symlink_or_a_mismatched_file_name_is_refused() {
         let root = scratch("grant-bad");
         let store = GrantStore::new(&root);
-        let grant = PluginGrant::from_manifest(&manifest(), "b".repeat(64), None);
+        let grant = ExtensionGrant::from_manifest(&manifest(), "b".repeat(64), None);
         store.write(&grant).expect("write");
 
         let text = fs::read_to_string(root.join("org.anth.hello.toml")).expect("read");

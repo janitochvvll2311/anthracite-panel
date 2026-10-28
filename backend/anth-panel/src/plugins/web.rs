@@ -10,7 +10,7 @@ use std::path::Path;
 use anth_wire::WireError;
 
 use super::bundle::MAX_ASSET_BYTES;
-use super::grants::PluginGrant;
+use anth_extension::grants::ExtensionGrant as PluginGrant;
 
 pub fn content_type(module: &str) -> &'static str {
     match module

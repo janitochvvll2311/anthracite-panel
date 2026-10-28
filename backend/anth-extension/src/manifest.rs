@@ -22,16 +22,16 @@ pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 pub const MAX_ENTRIES: usize = 256;
 
 /// The manifest schema this host understands.
-pub const MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
 
 /// The guest ABI this host drives. Must match `anth_plugin::ABI_VERSION`.
 pub const ABI_VERSION: u32 = 3;
 
 /// The module path inside a bundle is pinned, never read from a rewritten
 /// manifest at load time.
-pub const WASM_FILE: &str = "plugin.wasm";
-pub const MANIFEST_FILE: &str = "plugin.toml";
-pub const SIGNATURE_FILE: &str = "plugin.sig";
+pub const WASM_FILE: &str = "extension.wasm";
+pub const MANIFEST_FILE: &str = "extension.toml";
+pub const SIGNATURE_FILE: &str = "extension.sig";
 
 /// Programs a capability may name. The allowlist is the authority: a manifest
 /// cannot introduce a program the host does not know.
@@ -42,9 +42,10 @@ pub const MAX_ARG_LEN: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Manifest {
+pub struct ExtensionManifest {
     pub manifest_version: u32,
-    pub plugin: PluginSection,
+    pub extension: ExtensionSection,
+    pub runtime: RuntimeSection,
     pub wasm: WasmSection,
     #[serde(default)]
     pub capability: Vec<Capability>,
@@ -56,7 +57,19 @@ pub struct Manifest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PluginSection {
+pub struct RuntimeSection {
+    pub kind: RuntimeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeKind {
+    Wasm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionSection {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
@@ -127,7 +140,7 @@ pub struct UiSlot {
     pub sha256: String,
 }
 
-impl Manifest {
+impl ExtensionManifest {
     /// Parses and validates a manifest, then sorts its collections so two
     /// manifests that differ only in declaration order compare equal.
     pub fn parse(text: &str) -> Result<Self, WireError> {
@@ -150,20 +163,20 @@ impl Manifest {
                 self.manifest_version
             )));
         }
-        validate_id(&self.plugin.id)?;
-        if let Some(alias) = &self.plugin.alias {
+        validate_id(&self.extension.id)?;
+        if let Some(alias) = &self.extension.alias {
             validate_alias(alias)?;
         }
-        if self.plugin.version.trim().is_empty() {
+        if self.extension.version.trim().is_empty() {
             return Err(WireError::invalid("the manifest declares no version"));
         }
-        if self.plugin.name.trim().is_empty() {
+        if self.extension.name.trim().is_empty() {
             return Err(WireError::invalid("the manifest declares no name"));
         }
-        if self.plugin.abi != ABI_VERSION {
+        if self.extension.abi != ABI_VERSION {
             return Err(WireError::invalid(format!(
                 "plugin `{}` speaks ABI {}, this daemon speaks {ABI_VERSION}",
-                self.plugin.id, self.plugin.abi
+                self.extension.id, self.extension.abi
             )));
         }
         if self.wasm.path != WASM_FILE {
@@ -314,11 +327,12 @@ impl Manifest {
         self.ui.sort_by(|a, b| a.slot.cmp(&b.slot));
     }
 
-    /// The plugin surface an operator approves. Hashes and versions are not
+    /// The extension surface an operator approves. Hashes and versions are not
     /// part of it: a reinstall with the same programs and routes but a new build
     /// does not need a fresh approval.
-    pub fn surface(&self) -> ManifestSurface {
-        ManifestSurface {
+    pub fn surface(&self) -> ExtensionSurface {
+        ExtensionSurface {
+            runtime: self.runtime.kind,
             capability: self.capability.clone(),
             api: self.api.clone(),
             ui: self.ui.clone(),
@@ -340,7 +354,8 @@ impl Manifest {
 
 /// The part of a manifest a grant freezes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManifestSurface {
+pub struct ExtensionSurface {
+    pub runtime: RuntimeKind,
     pub capability: Vec<Capability>,
     pub api: Vec<Anchor>,
     pub ui: Vec<UiSlot>,
@@ -508,17 +523,20 @@ mod tests {
     fn manifest() -> String {
         format!(
             r#"
-manifest_version = 1
+manifest_version = 2
 
-[plugin]
+[extension]
 id = "org.anth.hello"
 alias = "hello"
 version = "0.3.0"
 name = "Hello"
 abi = 3
 
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 
 [[capability]]
@@ -542,9 +560,9 @@ sha256 = "{}"
 
     #[test]
     fn a_valid_manifest_parses_and_normalizes() {
-        let manifest = Manifest::parse(&manifest()).expect("manifest");
-        assert_eq!(manifest.plugin.id, "org.anth.hello");
-        assert_eq!(manifest.plugin.alias.as_deref(), Some("hello"));
+        let manifest = ExtensionManifest::parse(&manifest()).expect("manifest");
+        assert_eq!(manifest.extension.id, "org.anth.hello");
+        assert_eq!(manifest.extension.alias.as_deref(), Some("hello"));
         assert_eq!(manifest.api[0].method, "GET");
         assert_eq!(manifest.web_modules().len(), 1);
     }
@@ -558,14 +576,14 @@ sha256 = "{}"
         assert!(validate_alias("hello-2").is_ok());
         assert!(validate_alias("Hello").is_err());
 
-        let text = manifest().replace("manifest_version = 1", "manifest_version = 2");
-        assert!(Manifest::parse(&text).is_err());
+        let text = manifest().replace("manifest_version = 2", "manifest_version = 3");
+        assert!(ExtensionManifest::parse(&text).is_err());
     }
 
     #[test]
     fn a_capability_cannot_use_a_program_outside_the_allowlist() {
         let text = manifest().replace("program = \"hostname\"", "program = \"sh\"");
-        let error = Manifest::parse(&text).expect_err("program");
+        let error = ExtensionManifest::parse(&text).expect_err("program");
         assert!(error.message.contains("allowlist"), "{error}");
     }
 
@@ -575,20 +593,20 @@ sha256 = "{}"
             "program = \"hostname\"",
             "program = \"hostname\"\nargs = [\"--name\", \"{target}\"]\n\n[[capability.accept]]\nname = \"target\"\ntype = \"string\"",
         );
-        let parsed = Manifest::parse(&text).expect("manifest");
+        let parsed = ExtensionManifest::parse(&text).expect("manifest");
         assert_eq!(parsed.capability[0].args, ["--name", "{target}"]);
 
         let missing = manifest().replace(
             "program = \"hostname\"",
             "program = \"hostname\"\nargs = [\"{target}\"]",
         );
-        assert!(Manifest::parse(&missing).is_err());
+        assert!(ExtensionManifest::parse(&missing).is_err());
 
         let unused = manifest().replace(
             "program = \"hostname\"",
             "program = \"hostname\"\n\n[[capability.accept]]\nname = \"target\"",
         );
-        assert!(Manifest::parse(&unused).is_err());
+        assert!(ExtensionManifest::parse(&unused).is_err());
     }
 
     #[test]
@@ -597,8 +615,8 @@ sha256 = "{}"
         assert!(validate_anchor_path("status").is_err());
         assert!(validate_anchor_path("/../etc").is_err());
         assert!(validate_web_module("web/hello.js").is_ok());
-        assert!(validate_web_module("web/../plugin.wasm").is_err());
-        assert!(validate_web_module("plugin.wasm").is_err());
+        assert!(validate_web_module("web/../extension.wasm").is_err());
+        assert!(validate_web_module("extension.wasm").is_err());
         assert!(validate_web_module("web/hello.exe").is_err());
     }
 
@@ -608,7 +626,7 @@ sha256 = "{}"
             "[[api]]\nmethod = \"GET\"\npath = \"/status\"",
             "[[api]]\nmethod = \"GET\"\npath = \"/status\"\n\n[[api]]\nmethod = \"GET\"\npath = \"/status\"",
         );
-        assert!(Manifest::parse(&text).is_err());
+        assert!(ExtensionManifest::parse(&text).is_err());
     }
 }
 
@@ -625,10 +643,10 @@ mod proptests {
     proptest! {
         #[test]
         fn arbitrary_manifest_text_never_panics_and_keeps_invariants(text in text()) {
-            if let Ok(manifest) = Manifest::parse(&text) {
+            if let Ok(manifest) = ExtensionManifest::parse(&text) {
                 prop_assert_eq!(manifest.wasm.path.as_str(), WASM_FILE);
-                prop_assert_eq!(manifest.plugin.abi, ABI_VERSION);
-                prop_assert!(validate_id(&manifest.plugin.id).is_ok());
+                prop_assert_eq!(manifest.extension.abi, ABI_VERSION);
+                prop_assert!(validate_id(&manifest.extension.id).is_ok());
                 prop_assert_eq!(manifest.wasm.sha256.len(), 64);
                 prop_assert!(manifest
                     .ui

@@ -6,12 +6,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anth_extension::signature;
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
 use anth_panel::config::{AuthConfig, Config, PluginsConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
-use anth_panel::plugins::{PluginService, signature};
+use anth_panel::plugins::PluginService;
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use base64::Engine as _;
@@ -39,15 +40,18 @@ fn key() -> SigningKey {
 fn manifest(wasm: &[u8], capability: &str) -> String {
     format!(
         r#"
-manifest_version = 1
-[plugin]
+manifest_version = 2
+[extension]
 id = "org.anth.hello"
 alias = "hello"
 version = "0.3.0"
 name = "Hello"
 abi = 3
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "{}"
 
 [[capability]]
@@ -79,12 +83,12 @@ fn bundle_with_wasm(wasm: &[u8], capability: &str, signed: bool) -> Vec<u8> {
     {
         let mut zip = zip::ZipWriter::new(&mut bytes);
         let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("plugin.toml", options).expect("manifest");
+        zip.start_file("extension.toml", options).expect("manifest");
         zip.write_all(manifest.as_bytes()).expect("write");
-        zip.start_file("plugin.wasm", options).expect("wasm");
+        zip.start_file("extension.wasm", options).expect("wasm");
         zip.write_all(wasm).expect("write");
         if let Some(signature) = &signature {
-            zip.start_file("plugin.sig", options).expect("signature");
+            zip.start_file("extension.sig", options).expect("signature");
             zip.write_all(signature.as_bytes()).expect("write");
         }
         zip.finish().expect("finish");
@@ -235,11 +239,11 @@ sha256 = "{}"
     {
         let mut zip = zip::ZipWriter::new(&mut bytes);
         let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("plugin.toml", options).expect("manifest");
+        zip.start_file("extension.toml", options).expect("manifest");
         zip.write_all(manifest.as_bytes()).expect("write");
-        zip.start_file("plugin.wasm", options).expect("wasm");
+        zip.start_file("extension.wasm", options).expect("wasm");
         zip.write_all(wasm).expect("write");
-        zip.start_file("plugin.sig", options).expect("signature");
+        zip.start_file("extension.sig", options).expect("signature");
         zip.write_all(signature.as_bytes()).expect("write");
         zip.start_file("web/hello.js", options).expect("asset");
         zip.write_all(asset).expect("write");
