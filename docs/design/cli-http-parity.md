@@ -29,6 +29,8 @@ The rule is functional parity, not identical presentation:
 | Change one setting | — (config file) | `PATCH /api/settings` | `config set` |
 | Raw config file | — | — | `config get` |
 | Validate config | — | — | `config validate` |
+| Plugin catalogue and install | — (local bundle root) | `GET /api/plugins`, `POST /api/plugins/install` | `plugin list`, `plugin install` |
+| Enable/disable/approve/remove a plugin | — (local grant) | `POST /api/plugins/{id}/…` | `plugin enable/disable/approve/remove` |
 
 ### Files
 

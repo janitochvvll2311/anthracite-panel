@@ -12,8 +12,10 @@ guarded interface mutations and the managed nftables firewall are in place.
 Phase 6 is code-complete: the Storage inventory, guarded mount/unmount and
 partition/format operations, plus the Accounts inventory, guarded create/delete
 and password changes, are in place. Accounts success paths were validated on a
-real host; storage mutations still need `CAP_SYS_ADMIN`. After Phase 6, plugins
-and hardening/release remain.
+real host; storage mutations still need `CAP_SYS_ADMIN`. Phase 7 has started with
+signed plugin bundles, frozen grants and the plugin manager over CLI, HTTP and
+Settings; the wasm runtime, anchors, iframe bridge and reference plugins remain.
+After Phase 7, hardening/release.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
@@ -60,6 +62,10 @@ and hardening/release remain.
   and password changes behind `[accounts] control/manage_passwords` with
   system-id and privileged-group opt-ins, over socket, HTTP, CLI and the
   Accounts section's Users and Groups tabs.
+- Plugins: signed zip bundles with manifest v1 and ABI 3, Ed25519 over
+  `plugin.toml`, per-file sha256, frozen per-plugin grants under `plugins.d/`,
+  install/list/enable/disable/remove/approve over local CLI and HTTP, and the
+  Settings → Plugins panel. The wasm runtime, anchors and iframe bridge are next.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused

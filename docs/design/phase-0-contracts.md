@@ -366,8 +366,9 @@ disabled = ["org.example.plugin"]
 ```
 
 - Absence or an empty list means every installed plugin is enabled.
-- The grant schema for `plugins.d/<id>.toml` is finalized in Phase 7; the path,
-  mode and "one file per plugin" rule are fixed now.
+- The grant schema for `plugins.d/<id>.toml` is version 1; see
+  [plugins.md](../plugins.md). The path, mode and "one file per plugin" rule are
+  fixed, and the daemon rewrites the grant only on install or approval.
 
 ### Atomic writes that preserve comments
 

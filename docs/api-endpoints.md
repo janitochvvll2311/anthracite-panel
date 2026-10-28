@@ -456,6 +456,27 @@ invalid_account`, `501 account_unsupported` and `500 account_failed`. The
 password travels in the request body and is passed to `chpasswd` on stdin; it is
 never logged or placed in argv.
 
+## Plugins
+
+Plugin management is local state: the bundle root and `plugins.d/` grants. These
+routes require a live session unless auth is disabled; mutations check `Origin`
+against `Host` when the header is present.
+
+| Route | Body | Policy |
+| --- | --- | --- |
+| `GET /api/plugins` | — | catalogue plus `enabled` and `install_from_web` |
+| `POST /api/plugins/install` | `{"bundle_base64":"...","accept_capabilities":false}` | `[plugins] install_from_web` |
+| `POST /api/plugins/{id}/enable` | `{}` | — |
+| `POST /api/plugins/{id}/disable` | `{}` | — |
+| `POST /api/plugins/{id}/remove` | `{}` | — |
+| `POST /api/plugins/{id}/approve` | `{"accept_capabilities":true}` | — |
+
+Install answers `{id,name,version,capabilities,warning?}`. A signed bundle needs
+`[plugins] public_key`; an unsigned one is accepted only when
+`require_signature = false` and carries a warning. A manifest whose capability
+surface changed is `409` with code `plugin_capabilities_changed` until approved.
+See [plugins.md](plugins.md).
+
 ## Settings and lifecycle
 
 All four routes require a live access token unless auth is disabled. The two

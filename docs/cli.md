@@ -290,6 +290,27 @@ is never accepted as an argument; use the web UI to enter it interactively.
 New users are created locked until a password is set. See
 [accounts.md](accounts.md).
 
+## `plugin`
+
+```bash
+anth-panel plugin list
+anth-panel plugin ls
+anth-panel plugin install plugins/hello/dist/org.anth.hello.zip
+anth-panel plugin install bundle.zip --accept-capabilities
+anth-panel plugin enable hello
+anth-panel plugin disable org.anth.hello
+anth-panel plugin approve org.anth.hello --accept-capabilities
+anth-panel plugin remove org.anth.hello --yes
+```
+
+Plugin management is local, like `config`: it reads and writes the bundle root
+and `plugins.d/<id>.toml` grants directly, without a running daemon. The daemon
+re-reads them per request, so changes apply without a restart. A signed bundle
+needs `[plugins] public_key`; unsigned ones
+are accepted only with `require_signature = false` and print a warning. A
+changed capability surface needs the explicit `--accept-capabilities`. An alias
+resolves only when it is unique. See [plugins.md](plugins.md).
+
 ## `config`
 
 ```bash
