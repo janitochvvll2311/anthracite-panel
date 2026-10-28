@@ -135,3 +135,41 @@ test('the demo accounts are synthetic and mutable', async ({ page, request }) =>
   expect(after.users.some((entry: { name: string }) => entry.name === 'e2e-user')).toBe(false)
   expect(after.groups.some((entry: { name: string }) => entry.name === 'e2e-user')).toBe(false)
 })
+
+test('the demo terminal answers virtual commands', async ({ page }) => {
+  await page.goto('/#/terminal')
+  const output = await page.evaluate(async () => {
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+    const socket = new WebSocket(
+      `${scheme}://${location.host}/api/terminal?cols=80&rows=24`,
+    )
+    let text = ''
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('terminal timeout')), 8000)
+      socket.onerror = () => reject(new Error('terminal socket error'))
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data as string) as {
+          type: string
+          data?: string
+        }
+        if (message.type === 'ready') {
+          socket.send(JSON.stringify({ type: 'input', data: btoa('whoami\rexit\r') }))
+        } else if (message.type === 'output' && message.data) {
+          text += atob(message.data)
+        } else if (message.type === 'exit') {
+          clearTimeout(timer)
+          socket.close()
+          resolve()
+        } else if (message.type === 'error') {
+          clearTimeout(timer)
+          reject(new Error('terminal error'))
+        }
+      }
+    })
+    return text
+  })
+  expect(output).toContain('Anthracite demo shell')
+  expect(output).toContain('whoami')
+  expect(output).toContain('demo')
+  expect(output).toContain('logout')
+})
