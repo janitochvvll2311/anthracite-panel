@@ -1,12 +1,29 @@
-//! The contract a plugin guest links.
+//! The plugin contract for Anthracite Panel.
 //!
-//! Phase 0 keeps only the ABI version and the shape of the crate: `no_std`,
-//! no panel dependency, no authority. The three pipes, `Plugin` trait and
-//! executor arrive with the plugin phase.
+//! A plugin declares its own vocabulary — [`Action`]s and the [`Response`]s they
+//! produce — and the crate keeps every transport out of it. There are three
+//! pipes and each has its own type: `anth_http`, `anth_cli` and `anth_direct`.
+//!
+//! The crate is `no_std`; the generated exports live in [`abi`].
 
 #![no_std]
 
 extern crate alloc;
 
-/// The guest ABI this crate implements. Must match the host and `plugin.toml`.
-pub const ABI_VERSION: i32 = 3;
+pub mod abi;
+pub mod exec;
+mod message;
+pub mod plugin;
+pub mod transport;
+
+pub use abi::{
+    ABI_VERSION, HostExecutor, LogLevel, alloc_string, answer_cli, answer_direct, answer_http,
+    free_string, read_string, write_string,
+};
+pub use exec::Executor;
+pub use message::{Action, Request, Response, Status};
+pub use plugin::Plugin;
+pub use transport::{CliRequest, HttpRequest, Method};
+
+#[cfg(test)]
+mod tests;

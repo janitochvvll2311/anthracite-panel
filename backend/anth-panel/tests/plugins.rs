@@ -68,7 +68,10 @@ fn sha2_bytes(bytes: &[u8]) -> [u8; 32] {
 }
 
 fn bundle(capability: &str, signed: bool) -> Vec<u8> {
-    let wasm = b"\0asm\x01\0\0\0";
+    bundle_with_wasm(b"\0asm\x01\0\0\0", capability, signed)
+}
+
+fn bundle_with_wasm(wasm: &[u8], capability: &str, signed: bool) -> Vec<u8> {
     let manifest = manifest(wasm, capability);
     let signature =
         signed.then(|| signature::encode_hex(&key().sign(manifest.as_bytes()).to_bytes()));
@@ -211,6 +214,142 @@ async fn installs_lists_toggles_and_removes_a_signed_bundle() {
         .expect("remove");
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!root.join("plugins/org.anth.hello").exists());
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+fn bundle_with_asset(asset: &[u8]) -> Vec<u8> {
+    let wasm = b"\0asm\x01\0\0\0";
+    let mut manifest = manifest(wasm, "host.hostname");
+    manifest.push_str(&format!(
+        r#"
+[[ui]]
+slot = "settings.plugin"
+tag = "anth-hello"
+module = "web/hello.js"
+sha256 = "{}"
+"#,
+        signature::encode_hex(&sha2_bytes(asset))
+    ));
+    let signature = signature::encode_hex(&key().sign(manifest.as_bytes()).to_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut bytes);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("plugin.toml", options).expect("manifest");
+        zip.write_all(manifest.as_bytes()).expect("write");
+        zip.start_file("plugin.wasm", options).expect("wasm");
+        zip.write_all(wasm).expect("write");
+        zip.start_file("plugin.sig", options).expect("signature");
+        zip.write_all(signature.as_bytes()).expect("write");
+        zip.start_file("web/hello.js", options).expect("asset");
+        zip.write_all(asset).expect("write");
+        zip.finish().expect("finish");
+    }
+    bytes.into_inner()
+}
+
+#[tokio::test]
+async fn a_declared_ui_asset_is_served_and_an_undeclared_one_is_not() {
+    let (router, root) = app("plugins-api-asset", true, true);
+    let body = json!({
+        "bundle_base64": STANDARD.encode(bundle_with_asset(b"export const hello = 1\n")),
+        "accept_capabilities": false,
+    });
+    let response = router
+        .clone()
+        .oneshot(post("/api/plugins/install", body))
+        .await
+        .expect("install");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins/org.anth.hello/web/hello.js")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("asset");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/javascript; charset=utf-8"
+    );
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert_eq!(bytes.as_ref(), b"export const hello = 1\n");
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins/org.anth.hello/web/other.js")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("asset");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn an_anchor_runs_the_installed_guest() {
+    const GUEST: &str = r#"
+(module
+  (memory (export "memory") 1)
+  (data (i32.const 256) "{\"status\":200,\"body\":{\"hello\":\"world\"}}")
+  (func (export "anth_abi_version") (result i32) i32.const 3)
+  (func (export "anth_alloc") (param i32) (result i32) i32.const 4096)
+  (func (export "anth_http") (param i32 i32) (result i64)
+    i64.const 1099511627815)
+  (func (export "anth_cli") (param i32 i32) (result i64)
+    i64.const 1099511627815)
+  (func (export "anth_direct") (param i32 i32) (result i64)
+    i64.const 1099511627815)
+)
+"#;
+    let wasm = wat::parse_str(GUEST).expect("wat");
+    let (router, root) = app("plugins-api-anchor", true, true);
+    let body = json!({
+        "bundle_base64": STANDARD.encode(bundle_with_wasm(&wasm, "host.hostname", true)),
+        "accept_capabilities": false,
+    });
+    let response = router
+        .clone()
+        .oneshot(post("/api/plugins/install", body))
+        .await
+        .expect("install");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins/org.anth.hello/status?x=1")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("anchor");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["hello"], "world");
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/plugins/org.anth.hello/other")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("anchor");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     fs::remove_dir_all(root).expect("cleanup");
 }
 

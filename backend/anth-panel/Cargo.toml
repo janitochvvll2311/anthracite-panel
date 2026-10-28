@@ -32,9 +32,12 @@ tar.workspace = true
 tokio.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
+wasmi = "2"
+wasmi_core = "2"
 zip.workspace = true
 
 [dev-dependencies]
 http-body-util.workspace = true
+wat = "1"
 tokio-tungstenite.workspace = true
 tower.workspace = true

@@ -10,8 +10,11 @@
 pub mod bundle;
 pub mod grants;
 pub mod manifest;
+pub mod runtime;
 pub mod signature;
+pub mod web;
 
+use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +22,7 @@ use anth_wire::WireError;
 use serde::{Deserialize, Serialize};
 
 use crate::config::PluginsConfig;
+use crate::log::Logger;
 
 pub use bundle::{BundleInstall, LoadedBundle};
 pub use grants::{GrantStore, PluginGrant};
@@ -48,6 +52,13 @@ pub struct PluginsView {
     pub enabled: bool,
     pub install_from_web: bool,
     pub plugins: Vec<PluginView>,
+}
+
+/// What a guest answered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginReply {
+    pub status: u16,
+    pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -240,5 +251,99 @@ impl PluginService {
             self.config.require_signature,
             &self.config.public_key,
         )
+    }
+
+    /// Reads one declared UI module. The grant, not the manifest, decides what
+    /// may be served.
+    pub fn asset(&self, id: &str, module: &str) -> Result<Vec<u8>, WireError> {
+        if !self.config.enabled {
+            return Err(WireError::forbidden(
+                "plugins are disabled; set `[plugins] enabled = true`",
+            ));
+        }
+        validate_id(id)?;
+        let grant = self
+            .grants
+            .read(id)?
+            .ok_or_else(|| WireError::not_found(format!("plugin `{id}` is not installed")))?;
+        if !grant.enabled {
+            return Err(WireError::forbidden(format!("plugin `{id}` is disabled")));
+        }
+        web::read_asset(&self.root, &grant, module)
+    }
+
+    /// Runs one HTTP anchor through the guest's `anth_http` entry.
+    pub fn call_anchor(
+        &self,
+        id: &str,
+        method: &str,
+        path: &str,
+        query: BTreeMap<String, String>,
+        body: Option<String>,
+        log: std::sync::Arc<Logger>,
+    ) -> Result<PluginReply, WireError> {
+        let grant = self
+            .grants
+            .read(id)?
+            .ok_or_else(|| WireError::not_found(format!("plugin `{id}` is not installed")))?;
+        if !grant.enabled {
+            return Err(WireError::forbidden(format!("plugin `{id}` is disabled")));
+        }
+        let method = method.to_uppercase();
+        if !grant
+            .api
+            .iter()
+            .any(|anchor| anchor.method.eq_ignore_ascii_case(&method) && anchor.path == path)
+        {
+            return Err(WireError::not_found(format!(
+                "plugin `{id}` declares no anchor {method} {path}"
+            )));
+        }
+        let envelope = serde_json::json!({
+            "method": method,
+            "path": path,
+            "query": query,
+            "body": body,
+        })
+        .to_string();
+        self.call(id, "anth_http", &envelope, log)
+    }
+
+    /// Runs one CLI request through the guest's `anth_cli` entry.
+    pub fn call_cli(
+        &self,
+        id: &str,
+        command: &str,
+        log: std::sync::Arc<Logger>,
+    ) -> Result<PluginReply, WireError> {
+        let envelope = serde_json::to_string(command)
+            .map_err(|error| WireError::invalid(format!("the command is not JSON: {error}")))?;
+        self.call(id, "anth_cli", &envelope, log)
+    }
+
+    /// Runs one direct request through the guest's `anth_direct` entry.
+    pub fn call_direct(
+        &self,
+        id: &str,
+        request: &str,
+        log: std::sync::Arc<Logger>,
+    ) -> Result<PluginReply, WireError> {
+        self.call(id, "anth_direct", request, log)
+    }
+
+    fn call(
+        &self,
+        id: &str,
+        entry: &str,
+        payload: &str,
+        log: std::sync::Arc<Logger>,
+    ) -> Result<PluginReply, WireError> {
+        let loaded = self.load(id)?;
+        let runtime = runtime::Loaded::load(loaded.manifest, &loaded.wasm)?;
+        let reply = runtime.call(entry, payload, log, self.config.fuel)?;
+        Ok(PluginReply {
+            status: reply.status,
+            value: reply.value,
+        })
     }
 }

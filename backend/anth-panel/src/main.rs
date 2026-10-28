@@ -176,6 +176,13 @@ enum PluginCommand {
         #[arg(long)]
         accept_capabilities: bool,
     },
+    /// Send one request through the plugin's `anth_cli` entry.
+    Call {
+        /// Plugin id or alias.
+        id: String,
+        /// JSON request, or `-` to read it from stdin.
+        request: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -926,6 +933,32 @@ fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult 
                 println!("  {capability}");
             }
             Ok(())
+        }
+        PluginCommand::Call { id, request } => {
+            let id = resolve_plugin_id(&service, id)?;
+            let request = if request == "-" {
+                let mut text = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                    .map_err(|error| (1, format!("reading the request: {error}")))?;
+                text
+            } else {
+                request.clone()
+            };
+            serde_json::from_str::<serde_json::Value>(&request)
+                .map_err(|error| (2, format!("the request is not valid JSON: {error}")))?;
+            let logger = std::sync::Arc::new(Logger::with_out(Settings::default()));
+            let reply = service
+                .call_cli(&id, &request, logger)
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            println!(
+                "{}",
+                serde_json::json!({ "status": reply.status, "value": reply.value })
+            );
+            if reply.status >= 400 {
+                Err((1, String::new()))
+            } else {
+                Ok(())
+            }
         }
     }
 }

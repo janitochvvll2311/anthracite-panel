@@ -1,0 +1,270 @@
+//! Building an argv from a frozen grant.
+//!
+//! This is the module that makes "a plugin never sends an argv" true. The guest
+//! names a capability and supplies values; the program and the argument
+//! *template* come from the manifest the operator approved. Each substituted
+//! value is validated by the host and becomes exactly one argv element.
+
+use std::process::Command;
+
+use serde_json::{Map, Value};
+
+use crate::plugins::manifest::{ArgType, Capability, MAX_ARG_LEN, PROGRAM_ALLOWLIST};
+
+/// Runs one granted capability.
+pub fn run(capability: &Capability, args: &Value) -> Result<String, String> {
+    let argv = argv(capability, args)?;
+    let program = &argv[0];
+    if !PROGRAM_ALLOWLIST.contains(&program.as_str()) {
+        return Err(format!("`{program}` is not on the host allowlist"));
+    }
+    let output = Command::new(program)
+        .args(&argv[1..])
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|error| format!("running `{program}`: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "`{program}` exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string();
+    let limit = 64 * 1024;
+    if stdout.len() > limit {
+        return Err(format!(
+            "`{program}` printed {} bytes, over the {limit} byte limit",
+            stdout.len()
+        ));
+    }
+    Ok(serde_json::json!({
+        "program": program,
+        "stdout": stdout,
+    })
+    .to_string())
+}
+
+/// The exact argv a capability produces, for a test to assert.
+pub fn argv(capability: &Capability, args: &Value) -> Result<Vec<String>, String> {
+    let map = match args {
+        Value::Null => Map::new(),
+        Value::Object(map) => map.clone(),
+        _ => return Err("the arguments must be an object".to_string()),
+    };
+
+    let mut values: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    for (name, value) in &map {
+        let accepted = capability
+            .accept
+            .iter()
+            .find(|accepted| &accepted.name == name)
+            .ok_or_else(|| {
+                format!(
+                    "the capability `{}` does not accept `{name}`",
+                    capability.id
+                )
+            })?;
+        let rendered = match accepted.kind {
+            ArgType::String => {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| format!("`{name}` must be a string"))?;
+                validate_value(name, text)?;
+                text.to_string()
+            }
+            ArgType::Integer => {
+                let number = value
+                    .as_i64()
+                    .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
+                    .ok_or_else(|| format!("`{name}` must be an integer"))?;
+                number.to_string()
+            }
+            ArgType::Switch => {
+                if value.as_bool() == Some(true) {
+                    format!("--{name}")
+                } else {
+                    continue;
+                }
+            }
+        };
+        values.insert(name.as_str(), rendered);
+    }
+
+    let mut argv = vec![capability.program.clone()];
+    for template in &capability.args {
+        let mut replaced = String::new();
+        let mut rest = template.as_str();
+        let mut only_switch = true;
+        while let Some(open) = rest.find('{') {
+            replaced.push_str(&rest[..open]);
+            let after = &rest[open + 1..];
+            let close = after.find('}').ok_or_else(|| {
+                format!("the argv template `{template}` has an unclosed placeholder")
+            })?;
+            let name = &after[..close];
+            let accepted = capability
+                .accept
+                .iter()
+                .find(|accepted| accepted.name == name)
+                .ok_or_else(|| {
+                    format!(
+                        "the capability `{}` uses `{{{name}}}` but does not accept it",
+                        capability.id
+                    )
+                })?;
+            let value = values.get(name).ok_or_else(|| {
+                if accepted.kind == ArgType::Switch {
+                    return format!("the switch `{name}` has no value");
+                }
+                format!("the capability `{}` requires `{name}`", capability.id)
+            });
+            match value {
+                Ok(value) => {
+                    only_switch = false;
+                    replaced.push_str(value);
+                }
+                Err(_) if accepted.kind == ArgType::Switch => {
+                    // An absent switch is false: the whole element disappears.
+                }
+                Err(error) => return Err(error),
+            }
+            rest = &after[close + 1..];
+        }
+        replaced.push_str(rest);
+        if only_switch && replaced.is_empty() {
+            continue;
+        }
+        argv.push(replaced);
+    }
+    Ok(argv)
+}
+
+fn validate_value(name: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("`{name}` must not be empty"));
+    }
+    if value.len() > MAX_ARG_LEN {
+        return Err(format!("`{name}` is longer than {MAX_ARG_LEN} bytes"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("`{name}` contains a control character"));
+    }
+    if value.starts_with('-') {
+        return Err(format!("`{name}` must not start with `-`"));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::manifest::Manifest;
+
+    fn manifest() -> Manifest {
+        Manifest::parse(&format!(
+            r#"
+manifest_version = 1
+[plugin]
+id = "org.anth.hello"
+version = "0.3.0"
+name = "Hello"
+abi = 3
+[wasm]
+path = "plugin.wasm"
+sha256 = "{}"
+
+[[capability]]
+id = "host.named"
+program = "hostname"
+args = ["--alias", "{{name}}"]
+accept = [{{ name = "name", type = "string" }}]
+
+[[capability]]
+id = "host.port"
+program = "hostname"
+args = ["--port", "{{port}}"]
+accept = [{{ name = "port", type = "integer" }}]
+
+[[capability]]
+id = "host.flag"
+program = "hostname"
+args = ["{{verbose}}"]
+accept = [{{ name = "verbose", type = "switch" }}]
+"#,
+            "a".repeat(64)
+        ))
+        .expect("manifest")
+    }
+
+    fn capability(id: &str) -> Capability {
+        manifest()
+            .capability
+            .into_iter()
+            .find(|capability| capability.id == id)
+            .expect("capability")
+    }
+
+    #[test]
+    fn placeholders_render_one_validated_element() {
+        let named = argv(
+            &capability("host.named"),
+            &serde_json::json!({ "name": "Ana Sol" }),
+        )
+        .expect("argv");
+        assert_eq!(named, ["hostname", "--alias", "Ana Sol"]);
+
+        let port =
+            argv(&capability("host.port"), &serde_json::json!({ "port": 22 })).expect("argv");
+        assert_eq!(port, ["hostname", "--port", "22"]);
+    }
+
+    #[test]
+    fn a_false_switch_disappears_and_a_true_one_is_its_element() {
+        assert_eq!(
+            argv(
+                &capability("host.flag"),
+                &serde_json::json!({ "verbose": true })
+            )
+            .expect("true"),
+            ["hostname", "--verbose"]
+        );
+        assert_eq!(
+            argv(
+                &capability("host.flag"),
+                &serde_json::json!({ "verbose": false })
+            )
+            .expect("false"),
+            ["hostname"]
+        );
+    }
+
+    #[test]
+    fn unknown_missing_or_dangerous_values_are_refused() {
+        assert!(
+            argv(
+                &capability("host.named"),
+                &serde_json::json!({ "other": "x" })
+            )
+            .is_err()
+        );
+        assert!(argv(&capability("host.port"), &serde_json::json!({})).is_err());
+        assert!(
+            argv(
+                &capability("host.named"),
+                &serde_json::json!({ "name": "-rf" })
+            )
+            .is_err()
+        );
+        assert!(
+            argv(
+                &capability("host.named"),
+                &serde_json::json!({ "name": "a\nb" })
+            )
+            .is_err()
+        );
+    }
+}

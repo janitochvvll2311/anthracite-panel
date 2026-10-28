@@ -243,6 +243,14 @@ impl Logger {
         (Self::new(settings, sink.clone()), sink)
     }
 
+    /// A logger that emits nothing. Plugin load-time probes use it.
+    pub fn silent() -> Self {
+        Self::stdout(Settings {
+            format: Format::Off,
+            ..Settings::default()
+        })
+    }
+
     pub fn with_out(settings: Settings) -> Self {
         match settings.out {
             Out::Stdout => Self::stdout(settings),

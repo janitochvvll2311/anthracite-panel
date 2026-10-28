@@ -4,13 +4,13 @@
 //! in the transport. Errors use the one `WireError` shape and the kind-derived
 //! status.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::plugins::PluginsView;
+use crate::plugins::{PluginReply, PluginsView};
 use anth_wire::{
     AccountCreate, AccountDelete, AccountGroupCreate, AccountGroupDelete, AccountSetPassword,
     AccountSnapshot, ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk,
@@ -20,14 +20,14 @@ use anth_wire::{
     VolumeFormatRequest, VolumeMountRequest, VolumePartitionCreate, VolumePartitionDelete,
     VolumePartitionResize, VolumeSnapshot, VolumeUnmountRequest, WireError,
 };
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{
     ConnectInfo, DefaultBodyLimit, FromRequest, FromRequestParts, Path as AxumPath, Query,
     Request as AxumRequest, State, ws::WebSocketUpgrade,
 };
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response as HttpResponse};
 use axum::routing::{get, post};
@@ -134,6 +134,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/plugins/{id}/disable", post(plugin_disable))
         .route("/api/plugins/{id}/remove", post(plugin_remove))
         .route("/api/plugins/{id}/approve", post(plugin_approve))
+        .route("/api/plugins/{id}/web/{*path}", get(plugin_asset))
+        .route(
+            "/api/plugins/{id}/{*path}",
+            get(plugin_anchor)
+                .post(plugin_anchor)
+                .put(plugin_anchor)
+                .patch(plugin_anchor)
+                .delete(plugin_anchor),
+        )
         .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
@@ -1552,6 +1561,164 @@ where
         .await
         .map_err(|error| ApiError::internal(format!("the plugin worker failed: {error}")))?
         .map_err(ApiError::from)
+}
+
+/// Largest body forwarded to an anchor. An anchor is a control operation, not
+/// an upload channel.
+const MAX_ANCHOR_BODY: usize = 1024 * 1024;
+
+async fn plugin_asset(
+    State(state): State<AppState>,
+    _authed: Authed,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    if path.is_empty()
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == ".." || part == ".")
+    {
+        return Err(ApiError::invalid(
+            "the asset path is not a plain module path",
+        ));
+    }
+    let module = format!("web/{path}");
+    let content_type = crate::plugins::web::content_type(&module);
+    let service = state.daemon.plugins().clone();
+    let read_module = module.clone();
+    let bytes = plugin_blocking(move || service.asset(&id, &read_module)).await?;
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".to_string()),
+        ],
+        Body::from(bytes),
+    )
+        .into_response())
+}
+
+async fn plugin_anchor(
+    State(state): State<AppState>,
+    _authed: Authed,
+    AxumPath((id, path)): AxumPath<(String, String)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<HttpResponse, ApiError> {
+    let service = state.daemon.plugins().clone();
+    if !service.config().enabled {
+        return Err(ApiError::from(WireError::forbidden(
+            "plugins are disabled; set `[plugins] enabled = true`",
+        )));
+    }
+    crate::plugins::validate_id(&id).map_err(|error| ApiError::invalid(error.message))?;
+    if !matches!(
+        method,
+        Method::GET | Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) {
+        return Err(ApiError::from(WireError::invalid(
+            "that method is not an anchor method",
+        )));
+    }
+    if method != Method::GET {
+        same_origin(&headers)?;
+    }
+    if body.len() > MAX_ANCHOR_BODY {
+        return Err(ApiError::from(WireError::too_large(format!(
+            "an anchor body is at most {MAX_ANCHOR_BODY} bytes"
+        ))));
+    }
+    let path = canonical_anchor_path(&path);
+    let query = anchor_query(uri.query());
+    let body = if body.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&body).into_owned())
+    };
+    let method = method.as_str().to_string();
+    let logger = Arc::clone(state.daemon.logger());
+    let reply: PluginReply =
+        plugin_blocking(move || service.call_anchor(&id, &method, &path, query, body, logger))
+            .await?;
+    Ok(plugin_reply_response(reply))
+}
+
+fn plugin_reply_response(reply: PluginReply) -> HttpResponse {
+    let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let (body, content_type) = match reply.value {
+        serde_json::Value::Null => (String::new(), "text/plain; charset=utf-8"),
+        serde_json::Value::String(text) => (text, "text/plain; charset=utf-8"),
+        other => (other.to_string(), "application/json"),
+    };
+    (
+        status,
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// axum strips the leading slash from a `{*path}` capture; the guest contract
+/// always sees one.
+fn canonical_anchor_path(capture: &str) -> String {
+    let trimmed = capture.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+fn anchor_query(raw: Option<&str>) -> BTreeMap<String, String> {
+    raw.unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (percent_decode(key), percent_decode(value))
+        })
+        .collect()
+}
+
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hex = &raw[index + 1..index + 3];
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Validates the `interval` query shared by the SSE routes.
