@@ -23,15 +23,14 @@ implementations are always `System*` or `Demo*`.
 | --- | --- | --- | --- |
 | Network | `NetworkService` | `SystemNetwork` | `DemoNetwork` |
 | Firewall | `FirewallService` | `SystemFirewall` | `DemoFirewall` |
-| Files | `FilesService` | `SystemFiles` | pending |
-| Processes | `ProcessesService` | `SystemProcesses` | pending |
-| Volumes | `VolumesService` (pending) | `SystemVolumes` (pending) | pending |
+| Files | `FilesService` | `SystemFiles` | `DemoFiles` |
+| Processes | `ProcessesService` | `SystemProcesses` | `DemoProcesses` |
+| Volumes | `VolumesService` | `SystemVolumes` | `DemoVolumes` |
 | Accounts | `AccountsService` (pending) | `SystemAccounts` (pending) | pending |
 | Terminal | `TerminalService` | `SystemTerminal` | pending |
 | Info | `InfoService` (pending) | `SystemInfo` | pending |
 
-The existing panel service names (`AccountsService`, `VolumesService`) are
-temporary; they are the next moves.
+`AccountsService` is still a concrete panel type; its rename is the next move.
 
 ## Boundary rule
 
