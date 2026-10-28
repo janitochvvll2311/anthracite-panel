@@ -28,9 +28,9 @@ pub use firewall::{
 pub use frame::{MAX_FRAME_LEN, read_frame, read_frame_limited, write_frame, write_frame_limited};
 pub use interval::{DEFAULT_INTERVAL, MAX_INTERVAL, MIN_INTERVAL, parse_interval};
 pub use message::{
-    ArchiveEntry, ArchiveFormat, ArchiveListing, FileChunk, FileEntry, FileKind, FileWritten,
-    HostInfo, LoadAverage, MemoryInfo, OsInfo, PROTOCOL_VERSION, Request, Response, TrashEntry,
-    TrashListing,
+    ArchiveEntry, ArchiveFormat, ArchiveListing, DEFAULT_DOWNLOAD_CHUNK, FileBytes, FileChunk,
+    FileEntry, FileKind, FileWritten, HostInfo, LoadAverage, MAX_DOWNLOAD_CHUNK, MemoryInfo,
+    OsInfo, PROTOCOL_VERSION, Request, Response, TrashEntry, TrashListing,
 };
 pub use network::{
     NetworkAddress, NetworkCreate, NetworkEdit, NetworkInterface, NetworkRoute, NetworkSnapshot,

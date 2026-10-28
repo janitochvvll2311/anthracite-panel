@@ -153,6 +153,18 @@ pub enum Request {
         #[serde(default)]
         max_bytes: Option<u64>,
     },
+    /// A chunk of arbitrary bytes, base64-encoded for the JSON transport.
+    ///
+    /// The HTTP adapter streams the same file through its own response; this
+    /// request exists so a socket client can download a binary without loading
+    /// it into a UTF-8 string.
+    FilesDownload {
+        path: String,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default)]
+        max_bytes: Option<u64>,
+    },
     /// Deletes one regular file under the configured root. Requires
     /// `files.write`; directories are refused.
     FilesDelete { path: String },
@@ -298,6 +310,8 @@ pub enum Response {
     FilesList(Page<FileEntry>),
     /// A chunk of a text file.
     FilesRead(FileChunk),
+    /// A chunk of arbitrary file bytes.
+    FilesDownload(FileBytes),
     /// The file was deleted.
     FilesDeleted {
         path: String,
@@ -427,6 +441,27 @@ pub struct FileEntry {
     pub size: u64,
     /// Unix epoch milliseconds, or 0 when the platform cannot report it.
     pub modified_ms: u64,
+}
+
+/// The default chunk a download requests when the caller does not choose one.
+pub const DEFAULT_DOWNLOAD_CHUNK: u64 = 1024 * 1024;
+
+/// The largest chunk a download may request. It keeps one base64 frame well
+/// below the frame cap while still moving a large file in few round trips.
+pub const MAX_DOWNLOAD_CHUNK: u64 = 8 * 1024 * 1024;
+
+/// A chunk of arbitrary file bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileBytes {
+    /// The path relative to the file root, using `/` separators.
+    pub path: String,
+    pub offset: u64,
+    /// Full size of the file in bytes.
+    pub size: u64,
+    /// Whether this chunk reaches the end of the file.
+    pub eof: bool,
+    /// The chunk bytes, standard base64.
+    pub data_base64: String,
 }
 
 /// A chunk of a UTF-8 text file.

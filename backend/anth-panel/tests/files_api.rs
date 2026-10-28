@@ -9,7 +9,7 @@ use anth_panel::auth::AuthService;
 use anth_panel::config::{AuthConfig, BootstrapMode, Config, FilesConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
-use anth_wire::{FileChunk, FileEntry, Page};
+use anth_wire::{FileChunk, FileEntry, Page, Request, Response};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use base64::Engine as _;
@@ -186,6 +186,63 @@ async fn downloads_raw_files() {
         .expect("body")
         .to_bytes();
     assert_eq!(bytes.as_ref(), b"hello files");
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn the_socket_downloads_binary_chunks() {
+    let (root, config_path) = scratch("files-download-socket");
+    fs::write(root.join("binary.bin"), [0xff, 0xfe, 0x00, 0x01]).expect("file");
+    let config = Config {
+        files: FilesConfig {
+            root: root.display().to_string(),
+            write: true,
+            ..FilesConfig::default()
+        },
+        ..Config::dev_default()
+    };
+    let paths = config.paths(&config_path).expect("paths");
+    let logger = Arc::new(Logger::buffer(Settings::default()).0);
+    let daemon = Daemon::new(config, paths, logger);
+
+    let first = daemon
+        .execute(Request::FilesDownload {
+            path: "binary.bin".to_string(),
+            offset: 0,
+            max_bytes: Some(2),
+        })
+        .await;
+    match first {
+        Response::FilesDownload(chunk) => {
+            assert_eq!(chunk.offset, 0);
+            assert_eq!(chunk.size, 4);
+            assert!(!chunk.eof);
+            assert_eq!(
+                STANDARD.decode(chunk.data_base64).expect("base64"),
+                [0xff, 0xfe]
+            );
+        }
+        other => panic!("expected a download chunk, got {other:?}"),
+    }
+
+    let rest = daemon
+        .execute(Request::FilesDownload {
+            path: "binary.bin".to_string(),
+            offset: 2,
+            max_bytes: None,
+        })
+        .await;
+    match rest {
+        Response::FilesDownload(chunk) => {
+            assert!(chunk.eof);
+            assert_eq!(
+                STANDARD.decode(chunk.data_base64).expect("base64"),
+                [0x00, 0x01]
+            );
+        }
+        other => panic!("expected a download chunk, got {other:?}"),
+    }
 
     fs::remove_dir_all(root).expect("cleanup");
 }

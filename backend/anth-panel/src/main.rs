@@ -134,8 +134,10 @@ enum Command {
 
 #[derive(Subcommand, Debug)]
 enum ConfigCommand {
-    /// Print the configuration file.
+    /// Print the configuration file exactly as written.
     Get,
+    /// Print the effective configuration with defaults applied.
+    Show,
     /// Parse and validate the configuration without writing.
     Validate,
     /// Change one dotted key, preserving comments and key order.
@@ -172,6 +174,12 @@ enum FilesCommand {
         /// Maximum bytes to read.
         #[arg(long)]
         max_bytes: Option<u64>,
+    },
+    /// Write any file's bytes to stdout, including binary files.
+    Download {
+        /// Path relative to the file root.
+        #[arg(long, value_name = "PATH")]
+        path: String,
     },
     /// Delete a file under the file root. Requires files.write.
     Delete {
@@ -809,6 +817,15 @@ fn config_command(path: &std::path::Path, command: &ConfigCommand, cli: &Cli) ->
             print!("{text}");
             Ok(())
         }
+        ConfigCommand::Show => {
+            let config = Config::load(path).map_err(|error| (1, error))?;
+            print!(
+                "{}",
+                toml::to_string_pretty(&config)
+                    .map_err(|error| (1, format!("rendering the configuration: {error}")))?
+            );
+            Ok(())
+        }
         ConfigCommand::Validate => {
             Config::load(path).map_err(|error| (1, error))?;
             println!("{} is valid", path.display());
@@ -996,6 +1013,45 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
                 }
                 other => Err((1, format!("unexpected response: {other:?}"))),
             }
+        }
+        FilesCommand::Download { path } => {
+            use std::io::Write as _;
+
+            let stdout = std::io::stdout();
+            let mut out = stdout.lock();
+            let mut offset = 0u64;
+            loop {
+                let response = client
+                    .call(&Request::FilesDownload {
+                        path: path.clone(),
+                        offset,
+                        max_bytes: None,
+                    })
+                    .await
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                let chunk = match response {
+                    Response::FilesDownload(chunk) => chunk,
+                    Response::Error(error) => {
+                        return Err((error.kind.exit_code(), error.to_string()));
+                    }
+                    other => return Err((1, format!("unexpected response: {other:?}"))),
+                };
+                let bytes = STANDARD
+                    .decode(chunk.data_base64.as_bytes())
+                    .map_err(|error| (1, format!("the download chunk is not base64: {error}")))?;
+                out.write_all(&bytes)
+                    .map_err(|error| (1, format!("writing the download: {error}")))?;
+                if chunk.eof {
+                    break;
+                }
+                if bytes.is_empty() {
+                    return Err((1, "the download stopped before EOF".to_string()));
+                }
+                offset = chunk.offset + u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+            }
+            out.flush()
+                .map_err(|error| (1, format!("flushing the download: {error}")))?;
+            Ok(())
         }
         FilesCommand::Delete { path } => {
             let response = client

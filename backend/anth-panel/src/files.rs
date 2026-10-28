@@ -6,9 +6,9 @@
 //! a symlink from escaping; the first keeps an obviously hostile name from
 //! reaching the filesystem at all.
 //!
-//! Deleting is the one write this slice supports. It is gated by
-//! `files.write`, and it unlinks the final name instead of canonicalizing it:
-//! resolving a symlink before `unlink` would delete its target.
+//! Writes and deletes are gated by `files.write`. Deleting unlinks the final
+//! name instead of canonicalizing it: resolving a symlink before `unlink` would
+//! delete its target.
 
 use std::ffi::OsString;
 use std::fs::{self, File};
@@ -17,8 +17,8 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use anth_wire::{
-    ArchiveFormat, ArchiveListing, ErrorKind, FileChunk, FileEntry, FileWritten, Page, PageRequest,
-    TrashListing, WireError,
+    ArchiveFormat, ArchiveListing, DEFAULT_DOWNLOAD_CHUNK, ErrorKind, FileChunk, FileEntry,
+    FileWritten, MAX_DOWNLOAD_CHUNK, Page, PageRequest, TrashListing, WireError,
 };
 
 pub mod archive;
@@ -29,6 +29,16 @@ mod volumes;
 pub use trash::{TrashDirectory, TrashService};
 
 use error::{FileError, FileErrorKind};
+
+/// One chunk of raw file bytes, before the transport encodes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadChunk {
+    pub path: String,
+    pub offset: u64,
+    pub size: u64,
+    pub eof: bool,
+    pub bytes: Vec<u8>,
+}
 
 pub struct FileService {
     root: PathBuf,
@@ -736,6 +746,48 @@ impl FileService {
         fs::read(&resolved).map_err(|error| io_error(&display, error))
     }
 
+    /// Reads one chunk of arbitrary bytes. The socket client loops until `eof`;
+    /// a partial read is normal, unlike [`FileService::download`], which is for
+    /// the HTTP response that sends the whole file at once.
+    pub fn download_chunk(
+        &self,
+        path: &str,
+        offset: u64,
+        max_bytes: Option<u64>,
+    ) -> Result<DownloadChunk, WireError> {
+        let (resolved, display) = self.regular_file(path, self.max_write_bytes, "download")?;
+        let size = fs::metadata(&resolved)
+            .map_err(|error| io_error(&display, error))?
+            .len();
+        if offset > size {
+            return Err(WireError::invalid(format!(
+                "the offset {offset} is past the end of {display} ({size} bytes)"
+            )));
+        }
+        let requested = max_bytes.unwrap_or(DEFAULT_DOWNLOAD_CHUNK);
+        if requested == 0 {
+            return Err(WireError::invalid("max_bytes must be greater than zero"));
+        }
+        let take = requested.min(MAX_DOWNLOAD_CHUNK).min(size - offset);
+        let capacity = usize::try_from(take)
+            .map_err(|_| WireError::internal("the download is too large for this platform"))?;
+        let mut buffer = Vec::with_capacity(capacity);
+        let mut file = File::open(&resolved).map_err(|error| io_error(&display, error))?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| io_error(&display, error))?;
+        file.take(take)
+            .read_to_end(&mut buffer)
+            .map_err(|error| io_error(&display, error))?;
+        let eof = offset + u64::try_from(buffer.len()).unwrap_or(u64::MAX) >= size;
+        Ok(DownloadChunk {
+            path: display,
+            offset,
+            size,
+            eof,
+            bytes: buffer,
+        })
+    }
+
     /// Resolves `path` to a regular file and enforces `limit`.
     fn regular_file(
         &self,
@@ -1091,6 +1143,45 @@ mod tests {
         let empty = files.read("note.txt", 11, None).expect("at end");
         assert!(empty.eof);
         assert!(empty.text.is_empty());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn downloading_reads_raw_bytes_in_chunks() {
+        let root = scratch("download-chunks");
+        fs::write(root.join("binary.bin"), [0xff, 0xfe, 0x00, 0x01, 0x02]).expect("write");
+        let files = service(&root);
+
+        let first = files
+            .download_chunk("binary.bin", 0, Some(2))
+            .expect("first");
+        assert_eq!(first.bytes, [0xff, 0xfe]);
+        assert_eq!(first.size, 5);
+        assert!(!first.eof);
+
+        let rest = files.download_chunk("binary.bin", 2, None).expect("rest");
+        assert_eq!(rest.bytes, [0x00, 0x01, 0x02]);
+        assert!(rest.eof);
+
+        let empty = files.download_chunk("binary.bin", 5, None).expect("at end");
+        assert!(empty.eof);
+        assert!(empty.bytes.is_empty());
+
+        assert_eq!(
+            files
+                .download_chunk("binary.bin", 6, None)
+                .expect_err("past the end")
+                .kind,
+            ErrorKind::Invalid
+        );
+        assert_eq!(
+            files
+                .download_chunk("binary.bin", 0, Some(0))
+                .expect_err("zero chunk")
+                .kind,
+            ErrorKind::Invalid
+        );
 
         fs::remove_dir_all(root).expect("cleanup");
     }

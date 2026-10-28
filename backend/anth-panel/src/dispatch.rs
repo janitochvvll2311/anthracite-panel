@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anth_wire::{
-    ErrorKind, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
+    ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
     TerminalOpened, TerminalOutput, TerminalSize, WireError,
 };
 use base64::Engine as _;
@@ -446,6 +446,20 @@ impl Daemon {
             } => Ok(Response::FilesRead(
                 self.files()?.read(&path, offset, max_bytes)?,
             )),
+            Request::FilesDownload {
+                path,
+                offset,
+                max_bytes,
+            } => {
+                let chunk = self.files()?.download_chunk(&path, offset, max_bytes)?;
+                Ok(Response::FilesDownload(FileBytes {
+                    path: chunk.path,
+                    offset: chunk.offset,
+                    size: chunk.size,
+                    eof: chunk.eof,
+                    data_base64: STANDARD.encode(chunk.bytes),
+                }))
+            }
             Request::FilesDelete { path } => Ok(Response::FilesDeleted {
                 path: self.files()?.delete(&path)?,
             }),
@@ -661,6 +675,7 @@ fn operation_of(request: &Request) -> &'static str {
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",
         Request::FilesRead { .. } => "files-read",
+        Request::FilesDownload { .. } => "files-download",
         Request::FilesDelete { .. } => "files-delete",
         Request::FilesWrite { .. } => "files-write",
         Request::FilesUpload { .. } => "files-upload",
