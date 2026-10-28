@@ -25,6 +25,7 @@ code it describes.
 | [accounts.md](accounts.md) | Users and groups from local files plus NSS, lock state, guarded create/delete, password changes and the Accounts tabs |
 | [plugins.md](plugins.md) | Signed bundles, manifests, frozen grants, install/list/enable/remove, the ABI 3 runtime, anchors, the iframe sandbox, reference plugins and the Settings → Plugins panel |
 | [migration.md](migration.md) | Dry-run `migrate` from v0.2: policy mapping, secrets split, dropped sessions/grants and safety rules |
+| [hardening.md](hardening.md) | Property-test coverage, enforced security boundaries and the open hardening items |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design
