@@ -67,3 +67,23 @@ refused with a permission error.
 `.github/workflows/release.yml` runs on `v*` tags (or manually). It builds the
 same tarball, uploads it as an artifact and attaches it to a **prerelease**
 GitHub release. A tag is never moved once published; make a new suffix instead.
+
+## Demo image
+
+The hosted demo has its own tarball and image; it is not the privileged release:
+
+```bash
+./scripts/package-demo.sh 0.3.0a
+```
+
+```
+anthracite-panel-demo-0.3.0a-x86_64-unknown-linux-musl/
+  bin/anth-panel-demo
+  etc/anth/config.toml
+  share/containers/Dockerfile
+  share/doc/anthracite-panel/{README.md,LICENSE,docs/...}
+```
+
+The binary is compiled with `--features demo`, which forces the demo backends
+even if `ANTH_BACKEND=real` is set. The image runs non-root without capabilities
+and expects a reverse proxy for TLS; see `docs/demo.md`.

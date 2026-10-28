@@ -1,0 +1,69 @@
+# Demo-only configuration for the hosted image.
+#
+# Every host feature is simulated, authentication is replaced by the anonymous
+# demo cookie, and state lives under the container's writable tmpfs. TLS and the
+# public hostname belong to the reverse proxy.
+
+version = 1
+socket_path = "/var/lib/anth/anth.sock"
+state_dir = "/var/lib/anth"
+
+[server]
+addr = "0.0.0.0:8080"
+
+[log]
+level = "info"
+format = "human"
+out = "stdout"
+
+[terminal]
+enabled = true
+shell = "/bin/sh"
+max_sessions = 4
+idle_seconds = 900
+
+[process]
+control = true
+spawn = true
+spawn_allow = ["/bin/echo", "/bin/sleep", "/usr/bin/uptime"]
+
+[network]
+control = true
+manage = true
+
+[firewall]
+control = true
+
+[volumes]
+control = true
+partition = true
+format = true
+mount_root = "/mnt"
+disk_allow = []
+
+[accounts]
+control = true
+manage_passwords = true
+allow_system = true
+allow_privileged_groups = true
+home_root = "/home"
+shells = []
+default_shell = "/bin/sh"
+
+[files]
+root = "/var/lib/anth"
+write = true
+trash = true
+
+[auth]
+enabled = false
+username = "admin"
+cookie_secure = false
+
+[plugins]
+enabled = false
+
+[demo]
+features = []
+session_ttl_seconds = 3600
+max_sessions = 64

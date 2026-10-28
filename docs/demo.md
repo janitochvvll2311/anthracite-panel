@@ -19,6 +19,32 @@ The dev helper prints a warning that every host feature is simulated. In this
 mode no privileged command runs and no PTY is opened; the daemon still reads the
 host for `host-info`, because that view is informational.
 
+A build compiled with `--features demo` forces this mode even when
+`ANTH_BACKEND=real` is in the environment. The hosted artifact uses that feature,
+so it cannot select the real backends by mistake.
+
+## Sessions
+
+Every browser gets an anonymous `anth_demo` cookie. Its value is generated
+server-side and scopes one complete demo machine: network, firewall, files,
+processes, storage, accounts and terminal state. Two visitors never see each
+other's changes, and a socket CLI keeps its own `daemon` session.
+
+- `[demo] session_ttl_seconds` drops a session after that much idle time; `0`
+  disables expiry. The reaper runs every 30 seconds.
+- `[demo] max_sessions` evicts the least recently used session instead of
+  refusing a new visitor.
+- `POST /api/demo/reset` drops the current session and its sandbox; the next
+  request seeds a fresh one.
+- `GET /api/demo` reports the mode, feature matrix, session timestamps, TTL and
+  live-session count.
+- `[demo] features` is empty for every feature, or a list such as
+  `["network", "files", "terminal"]`. A disabled feature answers
+  `demo_feature_disabled`.
+
+The shell shows a **Demo** banner, a chip on each simulated section and a
+**Reset demo** button.
+
 ## Current demo data
 
 - `lo`, `eth0` and `wlan0`, with IPv4/IPv6 addresses and one default route.
@@ -28,8 +54,9 @@ host for `host-info`, because that view is informational.
 - `inet anthracite` starts with both chains and an `allow` policy.
 - Firewall add/update/delete/flush/policy update the in-memory table.
 - `[network] control/manage` and `[firewall] control` are still enforced.
-- Files use a seeded sandbox at `<state_dir>/demo/files`; writes, uploads,
-  archives and trash stay there.
+- Files use a per-session sandbox at
+  `<state_dir>/demo/sessions/<hashed owner>/files`; writes, uploads, archives
+  and trash stay there.
 - The process table is synthetic; signals and spawns mutate it without touching
   the kernel, and the configured control/spawn switches and allowlist apply.
 - Storage starts with two demo disks and their partitions. Mount/unmount,
@@ -43,9 +70,9 @@ host for `host-info`, because that view is informational.
   involved.
 - Snapshots use the same wire types, so the existing UI and CLI work unchanged.
 
-The state is shared by all clients and lost on restart. Per-session state,
-feature toggles, the demo banner, reset endpoint and the separate hosted image
-are the next phases in `/root/.opencode/plan/anthracite-demo.md`.
+Each session is independent and lost on restart. Plugins are still the global
+plugin service: the fixed demo catalogue is the next phase in
+`/root/.opencode/plan/anthracite-demo.md`.
 
 ## Host boundary
 
@@ -67,3 +94,25 @@ anth-host/src/demo         virtual implementations
 `anth-panel` keeps policy, guards, dispatch, HTTP/CLI rendering and UI. It talks
 to `<Feature>Service`, so the same request path serves the real and demo
 implementations.
+
+## Hosted image
+
+```bash
+./scripts/package-demo.sh 0.3.0a
+cd dist
+tar -xzf anthracite-panel-demo-0.3.0a-x86_64-unknown-linux-musl.tar.gz
+cd anthracite-panel-demo-0.3.0a-x86_64-unknown-linux-musl
+docker build --build-arg VERSION=0.3.0a -t anthracite-panel-demo:0.3.0a .
+docker run --rm --read-only --tmpfs /var/lib/anth:size=256m \
+  -p 127.0.0.1:8080:8080 anthracite-panel-demo:0.3.0a
+```
+
+The demo image runs as UID 10001, needs no Linux capabilities, keeps no host
+volumes and stores everything in the tmpfs at `/var/lib/anth`. It binds
+`0.0.0.0:8080` inside the container; publish it on loopback and let the reverse
+proxy terminate TLS and apply public rate limits. The image has no TLS
+configuration on purpose.
+
+The packaged config enables every demo policy, disables real authentication and
+disables plugins. Edit `etc/anth/config.toml` before building the image to change
+the TTL, session cap or feature matrix.

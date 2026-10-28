@@ -117,6 +117,7 @@ These are transport functions, not host operations that need a CLI twin:
 | `POST /api/auth/password` | Changes the panel password and revokes other web sessions |
 | `GET /api/auth/sessions`, `POST /api/auth/sessions/revoke` | Web-session management for the settings page |
 | `GET /api/files/image` | Browser preview with MIME detection and CSP; `files download` returns the same bytes |
+| `GET /api/demo`, `POST /api/demo/reset` | Hosted-demo session status and reset; there is no CLI demo session to reset |
 | SSE `*/watch` routes | Streaming representation of a snapshot the CLI already polls |
 
 ## Keeping parity

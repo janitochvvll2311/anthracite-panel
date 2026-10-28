@@ -26,8 +26,10 @@ live in `anth-host`, behind `<Feature>Service` traits with real `System*` and
 virtual `Demo*` implementations. Files use a seeded sandbox; processes are
 synthetic.
 `ANTH_BACKEND=demo ./scripts/dev.sh start` runs without `sudo` and simulates
-network, firewall, files, processes, storage, accounts and the terminal; every
-host feature has a demo backend.
+network, firewall, files, processes, storage, accounts and the terminal. Each
+browser gets an isolated anonymous session, with a banner and a reset action.
+`./scripts/package-demo.sh` builds the non-root demo image; TLS stays at the
+reverse proxy.
 
 ```bash
 cd tests
