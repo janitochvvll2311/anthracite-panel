@@ -12,6 +12,7 @@ serde.workspace = true
 portable-pty.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
+wait-timeout = "0.2"
 crc.workspace = true
 crc32fast.workspace = true
 flate2.workspace = true

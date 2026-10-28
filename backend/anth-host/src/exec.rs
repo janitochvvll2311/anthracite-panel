@@ -1,24 +1,30 @@
 //! `exec` capabilities.
 //!
-//! The guest never supplies a finished argv. It names a capability; the
-//! manifest supplies the program and argv template; the host validates the
-//! values and runs the result as a non-root user inside a sandbox.
+//! The guest never supplies a finished argv. The extension host names a
+//! capability, validates the manifest and renders one [`ExecSpec`]. This module
+//! runs that spec as a non-root user inside a sandbox.
 //!
 //! `SystemExecRunner` is the real side. `DemoExecRunner` is deterministic and
-//! never spawns a process, so demo mode exercises the same contract without
-//! touching the host.
+//! never spawns a process.
 
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anth_extension::manifest::{ArgType, Capability};
 use anth_wire::{ErrorKind, WireError};
-use serde_json::Value;
 use wait_timeout::ChildExt;
+
+/// One validated command to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecSpec {
+    pub id: String,
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
 
 /// One completed `exec` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +36,7 @@ pub struct ExecOutput {
 }
 
 pub trait ExecRunner: Send + Sync {
-    fn run(&self, capability: &Capability, args: &Value) -> Result<ExecOutput, WireError>;
+    fn run(&self, spec: &ExecSpec) -> Result<ExecOutput, WireError>;
 }
 
 /// Applies filesystem/network isolation inside the child.
@@ -83,17 +89,14 @@ impl SystemExecRunner {
         Self::new(0, 0, Arc::new(UnavailableSandbox))
     }
 
-    fn run_inner(&self, capability: &Capability, args: &Value) -> Result<ExecOutput, WireError> {
+    fn run_inner(&self, spec: &ExecSpec) -> Result<ExecOutput, WireError> {
         self.sandbox
             .probe()
             .map_err(|detail| WireError::new(ErrorKind::Forbidden, "exec_unavailable", detail))?;
-        let argv = argv(capability, args).map_err(|detail| {
-            WireError::new(ErrorKind::Invalid, "invalid_capability_args", detail)
-        })?;
-        let program = argv.first().cloned().unwrap_or_default();
-        let mut command = Command::new(&program);
+        let program = spec.program.to_string_lossy().into_owned();
+        let mut command = Command::new(&spec.program);
         command
-            .args(&argv[1..])
+            .args(&spec.args)
             .env_clear()
             .env("LC_ALL", "C")
             .env("PATH", "/usr/bin:/bin")
@@ -133,8 +136,8 @@ impl SystemExecRunner {
         })?;
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let stdout_reader = read_capped(stdout, self.max_output);
-        let stderr_reader = read_capped(stderr, self.max_output);
+        let stdout_reader = read_capped(stdout);
+        let stderr_reader = read_capped(stderr);
 
         let status = match child.wait_timeout(self.timeout) {
             Ok(Some(status)) => status,
@@ -172,8 +175,8 @@ impl SystemExecRunner {
 }
 
 impl ExecRunner for SystemExecRunner {
-    fn run(&self, capability: &Capability, args: &Value) -> Result<ExecOutput, WireError> {
-        self.run_inner(capability, args)
+    fn run(&self, spec: &ExecSpec) -> Result<ExecOutput, WireError> {
+        self.run_inner(spec)
     }
 }
 
@@ -210,21 +213,18 @@ impl Default for DemoExecRunner {
 }
 
 impl ExecRunner for DemoExecRunner {
-    fn run(&self, capability: &Capability, _args: &Value) -> Result<ExecOutput, WireError> {
-        self.replies.get(&capability.id).cloned().ok_or_else(|| {
+    fn run(&self, spec: &ExecSpec) -> Result<ExecOutput, WireError> {
+        self.replies.get(&spec.id).cloned().ok_or_else(|| {
             WireError::new(
                 ErrorKind::NotFound,
                 "exec_not_simulated",
-                format!("the demo has no simulated output for `{}`", capability.id),
+                format!("the demo has no simulated output for `{}`", spec.id),
             )
         })
     }
 }
 
-fn read_capped(
-    stream: Option<impl Read + Send + 'static>,
-    _limit: usize,
-) -> std::thread::JoinHandle<Vec<u8>> {
+fn read_capped(stream: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
         let mut buffer = Vec::new();
         if let Some(mut stream) = stream {
@@ -234,146 +234,23 @@ fn read_capped(
     })
 }
 
-fn argv(capability: &Capability, args: &Value) -> Result<Vec<String>, String> {
-    let map = match args {
-        Value::Null => serde_json::Map::new(),
-        Value::Object(map) => map.clone(),
-        _ => return Err("the arguments must be an object".to_string()),
-    };
-    let mut values = std::collections::HashMap::new();
-    for (name, value) in &map {
-        let accepted = capability
-            .accept
-            .iter()
-            .find(|accepted| &accepted.name == name)
-            .ok_or_else(|| {
-                format!(
-                    "the capability `{}` does not accept `{name}`",
-                    capability.id
-                )
-            })?;
-        let rendered = match accepted.kind {
-            ArgType::String => {
-                let text = value
-                    .as_str()
-                    .ok_or_else(|| format!("`{name}` must be a string"))?;
-                validate(name, text)?;
-                text.to_string()
-            }
-            ArgType::Integer => value
-                .as_i64()
-                .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
-                .ok_or_else(|| format!("`{name}` must be an integer"))?
-                .to_string(),
-            ArgType::Switch => {
-                if value.as_bool() == Some(true) {
-                    format!("--{name}")
-                } else {
-                    continue;
-                }
-            }
-            ArgType::Ifname => {
-                let text = value
-                    .as_str()
-                    .ok_or_else(|| format!("`{name}` must be a string"))?;
-                validate(name, text)?;
-                if text.len() > 15
-                    || text.contains('/')
-                    || text.contains("..")
-                    || text.starts_with('.')
-                    || text.chars().any(char::is_whitespace)
-                {
-                    return Err(format!("`{name}` is not a plain interface name"));
-                }
-                text.to_string()
-            }
-        };
-        values.insert(name.as_str(), rendered);
-    }
-    let mut argv = vec![capability.program.clone()];
-    for template in &capability.args {
-        let Some(open) = template.find('{') else {
-            argv.push(template.clone());
-            continue;
-        };
-        let after = &template[open + 1..];
-        let close = after
-            .find('}')
-            .ok_or_else(|| format!("the argv template `{template}` has an unclosed placeholder"))?;
-        let name = &after[..close];
-        if !capability
-            .accept
-            .iter()
-            .any(|accepted| accepted.name == name)
-        {
-            return Err(format!(
-                "the capability `{}` uses `{{{name}}}` but does not accept it",
-                capability.id
-            ));
-        }
-        let value = values
-            .get(name)
-            .ok_or_else(|| format!("the capability `{}` requires `{name}`", capability.id))?;
-        argv.push(format!(
-            "{}{}{}",
-            &template[..open],
-            value,
-            &after[close + 1..]
-        ));
-    }
-    Ok(argv)
-}
-
-fn validate(name: &str, value: &str) -> Result<(), String> {
-    if value.is_empty() {
-        return Err(format!("`{name}` must not be empty"));
-    }
-    if value.len() > 512 {
-        return Err(format!("`{name}` is longer than 512 bytes"));
-    }
-    if value.chars().any(char::is_control) {
-        return Err(format!("`{name}` contains a control character"));
-    }
-    if value.starts_with('-') {
-        return Err(format!("`{name}` must not start with `-`"));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anth_extension::manifest::ExtensionManifest;
-    use serde_json::json;
 
-    fn capability() -> Capability {
-        let manifest = ExtensionManifest::parse(
-            r#"
-manifest_version = 2
-[extension]
-id = "org.anth.demo"
-version = "0.4.0"
-name = "Demo"
-abi = 3
-[runtime]
-kind = "wasm"
-[wasm]
-path = "extension.wasm"
-sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-[[capability]]
-id = "host.hostname"
-program = "hostname"
-"#,
-        )
-        .expect("manifest");
-        manifest.capability.into_iter().next().expect("capability")
+    fn spec(id: &str) -> ExecSpec {
+        ExecSpec {
+            id: id.to_string(),
+            program: PathBuf::from("hostname"),
+            args: Vec::new(),
+        }
     }
 
     #[test]
     fn the_demo_runner_is_deterministic() {
         let runner = DemoExecRunner::new();
-        let first = runner.run(&capability(), &json!({})).expect("run");
-        let second = runner.run(&capability(), &json!({})).expect("run");
+        let first = runner.run(&spec("host.hostname")).expect("run");
+        let second = runner.run(&spec("host.hostname")).expect("run");
         assert_eq!(first, second);
         assert_eq!(first.stdout, "demo-host");
     }
@@ -381,17 +258,13 @@ program = "hostname"
     #[test]
     fn an_unknown_demo_capability_is_refused() {
         let runner = DemoExecRunner::new();
-        let mut capability = capability();
-        capability.id = "host.unknown".to_string();
-        assert!(runner.run(&capability, &json!({})).is_err());
+        assert!(runner.run(&spec("host.unknown")).is_err());
     }
 
     #[test]
     fn the_system_runner_refuses_without_a_sandbox() {
         let runner = SystemExecRunner::unavailable();
-        let error = runner
-            .run(&capability(), &json!({}))
-            .expect_err("unavailable sandbox");
+        let error = runner.run(&spec("host.hostname")).expect_err("unavailable");
         assert!(error.message.contains("sandbox"), "{}", error.message);
     }
 }

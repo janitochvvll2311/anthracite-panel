@@ -71,18 +71,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anth-extension-host"
-version = "0.3.0"
-dependencies = [
- "anth-extension",
- "anth-wire",
- "libc",
- "proptest",
- "serde_json",
- "wait-timeout",
-]
-
-[[package]]
 name = "anth-host"
 version = "0.3.0"
 dependencies = [
@@ -101,6 +89,7 @@ dependencies = [
  "sha2 0.11.1",
  "tar",
  "tokio",
+ "wait-timeout",
  "zip",
 ]
 

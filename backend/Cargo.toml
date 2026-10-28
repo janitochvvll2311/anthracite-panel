@@ -1,5 +1,5 @@
 [workspace]
-members = ["anth-wire", "anth-host", "anth-plugin", "anth-extension", "anth-extension-host", "anth-panel"]
+members = ["anth-wire", "anth-host", "anth-plugin", "anth-extension", "anth-panel"]
 resolver = "2"
 
 [workspace.package]
@@ -13,7 +13,6 @@ anth-wire = { path = "anth-wire" }
 anth-host = { path = "anth-host" }
 anth-plugin = { path = "anth-plugin" }
 anth-extension = { path = "anth-extension" }
-anth-extension-host = { path = "anth-extension-host" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
