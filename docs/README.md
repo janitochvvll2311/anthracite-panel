@@ -31,3 +31,4 @@ describes.
 | [design/v0.3.0.md](design/v0.3.0.md) | Architecture draft, decisions, target layout and phases |
 | [design/phase-0-contracts.md](design/phase-0-contracts.md) | Phase 0 contracts: wire, config/state, bootstrap, HTTP/CLI, logging, git |
 | [design/protocol-changelog.md](design/protocol-changelog.md) | Wire versions and the pre-1.0.0 compatibility scaffold |
+| [design/cli-http-parity.md](design/cli-http-parity.md) | Audit matrix of socket, HTTP and CLI coverage, plus the transport-only exceptions |

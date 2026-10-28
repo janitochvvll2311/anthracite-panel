@@ -147,6 +147,29 @@ started with `--allow-reboot`. Both actions answer before they run.
 ```
 
 ```json
+{ "type": "files_download", "data": { "path": "var/lib/app/data.bin", "offset": 0, "max_bytes": 1048576 } }
+```
+
+```json
+{
+  "type": "files_download",
+  "data": {
+    "path": "var/lib/app/data.bin",
+    "offset": 0,
+    "size": 2500000,
+    "eof": false,
+    "data_base64": "AAECAwQ="
+  }
+}
+```
+
+`files_download` returns arbitrary bytes, base64-encoded, so a binary file does
+not have to be UTF-8. The default chunk is 1 MiB and the maximum one request may
+ask for is 8 MiB; a client loops with `offset` until `eof`. The whole file is
+still capped by `files.max_upload_bytes`, the same cap the HTTP download route
+uses.
+
+```json
 { "type": "files_delete", "data": { "path": "etc/hosts" } }
 ```
 

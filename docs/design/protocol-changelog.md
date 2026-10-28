@@ -24,6 +24,9 @@ with the daemon. The `volumes`, `volumes_mount`, `volumes_unmount`,
 `volume_partition_delete`, `volume_format`, `accounts`, `account_create`,
 `account_delete`, `account_set_password`, `account_group_create` and
 `account_group_delete` requests and their responses are additive to version 3.
+The `files_download` request and its `FileBytes` response are additive too; they
+give socket clients the binary read that HTTP already had as
+`/api/files/download`.
 
 ## Rules before 1.0.0
 

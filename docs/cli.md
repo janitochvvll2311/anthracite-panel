@@ -110,6 +110,7 @@ anth-panel files list --path /etc --limit 50
 anth-panel files list --path /var/log --cursor <opaque>
 anth-panel files read --path /etc/hosts
 anth-panel files read --path big.log --offset 4096 --max-bytes 8192
+anth-panel files download --path /var/lib/app/data.bin > data.bin
 anth-panel files delete --path /tmp/old.log
 anth-panel files write --path /tmp/motd < motd.txt
 anth-panel files write --path /tmp/note.txt --create < note.txt
@@ -130,7 +131,9 @@ with directories first and then the rest, each group sorted by name. `--limit`
 is 1–1000; `--cursor` is the `next` value from the previous page. `read` prints
 a UTF-8 text file, capped by
 `files.max_preview_bytes`; when it stops early, the next offset is printed to
-stderr. `delete` removes one file or symlink and requires `files.write = true`;
+stderr. `download` writes any regular file verbatim to stdout, in 1 MiB socket
+chunks, so it handles images and other binary data. `delete` removes one file or
+symlink and requires `files.write = true`;
 directories and the root are refused. `write` reads UTF-8 content from stdin
 (up to `files.max_upload_bytes`) and requires `files.write`; `--create` fails
 instead of replacing an existing file. `upload` sends any bytes from stdin
@@ -291,11 +294,14 @@ New users are created locked until a password is set. See
 
 ```bash
 anth-panel config get
+anth-panel config show
 anth-panel config validate
 anth-panel config set KEY VALUE
 ```
 
-- `get` prints the file.
+- `get` prints the file exactly as written, comments included.
+- `show` loads the file, applies defaults and prints the effective configuration
+  in the same shape as `GET /api/settings`.
 - `validate` parses and validates it without writing.
 - `set` changes one dotted key and parses the result before the atomic write.
   Comments and key order are preserved. A bad value leaves the file untouched.
