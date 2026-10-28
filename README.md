@@ -16,8 +16,9 @@ real host; storage mutations still need `CAP_SYS_ADMIN`. Phase 7 has started wit
 signed plugin bundles, frozen grants, the wasm ABI 3 runtime, guarded HTTP
 anchors, declared UI asset delivery and the plugin manager over CLI, HTTP and
 Settings; the sandboxed iframe bridge and the `hello` and read-only WireGuard
-reference bundles are in place. Phase 7 is code-complete; hardening/release is
-next.
+reference bundles are in place. Phase 7 is code-complete. Phase 8 has started
+with the dry-run v0.2 migration; fuzz/property tests, packaging and the release
+tag remain.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,

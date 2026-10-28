@@ -315,6 +315,18 @@ resolves only when it is unique. `call` sends one JSON request through the
 guest's `anth_cli` entry, prints `{"status":...,"value":...}` and exits non-zero
 for a status of 400 or above. See [plugins.md](plugins.md).
 
+## `migrate`
+
+```bash
+anth-panel --config /etc/anth/config.toml migrate --from /etc/anth/config.toml
+sudo anth-panel --config /etc/anth/config.toml migrate --from /etc/anth/config.toml --write --force
+```
+
+Maps a v0.2 settings file to v0.3 policy and, when present, the account and
+signing key to `secrets.toml` (`0600`). Dry run by default; `--write` applies and
+`--force` overwrites an existing target. Sessions and plugin grants are not
+migrated. See [migration.md](migration.md).
+
 ## `config`
 
 ```bash
