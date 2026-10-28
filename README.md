@@ -15,8 +15,8 @@ and password changes, are in place. Accounts success paths were validated on a
 real host; storage mutations still need `CAP_SYS_ADMIN`. Phase 7 has started with
 signed plugin bundles, frozen grants, the wasm ABI 3 runtime, guarded HTTP
 anchors, declared UI asset delivery and the plugin manager over CLI, HTTP and
-Settings; the iframe bridge and reference plugins remain. After Phase 7,
-hardening/release.
+Settings; the sandboxed iframe bridge is in place, and the reference plugins
+remain. After Phase 7, hardening/release.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
@@ -67,7 +67,8 @@ hardening/release.
   `plugin.toml`, per-file sha256, frozen per-plugin grants under `plugins.d/`,
   install/list/enable/disable/remove/approve over local CLI and HTTP, the
   Settings → Plugins panel, the wasmi ABI 3 runtime, guarded HTTP anchors and
-  declared UI asset delivery. The iframe bridge and reference plugins are next.
+  declared UI asset delivery and the sandboxed iframe bridge. The reference
+  plugins are next.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused

@@ -472,6 +472,7 @@ against `Host` when the header is present.
 | `POST /api/plugins/{id}/approve` | `{"accept_capabilities":true}` | — |
 | `GET|POST|PUT|PATCH|DELETE /api/plugins/{id}/{*path}` | raw body, max 1 MiB | method/path declared in the grant |
 | `GET /api/plugins/{id}/web/{*path}` | — | declared UI module |
+| `GET /p/{id}/{*module}` | — | host-owned iframe bootstrap for a declared module |
 
 Install answers `{id,name,version,capabilities,warning?}`. A signed bundle needs
 `[plugins] public_key`; an unsigned one is accepted only when

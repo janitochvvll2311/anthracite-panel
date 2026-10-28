@@ -167,6 +167,7 @@ All routes require a live panel session unless auth is disabled. Mutations check
 | `POST /api/plugins/{id}/approve` | `{"accept_capabilities":true}` | — |
 | `GET|POST|PUT|PATCH|DELETE /api/plugins/{id}/{*path}` | raw body, max 1 MiB | anchor declared in the grant |
 | `GET /api/plugins/{id}/web/{*path}` | — | declared UI module |
+| `GET /p/{id}/{*module}` | — | host-owned iframe bootstrap |
 
 The install answer carries `id`, `name`, `version`, `capabilities` and an
 optional `warning` when the bundle was unsigned. Errors use the common shape:
@@ -242,10 +243,33 @@ imported; anything else fails to link.
 anchors use `anth_http`; the host checks the method and path against the grant
 before running the guest.
 
+## UI isolation
+
+A declared UI slot is mounted by `<anth-plugin-frame>`:
+
+- The iframe uses `sandbox="allow-scripts"` with no `allow-same-origin`, so the
+  module has an opaque origin and no panel DOM, cookies or storage.
+- `/p/{id}/{module}` serves a host-owned bootstrap, not the raw module. The
+  bootstrap inlines the declared source as a blob import, sends `ready`, and
+  waits for the parent's init message.
+- The bootstrap CSP is `default-src 'none'`, a per-request nonce for its own
+  script, `blob:` for the module, `style-src 'unsafe-inline'`, data/blob images,
+  no network (`connect-src 'none'`) and `frame-ancestors 'self'`.
+- `postMessage` is accepted only from the frame's own `contentWindow`, with an
+  opaque (`null`) origin and the `anthPlugin` marker.
+- The parent sends the plugin/slot snapshot, the panel locale and theme tokens.
+- `api.call(path, body, method)` is checked against the plugin's frozen anchors
+  before the parent performs the same-origin fetch. An undeclared method/path
+  is refused without a network request.
+- `api.resize(height)` lets the widget size itself; errors show inside the
+  widget card and do not break the shell.
+
+The module contract is an exported `mount(root, api)` (or a default function).
+It is self-contained: dynamic imports beyond the blob are blocked by the CSP.
+
 ## Not yet in this cut
 
-- The sandboxed iframe bootstrap and `postMessage` bridge in the shell.
 - The `hello` and WireGuard reference bundles and their packaging scripts.
 
-The runtime, anchors and asset delivery already build on the frozen grant; the
-authority model and file formats above are enforced.
+The runtime, anchors, asset delivery and iframe bridge already build on the
+frozen grant; the authority model and file formats above are enforced.
