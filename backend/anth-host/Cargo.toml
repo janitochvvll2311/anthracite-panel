@@ -7,3 +7,5 @@ rust-version.workspace = true
 
 [dependencies]
 anth-wire.workspace = true
+libc.workspace = true
+serde_json.workspace = true

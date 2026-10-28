@@ -7,11 +7,9 @@ pub mod client;
 pub mod config;
 pub mod dispatch;
 pub mod files;
-pub mod firewall;
 pub mod lifecycle;
 pub mod log;
 pub mod migrate;
-pub mod network;
 pub mod plugins;
 pub mod process;
 pub mod render;
@@ -23,5 +21,6 @@ pub mod volumes;
 pub(crate) mod ws;
 pub mod www;
 
+pub use anth_host::{firewall, network};
 pub use config::Config;
 pub use log::{Logger, Settings};

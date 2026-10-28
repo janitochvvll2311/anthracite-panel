@@ -34,7 +34,13 @@ script_path=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "$
 # The daemon runs from the directory the helper was called in, not from the
 # repo, so relative config or plugin paths the caller expects still resolve.
 invoke_dir=$PWD
-run=/tmp/anthracite-panel/dev
+backend=${ANTH_BACKEND:-real}
+case "$backend" in
+  demo) run=/tmp/anthracite-panel/demo ;;
+  real) run=/tmp/anthracite-panel/dev ;;
+  *) echo "error: ANTH_BACKEND must be real or demo" >&2; exit 2 ;;
+esac
+export ANTH_BACKEND=$backend
 config=$run/config.toml
 backend_log=$run/backend.log
 frontend_log=$run/frontend.log
@@ -64,8 +70,13 @@ fi
 # Prefix for the daemon launch. A root shell needs no wrapper; `-n` keeps a
 # missing password from turning into an invisible prompt (see sudo_ready).
 daemon_prefix=()
-if [ "$(id -u)" -ne 0 ]; then
+if [ "$backend" = real ] && [ "$(id -u)" -ne 0 ]; then
   daemon_prefix=(sudo -n)
+fi
+
+if [ "$backend" = demo ]; then
+  echo "backend: demo (network/firewall simulated; no sudo)" >&2
+  echo "warning: this slice simulates only network and firewall; other mutations still target the host" >&2
 fi
 
 mkdir -p "$run"
@@ -306,20 +317,24 @@ start() {
   local launcher=''
   local start_daemon=0
 
-  # The daemon runs as root, so ask for the password up front: the cached
+  # The real daemon runs as root, so ask for the password up front: the cached
   # timestamp then covers the ownership fix, the capability probe and the
-  # launch itself.
-  if ! sudo_ready; then
+  # launch itself. The demo backend stays as the caller.
+  if [ "$backend" = real ] && ! sudo_ready; then
     exit 2
   fi
 
-  restore_run_owner
+  if [ "$backend" = real ]; then
+    restore_run_owner
+  fi
   start_one backend
   if ! alive "$(read_pid "$backend_pid")"; then
     start_daemon=1
   fi
 
-  check_network_tools
+  if [ "$backend" = real ]; then
+    check_network_tools
+  fi
 
   if [ "$start_daemon" = 1 ]; then
     echo "backend: building"

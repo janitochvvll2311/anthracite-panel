@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anth_host::backend::{FirewallBackend, NetworkBackend};
 use anth_wire::{
     ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
     TerminalOpened, TerminalOutput, TerminalSize, WireError,
@@ -34,8 +35,8 @@ pub struct Daemon {
     files: Result<FileService, String>,
     terminal: Arc<Sessions>,
     process: ProcessService,
-    network: NetworkService,
-    firewall: FirewallService,
+    network: Arc<dyn NetworkBackend>,
+    firewall: Arc<dyn FirewallBackend>,
     volumes: VolumesService,
     accounts: AccountsService,
     plugins: PluginService,
@@ -84,8 +85,25 @@ impl Daemon {
             config.process.spawn,
             config.process.spawn_allow.clone(),
         );
-        let network = NetworkService::new(config.network.control, config.network.manage);
-        let firewall = FirewallService::new(config.firewall.control);
+        let demo = std::env::var("ANTH_BACKEND")
+            .map(|value| value.eq_ignore_ascii_case("demo"))
+            .unwrap_or(false);
+        let network: Arc<dyn NetworkBackend> = if demo {
+            Arc::new(anth_host::demo::DemoNetwork::new(
+                config.network.control,
+                config.network.manage,
+            ))
+        } else {
+            Arc::new(NetworkService::new(
+                config.network.control,
+                config.network.manage,
+            ))
+        };
+        let firewall: Arc<dyn FirewallBackend> = if demo {
+            Arc::new(anth_host::demo::DemoFirewall::new(config.firewall.control))
+        } else {
+            Arc::new(FirewallService::new(config.firewall.control))
+        };
         let mut protected = vec![
             files_root,
             paths.config.clone(),
@@ -126,6 +144,12 @@ impl Daemon {
     /// Replaces the network service. Tests use it to script `ip` without
     /// touching the host; the transport still goes through `execute`.
     pub fn with_network(mut self, network: NetworkService) -> Self {
+        self.network = Arc::new(network);
+        self
+    }
+
+    /// Replaces the network backend with any implementation.
+    pub fn with_network_backend(mut self, network: Arc<dyn NetworkBackend>) -> Self {
         self.network = network;
         self
     }
@@ -133,6 +157,12 @@ impl Daemon {
     /// Replaces the firewall service. Tests use it to script `nft` without
     /// touching the host.
     pub fn with_firewall(mut self, firewall: FirewallService) -> Self {
+        self.firewall = Arc::new(firewall);
+        self
+    }
+
+    /// Replaces the firewall backend with any implementation.
+    pub fn with_firewall_backend(mut self, firewall: Arc<dyn FirewallBackend>) -> Self {
         self.firewall = firewall;
         self
     }

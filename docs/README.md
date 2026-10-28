@@ -27,6 +27,7 @@ code it describes.
 | [migration.md](migration.md) | Dry-run `migrate` from v0.2: policy mapping, secrets split, dropped sessions/grants and safety rules |
 | [hardening.md](hardening.md) | Property-test coverage, enforced security boundaries and the open hardening items |
 | [release.md](release.md) | Tarball layout, systemd unit, container build, checksum and the pre-release suffix policy |
+| [demo.md](demo.md) | In-progress hosted demo, `ANTH_BACKEND=demo`, simulated network/firewall and the host boundary |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design
