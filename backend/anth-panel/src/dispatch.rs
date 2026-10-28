@@ -6,7 +6,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anth_host::backend::{FilesService, FirewallService, NetworkService, ProcessesService};
+use anth_host::backend::{
+    FilesService, FirewallService, NetworkService, ProcessesService, TerminalService,
+};
 use anth_wire::{
     ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
     TerminalOpened, TerminalOutput, TerminalSize, WireError,
@@ -21,10 +23,10 @@ use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::SystemNetwork;
 use crate::plugins::PluginService;
-use crate::terminal::{OpenError, Sessions, resolve_shell, supports_line_editing};
 use crate::volumes::VolumesService;
 use anth_host::files::SystemFiles;
 use anth_host::process::SystemProcesses;
+use anth_host::terminal::{OpenError, SystemTerminal, resolve_shell, supports_line_editing};
 
 /// Everything a request may need from the process.
 pub struct Daemon {
@@ -33,7 +35,7 @@ pub struct Daemon {
     logger: Arc<Logger>,
     lifecycle: Arc<Lifecycle>,
     files: Result<Arc<dyn FilesService>, String>,
-    terminal: Arc<Sessions>,
+    terminal: Arc<dyn TerminalService>,
     process: Arc<dyn ProcessesService>,
     network: Arc<dyn NetworkService>,
     firewall: Arc<dyn FirewallService>,
@@ -94,7 +96,7 @@ impl Daemon {
                 ) as Arc<dyn FilesService>
             })
         };
-        let terminal = Arc::new(Sessions::new(
+        let terminal: Arc<dyn TerminalService> = Arc::new(SystemTerminal::new(
             config.terminal.enabled,
             config.terminal.max_sessions,
             Duration::from_secs(config.terminal.idle_seconds),
@@ -216,7 +218,7 @@ impl Daemon {
         &self.plugins
     }
 
-    pub fn terminals(&self) -> &Arc<Sessions> {
+    pub fn terminals(&self) -> &Arc<dyn TerminalService> {
         &self.terminal
     }
 

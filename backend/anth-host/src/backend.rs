@@ -284,3 +284,82 @@ impl ProcessesService for crate::process::SystemProcesses {
         crate::process::SystemProcesses::spawn(self, program, args, cwd)
     }
 }
+
+pub trait TerminalService: Send + Sync {
+    fn enabled(&self) -> bool;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn open(
+        &self,
+        owner: &str,
+        program: &str,
+        size: anth_wire::TerminalSize,
+    ) -> Result<String, crate::terminal::OpenError>;
+    fn read<'a>(
+        &'a self,
+        owner: &'a str,
+        id: &'a str,
+        wait_ms: u32,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<crate::terminal::Chunk, WireError>> + Send + 'a,
+        >,
+    >;
+    fn write(&self, owner: &str, id: &str, bytes: &[u8]) -> Result<(), WireError>;
+    fn resize(&self, owner: &str, id: &str, size: anth_wire::TerminalSize)
+    -> Result<(), WireError>;
+    fn close(&self, owner: &str, id: &str) -> Result<(), WireError>;
+    fn close_owner(&self, owner: &str) -> usize;
+    fn reap(&self) -> usize;
+}
+
+impl TerminalService for crate::terminal::SystemTerminal {
+    fn enabled(&self) -> bool {
+        self.enabled()
+    }
+    fn len(&self) -> usize {
+        self.len()
+    }
+    fn open(
+        &self,
+        owner: &str,
+        program: &str,
+        size: anth_wire::TerminalSize,
+    ) -> Result<String, crate::terminal::OpenError> {
+        self.open(owner, program, size)
+    }
+    fn read<'a>(
+        &'a self,
+        owner: &'a str,
+        id: &'a str,
+        wait_ms: u32,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<crate::terminal::Chunk, WireError>> + Send + 'a,
+        >,
+    > {
+        Box::pin(self.read(owner, id, wait_ms))
+    }
+    fn write(&self, owner: &str, id: &str, bytes: &[u8]) -> Result<(), WireError> {
+        self.write(owner, id, bytes)
+    }
+    fn resize(
+        &self,
+        owner: &str,
+        id: &str,
+        size: anth_wire::TerminalSize,
+    ) -> Result<(), WireError> {
+        self.resize(owner, id, size)
+    }
+    fn close(&self, owner: &str, id: &str) -> Result<(), WireError> {
+        self.close(owner, id)
+    }
+    fn close_owner(&self, owner: &str) -> usize {
+        self.close_owner(owner)
+    }
+    fn reap(&self) -> usize {
+        self.reap()
+    }
+}

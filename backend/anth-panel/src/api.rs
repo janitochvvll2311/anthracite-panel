@@ -2289,9 +2289,9 @@ async fn ws_terminal(
     let daemon = Arc::clone(&state.daemon);
     let owner = authed.sid.clone();
     Ok(websocket
-        .max_message_size(crate::terminal::web::MAX_WEB_MESSAGE)
-        .max_frame_size(crate::terminal::web::MAX_WEB_MESSAGE)
-        .on_upgrade(move |socket| crate::terminal::web::serve_socket(socket, daemon, owner, size)))
+        .max_message_size(crate::terminal_web::MAX_WEB_MESSAGE)
+        .max_frame_size(crate::terminal_web::MAX_WEB_MESSAGE)
+        .on_upgrade(move |socket| crate::terminal_web::serve_socket(socket, daemon, owner, size)))
 }
 
 async fn index() -> HttpResponse {

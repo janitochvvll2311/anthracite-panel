@@ -137,7 +137,7 @@ impl Loan {
 }
 
 /// The open terminals, by opaque handle.
-pub struct Sessions {
+pub struct SystemTerminal {
     inner: Mutex<HashMap<String, Loan>>,
     next: AtomicU64,
     max: usize,
@@ -146,7 +146,7 @@ pub struct Sessions {
     now: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
 
-impl Sessions {
+impl SystemTerminal {
     pub fn new(enabled: bool, max: usize, idle: Duration) -> Self {
         Self::with_clock(enabled, max, idle, Arc::new(Instant::now))
     }

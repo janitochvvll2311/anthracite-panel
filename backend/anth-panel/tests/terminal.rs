@@ -7,7 +7,7 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anth_panel::terminal::{OpenError, PtySession, Session, Sessions};
+use anth_panel::terminal::{OpenError, PtySession, Session, SystemTerminal};
 use anth_wire::TerminalSize;
 
 fn size(cols: u16, rows: u16) -> TerminalSize {
@@ -33,7 +33,7 @@ fn read_until(reader: &mut (dyn Read + Send), needle: &str, within: Duration) ->
 }
 
 #[allow(dead_code)]
-fn drain_until(sessions: &Sessions, id: &str, needle: &str) -> String {
+fn drain_until(sessions: &SystemTerminal, id: &str, needle: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut seen = String::new();
     while Instant::now() < deadline {
@@ -128,7 +128,7 @@ fn an_absurd_size_is_rejected_before_spawning() {
 
 #[test]
 fn closing_a_session_kills_the_shell_process_group() {
-    let sessions = Sessions::new(true, 4, Duration::ZERO);
+    let sessions = SystemTerminal::new(true, 4, Duration::ZERO);
     let id = sessions
         .open("test", "/bin/sh", size(80, 24))
         .expect("open");
@@ -167,7 +167,7 @@ fn closing_a_session_kills_the_shell_process_group() {
 
 #[test]
 fn a_quiet_read_does_not_advance_seq() {
-    let sessions = Sessions::new(true, 2, Duration::ZERO);
+    let sessions = SystemTerminal::new(true, 2, Duration::ZERO);
     let id = sessions.open("test", "/bin/sh", size(80, 24)).unwrap();
     sessions.write("test", &id, b"echo FIRST\n").unwrap();
     let chunk = {
@@ -196,7 +196,7 @@ fn a_quiet_read_does_not_advance_seq() {
 
 #[test]
 fn the_registry_enforces_the_session_cap() {
-    let sessions = Sessions::new(true, 2, Duration::ZERO);
+    let sessions = SystemTerminal::new(true, 2, Duration::ZERO);
     let first = sessions.open("test", "/bin/sh", size(80, 24)).unwrap();
     let _second = sessions.open("test", "/bin/sh", size(80, 24)).unwrap();
     match sessions.open("test", "/bin/sh", size(80, 24)) {
@@ -209,7 +209,7 @@ fn the_registry_enforces_the_session_cap() {
 
 #[test]
 fn a_handle_is_invisible_to_another_owner() {
-    let sessions = Sessions::new(true, 2, Duration::ZERO);
+    let sessions = SystemTerminal::new(true, 2, Duration::ZERO);
     let id = sessions.open("owner-a", "/bin/sh", size(80, 24)).unwrap();
     let error = sessions.write("owner-b", &id, b"id\n").unwrap_err();
     assert_eq!(error.kind, anth_wire::ErrorKind::NotFound);
@@ -223,7 +223,7 @@ fn an_idle_session_is_reaped_and_a_used_one_is_not() {
     let start = Instant::now();
     let clock = Arc::new(Mutex::new(start));
     let now = Arc::clone(&clock);
-    let sessions = Sessions::with_clock(
+    let sessions = SystemTerminal::with_clock(
         true,
         2,
         Duration::from_secs(10),
@@ -247,7 +247,7 @@ fn an_idle_session_is_reaped_and_a_used_one_is_not() {
 
 #[test]
 fn a_terminal_reports_the_exit_code() {
-    let sessions = Sessions::new(true, 2, Duration::ZERO);
+    let sessions = SystemTerminal::new(true, 2, Duration::ZERO);
     let id = sessions.open("test", "/bin/sh", size(80, 24)).unwrap();
     sessions.write("test", &id, b"exit 7\n").unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -263,7 +263,7 @@ fn a_terminal_reports_the_exit_code() {
 
 #[test]
 fn a_missing_program_fails_to_spawn() {
-    let sessions = Sessions::new(true, 2, Duration::ZERO);
+    let sessions = SystemTerminal::new(true, 2, Duration::ZERO);
     assert!(
         sessions
             .open("test", "/nonexistent/shell", size(80, 24))

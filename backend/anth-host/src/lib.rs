@@ -21,6 +21,7 @@ pub mod files;
 pub mod firewall;
 pub mod network;
 pub mod process;
+pub mod terminal;
 
 const HOSTNAME: &str = "/proc/sys/kernel/hostname";
 const OS_RELEASE: &str = "/etc/os-release";
