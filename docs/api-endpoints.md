@@ -470,12 +470,17 @@ against `Host` when the header is present.
 | `POST /api/plugins/{id}/disable` | `{}` | — |
 | `POST /api/plugins/{id}/remove` | `{}` | — |
 | `POST /api/plugins/{id}/approve` | `{"accept_capabilities":true}` | — |
+| `GET|POST|PUT|PATCH|DELETE /api/plugins/{id}/{*path}` | raw body, max 1 MiB | method/path declared in the grant |
+| `GET /api/plugins/{id}/web/{*path}` | — | declared UI module |
 
 Install answers `{id,name,version,capabilities,warning?}`. A signed bundle needs
 `[plugins] public_key`; an unsigned one is accepted only when
 `require_signature = false` and carries a warning. A manifest whose capability
 surface changed is `409` with code `plugin_capabilities_changed` until approved.
-See [plugins.md](plugins.md).
+An anchor runs the guest's `anth_http` entry and maps its
+`{"status":...,"body":...}` reply. A UI module is served only when the grant
+declares it, with an explicit content type, `nosniff` and `no-store`. See
+[plugins.md](plugins.md).
 
 ## Settings and lifecycle
 

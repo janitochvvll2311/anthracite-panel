@@ -31,6 +31,8 @@ The rule is functional parity, not identical presentation:
 | Validate config | — | — | `config validate` |
 | Plugin catalogue and install | — (local bundle root) | `GET /api/plugins`, `POST /api/plugins/install` | `plugin list`, `plugin install` |
 | Enable/disable/approve/remove a plugin | — (local grant) | `POST /api/plugins/{id}/…` | `plugin enable/disable/approve/remove` |
+| Plugin anchor | — (local runtime) | `/api/plugins/{id}/{*path}` | `plugin call` |
+| Declared plugin UI asset | — | `GET /api/plugins/{id}/web/{*path}` | — (browser only) |
 
 ### Files
 

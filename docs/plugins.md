@@ -165,11 +165,24 @@ All routes require a live panel session unless auth is disabled. Mutations check
 | `POST /api/plugins/{id}/disable` | `{}` | — |
 | `POST /api/plugins/{id}/remove` | `{}` | — |
 | `POST /api/plugins/{id}/approve` | `{"accept_capabilities":true}` | — |
+| `GET|POST|PUT|PATCH|DELETE /api/plugins/{id}/{*path}` | raw body, max 1 MiB | anchor declared in the grant |
+| `GET /api/plugins/{id}/web/{*path}` | — | declared UI module |
 
 The install answer carries `id`, `name`, `version`, `capabilities` and an
 optional `warning` when the bundle was unsigned. Errors use the common shape:
 `403 forbidden`, `404 not_found`, `409 conflict` with code
 `plugin_capabilities_changed`, or `400 invalid`.
+
+An anchor must match a `[[api]]` method and path in the frozen grant; an
+undeclared pair is `404`. The body is passed to the guest as text, not parsed by
+the host. A guest reply `{"status":200,"body":...}` becomes that HTTP status;
+a string body is `text/plain`, anything else is JSON, and every response is
+`nosniff`. Plugin log lines go to the daemon log with the plugin id, never to
+the HTTP response.
+
+UI assets are served only when a `[[ui]]` slot declares that exact module. The
+handler canonicalises the path, refuses a symlink that leaves the bundle, caps
+the file at 4 MiB, and sends `nosniff`, `no-store` and an explicit content type.
 
 ## CLI
 
@@ -182,6 +195,8 @@ anth-panel plugin disable org.anth.hello
 anth-panel plugin enable hello
 anth-panel plugin approve org.anth.hello --accept-capabilities
 anth-panel plugin remove org.anth.hello --yes
+anth-panel plugin call org.anth.hello '{"action":"greeting"}'
+printf '{"action":"greeting"}' | anth-panel plugin call hello -
 ```
 
 Plugin management is local, like `config`: it reads and writes the bundle root
@@ -205,12 +220,32 @@ the section template:
   the picker.
 - The layout stacks at the component breakpoint and keeps 44 px touch targets.
 
+## Runtime
+
+The guest runs in `wasmi`, with no JIT and no WASI. Each call compiles the
+module once, creates a fresh store and invokes one of the three entries:
+`anth_http`, `anth_cli` or `anth_direct`. Only `anth_exec` and `anth_log` are
+imported; anything else fails to link.
+
+- `[plugins] fuel` (default 50,000,000) bounds instructions.
+- Linear memory is capped at 64 MiB; one instance, table and memory.
+- One call may run at most 32 capabilities; stdout from a capability is capped
+  at 64 KiB and guest log at 64 KiB.
+- A trap, an out-of-fuel call or a malformed ABI is a transport error, not a
+  plugin reply.
+- The guest names a capability; the host renders the argv from the frozen
+  template and validates every value. A value never becomes two arguments and
+  a leading `-` is refused.
+
+`plugin call` uses the `anth_cli` entry and prints
+`{"status":...,"value":...}`; a status of 400 or above exits non-zero. HTTP
+anchors use `anth_http`; the host checks the method and path against the grant
+before running the guest.
+
 ## Not yet in this cut
 
-- `wasmi` runtime, ABI 3 exports, `anth_exec`/`anth_log` and job records.
-- `GET|POST /api/plugins/{id}/{*path}` anchors.
-- Declared UI module delivery and the sandboxed iframe/postMessage bridge.
+- The sandboxed iframe bootstrap and `postMessage` bridge in the shell.
 - The `hello` and WireGuard reference bundles and their packaging scripts.
 
-Those pieces build on `PluginService::load` and the frozen grant; the authority
-model and file formats above are already enforced.
+The runtime, anchors and asset delivery already build on the frozen grant; the
+authority model and file formats above are enforced.

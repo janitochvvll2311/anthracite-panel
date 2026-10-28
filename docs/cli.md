@@ -301,6 +301,8 @@ anth-panel plugin enable hello
 anth-panel plugin disable org.anth.hello
 anth-panel plugin approve org.anth.hello --accept-capabilities
 anth-panel plugin remove org.anth.hello --yes
+anth-panel plugin call org.anth.hello '{"action":"greeting"}'
+printf '{"action":"greeting"}' | anth-panel plugin call hello -
 ```
 
 Plugin management is local, like `config`: it reads and writes the bundle root
@@ -309,7 +311,9 @@ re-reads them per request, so changes apply without a restart. A signed bundle
 needs `[plugins] public_key`; unsigned ones
 are accepted only with `require_signature = false` and print a warning. A
 changed capability surface needs the explicit `--accept-capabilities`. An alias
-resolves only when it is unique. See [plugins.md](plugins.md).
+resolves only when it is unique. `call` sends one JSON request through the
+guest's `anth_cli` entry, prints `{"status":...,"value":...}` and exits non-zero
+for a status of 400 or above. See [plugins.md](plugins.md).
 
 ## `config`
 
