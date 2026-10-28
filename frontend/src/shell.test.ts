@@ -291,7 +291,7 @@ test('the storage section owns Volumes and Partitions tabs', async () => {
   ).not.toBeNull()
 })
 
-test('the settings section owns a single General panel and parks Home', async () => {
+test('the settings section owns General and Plugins panels', async () => {
   const element = mountShell(OPEN)
   await flush()
   const root = element.shadowRoot!
@@ -306,8 +306,14 @@ test('the settings section owns a single General panel and parks Home', async ()
   const inner = outer.querySelector('anth-tab-panel') as AnthTabPanel
   expect(inner.active).toBe('general')
   const tabs = inner.shadowRoot!.querySelectorAll<HTMLButtonElement>('.tab')
-  expect([...tabs].map((tab) => tab.textContent)).toEqual(['General'])
+  expect([...tabs].map((tab) => tab.textContent)).toEqual(['General', 'Plugins'])
   expect(inner.querySelector('[data-tab="general"]')?.querySelector('anth-settings')).not.toBeNull()
+  expect(inner.querySelector('[data-tab="plugins"]')?.querySelector('anth-plugins')).not.toBeNull()
+
+  location.hash = '#/settings/plugins'
+  window.dispatchEvent(new Event('hashchange'))
+  await flush()
+  expect(inner.active).toBe('plugins')
 })
 
 test('an unauthenticated shell shows the registration form instead of the tabs', async () => {

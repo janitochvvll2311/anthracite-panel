@@ -1642,6 +1642,110 @@
   <source>Groups</source>
   <target>Grupos</target>
 </trans-unit>
+<trans-unit id="sd25f80f53b9f728c">
+  <source>Choose a signed .zip bundle.</source>
+  <target>Elegí un bundle .zip firmado.</target>
+</trans-unit>
+<trans-unit id="s2e04f2d0ecc0321c">
+  <source>Confirm that you trust this bundle before installing it.</source>
+  <target>Confirmá que confiás en este bundle antes de instalarlo.</target>
+</trans-unit>
+<trans-unit id="s1cc2385c7bf202e8">
+  <source>Installed <x id="0" equiv-text="${result.id}"/>, but <x id="1" equiv-text="${result.warning}"/></source>
+  <target>Se instaló <x id="0" equiv-text="${result.id}"/>, pero <x id="1" equiv-text="${result.warning}"/></target>
+</trans-unit>
+<trans-unit id="s9e10a81f90200f6d">
+  <source>Installed <x id="0" equiv-text="${result.id} ${result.version}"/>.</source>
+  <target>Se instaló <x id="0" equiv-text="${result.id} ${result.version}"/>.</target>
+</trans-unit>
+<trans-unit id="sa86c6c66bada29cb">
+  <source>plugins</source>
+  <target>plugins</target>
+</trans-unit>
+<trans-unit id="s66585797fc6b83d2">
+  <source>web install</source>
+  <target>instalación web</target>
+</trans-unit>
+<trans-unit id="s6b2dcda792e17f23">
+  <source>Plugins are disabled; set [plugins] enabled = true to load them.</source>
+  <target>Los plugins están deshabilitados; activá [plugins] enabled = true para cargarlos.</target>
+</trans-unit>
+<trans-unit id="s1f52a18aa2c1a47e">
+  <source>Browser installs are off. Install a bundle with anth-panel plugin install.</source>
+  <target>Las instalaciones desde el navegador están deshabilitadas. Instalá un bundle con anth-panel plugin install.</target>
+</trans-unit>
+<trans-unit id="s4ed97193d36e8979">
+  <source>Signed bundle (.zip)</source>
+  <target>Bundle firmado (.zip)</target>
+</trans-unit>
+<trans-unit id="saf6517f1b7e04419">
+  <source>I trust this bundle; it can run code as the daemon.</source>
+  <target>Confío en este bundle; puede ejecutar código como el daemon.</target>
+</trans-unit>
+<trans-unit id="s6196153c4b0c1ea0">
+  <source>Install</source>
+  <target>Instalar</target>
+</trans-unit>
+<trans-unit id="se710daaff232b31b">
+  <source>Filter plugins</source>
+  <target>Filtrar plugins</target>
+</trans-unit>
+<trans-unit id="s70d885806b56289e">
+  <source>enabled</source>
+  <target>activo</target>
+</trans-unit>
+<trans-unit id="s0fa3391db68e4425">
+  <source>disabled</source>
+  <target>deshabilitado</target>
+</trans-unit>
+<trans-unit id="s5d223afa4dd33645">
+  <source>unapproved</source>
+  <target>sin aprobar</target>
+</trans-unit>
+<trans-unit id="s10c8e4cae4e11503">
+  <source>Disable</source>
+  <target>Deshabilitar</target>
+</trans-unit>
+<trans-unit id="s9078ee819c18df6e">
+  <source>Enable</source>
+  <target>Habilitar</target>
+</trans-unit>
+<trans-unit id="se5d01bef737e2e3a">
+  <source>Approve</source>
+  <target>Aprobar</target>
+</trans-unit>
+<trans-unit id="sea4f08110bb8f15d">
+  <source>Remove</source>
+  <target>Quitar</target>
+</trans-unit>
+<trans-unit id="s0ddcd14040dcd625">
+  <source>Approve the capabilities of <x id="0" equiv-text="${plugin.id}"/>?</source>
+  <target>¿Aprobar las capacidades de <x id="0" equiv-text="${plugin.id}"/>?</target>
+</trans-unit>
+<trans-unit id="sbd5c7d27ae8c5ddb">
+  <source>Remove <x id="0" equiv-text="${plugin.id}"/> and its grant?</source>
+  <target>¿Quitar <x id="0" equiv-text="${plugin.id}"/> y su grant?</target>
+</trans-unit>
+<trans-unit id="sb87f3b70150bc6c7">
+  <source>Loading plugins…</source>
+  <target>Cargando plugins…</target>
+</trans-unit>
+<trans-unit id="s25e975e05968f6ba">
+  <source>No plugins installed.</source>
+  <target>No hay plugins instalados.</target>
+</trans-unit>
+<trans-unit id="sac7324a02a295064">
+  <source>No plugins match the filter.</source>
+  <target>Ningún plugin coincide con el filtro.</target>
+</trans-unit>
+<trans-unit id="s2dadaeb59c011680">
+  <source>1 plugin · active: <x id="0" equiv-text="${enabled}"/></source>
+  <target>1 plugin · activos: <x id="0" equiv-text="${enabled}"/></target>
+</trans-unit>
+<trans-unit id="s85864554c4d58276">
+  <source><x id="0" equiv-text="${count}"/> plugins · active: <x id="1" equiv-text="${enabled}"/></source>
+  <target><x id="0" equiv-text="${count}"/> plugins · activos: <x id="1" equiv-text="${enabled}"/></target>
+</trans-unit>
 </body>
 </file>
 </xliff>

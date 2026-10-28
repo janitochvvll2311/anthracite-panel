@@ -43,6 +43,8 @@ import type { StorageClient } from './storage-client'
 import type { AnthStorage } from './storage'
 import type { AccountClient } from './accounts-client'
 import type { AnthAccounts } from './accounts'
+import type { PluginsClient } from './plugins-client'
+import type { AnthPlugins } from './plugins'
 import { changeLocale, currentLocale } from './i18n'
 import type { PanelLocale } from './i18n'
 import { DRAWER_CLOSE_EVENT } from './nav-drawer'
@@ -62,6 +64,7 @@ import './firewall'
 import './host-info'
 import './nav-drawer'
 import './network'
+import './plugins'
 import './processes'
 import './settings'
 import './storage'
@@ -80,6 +83,7 @@ export class AnthApp extends HTMLElement {
   static firewallClient: FirewallClient | undefined
   static storageClient: StorageClient | undefined
   static accountsClient: AccountClient | undefined
+  static pluginsClient: PluginsClient | undefined
   static settingsClient: SettingsClient | undefined
 
   #auth?: AuthState
@@ -113,6 +117,7 @@ export class AnthApp extends HTMLElement {
   #usersTabSection?: HTMLElement
   #groupsTabSection?: HTMLElement
   #generalTabSection?: HTMLElement
+  #pluginsTabSection?: HTMLElement
   #drawer?: AnthNavDrawer
 
   connectedCallback(): void {
@@ -563,12 +568,14 @@ export class AnthApp extends HTMLElement {
       .map(
         (panel) => `
           <section data-tab="${panel.id}" label="${escape(panel.label)}">
-            <anth-settings></anth-settings>
+            ${panel.id === 'plugins' ? '<anth-plugins></anth-plugins>' : '<anth-settings></anth-settings>'}
           </section>`,
       )
       .join('')
     const generalTabSection =
-      settingsPanel.querySelector<HTMLElement>(':scope > section') ?? undefined
+      settingsPanel.querySelector<HTMLElement>('[data-tab="general"]') ?? undefined
+    const pluginsTabSection =
+      settingsPanel.querySelector<HTMLElement>('[data-tab="plugins"]') ?? undefined
     settingsSection?.append(settingsPanel)
 
     // Assign the clients before the panels join the page: they start reading
@@ -603,6 +610,10 @@ export class AnthApp extends HTMLElement {
     for (const settings of settingsPanel.querySelectorAll<AnthSettings>('anth-settings')) {
       settings.client = AnthApp.settingsClient
     }
+    const plugins = settingsPanel.querySelector<AnthPlugins>('anth-plugins')
+    if (plugins) {
+      plugins.client = AnthApp.pluginsClient
+    }
 
     container.append(outer)
 
@@ -628,6 +639,7 @@ export class AnthApp extends HTMLElement {
     this.#usersTabSection = usersTabSection
     this.#groupsTabSection = groupsTabSection
     this.#generalTabSection = generalTabSection
+    this.#pluginsTabSection = pluginsTabSection
 
     homeSection
       ?.querySelector('anth-fab')
@@ -687,6 +699,7 @@ export class AnthApp extends HTMLElement {
     this.#usersTabSection = undefined
     this.#groupsTabSection = undefined
     this.#generalTabSection = undefined
+    this.#pluginsTabSection = undefined
     container.innerHTML = ''
   }
 
@@ -710,6 +723,7 @@ export class AnthApp extends HTMLElement {
     this.#usersTabSection?.setAttribute('label', msg('Users'))
     this.#groupsTabSection?.setAttribute('label', msg('Groups'))
     this.#generalTabSection?.setAttribute('label', msg('General'))
+    this.#pluginsTabSection?.setAttribute('label', msg('Plugins'))
     const card = this.#homeSection?.querySelector('[data-host-card]')
     const label = card?.querySelector('.card-head .label')
     if (label) {
@@ -733,7 +747,8 @@ export class AnthApp extends HTMLElement {
       this.#accountsPanel.active = this.#route.section === 'accounts' ? this.#route.panel : 'users'
     }
     if (this.#settingsPanel) {
-      this.#settingsPanel.active = 'general'
+      this.#settingsPanel.active =
+        this.#route.section === 'settings' ? this.#route.panel : 'general'
     }
     this.#tabPanel.refresh()
     this.#filesPanel?.refresh()
