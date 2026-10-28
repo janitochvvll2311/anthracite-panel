@@ -70,3 +70,31 @@ test('the demo process table is synthetic and mutable', async ({ request }) => {
   })
   expect(spawn.ok()).toBeTruthy()
 })
+
+test('the demo storage inventory is synthetic and mutable', async ({ page, request }) => {
+  await page.goto('/#/storage')
+  const storage = page.locator('anth-storage').first()
+  await expect(storage.locator('.count')).toContainText('4 devices')
+  await expect(storage.getByText('demo-data')).toBeVisible()
+
+  const created = await request.post('/api/volumes/partition/create', {
+    data: { disk: '/dev/sdb', kind: 'linux', start_bytes: 0, size_bytes: 2_147_483_648 },
+  })
+  expect(created.ok()).toBeTruthy()
+  expect((await created.json()).message).toContain('/dev/sdb2')
+
+  const formatted = await request.post('/api/volumes/format', {
+    data: { partition: '/dev/sdb2', fs_type: 'ext4', label: 'e2e' },
+  })
+  expect(formatted.ok()).toBeTruthy()
+
+  const resized = await request.post('/api/volumes/partition/resize', {
+    data: { disk: '/dev/sdb', number: 2, size_bytes: 4_294_967_296 },
+  })
+  expect(resized.ok()).toBeTruthy()
+
+  const deleted = await request.post('/api/volumes/partition/delete', {
+    data: { disk: '/dev/sdb', number: 2 },
+  })
+  expect(deleted.ok()).toBeTruthy()
+})
