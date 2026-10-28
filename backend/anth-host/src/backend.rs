@@ -451,3 +451,20 @@ impl AccountsService for crate::accounts::SystemAccounts {
         crate::accounts::SystemAccounts::delete_group(self, request)
     }
 }
+
+/// Every host service one request may need.
+///
+/// The real build holds one set for the whole daemon; the demo build holds one
+/// set per anonymous session. `files` keeps its construction error because a
+/// missing or unreadable root must fail that feature without taking the other
+/// services down.
+#[derive(Clone)]
+pub struct Backends {
+    pub files: Result<std::sync::Arc<dyn FilesService>, String>,
+    pub terminal: std::sync::Arc<dyn TerminalService>,
+    pub process: std::sync::Arc<dyn ProcessesService>,
+    pub network: std::sync::Arc<dyn NetworkService>,
+    pub firewall: std::sync::Arc<dyn FirewallService>,
+    pub volumes: std::sync::Arc<dyn VolumesService>,
+    pub accounts: std::sync::Arc<dyn AccountsService>,
+}

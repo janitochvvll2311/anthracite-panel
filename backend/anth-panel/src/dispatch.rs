@@ -7,8 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anth_host::backend::{
-    AccountsService, FilesService, FirewallService, NetworkService, ProcessesService,
-    TerminalService, VolumesService,
+    Backends, FilesService, FirewallService, NetworkService, TerminalService,
 };
 use anth_wire::{
     ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
@@ -29,21 +28,35 @@ use anth_host::process::SystemProcesses;
 use anth_host::terminal::{OpenError, SystemTerminal, resolve_shell, supports_line_editing};
 use anth_host::volumes::SystemVolumes;
 
+tokio::task_local! {
+    /// The demo owner assigned by the HTTP session middleware.
+    static DEMO_OWNER: String;
+}
+
+/// Runs one HTTP request under a demo owner.
+pub fn with_demo_owner<F: std::future::Future>(
+    owner: String,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    DEMO_OWNER.scope(owner, future)
+}
+
+/// How the host services are selected for this process.
+enum Mode {
+    /// One backend set for the whole daemon.
+    Real(Backends),
+    /// One backend set per demo session, created on demand.
+    Demo(Arc<anth_host::demo::DemoSessions>),
+}
+
 /// Everything a request may need from the process.
 pub struct Daemon {
     config: Config,
     paths: Paths,
     logger: Arc<Logger>,
     lifecycle: Arc<Lifecycle>,
-    files: Result<Arc<dyn FilesService>, String>,
-    terminal: Arc<dyn TerminalService>,
-    process: Arc<dyn ProcessesService>,
-    network: Arc<dyn NetworkService>,
-    firewall: Arc<dyn FirewallService>,
-    volumes: Arc<dyn VolumesService>,
-    accounts: Arc<dyn AccountsService>,
+    mode: Mode,
     plugins: PluginService,
-    demo: bool,
 }
 
 impl Daemon {
@@ -58,32 +71,50 @@ impl Daemon {
         logger: Arc<Logger>,
         lifecycle: Arc<Lifecycle>,
     ) -> Self {
-        let demo = std::env::var("ANTH_BACKEND")
-            .map(|value| value.eq_ignore_ascii_case("demo"))
-            .unwrap_or(false);
-        let root = if demo {
-            paths.state_dir.join("demo/files")
+        // A demo build cannot select the real backends, even if the process
+        // environment still says `ANTH_BACKEND=real`.
+        let demo = cfg!(feature = "demo")
+            || std::env::var("ANTH_BACKEND")
+                .map(|value| value.eq_ignore_ascii_case("demo"))
+                .unwrap_or(false);
+        let mode = if demo {
+            let settings = anth_host::demo::DemoSettings {
+                root: paths.state_dir.join("demo/sessions"),
+                ttl_seconds: config.demo.session_ttl_seconds,
+                max_sessions: config.demo.max_sessions,
+                features: config.demo.features.clone(),
+                files: anth_host::demo::DemoFileSettings {
+                    max_entries: config.files.max_entries,
+                    max_preview_bytes: config.files.max_preview_bytes,
+                    max_upload_bytes: config.files.max_upload_bytes,
+                    max_trash_bytes: config.files.max_trash_bytes,
+                    max_archive_bytes: config.files.max_archive_bytes,
+                },
+                process: anth_host::demo::DemoProcessSettings {
+                    control: config.process.control,
+                    spawn: config.process.spawn,
+                    spawn_allow: config.process.spawn_allow.clone(),
+                },
+                network_control: config.network.control,
+                network_manage: config.network.manage,
+                firewall_control: config.firewall.control,
+                volumes: config.volumes.settings(),
+                accounts: config.accounts.settings(),
+                terminal_enabled: config.terminal.enabled,
+                terminal_max_sessions: config.terminal.max_sessions,
+            };
+            Mode::Demo(Arc::new(anth_host::demo::DemoSessions::new(settings)))
         } else {
-            let root = std::path::PathBuf::from(&config.files.root);
-            if root.is_absolute() {
-                root
-            } else {
-                paths.config_dir.join(root)
-            }
-        };
-        let files_root = root.clone();
-        let files: Result<Arc<dyn FilesService>, String> = if demo {
-            anth_host::demo::DemoFiles::new(
-                root,
-                config.files.max_entries,
-                config.files.max_preview_bytes,
-                config.files.max_upload_bytes,
-                config.files.max_trash_bytes,
-                config.files.max_archive_bytes,
-            )
-            .map(|service| Arc::new(service) as Arc<dyn FilesService>)
-        } else {
-            SystemFiles::new(
+            let root = {
+                let root = std::path::PathBuf::from(&config.files.root);
+                if root.is_absolute() {
+                    root
+                } else {
+                    paths.config_dir.join(root)
+                }
+            };
+            let files_root = root.clone();
+            let files = SystemFiles::new(
                 root,
                 config.files.write,
                 config.files.max_entries,
@@ -96,74 +127,41 @@ impl Daemon {
                         .with_trash(config.files.trash, config.files.max_trash_bytes)
                         .with_archive_limit(config.files.max_archive_bytes),
                 ) as Arc<dyn FilesService>
+            });
+            let mut protected = vec![
+                files_root,
+                paths.config.clone(),
+                paths.socket.clone(),
+                paths.state_dir.clone(),
+                paths.secrets.clone(),
+                paths.sessions.clone(),
+                paths.plugins.clone(),
+                paths.grants.clone(),
+                paths.plugin_state.clone(),
+            ];
+            if let Ok(executable) = std::env::current_exe() {
+                protected.push(executable);
+            }
+            Mode::Real(Backends {
+                files,
+                terminal: Arc::new(SystemTerminal::new(
+                    config.terminal.enabled,
+                    config.terminal.max_sessions,
+                    Duration::from_secs(config.terminal.idle_seconds),
+                )),
+                process: Arc::new(SystemProcesses::new(
+                    config.process.control,
+                    config.process.spawn,
+                    config.process.spawn_allow.clone(),
+                )),
+                network: Arc::new(SystemNetwork::new(
+                    config.network.control,
+                    config.network.manage,
+                )),
+                firewall: Arc::new(SystemFirewall::new(config.firewall.control)),
+                volumes: Arc::new(SystemVolumes::new(config.volumes.settings(), protected)),
+                accounts: Arc::new(SystemAccounts::new(config.accounts.settings())),
             })
-        };
-        let terminal: Arc<dyn TerminalService> = if demo {
-            Arc::new(anth_host::demo::DemoTerminal::new(
-                config.terminal.enabled,
-                config.terminal.max_sessions,
-            ))
-        } else {
-            Arc::new(SystemTerminal::new(
-                config.terminal.enabled,
-                config.terminal.max_sessions,
-                Duration::from_secs(config.terminal.idle_seconds),
-            ))
-        };
-        let process: Arc<dyn ProcessesService> = if demo {
-            Arc::new(anth_host::demo::DemoProcesses::new(
-                config.process.control,
-                config.process.spawn,
-                config.process.spawn_allow.clone(),
-            ))
-        } else {
-            Arc::new(SystemProcesses::new(
-                config.process.control,
-                config.process.spawn,
-                config.process.spawn_allow.clone(),
-            ))
-        };
-        let network: Arc<dyn NetworkService> = if demo {
-            Arc::new(anth_host::demo::DemoNetwork::new(
-                config.network.control,
-                config.network.manage,
-            ))
-        } else {
-            Arc::new(SystemNetwork::new(
-                config.network.control,
-                config.network.manage,
-            ))
-        };
-        let firewall: Arc<dyn FirewallService> = if demo {
-            Arc::new(anth_host::demo::DemoFirewall::new(config.firewall.control))
-        } else {
-            Arc::new(SystemFirewall::new(config.firewall.control))
-        };
-        let mut protected = vec![
-            files_root,
-            paths.config.clone(),
-            paths.socket.clone(),
-            paths.state_dir.clone(),
-            paths.secrets.clone(),
-            paths.sessions.clone(),
-            paths.plugins.clone(),
-            paths.grants.clone(),
-            paths.plugin_state.clone(),
-        ];
-        if let Ok(executable) = std::env::current_exe() {
-            protected.push(executable);
-        }
-        let volumes: Arc<dyn VolumesService> = if demo {
-            Arc::new(anth_host::demo::DemoVolumes::new(config.volumes.settings()))
-        } else {
-            Arc::new(SystemVolumes::new(config.volumes.settings(), protected))
-        };
-        let accounts: Arc<dyn AccountsService> = if demo {
-            Arc::new(anth_host::demo::DemoAccounts::new(
-                config.accounts.settings(),
-            ))
-        } else {
-            Arc::new(SystemAccounts::new(config.accounts.settings()))
         };
         let plugins = PluginService::new(
             config.plugins.clone(),
@@ -175,55 +173,60 @@ impl Daemon {
             paths,
             logger,
             lifecycle,
-            files,
-            terminal,
-            process,
-            network,
-            firewall,
-            volumes,
-            accounts,
+            mode,
             plugins,
-            demo,
         }
     }
 
     /// Replaces the network service. Tests use it to script `ip` without
     /// touching the host; the transport still goes through `execute`.
     pub fn with_network(mut self, network: SystemNetwork) -> Self {
-        self.network = Arc::new(network);
+        if let Mode::Real(backends) = &mut self.mode {
+            backends.network = Arc::new(network);
+        }
         self
     }
 
     /// Replaces the network backend with any implementation.
     pub fn with_network_backend(mut self, network: Arc<dyn NetworkService>) -> Self {
-        self.network = network;
+        if let Mode::Real(backends) = &mut self.mode {
+            backends.network = network;
+        }
         self
     }
 
     /// Replaces the firewall service. Tests use it to script `nft` without
     /// touching the host.
     pub fn with_firewall(mut self, firewall: SystemFirewall) -> Self {
-        self.firewall = Arc::new(firewall);
+        if let Mode::Real(backends) = &mut self.mode {
+            backends.firewall = Arc::new(firewall);
+        }
         self
     }
 
     /// Replaces the firewall backend with any implementation.
     pub fn with_firewall_backend(mut self, firewall: Arc<dyn FirewallService>) -> Self {
-        self.firewall = firewall;
+        if let Mode::Real(backends) = &mut self.mode {
+            backends.firewall = firewall;
+        }
         self
     }
 
     /// Replaces the volumes service. Tests use it to script the probe without
     /// touching the host.
     pub fn with_volumes(mut self, volumes: SystemVolumes) -> Self {
-        self.volumes = Arc::new(volumes);
+        if let Mode::Real(backends) = &mut self.mode {
+            backends.volumes = Arc::new(volumes);
+        }
         self
     }
 
     /// Replaces the accounts service. Tests use it to script `/etc` and the
     /// account tools without touching the host.
     pub fn with_accounts(mut self, accounts: SystemAccounts) -> Self {
-        self.accounts = Arc::new(accounts);
+        if let Mode::Real(backends) = &mut self.mode {
+            backends.accounts = Arc::new(accounts);
+        }
         self
     }
 
@@ -238,23 +241,68 @@ impl Daemon {
         &self.plugins
     }
 
-    pub fn terminals(&self) -> &Arc<dyn TerminalService> {
-        &self.terminal
+    /// The real terminal, for tests that inspect it directly.
+    pub fn terminals(&self) -> Option<&Arc<dyn TerminalService>> {
+        match &self.mode {
+            Mode::Real(backends) => Some(&backends.terminal),
+            Mode::Demo(_) => None,
+        }
     }
 
     pub fn close_terminals(&self, owner: &str) -> usize {
-        self.terminal.close_owner(owner)
+        match &self.mode {
+            Mode::Real(backends) => backends.terminal.close_owner(owner),
+            Mode::Demo(sessions) => sessions.close_terminals(owner),
+        }
     }
 
-    /// Reaps idle terminals forever. Called once by the serving command.
+    /// Reaps idle terminals and demo sessions forever. Called once by the
+    /// serving command.
     pub fn spawn_terminal_reaper(self: &Arc<Self>) {
         let daemon = Arc::clone(self);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
-                daemon.terminal.reap();
+                daemon.reap_idle();
             }
         });
+    }
+
+    fn reap_idle(&self) {
+        match &self.mode {
+            Mode::Real(backends) => {
+                backends.terminal.reap();
+            }
+            Mode::Demo(sessions) => {
+                sessions.reap();
+            }
+        }
+    }
+
+    fn backends(&self, owner: &str) -> Backends {
+        match &self.mode {
+            Mode::Real(backends) => backends.clone(),
+            Mode::Demo(sessions) => sessions.backends(owner),
+        }
+    }
+
+    fn demo(&self) -> Option<&Arc<anth_host::demo::DemoSessions>> {
+        match &self.mode {
+            Mode::Demo(sessions) => Some(sessions),
+            Mode::Real(_) => None,
+        }
+    }
+
+    pub fn demo_mode(&self) -> bool {
+        self.demo().is_some()
+    }
+
+    pub fn demo_status(&self, owner: &str) -> Option<anth_host::demo::DemoStatus> {
+        self.demo().map(|sessions| sessions.status(owner))
+    }
+
+    pub fn demo_reset(&self, owner: &str) -> Option<u64> {
+        self.demo().and_then(|sessions| sessions.reset(owner))
     }
 
     pub fn config(&self) -> &Config {
@@ -273,28 +321,27 @@ impl Daemon {
         &self.lifecycle
     }
 
-    fn files(&self) -> Result<&Arc<dyn FilesService>, WireError> {
-        self.files
-            .as_ref()
-            .map_err(|error| WireError::internal(format!("the file root is unavailable: {error}")))
-    }
-
     /// Reads an image for the HTTP preview route.
     ///
     /// Images are a binary resource rather than a wire command: the socket
     /// remains a JSON transport, and the HTTP adapter streams the bytes.
-    pub fn image(&self, path: &str) -> Result<(Vec<u8>, &'static str), WireError> {
-        self.files()?.image(path)
+    pub fn image(&self, owner: &str, path: &str) -> Result<(Vec<u8>, &'static str), WireError> {
+        let backends = self.backends(owner);
+        files_of(&backends)?.image(path)
     }
 
     /// Reads a file for the HTTP download route.
-    pub fn download(&self, path: &str) -> Result<Vec<u8>, WireError> {
-        self.files()?.download(path)
+    pub fn download(&self, owner: &str, path: &str) -> Result<Vec<u8>, WireError> {
+        let backends = self.backends(owner);
+        files_of(&backends)?.download(path)
     }
 
     /// Handles one request.
     pub async fn execute(&self, request: Request) -> Response {
-        self.execute_as("daemon", request).await
+        let owner = DEMO_OWNER
+            .try_with(Clone::clone)
+            .unwrap_or_else(|_| "daemon".to_string());
+        self.execute_as(&owner, request).await
     }
 
     /// Handles one request for a named owner.
@@ -328,6 +375,17 @@ impl Daemon {
     }
 
     async fn dispatch(&self, owner: &str, request: Request) -> Result<Response, WireError> {
+        let backends = self.backends(owner);
+        if let Some(demo) = self.demo()
+            && let Some(name) = feature_of(&request)
+            && !demo.features().enabled(name)
+        {
+            return Err(WireError::new(
+                ErrorKind::Forbidden,
+                "demo_feature_disabled",
+                format!("the demo has `{name}` turned off"),
+            ));
+        }
         if matches!(
             &request,
             Request::TerminalOpen { .. }
@@ -335,7 +393,7 @@ impl Daemon {
                 | Request::TerminalWrite { .. }
                 | Request::TerminalResize { .. }
                 | Request::TerminalClose { .. }
-        ) && !self.terminal.enabled()
+        ) && !backends.terminal.enabled()
         {
             return Err(WireError::new(
                 ErrorKind::Forbidden,
@@ -358,38 +416,38 @@ impl Daemon {
                 Ok(Response::HostInfo(info))
             }
             Request::Network => {
-                let network = self.network.clone();
+                let network = backends.network.clone();
                 Ok(Response::Network(
                     blocking(move || network.snapshot()).await?,
                 ))
             }
             Request::NetworkSetState { name, up } => {
-                let network = self.network.clone();
+                let network = backends.network.clone();
                 let message = blocking(move || network.set_state(&name, up)).await?;
                 Ok(Response::NetworkChanged { message })
             }
             Request::NetworkCreate(args) => {
-                let network = self.network.clone();
+                let network = backends.network.clone();
                 let message = blocking(move || network.create(&args)).await?;
                 Ok(Response::NetworkChanged { message })
             }
             Request::NetworkEdit(args) => {
-                let network = self.network.clone();
+                let network = backends.network.clone();
                 let message = blocking(move || network.edit(&args)).await?;
                 Ok(Response::NetworkChanged { message })
             }
             Request::NetworkRename { name, new_name } => {
-                let network = self.network.clone();
+                let network = backends.network.clone();
                 let message = blocking(move || network.rename(&name, &new_name)).await?;
                 Ok(Response::NetworkChanged { message })
             }
             Request::NetworkDelete { name, peer } => {
-                let network = self.network.clone();
+                let network = backends.network.clone();
                 let message = blocking(move || network.delete(&name, peer.as_deref())).await?;
                 Ok(Response::NetworkChanged { message })
             }
             Request::FirewallStatus => {
-                let firewall = self.firewall.clone();
+                let firewall = backends.firewall.clone();
                 Ok(Response::FirewallSnapshot(
                     blocking(move || firewall.snapshot()).await?,
                 ))
@@ -401,7 +459,7 @@ impl Daemon {
                 port,
                 comment,
             } => {
-                let firewall = self.firewall.clone();
+                let firewall = backends.firewall.clone();
                 let message = blocking(move || {
                     firewall.add(chain, action, protocol, port, comment.as_deref())
                 })
@@ -416,7 +474,7 @@ impl Daemon {
                 port,
                 comment,
             } => {
-                let firewall = self.firewall.clone();
+                let firewall = backends.firewall.clone();
                 let message = blocking(move || {
                     firewall.update(handle, chain, action, protocol, port, comment.as_deref())
                 })
@@ -424,84 +482,84 @@ impl Daemon {
                 Ok(Response::FirewallChanged { message })
             }
             Request::FirewallDelete { handle } => {
-                let firewall = self.firewall.clone();
+                let firewall = backends.firewall.clone();
                 let message = blocking(move || firewall.delete(handle)).await?;
                 Ok(Response::FirewallChanged { message })
             }
             Request::FirewallFlush { chain } => {
-                let firewall = self.firewall.clone();
+                let firewall = backends.firewall.clone();
                 let message = blocking(move || firewall.flush(chain)).await?;
                 Ok(Response::FirewallChanged { message })
             }
             Request::FirewallSetPolicy { chain, policy } => {
-                let firewall = self.firewall.clone();
+                let firewall = backends.firewall.clone();
                 let message = blocking(move || firewall.set_policy(chain, policy)).await?;
                 Ok(Response::FirewallChanged { message })
             }
             Request::Volumes => {
-                let volumes = self.volumes.clone();
+                let volumes = backends.volumes.clone();
                 Ok(Response::Volumes(
                     blocking(move || Ok::<_, WireError>(volumes.snapshot())).await?,
                 ))
             }
             Request::VolumesMount(request) => {
-                let volumes = self.volumes.clone();
+                let volumes = backends.volumes.clone();
                 let message = blocking(move || volumes.mount(&request)).await?;
                 Ok(Response::VolumeChanged { message })
             }
             Request::VolumesUnmount(request) => {
-                let volumes = self.volumes.clone();
+                let volumes = backends.volumes.clone();
                 let message = blocking(move || volumes.unmount(&request)).await?;
                 Ok(Response::VolumeChanged { message })
             }
             Request::VolumePartitionCreate(request) => {
-                let volumes = self.volumes.clone();
+                let volumes = backends.volumes.clone();
                 let message = blocking(move || volumes.create_partition(&request)).await?;
                 Ok(Response::VolumeChanged { message })
             }
             Request::VolumePartitionResize(request) => {
-                let volumes = self.volumes.clone();
+                let volumes = backends.volumes.clone();
                 let message = blocking(move || volumes.resize_partition(&request)).await?;
                 Ok(Response::VolumeChanged { message })
             }
             Request::VolumePartitionDelete(request) => {
-                let volumes = self.volumes.clone();
+                let volumes = backends.volumes.clone();
                 let message = blocking(move || volumes.delete_partition(&request)).await?;
                 Ok(Response::VolumeChanged { message })
             }
             Request::VolumeFormat(request) => {
-                let volumes = self.volumes.clone();
+                let volumes = backends.volumes.clone();
                 let message = blocking(move || volumes.format_partition(&request)).await?;
                 Ok(Response::VolumeChanged { message })
             }
             Request::Accounts => {
-                let accounts = self.accounts.clone();
+                let accounts = backends.accounts.clone();
                 Ok(Response::Accounts(
                     blocking(move || Ok::<_, WireError>(accounts.snapshot())).await?,
                 ))
             }
             Request::AccountCreate(request) => {
-                let accounts = self.accounts.clone();
+                let accounts = backends.accounts.clone();
                 let message = blocking(move || accounts.create_user(&request)).await?;
                 Ok(Response::AccountChanged { message })
             }
             Request::AccountDelete(request) => {
-                let accounts = self.accounts.clone();
+                let accounts = backends.accounts.clone();
                 let message = blocking(move || accounts.delete_user(&request)).await?;
                 Ok(Response::AccountChanged { message })
             }
             Request::AccountSetPassword(request) => {
-                let accounts = self.accounts.clone();
+                let accounts = backends.accounts.clone();
                 let message = blocking(move || accounts.set_password(&request)).await?;
                 Ok(Response::AccountChanged { message })
             }
             Request::AccountGroupCreate(request) => {
-                let accounts = self.accounts.clone();
+                let accounts = backends.accounts.clone();
                 let message = blocking(move || accounts.create_group(&request)).await?;
                 Ok(Response::AccountChanged { message })
             }
             Request::AccountGroupDelete(request) => {
-                let accounts = self.accounts.clone();
+                let accounts = backends.accounts.clone();
                 let message = blocking(move || accounts.delete_group(&request)).await?;
                 Ok(Response::AccountChanged { message })
             }
@@ -532,21 +590,23 @@ impl Daemon {
                 cursor,
             } => {
                 let request = PageRequest { limit, cursor };
-                Ok(Response::FilesList(self.files()?.list(&path, &request)?))
+                Ok(Response::FilesList(
+                    files_of(&backends)?.list(&path, &request)?,
+                ))
             }
             Request::FilesRead {
                 path,
                 offset,
                 max_bytes,
             } => Ok(Response::FilesRead(
-                self.files()?.read(&path, offset, max_bytes)?,
+                files_of(&backends)?.read(&path, offset, max_bytes)?,
             )),
             Request::FilesDownload {
                 path,
                 offset,
                 max_bytes,
             } => {
-                let chunk = self.files()?.download_chunk(&path, offset, max_bytes)?;
+                let chunk = files_of(&backends)?.download_chunk(&path, offset, max_bytes)?;
                 Ok(Response::FilesDownload(FileBytes {
                     path: chunk.path,
                     offset: chunk.offset,
@@ -556,14 +616,14 @@ impl Daemon {
                 }))
             }
             Request::FilesDelete { path } => Ok(Response::FilesDeleted {
-                path: self.files()?.delete(&path)?,
+                path: files_of(&backends)?.delete(&path)?,
             }),
             Request::FilesWrite {
                 path,
                 content,
                 create,
             } => Ok(Response::FilesWritten(
-                self.files()?.write(&path, &content, create)?,
+                files_of(&backends)?.write(&path, &content, create)?,
             )),
             Request::FilesUpload {
                 path,
@@ -574,39 +634,40 @@ impl Daemon {
                     .decode(content_base64.as_bytes())
                     .map_err(|_| WireError::invalid("the upload content is not valid base64"))?;
                 Ok(Response::FilesWritten(
-                    self.files()?.write_bytes(&path, &bytes, create)?,
+                    files_of(&backends)?.write_bytes(&path, &bytes, create)?,
                 ))
             }
             Request::FilesTrash { path } => {
-                let (path, id) = self.files()?.trash(&path)?;
+                let (path, id) = files_of(&backends)?.trash(&path)?;
                 Ok(Response::FilesTrashed { path, id })
             }
-            Request::FilesTrashList => Ok(Response::FilesTrashList(self.files()?.trash_listing()?)),
+            Request::FilesTrashList => Ok(Response::FilesTrashList(
+                files_of(&backends)?.trash_listing()?,
+            )),
             Request::FilesTrashRestore { id, overwrite } => {
-                let (id, path) = self.files()?.restore(&id, overwrite)?;
+                let (id, path) = files_of(&backends)?.restore(&id, overwrite)?;
                 Ok(Response::FilesRestored { id, path })
             }
             Request::FilesTrashEmpty => Ok(Response::FilesTrashEmptied {
-                removed: self.files()?.empty_trash()?,
+                removed: files_of(&backends)?.empty_trash()?,
             }),
             Request::FilesArchive {
                 path,
                 destination,
                 format,
             } => Ok(Response::FilesArchiveCreated {
-                path: self
-                    .files()?
-                    .create_archive(&path, destination.as_deref(), format)?,
+                path: files_of(&backends)?.create_archive(&path, destination.as_deref(), format)?,
             }),
             Request::FilesArchiveList { path } => Ok(Response::FilesArchiveList(
-                self.files()?.list_archive(&path)?,
+                files_of(&backends)?.list_archive(&path)?,
             )),
             Request::FilesArchiveExtract { path, into } => {
-                let (path, entries) = self.files()?.extract_archive(&path, into.as_deref())?;
+                let (path, entries) =
+                    files_of(&backends)?.extract_archive(&path, into.as_deref())?;
                 Ok(Response::FilesArchiveExtracted { path, entries })
             }
             Request::TerminalOpen { cols, rows } => {
-                let program = if self.demo {
+                let program = if self.demo_mode() {
                     let configured = &self.config.terminal.shell;
                     if configured == "auto" || !std::path::Path::new(configured).is_absolute() {
                         "/bin/sh".to_string()
@@ -619,8 +680,8 @@ impl Daemon {
                     })?
                 };
                 let size = TerminalSize { cols, rows };
-                let line_editing = !self.demo && supports_line_editing(&program);
-                let sessions = Arc::clone(&self.terminal);
+                let line_editing = !self.demo_mode() && supports_line_editing(&program);
+                let sessions = Arc::clone(&backends.terminal);
                 let owner = owner.to_string();
                 let asked = program.clone();
                 let id = blocking(move || {
@@ -638,7 +699,7 @@ impl Daemon {
                 }))
             }
             Request::TerminalRead { id, wait_ms } => {
-                let chunk = self.terminal.read(owner, &id, wait_ms).await?;
+                let chunk = backends.terminal.read(owner, &id, wait_ms).await?;
                 Ok(Response::TerminalOutput(TerminalOutput {
                     id,
                     seq: chunk.seq,
@@ -657,25 +718,26 @@ impl Daemon {
                         bytes.len()
                     )));
                 }
-                let sessions = Arc::clone(&self.terminal);
+                let sessions = Arc::clone(&backends.terminal);
                 let owner = owner.to_string();
                 blocking(move || sessions.write(&owner, &id, &bytes)).await?;
                 Ok(Response::Accepted)
             }
             Request::TerminalResize { id, cols, rows } => {
-                self.terminal
+                backends
+                    .terminal
                     .resize(owner, &id, TerminalSize { cols, rows })?;
                 Ok(Response::Accepted)
             }
             Request::TerminalClose { id } => {
-                let sessions = Arc::clone(&self.terminal);
+                let sessions = Arc::clone(&backends.terminal);
                 let owner = owner.to_string();
                 blocking(move || sessions.close(&owner, &id)).await?;
                 Ok(Response::Accepted)
             }
             Request::Processes { limit, cursor } => {
                 let request = PageRequest { limit, cursor };
-                let process = self.process.clone();
+                let process = backends.process.clone();
                 let snapshot = blocking(move || process.snapshot(&request)).await?;
                 Ok(Response::Processes(snapshot))
             }
@@ -685,12 +747,12 @@ impl Daemon {
                 signal,
                 group,
             } => {
-                let process = self.process.clone();
+                let process = backends.process.clone();
                 blocking(move || process.signal(pid, start_ticks, signal, group)).await?;
                 Ok(Response::ProcessSignalled { pid, signal })
             }
             Request::ProcessSpawn { program, args, cwd } => {
-                let process = self.process.clone();
+                let process = backends.process.clone();
                 let started =
                     blocking(move || process.spawn(&program, &args, cwd.as_deref())).await?;
                 Ok(Response::ProcessStarted(started))
@@ -744,6 +806,66 @@ where
     tokio::task::spawn_blocking(task)
         .await
         .map_err(|error| WireError::internal(format!("the blocking task failed: {error}")))?
+}
+
+fn files_of(backends: &Backends) -> Result<&Arc<dyn FilesService>, WireError> {
+    backends
+        .files
+        .as_ref()
+        .map_err(|error| WireError::internal(format!("the file root is unavailable: {error}")))
+}
+
+/// Which demo feature one request belongs to, when the demo can turn it off.
+fn feature_of(request: &Request) -> Option<&'static str> {
+    match request {
+        Request::Network
+        | Request::NetworkSetState { .. }
+        | Request::NetworkCreate(_)
+        | Request::NetworkEdit(_)
+        | Request::NetworkRename { .. }
+        | Request::NetworkDelete { .. } => Some("network"),
+        Request::FirewallStatus
+        | Request::FirewallAdd { .. }
+        | Request::FirewallUpdate { .. }
+        | Request::FirewallDelete { .. }
+        | Request::FirewallFlush { .. }
+        | Request::FirewallSetPolicy { .. } => Some("firewall"),
+        Request::Volumes
+        | Request::VolumesMount(_)
+        | Request::VolumesUnmount(_)
+        | Request::VolumePartitionCreate(_)
+        | Request::VolumePartitionResize(_)
+        | Request::VolumePartitionDelete(_)
+        | Request::VolumeFormat(_) => Some("volumes"),
+        Request::Accounts
+        | Request::AccountCreate(_)
+        | Request::AccountDelete(_)
+        | Request::AccountSetPassword(_)
+        | Request::AccountGroupCreate(_)
+        | Request::AccountGroupDelete(_) => Some("accounts"),
+        Request::FilesList { .. }
+        | Request::FilesRead { .. }
+        | Request::FilesDownload { .. }
+        | Request::FilesDelete { .. }
+        | Request::FilesWrite { .. }
+        | Request::FilesUpload { .. }
+        | Request::FilesTrash { .. }
+        | Request::FilesTrashList
+        | Request::FilesTrashRestore { .. }
+        | Request::FilesTrashEmpty
+        | Request::FilesArchive { .. }
+        | Request::FilesArchiveList { .. }
+        | Request::FilesArchiveExtract { .. } => Some("files"),
+        Request::TerminalOpen { .. }
+        | Request::TerminalRead { .. }
+        | Request::TerminalWrite { .. }
+        | Request::TerminalResize { .. }
+        | Request::TerminalClose { .. } => Some("terminal"),
+        Request::Processes { .. }
+        | Request::ProcessSignal { .. }
+        | Request::ProcessSpawn { .. } => Some("processes"),
+        _ => None,
+    }
 }
 
 fn operation_of(request: &Request) -> &'static str {

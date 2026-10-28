@@ -42,3 +42,6 @@ proptest = "1"
 wat = "1"
 tokio-tungstenite.workspace = true
 tower.workspace = true
+
+[features]
+demo = []

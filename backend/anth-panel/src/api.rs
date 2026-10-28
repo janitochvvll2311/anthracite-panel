@@ -48,6 +48,11 @@ use crate::www;
 const MAX_BODY_BYTES: usize = 8 * 1024;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_ATTEMPTS: usize = 5;
+const DEMO_COOKIE: &str = "anth_demo";
+
+/// The owner assigned by the demo cookie middleware.
+#[derive(Clone)]
+struct DemoOwner(String);
 
 /// Shared state for the HTTP routes.
 #[derive(Clone)]
@@ -81,6 +86,8 @@ pub fn router(state: AppState) -> Router {
         .saturating_add(1024 * 1024);
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/api/demo", get(demo_status))
+        .route("/api/demo/reset", post(demo_reset))
         .route("/api/auth/state", get(auth_state))
         .route("/api/auth/register", post(register))
         .route("/api/auth/login", post(login))
@@ -176,10 +183,105 @@ pub fn router(state: AppState) -> Router {
         .route("/{*path}", get(static_path))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            demo_session,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             log_request,
         ))
         .with_state(state)
         .layer(axum::middleware::from_fn(protocol_header))
+}
+
+/// Gives every demo browser its own anonymous owner.
+///
+/// It runs before the auth extractor, which uses the extracted owner when real
+/// auth is off. A cookie is generated server-side, so a visitor cannot choose
+/// another session's id.
+async fn demo_session(
+    State(state): State<AppState>,
+    mut request: AxumRequest,
+    next: axum::middleware::Next,
+) -> HttpResponse {
+    if !state.daemon.demo_mode() {
+        return next.run(request).await;
+    }
+    let existing = request
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value.split(';').map(str::trim).find_map(|part| {
+                part.strip_prefix(&format!("{DEMO_COOKIE}=")).filter(|sid| {
+                    sid.len() == 32 && sid.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            })
+        })
+        .map(str::to_string);
+    let (sid, fresh) = match existing {
+        Some(sid) => (sid, false),
+        None => {
+            let mut bytes = [0u8; 16];
+            if getrandom::fill(&mut bytes).is_err() {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "the demo session could not be created",
+                )
+                    .into_response();
+            }
+            (hex(&bytes), true)
+        }
+    };
+    request.extensions_mut().insert(DemoOwner(sid.clone()));
+    let mut response = crate::dispatch::with_demo_owner(sid.clone(), next.run(request)).await;
+    if fresh {
+        let max_age = state
+            .daemon
+            .demo_status(&sid)
+            .map_or(86_400, |status| status.ttl_seconds.max(3600));
+        let secure = if state.daemon.config().auth.cookie_secure {
+            "; Secure"
+        } else {
+            ""
+        };
+        let cookie = format!(
+            "{DEMO_COOKIE}={sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}"
+        );
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().insert(header::SET_COOKIE, value);
+        }
+    }
+    response
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(char::from_digit(u32::from(byte >> 4), 16).expect("nibble"));
+        text.push(char::from_digit(u32::from(byte & 0x0f), 16).expect("nibble"));
+    }
+    text
+}
+
+async fn demo_status(State(state): State<AppState>, authed: Authed) -> Json<Value> {
+    match state.daemon.demo_status(&authed.sid) {
+        Some(status) => Json(json!({ "mode": "demo", "status": status })),
+        None => Json(json!({ "mode": "real" })),
+    }
+}
+
+async fn demo_reset(
+    State(state): State<AppState>,
+    authed: Authed,
+) -> Result<Json<Value>, ApiError> {
+    let reset_ms = state.daemon.demo_reset(&authed.sid).ok_or_else(|| {
+        ApiError::from(WireError::new(
+            ErrorKind::NotFound,
+            "demo_unavailable",
+            "the demo backend is not active",
+        ))
+    })?;
+    Ok(Json(json!({ "status": "reset", "reset_ms": reset_ms })))
 }
 
 async fn log_request(
@@ -246,6 +348,11 @@ impl FromRequestParts<AppState> for Authed {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         if !state.auth.required() {
+            if let Some(owner) = parts.extensions.get::<DemoOwner>() {
+                return Ok(Authed {
+                    sid: owner.0.clone(),
+                });
+            }
             return Ok(Authed {
                 sid: "anonymous".to_string(),
             });
@@ -761,7 +868,7 @@ async fn network(
 
 async fn watch_network(
     State(state): State<AppState>,
-    _authed: Authed,
+    authed: Authed,
     query: Result<Query<WatchQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
@@ -770,12 +877,14 @@ async fn watch_network(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let daemon = Arc::clone(&state.daemon);
     let logger = Arc::clone(&state.logger);
+    let owner = authed.sid;
     let stream = stream::unfold(ticker, move |mut ticker| {
         let daemon = Arc::clone(&daemon);
         let logger = Arc::clone(&logger);
+        let owner = owner.clone();
         async move {
             ticker.tick().await;
-            let event = match daemon.execute(Request::Network).await {
+            let event = match daemon.execute_as(&owner, Request::Network).await {
                 Response::Network(snapshot) => Event::default()
                     .event("network")
                     .id(snapshot.timestamp_ms.to_string())
@@ -1889,7 +1998,7 @@ async fn processes(
 
 async fn watch_processes(
     State(state): State<AppState>,
-    _authed: Authed,
+    authed: Authed,
     query: Result<Query<ProcessWatchQuery>, QueryRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
@@ -1906,17 +2015,22 @@ async fn watch_processes(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let daemon = Arc::clone(&state.daemon);
     let logger = Arc::clone(&state.logger);
+    let owner = authed.sid;
     let stream = stream::unfold(ticker, move |mut ticker| {
         let daemon = Arc::clone(&daemon);
         let logger = Arc::clone(&logger);
+        let owner = owner.clone();
         let request = request.clone();
         async move {
             ticker.tick().await;
             let event = match daemon
-                .execute(Request::Processes {
-                    limit: request.limit,
-                    cursor: None,
-                })
+                .execute_as(
+                    &owner,
+                    Request::Processes {
+                        limit: request.limit,
+                        cursor: None,
+                    },
+                )
                 .await
             {
                 Response::Processes(snapshot) => Event::default()
@@ -2109,11 +2223,14 @@ async fn upload_file(
 
 async fn image_file(
     State(state): State<AppState>,
-    _authed: Authed,
+    authed: Authed,
     query: Result<Query<FilePathQuery>, QueryRejection>,
 ) -> Result<HttpResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
-    let (bytes, content_type) = state.daemon.image(&query.path).map_err(ApiError::from)?;
+    let (bytes, content_type) = state
+        .daemon
+        .image(&authed.sid, &query.path)
+        .map_err(ApiError::from)?;
     let mut response = binary_response(bytes, content_type);
     response.headers_mut().insert(
         HeaderName::from_static("content-security-policy"),
@@ -2124,11 +2241,14 @@ async fn image_file(
 
 async fn download_file(
     State(state): State<AppState>,
-    _authed: Authed,
+    authed: Authed,
     query: Result<Query<FilePathQuery>, QueryRejection>,
 ) -> Result<HttpResponse, ApiError> {
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
-    let bytes = state.daemon.download(&query.path).map_err(ApiError::from)?;
+    let bytes = state
+        .daemon
+        .download(&authed.sid, &query.path)
+        .map_err(ApiError::from)?;
     let mut response = binary_response(bytes, "application/octet-stream");
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,

@@ -141,7 +141,7 @@ async fn a_socket_terminal_echoes_and_reports_the_exit_code() {
         .call(&Request::TerminalClose { id })
         .await
         .expect("close");
-    assert!(daemon.terminals().is_empty());
+    assert!(daemon.terminals().expect("real backends").is_empty());
     server.abort();
 }
 
@@ -154,7 +154,7 @@ async fn a_disabled_terminal_refuses_the_open() {
         .await
         .expect_err("disabled");
     assert_eq!(error.code, "terminal_disabled");
-    assert!(daemon.terminals().is_empty());
+    assert!(daemon.terminals().expect("real backends").is_empty());
     server.abort();
 }
 

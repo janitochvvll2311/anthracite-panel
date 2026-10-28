@@ -276,6 +276,30 @@ impl Default for PluginsConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct DemoConfig {
+    /// Empty means every demo feature. Otherwise only these names are on:
+    /// `network`, `firewall`, `files`, `processes`, `volumes`,
+    /// `accounts` and `terminal`.
+    pub features: Vec<String>,
+    /// Idle lifetime of one anonymous demo session; `0` disables expiry.
+    pub session_ttl_seconds: u64,
+    /// Upper bound on live demo sessions before the least recently used one is
+    /// evicted.
+    pub max_sessions: usize,
+}
+
+impl Default for DemoConfig {
+    fn default() -> Self {
+        Self {
+            features: Vec::new(),
+            session_ttl_seconds: 3600,
+            max_sessions: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
     pub socket_path: String,
@@ -291,6 +315,7 @@ pub struct Config {
     pub files: FilesConfig,
     pub auth: AuthConfig,
     pub plugins: PluginsConfig,
+    pub demo: DemoConfig,
 }
 
 impl Default for Config {
@@ -310,6 +335,7 @@ impl Default for Config {
             files: FilesConfig::default(),
             auth: AuthConfig::default(),
             plugins: PluginsConfig::default(),
+            demo: DemoConfig::default(),
         }
     }
 }
