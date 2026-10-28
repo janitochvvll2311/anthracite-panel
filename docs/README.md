@@ -26,6 +26,7 @@ code it describes.
 | [plugins.md](plugins.md) | Signed bundles, manifests, frozen grants, install/list/enable/remove, the ABI 3 runtime, anchors, the iframe sandbox, reference plugins and the Settings → Plugins panel |
 | [migration.md](migration.md) | Dry-run `migrate` from v0.2: policy mapping, secrets split, dropped sessions/grants and safety rules |
 | [hardening.md](hardening.md) | Property-test coverage, enforced security boundaries and the open hardening items |
+| [release.md](release.md) | Tarball layout, systemd unit, container build, checksum and the pre-release suffix policy |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design
