@@ -26,13 +26,13 @@ use parse::{parse_cmdline, parse_comm, parse_stat, parse_status, read_users};
 
 /// The process service, built once from the policy the daemon read at startup.
 #[derive(Debug, Clone)]
-pub struct ProcessService {
+pub struct SystemProcesses {
     control: bool,
     spawn: bool,
     spawn_allow: Vec<String>,
 }
 
-impl ProcessService {
+impl SystemProcesses {
     pub fn new(control: bool, spawn: bool, spawn_allow: Vec<String>) -> Self {
         Self {
             control,

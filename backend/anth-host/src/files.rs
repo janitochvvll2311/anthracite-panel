@@ -40,7 +40,7 @@ pub struct DownloadChunk {
     pub bytes: Vec<u8>,
 }
 
-pub struct FileService {
+pub struct SystemFiles {
     root: PathBuf,
     write: bool,
     max_entries: usize,
@@ -64,7 +64,7 @@ pub struct TrashPaths {
     pub data_home: PathBuf,
 }
 
-impl FileService {
+impl SystemFiles {
     /// Builds the service. `root` is canonicalized once so every later check
     /// compares against the same absolute path.
     pub fn new(
@@ -747,7 +747,7 @@ impl FileService {
     }
 
     /// Reads one chunk of arbitrary bytes. The socket client loops until `eof`;
-    /// a partial read is normal, unlike [`FileService::download`], which is for
+    /// a partial read is normal, unlike [`SystemFiles::download`], which is for
     /// the HTTP response that sends the whole file at once.
     pub fn download_chunk(
         &self,
@@ -1010,12 +1010,12 @@ mod tests {
         root
     }
 
-    fn service(root: &Path) -> FileService {
-        FileService::new(root, false, 100, 64, 1024).expect("service")
+    fn service(root: &Path) -> SystemFiles {
+        SystemFiles::new(root, false, 100, 64, 1024).expect("service")
     }
 
-    fn writable(root: &Path) -> FileService {
-        FileService::new(root, true, 100, 64, 1024).expect("service")
+    fn writable(root: &Path) -> SystemFiles {
+        SystemFiles::new(root, true, 100, 64, 1024).expect("service")
     }
 
     #[test]
@@ -1424,7 +1424,7 @@ mod proptests {
             let root = scratch("prop-resolve");
             fs::create_dir(root.join("dir")).expect("dir");
             fs::write(root.join("ok.txt"), b"ok").expect("file");
-            let files = FileService::new(&root, false, 100, 64, 1024).expect("service");
+            let files = SystemFiles::new(&root, false, 100, 64, 1024).expect("service");
             if let Ok(path) = files.resolve(&raw) {
                 prop_assert!(path.starts_with(&root));
             }

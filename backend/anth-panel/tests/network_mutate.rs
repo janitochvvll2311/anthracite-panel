@@ -13,7 +13,7 @@ use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
-use anth_panel::network::{IpError, IpRunner, NetworkService};
+use anth_panel::network::{IpError, IpRunner, SystemNetwork};
 use anth_panel::socket;
 use anth_wire::{NetworkCreate, NetworkEdit, Request, Response};
 use axum::body::Body;
@@ -55,8 +55,8 @@ impl IpRunner for FakeIp {
     }
 }
 
-fn service(ip: Arc<FakeIp>) -> NetworkService {
-    NetworkService::with_runner(true, true, ip)
+fn service(ip: Arc<FakeIp>) -> SystemNetwork {
+    SystemNetwork::with_runner(true, true, ip)
 }
 
 fn create(name: &str, kind: &str) -> NetworkCreate {
@@ -82,7 +82,7 @@ fn scratch(name: &str) -> (PathBuf, PathBuf) {
     (root.clone(), root.join("config.toml"))
 }
 
-fn daemon(name: &str, network: NetworkService) -> (Arc<Daemon>, anth_panel::config::Paths) {
+fn daemon(name: &str, network: SystemNetwork) -> (Arc<Daemon>, anth_panel::config::Paths) {
     let (_root, config_path) = scratch(name);
     let config = Config::dev_default();
     let paths = config.paths(&config_path).expect("paths");
@@ -194,7 +194,7 @@ fn guards_run_before_ip_and_leave_no_side_effects() {
         .expect_err("nothing");
     assert_eq!(nothing.code, "invalid_interface");
 
-    let manage_only = NetworkService::with_runner(false, true, ip.clone());
+    let manage_only = SystemNetwork::with_runner(false, true, ip.clone());
     let no_control = manage_only
         .edit(&NetworkEdit {
             name: "eth0".to_string(),

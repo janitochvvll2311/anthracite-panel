@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anth_host::backend::{FirewallBackend, NetworkBackend};
+use anth_host::backend::{FilesService, FirewallService, NetworkService, ProcessesService};
 use anth_wire::{
     ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
     TerminalOpened, TerminalOutput, TerminalSize, WireError,
@@ -16,15 +16,15 @@ use base64::engine::general_purpose::STANDARD;
 
 use crate::accounts::AccountsService;
 use crate::config::{Config, Paths};
-use crate::files::FileService;
-use crate::firewall::FirewallService;
+use crate::firewall::SystemFirewall;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
-use crate::network::NetworkService;
+use crate::network::SystemNetwork;
 use crate::plugins::PluginService;
-use crate::process::ProcessService;
 use crate::terminal::{OpenError, Sessions, resolve_shell, supports_line_editing};
 use crate::volumes::VolumesService;
+use anth_host::files::SystemFiles;
+use anth_host::process::SystemProcesses;
 
 /// Everything a request may need from the process.
 pub struct Daemon {
@@ -32,11 +32,11 @@ pub struct Daemon {
     paths: Paths,
     logger: Arc<Logger>,
     lifecycle: Arc<Lifecycle>,
-    files: Result<FileService, String>,
+    files: Result<Arc<dyn FilesService>, String>,
     terminal: Arc<Sessions>,
-    process: ProcessService,
-    network: Arc<dyn NetworkBackend>,
-    firewall: Arc<dyn FirewallBackend>,
+    process: Arc<dyn ProcessesService>,
+    network: Arc<dyn NetworkService>,
+    firewall: Arc<dyn FirewallService>,
     volumes: VolumesService,
     accounts: AccountsService,
     plugins: PluginService,
@@ -63,7 +63,7 @@ impl Daemon {
             }
         };
         let files_root = root.clone();
-        let files = FileService::new(
+        let files = SystemFiles::new(
             root,
             config.files.write,
             config.files.max_entries,
@@ -71,38 +71,40 @@ impl Daemon {
             config.files.max_upload_bytes,
         )
         .map(|service| {
-            service
-                .with_trash(config.files.trash, config.files.max_trash_bytes)
-                .with_archive_limit(config.files.max_archive_bytes)
+            Arc::new(
+                service
+                    .with_trash(config.files.trash, config.files.max_trash_bytes)
+                    .with_archive_limit(config.files.max_archive_bytes),
+            ) as Arc<dyn FilesService>
         });
         let terminal = Arc::new(Sessions::new(
             config.terminal.enabled,
             config.terminal.max_sessions,
             Duration::from_secs(config.terminal.idle_seconds),
         ));
-        let process = ProcessService::new(
+        let process = Arc::new(SystemProcesses::new(
             config.process.control,
             config.process.spawn,
             config.process.spawn_allow.clone(),
-        );
+        )) as Arc<dyn ProcessesService>;
         let demo = std::env::var("ANTH_BACKEND")
             .map(|value| value.eq_ignore_ascii_case("demo"))
             .unwrap_or(false);
-        let network: Arc<dyn NetworkBackend> = if demo {
+        let network: Arc<dyn NetworkService> = if demo {
             Arc::new(anth_host::demo::DemoNetwork::new(
                 config.network.control,
                 config.network.manage,
             ))
         } else {
-            Arc::new(NetworkService::new(
+            Arc::new(SystemNetwork::new(
                 config.network.control,
                 config.network.manage,
             ))
         };
-        let firewall: Arc<dyn FirewallBackend> = if demo {
+        let firewall: Arc<dyn FirewallService> = if demo {
             Arc::new(anth_host::demo::DemoFirewall::new(config.firewall.control))
         } else {
-            Arc::new(FirewallService::new(config.firewall.control))
+            Arc::new(SystemFirewall::new(config.firewall.control))
         };
         let mut protected = vec![
             files_root,
@@ -143,26 +145,26 @@ impl Daemon {
 
     /// Replaces the network service. Tests use it to script `ip` without
     /// touching the host; the transport still goes through `execute`.
-    pub fn with_network(mut self, network: NetworkService) -> Self {
+    pub fn with_network(mut self, network: SystemNetwork) -> Self {
         self.network = Arc::new(network);
         self
     }
 
     /// Replaces the network backend with any implementation.
-    pub fn with_network_backend(mut self, network: Arc<dyn NetworkBackend>) -> Self {
+    pub fn with_network_backend(mut self, network: Arc<dyn NetworkService>) -> Self {
         self.network = network;
         self
     }
 
     /// Replaces the firewall service. Tests use it to script `nft` without
     /// touching the host.
-    pub fn with_firewall(mut self, firewall: FirewallService) -> Self {
+    pub fn with_firewall(mut self, firewall: SystemFirewall) -> Self {
         self.firewall = Arc::new(firewall);
         self
     }
 
     /// Replaces the firewall backend with any implementation.
-    pub fn with_firewall_backend(mut self, firewall: Arc<dyn FirewallBackend>) -> Self {
+    pub fn with_firewall_backend(mut self, firewall: Arc<dyn FirewallService>) -> Self {
         self.firewall = firewall;
         self
     }
@@ -227,7 +229,7 @@ impl Daemon {
         &self.lifecycle
     }
 
-    fn files(&self) -> Result<&FileService, WireError> {
+    fn files(&self) -> Result<&Arc<dyn FilesService>, WireError> {
         self.files
             .as_ref()
             .map_err(|error| WireError::internal(format!("the file root is unavailable: {error}")))

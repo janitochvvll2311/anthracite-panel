@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_panel::files::archive::{self, ArchiveLimits};
+use anth_host::files::archive::{self, ArchiveLimits};
 use anth_wire::ArchiveFormat;
 
 struct Fixture {

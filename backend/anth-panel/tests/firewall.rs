@@ -11,7 +11,7 @@ use anth_panel::auth::AuthService;
 use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config};
 use anth_panel::dispatch::Daemon;
-use anth_panel::firewall::{FirewallService, NftOutput, NftRunner};
+use anth_panel::firewall::{NftOutput, NftRunner, SystemFirewall};
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
 use anth_wire::{FirewallAction, FirewallChain, FirewallProtocol, Request, Response};
@@ -97,7 +97,7 @@ fn daemon(name: &str, control: bool, nft: Arc<FakeNft>) -> Built {
     config.firewall.control = control;
     let paths = config.paths(&config_path).expect("paths");
     let logger = Arc::new(Logger::buffer(Settings::default()).0);
-    let firewall = FirewallService::with_runner(control, nft);
+    let firewall = SystemFirewall::with_runner(control, nft);
     let daemon = Daemon::new(config, paths.clone(), logger).with_firewall(firewall);
     Built {
         daemon: Arc::new(daemon),
@@ -464,7 +464,7 @@ async fn the_socket_answers_status_and_mutations() {
 #[test]
 fn the_service_parses_and_reports_the_policy() {
     let nft = Arc::new(FakeNft::new(vec![ok(&rules_json()), ok("text")]));
-    let service = FirewallService::with_runner(true, nft);
+    let service = SystemFirewall::with_runner(true, nft);
     let snapshot = service.snapshot().expect("snapshot");
     assert!(snapshot.initialized);
     assert!(snapshot.control_enabled);

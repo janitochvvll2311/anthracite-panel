@@ -17,8 +17,10 @@ use anth_wire::{HostInfo, OsInfo};
 
 pub mod backend;
 pub mod demo;
+pub mod files;
 pub mod firewall;
 pub mod network;
+pub mod process;
 
 const HOSTNAME: &str = "/proc/sys/kernel/hostname";
 const OS_RELEASE: &str = "/etc/os-release";

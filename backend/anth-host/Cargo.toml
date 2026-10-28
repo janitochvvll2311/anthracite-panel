@@ -9,3 +9,15 @@ rust-version.workspace = true
 anth-wire.workspace = true
 libc.workspace = true
 serde_json.workspace = true
+crc.workspace = true
+crc32fast.workspace = true
+flate2.workspace = true
+lzma-rs.workspace = true
+lzma-rust2.workspace = true
+sevenz-rust2.workspace = true
+sha2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+proptest = "1"

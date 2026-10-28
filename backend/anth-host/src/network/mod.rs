@@ -25,13 +25,13 @@ use parse::{default_route_v4, default_route_v6, parse_dev, parse_flags};
 pub use mutate::{IpError, IpRunner, validate_mtu, validate_name};
 
 /// The network service, built once from the policy the daemon read at startup.
-pub struct NetworkService {
+pub struct SystemNetwork {
     control: bool,
     manage: bool,
     ip: Arc<dyn IpRunner>,
 }
 
-impl Clone for NetworkService {
+impl Clone for SystemNetwork {
     fn clone(&self) -> Self {
         Self {
             control: self.control,
@@ -41,7 +41,7 @@ impl Clone for NetworkService {
     }
 }
 
-impl NetworkService {
+impl SystemNetwork {
     pub fn new(control: bool, manage: bool) -> Self {
         Self::with_runner(control, manage, Arc::new(SystemIp))
     }

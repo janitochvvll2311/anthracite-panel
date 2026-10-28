@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_panel::files::{FileService, TrashPaths};
+use anth_host::files::{SystemFiles, TrashPaths};
 use anth_wire::ErrorKind;
 
 struct Fixture {
@@ -31,12 +31,12 @@ impl Fixture {
         Self { root, data_home }
     }
 
-    fn service(&self, trash: bool) -> FileService {
+    fn service(&self, trash: bool) -> SystemFiles {
         self.service_with_limit(trash, 1024 * 1024 * 1024)
     }
 
-    fn service_with_limit(&self, trash: bool, max_trash_bytes: u64) -> FileService {
-        FileService::new(&self.root, true, 100, 64, 1024)
+    fn service_with_limit(&self, trash: bool, max_trash_bytes: u64) -> SystemFiles {
+        SystemFiles::new(&self.root, true, 100, 64, 1024)
             .unwrap()
             .with_trash(trash, max_trash_bytes)
             .with_trash_paths(TrashPaths {
@@ -105,7 +105,7 @@ fn trashing_is_refused_when_the_feature_is_off() {
 fn trashing_needs_write_permission_too() {
     let fixture = Fixture::new("nowrite");
     fixture.write("/notes.txt", b"hello");
-    let service = FileService::new(&fixture.root, false, 100, 64, 1024)
+    let service = SystemFiles::new(&fixture.root, false, 100, 64, 1024)
         .unwrap()
         .with_trash(true, 1024 * 1024 * 1024)
         .with_trash_paths(TrashPaths {

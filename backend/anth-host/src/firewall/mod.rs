@@ -70,12 +70,12 @@ impl NftRunner for SystemNft {
 }
 
 /// The firewall service, built once from the policy the daemon read at startup.
-pub struct FirewallService {
+pub struct SystemFirewall {
     control: bool,
     nft: Arc<dyn NftRunner>,
 }
 
-impl Clone for FirewallService {
+impl Clone for SystemFirewall {
     fn clone(&self) -> Self {
         Self {
             control: self.control,
@@ -84,7 +84,7 @@ impl Clone for FirewallService {
     }
 }
 
-impl FirewallService {
+impl SystemFirewall {
     pub fn new(control: bool) -> Self {
         Self::with_runner(control, Arc::new(SystemNft))
     }
@@ -664,9 +664,9 @@ mod tests {
     fn build_service(
         control: bool,
         responses: Vec<Result<NftOutput, String>>,
-    ) -> (FirewallService, Arc<FakeNft>) {
+    ) -> (SystemFirewall, Arc<FakeNft>) {
         let nft = Arc::new(FakeNft::new(responses));
-        let service = FirewallService::with_runner(control, nft.clone());
+        let service = SystemFirewall::with_runner(control, nft.clone());
         (service, nft)
     }
 

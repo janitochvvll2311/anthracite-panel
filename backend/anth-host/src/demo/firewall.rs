@@ -7,7 +7,7 @@ use anth_wire::{
     FirewallSnapshot, WireError,
 };
 
-use crate::backend::FirewallBackend;
+use crate::backend::FirewallService;
 use crate::now_ms;
 
 pub struct DemoFirewall {
@@ -50,7 +50,7 @@ impl DemoFirewall {
     }
 }
 
-impl FirewallBackend for DemoFirewall {
+impl FirewallService for DemoFirewall {
     fn snapshot(&self) -> Result<FirewallSnapshot, WireError> {
         let state = self.state.lock().expect("demo firewall lock");
         let rules = state.rules.clone();

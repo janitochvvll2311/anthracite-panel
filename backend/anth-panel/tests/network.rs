@@ -11,7 +11,7 @@ use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config, NetworkConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
-use anth_panel::network::NetworkService;
+use anth_panel::network::SystemNetwork;
 use anth_panel::socket;
 use anth_wire::{Request, Response};
 use axum::body::Body;
@@ -116,7 +116,7 @@ fn check_snapshot(snapshot: &anth_wire::NetworkSnapshot) {
 
 #[test]
 fn a_snapshot_reports_interfaces_addresses_counters_and_policy() {
-    let service = NetworkService::new(true, false);
+    let service = SystemNetwork::new(true, false);
     let snapshot = service.snapshot().expect("snapshot");
     check_snapshot(&snapshot);
     assert!(snapshot.control_enabled);
@@ -219,7 +219,7 @@ async fn the_socket_answers_a_network_request() {
 
 #[test]
 fn the_policy_flags_mirror_the_configuration() {
-    let service = NetworkService::new(false, true);
+    let service = SystemNetwork::new(false, true);
     let snapshot = service.snapshot().expect("snapshot");
     assert!(!snapshot.control_enabled);
     assert!(snapshot.manage_enabled);

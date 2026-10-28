@@ -10,7 +10,7 @@ use anth_wire::{
     NetworkSnapshot, WireError,
 };
 
-use crate::backend::NetworkBackend;
+use crate::backend::NetworkService;
 use crate::network::{validate_mtu, validate_name};
 use crate::now_ms;
 
@@ -58,7 +58,7 @@ impl DemoNetwork {
     }
 }
 
-impl NetworkBackend for DemoNetwork {
+impl NetworkService for DemoNetwork {
     fn snapshot(&self) -> Result<NetworkSnapshot, WireError> {
         Ok(DemoNetwork::snapshot(self))
     }

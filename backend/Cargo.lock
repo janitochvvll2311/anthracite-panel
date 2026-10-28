@@ -63,8 +63,18 @@ name = "anth-host"
 version = "0.3.0"
 dependencies = [
  "anth-wire",
+ "crc",
+ "crc32fast",
+ "flate2",
  "libc",
+ "lzma-rs",
+ "lzma-rust2",
+ "proptest",
  "serde_json",
+ "sevenz-rust2",
+ "sha2 0.11.1",
+ "tar",
+ "zip",
 ]
 
 [[package]]

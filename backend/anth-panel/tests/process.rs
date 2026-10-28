@@ -2,11 +2,11 @@
 
 use std::time::{Duration, Instant};
 
-use anth_panel::process::ProcessService;
+use anth_host::process::SystemProcesses;
 use anth_wire::{PageRequest, ProcessSignal};
 
-fn service(control: bool, spawn: bool) -> ProcessService {
-    ProcessService::new(control, spawn, vec!["/bin/sleep".to_string()])
+fn service(control: bool, spawn: bool) -> SystemProcesses {
+    SystemProcesses::new(control, spawn, vec!["/bin/sleep".to_string()])
 }
 
 fn page() -> PageRequest {
@@ -16,7 +16,7 @@ fn page() -> PageRequest {
     }
 }
 
-fn find(service: &ProcessService, pid: u32) -> anth_wire::ProcessInfo {
+fn find(service: &SystemProcesses, pid: u32) -> anth_wire::ProcessInfo {
     let mut cursor = None;
     loop {
         let snapshot = service
@@ -168,27 +168,27 @@ fn a_group_signal_requires_the_process_to_lead_its_group() {
 fn spawn_refuses_what_the_policy_does_not_allow() {
     let cases = [
         (
-            ProcessService::new(false, false, vec!["/bin/sleep".to_string()]),
+            SystemProcesses::new(false, false, vec!["/bin/sleep".to_string()]),
             "/bin/sleep",
             "process_spawn_disabled",
         ),
         (
-            ProcessService::new(false, true, vec!["/bin/true".to_string()]),
+            SystemProcesses::new(false, true, vec!["/bin/true".to_string()]),
             "/bin/sleep",
             "program_not_allowed",
         ),
         (
-            ProcessService::new(false, true, vec![]),
+            SystemProcesses::new(false, true, vec![]),
             "/bin/sleep",
             "program_not_allowed",
         ),
         (
-            ProcessService::new(false, true, vec!["/bin/sleep".to_string()]),
+            SystemProcesses::new(false, true, vec!["/bin/sleep".to_string()]),
             "sleep",
             "program_not_absolute",
         ),
         (
-            ProcessService::new(false, true, vec!["/bin/sleep".to_string()]),
+            SystemProcesses::new(false, true, vec!["/bin/sleep".to_string()]),
             "/definitely/not/here",
             "not_found",
         ),
@@ -203,7 +203,7 @@ fn spawn_refuses_what_the_policy_does_not_allow() {
 
 #[test]
 fn spawn_refuses_a_relative_or_missing_working_directory() {
-    let service = ProcessService::new(false, true, vec!["/bin/sleep".to_string()]);
+    let service = SystemProcesses::new(false, true, vec!["/bin/sleep".to_string()]);
     let relative = service
         .spawn("/bin/sleep", &["1".to_string()], Some("tmp"))
         .expect_err("relative cwd");
@@ -221,7 +221,7 @@ fn spawn_refuses_a_relative_or_missing_working_directory() {
 
 #[test]
 fn spawn_starts_an_allowlisted_program_and_reaps_it() {
-    let service = ProcessService::new(false, true, vec!["/bin/sleep".to_string()]);
+    let service = SystemProcesses::new(false, true, vec!["/bin/sleep".to_string()]);
     let started = service
         .spawn("/bin/sleep", &["1".to_string()], None)
         .expect("spawn");
