@@ -22,11 +22,11 @@ manifests, config and migration, and a release tarball/container workflow.
 `v0.3.0a` is the pre-release marker; the crate version stays `0.3.0`.
 
 Network, firewall, files and processes now live in `anth-host`, behind
-`<Feature>Service` traits. Network and firewall have real `System*` and virtual
-`Demo*` implementations; files and processes have their `System*` side moved,
-with demo implementations still pending. `ANTH_BACKEND=demo ./scripts/dev.sh start`
-runs without `sudo` and simulates those two sections; the full hosted demo is in
-progress and still has file/account/storage/process/terminal work pending.
+`<Feature>Service` traits with real `System*` and virtual `Demo*`
+implementations. Files use a seeded sandbox; processes are synthetic.
+`ANTH_BACKEND=demo ./scripts/dev.sh start` runs without `sudo` and simulates
+network, firewall, files and processes; the full hosted demo is in progress and
+still has account/storage/terminal work pending.
 
 ```bash
 cd tests

@@ -1,8 +1,9 @@
 # Demo mode
 
-The hosted demo is in progress. The first slice moves the network and firewall
-backends into `anth-host` and adds deterministic virtual implementations. The
-remaining features still use the real host until their backends move.
+The hosted demo is in progress. The first slices move the network, firewall,
+files and process backends into `anth-host` and add deterministic virtual
+implementations. Storage, accounts and the terminal still use the real host
+until their backends move.
 
 ## Development switch
 
@@ -15,9 +16,9 @@ ANTH_BACKEND=demo ./scripts/dev.sh start   # no sudo, simulated network/firewall
 so it cannot mix state with a real development run. It starts the daemon as the
 calling user, without `sudo`, and sets `ANTH_BACKEND=demo` for the process.
 
-The dev helper prints a warning: only network and firewall are simulated in this
-slice. Do not use it as a safety boundary yet; file, account, storage, process
-and terminal operations still target the host.
+The dev helper prints a warning: network, firewall, files and processes are
+simulated in this slice. Do not use it as a safety boundary yet; account,
+storage and terminal operations still target the host.
 
 ## Current demo data
 
@@ -28,6 +29,10 @@ and terminal operations still target the host.
 - `inet anthracite` starts with both chains and an `allow` policy.
 - Firewall add/update/delete/flush/policy update the in-memory table.
 - `[network] control/manage` and `[firewall] control` are still enforced.
+- Files use a seeded sandbox at `<state_dir>/demo/files`; writes, uploads,
+  archives and trash stay there.
+- The process table is synthetic; signals and spawns mutate it without touching
+  the kernel, and the configured control/spawn switches and allowlist apply.
 - Snapshots use the same wire types, so the existing UI and CLI work unchanged.
 
 The state is shared by all clients and lost on restart. Per-session state,
