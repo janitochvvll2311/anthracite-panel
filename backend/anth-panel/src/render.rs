@@ -5,7 +5,8 @@
 use std::fmt::Write as _;
 
 use anth_wire::{
-    FileEntry, FirewallSnapshot, HostInfo, NetworkSnapshot, Page, ProcessInfo, VolumeSnapshot,
+    AccountSnapshot, FileEntry, FirewallSnapshot, HostInfo, NetworkSnapshot, Page, ProcessInfo,
+    VolumeSnapshot,
 };
 
 /// Formats a host snapshot as grouped sections.
@@ -260,6 +261,95 @@ pub fn firewall(snapshot: &FirewallSnapshot) -> String {
                 .map(safe)
                 .unwrap_or_else(|| "-".to_string()),
         );
+    }
+    out.trim_end().to_string()
+}
+
+/// Formats the account inventory as users, then groups.
+pub fn accounts(snapshot: &AccountSnapshot) -> String {
+    let mut out = String::new();
+    if let Some(warning) = &snapshot.warning {
+        let _ = writeln!(out, "warning: {}", safe(warning));
+        let _ = writeln!(out);
+    }
+    let _ = writeln!(
+        out,
+        "control: {}  passwords: {}  system: {}  privileged groups: {}",
+        on_off(snapshot.control_enabled),
+        on_off(snapshot.password_enabled),
+        on_off(snapshot.allow_system),
+        on_off(snapshot.allow_privileged_groups),
+    );
+    let _ = writeln!(out);
+
+    if snapshot.users.is_empty() {
+        let _ = writeln!(out, "(no users)");
+    } else {
+        let _ = writeln!(
+            out,
+            "{:<20} {:>6} {:>6} {:<16} {:<9} {:<7} {:<6} GROUPS",
+            "NAME", "UID", "GID", "PRIMARY", "LOCKED", "SOURCE", "SYSTEM"
+        );
+        for user in &snapshot.users {
+            let locked = match user.locked {
+                Some(true) => "locked",
+                Some(false) => "unlocked",
+                None => "unknown",
+            };
+            let groups = if user.groups.is_empty() {
+                "-".to_string()
+            } else {
+                user.groups
+                    .iter()
+                    .map(|group| safe(group))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            let _ = writeln!(
+                out,
+                "{:<20} {:>6} {:>6} {:<16} {:<9} {:<7} {:<6} {}",
+                truncate(&safe(&user.name), 20),
+                user.uid,
+                user.gid,
+                truncate(&safe(&user.group), 16),
+                locked,
+                user.source.as_str(),
+                if user.system { "yes" } else { "no" },
+                groups,
+            );
+        }
+    }
+
+    let _ = writeln!(out);
+    if snapshot.groups.is_empty() {
+        let _ = writeln!(out, "(no groups)");
+    } else {
+        let _ = writeln!(
+            out,
+            "{:<20} {:>6} {:<6} {:<6} MEMBERS",
+            "GROUP", "GID", "SYSTEM", "SOURCE"
+        );
+        for group in &snapshot.groups {
+            let members = if group.members.is_empty() {
+                "-".to_string()
+            } else {
+                group
+                    .members
+                    .iter()
+                    .map(|member| safe(member))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            let _ = writeln!(
+                out,
+                "{:<20} {:>6} {:<6} {:<6} {}",
+                truncate(&safe(&group.name), 20),
+                group.gid,
+                if group.system { "yes" } else { "no" },
+                group.source.as_str(),
+                members,
+            );
+        }
     }
     out.trim_end().to_string()
 }

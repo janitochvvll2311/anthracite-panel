@@ -13,6 +13,7 @@ use anth_wire::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
+use crate::accounts::AccountsService;
 use crate::config::{Config, Paths};
 use crate::files::FileService;
 use crate::firewall::FirewallService;
@@ -35,6 +36,7 @@ pub struct Daemon {
     network: NetworkService,
     firewall: FirewallService,
     volumes: VolumesService,
+    accounts: AccountsService,
 }
 
 impl Daemon {
@@ -97,6 +99,7 @@ impl Daemon {
             protected.push(executable);
         }
         let volumes = VolumesService::new(config.volumes.clone(), protected);
+        let accounts = AccountsService::new(config.accounts.clone());
         Self {
             config,
             paths,
@@ -108,6 +111,7 @@ impl Daemon {
             network,
             firewall,
             volumes,
+            accounts,
         }
     }
 
@@ -129,6 +133,13 @@ impl Daemon {
     /// touching the host.
     pub fn with_volumes(mut self, volumes: VolumesService) -> Self {
         self.volumes = volumes;
+        self
+    }
+
+    /// Replaces the accounts service. Tests use it to script `/etc` and the
+    /// account tools without touching the host.
+    pub fn with_accounts(mut self, accounts: AccountsService) -> Self {
+        self.accounts = accounts;
         self
     }
 
@@ -367,6 +378,37 @@ impl Daemon {
                 let volumes = self.volumes.clone();
                 let message = blocking(move || volumes.format_partition(&request)).await?;
                 Ok(Response::VolumeChanged { message })
+            }
+            Request::Accounts => {
+                let accounts = self.accounts.clone();
+                Ok(Response::Accounts(
+                    blocking(move || Ok::<_, WireError>(accounts.snapshot())).await?,
+                ))
+            }
+            Request::AccountCreate(request) => {
+                let accounts = self.accounts.clone();
+                let message = blocking(move || accounts.create_user(&request)).await?;
+                Ok(Response::AccountChanged { message })
+            }
+            Request::AccountDelete(request) => {
+                let accounts = self.accounts.clone();
+                let message = blocking(move || accounts.delete_user(&request)).await?;
+                Ok(Response::AccountChanged { message })
+            }
+            Request::AccountSetPassword(request) => {
+                let accounts = self.accounts.clone();
+                let message = blocking(move || accounts.set_password(&request)).await?;
+                Ok(Response::AccountChanged { message })
+            }
+            Request::AccountGroupCreate(request) => {
+                let accounts = self.accounts.clone();
+                let message = blocking(move || accounts.create_group(&request)).await?;
+                Ok(Response::AccountChanged { message })
+            }
+            Request::AccountGroupDelete(request) => {
+                let accounts = self.accounts.clone();
+                let message = blocking(move || accounts.delete_group(&request)).await?;
+                Ok(Response::AccountChanged { message })
             }
             Request::Restart => {
                 let lifecycle = Arc::clone(&self.lifecycle);
@@ -609,6 +651,12 @@ fn operation_of(request: &Request) -> &'static str {
         Request::VolumePartitionResize(_) => "volume-partition-resize",
         Request::VolumePartitionDelete(_) => "volume-partition-delete",
         Request::VolumeFormat(_) => "volume-format",
+        Request::Accounts => "accounts",
+        Request::AccountCreate(_) => "account-create",
+        Request::AccountDelete(_) => "account-delete",
+        Request::AccountSetPassword(_) => "account-set-password",
+        Request::AccountGroupCreate(_) => "account-group-create",
+        Request::AccountGroupDelete(_) => "account-group-delete",
         Request::Restart => "restart",
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",

@@ -4,6 +4,7 @@
 //! followed by that many bytes of `serde_json`. The crate is deliberately free
 //! of panel code so an alternative client or daemon can implement it.
 
+mod accounts;
 mod error;
 mod firewall;
 mod frame;
@@ -15,6 +16,10 @@ mod process;
 mod terminal;
 mod volumes;
 
+pub use accounts::{
+    AccountCreate, AccountDelete, AccountGroup, AccountGroupCreate, AccountGroupDelete,
+    AccountSetPassword, AccountSnapshot, AccountSource, AccountUser, SecretString,
+};
 pub use error::{ErrorKind, WireError};
 pub use firewall::{
     FirewallAction, FirewallChain, FirewallChainState, FirewallProtocol, FirewallRule,

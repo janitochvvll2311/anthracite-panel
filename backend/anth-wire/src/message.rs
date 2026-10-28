@@ -6,6 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::accounts::{
+    AccountCreate, AccountDelete, AccountGroupCreate, AccountGroupDelete, AccountSetPassword,
+    AccountSnapshot,
+};
 use crate::error::WireError;
 use crate::firewall::{FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot};
 use crate::network::{NetworkCreate, NetworkEdit, NetworkSnapshot};
@@ -109,6 +113,18 @@ pub enum Request {
     VolumePartitionDelete(VolumePartitionDelete),
     /// Format one partition. Requires `[volumes] format` and `disk_allow`.
     VolumeFormat(VolumeFormatRequest),
+    /// One snapshot of local and directory-resolved users and groups.
+    Accounts,
+    /// Create one locked local user. Requires `[accounts] control`.
+    AccountCreate(AccountCreate),
+    /// Delete one local user. Requires `[accounts] control`.
+    AccountDelete(AccountDelete),
+    /// Set one local user's password. Requires `[accounts] manage_passwords`.
+    AccountSetPassword(AccountSetPassword),
+    /// Create one local group. Requires `[accounts] control`.
+    AccountGroupCreate(AccountGroupCreate),
+    /// Delete one local group. Requires `[accounts] control`.
+    AccountGroupDelete(AccountGroupDelete),
     /// Replaces this process with a fresh copy of the same command line, which
     /// re-reads the configuration.
     Restart,
@@ -260,6 +276,12 @@ pub enum Response {
     Volumes(VolumeSnapshot),
     /// A storage mutation succeeded.
     VolumeChanged {
+        message: String,
+    },
+    /// One account inventory snapshot.
+    Accounts(AccountSnapshot),
+    /// An account mutation succeeded. The message is ready for the CLI.
+    AccountChanged {
         message: String,
     },
     /// The restart was accepted; this process is about to be replaced.

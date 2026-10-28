@@ -119,6 +119,12 @@ enum Command {
         #[command(subcommand)]
         command: StorageCommand,
     },
+    /// Inspect and manage local users and groups.
+    #[command(alias = "accounts")]
+    Account {
+        #[command(subcommand)]
+        command: AccountCommand,
+    },
     /// Read, validate or change the configuration.
     Config {
         #[command(subcommand)]
@@ -501,6 +507,95 @@ struct FirewallFlushArgs {
 }
 
 #[derive(Subcommand, Debug)]
+enum AccountCommand {
+    /// List users and groups.
+    #[command(alias = "ls")]
+    List,
+    /// Create one locked local user.
+    Create(AccountCreateArgs),
+    /// Delete one local user.
+    Delete(AccountDeleteArgs),
+    /// Set one local user's password from stdin.
+    Password(AccountPasswordArgs),
+    /// Create or delete a local group.
+    Group {
+        #[command(subcommand)]
+        command: AccountGroupCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AccountGroupCommand {
+    /// Create one local group.
+    Create(AccountGroupCreateArgs),
+    /// Delete one local group.
+    Delete(AccountGroupDeleteArgs),
+}
+
+#[derive(Args, Debug)]
+struct AccountCreateArgs {
+    /// Login name, lowercase letters, digits, `_` and `-`.
+    name: String,
+    /// Explicit uid; defaults to the host's range.
+    #[arg(long)]
+    uid: Option<u32>,
+    /// Existing primary gid.
+    #[arg(long)]
+    gid: Option<u32>,
+    /// Description (GECOS) without `:` or newlines.
+    #[arg(long)]
+    gecos: Option<String>,
+    /// Home inside `accounts.home_root`; defaults to `<home_root>/<name>`.
+    #[arg(long)]
+    home: Option<String>,
+    /// Login shell from the allowlist; defaults to `accounts.default_shell`.
+    #[arg(long)]
+    shell: Option<String>,
+    /// Create a system account; requires `accounts.allow_system`.
+    #[arg(long)]
+    system: bool,
+}
+
+#[derive(Args, Debug)]
+struct AccountDeleteArgs {
+    /// Login name.
+    name: String,
+    /// Also delete the home directory inside `accounts.home_root`.
+    #[arg(long)]
+    remove_home: bool,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Args, Debug)]
+struct AccountPasswordArgs {
+    /// Login name.
+    name: String,
+}
+
+#[derive(Args, Debug)]
+struct AccountGroupCreateArgs {
+    /// Group name.
+    name: String,
+    /// Explicit gid; defaults to the host's range.
+    #[arg(long)]
+    gid: Option<u32>,
+    /// Create a system group; requires `accounts.allow_system`.
+    #[arg(long)]
+    system: bool,
+}
+
+#[derive(Args, Debug)]
+struct AccountGroupDeleteArgs {
+    /// Group name.
+    name: String,
+    /// Do not ask for confirmation.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Subcommand, Debug)]
 enum StorageCommand {
     /// List block devices, mounts and swap areas.
     #[command(alias = "ls")]
@@ -684,6 +779,7 @@ async fn run() -> CliResult {
         Command::Network { command } => network_command(&path, command).await,
         Command::Firewall { command } => firewall_command(&path, command).await,
         Command::Storage { command } => storage_command(&path, command).await,
+        Command::Account { command } => account_command(&path, command).await,
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
         Command::Reboot { delay } => {
@@ -1600,6 +1696,146 @@ async fn volume_change(client: &mut Client, request: Request) -> CliResult {
         Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
         other => Err((1, format!("unexpected response: {other:?}"))),
     }
+}
+
+async fn account_command(path: &std::path::Path, command: &AccountCommand) -> CliResult {
+    let mut client = connect(path).await?;
+    match command {
+        AccountCommand::List => {
+            let response = client
+                .call(&Request::Accounts)
+                .await
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            match response {
+                Response::Accounts(snapshot) => {
+                    println!("{}", render::accounts(&snapshot));
+                    Ok(())
+                }
+                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+                other => Err((1, format!("unexpected response: {other:?}"))),
+            }
+        }
+        AccountCommand::Create(args) => {
+            account_change(
+                &mut client,
+                Request::AccountCreate(anth_wire::AccountCreate {
+                    name: args.name.clone(),
+                    uid: args.uid,
+                    gid: args.gid,
+                    gecos: args.gecos.clone(),
+                    home: args.home.clone(),
+                    shell: args.shell.clone(),
+                    system: args.system,
+                }),
+            )
+            .await
+        }
+        AccountCommand::Delete(args) => {
+            if !args.yes {
+                confirm(&format!(
+                    "Delete user {}?{}",
+                    args.name,
+                    if args.remove_home {
+                        " Its home directory will be removed too."
+                    } else {
+                        ""
+                    }
+                ))?;
+            }
+            account_change(
+                &mut client,
+                Request::AccountDelete(anth_wire::AccountDelete {
+                    name: args.name.clone(),
+                    remove_home: args.remove_home,
+                }),
+            )
+            .await
+        }
+        AccountCommand::Password(args) => {
+            let password = read_password_stdin()?;
+            account_change(
+                &mut client,
+                Request::AccountSetPassword(anth_wire::AccountSetPassword {
+                    name: args.name.clone(),
+                    password: anth_wire::SecretString::new(password),
+                }),
+            )
+            .await
+        }
+        AccountCommand::Group { command } => match command {
+            AccountGroupCommand::Create(args) => {
+                account_change(
+                    &mut client,
+                    Request::AccountGroupCreate(anth_wire::AccountGroupCreate {
+                        name: args.name.clone(),
+                        gid: args.gid,
+                        system: args.system,
+                    }),
+                )
+                .await
+            }
+            AccountGroupCommand::Delete(args) => {
+                if !args.yes {
+                    confirm(&format!("Delete group {}?", args.name))?;
+                }
+                account_change(
+                    &mut client,
+                    Request::AccountGroupDelete(anth_wire::AccountGroupDelete {
+                        name: args.name.clone(),
+                    }),
+                )
+                .await
+            }
+        },
+    }
+}
+
+async fn account_change(client: &mut Client, request: Request) -> CliResult {
+    let response = client
+        .call(&request)
+        .await
+        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+    match response {
+        Response::AccountChanged { message } => {
+            println!("{message}");
+            Ok(())
+        }
+        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
+        other => Err((1, format!("unexpected response: {other:?}"))),
+    }
+}
+
+/// Reads one password line from stdin. It is never accepted as an argument:
+/// argv is visible in `/proc` and in shell history.
+fn read_password_stdin() -> Result<String, (u8, String)> {
+    use std::io::{IsTerminal, Read};
+
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Err((
+            2,
+            "pipe the password on stdin; it is never read from a terminal or an argument"
+                .to_string(),
+        ));
+    }
+    let mut input = String::new();
+    stdin
+        .lock()
+        .read_to_string(&mut input)
+        .map_err(|error| (1, format!("reading the password: {error}")))?;
+    if input.ends_with('\n') {
+        input.pop();
+        if input.ends_with('\r') {
+            input.pop();
+        }
+    }
+    if input.contains('\n') || input.contains('\r') {
+        return Err((2, "the password must be one line".to_string()));
+    }
+    if input.is_empty() {
+        return Err((2, "the password must not be empty".to_string()));
+    }
+    Ok(input)
 }
 
 /// Repeats one request on an interval until Ctrl-C.

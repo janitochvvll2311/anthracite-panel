@@ -11,12 +11,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anth_wire::{
-    ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk, FileEntry,
-    FileWritten, FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot, NetworkCreate,
-    NetworkEdit, NetworkSnapshot, Page, PageRequest, PartitionKind, ProcessSignal, ProcessSnapshot,
-    Request, Response, TerminalSize, TrashListing, VolumeFormatRequest, VolumeMountRequest,
-    VolumePartitionCreate, VolumePartitionDelete, VolumePartitionResize, VolumeSnapshot,
-    VolumeUnmountRequest, WireError,
+    AccountCreate, AccountDelete, AccountGroupCreate, AccountGroupDelete, AccountSetPassword,
+    AccountSnapshot, ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk,
+    FileEntry, FileWritten, FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot,
+    NetworkCreate, NetworkEdit, NetworkSnapshot, Page, PageRequest, PartitionKind, ProcessSignal,
+    ProcessSnapshot, Request, Response, SecretString, TerminalSize, TrashListing,
+    VolumeFormatRequest, VolumeMountRequest, VolumePartitionCreate, VolumePartitionDelete,
+    VolumePartitionResize, VolumeSnapshot, VolumeUnmountRequest, WireError,
 };
 use axum::body::Body;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -115,6 +116,12 @@ pub fn router(state: AppState) -> Router {
             post(volume_partition_delete),
         )
         .route("/api/volumes/format", post(volume_format))
+        .route("/api/accounts", get(accounts))
+        .route("/api/accounts/users", post(account_create))
+        .route("/api/accounts/users/delete", post(account_delete))
+        .route("/api/accounts/users/password", post(account_password))
+        .route("/api/accounts/groups", post(account_group_create))
+        .route("/api/accounts/groups/delete", post(account_group_delete))
         .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
@@ -1263,6 +1270,156 @@ async fn volume_format(
         }),
     )
     .await
+}
+
+async fn accounts(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<AccountSnapshot>, ApiError> {
+    match state.daemon.execute(Request::Accounts).await {
+        Response::Accounts(snapshot) => Ok(Json(snapshot)),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "an account snapshot answered unexpectedly: {other:?}"
+        ))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountCreateBody {
+    name: String,
+    #[serde(default)]
+    uid: Option<u32>,
+    #[serde(default)]
+    gid: Option<u32>,
+    #[serde(default)]
+    gecos: Option<String>,
+    #[serde(default)]
+    home: Option<String>,
+    #[serde(default)]
+    shell: Option<String>,
+    #[serde(default)]
+    system: bool,
+}
+
+async fn account_create(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<AccountCreateBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    account_change(
+        &state.daemon,
+        Request::AccountCreate(AccountCreate {
+            name: body.name,
+            uid: body.uid,
+            gid: body.gid,
+            gecos: body.gecos,
+            home: body.home,
+            shell: body.shell,
+            system: body.system,
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountDeleteBody {
+    name: String,
+    #[serde(default)]
+    remove_home: bool,
+}
+
+async fn account_delete(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<AccountDeleteBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    account_change(
+        &state.daemon,
+        Request::AccountDelete(AccountDelete {
+            name: body.name,
+            remove_home: body.remove_home,
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountPasswordBody {
+    name: String,
+    password: String,
+}
+
+async fn account_password(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<AccountPasswordBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    account_change(
+        &state.daemon,
+        Request::AccountSetPassword(AccountSetPassword {
+            name: body.name,
+            password: SecretString::new(body.password),
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountGroupCreateBody {
+    name: String,
+    #[serde(default)]
+    gid: Option<u32>,
+    #[serde(default)]
+    system: bool,
+}
+
+async fn account_group_create(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<AccountGroupCreateBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    account_change(
+        &state.daemon,
+        Request::AccountGroupCreate(AccountGroupCreate {
+            name: body.name,
+            gid: body.gid,
+            system: body.system,
+        }),
+    )
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountGroupDeleteBody {
+    name: String,
+}
+
+async fn account_group_delete(
+    State(state): State<AppState>,
+    _authed: Authed,
+    body: Result<Json<AccountGroupDeleteBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    account_change(
+        &state.daemon,
+        Request::AccountGroupDelete(AccountGroupDelete { name: body.name }),
+    )
+    .await
+}
+
+async fn account_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<Value>, ApiError> {
+    match daemon.execute(request).await {
+        Response::AccountChanged { message } => Ok(Json(json!({ "message": message }))),
+        Response::Error(error) => Err(ApiError::from(error)),
+        other => Err(ApiError::internal(format!(
+            "an account change answered unexpectedly: {other:?}"
+        ))),
+    }
 }
 
 /// Validates the `interval` query shared by the SSE routes.
