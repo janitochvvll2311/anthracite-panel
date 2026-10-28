@@ -5,6 +5,7 @@ import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg, str } from '@lit/localize'
 
 import './icon'
+import './plugin-frame'
 import { describeError } from './errors'
 import type { PluginView, PluginsClient, PluginsView } from './plugins-client'
 
@@ -414,6 +415,25 @@ export class AnthPlugins extends LitElement {
     )
   }
 
+  private renderWidgets(snapshot: PluginsView) {
+    const withWidgets = snapshot.plugins.filter(
+      (plugin) => plugin.enabled && plugin.state === 'enabled' && plugin.ui.length > 0,
+    )
+    if (withWidgets.length === 0) return nothing
+    return html`
+      <section class="widgets" part="widgets">
+        <h2>${msg('Widgets')}</h2>
+        ${withWidgets.map((plugin) =>
+          plugin.ui.map(
+            (slot) => html`
+              <anth-plugin-frame .plugin=${plugin} .uiSlot=${slot}></anth-plugin-frame>
+            `,
+          ),
+        )}
+      </section>
+    `
+  }
+
   private renderBody() {
     const snapshot = this.snapshot
     if (!snapshot) {
@@ -442,6 +462,7 @@ export class AnthPlugins extends LitElement {
         : html`<div class="list" part="plugins">
             ${plugins.map((plugin) => this.renderPlugin(plugin))}
           </div>`}
+      ${this.renderWidgets(snapshot)}
     `
   }
 
@@ -683,6 +704,15 @@ export class AnthPlugins extends LitElement {
       font-size: 12px;
     }
     .manage.confirm > span { margin-right: auto; }
+
+    .widgets { display: grid; gap: 0.5rem; }
+    .widgets h2 {
+      margin: 0.4rem 0 0;
+      color: var(--muted, #8b9bad);
+      font: 600 11px/1.4 var(--mono, monospace);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
 
     .notice {
       margin: 0;

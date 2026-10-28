@@ -34,6 +34,8 @@ export default defineConfig({
     hmr: process.env.ANTH_HMR === 'off' ? false : undefined,
     proxy: {
       '/healthz': 'http://127.0.0.1:8080',
+      // Sandboxed plugin UI documents and their bridge live beside the API.
+      '/p': 'http://127.0.0.1:8080',
       '/api': {
         target: 'http://127.0.0.1:8080',
         // The terminal is a WebSocket at /api/terminal; without this the

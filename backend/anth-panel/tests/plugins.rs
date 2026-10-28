@@ -299,6 +299,57 @@ async fn a_declared_ui_asset_is_served_and_an_undeclared_one_is_not() {
 }
 
 #[tokio::test]
+async fn the_frame_bootstrap_inlines_a_declared_module() {
+    let (router, root) = app("plugins-api-frame", true, true);
+    let body = json!({
+        "bundle_base64": STANDARD.encode(bundle_with_asset(
+            b"export function mount(root) { root.textContent = 'hello' }\n",
+        )),
+        "accept_capabilities": false,
+    });
+    let response = router
+        .clone()
+        .oneshot(post("/api/plugins/install", body))
+        .await
+        .expect("install");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/p/org.anth.hello/hello.js")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("frame");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/html; charset=utf-8"
+    );
+    let csp = response
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(csp.contains("script-src 'nonce-"), "{csp}");
+    assert!(csp.contains("frame-ancestors 'self'"), "{csp}");
+    let html = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    let html = String::from_utf8(html.to_vec()).expect("utf8");
+    assert!(html.contains("export function mount"), "{html}");
+    assert!(html.contains("sandbox") || html.contains("URL.createObjectURL"));
+    fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
 async fn an_anchor_runs_the_installed_guest() {
     const GUEST: &str = r#"
 (module

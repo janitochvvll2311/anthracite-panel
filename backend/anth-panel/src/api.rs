@@ -135,6 +135,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/plugins/{id}/remove", post(plugin_remove))
         .route("/api/plugins/{id}/approve", post(plugin_approve))
         .route("/api/plugins/{id}/web/{*path}", get(plugin_asset))
+        .route("/p/{id}/{*module}", get(plugin_frame))
         .route(
             "/api/plugins/{id}/{*path}",
             get(plugin_anchor)
@@ -1566,6 +1567,124 @@ where
 /// Largest body forwarded to an anchor. An anchor is a control operation, not
 /// an upload channel.
 const MAX_ANCHOR_BODY: usize = 1024 * 1024;
+
+async fn plugin_frame(
+    State(state): State<AppState>,
+    _authed: Authed,
+    AxumPath((id, module)): AxumPath<(String, String)>,
+) -> Result<HttpResponse, ApiError> {
+    if module.is_empty()
+        || module
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(ApiError::invalid("the frame module path is not plain"));
+    }
+    let declared = if module.starts_with("web/") {
+        module.clone()
+    } else {
+        format!("web/{module}")
+    };
+    let service = state.daemon.plugins().clone();
+    let read = declared.clone();
+    let asset_id = id.clone();
+    let bytes = plugin_blocking(move || service.asset(&asset_id, &read)).await?;
+    let source = String::from_utf8(bytes)
+        .map_err(|_| ApiError::invalid("a UI module must be UTF-8 JavaScript"))?;
+    let source = source.replace('<', "\\u003c");
+    let mut nonce_bytes = [0u8; 16];
+    getrandom::fill(&mut nonce_bytes)
+        .map_err(|error| ApiError::internal(format!("reading entropy: {error}")))?;
+    let nonce = crate::plugins::signature::encode_hex(&nonce_bytes);
+    let code = serde_json::to_string(&source)
+        .map_err(|error| ApiError::internal(format!("encoding the module: {error}")))?;
+    let id_json = serde_json::to_string(&id)
+        .map_err(|error| ApiError::internal(format!("encoding the plugin id: {error}")))?;
+    let html = format!(
+        r#"<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<style>
+html,body{{margin:0;background:var(--panel,#0b121b);color:var(--text,#dbe6f2);
+color-scheme:dark;font:13px/1.45 var(--sans,system-ui,sans-serif)}}
+#root{{display:block;padding:0.4rem}}
+#error{{margin:0.5rem;padding:0.5rem;border:1px solid var(--err,#f87171);
+border-radius:7px;color:var(--err,#f87171);font:12px/1.4 var(--mono,monospace)}}
+</style></head><body><div id="root"></div>
+<script type="module" nonce="{nonce}">
+const CODE = {code};
+const PLUGIN_ID = {id_json};
+const root = document.getElementById('root');
+let snapshot = null, locale = 'en', theme = {{}};
+const pending = new Map();
+let nextId = 1;
+const send = (type, extra = {{}}) => parent.postMessage({{anthPlugin: true, type, ...extra}}, '*');
+const call = (path, body = null, method = 'POST') => new Promise((resolve, reject) => {{
+  const requestId = nextId++;
+  pending.set(requestId, {{ resolve, reject }});
+  send('call', {{ requestId, method, path, body }});
+}});
+const api = {{
+  call,
+  snapshot: () => snapshot,
+  locale: () => locale,
+  theme: () => theme,
+  resize: (height) => send('resize', {{ height }}),
+}};
+window.addEventListener('message', (event) => {{
+  const data = event.data;
+  if (!data || data.anthPluginHost !== true) return;
+  if (data.type === 'init') {{
+    snapshot = data.snapshot;
+    locale = data.locale || 'en';
+    theme = data.theme || {{}};
+    for (const [name, value] of Object.entries(theme)) {{
+      if (typeof value === 'string') document.documentElement.style.setProperty('--' + name, value);
+    }}
+  }}
+  if (data.type === 'result') {{
+    const wait = pending.get(data.requestId);
+    if (!wait) return;
+    pending.delete(data.requestId);
+    if (data.ok) wait.resolve({{ status: data.status, body: data.body }});
+    else wait.reject(new Error(data.message || 'the host refused the call'));
+  }}
+}});
+send('ready');
+try {{
+  const url = URL.createObjectURL(new Blob([CODE], {{ type: 'text/javascript' }}));
+  const module = await import(url);
+  URL.revokeObjectURL(url);
+  const mount = module.mount || module.default;
+  if (typeof mount !== 'function') throw new Error('the module exports no mount()');
+  await mount(root, api);
+  send('mounted');
+}} catch (error) {{
+  const message = error && error.message ? error.message : String(error);
+  const box = document.createElement('p');
+  box.id = 'error';
+  box.textContent = message;
+  root.replaceChildren(box);
+  send('error', {{ message }});
+}}
+</script></body></html>"#
+    );
+    let csp = format!(
+        "default-src 'none'; script-src 'nonce-{nonce}' blob:; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; frame-ancestors 'self'"
+    );
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (header::REFERRER_POLICY, "no-referrer".to_string()),
+            (header::CONTENT_SECURITY_POLICY, csp.clone()),
+        ],
+        html,
+    )
+        .into_response())
+}
 
 async fn plugin_asset(
     State(state): State<AppState>,

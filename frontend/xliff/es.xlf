@@ -1746,6 +1746,14 @@
   <source><x id="0" equiv-text="${count}"/> plugins · active: <x id="1" equiv-text="${enabled}"/></source>
   <target><x id="0" equiv-text="${count}"/> plugins · activos: <x id="1" equiv-text="${enabled}"/></target>
 </trans-unit>
+<trans-unit id="sb27f107e67686a9c">
+  <source>The plugin widget failed.</source>
+  <target>El widget del plugin falló.</target>
+</trans-unit>
+<trans-unit id="sa3b6d53b60aaa982">
+  <source>Widgets</source>
+  <target>Widgets</target>
+</trans-unit>
 </body>
 </file>
 </xliff>
