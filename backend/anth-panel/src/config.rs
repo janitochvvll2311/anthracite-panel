@@ -328,7 +328,7 @@ impl Config {
         config.accounts.allow_system = true;
         config.accounts.allow_privileged_groups = true;
         config.plugins.enabled = true;
-        config.plugins.root = "./plugins".to_string();
+        config.plugins.root = "./plugins/bundles".to_string();
         config.plugins.install_from_web = true;
         config.plugins.require_signature = false;
         config.files.write = true;
@@ -606,7 +606,7 @@ mod tests {
         let dev = Config::dev_default();
         assert_eq!(dev.socket_path, "./anth.sock");
         assert_eq!(dev.state_dir, "./state");
-        assert_eq!(dev.plugins.root, "./plugins");
+        assert_eq!(dev.plugins.root, "./plugins/bundles");
 
         let release = Config::default();
         assert_eq!(release.socket_path, RELEASE_SOCKET_PATH);

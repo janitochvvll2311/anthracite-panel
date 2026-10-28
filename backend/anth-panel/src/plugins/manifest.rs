@@ -105,6 +105,8 @@ pub enum ArgType {
     Integer,
     /// A flag that contributes no element of its own.
     Switch,
+    /// A Linux interface name: at most 15 bytes, no slash or whitespace.
+    Ifname,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

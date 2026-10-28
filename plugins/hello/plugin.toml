@@ -1,0 +1,36 @@
+# Hello plugin manifest: the smallest bundle that exercises the whole path.
+#
+# `package.sh` fills in the two digests and writes `plugin.sig`. Installing this
+# source tree directly is refused because the zero digests are placeholders.
+
+manifest_version = 1
+
+[plugin]
+id = "org.anth.hello"
+alias = "hello"
+version = "0.3.0"
+name = "Hello"
+abi = 3
+
+[wasm]
+path = "plugin.wasm"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[capability]]
+id = "host.hostname"
+program = "hostname"
+
+[[api]]
+method = "GET"
+path = "/greeting"
+
+[[api]]
+method = "GET"
+path = "/status"
+
+[[ui]]
+slot = "settings.plugin"
+tag = "anth-hello"
+module = "web/hello.js"
+label = "Hello"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

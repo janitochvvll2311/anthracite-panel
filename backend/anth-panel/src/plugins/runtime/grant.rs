@@ -90,6 +90,13 @@ pub fn argv(capability: &Capability, args: &Value) -> Result<Vec<String>, String
                     continue;
                 }
             }
+            ArgType::Ifname => {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| format!("`{name}` must be a string"))?;
+                validate_ifname(name, text)?;
+                text.to_string()
+            }
         };
         values.insert(name.as_str(), rendered);
     }
@@ -141,6 +148,19 @@ pub fn argv(capability: &Capability, args: &Value) -> Result<Vec<String>, String
         argv.push(replaced);
     }
     Ok(argv)
+}
+
+fn validate_ifname(name: &str, value: &str) -> Result<(), String> {
+    validate_value(name, value)?;
+    if value.len() > 15
+        || value.contains('/')
+        || value.contains("..")
+        || value.starts_with('.')
+        || value.chars().any(char::is_whitespace)
+    {
+        return Err(format!("`{name}` is not a plain interface name"));
+    }
+    Ok(())
 }
 
 fn validate_value(name: &str, value: &str) -> Result<(), String> {
@@ -240,6 +260,41 @@ accept = [{{ name = "verbose", type = "switch" }}]
             .expect("false"),
             ["hostname"]
         );
+    }
+
+    #[test]
+    fn an_interface_name_is_validated_before_wg_sees_it() {
+        let manifest = Manifest::parse(&format!(
+            r#"
+manifest_version = 1
+[plugin]
+id = "org.anth.wireguard"
+version = "0.3.0"
+name = "WireGuard"
+abi = 3
+[wasm]
+path = "plugin.wasm"
+sha256 = "{}"
+[[capability]]
+id = "wg.show"
+program = "wg"
+args = ["show", "{{interface}}"]
+accept = [{{ name = "interface", type = "ifname" }}]
+"#,
+            "a".repeat(64)
+        ))
+        .expect("manifest");
+        let capability = manifest.capability.into_iter().next().expect("capability");
+        assert_eq!(
+            argv(&capability, &serde_json::json!({ "interface": "wg0" })).expect("valid"),
+            ["wg", "show", "wg0"]
+        );
+        for bad in ["wg/0", "wg 0", "..", "this-name-is-too-long"] {
+            assert!(
+                argv(&capability, &serde_json::json!({ "interface": bad })).is_err(),
+                "{bad} must be refused"
+            );
+        }
     }
 
     #[test]

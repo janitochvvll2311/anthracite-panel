@@ -1,0 +1,21 @@
+[package]
+name = "anth-plugin-hello"
+version = "0.3.0"
+edition = "2024"
+description = "Reference plugin: the smallest full ABI 3 guest"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anth-plugin = { path = "../../../backend/anth-plugin" }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
