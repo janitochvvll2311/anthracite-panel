@@ -125,10 +125,56 @@ enum Command {
         #[command(subcommand)]
         command: AccountCommand,
     },
+    /// Inspect, install and manage signed plugin bundles.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
     /// Read, validate or change the configuration.
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PluginCommand {
+    /// List installed bundles and their state.
+    #[command(alias = "ls")]
+    List,
+    /// Install one signed zip bundle.
+    Install {
+        /// Path to the bundle.
+        bundle: PathBuf,
+        /// Accept a changed capability surface.
+        #[arg(long)]
+        accept_capabilities: bool,
+    },
+    /// Remove one installed plugin and its grant.
+    Remove {
+        /// Plugin id or alias.
+        id: String,
+        /// Do not ask for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Switch one plugin on.
+    Enable {
+        /// Plugin id or alias.
+        id: String,
+    },
+    /// Switch one plugin off without removing it.
+    Disable {
+        /// Plugin id or alias.
+        id: String,
+    },
+    /// Rewrite the grant from the manifest currently on disk.
+    Approve {
+        /// Plugin id or alias.
+        id: String,
+        /// Confirm the capability surface.
+        #[arg(long)]
+        accept_capabilities: bool,
     },
 }
 
@@ -788,6 +834,7 @@ async fn run() -> CliResult {
         Command::Firewall { command } => firewall_command(&path, command).await,
         Command::Storage { command } => storage_command(&path, command).await,
         Command::Account { command } => account_command(&path, command).await,
+        Command::Plugin { command } => plugin_command(&path, command),
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
         Command::Reboot { delay } => {
@@ -802,6 +849,117 @@ async fn run() -> CliResult {
             serve(&path, Some(addr.clone()), *allow_reboot, &cli).await
         }
     }
+}
+
+fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult {
+    let config = Config::load_or_create(path).map_err(|error| (1, error))?;
+    let paths = config.paths(path).map_err(|error| (1, error))?;
+    let service = anth_panel::plugins::PluginService::new(
+        config.plugins.clone(),
+        paths.plugins,
+        paths.grants,
+    );
+    match command {
+        PluginCommand::List => {
+            let view = service
+                .snapshot()
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            println!("{}", render::plugins(&view));
+            Ok(())
+        }
+        PluginCommand::Install {
+            bundle,
+            accept_capabilities,
+        } => {
+            let installed = service
+                .install_file(bundle, *accept_capabilities)
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            println!(
+                "installed {} {} ({} capabilities)",
+                installed.grant.id,
+                installed.grant.plugin_version,
+                installed.grant.allowed_ids().len()
+            );
+            for capability in installed.grant.allowed_ids() {
+                println!("  {capability}");
+            }
+            if let Some(warning) = installed.warning {
+                eprintln!("warning: {warning}");
+            }
+            Ok(())
+        }
+        PluginCommand::Remove { id, yes } => {
+            let id = resolve_plugin_id(&service, id)?;
+            if !yes {
+                confirm(&format!("Remove plugin {id} and its grant?"))?;
+            }
+            service
+                .remove(&id)
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            println!("removed {id}");
+            Ok(())
+        }
+        PluginCommand::Enable { id } | PluginCommand::Disable { id } => {
+            let id = resolve_plugin_id(&service, id)?;
+            let enable = matches!(command, PluginCommand::Enable { .. });
+            service
+                .set_enabled(&id, enable)
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            println!("{} is {}", id, if enable { "enabled" } else { "disabled" });
+            Ok(())
+        }
+        PluginCommand::Approve {
+            id,
+            accept_capabilities,
+        } => {
+            let id = resolve_plugin_id(&service, id)?;
+            let grant = service
+                .approve(&id, *accept_capabilities)
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+            println!(
+                "approved {} {} ({} capabilities)",
+                grant.id,
+                grant.plugin_version,
+                grant.allowed_ids().len()
+            );
+            for capability in grant.allowed_ids() {
+                println!("  {capability}");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn resolve_plugin_id(
+    service: &anth_panel::plugins::PluginService,
+    id_or_alias: &str,
+) -> Result<String, (u8, String)> {
+    match service.grants().read(id_or_alias) {
+        Ok(Some(_)) => return Ok(id_or_alias.to_string()),
+        Ok(None) => {}
+        Err(error) if error.kind == anth_wire::ErrorKind::Invalid => {
+            // Not a valid id, so it can only be an alias. Fall through to the
+            // catalogue lookup rather than reporting the shape as an error.
+        }
+        Err(error) => return Err((error.kind.exit_code(), error.to_string())),
+    }
+    let view = service
+        .snapshot()
+        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+    let mut matches = view
+        .plugins
+        .iter()
+        .filter(|plugin| plugin.alias.as_deref() == Some(id_or_alias));
+    let Some(first) = matches.next() else {
+        return Err((1, format!("no plugin `{id_or_alias}` is installed")));
+    };
+    if matches.next().is_some() {
+        return Err((
+            1,
+            format!("more than one plugin declares the alias `{id_or_alias}`; use the full id"),
+        ));
+    }
+    Ok(first.id.clone())
 }
 
 fn config_command(path: &std::path::Path, command: &ConfigCommand, cli: &Cli) -> CliResult {

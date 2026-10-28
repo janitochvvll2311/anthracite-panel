@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::plugins::PluginsView;
 use anth_wire::{
     AccountCreate, AccountDelete, AccountGroupCreate, AccountGroupDelete, AccountSetPassword,
     AccountSnapshot, ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk,
@@ -31,6 +32,8 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response as HttpResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use futures_util::stream;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -122,6 +125,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/accounts/users/password", post(account_password))
         .route("/api/accounts/groups", post(account_group_create))
         .route("/api/accounts/groups/delete", post(account_group_delete))
+        .route("/api/plugins", get(plugins))
+        .route(
+            "/api/plugins/install",
+            post(plugin_install).layer(DefaultBodyLimit::max(48 * 1024 * 1024)),
+        )
+        .route("/api/plugins/{id}/enable", post(plugin_enable))
+        .route("/api/plugins/{id}/disable", post(plugin_disable))
+        .route("/api/plugins/{id}/remove", post(plugin_remove))
+        .route("/api/plugins/{id}/approve", post(plugin_approve))
         .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
         .route("/api/files/read", get(read_file))
@@ -1420,6 +1432,126 @@ async fn account_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<V
             "an account change answered unexpectedly: {other:?}"
         ))),
     }
+}
+
+async fn plugins(
+    State(state): State<AppState>,
+    _authed: Authed,
+) -> Result<Json<PluginsView>, ApiError> {
+    let service = state.daemon.plugins().clone();
+    let view = plugin_blocking(move || service.snapshot()).await?;
+    Ok(Json(view))
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginInstallBody {
+    bundle_base64: String,
+    #[serde(default)]
+    accept_capabilities: bool,
+}
+
+async fn plugin_install(
+    State(state): State<AppState>,
+    _authed: Authed,
+    headers: HeaderMap,
+    body: Result<Json<PluginInstallBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    same_origin(&headers)?;
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    if !state.daemon.config().plugins.install_from_web {
+        return Err(ApiError::from(WireError::forbidden(
+            "browser plugin installs are disabled; set `[plugins] install_from_web = true`",
+        )));
+    }
+    let bytes = STANDARD
+        .decode(body.bundle_base64.as_bytes())
+        .map_err(|_| ApiError::invalid("the bundle is not valid base64"))?;
+    if bytes.len() as u64 > crate::plugins::bundle::MAX_BUNDLE_BYTES {
+        return Err(ApiError::from(WireError::too_large(
+            "the bundle is larger than 32 MiB",
+        )));
+    }
+    let service = state.daemon.plugins().clone();
+    let accepted = body.accept_capabilities;
+    let installed = plugin_blocking(move || service.install_bytes(&bytes, accepted)).await?;
+    Ok(Json(json!({
+        "id": installed.grant.id,
+        "name": installed.manifest.plugin.name,
+        "version": installed.grant.plugin_version,
+        "capabilities": installed.grant.allowed_ids(),
+        "warning": installed.warning,
+    })))
+}
+
+async fn plugin_enable(
+    State(state): State<AppState>,
+    _authed: Authed,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    same_origin(&headers)?;
+    let service = state.daemon.plugins().clone();
+    plugin_blocking(move || service.set_enabled(&id, true)).await?;
+    Ok(Json(json!({ "message": "plugin enabled" })))
+}
+
+async fn plugin_disable(
+    State(state): State<AppState>,
+    _authed: Authed,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    same_origin(&headers)?;
+    let service = state.daemon.plugins().clone();
+    plugin_blocking(move || service.set_enabled(&id, false)).await?;
+    Ok(Json(json!({ "message": "plugin disabled" })))
+}
+
+async fn plugin_remove(
+    State(state): State<AppState>,
+    _authed: Authed,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    same_origin(&headers)?;
+    let service = state.daemon.plugins().clone();
+    plugin_blocking(move || service.remove(&id)).await?;
+    Ok(Json(json!({ "message": "plugin removed" })))
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginApproveBody {
+    #[serde(default)]
+    accept_capabilities: bool,
+}
+
+async fn plugin_approve(
+    State(state): State<AppState>,
+    _authed: Authed,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+    body: Result<Json<PluginApproveBody>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    same_origin(&headers)?;
+    let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
+    let service = state.daemon.plugins().clone();
+    let accepted = body.accept_capabilities;
+    let grant = plugin_blocking(move || service.approve(&id, accepted)).await?;
+    Ok(Json(json!({
+        "id": grant.id,
+        "capabilities": grant.allowed_ids(),
+    })))
+}
+
+async fn plugin_blocking<T, F>(task: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, WireError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|error| ApiError::internal(format!("the plugin worker failed: {error}")))?
+        .map_err(ApiError::from)
 }
 
 /// Validates the `interval` query shared by the SSE routes.

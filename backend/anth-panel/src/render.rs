@@ -9,6 +9,8 @@ use anth_wire::{
     VolumeSnapshot,
 };
 
+use crate::plugins::PluginsView;
+
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
     let mut out = String::new();
@@ -261,6 +263,46 @@ pub fn firewall(snapshot: &FirewallSnapshot) -> String {
                 .map(safe)
                 .unwrap_or_else(|| "-".to_string()),
         );
+    }
+    out.trim_end().to_string()
+}
+
+/// Formats the plugin catalogue, one line per bundle and its reason when off.
+pub fn plugins(view: &PluginsView) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "plugins: {}  web install: {}",
+        on_off(view.enabled),
+        on_off(view.install_from_web),
+    );
+    let _ = writeln!(out);
+    if view.plugins.is_empty() {
+        let _ = writeln!(out, "(no plugins installed)");
+        return out.trim_end().to_string();
+    }
+    let _ = writeln!(
+        out,
+        "{:<32} {:<10} {:<9} {:<8} CAPABILITIES",
+        "ID", "VERSION", "STATE", "ENABLED"
+    );
+    for plugin in &view.plugins {
+        let _ = writeln!(
+            out,
+            "{:<32} {:<10} {:<9} {:<8} {}",
+            truncate(&safe(&plugin.id), 32),
+            truncate(&safe(&plugin.version), 10),
+            plugin.state,
+            if plugin.enabled { "yes" } else { "no" },
+            if plugin.capabilities.is_empty() {
+                "-".to_string()
+            } else {
+                plugin.capabilities.join(", ")
+            },
+        );
+        if let Some(error) = &plugin.error {
+            let _ = writeln!(out, "  {error}");
+        }
     }
     out.trim_end().to_string()
 }

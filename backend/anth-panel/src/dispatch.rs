@@ -20,6 +20,7 @@ use crate::firewall::FirewallService;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::NetworkService;
+use crate::plugins::PluginService;
 use crate::process::ProcessService;
 use crate::terminal::{OpenError, Sessions, resolve_shell, supports_line_editing};
 use crate::volumes::VolumesService;
@@ -37,6 +38,7 @@ pub struct Daemon {
     firewall: FirewallService,
     volumes: VolumesService,
     accounts: AccountsService,
+    plugins: PluginService,
 }
 
 impl Daemon {
@@ -100,6 +102,11 @@ impl Daemon {
         }
         let volumes = VolumesService::new(config.volumes.clone(), protected);
         let accounts = AccountsService::new(config.accounts.clone());
+        let plugins = PluginService::new(
+            config.plugins.clone(),
+            paths.plugins.clone(),
+            paths.grants.clone(),
+        );
         Self {
             config,
             paths,
@@ -112,6 +119,7 @@ impl Daemon {
             firewall,
             volumes,
             accounts,
+            plugins,
         }
     }
 
@@ -141,6 +149,17 @@ impl Daemon {
     pub fn with_accounts(mut self, accounts: AccountsService) -> Self {
         self.accounts = accounts;
         self
+    }
+
+    /// Replaces the plugin service. Tests use it to script a plugin root
+    /// without touching the installation directory.
+    pub fn with_plugins(mut self, plugins: PluginService) -> Self {
+        self.plugins = plugins;
+        self
+    }
+
+    pub fn plugins(&self) -> &PluginService {
+        &self.plugins
     }
 
     pub fn terminals(&self) -> &Arc<Sessions> {

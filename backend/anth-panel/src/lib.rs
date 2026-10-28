@@ -11,6 +11,7 @@ pub mod firewall;
 pub mod lifecycle;
 pub mod log;
 pub mod network;
+pub mod plugins;
 pub mod process;
 pub mod render;
 pub mod socket;
