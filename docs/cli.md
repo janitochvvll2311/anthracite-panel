@@ -266,6 +266,27 @@ program from `[process] spawn_allow`, passes the remaining words as argv without
 a shell, and prints the pid; it requires `[process] spawn = true`. Because the
 words are passed verbatim, put `--cwd` before the program.
 
+## `account`
+
+```bash
+anth-panel account list
+anth-panel account ls
+anth-panel accounts list
+anth-panel account create alice --uid 1001 --gecos "Alice Example" --shell /bin/bash
+anth-panel account delete alice --remove-home --yes
+printf 'a long password' | anth-panel account password alice
+anth-panel account group create builders --gid 1500
+anth-panel account group delete builders --yes
+```
+
+`list` prints the policy flags, users and groups. `accounts` is an alias for
+`account`. Create/delete require `[accounts] control`; password requires
+`[accounts] manage_passwords`. Delete asks for confirmation on a TTY and refuses
+without `--yes` when stdin is not a terminal. The password is read from stdin and
+is never accepted as an argument; use the web UI to enter it interactively.
+New users are created locked until a password is set. See
+[accounts.md](accounts.md).
+
 ## `config`
 
 ```bash

@@ -1,21 +1,25 @@
 # Documentation
 
 This branch is the v0.3.0 rewrite. Phases 0–4 are implemented; Phase 5 is
-code-complete with real-command validation pending, and Phase 6 is in progress
-with the Storage inventory, guarded mount/unmount and partition/format. The
-remaining feature documentation is added with the code it describes.
+code-complete with real-command validation pending, and Phase 6 is code-complete
+with Storage (inventory, guarded mount/unmount and partition/format) and
+Accounts (inventory, guarded create/delete and passwords). Accounts success
+paths were validated on a real host; storage mutations still wait for
+`CAP_SYS_ADMIN`. The remaining feature documentation is added with the code it
+describes.
 
 ## User contract
 
 | Document | Contents |
 | --- | --- |
 | [cli.md](cli.md) | Commands, flags, output, exit codes and bootstrap |
-| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, processes, network, firewall, storage, SSE and error shape |
+| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, processes, network, firewall, storage, accounts, SSE and error shape |
 | [terminal.md](terminal.md) | PTY sessions, policy, socket/WebSocket contract and mobile UI |
 | [processes.md](processes.md) | Process table, signals, spawn policy, SSE, CLI and the flat/tree UI |
 | [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, guarded up/down/create/edit/rename/delete, SSE, CLI and the Interfaces tab |
 | [firewall.md](firewall.md) | Managed nftables table with input/output chains, allow/deny/edit/delete/flush rules, default policies, guards, HTTP/socket/CLI and the Firewall tab |
 | [storage.md](storage.md) | Block devices, mounts, usage, swap, guarded mount/unmount and partition/format over socket, HTTP, CLI and the Storage tabs |
+| [accounts.md](accounts.md) | Users and groups from local files plus NSS, lock state, guarded create/delete, password changes and the Accounts tabs |
 | [socket-protocol.md](socket-protocol.md) | Framing, handshake, messages, errors and peer credentials |
 
 ## Design

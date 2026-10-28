@@ -21,8 +21,9 @@ chain, snapshots gained `chains` with per-chain policies, and
 `firewall_update`/`firewall_set_policy` are new. An older CLI must be upgraded
 with the daemon. The `volumes`, `volumes_mount`, `volumes_unmount`,
 `volume_partition_create`, `volume_partition_resize`,
-`volume_partition_delete` and `volume_format` requests and their responses are
-additive to version 3.
+`volume_partition_delete`, `volume_format`, `accounts`, `account_create`,
+`account_delete`, `account_set_password`, `account_group_create` and
+`account_group_delete` requests and their responses are additive to version 3.
 
 ## Rules before 1.0.0
 

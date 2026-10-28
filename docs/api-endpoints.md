@@ -435,6 +435,27 @@ and multiples of 512. All answer `200 {"message":"..."}`. Refusals include
 `403 protected_disk`, `409 disk_busy`, `404 partition_not_found`, `400
 invalid_partition`, `403 partition_permission` and `501 partition_unavailable`.
 
+## Accounts
+
+`GET /api/accounts` returns the users and groups snapshot described in
+[accounts.md](accounts.md). It requires a live panel session unless auth is
+disabled.
+
+| Route | Body | Policy |
+| --- | --- | --- |
+| `POST /api/accounts/users` | `{"name":"alice","uid":1001,"gecos":"Alice","shell":"/bin/bash"}` | `[accounts] control` |
+| `POST /api/accounts/users/delete` | `{"name":"alice","remove_home":false}` | `[accounts] control` |
+| `POST /api/accounts/users/password` | `{"name":"alice","password":"..."}` | `[accounts] manage_passwords` |
+| `POST /api/accounts/groups` | `{"name":"builders","gid":1500}` | `[accounts] control` |
+| `POST /api/accounts/groups/delete` | `{"name":"builders"}` | `[accounts] control` |
+
+All mutations answer `200 {"message":"..."}`. Refusals include `403
+accounts_disabled`, `403 account_passwords_disabled`, `403 account_protected`,
+`403 account_permission`, `404 account_not_found`, `409 account_conflict`, `400
+invalid_account`, `501 account_unsupported` and `500 account_failed`. The
+password travels in the request body and is passed to `chpasswd` on stdin; it is
+never logged or placed in argv.
+
 ## Settings and lifecycle
 
 All four routes require a live access token unless auth is disabled. The two

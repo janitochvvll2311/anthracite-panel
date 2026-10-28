@@ -506,6 +506,22 @@ All answer `{"type":"volume_changed","data":{"message":"..."}}`. Mount/unmount
 require `[volumes] control`; partition edits require `[volumes] partition`;
 format requires `[volumes] format`. See [storage.md](storage.md).
 
+### Accounts
+
+```json
+{ "type": "accounts" }
+{ "type": "account_create", "data": { "name": "alice", "uid": 1001, "shell": "/bin/bash" } }
+{ "type": "account_delete", "data": { "name": "alice", "remove_home": false } }
+{ "type": "account_set_password", "data": { "name": "alice", "password": "..." } }
+{ "type": "account_group_create", "data": { "name": "builders", "gid": 1500 } }
+{ "type": "account_group_delete", "data": { "name": "builders" } }
+```
+
+`accounts` answers `{"type":"accounts","data":{...}}`. Mutations answer
+`{"type":"account_changed","data":{"message":"..."}}`. Create/delete require
+`[accounts] control`; password requires `[accounts] manage_passwords`. See
+[accounts.md](accounts.md).
+
 ### Processes
 
 ```json

@@ -9,9 +9,11 @@ and a web UI. Apache-2.0.
 host-info, auth/lifecycle, files and the terminal and process slices. Phase 5 is
 code-complete with real-command validation pending: the network inventory, its
 guarded interface mutations and the managed nftables firewall are in place.
-Phase 6 is in progress: the Storage inventory, guarded mount/unmount and
-partition/format operations are in place; accounts are next. After Phase 6,
-plugins and hardening/release remain.
+Phase 6 is code-complete: the Storage inventory, guarded mount/unmount and
+partition/format operations, plus the Accounts inventory, guarded create/delete
+and password changes, are in place. Accounts success paths were validated on a
+real host; storage mutations still need `CAP_SYS_ADMIN`. After Phase 6, plugins
+and hardening/release remain.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
@@ -53,6 +55,11 @@ plugins and hardening/release remain.
   partition create/resize/delete plus `mkfs` behind `[volumes]
   partition/format` and `disk_allow`, over socket, HTTP, CLI and the Storage
   section's Volumes and Partitions tabs.
+- Accounts: users and groups from `/etc/passwd`, `/etc/group`, `/etc/shadow`,
+  `/etc/gshadow` and `getent`, an explicit lock bit, and guarded create/delete
+  and password changes behind `[accounts] control/manage_passwords` with
+  system-id and privileged-group opt-ins, over socket, HTTP, CLI and the
+  Accounts section's Users and Groups tabs.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
