@@ -35,3 +35,38 @@ test('the firewall form adds a simulated rule', async ({ page }) => {
   await expect(firewall.locator('.count')).toContainText('1 rule')
   await expect(firewall.getByText('tcp/8443')).toBeVisible()
 })
+
+test('the demo file tree is a sandbox with seeded content', async ({ request }) => {
+  const listing = await request.get('/api/files?path=/')
+  expect(listing.ok()).toBeTruthy()
+  const names = (await listing.json()).items.map((entry: { name: string }) => entry.name)
+  expect(names).toContain('README.md')
+  expect(names).toContain('docs')
+
+  const created = await request.post('/api/files/write', {
+    data: { path: 'e2e-note.txt', content: 'sandbox\n', create: true },
+  })
+  expect(created.ok()).toBeTruthy()
+  const read = await request.get('/api/files/read?path=e2e-note.txt')
+  expect((await read.json()).text).toBe('sandbox\n')
+  const deleted = await request.post('/api/files/trash', { data: { path: 'e2e-note.txt' } })
+  expect(deleted.ok()).toBeTruthy()
+})
+
+test('the demo process table is synthetic and mutable', async ({ request }) => {
+  const snapshot = await request.get('/api/processes')
+  const body = await snapshot.json()
+  expect(body.items.some((process: { name: string }) => process.name === 'demo-worker')).toBe(true)
+
+  const signal = await request.post('/api/processes/signal', {
+    data: { pid: 1440, start_ticks: 144000, signal: 'term' },
+  })
+  expect(signal.ok()).toBeTruthy()
+  const after = await (await request.get('/api/processes')).json()
+  expect(after.items.some((process: { pid: number }) => process.pid === 1440)).toBe(false)
+
+  const spawn = await request.post('/api/processes/spawn', {
+    data: { program: '/bin/sleep', args: ['1'] },
+  })
+  expect(spawn.ok()).toBeTruthy()
+})

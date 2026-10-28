@@ -54,7 +54,12 @@ impl Daemon {
         logger: Arc<Logger>,
         lifecycle: Arc<Lifecycle>,
     ) -> Self {
-        let root = {
+        let demo = std::env::var("ANTH_BACKEND")
+            .map(|value| value.eq_ignore_ascii_case("demo"))
+            .unwrap_or(false);
+        let root = if demo {
+            paths.state_dir.join("demo/files")
+        } else {
             let root = std::path::PathBuf::from(&config.files.root);
             if root.is_absolute() {
                 root
@@ -63,33 +68,50 @@ impl Daemon {
             }
         };
         let files_root = root.clone();
-        let files = SystemFiles::new(
-            root,
-            config.files.write,
-            config.files.max_entries,
-            config.files.max_preview_bytes,
-            config.files.max_upload_bytes,
-        )
-        .map(|service| {
-            Arc::new(
-                service
-                    .with_trash(config.files.trash, config.files.max_trash_bytes)
-                    .with_archive_limit(config.files.max_archive_bytes),
-            ) as Arc<dyn FilesService>
-        });
+        let files: Result<Arc<dyn FilesService>, String> = if demo {
+            anth_host::demo::DemoFiles::new(
+                root,
+                config.files.max_entries,
+                config.files.max_preview_bytes,
+                config.files.max_upload_bytes,
+                config.files.max_trash_bytes,
+                config.files.max_archive_bytes,
+            )
+            .map(|service| Arc::new(service) as Arc<dyn FilesService>)
+        } else {
+            SystemFiles::new(
+                root,
+                config.files.write,
+                config.files.max_entries,
+                config.files.max_preview_bytes,
+                config.files.max_upload_bytes,
+            )
+            .map(|service| {
+                Arc::new(
+                    service
+                        .with_trash(config.files.trash, config.files.max_trash_bytes)
+                        .with_archive_limit(config.files.max_archive_bytes),
+                ) as Arc<dyn FilesService>
+            })
+        };
         let terminal = Arc::new(Sessions::new(
             config.terminal.enabled,
             config.terminal.max_sessions,
             Duration::from_secs(config.terminal.idle_seconds),
         ));
-        let process = Arc::new(SystemProcesses::new(
-            config.process.control,
-            config.process.spawn,
-            config.process.spawn_allow.clone(),
-        )) as Arc<dyn ProcessesService>;
-        let demo = std::env::var("ANTH_BACKEND")
-            .map(|value| value.eq_ignore_ascii_case("demo"))
-            .unwrap_or(false);
+        let process: Arc<dyn ProcessesService> = if demo {
+            Arc::new(anth_host::demo::DemoProcesses::new(
+                config.process.control,
+                config.process.spawn,
+                config.process.spawn_allow.clone(),
+            ))
+        } else {
+            Arc::new(SystemProcesses::new(
+                config.process.control,
+                config.process.spawn,
+                config.process.spawn_allow.clone(),
+            ))
+        };
         let network: Arc<dyn NetworkService> = if demo {
             Arc::new(anth_host::demo::DemoNetwork::new(
                 config.network.control,
