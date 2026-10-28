@@ -1616,6 +1616,8 @@ const CODE = {code};
 const PLUGIN_ID = {id_json};
 const root = document.getElementById('root');
 let snapshot = null, locale = 'en', theme = {{}};
+let initialized;
+const readyForInit = new Promise((resolve) => {{ initialized = resolve }});
 const pending = new Map();
 let nextId = 1;
 const send = (type, extra = {{}}) => parent.postMessage({{anthPlugin: true, type, ...extra}}, '*');
@@ -1641,6 +1643,7 @@ window.addEventListener('message', (event) => {{
     for (const [name, value] of Object.entries(theme)) {{
       if (typeof value === 'string') document.documentElement.style.setProperty('--' + name, value);
     }}
+    initialized();
   }}
   if (data.type === 'result') {{
     const wait = pending.get(data.requestId);
@@ -1652,6 +1655,7 @@ window.addEventListener('message', (event) => {{
 }});
 send('ready');
 try {{
+  await readyForInit;
   const url = URL.createObjectURL(new Blob([CODE], {{ type: 'text/javascript' }}));
   const module = await import(url);
   URL.revokeObjectURL(url);
