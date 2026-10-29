@@ -230,9 +230,9 @@ impl Daemon {
         self
     }
 
-    /// Replaces the extension service. Tests use it to script a extension root
+    /// Replaces the extension service. Tests use it to script an extension root
     /// without touching the installation directory.
-    pub fn with_plugins(mut self, extensions: ExtensionService) -> Self {
+    pub fn with_extensions(mut self, extensions: ExtensionService) -> Self {
         self.extensions = extensions;
         self
     }

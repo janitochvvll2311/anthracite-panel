@@ -1,4 +1,4 @@
-# Read-only WireGuard reference plugin.
+# Read-only WireGuard reference extension.
 #
 # Two frozen commands: list interfaces and show one. The guest names the
 # capability; the host renders `wg show ...` and validates the interface name.

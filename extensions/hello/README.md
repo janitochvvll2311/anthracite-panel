@@ -1,6 +1,6 @@
 # Hello
 
-The smallest reference plugin. It declares one capability (`host.hostname`), two
+The smallest reference extension. It declares one capability (`host.hostname`), two
 HTTP anchors and one UI slot, and answers `GET /greeting` by running the frozen
 `hostname` argv.
 

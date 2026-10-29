@@ -118,8 +118,9 @@ fn app(name: &str, require_signature: bool, install_from_web: bool) -> (axum::Ro
         root.join("extensions"),
         root.join("extensions.d"),
     );
-    let daemon =
-        Arc::new(Daemon::new(config, paths.clone(), Arc::clone(&logger)).with_plugins(extensions));
+    let daemon = Arc::new(
+        Daemon::new(config, paths.clone(), Arc::clone(&logger)).with_extensions(extensions),
+    );
     let auth_config = AuthConfig {
         enabled: false,
         ..AuthConfig::default()

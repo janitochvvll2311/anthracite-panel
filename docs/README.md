@@ -6,7 +6,7 @@ with Storage (inventory, guarded mount/unmount and partition/format) and
 Accounts (inventory, guarded create/delete and passwords). Accounts success
 paths were validated on a real host; storage mutations still wait for
 `CAP_SYS_ADMIN`. Phase 7 is code-complete: signed bundles, frozen grants, the
-plugin manager, the wasm ABI 3 runtime, guarded anchors, the sandboxed iframe
+extension manager, the wasm ABI 3 runtime, guarded anchors, the sandboxed iframe
 bridge and the `hello`/read-only WireGuard reference bundles. Phase 8
 hardening/release is next. The remaining feature documentation is added with the
 code it describes.
@@ -16,14 +16,14 @@ code it describes.
 | Document | Contents |
 | --- | --- |
 | [cli.md](cli.md) | Commands, flags, output, exit codes and bootstrap |
-| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, processes, network, firewall, storage, accounts, plugins, SSE and error shape |
+| [api-endpoints.md](api-endpoints.md) | HTTP routes, auth, files, terminal, processes, network, firewall, storage, accounts, extensions, SSE and error shape |
 | [terminal.md](terminal.md) | PTY sessions, policy, socket/WebSocket contract and mobile UI |
 | [processes.md](processes.md) | Process table, signals, spawn policy, SSE, CLI and the flat/tree UI |
 | [network.md](network.md) | Interface inventory, addresses, counters, rates, default routes, guarded up/down/create/edit/rename/delete, SSE, CLI and the Interfaces tab |
 | [firewall.md](firewall.md) | Managed nftables table with input/output chains, allow/deny/edit/delete/flush rules, default policies, guards, HTTP/socket/CLI and the Firewall tab |
 | [storage.md](storage.md) | Block devices, mounts, usage, swap, guarded mount/unmount and partition/format over socket, HTTP, CLI and the Storage tabs |
 | [accounts.md](accounts.md) | Users and groups from local files plus NSS, lock state, guarded create/delete, password changes and the Accounts tabs |
-| [plugins.md](plugins.md) | Signed bundles, manifests, frozen grants, install/list/enable/remove, the ABI 3 runtime, anchors, the iframe sandbox, reference plugins and the Settings → Plugins panel |
+| [extensions.md](extensions.md) | Signed bundles, manifests, frozen grants, install/list/enable/remove, the ABI 3 runtime, anchors, the iframe sandbox, reference extensions and the Settings → Extensions panel |
 | [migration.md](migration.md) | Dry-run `migrate` from v0.2: policy mapping, secrets split, dropped sessions/grants and safety rules |
 | [hardening.md](hardening.md) | Property-test coverage, enforced security boundaries and the open hardening items |
 | [release.md](release.md) | Tarball layout, systemd unit, container build, checksum and the pre-release suffix policy |

@@ -1,11 +1,11 @@
-//! Frozen grants: one file per installed plugin under `plugins.d/`.
+//! Frozen grants: one file per installed extension under `extensions.d/`.
 //!
 //! The bundle is content; the grant is policy. It records the manifest hash and
 //! signature, the module and asset hashes, and the normalized capability, anchor
 //! and UI surface the operator approved. A rewritten bundle cannot widen its own
-//! grant: a changed surface is refused until `plugin approve` is run.
+//! grant: a changed surface is refused until `extension approve` is run.
 //!
-//! The file name is the plugin id, and the id is validated before it becomes a
+//! The file name is the extension id, and the id is validated before it becomes a
 //! path. A symlink is refused rather than followed, and writes are atomic and
 //! `0600`, like every other policy file.
 
@@ -91,7 +91,7 @@ impl ExtensionGrant {
     }
 }
 
-/// The directory that holds one `<id>.toml` per plugin.
+/// The directory that holds one `<id>.toml` per extension.
 #[derive(Debug, Clone)]
 pub struct GrantStore {
     dir: PathBuf,

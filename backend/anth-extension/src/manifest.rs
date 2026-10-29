@@ -1,11 +1,11 @@
-//! The plugin manifest: the only contract a bundle gets to declare.
+//! The extension manifest: the only contract a bundle gets to declare.
 //!
 //! A manifest is data from a third party, so every field is untrusted. Values
 //! are parsed into types that cannot hold a bad one, and a refusal names the
 //! field. Nothing is repaired silently: a manifest the host had to guess at is
 //! one it cannot claim to have enforced.
 //!
-//! The authority boundary is the capability. A plugin declares a program and an
+//! The authority boundary is the capability. A extension declares a program and an
 //! argv template whose only variable parts are typed arguments; it never sends
 //! a finished argv. The host validates every value and renders the vector.
 
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// bounds the parser's work.
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 
-/// Largest number of capabilities, anchors or UI slots one plugin may declare.
+/// Largest number of capabilities, anchors or UI slots one extension may declare.
 pub const MAX_ENTRIES: usize = 256;
 
 /// The manifest schema this host understands.
@@ -175,7 +175,7 @@ impl ExtensionManifest {
         }
         if self.extension.abi != ABI_VERSION {
             return Err(WireError::invalid(format!(
-                "plugin `{}` speaks ABI {}, this daemon speaks {ABI_VERSION}",
+                "extension `{}` speaks ABI {}, this daemon speaks {ABI_VERSION}",
                 self.extension.id, self.extension.abi
             )));
         }
@@ -192,7 +192,7 @@ impl ExtensionManifest {
             || self.ui.len() > MAX_ENTRIES
         {
             return Err(WireError::invalid(format!(
-                "a plugin may declare at most {MAX_ENTRIES} capabilities, anchors and UI slots"
+                "a extension may declare at most {MAX_ENTRIES} capabilities, anchors and UI slots"
             )));
         }
 
@@ -361,13 +361,13 @@ pub struct ExtensionSurface {
     pub ui: Vec<UiSlot>,
 }
 
-/// A plugin id is a dotted lowercase name, which is also what a bundle
+/// A extension id is a dotted lowercase name, which is also what a bundle
 /// directory is called. Restricting it here means a path built from an id
 /// cannot escape.
 pub fn validate_id(id: &str) -> Result<(), WireError> {
     if id.is_empty() || id.len() > 128 {
         return Err(WireError::invalid(
-            "a plugin id must be 1 to 128 characters",
+            "a extension id must be 1 to 128 characters",
         ));
     }
     let well_formed = id.split('.').all(|part| {
@@ -378,7 +378,7 @@ pub fn validate_id(id: &str) -> Result<(), WireError> {
     });
     if !well_formed || !id.contains('.') {
         return Err(WireError::invalid(format!(
-            "`{id}` is not a plugin id: use lowercase dot-separated parts, like org.example.thing"
+            "`{id}` is not a extension id: use lowercase dot-separated parts, like org.example.thing"
         )));
     }
     Ok(())
@@ -395,7 +395,7 @@ fn validate_capability_id(id: &str) -> Result<(), WireError> {
 fn validate_alias(alias: &str) -> Result<(), WireError> {
     if alias.is_empty() || alias.len() > 64 {
         return Err(WireError::invalid(
-            "a plugin alias must be 1 to 64 characters; omit the field instead",
+            "a extension alias must be 1 to 64 characters; omit the field instead",
         ));
     }
     if !alias
@@ -403,7 +403,7 @@ fn validate_alias(alias: &str) -> Result<(), WireError> {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     {
         return Err(WireError::invalid(format!(
-            "`{alias}` is not a plugin alias: use lowercase letters, digits, `-` and `_`"
+            "`{alias}` is not a extension alias: use lowercase letters, digits, `-` and `_`"
         )));
     }
     Ok(())

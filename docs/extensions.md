@@ -1,13 +1,13 @@
-# Plugins
+# Extensions
 
 Phase 7 starts with the package layer: signed bundles, frozen grants and a
-manager over CLI, HTTP and the **Settings → Plugins** panel. The wasm runtime,
+manager over CLI, HTTP and the **Settings → Extensions** panel. The wasm runtime,
 HTTP anchors, iframe bridge and the `hello`/WireGuard reference bundles are the
 next cuts; this document marks what is already enforced and what is still
 pending.
 
-A plugin extends the panel without receiving authority over the host. The
-manifest is a recipe: it declares which programs a plugin needs and the shape of
+An extension extends the panel without receiving authority over the host. The
+manifest is a recipe: it declares which programs an extension needs and the shape of
 their arguments. The grant is the policy the operator approved. The guest never
 sends an argv: it names a capability and supplies values, and the host renders
 the vector from the frozen template.
@@ -15,37 +15,40 @@ the vector from the frozen template.
 ## Bundle format
 
 ```
-plugin.toml        manifest
-plugin.wasm        guest module (ABI 3)
-plugin.sig         detached Ed25519 signature over plugin.toml (optional
+extension.toml        manifest
+extension.wasm        guest module (ABI 3)
+extension.sig         detached Ed25519 signature over extension.toml (optional
                    when require_signature = false)
 web/<module>.js    declared UI modules, each with a sha256
 web/<module>.css
 ```
 
-- `plugin.sig` signs the raw bytes of `plugin.toml`, hex encoded (128
+- `extension.sig` signs the raw bytes of `extension.toml`, hex encoded (128
   characters).
 - The manifest declares the sha256 of the module and of every UI module, so one
   signature approves every byte the host will load or serve.
-- `manifest_version = 1` and `abi = 3` are explicit; an unknown value is refused.
-- `plugin.wasm` is pinned; the manifest cannot point the module somewhere else.
+- `manifest_version = 2` and `abi = 3` are explicit; an unknown value is refused.
+- `extension.wasm` is pinned; the manifest cannot point the module somewhere else.
 - UI modules live under `web/`, end in `.js`, `.mjs` or `.css`, and must appear
   in a `[[ui]]` slot with their digest.
 
 Example:
 
 ```toml
-manifest_version = 1
+manifest_version = 2
 
-[plugin]
+[extension]
 id = "org.anth.hello"
 alias = "hello"
 version = "0.3.0"
 name = "Hello"
 abi = 3
 
+[runtime]
+kind = "wasm"
+
 [wasm]
-path = "plugin.wasm"
+path = "extension.wasm"
 sha256 = "<64 hex characters>"
 
 [[capability]]
@@ -64,7 +67,7 @@ method = "GET"
 path = "/status"
 
 [[ui]]
-slot = "settings.plugin"
+slot = "settings.extension"
 tag = "anth-hello"
 module = "web/hello.js"
 sha256 = "<64 hex characters>"
@@ -78,9 +81,9 @@ literal argv elements cannot contain control characters.
 ## Configuration
 
 ```toml
-[plugins]
+[extensions]
 enabled = false
-root = "/var/lib/anth/plugins"
+root = "/var/lib/anth/extensions"
 install_from_web = false
 require_signature = true
 public_key = ""
@@ -88,8 +91,8 @@ fuel = 50000000
 ```
 
 - `enabled` is the master switch: install and load refuse when it is off.
-- `root` holds one directory per installed plugin.
-- `install_from_web` enables `POST /api/plugins/install`. Local CLI install does
+- `root` holds one directory per installed extension.
+- `install_from_web` enables `POST /api/extensions/install`. Local CLI install does
   not need it.
 - `require_signature` defaults to true. With it off, an unsigned bundle installs
   with a warning; a signature that *is* present is still verified.
@@ -97,23 +100,23 @@ fuel = 50000000
   is empty.
 - `fuel` is reserved for the wasm runtime cut.
 
-Grants live beside the config file under `plugins.d/<id>.toml`, mode `0600`.
+Grants live beside the config file under `extensions.d/<id>.toml`, mode `0600`.
 They are written atomically and are never read from a symlink.
 
 ## Install order
 
-Nothing appears under the plugin's id until every step passes:
+Nothing appears under the extension's id until every step passes:
 
 1. Open the zip and reject path escapes, symlinks, duplicate names, unexpected
    members, more than 512 entries or more than 32 MiB expanded.
-2. Read `plugin.toml`, hash it and verify `plugin.sig` when present.
+2. Read `extension.toml`, hash it and verify `extension.sig` when present.
 3. Parse and validate the manifest.
-4. Hash `plugin.wasm` and every declared UI module.
+4. Hash `extension.wasm` and every declared UI module.
 5. Compare the capability, anchor and UI surface with an existing grant. A
-   changed surface is `409 plugin_capabilities_changed` until
-   `plugin approve --accept-capabilities` (or the install's
+   changed surface is `409 extension_capabilities_changed` until
+   `extension approve --accept-capabilities` (or the install's
    `accept_capabilities`) rewrites the grant.
-6. Rename the staging directory into `plugins/<id>` and write the grant.
+6. Rename the staging directory into `extensions/<id>` and write the grant.
 
 A refusal removes staging. At every listing, the host re-verifies the manifest
 hash, the signature, the module digest and every UI digest against the grant; a
@@ -122,10 +125,11 @@ rewritten bundle becomes an `error` entry with the reason, never a silent skip.
 ## Grant
 
 ```toml
-version = 1
+version = 2
 id = "org.anth.hello"
 name = "Hello"
-plugin_version = "0.3.0"
+extension_version = "0.3.0"
+runtime = "wasm"
 enabled = true
 manifest_sha256 = "..."
 manifest_signature = "..."
@@ -142,7 +146,7 @@ method = "GET"
 path = "/status"
 
 [[ui]]
-slot = "settings.plugin"
+slot = "settings.extension"
 tag = "anth-hello"
 module = "web/hello.js"
 sha256 = "..."
@@ -159,26 +163,26 @@ All routes require a live panel session unless auth is disabled. Mutations check
 
 | Route | Body | Policy |
 | --- | --- | --- |
-| `GET /api/plugins` | — | returns the catalogue, `enabled`, `install_from_web` |
-| `POST /api/plugins/install` | `{"bundle_base64":"...","accept_capabilities":false}` | `install_from_web` |
-| `POST /api/plugins/{id}/enable` | `{}` | — |
-| `POST /api/plugins/{id}/disable` | `{}` | — |
-| `POST /api/plugins/{id}/remove` | `{}` | — |
-| `POST /api/plugins/{id}/approve` | `{"accept_capabilities":true}` | — |
-| `GET|POST|PUT|PATCH|DELETE /api/plugins/{id}/{*path}` | raw body, max 1 MiB | anchor declared in the grant |
-| `GET /api/plugins/{id}/web/{*path}` | — | declared UI module |
-| `GET /p/{id}/{*module}` | — | host-owned iframe bootstrap |
+| `GET /api/extensions` | — | returns the catalogue, `enabled`, `install_from_web` |
+| `POST /api/extensions/install` | `{"bundle_base64":"...","accept_capabilities":false}` | `install_from_web` |
+| `POST /api/extensions/{id}/enable` | `{}` | — |
+| `POST /api/extensions/{id}/disable` | `{}` | — |
+| `POST /api/extensions/{id}/remove` | `{}` | — |
+| `POST /api/extensions/{id}/approve` | `{"accept_capabilities":true}` | — |
+| `GET|POST|PUT|PATCH|DELETE /api/extensions/{id}/{*path}` | raw body, max 1 MiB | anchor declared in the grant |
+| `GET /api/extensions/{id}/web/{*path}` | — | declared UI module |
+| `GET /e/{id}/{*module}` | — | host-owned iframe bootstrap |
 
 The install answer carries `id`, `name`, `version`, `capabilities` and an
 optional `warning` when the bundle was unsigned. Errors use the common shape:
 `403 forbidden`, `404 not_found`, `409 conflict` with code
-`plugin_capabilities_changed`, or `400 invalid`.
+`extension_capabilities_changed`, or `400 invalid`.
 
 An anchor must match a `[[api]]` method and path in the frozen grant; an
 undeclared pair is `404`. The body is passed to the guest as text, not parsed by
 the host. A guest reply `{"status":200,"body":...}` becomes that HTTP status;
 a string body is `text/plain`, anything else is JSON, and every response is
-`nosniff`. Plugin log lines go to the daemon log with the plugin id, never to
+`nosniff`. Extension log lines go to the daemon log with the extension id, never to
 the HTTP response.
 
 UI assets are served only when a `[[ui]]` slot declares that exact module. The
@@ -188,27 +192,27 @@ the file at 4 MiB, and sends `nosniff`, `no-store` and an explicit content type.
 ## CLI
 
 ```bash
-anth-panel plugin list
-anth-panel plugin ls
-anth-panel plugin install plugins/hello/dist/org.anth.hello.zip
-anth-panel plugin install bundle.zip --accept-capabilities
-anth-panel plugin disable org.anth.hello
-anth-panel plugin enable hello
-anth-panel plugin approve org.anth.hello --accept-capabilities
-anth-panel plugin remove org.anth.hello --yes
-anth-panel plugin call org.anth.hello '{"action":"greeting"}'
-printf '{"action":"greeting"}' | anth-panel plugin call hello -
+anth-panel extension list
+anth-panel extension ls
+anth-panel extension install extensions/hello/dist/org.anth.hello.zip
+anth-panel extension install bundle.zip --accept-capabilities
+anth-panel extension disable org.anth.hello
+anth-panel extension enable hello
+anth-panel extension approve org.anth.hello --accept-capabilities
+anth-panel extension remove org.anth.hello --yes
+anth-panel extension call org.anth.hello '{"action":"greeting"}'
+printf '{"action":"greeting"}' | anth-panel extension call hello -
 ```
 
-Plugin management is local, like `config`: it reads and writes the bundle root
+Extension management is local, like `config`: it reads and writes the bundle root
 and grant files directly. It does not need a running daemon. The daemon reads
 the bundle root and grants on every listing, so installs and toggles apply
-without a restart. An alias resolves to its plugin only when it is unique;
+without a restart. An alias resolves to its extension only when it is unique;
 otherwise the full id is required.
 
 ## Web UI
 
-**Settings** now has **General** and **Plugins** tabs. The Plugins panel follows
+**Settings** now has **General** and **Extensions** tabs. The Extensions panel follows
 the section template:
 
 - One feed, status/count toolbar, refresh, policy strip and a local filter.
@@ -228,37 +232,37 @@ module once, creates a fresh store and invokes one of the three entries:
 `anth_http`, `anth_cli` or `anth_direct`. Only `anth_exec` and `anth_log` are
 imported; anything else fails to link.
 
-- `[plugins] fuel` (default 50,000,000) bounds instructions.
+- `[extensions] fuel` (default 50,000,000) bounds instructions.
 - Linear memory is capped at 64 MiB; one instance, table and memory.
 - One call may run at most 32 capabilities; stdout from a capability is capped
   at 64 KiB and guest log at 64 KiB.
 - A trap, an out-of-fuel call or a malformed ABI is a transport error, not a
-  plugin reply.
+  extension reply.
 - The guest names a capability; the host renders the argv from the frozen
   template and validates every value. A value never becomes two arguments and
   a leading `-` is refused.
 
-`plugin call` uses the `anth_cli` entry and prints
+`extension call` uses the `anth_cli` entry and prints
 `{"status":...,"value":...}`; a status of 400 or above exits non-zero. HTTP
 anchors use `anth_http`; the host checks the method and path against the grant
 before running the guest.
 
 ## UI isolation
 
-A declared UI slot is mounted by `<anth-plugin-frame>`:
+A declared UI slot is mounted by `<anth-extension-frame>`:
 
 - The iframe uses `sandbox="allow-scripts"` with no `allow-same-origin`, so the
   module has an opaque origin and no panel DOM, cookies or storage.
-- `/p/{id}/{module}` serves a host-owned bootstrap, not the raw module. The
+- `/e/{id}/{module}` serves a host-owned bootstrap, not the raw module. The
   bootstrap inlines the declared source as a blob import, sends `ready`, and
   waits for the parent's init message.
 - The bootstrap CSP is `default-src 'none'`, a per-request nonce for its own
   script, `blob:` for the module, `style-src 'unsafe-inline'`, data/blob images,
   no network (`connect-src 'none'`) and `frame-ancestors 'self'`.
 - `postMessage` is accepted only from the frame's own `contentWindow`, with an
-  opaque (`null`) origin and the `anthPlugin` marker.
-- The parent sends the plugin/slot snapshot, the panel locale and theme tokens.
-- `api.call(path, body, method)` is checked against the plugin's frozen anchors
+  opaque (`null`) origin and the `anthExtension` marker.
+- The parent sends the extension/slot snapshot, the panel locale and theme tokens.
+- `api.call(path, body, method)` is checked against the extension's frozen anchors
   before the parent performs the same-origin fetch. An undeclared method/path
   is refused without a network request.
 - `api.resize(height)` lets the widget size itself; errors show inside the
@@ -267,25 +271,25 @@ A declared UI slot is mounted by `<anth-plugin-frame>`:
 The module contract is an exported `mount(root, api)` (or a default function).
 It is self-contained: dynamic imports beyond the blob are blocked by the CSP.
 
-## Reference plugins
+## Reference extensions
 
 Two peer projects show the contract end to end. They are not workspace members:
 `backend/` does not build them and `frontend/` does not install their
 dependencies.
 
-### `plugins/hello`
+### `extensions/hello`
 
 The smallest complete bundle: one capability (`host.hostname`), two anchors
 (`/greeting`, `/status`) and one UI slot. Its widget calls `/greeting` through
 the iframe bridge.
 
 ```bash
-cd plugins/hello
+cd extensions/hello
 ./package.sh
 # dist/org.anth.hello.zip, dist/hello-public-key.txt
 ```
 
-### `plugins/wireguard`
+### `extensions/wireguard`
 
 A read-only WireGuard bundle: `wg show interfaces` and `wg show <if>`, with the
 interface validated by the host's `ifname` type. The widget lists interfaces and
@@ -293,7 +297,7 @@ shows one. Interface/peer mutations, config persistence and private-key handling
 are deliberately not in this cut.
 
 ```bash
-cd plugins/wireguard
+cd extensions/wireguard
 ./package.sh
 # dist/org.anth.wireguard.zip, dist/wireguard-public-key.txt
 ```
@@ -301,11 +305,11 @@ cd plugins/wireguard
 Each script builds the guest for `wasm32-unknown-unknown`, copies the declared
 UI module, fills both digests, signs the manifest with Ed25519 and writes the
 zip. The key lives under `dist/` and is gitignored; reuse it for upgrades so the
-operator's `[plugins] public_key` stays valid. Set that key before installing.
+operator's `[extensions] public_key` stays valid. Set that key before installing.
 
 ```bash
-sudo anth-panel plugin install plugins/hello/dist/org.anth.hello.zip
-curl http://127.0.0.1:8080/api/plugins/org.anth.hello/greeting
+sudo anth-panel extension install extensions/hello/dist/org.anth.hello.zip
+curl http://127.0.0.1:8080/api/extensions/org.anth.hello/greeting
 ```
 
 The hello widget was exercised in the browser with the real runtime: the
@@ -315,4 +319,4 @@ installed and listed; the container has no `wg` binary, so its anchors report
 the host refusal there.
 
 Phase 7 is code-complete with these two bundles; the WireGuard mutation surface
-is a later feature, not part of the plugin isolation phase.
+is a later feature, not part of the extension isolation phase.

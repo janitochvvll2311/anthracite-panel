@@ -13,8 +13,8 @@ Phase 6 is code-complete: the Storage inventory, guarded mount/unmount and
 partition/format operations, plus the Accounts inventory, guarded create/delete
 and password changes, are in place. Accounts success paths were validated on a
 real host; storage mutations still need `CAP_SYS_ADMIN`. Phase 7 has started with
-signed plugin bundles, frozen grants, the wasm ABI 3 runtime, guarded HTTP
-anchors, declared UI asset delivery and the plugin manager over CLI, HTTP and
+signed extension bundles, frozen grants, the wasm ABI 3 runtime, guarded HTTP
+anchors, declared UI asset delivery and the extension manager over CLI, HTTP and
 Settings; the sandboxed iframe bridge and the `hello` and read-only WireGuard
 reference bundles are in place. Phase 7 is code-complete. Phase 8 has started
 with the dry-run v0.2 migration, property tests over paths, archives,
@@ -40,7 +40,7 @@ bun install
 The `tests/` project starts the demo, disables auth for the local run, exercises
 the synthetic network/firewall through the UI and API, and stops both servers.
 
-- Rust workspace: `anth-wire`, `anth-host`, `anth-plugin`, `anth-panel`.
+- Rust workspace: `anth-wire`, `anth-host`, `anth-extension`, `anth-plugin`, `anth-panel`.
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
   one error type and explicit pagination.
 - Pure `/proc` and `os-release` parsers with fixture tests.
@@ -85,10 +85,10 @@ the synthetic network/firewall through the UI and API, and stops both servers.
   and password changes behind `[accounts] control/manage_passwords` with
   system-id and privileged-group opt-ins, over socket, HTTP, CLI and the
   Accounts section's Users and Groups tabs.
-- Plugins: signed zip bundles with manifest v1 and ABI 3, Ed25519 over
-  `plugin.toml`, per-file sha256, frozen per-plugin grants under `plugins.d/`,
+- Extensions: signed zip bundles with manifest v2 and ABI 3, Ed25519 over
+  `extension.toml`, per-file sha256, frozen per-extension grants under `extensions.d/`,
   install/list/enable/disable/remove/approve over local CLI and HTTP, the
-  Settings → Plugins panel, the wasmi ABI 3 runtime, guarded HTTP anchors and
+  Settings → Extensions panel, the wasmi ABI 3 runtime, guarded HTTP anchors and
   declared UI asset delivery, the sandboxed iframe bridge, and the `hello` and
   read-only WireGuard reference bundles.
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
@@ -105,7 +105,7 @@ the synthetic network/firewall through the UI and API, and stops both servers.
   `config set`; CI for backend and frontend.
 
 The remaining work (network mutations, firewall, volumes/partitions/accounts,
-plugins and hardening/release) arrives later. The settings page covers policy
+extensions and hardening/release) arrives later. The settings page covers policy
 switches, sessions and lifecycle; it is not a full config editor. The plan is
 [docs/design/v0.3.0.md](docs/design/v0.3.0.md); the accepted Phase 0 contracts
 are [docs/design/phase-0-contracts.md](docs/design/phase-0-contracts.md).
@@ -150,7 +150,7 @@ Debug builds default to relative paths (`./config.toml`, `./anth.sock`,
 `./state`) and a development profile that turns every policy switch on, including
 the sensitive ones: terminal, process control and spawn, network management, the
 firewall, volume mount/partition/format, account management with passwords,
-system and privileged groups, unsigned plugin installs, file writes and trash.
+system and privileged groups, unsigned extension installs, file writes and trash.
 Release builds default to `/etc/anth/config.toml` and `/var/lib/anth` with every
 switch closed.
 

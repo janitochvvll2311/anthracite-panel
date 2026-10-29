@@ -27,18 +27,18 @@ rustc-ice-*.txt
 /config.toml
 /secrets.toml
 /state/
-# Reference plugin sources live under plugins/; only built bundles and the
+# Reference extension sources live under extensions/; only built bundles and the
 # registry installed by a debug run are generated.
-/plugins/bundles/
-/plugins/*/dist/
-/plugins/*/backend/target/
-/plugins.d/
+/extensions/bundles/
+/extensions/*/dist/
+/extensions/*/backend/target/
+/extensions.d/
 /anth.sock
 /backend/config.toml
 /backend/secrets.toml
 /backend/state/
-/backend/plugins/
-/backend/plugins.d/
+/backend/extensions/
+/backend/extensions.d/
 /backend/anth.sock
 /dist/
 /frontend/node_modules/

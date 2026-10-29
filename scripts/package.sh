@@ -41,10 +41,10 @@ cp "$root/packaging/anthracite-panel.service" "$prefix/lib/systemd/system/anthra
 cp "$root/packaging/Dockerfile" "$prefix/share/containers/Dockerfile"
 cp "$root/README.md" "$root/LICENSE" "$prefix/share/doc/anthracite-panel/"
 cp -R "$root/docs" "$prefix/share/doc/anthracite-panel/docs"
-cp -R "$root/plugins" "$prefix/share/doc/anthracite-panel/plugins"
+cp -R "$root/extensions" "$prefix/share/doc/anthracite-panel/extensions"
 # Keep reference bundles out of the release tree; they are sources, not binaries.
-rm -rf "$prefix/share/doc/anthracite-panel/plugins"/*/dist \
-       "$prefix/share/doc/anthracite-panel/plugins"/*/backend/target
+rm -rf "$prefix/share/doc/anthracite-panel/extensions"/*/dist \
+       "$prefix/share/doc/anthracite-panel/extensions"/*/backend/target
 
 mkdir -p "$dist"
 tar -C "$staging" -czf "$dist/$name.tar.gz" "$name"

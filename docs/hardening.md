@@ -13,8 +13,8 @@ characters, NULs, separators and traversal spellings.
 | --- | --- |
 | File paths (`files::resolve`, `split_parent`) | A resolved path always stays under the canonical file root; a split parent is relative and contains no `..`; nothing panics |
 | Archive members (`archive::safe_member`) | An accepted relative path is not absolute and has no parent component, so joining it to the extract root cannot escape |
-| Plugin bundle members (`bundle::safe_member`) | Same confinement for extracted plugin zips |
-| Plugin manifests (`Manifest::parse`) | Arbitrary text never panics; an accepted manifest has the pinned module path, ABI 3, a valid id and a 64-hex module digest |
+| Extension bundle members (`bundle::safe_member`) | Same confinement for extracted extension zips |
+| Extension manifests (`Manifest::parse`) | Arbitrary text never panics; an accepted manifest has the pinned module path, ABI 3, a valid id and a 64-hex module digest |
 | Config (`Config::from_toml`) | Arbitrary text never panics; parse errors stay errors |
 | v0.2 migration (`migrate::plan`) | Arbitrary text never panics; an accepted plan validates and only carries an empty or 64-hex signing key |
 
@@ -33,10 +33,10 @@ Enforced today:
   canonicalised afterwards; symlink escapes and `..` are refused. Archive
   extraction refuses absolute members, traversal and writes through
   archive-created symlinks.
-- **Commands.** `ip`, `nft`, `mount`, `sfdisk`, `mkfs`, shadow-utils and plugin
+- **Commands.** `ip`, `nft`, `mount`, `sfdisk`, `mkfs`, shadow-utils and extension
   capabilities are direct argv vectors; no shell. Values cannot start with `-`
   where the program would read them as flags.
-- **Plugins.** Ed25519 over `plugin.toml`, per-file SHA-256, a frozen grant,
+- **Extensions.** Ed25519 over `extension.toml`, per-file SHA-256, a frozen grant,
   archive member/size caps, a wasmi sandbox (fuel, memory, deadline, call and
   log budgets), grant-checked anchors, and an opaque-origin iframe with CSP and
   a narrow `postMessage` bridge.
@@ -54,12 +54,12 @@ Still open / pending:
 - Real `ip`/`nft` success paths need `CAP_NET_ADMIN` and `/dev/net/tun`.
 - Real mount/partition/format success paths need `CAP_SYS_ADMIN`.
 - WireGuard mutation jobs and private-key handling are not implemented; the
-  reference plugin is read-only.
-- A corpus-based fuzz job for the archive and plugin zip readers, plus a longer
+  reference extension is read-only.
+- A corpus-based fuzz job for the archive and extension zip readers, plus a longer
   property budget in CI.
-- An external review of the auth/session and plugin trust boundaries before a
+- An external review of the auth/session and extension trust boundaries before a
   `1.0.0` claim.
-- Migration intentionally drops v0.2 sessions and plugin grants.
+- Migration intentionally drops v0.2 sessions and extension grants.
 
 ## Running the checks
 

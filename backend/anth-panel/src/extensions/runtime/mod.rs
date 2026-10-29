@@ -116,7 +116,7 @@ impl Loaded {
     ///
     /// This is also the only place the imports are checked: a guest that imports
     /// anything beyond `anth_exec` and `anth_log` fails to link here, which is
-    /// what keeps "a extension never gets a host handle" true by construction
+    /// what keeps "an extension never gets a host handle" true by construction
     /// rather than by review.
     fn verify_abi(&self) -> Result<(), WireError> {
         // Nothing the guest logs here is meant for an operator: this runs at

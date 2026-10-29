@@ -28,7 +28,7 @@ pub const MAX_LOG_BYTES: usize = 64 * 1024;
 #[derive(Debug)]
 pub struct Reply {
     /// The guest's status, as an HTTP code. `__ANTH_EXTENSION_ID__::Status` maps its
-    /// variants to exactly these, so a extension cannot invent a code the host does
+    /// variants to exactly these, so an extension cannot invent a code the host does
     /// not already classify.
     pub status: u16,
     pub value: serde_json::Value,
@@ -234,7 +234,7 @@ pub(crate) fn exec(
 /// The guest names a level; the daemon decides whether to print it.
 ///
 /// A number the host has no name for becomes `info` rather than an error: the
-/// line is diagnostic, and a extension that is already confused should not also be
+/// line is diagnostic, and an extension that is already confused should not also be
 /// silent. `info` specifically, because it is the default the operator sees —
 /// mapping garbage to `error` would let a guest raise its own priority.
 /// The number a guest sends to the level the daemon filters on.

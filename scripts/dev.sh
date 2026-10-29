@@ -32,7 +32,7 @@ fi
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 script_path=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/$(basename -- "${BASH_SOURCE[0]}")
 # The daemon runs from the directory the helper was called in, not from the
-# repo, so relative config or plugin paths the caller expects still resolve.
+# repo, so relative config or extension paths the caller expects still resolve.
 invoke_dir=$PWD
 backend=${ANTH_BACKEND:-real}
 case "$backend" in

@@ -290,30 +290,30 @@ is never accepted as an argument; use the web UI to enter it interactively.
 New users are created locked until a password is set. See
 [accounts.md](accounts.md).
 
-## `plugin`
+## `extension`
 
 ```bash
-anth-panel plugin list
-anth-panel plugin ls
-anth-panel plugin install plugins/hello/dist/org.anth.hello.zip
-anth-panel plugin install bundle.zip --accept-capabilities
-anth-panel plugin enable hello
-anth-panel plugin disable org.anth.hello
-anth-panel plugin approve org.anth.hello --accept-capabilities
-anth-panel plugin remove org.anth.hello --yes
-anth-panel plugin call org.anth.hello '{"action":"greeting"}'
-printf '{"action":"greeting"}' | anth-panel plugin call hello -
+anth-panel extension list
+anth-panel extension ls
+anth-panel extension install extensions/hello/dist/org.anth.hello.zip
+anth-panel extension install bundle.zip --accept-capabilities
+anth-panel extension enable hello
+anth-panel extension disable org.anth.hello
+anth-panel extension approve org.anth.hello --accept-capabilities
+anth-panel extension remove org.anth.hello --yes
+anth-panel extension call org.anth.hello '{"action":"greeting"}'
+printf '{"action":"greeting"}' | anth-panel extension call hello -
 ```
 
-Plugin management is local, like `config`: it reads and writes the bundle root
-and `plugins.d/<id>.toml` grants directly, without a running daemon. The daemon
+Extension management is local, like `config`: it reads and writes the bundle root
+and `extensions.d/<id>.toml` grants directly, without a running daemon. The daemon
 re-reads them per request, so changes apply without a restart. A signed bundle
-needs `[plugins] public_key`; unsigned ones
+needs `[extensions] public_key`; unsigned ones
 are accepted only with `require_signature = false` and print a warning. A
 changed capability surface needs the explicit `--accept-capabilities`. An alias
 resolves only when it is unique. `call` sends one JSON request through the
 guest's `anth_cli` entry, prints `{"status":...,"value":...}` and exits non-zero
-for a status of 400 or above. See [plugins.md](plugins.md).
+for a status of 400 or above. See [extensions.md](extensions.md).
 
 ## `migrate`
 
@@ -324,7 +324,7 @@ sudo anth-panel --config /etc/anth/config.toml migrate --from /etc/anth/config.t
 
 Maps a v0.2 settings file to v0.3 policy and, when present, the account and
 signing key to `secrets.toml` (`0600`). Dry run by default; `--write` applies and
-`--force` overwrites an existing target. Sessions and plugin grants are not
+`--force` overwrites an existing target. Sessions and extension grants are not
 migrated. See [migration.md](migration.md).
 
 ## `config`

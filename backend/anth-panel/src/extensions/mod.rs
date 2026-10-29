@@ -1,7 +1,7 @@
 //! Extensions: signed bundles, frozen grants and the catalogue the panel shows.
 //!
 //! The bundle is content, the grant is policy and the daemon is the only thing
-//! that turns one into the other. A extension cannot widen its own grant; a
+//! that turns one into the other. An extension cannot widen its own grant; a
 //! changed manifest is refused until the operator approves it again.
 //!
 //! This module owns the management surface. The wasm runtime, HTTP anchors and
