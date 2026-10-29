@@ -1,24 +1,24 @@
-/** `anth-plugins`: the signed-bundle catalogue inside Settings. */
+/** `anth-extensions`: the signed-bundle catalogue inside Settings. */
 
 import { LitElement, css, html, nothing } from 'lit'
 import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg, str } from '@lit/localize'
 
 import './icon'
-import './plugin-frame'
+import './extension-frame'
 import { describeError } from './errors'
-import type { PluginView, PluginsClient, PluginsView } from './plugins-client'
+import type { ExtensionView, ExtensionsClient, ExtensionsView } from './extensions-client'
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 
-@customElement('anth-plugins')
+@customElement('anth-extensions')
 @localized()
-export class AnthPlugins extends LitElement {
+export class AnthExtensions extends LitElement {
   @property({ attribute: false })
-  client?: PluginsClient
+  client?: ExtensionsClient
 
   @state()
-  private snapshot?: PluginsView
+  private snapshot?: ExtensionsView
 
   @state()
   private status: LoadStatus = 'idle'
@@ -79,7 +79,7 @@ export class AnthPlugins extends LitElement {
   }
 
   private async run(
-    task: (client: PluginsClient) => Promise<unknown>,
+    task: (client: ExtensionsClient) => Promise<unknown>,
     done?: () => void,
   ): Promise<void> {
     const client = this.client
@@ -140,11 +140,11 @@ export class AnthPlugins extends LitElement {
 
   private countLabel(): string {
     if (!this.snapshot) return ''
-    const count = this.snapshot.plugins.length
-    const enabled = this.snapshot.plugins.filter((plugin) => plugin.enabled).length
+    const count = this.snapshot.extensions.length
+    const enabled = this.snapshot.extensions.filter((extension) => extension.enabled).length
     return count === 1
-      ? msg(str`1 plugin · active: ${enabled}`)
-      : msg(str`${count} plugins · active: ${enabled}`)
+      ? msg(str`1 extension · active: ${enabled}`)
+      : msg(str`${count} extensions · active: ${enabled}`)
   }
 
   private renderToolbar() {
@@ -174,13 +174,13 @@ export class AnthPlugins extends LitElement {
     `
   }
 
-  private renderContext(snapshot: PluginsView) {
+  private renderContext(snapshot: ExtensionsView) {
     return html`
       <div class="context" part="context">
         <span class="context-label">${msg('Policy')}</span>
         <span class="policies">
           <span class="policy" data-on=${snapshot.enabled ? 'yes' : 'no'}>
-            ${msg('plugins')}
+            ${msg('extensions')}
           </span>
           <span class="policy" data-on=${snapshot.install_from_web ? 'yes' : 'no'}>
             ${msg('web install')}
@@ -190,16 +190,16 @@ export class AnthPlugins extends LitElement {
       ${snapshot.enabled
         ? nothing
         : html`<p class="warning" role="status">
-            ${msg('Plugins are disabled; set [plugins] enabled = true to load them.')}
+            ${msg('Extensions are disabled; set [extensions] enabled = true to load them.')}
           </p>`}
     `
   }
 
-  private renderInstall(snapshot: PluginsView) {
+  private renderInstall(snapshot: ExtensionsView) {
     if (!snapshot.enabled) return nothing
     if (!snapshot.install_from_web) {
       return html`<p class="hint">
-        ${msg('Browser installs are off. Install a bundle with anth-panel plugin install.')}
+        ${msg('Browser installs are off. Install a bundle with anth-panel extension install.')}
       </p>`
     }
     return html`
@@ -239,8 +239,8 @@ export class AnthPlugins extends LitElement {
         <input
           type="search"
           .value=${this.query}
-          placeholder=${msg('Filter plugins')}
-          aria-label=${msg('Filter plugins')}
+          placeholder=${msg('Filter extensions')}
+          aria-label=${msg('Filter extensions')}
           @input=${(event: Event) => {
             this.query = (event.currentTarget as HTMLInputElement).value
           }}
@@ -249,75 +249,75 @@ export class AnthPlugins extends LitElement {
     `
   }
 
-  private stateLabel(plugin: PluginView): string {
-    if (plugin.state === 'enabled') return msg('enabled')
-    if (plugin.state === 'disabled') return msg('disabled')
-    if (plugin.state === 'unapproved') return msg('unapproved')
+  private stateLabel(extension: ExtensionView): string {
+    if (extension.state === 'enabled') return msg('enabled')
+    if (extension.state === 'disabled') return msg('disabled')
+    if (extension.state === 'unapproved') return msg('unapproved')
     return msg('error')
   }
 
-  private renderPlugin(plugin: PluginView) {
+  private renderExtension(extension: ExtensionView) {
     return html`
-      <article class="plugin" data-state=${plugin.state} part="plugin">
+      <article class="extension" data-state=${extension.state} part="extension">
         <div class="identity">
           <div class="title">
             <span class="dot" aria-hidden="true"></span>
-            <h3>${plugin.name}</h3>
-            <span class="badge" data-tone=${plugin.state === 'enabled' ? 'ok' : 'warn'}>
-              ${this.stateLabel(plugin)}
+            <h3>${extension.name}</h3>
+            <span class="badge" data-tone=${extension.state === 'enabled' ? 'ok' : 'warn'}>
+              ${this.stateLabel(extension)}
             </span>
-            ${plugin.alias ? html`<span class="badge">${plugin.alias}</span>` : nothing}
+            ${extension.alias ? html`<span class="badge">${extension.alias}</span>` : nothing}
           </div>
           <p class="meta">
-            <code>${plugin.id}</code>
-            ${plugin.version ? html`<span>${plugin.version}</span>` : nothing}
+            <code>${extension.id}</code>
+            ${extension.version ? html`<span>${extension.version}</span>` : nothing}
           </p>
-          ${plugin.error
-            ? html`<p class="reason" role="status">${plugin.error}</p>`
+          ${extension.error
+            ? html`<p class="reason" role="status">${extension.error}</p>`
             : nothing}
         </div>
         <div class="surface">
-          ${plugin.capabilities.length === 0
+          ${extension.capabilities.length === 0
             ? nothing
             : html`<div class="chips">
-                ${plugin.capabilities.map(
+                ${extension.capabilities.map(
                   (capability) => html`<span class="chip">${capability}</span>`,
                 )}
               </div>`}
-          ${plugin.api.length === 0
+          ${extension.api.length === 0
             ? nothing
             : html`<p class="meta">
-                ${plugin.api.map(
+                ${extension.api.map(
                   (anchor) => html`<span class="chip">${anchor.method} ${anchor.path}</span>`,
                 )}
               </p>`}
         </div>
         <div class="actions">
-          ${plugin.state === 'enabled'
+          ${extension.state === 'enabled'
             ? html`<button
                 type="button"
                 ?disabled=${this.busy}
                 @click=${() =>
-                  void this.run((client) => client.disable(plugin.id))}
+                  void this.run((client) => client.disable(extension.id))}
               >
                 ${msg('Disable')}
               </button>`
-            : plugin.state === 'disabled'
+            : extension.state === 'disabled'
               ? html`<button
                   type="button"
                   ?disabled=${this.busy}
-                  @click=${() => void this.run((client) => client.enable(plugin.id))}
+                  @click=${() => void this.run((client) => client.enable(extension.id))}
                 >
                   ${msg('Enable')}
                 </button>`
               : nothing}
-          ${plugin.state === 'error' || plugin.state === 'unapproved'
+          ${extension.state === 'error' || extension.state === 'unapproved'
             ? html`<button
                 type="button"
                 ?disabled=${this.busy}
                 @click=${() => {
                   this.confirmingApprove =
-                    this.confirmingApprove === plugin.id ? undefined : plugin.id
+                    this.confirmingApprove === extension.id ? undefined : extension.id
                   this.confirmingRemove = undefined
                 }}
               >
@@ -330,23 +330,23 @@ export class AnthPlugins extends LitElement {
             ?disabled=${this.busy}
             @click=${() => {
               this.confirmingRemove =
-                this.confirmingRemove === plugin.id ? undefined : plugin.id
+                this.confirmingRemove === extension.id ? undefined : extension.id
               this.confirmingApprove = undefined
             }}
           >
             ${msg('Remove')}
           </button>
         </div>
-        ${this.confirmingApprove === plugin.id
+        ${this.confirmingApprove === extension.id
           ? html`
               <div class="manage confirm" role="alert">
-                <span>${msg(str`Approve the capabilities of ${plugin.id}?`)}</span>
+                <span>${msg(str`Approve the capabilities of ${extension.id}?`)}</span>
                 <button
                   type="button"
                   ?disabled=${this.busy}
                   @click=${() =>
                     void this.run(
-                      (client) => client.approve(plugin.id, true),
+                      (client) => client.approve(extension.id, true),
                       () => {
                         this.confirmingApprove = undefined
                       },
@@ -366,17 +366,17 @@ export class AnthPlugins extends LitElement {
               </div>
             `
           : nothing}
-        ${this.confirmingRemove === plugin.id
+        ${this.confirmingRemove === extension.id
           ? html`
               <div class="manage confirm" role="alert">
-                <span>${msg(str`Remove ${plugin.id} and its grant?`)}</span>
+                <span>${msg(str`Remove ${extension.id} and its grant?`)}</span>
                 <button
                   type="button"
                   class="danger"
                   ?disabled=${this.busy}
                   @click=${() =>
                     void this.run(
-                      (client) => client.remove(plugin.id),
+                      (client) => client.remove(extension.id),
                       () => {
                         this.confirmingRemove = undefined
                       },
@@ -400,33 +400,33 @@ export class AnthPlugins extends LitElement {
     `
   }
 
-  private filtered(snapshot: PluginsView): PluginView[] {
+  private filtered(snapshot: ExtensionsView): ExtensionView[] {
     const needle = this.query.trim().toLowerCase()
-    if (needle === '') return snapshot.plugins
-    return snapshot.plugins.filter((plugin) =>
+    if (needle === '') return snapshot.extensions
+    return snapshot.extensions.filter((extension) =>
       [
-        plugin.id,
-        plugin.alias ?? '',
-        plugin.name,
-        plugin.version,
-        ...plugin.capabilities,
-        ...plugin.api.map((anchor) => `${anchor.method} ${anchor.path}`),
+        extension.id,
+        extension.alias ?? '',
+        extension.name,
+        extension.version,
+        ...extension.capabilities,
+        ...extension.api.map((anchor) => `${anchor.method} ${anchor.path}`),
       ].some((value) => value.toLowerCase().includes(needle)),
     )
   }
 
-  private renderWidgets(snapshot: PluginsView) {
-    const withWidgets = snapshot.plugins.filter(
-      (plugin) => plugin.enabled && plugin.state === 'enabled' && plugin.ui.length > 0,
+  private renderWidgets(snapshot: ExtensionsView) {
+    const withWidgets = snapshot.extensions.filter(
+      (extension) => extension.enabled && extension.state === 'enabled' && extension.ui.length > 0,
     )
     if (withWidgets.length === 0) return nothing
     return html`
       <section class="widgets" part="widgets">
         <h2>${msg('Widgets')}</h2>
-        ${withWidgets.map((plugin) =>
-          plugin.ui.map(
+        ${withWidgets.map((extension) =>
+          extension.ui.map(
             (slot) => html`
-              <anth-plugin-frame .plugin=${plugin} .uiSlot=${slot}></anth-plugin-frame>
+              <anth-extension-frame .extension=${extension} .uiSlot=${slot}></anth-extension-frame>
             `,
           ),
         )}
@@ -440,9 +440,9 @@ export class AnthPlugins extends LitElement {
       if (this.status === 'error') {
         return html`<p class="error" role="alert">${this.error}</p>`
       }
-      return html`<p class="empty">${msg('Loading plugins…')}</p>`
+      return html`<p class="empty">${msg('Loading extensions…')}</p>`
     }
-    const plugins = this.filtered(snapshot)
+    const extensions = this.filtered(snapshot)
     return html`
       ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
       ${this.actionError
@@ -453,14 +453,14 @@ export class AnthPlugins extends LitElement {
       ${this.renderContext(snapshot)}
       ${this.renderInstall(snapshot)}
       ${this.renderFilter()}
-      ${plugins.length === 0
+      ${extensions.length === 0
         ? html`<p class="empty">
-            ${snapshot.plugins.length === 0
-              ? msg('No plugins installed.')
-              : msg('No plugins match the filter.')}
+            ${snapshot.extensions.length === 0
+              ? msg('No extensions installed.')
+              : msg('No extensions match the filter.')}
           </p>`
-        : html`<div class="list" part="plugins">
-            ${plugins.map((plugin) => this.renderPlugin(plugin))}
+        : html`<div class="list" part="extensions">
+            ${extensions.map((extension) => this.renderExtension(extension))}
           </div>`}
       ${this.renderWidgets(snapshot)}
     `
@@ -631,7 +631,7 @@ export class AnthPlugins extends LitElement {
     }
 
     .list { display: flex; flex-direction: column; gap: 0.5rem; }
-    .plugin {
+    .extension {
       display: grid;
       grid-template-columns: minmax(14rem, 1.2fr) minmax(12rem, 1fr) auto;
       align-items: start;
@@ -642,12 +642,12 @@ export class AnthPlugins extends LitElement {
       border-radius: 9px;
       background: var(--panel, #101721);
     }
-    .plugin[data-state='enabled'] { border-left-color: var(--ok, #34d399); }
-    .plugin[data-state='error'],
-    .plugin[data-state='unapproved'] { border-left-color: var(--err, #f87171); }
-    .plugin[data-state='disabled'] { border-left-color: var(--warn, #fbbf24); }
+    .extension[data-state='enabled'] { border-left-color: var(--ok, #34d399); }
+    .extension[data-state='error'],
+    .extension[data-state='unapproved'] { border-left-color: var(--err, #f87171); }
+    .extension[data-state='disabled'] { border-left-color: var(--warn, #fbbf24); }
     .title { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
-    .plugin h3 { margin: 0; font: 600 15px/1.3 var(--mono, monospace); }
+    .extension h3 { margin: 0; font: 600 15px/1.3 var(--mono, monospace); }
     .dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
     .badge {
       padding: 0.1rem 0.35rem;
@@ -743,7 +743,7 @@ export class AnthPlugins extends LitElement {
       .filters input { min-height: 44px; }
       .install { grid-template-columns: 1fr; }
       .install input[type='file'] { min-height: 44px; }
-      .plugin { grid-template-columns: minmax(0, 1fr); }
+      .extension { grid-template-columns: minmax(0, 1fr); }
       .actions { justify-content: flex-start; }
       .manage { grid-column: 1; }
     }
@@ -763,6 +763,6 @@ function toBase64(buffer: ArrayBuffer): string {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'anth-plugins': AnthPlugins
+    'anth-extensions': AnthExtensions
   }
 }

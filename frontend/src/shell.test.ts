@@ -42,7 +42,7 @@ const SETTINGS = {
   accounts: { control: false, manage_passwords: false },
   files: { write: false, trash: false },
   auth: { enabled: false, username: 'admin', cookie_secure: false, bootstrap: 'auto' },
-  plugins: { enabled: false },
+  extensions: { enabled: false },
 }
 
 function settingsClient(): SettingsClient {
@@ -291,7 +291,7 @@ test('the storage section owns Volumes and Partitions tabs', async () => {
   ).not.toBeNull()
 })
 
-test('the settings section owns General and Plugins panels', async () => {
+test('the settings section owns General and Extensions panels', async () => {
   const element = mountShell(OPEN)
   await flush()
   const root = element.shadowRoot!
@@ -306,14 +306,14 @@ test('the settings section owns General and Plugins panels', async () => {
   const inner = outer.querySelector('anth-tab-panel') as AnthTabPanel
   expect(inner.active).toBe('general')
   const tabs = inner.shadowRoot!.querySelectorAll<HTMLButtonElement>('.tab')
-  expect([...tabs].map((tab) => tab.textContent)).toEqual(['General', 'Plugins'])
+  expect([...tabs].map((tab) => tab.textContent)).toEqual(['General', 'Extensions'])
   expect(inner.querySelector('[data-tab="general"]')?.querySelector('anth-settings')).not.toBeNull()
-  expect(inner.querySelector('[data-tab="plugins"]')?.querySelector('anth-plugins')).not.toBeNull()
+  expect(inner.querySelector('[data-tab="extensions"]')?.querySelector('anth-extensions')).not.toBeNull()
 
-  location.hash = '#/settings/plugins'
+  location.hash = '#/settings/extensions'
   window.dispatchEvent(new Event('hashchange'))
   await flush()
-  expect(inner.active).toBe('plugins')
+  expect(inner.active).toBe('extensions')
 })
 
 test('an unauthenticated shell shows the registration form instead of the tabs', async () => {

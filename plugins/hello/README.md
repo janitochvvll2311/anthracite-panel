@@ -12,7 +12,7 @@ ANTH_PLUGIN_KEY=dist/hello-key.pem # optional; otherwise a dev key is generated
 `package.sh` builds `backend/` for `wasm32-unknown-unknown`, wraps it with
 `web/hello.js`, fills both digests, signs `extension.toml` with Ed25519 and writes
 `dist/org.anth.hello.zip`. The public key is printed; set it as
-`[plugins] public_key` before installing.
+`[extensions] public_key` before installing.
 
 The widget is served inside the sandboxed iframe and only uses `api.call`; it
 has no network or panel DOM access.

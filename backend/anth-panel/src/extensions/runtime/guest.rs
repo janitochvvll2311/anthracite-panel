@@ -27,15 +27,15 @@ pub const MAX_LOG_BYTES: usize = 64 * 1024;
 /// What a guest answered.
 #[derive(Debug)]
 pub struct Reply {
-    /// The guest's status, as an HTTP code. `anth_plugin::Status` maps its
-    /// variants to exactly these, so a plugin cannot invent a code the host does
+    /// The guest's status, as an HTTP code. `__ANTH_EXTENSION_ID__::Status` maps its
+    /// variants to exactly these, so a extension cannot invent a code the host does
     /// not already classify.
     pub status: u16,
     pub value: serde_json::Value,
 }
 
 impl Reply {
-    /// Reads the envelope `anth_plugin::Response::to_envelope` produces.
+    /// Reads the envelope `__ANTH_EXTENSION_ID__::Response::to_envelope` produces.
     ///
     /// The key is `body`, not `value`, and a `null` reply omits it entirely
     /// rather than sending `"body": null`. Both are the guest's contract, so the
@@ -43,7 +43,7 @@ impl Reply {
     ///
     /// A body that is not that envelope becomes a `500` carrying what the guest
     /// did say: the host cannot pretend to understand an answer it could not
-    /// parse, and a silent success would hide a broken plugin.
+    /// parse, and a silent success would hide a broken extension.
     fn decode(text: &str) -> Self {
         #[derive(serde::Deserialize)]
         struct Wire {
@@ -60,7 +60,7 @@ impl Reply {
             Err(_) => Self {
                 status: 500,
                 value: serde_json::json!({
-                    "error": format!("the plugin answered with something that is not a reply: {text}")
+                    "error": format!("the extension answered with something that is not a reply: {text}")
                 }),
             },
         }
@@ -85,8 +85,8 @@ impl Reply {
 /// The store's data: everything the imports may touch.
 pub(crate) struct Host {
     capabilities: Vec<Capability>,
-    /// Where `anth_log` lines go, and at what level. The plugin id is added to
-    /// the target so a refusal names the plugin that asked for it.
+    /// Where `anth_log` lines go, and at what level. The extension id is added to
+    /// the target so a refusal names the extension that asked for it.
     log: std::sync::Arc<Logger>,
     id: String,
     calls: u32,
@@ -94,7 +94,7 @@ pub(crate) struct Host {
     started: Instant,
     /// Set when a capability was refused, so the guest's `anth_exec` can return
     /// a sentinel and the host can report the real reason afterwards. The guest
-    /// sees only a `0` pointer, which is what `anth_plugin` documents.
+    /// sees only a `0` pointer, which is what `__ANTH_EXTENSION_ID__` documents.
     pub(crate) refusal: Option<String>,
 }
 
@@ -160,7 +160,7 @@ pub(crate) fn exec(
     args_ptr: i32,
     args_len: i32,
 ) -> i64 {
-    // The capability arrives JSON-encoded because `anth_plugin` serializes it
+    // The capability arrives JSON-encoded because `__ANTH_EXTENSION_ID__` serializes it
     // with `serde_json::to_vec`, so the raw text is `"host.hostname"` with its
     // quotes. Decoding here is what makes the id compare equal to the manifest.
     let capability = match read_guest_string(caller, cap_ptr, cap_len)
@@ -183,7 +183,7 @@ pub(crate) fn exec(
     let host = caller.data_mut();
     if host.started.elapsed() > DEADLINE {
         host.refusal = Some(format!(
-            "the plugin ran past the {} second limit",
+            "the extension ran past the {} second limit",
             DEADLINE.as_secs()
         ));
         return 0;
@@ -191,7 +191,7 @@ pub(crate) fn exec(
     host.calls += 1;
     if host.calls > MAX_CAPABILITY_CALLS {
         host.refusal = Some(format!(
-            "the plugin asked for more than {MAX_CAPABILITY_CALLS} capabilities in one call"
+            "the extension asked for more than {MAX_CAPABILITY_CALLS} capabilities in one call"
         ));
         return 0;
     }
@@ -234,14 +234,14 @@ pub(crate) fn exec(
 /// The guest names a level; the daemon decides whether to print it.
 ///
 /// A number the host has no name for becomes `info` rather than an error: the
-/// line is diagnostic, and a plugin that is already confused should not also be
+/// line is diagnostic, and a extension that is already confused should not also be
 /// silent. `info` specifically, because it is the default the operator sees —
 /// mapping garbage to `error` would let a guest raise its own priority.
 /// The number a guest sends to the level the daemon filters on.
 ///
-/// These five numbers are `anth_plugin::LogLevel`'s discriminants, written out
+/// These five numbers are `__ANTH_EXTENSION_ID__::LogLevel`'s discriminants, written out
 /// here because the two crates do not depend on each other. A test pins the
-/// table, since a silent drift would relabel every plugin line.
+/// table, since a silent drift would relabel every extension line.
 pub(crate) fn level_of(number: i32) -> Level {
     match number {
         0 => Level::Error,
@@ -264,7 +264,7 @@ pub(crate) fn log(caller: &mut Caller<'_, Host>, level: i32, ptr: i32, len: i32)
     let level = level_of(level);
     host.log.event(
         level,
-        "plugin",
+        "extension",
         message.trim_end(),
         &[("id", host.id.as_str())],
     );
@@ -285,7 +285,7 @@ pub(crate) fn run(
         .get_typed_func::<(i32, i32), i64>(&store, entry)
         .map_err(|e| {
             WireError::invalid(format!(
-                "plugin `{}` has no usable `{entry}`: {e}",
+                "extension `{}` has no usable `{entry}`: {e}",
                 loaded.id()
             ))
         })?;
@@ -300,7 +300,7 @@ pub(crate) fn run(
     if let Some(reason) = store.data_mut().refusal.take() {
         return Err(WireError::new(
             ErrorKind::Forbidden,
-            "plugin_refused",
+            "extension_refused",
             reason,
         ));
     }
@@ -313,17 +313,17 @@ fn memory(caller: &mut Caller<'_, Host>) -> Result<Memory, String> {
     caller
         .get_export("memory")
         .and_then(Extern::into_memory)
-        .ok_or_else(|| "the plugin exports no memory".to_string())
+        .ok_or_else(|| "the extension exports no memory".to_string())
 }
 
 fn read_guest_string(caller: &mut Caller<'_, Host>, ptr: i32, len: i32) -> Result<String, String> {
     if ptr < 0 || len < 0 {
-        return Err("the plugin passed a negative pointer".to_string());
+        return Err("the extension passed a negative pointer".to_string());
     }
     let len = len as usize;
     if len > MAX_STRING_BYTES {
         return Err(format!(
-            "the plugin passed {len} bytes, over the {MAX_STRING_BYTES} byte limit"
+            "the extension passed {len} bytes, over the {MAX_STRING_BYTES} byte limit"
         ));
     }
     let memory = memory(caller)?;
@@ -331,7 +331,7 @@ fn read_guest_string(caller: &mut Caller<'_, Host>, ptr: i32, len: i32) -> Resul
     memory
         .read(&*caller, ptr as usize, &mut bytes)
         .map_err(|e| format!("reading guest memory: {e}"))?;
-    String::from_utf8(bytes).map_err(|e| format!("the plugin passed invalid UTF-8: {e}"))
+    String::from_utf8(bytes).map_err(|e| format!("the extension passed invalid UTF-8: {e}"))
 }
 
 /// Reserves guest memory through the guest's own allocator, so the allocator
@@ -343,7 +343,7 @@ fn write_host_string(caller: &mut Caller<'_, Host>, text: &str) -> Result<i64, S
     let alloc = caller
         .get_export("anth_alloc")
         .and_then(Extern::into_func)
-        .ok_or_else(|| "the plugin has no anth_alloc".to_string())?;
+        .ok_or_else(|| "the extension has no anth_alloc".to_string())?;
     let memory = memory(caller)?;
 
     let mut results = [Val::I32(0)];
@@ -354,7 +354,7 @@ fn write_host_string(caller: &mut Caller<'_, Host>, text: &str) -> Result<i64, S
         return Err("anth_alloc did not answer a pointer".to_string());
     };
     if ptr <= 0 {
-        return Err("the plugin could not allocate the reply".to_string());
+        return Err("the extension could not allocate the reply".to_string());
     }
 
     memory
@@ -371,11 +371,13 @@ fn write_payload(
 ) -> Result<(i32, i32), WireError> {
     let alloc = instance
         .get_typed_func::<i32, i32>(&*store, "anth_alloc")
-        .map_err(|e| WireError::invalid(format!("plugin `{id}`: anth_alloc is unusable: {e}")))?;
+        .map_err(|e| {
+            WireError::invalid(format!("extension `{id}`: anth_alloc is unusable: {e}"))
+        })?;
     let memory = instance
         .get_export(&*store, "memory")
         .and_then(Extern::into_memory)
-        .ok_or_else(|| WireError::invalid(format!("plugin `{id}` exports no memory")))?;
+        .ok_or_else(|| WireError::invalid(format!("extension `{id}` exports no memory")))?;
 
     let bytes = payload.as_bytes();
     let len =
@@ -388,10 +390,10 @@ fn write_payload(
     }
     let ptr = alloc
         .call(&mut *store, len)
-        .map_err(|e| WireError::internal(format!("plugin `{id}`: anth_alloc trapped: {e}")))?;
+        .map_err(|e| WireError::internal(format!("extension `{id}`: anth_alloc trapped: {e}")))?;
     if ptr <= 0 {
         return Err(WireError::internal(format!(
-            "plugin `{id}` could not allocate {len} bytes"
+            "extension `{id}` could not allocate {len} bytes"
         )));
     }
     memory
@@ -410,19 +412,19 @@ fn read_payload(
     let len = (packed & 0xFFFF_FFFF) as i32;
     if ptr <= 0 || len <= 0 {
         return Err(WireError::internal(format!(
-            "plugin `{id}` answered with no payload"
+            "extension `{id}` answered with no payload"
         )));
     }
     let len = len as usize;
     if len > MAX_STRING_BYTES {
         return Err(WireError::too_large(format!(
-            "plugin `{id}` answered {len} bytes, over the limit"
+            "extension `{id}` answered {len} bytes, over the limit"
         )));
     }
     let memory = instance
         .get_export(store, "memory")
         .and_then(Extern::into_memory)
-        .ok_or_else(|| WireError::invalid(format!("plugin `{id}` exports no memory")))?;
+        .ok_or_else(|| WireError::invalid(format!("extension `{id}` exports no memory")))?;
     let mut bytes = vec![0u8; len];
     memory
         .read(store, ptr as usize, &mut bytes)

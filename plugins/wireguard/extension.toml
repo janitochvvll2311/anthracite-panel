@@ -39,7 +39,7 @@ method = "POST"
 path = "/show"
 
 [[ui]]
-slot = "settings.plugin"
+slot = "settings.extension"
 tag = "anth-wireguard"
 module = "web/wireguard.js"
 label = "WireGuard"

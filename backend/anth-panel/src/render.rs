@@ -9,7 +9,7 @@ use anth_wire::{
     VolumeSnapshot,
 };
 
-use crate::plugins::PluginsView;
+use crate::extensions::ExtensionsView;
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -267,18 +267,18 @@ pub fn firewall(snapshot: &FirewallSnapshot) -> String {
     out.trim_end().to_string()
 }
 
-/// Formats the plugin catalogue, one line per bundle and its reason when off.
-pub fn plugins(view: &PluginsView) -> String {
+/// Formats the extension catalogue, one line per bundle and its reason when off.
+pub fn extensions(view: &ExtensionsView) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "plugins: {}  web install: {}",
+        "extensions: {}  web install: {}",
         on_off(view.enabled),
         on_off(view.install_from_web),
     );
     let _ = writeln!(out);
-    if view.plugins.is_empty() {
-        let _ = writeln!(out, "(no plugins installed)");
+    if view.extensions.is_empty() {
+        let _ = writeln!(out, "(no extensions installed)");
         return out.trim_end().to_string();
     }
     let _ = writeln!(
@@ -286,21 +286,21 @@ pub fn plugins(view: &PluginsView) -> String {
         "{:<32} {:<10} {:<9} {:<8} CAPABILITIES",
         "ID", "VERSION", "STATE", "ENABLED"
     );
-    for plugin in &view.plugins {
+    for extension in &view.extensions {
         let _ = writeln!(
             out,
             "{:<32} {:<10} {:<9} {:<8} {}",
-            truncate(&safe(&plugin.id), 32),
-            truncate(&safe(&plugin.version), 10),
-            plugin.state,
-            if plugin.enabled { "yes" } else { "no" },
-            if plugin.capabilities.is_empty() {
+            truncate(&safe(&extension.id), 32),
+            truncate(&safe(&extension.version), 10),
+            extension.state,
+            if extension.enabled { "yes" } else { "no" },
+            if extension.capabilities.is_empty() {
                 "-".to_string()
             } else {
-                plugin.capabilities.join(", ")
+                extension.capabilities.join(", ")
             },
         );
-        if let Some(error) = &plugin.error {
+        if let Some(error) = &extension.error {
             let _ = writeln!(out, "  {error}");
         }
     }

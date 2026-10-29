@@ -125,10 +125,10 @@ enum Command {
         #[command(subcommand)]
         command: AccountCommand,
     },
-    /// Inspect, install and manage signed plugin bundles.
-    Plugin {
+    /// Inspect, install and manage signed extension bundles.
+    Extension {
         #[command(subcommand)]
-        command: PluginCommand,
+        command: ExtensionCommand,
     },
     /// Read, validate or change the configuration.
     Config {
@@ -150,7 +150,7 @@ enum Command {
 }
 
 #[derive(Subcommand, Debug)]
-enum PluginCommand {
+enum ExtensionCommand {
     /// List installed bundles and their state.
     #[command(alias = "ls")]
     List,
@@ -162,35 +162,35 @@ enum PluginCommand {
         #[arg(long)]
         accept_capabilities: bool,
     },
-    /// Remove one installed plugin and its grant.
+    /// Remove one installed extension and its grant.
     Remove {
-        /// Plugin id or alias.
+        /// Extension id or alias.
         id: String,
         /// Do not ask for confirmation.
         #[arg(long)]
         yes: bool,
     },
-    /// Switch one plugin on.
+    /// Switch one extension on.
     Enable {
-        /// Plugin id or alias.
+        /// Extension id or alias.
         id: String,
     },
-    /// Switch one plugin off without removing it.
+    /// Switch one extension off without removing it.
     Disable {
-        /// Plugin id or alias.
+        /// Extension id or alias.
         id: String,
     },
     /// Rewrite the grant from the manifest currently on disk.
     Approve {
-        /// Plugin id or alias.
+        /// Extension id or alias.
         id: String,
         /// Confirm the capability surface.
         #[arg(long)]
         accept_capabilities: bool,
     },
-    /// Send one request through the plugin's `anth_cli` entry.
+    /// Send one request through the extension's `anth_cli` entry.
     Call {
-        /// Plugin id or alias.
+        /// Extension id or alias.
         id: String,
         /// JSON request, or `-` to read it from stdin.
         request: String,
@@ -853,7 +853,7 @@ async fn run() -> CliResult {
         Command::Firewall { command } => firewall_command(&path, command).await,
         Command::Storage { command } => storage_command(&path, command).await,
         Command::Account { command } => account_command(&path, command).await,
-        Command::Plugin { command } => plugin_command(&path, command),
+        Command::Extension { command } => extension_command(&path, command),
         Command::Migrate { from, write, force } => migrate_command(&path, from, *write, *force),
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
@@ -871,23 +871,23 @@ async fn run() -> CliResult {
     }
 }
 
-fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult {
+fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliResult {
     let config = Config::load_or_create(path).map_err(|error| (1, error))?;
     let paths = config.paths(path).map_err(|error| (1, error))?;
-    let service = anth_panel::plugins::PluginService::new(
-        config.plugins.clone(),
-        paths.plugins,
+    let service = anth_panel::extensions::ExtensionService::new(
+        config.extensions.clone(),
+        paths.extensions,
         paths.grants,
     );
     match command {
-        PluginCommand::List => {
+        ExtensionCommand::List => {
             let view = service
                 .snapshot()
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            println!("{}", render::plugins(&view));
+            println!("{}", render::extensions(&view));
             Ok(())
         }
-        PluginCommand::Install {
+        ExtensionCommand::Install {
             bundle,
             accept_capabilities,
         } => {
@@ -908,10 +908,10 @@ fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult 
             }
             Ok(())
         }
-        PluginCommand::Remove { id, yes } => {
-            let id = resolve_plugin_id(&service, id)?;
+        ExtensionCommand::Remove { id, yes } => {
+            let id = resolve_extension_id(&service, id)?;
             if !yes {
-                confirm(&format!("Remove plugin {id} and its grant?"))?;
+                confirm(&format!("Remove extension {id} and its grant?"))?;
             }
             service
                 .remove(&id)
@@ -919,20 +919,20 @@ fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult 
             println!("removed {id}");
             Ok(())
         }
-        PluginCommand::Enable { id } | PluginCommand::Disable { id } => {
-            let id = resolve_plugin_id(&service, id)?;
-            let enable = matches!(command, PluginCommand::Enable { .. });
+        ExtensionCommand::Enable { id } | ExtensionCommand::Disable { id } => {
+            let id = resolve_extension_id(&service, id)?;
+            let enable = matches!(command, ExtensionCommand::Enable { .. });
             service
                 .set_enabled(&id, enable)
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
             println!("{} is {}", id, if enable { "enabled" } else { "disabled" });
             Ok(())
         }
-        PluginCommand::Approve {
+        ExtensionCommand::Approve {
             id,
             accept_capabilities,
         } => {
-            let id = resolve_plugin_id(&service, id)?;
+            let id = resolve_extension_id(&service, id)?;
             let grant = service
                 .approve(&id, *accept_capabilities)
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
@@ -947,8 +947,8 @@ fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult 
             }
             Ok(())
         }
-        PluginCommand::Call { id, request } => {
-            let id = resolve_plugin_id(&service, id)?;
+        ExtensionCommand::Call { id, request } => {
+            let id = resolve_extension_id(&service, id)?;
             let request = if request == "-" {
                 let mut text = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
@@ -976,8 +976,8 @@ fn plugin_command(path: &std::path::Path, command: &PluginCommand) -> CliResult 
     }
 }
 
-fn resolve_plugin_id(
-    service: &anth_panel::plugins::PluginService,
+fn resolve_extension_id(
+    service: &anth_panel::extensions::ExtensionService,
     id_or_alias: &str,
 ) -> Result<String, (u8, String)> {
     match service.grants().read(id_or_alias) {
@@ -993,16 +993,16 @@ fn resolve_plugin_id(
         .snapshot()
         .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
     let mut matches = view
-        .plugins
+        .extensions
         .iter()
-        .filter(|plugin| plugin.alias.as_deref() == Some(id_or_alias));
+        .filter(|extension| extension.alias.as_deref() == Some(id_or_alias));
     let Some(first) = matches.next() else {
-        return Err((1, format!("no plugin `{id_or_alias}` is installed")));
+        return Err((1, format!("no extension `{id_or_alias}` is installed")));
     };
     if matches.next().is_some() {
         return Err((
             1,
-            format!("more than one plugin declares the alias `{id_or_alias}`; use the full id"),
+            format!("more than one extension declares the alias `{id_or_alias}`; use the full id"),
         ));
     }
     Ok(first.id.clone())

@@ -14,7 +14,7 @@ export interface Settings {
   accounts: { control: boolean; manage_passwords: boolean }
   files: { write: boolean; trash: boolean }
   auth: { enabled: boolean; username: string; cookie_secure: boolean; bootstrap: string }
-  plugins: { enabled: boolean }
+  extensions: { enabled: boolean }
 }
 
 export interface SessionSummary {

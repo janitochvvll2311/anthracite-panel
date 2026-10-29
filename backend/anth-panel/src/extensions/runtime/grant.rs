@@ -1,6 +1,6 @@
 //! Building an argv from a frozen grant.
 //!
-//! This is the module that makes "a plugin never sends an argv" true. The guest
+//! This is the module that makes "a extension never sends an argv" true. The guest
 //! names a capability and supplies values; the program and the argument
 //! *template* come from the manifest the operator approved. Each substituted
 //! value is validated by the host and becomes exactly one argv element.

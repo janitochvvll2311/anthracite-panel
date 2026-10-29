@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::plugins::{PluginReply, PluginsView};
+use crate::extensions::{ExtensionReply, ExtensionsView};
 use anth_wire::{
     AccountCreate, AccountDelete, AccountGroupCreate, AccountGroupDelete, AccountSetPassword,
     AccountSnapshot, ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk,
@@ -132,24 +132,24 @@ pub fn router(state: AppState) -> Router {
         .route("/api/accounts/users/password", post(account_password))
         .route("/api/accounts/groups", post(account_group_create))
         .route("/api/accounts/groups/delete", post(account_group_delete))
-        .route("/api/plugins", get(plugins))
+        .route("/api/extensions", get(extensions))
         .route(
-            "/api/plugins/install",
-            post(plugin_install).layer(DefaultBodyLimit::max(48 * 1024 * 1024)),
+            "/api/extensions/install",
+            post(extension_install).layer(DefaultBodyLimit::max(48 * 1024 * 1024)),
         )
-        .route("/api/plugins/{id}/enable", post(plugin_enable))
-        .route("/api/plugins/{id}/disable", post(plugin_disable))
-        .route("/api/plugins/{id}/remove", post(plugin_remove))
-        .route("/api/plugins/{id}/approve", post(plugin_approve))
-        .route("/api/plugins/{id}/web/{*path}", get(plugin_asset))
-        .route("/p/{id}/{*module}", get(plugin_frame))
+        .route("/api/extensions/{id}/enable", post(extension_enable))
+        .route("/api/extensions/{id}/disable", post(extension_disable))
+        .route("/api/extensions/{id}/remove", post(extension_remove))
+        .route("/api/extensions/{id}/approve", post(extension_approve))
+        .route("/api/extensions/{id}/web/{*path}", get(extension_asset))
+        .route("/e/{id}/{*module}", get(extension_frame))
         .route(
-            "/api/plugins/{id}/{*path}",
-            get(plugin_anchor)
-                .post(plugin_anchor)
-                .put(plugin_anchor)
-                .patch(plugin_anchor)
-                .delete(plugin_anchor),
+            "/api/extensions/{id}/{*path}",
+            get(extension_anchor)
+                .post(extension_anchor)
+                .put(extension_anchor)
+                .patch(extension_anchor)
+                .delete(extension_anchor),
         )
         .route("/api/firewall/policy", post(firewall_policy))
         .route("/api/files", get(list_files).delete(delete_file))
@@ -1553,12 +1553,12 @@ async fn account_change(daemon: &Arc<Daemon>, request: Request) -> Result<Json<V
     }
 }
 
-async fn plugins(
+async fn extensions(
     State(state): State<AppState>,
     _authed: Authed,
-) -> Result<Json<PluginsView>, ApiError> {
-    let service = state.daemon.plugins().clone();
-    let view = plugin_blocking(move || service.snapshot()).await?;
+) -> Result<Json<ExtensionsView>, ApiError> {
+    let service = state.daemon.extensions().clone();
+    let view = extension_blocking(move || service.snapshot()).await?;
     Ok(Json(view))
 }
 
@@ -1569,7 +1569,7 @@ struct PluginInstallBody {
     accept_capabilities: bool,
 }
 
-async fn plugin_install(
+async fn extension_install(
     State(state): State<AppState>,
     _authed: Authed,
     headers: HeaderMap,
@@ -1577,22 +1577,22 @@ async fn plugin_install(
 ) -> Result<Json<Value>, ApiError> {
     same_origin(&headers)?;
     let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
-    if !state.daemon.config().plugins.install_from_web {
+    if !state.daemon.config().extensions.install_from_web {
         return Err(ApiError::from(WireError::forbidden(
-            "browser plugin installs are disabled; set `[plugins] install_from_web = true`",
+            "browser extension installs are disabled; set `[extensions] install_from_web = true`",
         )));
     }
     let bytes = STANDARD
         .decode(body.bundle_base64.as_bytes())
         .map_err(|_| ApiError::invalid("the bundle is not valid base64"))?;
-    if bytes.len() as u64 > crate::plugins::bundle::MAX_BUNDLE_BYTES {
+    if bytes.len() as u64 > crate::extensions::bundle::MAX_BUNDLE_BYTES {
         return Err(ApiError::from(WireError::too_large(
             "the bundle is larger than 32 MiB",
         )));
     }
-    let service = state.daemon.plugins().clone();
+    let service = state.daemon.extensions().clone();
     let accepted = body.accept_capabilities;
-    let installed = plugin_blocking(move || service.install_bytes(&bytes, accepted)).await?;
+    let installed = extension_blocking(move || service.install_bytes(&bytes, accepted)).await?;
     Ok(Json(json!({
         "id": installed.grant.id,
         "name": installed.manifest.extension.name,
@@ -1602,40 +1602,40 @@ async fn plugin_install(
     })))
 }
 
-async fn plugin_enable(
+async fn extension_enable(
     State(state): State<AppState>,
     _authed: Authed,
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     same_origin(&headers)?;
-    let service = state.daemon.plugins().clone();
-    plugin_blocking(move || service.set_enabled(&id, true)).await?;
-    Ok(Json(json!({ "message": "plugin enabled" })))
+    let service = state.daemon.extensions().clone();
+    extension_blocking(move || service.set_enabled(&id, true)).await?;
+    Ok(Json(json!({ "message": "extension enabled" })))
 }
 
-async fn plugin_disable(
+async fn extension_disable(
     State(state): State<AppState>,
     _authed: Authed,
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     same_origin(&headers)?;
-    let service = state.daemon.plugins().clone();
-    plugin_blocking(move || service.set_enabled(&id, false)).await?;
-    Ok(Json(json!({ "message": "plugin disabled" })))
+    let service = state.daemon.extensions().clone();
+    extension_blocking(move || service.set_enabled(&id, false)).await?;
+    Ok(Json(json!({ "message": "extension disabled" })))
 }
 
-async fn plugin_remove(
+async fn extension_remove(
     State(state): State<AppState>,
     _authed: Authed,
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     same_origin(&headers)?;
-    let service = state.daemon.plugins().clone();
-    plugin_blocking(move || service.remove(&id)).await?;
-    Ok(Json(json!({ "message": "plugin removed" })))
+    let service = state.daemon.extensions().clone();
+    extension_blocking(move || service.remove(&id)).await?;
+    Ok(Json(json!({ "message": "extension removed" })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1644,7 +1644,7 @@ struct PluginApproveBody {
     accept_capabilities: bool,
 }
 
-async fn plugin_approve(
+async fn extension_approve(
     State(state): State<AppState>,
     _authed: Authed,
     AxumPath(id): AxumPath<String>,
@@ -1653,23 +1653,23 @@ async fn plugin_approve(
 ) -> Result<Json<Value>, ApiError> {
     same_origin(&headers)?;
     let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
-    let service = state.daemon.plugins().clone();
+    let service = state.daemon.extensions().clone();
     let accepted = body.accept_capabilities;
-    let grant = plugin_blocking(move || service.approve(&id, accepted)).await?;
+    let grant = extension_blocking(move || service.approve(&id, accepted)).await?;
     Ok(Json(json!({
         "id": grant.id,
         "capabilities": grant.allowed_ids(),
     })))
 }
 
-async fn plugin_blocking<T, F>(task: F) -> Result<T, ApiError>
+async fn extension_blocking<T, F>(task: F) -> Result<T, ApiError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, WireError> + Send + 'static,
 {
     tokio::task::spawn_blocking(task)
         .await
-        .map_err(|error| ApiError::internal(format!("the plugin worker failed: {error}")))?
+        .map_err(|error| ApiError::internal(format!("the extension worker failed: {error}")))?
         .map_err(ApiError::from)
 }
 
@@ -1677,7 +1677,7 @@ where
 /// an upload channel.
 const MAX_ANCHOR_BODY: usize = 1024 * 1024;
 
-async fn plugin_frame(
+async fn extension_frame(
     State(state): State<AppState>,
     _authed: Authed,
     AxumPath((id, module)): AxumPath<(String, String)>,
@@ -1694,10 +1694,10 @@ async fn plugin_frame(
     } else {
         format!("web/{module}")
     };
-    let service = state.daemon.plugins().clone();
+    let service = state.daemon.extensions().clone();
     let read = declared.clone();
     let asset_id = id.clone();
-    let bytes = plugin_blocking(move || service.asset(&asset_id, &read)).await?;
+    let bytes = extension_blocking(move || service.asset(&asset_id, &read)).await?;
     let source = String::from_utf8(bytes)
         .map_err(|_| ApiError::invalid("a UI module must be UTF-8 JavaScript"))?;
     let source = source.replace('<', "\\u003c");
@@ -1708,7 +1708,7 @@ async fn plugin_frame(
     let code = serde_json::to_string(&source)
         .map_err(|error| ApiError::internal(format!("encoding the module: {error}")))?;
     let id_json = serde_json::to_string(&id)
-        .map_err(|error| ApiError::internal(format!("encoding the plugin id: {error}")))?;
+        .map_err(|error| ApiError::internal(format!("encoding the extension id: {error}")))?;
     let html = format!(
         r#"<!doctype html>
 <html><head><meta charset="utf-8">
@@ -1722,7 +1722,7 @@ border-radius:7px;color:var(--err,#f87171);font:12px/1.4 var(--mono,monospace)}}
 </style></head><body><div id="root"></div>
 <script type="module" nonce="{nonce}">
 const CODE = {code};
-const PLUGIN_ID = {id_json};
+const EXTENSION_ID = {id_json};
 const root = document.getElementById('root');
 let snapshot = null, locale = 'en', theme = {{}};
 let initialized;
@@ -1799,7 +1799,7 @@ try {{
         .into_response())
 }
 
-async fn plugin_asset(
+async fn extension_asset(
     State(state): State<AppState>,
     _authed: Authed,
     AxumPath((id, path)): AxumPath<(String, String)>,
@@ -1814,10 +1814,10 @@ async fn plugin_asset(
         ));
     }
     let module = format!("web/{path}");
-    let content_type = crate::plugins::web::content_type(&module);
-    let service = state.daemon.plugins().clone();
+    let content_type = crate::extensions::web::content_type(&module);
+    let service = state.daemon.extensions().clone();
     let read_module = module.clone();
-    let bytes = plugin_blocking(move || service.asset(&id, &read_module)).await?;
+    let bytes = extension_blocking(move || service.asset(&id, &read_module)).await?;
     Ok((
         StatusCode::OK,
         [
@@ -1831,7 +1831,7 @@ async fn plugin_asset(
         .into_response())
 }
 
-async fn plugin_anchor(
+async fn extension_anchor(
     State(state): State<AppState>,
     _authed: Authed,
     AxumPath((id, path)): AxumPath<(String, String)>,
@@ -1840,13 +1840,13 @@ async fn plugin_anchor(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<HttpResponse, ApiError> {
-    let service = state.daemon.plugins().clone();
+    let service = state.daemon.extensions().clone();
     if !service.config().enabled {
         return Err(ApiError::from(WireError::forbidden(
-            "plugins are disabled; set `[plugins] enabled = true`",
+            "extensions are disabled; set `[extensions] enabled = true`",
         )));
     }
-    crate::plugins::validate_id(&id).map_err(|error| ApiError::invalid(error.message))?;
+    crate::extensions::validate_id(&id).map_err(|error| ApiError::invalid(error.message))?;
     if !matches!(
         method,
         Method::GET | Method::POST | Method::PUT | Method::PATCH | Method::DELETE
@@ -1872,13 +1872,13 @@ async fn plugin_anchor(
     };
     let method = method.as_str().to_string();
     let logger = Arc::clone(state.daemon.logger());
-    let reply: PluginReply =
-        plugin_blocking(move || service.call_anchor(&id, &method, &path, query, body, logger))
+    let reply: ExtensionReply =
+        extension_blocking(move || service.call_anchor(&id, &method, &path, query, body, logger))
             .await?;
-    Ok(plugin_reply_response(reply))
+    Ok(extension_reply_response(reply))
 }
 
-fn plugin_reply_response(reply: PluginReply) -> HttpResponse {
+fn extension_reply_response(reply: ExtensionReply) -> HttpResponse {
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let (body, content_type) = match reply.value {
         serde_json::Value::Null => (String::new(), "text/plain; charset=utf-8"),

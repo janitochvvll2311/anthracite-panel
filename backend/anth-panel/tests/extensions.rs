@@ -1,4 +1,4 @@
-//! Plugin management over HTTP with a temporary bundle root.
+//! Extension management over HTTP with a temporary bundle root.
 
 use std::fs;
 use std::io::Write as _;
@@ -9,10 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anth_extension::signature;
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::config::{AuthConfig, Config, PluginsConfig};
+use anth_panel::config::{AuthConfig, Config, ExtensionsConfig};
 use anth_panel::dispatch::Daemon;
+use anth_panel::extensions::ExtensionService;
 use anth_panel::log::{Logger, Settings};
-use anth_panel::plugins::PluginService;
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use base64::Engine as _;
@@ -103,23 +103,23 @@ fn app(name: &str, require_signature: bool, install_from_web: bool) -> (axum::Ro
         (root, config_path)
     };
     let mut config = Config::dev_default();
-    config.plugins = PluginsConfig {
+    config.extensions = ExtensionsConfig {
         enabled: true,
-        root: root.join("plugins").display().to_string(),
+        root: root.join("extensions").display().to_string(),
         install_from_web,
         require_signature,
         public_key: signature::encode_hex(key().verifying_key().as_bytes()),
-        ..PluginsConfig::default()
+        ..ExtensionsConfig::default()
     };
     let paths = config.paths(&config_path).expect("paths");
     let logger = Arc::new(Logger::buffer(Settings::default()).0);
-    let plugins = PluginService::new(
-        config.plugins.clone(),
-        root.join("plugins"),
-        root.join("plugins.d"),
+    let extensions = ExtensionService::new(
+        config.extensions.clone(),
+        root.join("extensions"),
+        root.join("extensions.d"),
     );
     let daemon =
-        Arc::new(Daemon::new(config, paths.clone(), Arc::clone(&logger)).with_plugins(plugins));
+        Arc::new(Daemon::new(config, paths.clone(), Arc::clone(&logger)).with_plugins(extensions));
     let auth_config = AuthConfig {
         enabled: false,
         ..AuthConfig::default()
@@ -156,12 +156,12 @@ fn install_body(capability: &str, signed: bool) -> serde_json::Value {
 
 #[tokio::test]
 async fn installs_lists_toggles_and_removes_a_signed_bundle() {
-    let (router, root) = app("plugins-api", true, true);
+    let (router, root) = app("extensions-api", true, true);
 
     let response = router
         .clone()
         .oneshot(post(
-            "/api/plugins/install",
+            "/api/extensions/install",
             install_body("host.hostname", true),
         ))
         .await
@@ -175,7 +175,7 @@ async fn installs_lists_toggles_and_removes_a_signed_bundle() {
         .clone()
         .oneshot(
             HttpRequest::builder()
-                .uri("/api/plugins")
+                .uri("/api/extensions")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -184,12 +184,12 @@ async fn installs_lists_toggles_and_removes_a_signed_bundle() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_json(response).await;
     assert_eq!(body["enabled"], true);
-    assert_eq!(body["plugins"][0]["state"], "enabled");
-    assert_eq!(body["plugins"][0]["alias"], "hello");
+    assert_eq!(body["extensions"][0]["state"], "enabled");
+    assert_eq!(body["extensions"][0]["alias"], "hello");
 
     let response = router
         .clone()
-        .oneshot(post("/api/plugins/org.anth.hello/disable", json!({})))
+        .oneshot(post("/api/extensions/org.anth.hello/disable", json!({})))
         .await
         .expect("disable");
     assert_eq!(response.status(), StatusCode::OK);
@@ -197,27 +197,30 @@ async fn installs_lists_toggles_and_removes_a_signed_bundle() {
         .clone()
         .oneshot(
             HttpRequest::builder()
-                .uri("/api/plugins")
+                .uri("/api/extensions")
                 .body(Body::empty())
                 .expect("request"),
         )
         .await
         .expect("list");
-    assert_eq!(body_json(response).await["plugins"][0]["state"], "disabled");
+    assert_eq!(
+        body_json(response).await["extensions"][0]["state"],
+        "disabled"
+    );
 
     let response = router
         .clone()
-        .oneshot(post("/api/plugins/org.anth.hello/enable", json!({})))
+        .oneshot(post("/api/extensions/org.anth.hello/enable", json!({})))
         .await
         .expect("enable");
     assert_eq!(response.status(), StatusCode::OK);
 
     let response = router
-        .oneshot(post("/api/plugins/org.anth.hello/remove", json!({})))
+        .oneshot(post("/api/extensions/org.anth.hello/remove", json!({})))
         .await
         .expect("remove");
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(!root.join("plugins/org.anth.hello").exists());
+    assert!(!root.join("extensions/org.anth.hello").exists());
     fs::remove_dir_all(root).expect("cleanup");
 }
 
@@ -227,7 +230,7 @@ fn bundle_with_asset(asset: &[u8]) -> Vec<u8> {
     manifest.push_str(&format!(
         r#"
 [[ui]]
-slot = "settings.plugin"
+slot = "settings.extension"
 tag = "anth-hello"
 module = "web/hello.js"
 sha256 = "{}"
@@ -254,14 +257,14 @@ sha256 = "{}"
 
 #[tokio::test]
 async fn a_declared_ui_asset_is_served_and_an_undeclared_one_is_not() {
-    let (router, root) = app("plugins-api-asset", true, true);
+    let (router, root) = app("extensions-api-asset", true, true);
     let body = json!({
         "bundle_base64": STANDARD.encode(bundle_with_asset(b"export const hello = 1\n")),
         "accept_capabilities": false,
     });
     let response = router
         .clone()
-        .oneshot(post("/api/plugins/install", body))
+        .oneshot(post("/api/extensions/install", body))
         .await
         .expect("install");
     assert_eq!(response.status(), StatusCode::OK);
@@ -270,7 +273,7 @@ async fn a_declared_ui_asset_is_served_and_an_undeclared_one_is_not() {
         .clone()
         .oneshot(
             HttpRequest::builder()
-                .uri("/api/plugins/org.anth.hello/web/hello.js")
+                .uri("/api/extensions/org.anth.hello/web/hello.js")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -292,7 +295,7 @@ async fn a_declared_ui_asset_is_served_and_an_undeclared_one_is_not() {
     let response = router
         .oneshot(
             HttpRequest::builder()
-                .uri("/api/plugins/org.anth.hello/web/other.js")
+                .uri("/api/extensions/org.anth.hello/web/other.js")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -304,7 +307,7 @@ async fn a_declared_ui_asset_is_served_and_an_undeclared_one_is_not() {
 
 #[tokio::test]
 async fn the_frame_bootstrap_inlines_a_declared_module() {
-    let (router, root) = app("plugins-api-frame", true, true);
+    let (router, root) = app("extensions-api-frame", true, true);
     let body = json!({
         "bundle_base64": STANDARD.encode(bundle_with_asset(
             b"export function mount(root) { root.textContent = 'hello' }\n",
@@ -313,7 +316,7 @@ async fn the_frame_bootstrap_inlines_a_declared_module() {
     });
     let response = router
         .clone()
-        .oneshot(post("/api/plugins/install", body))
+        .oneshot(post("/api/extensions/install", body))
         .await
         .expect("install");
     assert_eq!(response.status(), StatusCode::OK);
@@ -321,7 +324,7 @@ async fn the_frame_bootstrap_inlines_a_declared_module() {
     let response = router
         .oneshot(
             HttpRequest::builder()
-                .uri("/p/org.anth.hello/hello.js")
+                .uri("/e/org.anth.hello/hello.js")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -370,14 +373,14 @@ async fn an_anchor_runs_the_installed_guest() {
 )
 "#;
     let wasm = wat::parse_str(GUEST).expect("wat");
-    let (router, root) = app("plugins-api-anchor", true, true);
+    let (router, root) = app("extensions-api-anchor", true, true);
     let body = json!({
         "bundle_base64": STANDARD.encode(bundle_with_wasm(&wasm, "host.hostname", true)),
         "accept_capabilities": false,
     });
     let response = router
         .clone()
-        .oneshot(post("/api/plugins/install", body))
+        .oneshot(post("/api/extensions/install", body))
         .await
         .expect("install");
     assert_eq!(response.status(), StatusCode::OK);
@@ -386,7 +389,7 @@ async fn an_anchor_runs_the_installed_guest() {
         .clone()
         .oneshot(
             HttpRequest::builder()
-                .uri("/api/plugins/org.anth.hello/status?x=1")
+                .uri("/api/extensions/org.anth.hello/status?x=1")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -398,7 +401,7 @@ async fn an_anchor_runs_the_installed_guest() {
     let response = router
         .oneshot(
             HttpRequest::builder()
-                .uri("/api/plugins/org.anth.hello/other")
+                .uri("/api/extensions/org.anth.hello/other")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -410,25 +413,25 @@ async fn an_anchor_runs_the_installed_guest() {
 
 #[tokio::test]
 async fn unsigned_installs_are_refused_when_the_signature_is_required() {
-    let (router, root) = app("plugins-api-unsigned", true, true);
+    let (router, root) = app("extensions-api-unsigned", true, true);
     let response = router
         .oneshot(post(
-            "/api/plugins/install",
+            "/api/extensions/install",
             install_body("host.hostname", false),
         ))
         .await
         .expect("install");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert!(!root.join("plugins/org.anth.hello").exists());
+    assert!(!root.join("extensions/org.anth.hello").exists());
     fs::remove_dir_all(root).expect("cleanup");
 }
 
 #[tokio::test]
 async fn web_install_is_refused_when_the_switch_is_off() {
-    let (router, root) = app("plugins-api-web-off", true, false);
+    let (router, root) = app("extensions-api-web-off", true, false);
     let response = router
         .oneshot(post(
-            "/api/plugins/install",
+            "/api/extensions/install",
             install_body("host.hostname", true),
         ))
         .await
@@ -439,11 +442,11 @@ async fn web_install_is_refused_when_the_switch_is_off() {
 
 #[tokio::test]
 async fn a_changed_surface_needs_an_explicit_approval_route() {
-    let (router, root) = app("plugins-api-approve", true, true);
+    let (router, root) = app("extensions-api-approve", true, true);
     let response = router
         .clone()
         .oneshot(post(
-            "/api/plugins/install",
+            "/api/extensions/install",
             install_body("host.hostname", true),
         ))
         .await
@@ -454,7 +457,7 @@ async fn a_changed_surface_needs_an_explicit_approval_route() {
     body["accept_capabilities"] = json!(true);
     let response = router
         .clone()
-        .oneshot(post("/api/plugins/install", body))
+        .oneshot(post("/api/extensions/install", body))
         .await
         .expect("accepted");
     assert_eq!(response.status(), StatusCode::OK);
@@ -462,7 +465,7 @@ async fn a_changed_surface_needs_an_explicit_approval_route() {
 
     let response = router
         .oneshot(post(
-            "/api/plugins/org.anth.hello/approve",
+            "/api/extensions/org.anth.hello/approve",
             json!({ "accept_capabilities": true }),
         ))
         .await

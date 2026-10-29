@@ -17,11 +17,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
 use crate::config::{Config, Paths};
+use crate::extensions::ExtensionService;
 use crate::firewall::SystemFirewall;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::SystemNetwork;
-use crate::plugins::PluginService;
 use anth_host::accounts::SystemAccounts;
 use anth_host::files::SystemFiles;
 use anth_host::process::SystemProcesses;
@@ -56,7 +56,7 @@ pub struct Daemon {
     logger: Arc<Logger>,
     lifecycle: Arc<Lifecycle>,
     mode: Mode,
-    plugins: PluginService,
+    extensions: ExtensionService,
 }
 
 impl Daemon {
@@ -135,9 +135,9 @@ impl Daemon {
                 paths.state_dir.clone(),
                 paths.secrets.clone(),
                 paths.sessions.clone(),
-                paths.plugins.clone(),
+                paths.extensions.clone(),
                 paths.grants.clone(),
-                paths.plugin_state.clone(),
+                paths.extension_state.clone(),
             ];
             if let Ok(executable) = std::env::current_exe() {
                 protected.push(executable);
@@ -163,9 +163,9 @@ impl Daemon {
                 accounts: Arc::new(SystemAccounts::new(config.accounts.settings())),
             })
         };
-        let plugins = PluginService::new(
-            config.plugins.clone(),
-            paths.plugins.clone(),
+        let extensions = ExtensionService::new(
+            config.extensions.clone(),
+            paths.extensions.clone(),
             paths.grants.clone(),
         );
         Self {
@@ -174,7 +174,7 @@ impl Daemon {
             logger,
             lifecycle,
             mode,
-            plugins,
+            extensions,
         }
     }
 
@@ -230,15 +230,15 @@ impl Daemon {
         self
     }
 
-    /// Replaces the plugin service. Tests use it to script a plugin root
+    /// Replaces the extension service. Tests use it to script a extension root
     /// without touching the installation directory.
-    pub fn with_plugins(mut self, plugins: PluginService) -> Self {
-        self.plugins = plugins;
+    pub fn with_plugins(mut self, extensions: ExtensionService) -> Self {
+        self.extensions = extensions;
         self
     }
 
-    pub fn plugins(&self) -> &PluginService {
-        &self.plugins
+    pub fn extensions(&self) -> &ExtensionService {
+        &self.extensions
     }
 
     /// The real terminal, for tests that inspect it directly.

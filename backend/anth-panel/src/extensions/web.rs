@@ -1,4 +1,4 @@
-//! Declared plugin UI assets.
+//! Declared extension UI assets.
 //!
 //! Only files named by a `[[ui]]` slot in the grant are served. The path is
 //! resolved inside `web/`, canonicalised, and must stay under the bundle; a
@@ -10,7 +10,7 @@ use std::path::Path;
 use anth_wire::WireError;
 
 use super::bundle::MAX_ASSET_BYTES;
-use anth_extension::grants::ExtensionGrant as PluginGrant;
+use anth_extension::grants::ExtensionGrant;
 
 pub fn content_type(module: &str) -> &'static str {
     match module
@@ -25,18 +25,18 @@ pub fn content_type(module: &str) -> &'static str {
 }
 
 /// Reads one module the grant declares.
-pub fn read_asset(root: &Path, grant: &PluginGrant, module: &str) -> Result<Vec<u8>, WireError> {
+pub fn read_asset(root: &Path, grant: &ExtensionGrant, module: &str) -> Result<Vec<u8>, WireError> {
     let declared = grant.ui.iter().any(|slot| slot.module == module);
     if !declared {
         return Err(WireError::not_found(format!(
-            "plugin `{}` does not declare the module `{module}`",
+            "extension `{}` does not declare the module `{module}`",
             grant.id
         )));
     }
     let dir = root.join(&grant.id);
-    let base = dir
-        .canonicalize()
-        .map_err(|error| WireError::not_found(format!("reading plugin `{}`: {error}", grant.id)))?;
+    let base = dir.canonicalize().map_err(|error| {
+        WireError::not_found(format!("reading extension `{}`: {error}", grant.id))
+    })?;
     let path = dir.join(module).canonicalize().map_err(|error| {
         WireError::not_found(format!("reading `{module}` from `{}`: {error}", grant.id))
     })?;

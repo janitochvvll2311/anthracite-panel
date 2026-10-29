@@ -1,11 +1,11 @@
-//! Plugins: signed bundles, frozen grants and the catalogue the panel shows.
+//! Extensions: signed bundles, frozen grants and the catalogue the panel shows.
 //!
 //! The bundle is content, the grant is policy and the daemon is the only thing
-//! that turns one into the other. A plugin cannot widen its own grant; a
+//! that turns one into the other. A extension cannot widen its own grant; a
 //! changed manifest is refused until the operator approves it again.
 //!
 //! This module owns the management surface. The wasm runtime, HTTP anchors and
-//! the iframe bridge build on [`PluginService::load`] and the grant stored here.
+//! the iframe bridge build on [`ExtensionService::load`] and the grant stored here.
 
 pub mod bundle;
 pub mod runtime;
@@ -18,18 +18,18 @@ use std::path::{Path, PathBuf};
 use anth_wire::WireError;
 use serde::{Deserialize, Serialize};
 
-use crate::config::PluginsConfig;
+use crate::config::ExtensionsConfig;
 use crate::log::Logger;
 
 pub use anth_extension::{
-    Anchor, Capability, ExtensionGrant as PluginGrant, ExtensionManifest as Manifest, GrantStore,
-    UiSlot, validate_id,
+    Anchor, Capability, ExtensionGrant, ExtensionManifest as Manifest, GrantStore, UiSlot,
+    validate_id,
 };
 pub use bundle::{BundleInstall, LoadedBundle};
 
 /// One entry in the catalogue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginView {
+pub struct ExtensionView {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
@@ -47,28 +47,28 @@ pub struct PluginView {
 
 /// The whole catalogue plus the two policy switches that shape the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginsView {
+pub struct ExtensionsView {
     pub enabled: bool,
     pub install_from_web: bool,
-    pub plugins: Vec<PluginView>,
+    pub extensions: Vec<ExtensionView>,
 }
 
 /// What a guest answered.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PluginReply {
+pub struct ExtensionReply {
     pub status: u16,
     pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
-pub struct PluginService {
-    config: PluginsConfig,
+pub struct ExtensionService {
+    config: ExtensionsConfig,
     root: PathBuf,
     grants: GrantStore,
 }
 
-impl PluginService {
-    pub fn new(config: PluginsConfig, root: PathBuf, grants_dir: PathBuf) -> Self {
+impl ExtensionService {
+    pub fn new(config: ExtensionsConfig, root: PathBuf, grants_dir: PathBuf) -> Self {
         Self {
             config,
             root,
@@ -76,7 +76,7 @@ impl PluginService {
         }
     }
 
-    pub fn config(&self) -> &PluginsConfig {
+    pub fn config(&self) -> &ExtensionsConfig {
         &self.config
     }
 
@@ -90,22 +90,22 @@ impl PluginService {
 
     /// Lists every installed bundle, including disabled and broken ones so the
     /// operator sees why an entry is not serving.
-    pub fn snapshot(&self) -> Result<PluginsView, WireError> {
+    pub fn snapshot(&self) -> Result<ExtensionsView, WireError> {
         let entries = bundle::installed(&self.root, &self.grants)?;
-        let mut plugins = Vec::with_capacity(entries.len());
+        let mut extensions = Vec::with_capacity(entries.len());
         for (id, grant) in entries {
-            plugins.push(self.view(&id, grant.as_ref()));
+            extensions.push(self.view(&id, grant.as_ref()));
         }
-        Ok(PluginsView {
+        Ok(ExtensionsView {
             enabled: self.config.enabled,
             install_from_web: self.config.install_from_web,
-            plugins,
+            extensions,
         })
     }
 
-    fn view(&self, id: &str, grant: Option<&PluginGrant>) -> PluginView {
+    fn view(&self, id: &str, grant: Option<&ExtensionGrant>) -> ExtensionView {
         let Some(grant) = grant else {
-            return PluginView {
+            return ExtensionView {
                 id: id.to_string(),
                 alias: None,
                 name: id.to_string(),
@@ -113,7 +113,7 @@ impl PluginService {
                 enabled: false,
                 state: "unapproved".to_string(),
                 error: Some(
-                    "the bundle has no grant; run `plugin approve <id> --accept-capabilities`"
+                    "the bundle has no grant; run `extension approve <id> --accept-capabilities`"
                         .to_string(),
                 ),
                 capabilities: Vec::new(),
@@ -130,12 +130,12 @@ impl PluginService {
         let (state, error) = match (grant.enabled, loaded) {
             (false, _) => (
                 "disabled".to_string(),
-                Some("the operator switched this plugin off".to_string()),
+                Some("the operator switched this extension off".to_string()),
             ),
             (true, Ok(_)) => ("enabled".to_string(), None),
             (true, Err(error)) => ("error".to_string(), Some(error.message)),
         };
-        PluginView {
+        ExtensionView {
             id: grant.id.clone(),
             alias: grant.alias.clone(),
             name: grant.name.clone(),
@@ -162,7 +162,7 @@ impl PluginService {
     ) -> Result<BundleInstall, WireError> {
         if !self.config.enabled {
             return Err(WireError::forbidden(
-                "plugins are disabled; set `[plugins] enabled = true`",
+                "extensions are disabled; set `[extensions] enabled = true`",
             ));
         }
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|error| {
@@ -185,7 +185,7 @@ impl PluginService {
     ) -> Result<BundleInstall, WireError> {
         if !self.config.enabled {
             return Err(WireError::forbidden(
-                "plugins are disabled; set `[plugins] enabled = true`",
+                "extensions are disabled; set `[extensions] enabled = true`",
             ));
         }
         bundle::install_file(
@@ -198,12 +198,12 @@ impl PluginService {
         )
     }
 
-    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<PluginGrant, WireError> {
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<ExtensionGrant, WireError> {
         validate_id(id)?;
         let mut grant = self
             .grants
             .read(id)?
-            .ok_or_else(|| WireError::not_found(format!("plugin `{id}` is not installed")))?;
+            .ok_or_else(|| WireError::not_found(format!("extension `{id}` is not installed")))?;
         grant.enabled = enabled;
         self.grants.write(&grant)?;
         Ok(grant)
@@ -214,10 +214,14 @@ impl PluginService {
     }
 
     /// Rewrites the grant from the manifest currently on disk.
-    pub fn approve(&self, id: &str, accept_capabilities: bool) -> Result<PluginGrant, WireError> {
+    pub fn approve(
+        &self,
+        id: &str,
+        accept_capabilities: bool,
+    ) -> Result<ExtensionGrant, WireError> {
         if !accept_capabilities {
             return Err(WireError::invalid(
-                "pass `--accept-capabilities` to approve the plugin's authority",
+                "pass `--accept-capabilities` to approve the extension's authority",
             ));
         }
         bundle::approve(
@@ -229,20 +233,22 @@ impl PluginService {
         )
     }
 
-    /// Loads one enabled plugin, re-verifying its grant and every file hash.
+    /// Loads one enabled extension, re-verifying its grant and every file hash.
     pub fn load(&self, id: &str) -> Result<LoadedBundle, WireError> {
         if !self.config.enabled {
             return Err(WireError::forbidden(
-                "plugins are disabled; set `[plugins] enabled = true`",
+                "extensions are disabled; set `[extensions] enabled = true`",
             ));
         }
         validate_id(id)?;
         let grant = self
             .grants
             .read(id)?
-            .ok_or_else(|| WireError::not_found(format!("plugin `{id}` is not installed")))?;
+            .ok_or_else(|| WireError::not_found(format!("extension `{id}` is not installed")))?;
         if !grant.enabled {
-            return Err(WireError::forbidden(format!("plugin `{id}` is disabled")));
+            return Err(WireError::forbidden(format!(
+                "extension `{id}` is disabled"
+            )));
         }
         bundle::load(
             &self.root,
@@ -257,16 +263,18 @@ impl PluginService {
     pub fn asset(&self, id: &str, module: &str) -> Result<Vec<u8>, WireError> {
         if !self.config.enabled {
             return Err(WireError::forbidden(
-                "plugins are disabled; set `[plugins] enabled = true`",
+                "extensions are disabled; set `[extensions] enabled = true`",
             ));
         }
         validate_id(id)?;
         let grant = self
             .grants
             .read(id)?
-            .ok_or_else(|| WireError::not_found(format!("plugin `{id}` is not installed")))?;
+            .ok_or_else(|| WireError::not_found(format!("extension `{id}` is not installed")))?;
         if !grant.enabled {
-            return Err(WireError::forbidden(format!("plugin `{id}` is disabled")));
+            return Err(WireError::forbidden(format!(
+                "extension `{id}` is disabled"
+            )));
         }
         web::read_asset(&self.root, &grant, module)
     }
@@ -280,13 +288,15 @@ impl PluginService {
         query: BTreeMap<String, String>,
         body: Option<String>,
         log: std::sync::Arc<Logger>,
-    ) -> Result<PluginReply, WireError> {
+    ) -> Result<ExtensionReply, WireError> {
         let grant = self
             .grants
             .read(id)?
-            .ok_or_else(|| WireError::not_found(format!("plugin `{id}` is not installed")))?;
+            .ok_or_else(|| WireError::not_found(format!("extension `{id}` is not installed")))?;
         if !grant.enabled {
-            return Err(WireError::forbidden(format!("plugin `{id}` is disabled")));
+            return Err(WireError::forbidden(format!(
+                "extension `{id}` is disabled"
+            )));
         }
         let method = method.to_uppercase();
         if !grant
@@ -295,7 +305,7 @@ impl PluginService {
             .any(|anchor| anchor.method.eq_ignore_ascii_case(&method) && anchor.path == path)
         {
             return Err(WireError::not_found(format!(
-                "plugin `{id}` declares no anchor {method} {path}"
+                "extension `{id}` declares no anchor {method} {path}"
             )));
         }
         let envelope = serde_json::json!({
@@ -314,7 +324,7 @@ impl PluginService {
         id: &str,
         command: &str,
         log: std::sync::Arc<Logger>,
-    ) -> Result<PluginReply, WireError> {
+    ) -> Result<ExtensionReply, WireError> {
         let envelope = serde_json::to_string(command)
             .map_err(|error| WireError::invalid(format!("the command is not JSON: {error}")))?;
         self.call(id, "anth_cli", &envelope, log)
@@ -326,7 +336,7 @@ impl PluginService {
         id: &str,
         request: &str,
         log: std::sync::Arc<Logger>,
-    ) -> Result<PluginReply, WireError> {
+    ) -> Result<ExtensionReply, WireError> {
         self.call(id, "anth_direct", request, log)
     }
 
@@ -336,11 +346,11 @@ impl PluginService {
         entry: &str,
         payload: &str,
         log: std::sync::Arc<Logger>,
-    ) -> Result<PluginReply, WireError> {
+    ) -> Result<ExtensionReply, WireError> {
         let loaded = self.load(id)?;
         let runtime = runtime::Loaded::load(loaded.manifest, &loaded.wasm)?;
         let reply = runtime.call(entry, payload, log, self.config.fuel)?;
-        Ok(PluginReply {
+        Ok(ExtensionReply {
             status: reply.status,
             value: reply.value,
         })

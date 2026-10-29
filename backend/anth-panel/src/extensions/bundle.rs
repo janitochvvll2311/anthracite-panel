@@ -1,8 +1,8 @@
-//! Plugin bundles: extraction, signatures, hashes and installation.
+//! Extension bundles: extraction, signatures, hashes and installation.
 //!
 //! A bundle is a zip with `extension.toml`, `extension.wasm`, an optional
 //! `extension.sig` and assets under `web/`. Installation is the only moment a
-//! plugin gains authority, so every check runs before the directory becomes
+//! extension gains authority, so every check runs before the directory becomes
 //! visible under its id:
 //!
 //! 1. the archive is read with an allowlist, size and entry caps, refusing
@@ -13,7 +13,7 @@
 //! 5. a changed capability surface needs an explicit approval.
 //!
 //! A failure removes the staging directory; a refused bundle never becomes a
-//! half-installed plugin for the next start to find.
+//! half-installed extension for the next start to find.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -24,7 +24,7 @@ use std::path::{Component, Path, PathBuf};
 use anth_wire::WireError;
 use sha2::{Digest as _, Sha256};
 
-use anth_extension::grants::{ExtensionGrant as PluginGrant, GrantStore};
+use anth_extension::grants::{ExtensionGrant, GrantStore};
 use anth_extension::manifest::{
     ExtensionManifest as Manifest, MANIFEST_FILE, SIGNATURE_FILE, WASM_FILE,
 };
@@ -37,7 +37,7 @@ pub const MAX_ASSET_BYTES: u64 = 4 * 1024 * 1024;
 /// What an install produced.
 #[derive(Debug, Clone)]
 pub struct BundleInstall {
-    pub grant: PluginGrant,
+    pub grant: ExtensionGrant,
     pub manifest: Manifest,
     pub warning: Option<String>,
 }
@@ -59,7 +59,7 @@ impl LoadedBundle {
 fn staging_root(root: &Path) -> Result<PathBuf, WireError> {
     fs::create_dir_all(root).map_err(|error| {
         WireError::internal(format!(
-            "creating the plugin directory {}: {error}",
+            "creating the extension directory {}: {error}",
             root.display()
         ))
     })?;
@@ -229,14 +229,14 @@ fn verify_signature(
         Some(hex) => {
             if public_key.trim().is_empty() {
                 return Err(WireError::forbidden(
-                    "the bundle is signed but `[plugins] public_key` is empty",
+                    "the bundle is signed but `[extensions] public_key` is empty",
                 ));
             }
             signature::verify(public_key, &hex, manifest).map_err(WireError::forbidden)?;
             Ok(Some(hex))
         }
         None if require_signature => Err(WireError::forbidden(
-            "the bundle is not signed; add `extension.sig` or set `[plugins] require_signature = false`",
+            "the bundle is not signed; add `extension.sig` or set `[extensions] require_signature = false`",
         )),
         None => Ok(None),
     }
@@ -299,11 +299,12 @@ pub fn install_reader<R: Read + Seek>(
         {
             return Err(WireError::new(
                 anth_wire::ErrorKind::Conflict,
-                "plugin_capabilities_changed",
-                "the manifest changes the approved capabilities; run `plugin approve --accept-capabilities` to accept them",
+                "extension_capabilities_changed",
+                "the manifest changes the approved capabilities; run `extension approve --accept-capabilities` to accept them",
             ));
         }
-        let mut grant = PluginGrant::from_manifest(&manifest, manifest_sha256, signature.clone());
+        let mut grant =
+            ExtensionGrant::from_manifest(&manifest, manifest_sha256, signature.clone());
         if let Some(existing) = &existing {
             grant.enabled = existing.enabled;
         }
@@ -324,7 +325,7 @@ pub fn install_reader<R: Read + Seek>(
     if had_existing {
         fs::rename(&destination, &aside).map_err(|error| {
             let _ = fs::remove_dir_all(&staging);
-            WireError::internal(format!("replacing plugin `{id}`: {error}"))
+            WireError::internal(format!("replacing extension `{id}`: {error}"))
         })?;
     }
     if let Err(error) = fs::rename(&staging, &destination) {
@@ -333,7 +334,7 @@ pub fn install_reader<R: Read + Seek>(
         }
         let _ = fs::remove_dir_all(&staging);
         return Err(WireError::internal(format!(
-            "installing plugin `{id}`: {error}"
+            "installing extension `{id}`: {error}"
         )));
     }
     if had_existing {
@@ -347,7 +348,7 @@ pub fn install_reader<R: Read + Seek>(
         return Err(error);
     }
     let warning = signature.is_none().then(|| {
-        "installed without a signature because `[plugins] require_signature = false`".to_string()
+        "installed without a signature because `[extensions] require_signature = false`".to_string()
     });
     Ok(BundleInstall {
         grant,
@@ -391,7 +392,7 @@ pub fn install_file(
 /// manifest, the hashes prove the files still match what that manifest names.
 pub fn load(
     root: &Path,
-    grant: &PluginGrant,
+    grant: &ExtensionGrant,
     require_signature: bool,
     public_key: &str,
 ) -> Result<LoadedBundle, WireError> {
@@ -399,7 +400,7 @@ pub fn load(
     let (text, manifest_bytes) = read_manifest(&dir)?;
     if sha256(&manifest_bytes) != grant.manifest_sha256.to_lowercase() {
         return Err(WireError::forbidden(format!(
-            "plugin `{}` has a rewritten manifest; reinstall it to approve the new bytes",
+            "extension `{}` has a rewritten manifest; reinstall it to approve the new bytes",
             grant.id
         )));
     }
@@ -407,7 +408,7 @@ pub fn load(
         Some(signature) => {
             if public_key.trim().is_empty() {
                 return Err(WireError::forbidden(
-                    "the grant is signed but `[plugins] public_key` is empty",
+                    "the grant is signed but `[extensions] public_key` is empty",
                 ));
             }
             signature::verify(public_key, signature, &manifest_bytes)
@@ -415,7 +416,7 @@ pub fn load(
         }
         None if require_signature => {
             return Err(WireError::forbidden(
-                "the grant has no signature and `[plugins] require_signature` is on",
+                "the grant has no signature and `[extensions] require_signature` is on",
             ));
         }
         None => {}
@@ -423,13 +424,13 @@ pub fn load(
     let manifest = Manifest::parse(&text)?;
     if !grant.approves(&manifest) {
         return Err(WireError::forbidden(format!(
-            "plugin `{}` declares a capability surface the grant does not approve; run `plugin approve --accept-capabilities`",
+            "extension `{}` declares a capability surface the grant does not approve; run `extension approve --accept-capabilities`",
             grant.id
         )));
     }
     if manifest.wasm.sha256.to_lowercase() != grant.wasm_sha256.to_lowercase() {
         return Err(WireError::forbidden(format!(
-            "plugin `{}` module digest does not match the grant",
+            "extension `{}` module digest does not match the grant",
             grant.id
         )));
     }
@@ -449,12 +450,12 @@ pub fn approve(
     id: &str,
     require_signature: bool,
     public_key: &str,
-) -> Result<PluginGrant, WireError> {
+) -> Result<ExtensionGrant, WireError> {
     let existing = grants.read(id)?;
     let dir = root.join(id);
     if !dir.is_dir() {
         return Err(WireError::not_found(format!(
-            "plugin `{id}` is not installed"
+            "extension `{id}` is not installed"
         )));
     }
     let (text, manifest_bytes) = read_manifest(&dir)?;
@@ -462,7 +463,7 @@ pub fn approve(
     let manifest = Manifest::parse(&text)?;
     verify_hash(&dir.join(WASM_FILE), &manifest.wasm.sha256, "module")?;
     verify_web_assets(&dir, &manifest)?;
-    let mut grant = PluginGrant::from_manifest(&manifest, sha256(&manifest_bytes), signature);
+    let mut grant = ExtensionGrant::from_manifest(&manifest, sha256(&manifest_bytes), signature);
     grant.enabled = existing.map(|grant| grant.enabled).unwrap_or(true);
     grants.write(&grant)?;
     Ok(grant)
@@ -477,7 +478,7 @@ pub fn remove(root: &Path, grants: &GrantStore, id: &str) -> Result<(), WireErro
             .map_err(|error| WireError::internal(format!("removing {}: {error}", dir.display())))?;
     } else if grant.is_none() {
         return Err(WireError::not_found(format!(
-            "plugin `{id}` is not installed"
+            "extension `{id}` is not installed"
         )));
     }
     grants.remove(id)?;
@@ -488,8 +489,8 @@ pub fn remove(root: &Path, grants: &GrantStore, id: &str) -> Result<(), WireErro
 pub fn installed(
     root: &Path,
     grants: &GrantStore,
-) -> Result<Vec<(String, Option<PluginGrant>)>, WireError> {
-    let by_id: BTreeMap<String, PluginGrant> = grants
+) -> Result<Vec<(String, Option<ExtensionGrant>)>, WireError> {
+    let by_id: BTreeMap<String, ExtensionGrant> = grants
         .load_all()?
         .into_iter()
         .map(|grant| (grant.id.clone(), grant))
@@ -534,8 +535,8 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     use super::*;
-    use crate::config::PluginsConfig;
-    use crate::plugins::PluginService;
+    use crate::config::ExtensionsConfig;
+    use crate::extensions::ExtensionService;
 
     fn scratch(name: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -552,12 +553,12 @@ mod tests {
         SigningKey::from_bytes(&[9u8; 32])
     }
 
-    fn config(require_signature: bool) -> PluginsConfig {
-        PluginsConfig {
+    fn config(require_signature: bool) -> ExtensionsConfig {
+        ExtensionsConfig {
             enabled: true,
             require_signature,
             public_key: signature::encode_hex(key().verifying_key().as_bytes()),
-            ..PluginsConfig::default()
+            ..ExtensionsConfig::default()
         }
     }
 
@@ -621,49 +622,52 @@ path = "/status"
         zip(&entries)
     }
 
-    fn make_service(name: &str, require_signature: bool) -> (PluginService, PathBuf) {
+    fn make_service(name: &str, require_signature: bool) -> (ExtensionService, PathBuf) {
         let root = scratch(name);
-        let service = PluginService::new(
+        let service = ExtensionService::new(
             config(require_signature),
-            root.join("plugins"),
-            root.join("plugins.d"),
+            root.join("extensions"),
+            root.join("extensions.d"),
         );
         (service, root)
     }
 
     #[test]
     fn a_signed_bundle_installs_and_lists_as_enabled() {
-        let (service, root) = make_service("plugin-signed", true);
+        let (service, root) = make_service("extension-signed", true);
         let installed = service
             .install_bytes(&signed_bundle(true, "host.hostname"), false)
             .expect("install");
         assert!(installed.warning.is_none());
         assert_eq!(installed.grant.id, "org.anth.hello");
         assert!(installed.grant.enabled);
-        assert!(root.join("plugins/org.anth.hello/extension.toml").is_file());
-        assert!(root.join("plugins.d/org.anth.hello.toml").is_file());
+        assert!(
+            root.join("extensions/org.anth.hello/extension.toml")
+                .is_file()
+        );
+        assert!(root.join("extensions.d/org.anth.hello.toml").is_file());
 
         let view = service.snapshot().expect("snapshot");
         assert!(view.enabled);
-        assert_eq!(view.plugins.len(), 1);
-        assert_eq!(view.plugins[0].state, "enabled");
-        assert_eq!(view.plugins[0].alias.as_deref(), Some("hello"));
-        assert_eq!(view.plugins[0].capabilities, ["host.hostname"]);
+        assert_eq!(view.extensions.len(), 1);
+        assert_eq!(view.extensions[0].state, "enabled");
+        assert_eq!(view.extensions[0].alias.as_deref(), Some("hello"));
+        assert_eq!(view.extensions[0].capabilities, ["host.hostname"]);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
     fn a_missing_or_wrong_signature_is_refused() {
-        let (service, root) = make_service("plugin-unsigned", true);
+        let (service, root) = make_service("extension-unsigned", true);
         let error = service
             .install_bytes(&signed_bundle(false, "host.hostname"), false)
             .expect_err("unsigned");
         assert_eq!(error.kind, anth_wire::ErrorKind::Forbidden);
         assert!(error.message.contains("not signed"));
-        assert!(!root.join("plugins/org.anth.hello").exists());
+        assert!(!root.join("extensions/org.anth.hello").exists());
         fs::remove_dir_all(root).expect("cleanup");
 
-        let (service, root) = make_service("plugin-badsig", true);
+        let (service, root) = make_service("extension-badsig", true);
         let wasm = b"\0asm\x01\0\0\0";
         let manifest = manifest(wasm, "host.hostname");
         let other = SigningKey::from_bytes(&[8u8; 32]);
@@ -679,13 +683,13 @@ path = "/status"
 
     #[test]
     fn an_unsigned_bundle_is_allowed_only_when_the_switch_is_off() {
-        let (service, root) = make_service("plugin-unsigned-off", false);
+        let (service, root) = make_service("extension-unsigned-off", false);
         let installed = service
             .install_bytes(&signed_bundle(false, "host.hostname"), false)
             .expect("install");
         assert!(installed.warning.is_some());
         assert_eq!(
-            service.snapshot().expect("snapshot").plugins[0].state,
+            service.snapshot().expect("snapshot").extensions[0].state,
             "enabled"
         );
         fs::remove_dir_all(root).expect("cleanup");
@@ -701,7 +705,7 @@ path = "/status"
             ("extension.wasm", b"not wasm"),
             ("extension.sig", signature.as_bytes()),
         ]);
-        let (service, root) = make_service("plugin-tampered", true);
+        let (service, root) = make_service("extension-tampered", true);
         let error = service.install_bytes(&bundle, false).expect_err("tampered");
         assert!(error.message.contains("digest"), "{error}");
         fs::remove_dir_all(root).expect("cleanup");
@@ -709,7 +713,7 @@ path = "/status"
 
     #[test]
     fn a_traversal_or_unexpected_member_is_refused() {
-        let (service, root) = make_service("plugin-traversal", true);
+        let (service, root) = make_service("extension-traversal", true);
         let bundle = zip(&[
             ("extension.toml", b"x"),
             ("../escape.wasm", b"x"),
@@ -725,7 +729,7 @@ path = "/status"
 
     #[test]
     fn a_changed_capability_surface_needs_approval() {
-        let (service, root) = make_service("plugin-approve", true);
+        let (service, root) = make_service("extension-approve", true);
         service
             .install_bytes(&signed_bundle(true, "host.hostname"), false)
             .expect("first install");
@@ -733,14 +737,14 @@ path = "/status"
             .install_bytes(&signed_bundle(true, "host.uname"), false)
             .expect_err("changed");
         assert_eq!(error.kind, anth_wire::ErrorKind::Conflict);
-        assert_eq!(error.code, "plugin_capabilities_changed");
+        assert_eq!(error.code, "extension_capabilities_changed");
 
         let accepted = service
             .install_bytes(&signed_bundle(true, "host.uname"), true)
             .expect("accepted");
         assert_eq!(accepted.grant.capability[0].id, "host.uname");
         assert_eq!(
-            service.snapshot().expect("snapshot").plugins[0].capabilities,
+            service.snapshot().expect("snapshot").extensions[0].capabilities,
             ["host.uname"]
         );
         fs::remove_dir_all(root).expect("cleanup");
@@ -748,19 +752,19 @@ path = "/status"
 
     #[test]
     fn rewriting_the_bundle_after_install_is_reported_as_an_error() {
-        let (service, root) = make_service("plugin-rewrite", true);
+        let (service, root) = make_service("extension-rewrite", true);
         service
             .install_bytes(&signed_bundle(true, "host.hostname"), false)
             .expect("install");
         fs::write(
-            root.join("plugins/org.anth.hello/extension.wasm"),
+            root.join("extensions/org.anth.hello/extension.wasm"),
             b"different",
         )
         .expect("rewrite");
         let view = service.snapshot().expect("snapshot");
-        assert_eq!(view.plugins[0].state, "error");
+        assert_eq!(view.extensions[0].state, "error");
         assert!(
-            view.plugins[0]
+            view.extensions[0]
                 .error
                 .as_deref()
                 .is_some_and(|error| error.contains("digest"))
@@ -770,18 +774,18 @@ path = "/status"
 
     #[test]
     fn a_bundle_without_a_grant_can_be_approved() {
-        let (service, root) = make_service("plugin-unapproved", true);
+        let (service, root) = make_service("extension-unapproved", true);
         service
             .install_bytes(&signed_bundle(true, "host.hostname"), false)
             .expect("install");
-        fs::remove_file(root.join("plugins.d/org.anth.hello.toml")).expect("remove grant");
+        fs::remove_file(root.join("extensions.d/org.anth.hello.toml")).expect("remove grant");
         assert_eq!(
-            service.snapshot().expect("snapshot").plugins[0].state,
+            service.snapshot().expect("snapshot").extensions[0].state,
             "unapproved"
         );
         service.approve("org.anth.hello", true).expect("approve");
         assert_eq!(
-            service.snapshot().expect("snapshot").plugins[0].state,
+            service.snapshot().expect("snapshot").extensions[0].state,
             "enabled"
         );
         fs::remove_dir_all(root).expect("cleanup");
@@ -789,7 +793,7 @@ path = "/status"
 
     #[test]
     fn enable_disable_and_remove_update_the_catalogue() {
-        let (service, root) = make_service("plugin-toggle", true);
+        let (service, root) = make_service("extension-toggle", true);
         service
             .install_bytes(&signed_bundle(true, "host.hostname"), false)
             .expect("install");
@@ -797,17 +801,17 @@ path = "/status"
             .set_enabled("org.anth.hello", false)
             .expect("disable");
         assert_eq!(
-            service.snapshot().expect("snapshot").plugins[0].state,
+            service.snapshot().expect("snapshot").extensions[0].state,
             "disabled"
         );
         service.set_enabled("org.anth.hello", true).expect("enable");
         assert_eq!(
-            service.snapshot().expect("snapshot").plugins[0].state,
+            service.snapshot().expect("snapshot").extensions[0].state,
             "enabled"
         );
 
         service.remove("org.anth.hello").expect("remove");
-        assert!(service.snapshot().expect("snapshot").plugins.is_empty());
+        assert!(service.snapshot().expect("snapshot").extensions.is_empty());
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

@@ -6,7 +6,7 @@ import { HttpFilesClient } from './files-client'
 import { HttpFirewallClient } from './firewall-client'
 import { HttpHostInfoClient } from './host-info-client'
 import { HttpNetworkClient } from './network-client'
-import { HttpPluginsClient } from './plugins-client'
+import { HttpExtensionsClient } from './extensions-client'
 import { HttpProcessesClient } from './processes-client'
 import { HttpSettingsClient } from './settings-client'
 import { HttpStorageClient } from './storage-client'
@@ -21,7 +21,7 @@ AnthApp.networkClient = new HttpNetworkClient()
 AnthApp.firewallClient = new HttpFirewallClient()
 AnthApp.storageClient = new HttpStorageClient()
 AnthApp.accountsClient = new HttpAccountClient()
-AnthApp.pluginsClient = new HttpPluginsClient()
+AnthApp.extensionsClient = new HttpExtensionsClient()
 AnthApp.settingsClient = new HttpSettingsClient()
 
 await applyInitialLocale()

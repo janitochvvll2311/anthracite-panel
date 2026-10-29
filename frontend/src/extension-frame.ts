@@ -1,10 +1,10 @@
 /**
- * `anth-plugin-frame`: one declared plugin UI module in a sandboxed iframe.
+ * `anth-extension-frame`: one declared extension UI module in a sandboxed iframe.
  *
  * The iframe has an opaque origin (`sandbox="allow-scripts"`, no
  * `allow-same-origin`), so the module sees no panel DOM, cookies or storage.
  * It talks to this element only through `postMessage`; every `call` is checked
- * against the plugin's frozen anchors before it becomes a same-origin fetch.
+ * against the extension's frozen anchors before it becomes a same-origin fetch.
  */
 
 import { LitElement, css, html, nothing } from 'lit'
@@ -12,10 +12,10 @@ import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
 import { currentLocale } from './i18n'
-import type { PluginUiSlot, PluginView } from './plugins-client'
+import type { ExtensionUiSlot, ExtensionView } from './extensions-client'
 
 interface BridgeCall {
-  anthPlugin?: boolean
+  anthExtension?: boolean
   type?: string
   requestId?: number
   method?: string
@@ -39,14 +39,14 @@ const THEME_TOKENS = [
   'sans',
 ]
 
-@customElement('anth-plugin-frame')
+@customElement('anth-extension-frame')
 @localized()
-export class AnthPluginFrame extends LitElement {
+export class AnthExtensionFrame extends LitElement {
   @property({ attribute: false })
-  plugin?: PluginView
+  extension?: ExtensionView
 
   @property({ attribute: false })
-  uiSlot?: PluginUiSlot
+  uiSlot?: ExtensionUiSlot
 
   @state()
   private error = ''
@@ -69,12 +69,12 @@ export class AnthPluginFrame extends LitElement {
   }
 
   #source(): string {
-    const plugin = this.plugin
+    const extension = this.extension
     const slot = this.uiSlot
-    if (!plugin || !slot) return 'about:blank'
+    if (!extension || !slot) return 'about:blank'
     const module = slot.module.replace(/^web\//, '')
     const path = module.split('/').map(encodeURIComponent).join('/')
-    return `/p/${encodeURIComponent(plugin.id)}/${path}`
+    return `/e/${encodeURIComponent(extension.id)}/${path}`
   }
 
   #theme(): Record<string, string> {
@@ -88,15 +88,15 @@ export class AnthPluginFrame extends LitElement {
   }
 
   #sendInit(): void {
-    const plugin = this.plugin
+    const extension = this.extension
     const slot = this.uiSlot
     const frame = this.#frame()
-    if (!plugin || !slot || !frame?.contentWindow) return
+    if (!extension || !slot || !frame?.contentWindow) return
     frame.contentWindow.postMessage(
       {
-        anthPluginHost: true,
+        anthExtensionHost: true,
         type: 'init',
-        snapshot: { plugin, slot },
+        snapshot: { extension, slot },
         locale: currentLocale(),
         theme: this.#theme(),
       },
@@ -107,23 +107,23 @@ export class AnthPluginFrame extends LitElement {
   #reply(requestId: number, ok: boolean, payload: Record<string, unknown>): void {
     const frame = this.#frame()
     frame?.contentWindow?.postMessage(
-      { anthPluginHost: true, type: 'result', requestId, ok, ...payload },
+      { anthExtensionHost: true, type: 'result', requestId, ok, ...payload },
       '*',
     )
   }
 
   async #call(data: BridgeCall): Promise<void> {
     const requestId = data.requestId
-    const plugin = this.plugin
-    if (typeof requestId !== 'number' || !plugin) return
+    const extension = this.extension
+    if (typeof requestId !== 'number' || !extension) return
     const method = (data.method ?? 'POST').toUpperCase()
     const path = data.path ?? ''
-    const declared = plugin.api.some(
+    const declared = extension.api.some(
       (anchor) => anchor.method.toUpperCase() === method && anchor.path === path,
     )
     if (!declared || !path.startsWith('/')) {
       this.#reply(requestId, false, {
-        message: `the plugin does not declare ${method} ${path}`,
+        message: `the extension does not declare ${method} ${path}`,
       })
       return
     }
@@ -139,7 +139,7 @@ export class AnthPluginFrame extends LitElement {
     if (method === 'GET') delete init.headers
     try {
       const response = await fetch(
-        `/api/plugins/${encodeURIComponent(plugin.id)}${path}`,
+        `/api/extensions/${encodeURIComponent(extension.id)}${path}`,
         init,
       )
       const text = await response.text()
@@ -160,7 +160,7 @@ export class AnthPluginFrame extends LitElement {
     if (!frame || event.source !== frame.contentWindow) return
     if (event.origin !== 'null' && event.origin !== '') return
     const data = event.data as BridgeCall | undefined
-    if (!data || data.anthPlugin !== true) return
+    if (!data || data.anthExtension !== true) return
     switch (data.type) {
       case 'ready':
         this.#sendInit()
@@ -169,7 +169,7 @@ export class AnthPluginFrame extends LitElement {
         this.error = ''
         break
       case 'error':
-        this.error = data.message ?? msg('The plugin widget failed.')
+        this.error = data.message ?? msg('The extension widget failed.')
         break
       case 'resize':
         if (typeof data.height === 'number' && Number.isFinite(data.height)) {
@@ -183,17 +183,17 @@ export class AnthPluginFrame extends LitElement {
   }
 
   override render() {
-    const plugin = this.plugin
+    const extension = this.extension
     const slot = this.uiSlot
-    if (!plugin || !slot) return nothing
+    if (!extension || !slot) return nothing
     return html`
       <section class="widget" part="widget">
         <header>
           <span class="slot">${slot.label ?? slot.slot}</span>
-          <span class="plugin">${plugin.name}</span>
+          <span class="extension">${extension.name}</span>
         </header>
         <iframe
-          title=${slot.label ?? `${plugin.name} widget`}
+          title=${slot.label ?? `${extension.name} widget`}
           sandbox="allow-scripts"
           referrerpolicy="no-referrer"
           src=${this.#source()}
@@ -231,7 +231,7 @@ export class AnthPluginFrame extends LitElement {
       letter-spacing: 0.05em;
       text-transform: uppercase;
     }
-    .plugin { color: var(--text, #dbe6f2); }
+    .extension { color: var(--text, #dbe6f2); }
     iframe {
       display: block;
       width: 100%;
@@ -253,6 +253,6 @@ export class AnthPluginFrame extends LitElement {
 
 declare global {
   interface HTMLElementTagNameMap {
-    'anth-plugin-frame': AnthPluginFrame
+    'anth-extension-frame': AnthExtensionFrame
   }
 }

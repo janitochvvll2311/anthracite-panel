@@ -1,11 +1,11 @@
 import { responseError } from './http'
 
-export interface PluginAnchor {
+export interface ExtensionAnchor {
   method: string
   path: string
 }
 
-export interface PluginUiSlot {
+export interface ExtensionUiSlot {
   slot: string
   tag: string
   module: string
@@ -13,7 +13,7 @@ export interface PluginUiSlot {
   sha256: string
 }
 
-export interface PluginView {
+export interface ExtensionView {
   id: string
   alias?: string
   name: string
@@ -22,17 +22,17 @@ export interface PluginView {
   state: 'enabled' | 'disabled' | 'error' | 'unapproved'
   error?: string
   capabilities: string[]
-  api: PluginAnchor[]
-  ui: PluginUiSlot[]
+  api: ExtensionAnchor[]
+  ui: ExtensionUiSlot[]
 }
 
-export interface PluginsView {
+export interface ExtensionsView {
   enabled: boolean
   install_from_web: boolean
-  plugins: PluginView[]
+  extensions: ExtensionView[]
 }
 
-export interface PluginInstallResult {
+export interface ExtensionInstallResult {
   id: string
   name: string
   version: string
@@ -40,16 +40,16 @@ export interface PluginInstallResult {
   warning?: string
 }
 
-export interface PluginsClient {
-  get(): Promise<PluginsView>
-  install(bundleBase64: string, acceptCapabilities: boolean): Promise<PluginInstallResult>
+export interface ExtensionsClient {
+  get(): Promise<ExtensionsView>
+  install(bundleBase64: string, acceptCapabilities: boolean): Promise<ExtensionInstallResult>
   enable(id: string): Promise<string>
   disable(id: string): Promise<string>
   remove(id: string): Promise<string>
   approve(id: string, acceptCapabilities: boolean): Promise<string>
 }
 
-export class HttpPluginsClient implements PluginsClient {
+export class HttpExtensionsClient implements ExtensionsClient {
   private readonly fetchImpl: typeof fetch
 
   constructor(fetchImpl: typeof fetch = fetch) {
@@ -57,17 +57,17 @@ export class HttpPluginsClient implements PluginsClient {
     this.fetchImpl = fetchImpl.bind(globalThis)
   }
 
-  async get(): Promise<PluginsView> {
-    const response = await this.fetchImpl('/api/plugins')
+  async get(): Promise<ExtensionsView> {
+    const response = await this.fetchImpl('/api/extensions')
     if (!response.ok) throw await responseError(response)
-    return (await response.json()) as PluginsView
+    return (await response.json()) as ExtensionsView
   }
 
   async install(
     bundleBase64: string,
     acceptCapabilities: boolean,
-  ): Promise<PluginInstallResult> {
-    const response = await this.fetchImpl('/api/plugins/install', {
+  ): Promise<ExtensionInstallResult> {
+    const response = await this.fetchImpl('/api/extensions/install', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -76,23 +76,23 @@ export class HttpPluginsClient implements PluginsClient {
       }),
     })
     if (!response.ok) throw await responseError(response)
-    return (await response.json()) as PluginInstallResult
+    return (await response.json()) as ExtensionInstallResult
   }
 
   async enable(id: string): Promise<string> {
-    return this.action(`/api/plugins/${encodeURIComponent(id)}/enable`)
+    return this.action(`/api/extensions/${encodeURIComponent(id)}/enable`)
   }
 
   async disable(id: string): Promise<string> {
-    return this.action(`/api/plugins/${encodeURIComponent(id)}/disable`)
+    return this.action(`/api/extensions/${encodeURIComponent(id)}/disable`)
   }
 
   async remove(id: string): Promise<string> {
-    return this.action(`/api/plugins/${encodeURIComponent(id)}/remove`)
+    return this.action(`/api/extensions/${encodeURIComponent(id)}/remove`)
   }
 
   async approve(id: string, acceptCapabilities: boolean): Promise<string> {
-    return this.action(`/api/plugins/${encodeURIComponent(id)}/approve`, {
+    return this.action(`/api/extensions/${encodeURIComponent(id)}/approve`, {
       accept_capabilities: acceptCapabilities,
     })
   }

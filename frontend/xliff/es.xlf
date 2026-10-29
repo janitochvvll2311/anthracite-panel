@@ -166,10 +166,6 @@
   <source>Terminal</source>
   <target>Terminal</target>
 </trans-unit>
-<trans-unit id="s2462044f08a1be2b">
-  <source>Plugins</source>
-  <target>Complementos</target>
-</trans-unit>
 <trans-unit id="s9ecbaa744eb6a475">
   <source>No live sessions.</source>
   <target>No hay sesiones activas.</target>
@@ -1658,21 +1654,9 @@
   <source>Installed <x id="0" equiv-text="${result.id} ${result.version}"/>.</source>
   <target>Se instaló <x id="0" equiv-text="${result.id} ${result.version}"/>.</target>
 </trans-unit>
-<trans-unit id="sa86c6c66bada29cb">
-  <source>plugins</source>
-  <target>plugins</target>
-</trans-unit>
 <trans-unit id="s66585797fc6b83d2">
   <source>web install</source>
   <target>instalación web</target>
-</trans-unit>
-<trans-unit id="s6b2dcda792e17f23">
-  <source>Plugins are disabled; set [plugins] enabled = true to load them.</source>
-  <target>Los plugins están deshabilitados; activá [plugins] enabled = true para cargarlos.</target>
-</trans-unit>
-<trans-unit id="s1f52a18aa2c1a47e">
-  <source>Browser installs are off. Install a bundle with anth-panel plugin install.</source>
-  <target>Las instalaciones desde el navegador están deshabilitadas. Instalá un bundle con anth-panel plugin install.</target>
 </trans-unit>
 <trans-unit id="s4ed97193d36e8979">
   <source>Signed bundle (.zip)</source>
@@ -1685,10 +1669,6 @@
 <trans-unit id="s6196153c4b0c1ea0">
   <source>Install</source>
   <target>Instalar</target>
-</trans-unit>
-<trans-unit id="se710daaff232b31b">
-  <source>Filter plugins</source>
-  <target>Filtrar plugins</target>
 </trans-unit>
 <trans-unit id="s70d885806b56289e">
   <source>enabled</source>
@@ -1719,36 +1699,12 @@
   <target>Quitar</target>
 </trans-unit>
 <trans-unit id="s0ddcd14040dcd625">
-  <source>Approve the capabilities of <x id="0" equiv-text="${plugin.id}"/>?</source>
+  <source>Approve the capabilities of <x id="0" equiv-text="${extension.id}"/>?</source>
   <target>¿Aprobar las capacidades de <x id="0" equiv-text="${plugin.id}"/>?</target>
 </trans-unit>
 <trans-unit id="sbd5c7d27ae8c5ddb">
-  <source>Remove <x id="0" equiv-text="${plugin.id}"/> and its grant?</source>
+  <source>Remove <x id="0" equiv-text="${extension.id}"/> and its grant?</source>
   <target>¿Quitar <x id="0" equiv-text="${plugin.id}"/> y su grant?</target>
-</trans-unit>
-<trans-unit id="sb87f3b70150bc6c7">
-  <source>Loading plugins…</source>
-  <target>Cargando plugins…</target>
-</trans-unit>
-<trans-unit id="s25e975e05968f6ba">
-  <source>No plugins installed.</source>
-  <target>No hay plugins instalados.</target>
-</trans-unit>
-<trans-unit id="sac7324a02a295064">
-  <source>No plugins match the filter.</source>
-  <target>Ningún plugin coincide con el filtro.</target>
-</trans-unit>
-<trans-unit id="s2dadaeb59c011680">
-  <source>1 plugin · active: <x id="0" equiv-text="${enabled}"/></source>
-  <target>1 plugin · activos: <x id="0" equiv-text="${enabled}"/></target>
-</trans-unit>
-<trans-unit id="s85864554c4d58276">
-  <source><x id="0" equiv-text="${count}"/> plugins · active: <x id="1" equiv-text="${enabled}"/></source>
-  <target><x id="0" equiv-text="${count}"/> plugins · activos: <x id="1" equiv-text="${enabled}"/></target>
-</trans-unit>
-<trans-unit id="sb27f107e67686a9c">
-  <source>The plugin widget failed.</source>
-  <target>El widget del plugin falló.</target>
 </trans-unit>
 <trans-unit id="sa3b6d53b60aaa982">
   <source>Widgets</source>
@@ -1777,6 +1733,50 @@
 <trans-unit id="sa5e41b674276d396">
   <source>demo</source>
   <target>demo</target>
+</trans-unit>
+<trans-unit id="s9698888cf053484b">
+  <source>Extensions</source>
+  <target>Extensiones</target>
+</trans-unit>
+<trans-unit id="sc31a5ff2d095641a">
+  <source>The extension widget failed.</source>
+  <target>El widget de la extensión falló.</target>
+</trans-unit>
+<trans-unit id="s1246097cf96da3ae">
+  <source>1 extension · active: <x id="0" equiv-text="${enabled}"/></source>
+  <target>1 extensión · activas: <x id="0" equiv-text="${enabled}"/></target>
+</trans-unit>
+<trans-unit id="se3717ec5adc59892">
+  <source><x id="0" equiv-text="${count}"/> extensions · active: <x id="1" equiv-text="${enabled}"/></source>
+  <target><x id="0" equiv-text="${count}"/> extensiones · activas: <x id="1" equiv-text="${enabled}"/></target>
+</trans-unit>
+<trans-unit id="s1c40126e993aea6b">
+  <source>extensions</source>
+  <target>extensiones</target>
+</trans-unit>
+<trans-unit id="sfb23baf84e110d3b">
+  <source>Extensions are disabled; set [extensions] enabled = true to load them.</source>
+  <target>Las extensiones están deshabilitadas; activá [extensions] enabled = true para cargarlas.</target>
+</trans-unit>
+<trans-unit id="s8505b037e8022268">
+  <source>Browser installs are off. Install a bundle with anth-panel extension install.</source>
+  <target>Las instalaciones desde el navegador están deshabilitadas. Instalá un bundle con anth-panel extension install.</target>
+</trans-unit>
+<trans-unit id="sd0e8aef263fc487b">
+  <source>Filter extensions</source>
+  <target>Filtrar extensiones</target>
+</trans-unit>
+<trans-unit id="s89cf95d71ec39827">
+  <source>Loading extensions…</source>
+  <target>Cargando extensiones…</target>
+</trans-unit>
+<trans-unit id="s8f5a4af469cecbf0">
+  <source>No extensions installed.</source>
+  <target>No hay extensiones instaladas.</target>
+</trans-unit>
+<trans-unit id="sb04ba9abe983fe4a">
+  <source>No extensions match the filter.</source>
+  <target>Ninguna extensión coincide con el filtro.</target>
 </trans-unit>
 </body>
 </file>

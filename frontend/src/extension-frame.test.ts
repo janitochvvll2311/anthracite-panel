@@ -1,9 +1,9 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
-import './plugin-frame'
-import type { PluginUiSlot, PluginView } from './plugins-client'
+import './extension-frame'
+import type { ExtensionUiSlot, ExtensionView } from './extensions-client'
 
-function plugin(overrides: Partial<PluginView> = {}): PluginView {
+function extension(overrides: Partial<ExtensionView> = {}): ExtensionView {
   return {
     id: 'org.anth.hello',
     alias: 'hello',
@@ -18,9 +18,9 @@ function plugin(overrides: Partial<PluginView> = {}): PluginView {
   }
 }
 
-function slot(overrides: Partial<PluginUiSlot> = {}): PluginUiSlot {
+function slot(overrides: Partial<ExtensionUiSlot> = {}): ExtensionUiSlot {
   return {
-    slot: 'settings.plugin',
+    slot: 'settings.extension',
     tag: 'anth-hello',
     module: 'web/hello.js',
     label: 'Hello',
@@ -30,14 +30,14 @@ function slot(overrides: Partial<PluginUiSlot> = {}): PluginUiSlot {
 }
 
 type FrameElement = HTMLElement & {
-  plugin: PluginView
-  uiSlot: PluginUiSlot
+  extension: ExtensionView
+  uiSlot: ExtensionUiSlot
   updateComplete: Promise<boolean>
 }
 
-async function mount(pluginValue = plugin()): Promise<FrameElement> {
-  const element = document.createElement('anth-plugin-frame') as FrameElement
-  element.plugin = pluginValue
+async function mount(extensionValue = extension()): Promise<FrameElement> {
+  const element = document.createElement('anth-extension-frame') as FrameElement
+  element.extension = extensionValue
   element.uiSlot = slot()
   document.body.append(element)
   await element.updateComplete
@@ -49,7 +49,7 @@ function message(
   data: Record<string, unknown>,
 ): MessageEvent {
   return new MessageEvent('message', {
-    data: { anthPlugin: true, ...data },
+    data: { anthExtension: true, ...data },
     origin: 'null',
     source: frame.contentWindow,
   })
@@ -64,7 +64,7 @@ test('renders a sandboxed iframe with the declared module', async () => {
   const element = await mount()
   const iframe = element.shadowRoot?.querySelector('iframe')!
   expect(iframe.getAttribute('sandbox')).toBe('allow-scripts')
-  expect(iframe.getAttribute('src')).toBe('/p/org.anth.hello/hello.js')
+  expect(iframe.getAttribute('src')).toBe('/e/org.anth.hello/hello.js')
   expect(iframe.getAttribute('referrerpolicy')).toBe('no-referrer')
   expect(iframe.getAttribute('title')).toBe('Hello')
 })
@@ -80,9 +80,9 @@ test('answers ready with the snapshot, locale and theme', async () => {
   window.dispatchEvent(message(iframe, { type: 'ready' }))
   expect(post).toHaveBeenCalledTimes(1)
   const payload = post.mock.calls[0][0]
-  expect(payload.anthPluginHost).toBe(true)
+  expect(payload.anthExtensionHost).toBe(true)
   expect(payload.type).toBe('init')
-  expect(payload.snapshot.plugin.id).toBe('org.anth.hello')
+  expect(payload.snapshot.extension.id).toBe('org.anth.hello')
   expect(typeof payload.locale).toBe('string')
 })
 
@@ -112,7 +112,7 @@ test('proxies a declared anchor and returns its body', async () => {
   )
   await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalled())
   await vi.waitFor(() => expect(post).toHaveBeenCalled())
-  expect(fetchImpl).toHaveBeenCalledWith('/api/plugins/org.anth.hello/status', {
+  expect(fetchImpl).toHaveBeenCalledWith('/api/extensions/org.anth.hello/status', {
     method: 'GET',
     credentials: 'same-origin',
   })
@@ -125,7 +125,7 @@ test('proxies a declared anchor and returns its body', async () => {
   })
 })
 
-test('refuses an anchor the plugin did not declare', async () => {
+test('refuses an anchor the extension did not declare', async () => {
   const element = await mount()
   const iframe = element.shadowRoot?.querySelector('iframe')!
   const post = vi.fn()
@@ -178,14 +178,14 @@ test('ignores messages from another source or another origin', async () => {
   })
   window.dispatchEvent(
     new MessageEvent('message', {
-      data: { anthPlugin: true, type: 'ready' },
+      data: { anthExtension: true, type: 'ready' },
       origin: 'https://evil.example',
       source: iframe.contentWindow,
     }),
   )
   window.dispatchEvent(
     new MessageEvent('message', {
-      data: { anthPlugin: true, type: 'ready' },
+      data: { anthExtension: true, type: 'ready' },
       origin: 'null',
       source: window,
     }),

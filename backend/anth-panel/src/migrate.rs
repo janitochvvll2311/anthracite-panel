@@ -57,8 +57,8 @@ pub fn plan(text: &str) -> Result<MigrationPlan, String> {
     if let Some(value) = root.get("socket").and_then(Value::as_str) {
         config.socket_path = value.to_string();
     }
-    if let Some(value) = root.get("plugins").and_then(Value::as_str) {
-        config.plugins.root = value.to_string();
+    if let Some(value) = root.get("extensions").and_then(Value::as_str) {
+        config.extensions.root = value.to_string();
     }
     if let Some(value) = root.get("readable").and_then(Value::as_str) {
         config.files.root = value.to_string();
@@ -124,7 +124,7 @@ pub fn plan(text: &str) -> Result<MigrationPlan, String> {
 
     warn_unknown(
         root,
-        &["socket", "plugins", "readable", "terminal", "auth"],
+        &["socket", "extensions", "readable", "terminal", "auth"],
         "the v0.2 config",
         &mut warnings,
     );
@@ -132,9 +132,9 @@ pub fn plan(text: &str) -> Result<MigrationPlan, String> {
         warnings
             .push("v0.2 sessions are not migrated; existing browsers sign in again".to_string());
     }
-    if root.contains_key("plugin_grants") {
+    if root.contains_key("extension_grants") {
         warnings.push(
-            "v0.2 plugin grants are not migrated; reinstall the bundles and approve them again"
+            "v0.2 extension grants are not migrated; reinstall the bundles and approve them again"
                 .to_string(),
         );
     }
@@ -247,7 +247,7 @@ mod tests {
     fn fixture() -> &'static str {
         r#"
 socket = "/run/anth.sock"
-plugins = "/var/lib/anth/plugins"
+extensions = "/var/lib/anth/extensions"
 readable = "/srv/www"
 sudo = false
 
@@ -269,7 +269,7 @@ digest = "dd"
     fn known_values_are_mapped_and_unknown_ones_warn() {
         let plan = plan(fixture()).expect("plan");
         assert_eq!(plan.config.socket_path, "/run/anth.sock");
-        assert_eq!(plan.config.plugins.root, "/var/lib/anth/plugins");
+        assert_eq!(plan.config.extensions.root, "/var/lib/anth/extensions");
         assert_eq!(plan.config.files.root, "/srv/www");
         assert!(plan.config.terminal.enabled);
         assert!(plan.config.auth.enabled);

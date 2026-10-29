@@ -25,7 +25,7 @@ use guest::Host;
 
 /// Instructions one invocation may burn.
 ///
-/// Generous for real work — the example plugin answers in a few thousand — and
+/// Generous for real work — the example extension answers in a few thousand — and
 /// small enough that a spin loop dies in milliseconds instead of holding a
 /// connection open.
 pub const FUEL_PER_CALL: u64 = 10_000_000;
@@ -37,7 +37,7 @@ pub const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
 /// Wall-clock bound on one invocation.
 pub const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// A loaded, verified plugin.
+/// A loaded, verified extension.
 ///
 /// Holds the compiled module rather than an instance: a fresh instance per call
 /// is what makes each invocation's memory and fuel its own.
@@ -52,7 +52,7 @@ impl Loaded {
     /// Verifies the module's shape and compiles it.
     ///
     /// Compiling at load means a malformed module is reported once, with the
-    /// plugin's id, instead of on the first request that reaches it.
+    /// extension's id, instead of on the first request that reaches it.
     pub fn load(
         manifest: anth_extension::manifest::ExtensionManifest,
         wasm: &[u8],
@@ -60,7 +60,7 @@ impl Loaded {
         let engine = engine();
         let module = Module::new(&engine, wasm).map_err(|e| {
             WireError::invalid(format!(
-                "plugin `{}` is not a valid module: {e}",
+                "extension `{}` is not a valid module: {e}",
                 manifest.extension.id
             ))
         })?;
@@ -70,7 +70,7 @@ impl Loaded {
         for required in ["anth_abi_version", "anth_alloc", "memory"] {
             if module.get_export(required).is_none() {
                 return Err(WireError::invalid(format!(
-                    "plugin `{}` does not export `{required}`",
+                    "extension `{}` does not export `{required}`",
                     manifest.extension.id
                 )));
             }
@@ -80,7 +80,7 @@ impl Loaded {
             && module.get_export("anth_direct").is_none()
         {
             return Err(WireError::invalid(format!(
-                "plugin `{}` exports none of anth_http, anth_cli or anth_direct, so no pipe can reach it",
+                "extension `{}` exports none of anth_http, anth_cli or anth_direct, so no pipe can reach it",
                 manifest.extension.id
             )));
         }
@@ -116,7 +116,7 @@ impl Loaded {
     ///
     /// This is also the only place the imports are checked: a guest that imports
     /// anything beyond `anth_exec` and `anth_log` fails to link here, which is
-    /// what keeps "a plugin never gets a host handle" true by construction
+    /// what keeps "a extension never gets a host handle" true by construction
     /// rather than by review.
     fn verify_abi(&self) -> Result<(), WireError> {
         // Nothing the guest logs here is meant for an operator: this runs at
@@ -135,7 +135,7 @@ impl Loaded {
         let expected = anth_extension::manifest::ABI_VERSION as i32;
         if version != expected {
             return Err(WireError::invalid(format!(
-                "plugin `{}` answers ABI {version}, this daemon speaks {expected}",
+                "extension `{}` answers ABI {version}, this daemon speaks {expected}",
                 self.manifest.extension.id
             )));
         }
@@ -190,7 +190,7 @@ impl Loaded {
         linker
             .instantiate_and_start(&mut *store, &self.module)
             .map_err(|e| {
-                crate::plugins::runtime::instantiation_error(&self.manifest.extension.id, e)
+                crate::extensions::runtime::instantiation_error(&self.manifest.extension.id, e)
             })
     }
 }
@@ -201,10 +201,12 @@ fn engine() -> Engine {
     Engine::new(&config)
 }
 
-/// A link failure names the plugin and the import, because "unknown import" with
-/// no plugin is the message an operator cannot act on.
+/// A link failure names the extension and the import, because "unknown import" with
+/// no extension is the message an operator cannot act on.
 fn instantiation_error(id: &str, error: wasmi::Error) -> WireError {
-    WireError::invalid(format!("plugin `{id}` could not be instantiated: {error}"))
+    WireError::invalid(format!(
+        "extension `{id}` could not be instantiated: {error}"
+    ))
 }
 
 #[cfg(test)]
@@ -219,9 +221,9 @@ pub(crate) fn trap_kind(id: &str, error: &wasmi::Error) -> WireError {
     match error.as_trap_code() {
         Some(wasmi::TrapCode::OutOfFuel) => WireError::new(
             ErrorKind::TooLarge,
-            "plugin_out_of_fuel",
-            format!("plugin `{id}` used its whole instruction budget"),
+            "extension_out_of_fuel",
+            format!("extension `{id}` used its whole instruction budget"),
         ),
-        _ => WireError::internal(format!("plugin `{id}` trapped: {error}")),
+        _ => WireError::internal(format!("extension `{id}` trapped: {error}")),
     }
 }

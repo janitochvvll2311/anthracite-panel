@@ -14,4 +14,4 @@ authority the plugin does not have.
 ```
 
 The script writes `dist/org.anth.wireguard.zip` and prints the Ed25519 public
-key to set as `[plugins] public_key`.
+key to set as `[extensions] public_key`.
