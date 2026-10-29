@@ -5,7 +5,7 @@
   "tsConfig": "./tsconfig.json",
   "output": {
     "mode": "runtime",
-    "outputDir": "./src/generated/locales"
+    "outputDir": "./anth-widget/src/generated/locales"
   },
   "interchange": {
     "format": "xliff",

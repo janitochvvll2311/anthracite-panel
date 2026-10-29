@@ -194,7 +194,7 @@ mutations:
 | `src/network.ts` | Lit element: feed lifecycle, toolbar, states, cards, CSS |
 | `src/destinations.ts` | Section id, panel ids, labels, routes and section order |
 | `src/app.ts` | Mounts the section and tab panel, injects the client, paints labels |
-| `src/main.ts` | Constructs the real HTTP client |
+| `anth-app/src/main.ts` | Constructs the real HTTP client |
 | `src/network-display.test.ts` | Pure helpers and edge cases |
 | `src/network.test.ts` | Component with a fake client; HTTP client errors |
 | `src/shell.test.ts` | Nav entry, route, tab and panel mounting |

@@ -1,29 +1,18 @@
 {
-  "name": "anth-panel-web",
+  "name": "anth-frontend",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
+  "workspaces": ["anth-app", "anth-widget", "anth-wire"],
   "scripts": {
-    "dev": "vite",
-    "build": "lit-localize build && tsc && vite build",
-    "preview": "vite preview",
+    "dev": "bun --cwd=anth-app run dev",
+    "build": "bun run i18n:build && bun run typecheck && bun --cwd=anth-app run build",
+    "preview": "bun --cwd=anth-app run preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p anth-wire && tsc --noEmit -p anth-widget && tsc --noEmit -p anth-app",
     "i18n:extract": "lit-localize extract",
     "i18n:build": "lit-localize build"
-  },
-  "dependencies": {
-    "@codemirror/language": "^6.13.1",
-    "@codemirror/language-data": "^6.5.2",
-    "@codemirror/state": "^6.7.6",
-    "@codemirror/view": "^6.43.15",
-    "@lezer/highlight": "^1.2.5",
-    "@lit/localize": "^0.12.2",
-    "@xterm/addon-fit": "^0.11",
-    "@xterm/xterm": "^6",
-    "codemirror": "^6.0.2",
-    "lit": "^3.3.3"
   },
   "devDependencies": {
     "@lit/localize-tools": "^0.8.2",

@@ -41,6 +41,7 @@ The `tests/` project starts the demo, disables auth for the local run, exercises
 the synthetic network/firewall through the UI and API, and stops both servers.
 
 - Rust workspace: `anth-wire`, `anth-host`, `anth-extension`, `anth-plugin`, `anth-panel`.
+- Bun workspace: `anth-wire` (clients/protocol), `anth-widget` (Lit components) and `anth-app` (shell/build).
 - Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
   one error type and explicit pagination.
 - Pure `/proc` and `os-release` parsers with fixture tests.
