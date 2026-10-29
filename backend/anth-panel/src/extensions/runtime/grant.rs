@@ -5,45 +5,43 @@
 //! *template* come from the manifest the operator approved. Each substituted
 //! value is validated by the host and becomes exactly one argv element.
 
-use std::process::Command;
+use std::path::PathBuf;
 
+use anth_host::exec::{ExecRunner, ExecSpec};
 use serde_json::{Map, Value};
 
 use anth_extension::manifest::{ArgType, Capability, MAX_ARG_LEN, PROGRAM_ALLOWLIST};
 
-/// Runs one granted capability.
-pub fn run(capability: &Capability, args: &Value) -> Result<String, String> {
+/// Runs one granted capability through the selected runner.
+pub fn run(
+    runner: &dyn ExecRunner,
+    capability: &Capability,
+    args: &Value,
+) -> Result<String, String> {
     let argv = argv(capability, args)?;
     let program = &argv[0];
     if !PROGRAM_ALLOWLIST.contains(&program.as_str()) {
         return Err(format!("`{program}` is not on the host allowlist"));
     }
-    let output = Command::new(program)
-        .args(&argv[1..])
-        .env("LC_ALL", "C")
-        .output()
-        .map_err(|error| format!("running `{program}`: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let spec = ExecSpec {
+        id: capability.id.clone(),
+        program: PathBuf::from(program),
+        args: argv[1..].to_vec(),
+    };
+    let output = runner.run(&spec).map_err(|error| error.message)?;
+    if output.status != 0 {
         return Err(format!(
-            "`{program}` exited with {}: {}",
+            "`{}` exited with {}: {}",
+            output.program,
             output.status,
-            stderr.trim()
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout)
-        .trim_end()
-        .to_string();
-    let limit = 64 * 1024;
-    if stdout.len() > limit {
-        return Err(format!(
-            "`{program}` printed {} bytes, over the {limit} byte limit",
-            stdout.len()
+            output.stderr.trim()
         ));
     }
     Ok(serde_json::json!({
-        "program": program,
-        "stdout": stdout,
+        "program": output.program,
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "status": output.status,
     })
     .to_string())
 }
@@ -326,5 +324,24 @@ accept = [{{ name = "interface", type = "ifname" }}]
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod runner_tests {
+    use super::*;
+    use anth_host::exec::DemoExecRunner;
+
+    #[test]
+    fn a_granted_capability_goes_through_the_runner() {
+        let capability = Capability {
+            id: "host.hostname".to_string(),
+            program: "hostname".to_string(),
+            args: Vec::new(),
+            accept: Vec::new(),
+        };
+        let output = run(&DemoExecRunner::new(), &capability, &serde_json::json!({}))
+            .expect("runner output");
+        assert!(output.contains("demo-host"), "{output}");
     }
 }

@@ -23,6 +23,7 @@ use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::SystemNetwork;
 use anth_host::accounts::SystemAccounts;
+use anth_host::exec::{DemoExecRunner, ExecRunner, SystemExecRunner};
 use anth_host::files::SystemFiles;
 use anth_host::process::SystemProcesses;
 use anth_host::terminal::{OpenError, SystemTerminal, resolve_shell, supports_line_editing};
@@ -163,10 +164,16 @@ impl Daemon {
                 accounts: Arc::new(SystemAccounts::new(config.accounts.settings())),
             })
         };
+        let exec: Arc<dyn ExecRunner> = if demo {
+            Arc::new(DemoExecRunner::new())
+        } else {
+            Arc::new(SystemExecRunner::unavailable())
+        };
         let extensions = ExtensionService::new(
             config.extensions.clone(),
             paths.extensions.clone(),
             paths.grants.clone(),
+            exec,
         );
         Self {
             config,

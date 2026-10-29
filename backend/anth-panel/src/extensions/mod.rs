@@ -14,7 +14,9 @@ pub mod web;
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use anth_host::exec::ExecRunner;
 use anth_wire::WireError;
 use serde::{Deserialize, Serialize};
 
@@ -65,14 +67,21 @@ pub struct ExtensionService {
     config: ExtensionsConfig,
     root: PathBuf,
     grants: GrantStore,
+    exec: Arc<dyn ExecRunner>,
 }
 
 impl ExtensionService {
-    pub fn new(config: ExtensionsConfig, root: PathBuf, grants_dir: PathBuf) -> Self {
+    pub fn new(
+        config: ExtensionsConfig,
+        root: PathBuf,
+        grants_dir: PathBuf,
+        exec: Arc<dyn ExecRunner>,
+    ) -> Self {
         Self {
             config,
             root,
             grants: GrantStore::new(grants_dir),
+            exec,
         }
     }
 
@@ -348,7 +357,7 @@ impl ExtensionService {
         log: std::sync::Arc<Logger>,
     ) -> Result<ExtensionReply, WireError> {
         let loaded = self.load(id)?;
-        let runtime = runtime::Loaded::load(loaded.manifest, &loaded.wasm)?;
+        let runtime = runtime::Loaded::load(loaded.manifest, &loaded.wasm, Arc::clone(&self.exec))?;
         let reply = runtime.call(entry, payload, log, self.config.fuel)?;
         Ok(ExtensionReply {
             status: reply.status,

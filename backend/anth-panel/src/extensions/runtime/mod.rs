@@ -13,6 +13,7 @@
 //! All four are checked by the host. A guest that exceeds any of them gets a
 //! `Response`, never a hung daemon.
 
+use anth_host::exec::ExecRunner;
 use anth_wire::{ErrorKind, WireError};
 use wasmi::{Config, Engine, Instance, Linker, Module, ResourceLimiter, Store};
 
@@ -46,6 +47,7 @@ pub struct Loaded {
     pub manifest: anth_extension::manifest::ExtensionManifest,
     module: Module,
     engine: Engine,
+    exec: std::sync::Arc<dyn ExecRunner>,
 }
 
 impl Loaded {
@@ -56,6 +58,7 @@ impl Loaded {
     pub fn load(
         manifest: anth_extension::manifest::ExtensionManifest,
         wasm: &[u8],
+        exec: std::sync::Arc<dyn ExecRunner>,
     ) -> Result<Self, WireError> {
         let engine = engine();
         let module = Module::new(&engine, wasm).map_err(|e| {
@@ -89,6 +92,7 @@ impl Loaded {
             manifest,
             module,
             engine,
+            exec,
         };
         loaded.verify_abi()?;
         Ok(loaded)
@@ -147,7 +151,10 @@ impl Loaded {
         log: std::sync::Arc<crate::log::Logger>,
         fuel: u64,
     ) -> Store<Host> {
-        let mut store = Store::new(&self.engine, Host::new(&self.manifest, log));
+        let mut store = Store::new(
+            &self.engine,
+            Host::new(&self.manifest, log, std::sync::Arc::clone(&self.exec)),
+        );
         store.limiter(|host| host as &mut dyn ResourceLimiter);
         // A store without fuel would let every instruction run unmeasured, so
         // this is a hard expectation rather than a best effort.

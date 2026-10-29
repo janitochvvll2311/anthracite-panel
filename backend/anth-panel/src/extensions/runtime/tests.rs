@@ -58,7 +58,12 @@ fn logger() -> Arc<Logger> {
 #[test]
 fn an_http_anchor_returns_the_guest_envelope() {
     let wasm = wat::parse_str(GUEST).expect("wat");
-    let loaded = Loaded::load(manifest(), &wasm).expect("load");
+    let loaded = Loaded::load(
+        manifest(),
+        &wasm,
+        Arc::new(anth_host::exec::DemoExecRunner::new()),
+    )
+    .expect("load");
     let reply = loaded
         .call(
             "anth_http",
@@ -75,7 +80,12 @@ fn an_http_anchor_returns_the_guest_envelope() {
 #[test]
 fn a_guest_that_speaks_the_wrong_abi_is_refused() {
     let wasm = wat::parse_str(GUEST.replace("i32.const 3", "i32.const 2")).expect("wat");
-    let error = Loaded::load(manifest(), &wasm).expect_err("abi");
+    let error = Loaded::load(
+        manifest(),
+        &wasm,
+        Arc::new(anth_host::exec::DemoExecRunner::new()),
+    )
+    .expect_err("abi");
     assert!(error.message.contains("ABI 2"), "{error}");
 }
 
@@ -89,6 +99,11 @@ fn a_guest_without_an_entry_is_refused() {
         )"#,
     )
     .expect("wat");
-    let error = Loaded::load(manifest(), &wasm).expect_err("entry");
+    let error = Loaded::load(
+        manifest(),
+        &wasm,
+        Arc::new(anth_host::exec::DemoExecRunner::new()),
+    )
+    .expect_err("entry");
     assert!(error.message.contains("exports none"), "{error}");
 }

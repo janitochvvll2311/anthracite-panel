@@ -628,6 +628,7 @@ path = "/status"
             config(require_signature),
             root.join("extensions"),
             root.join("extensions.d"),
+            std::sync::Arc::new(anth_host::exec::DemoExecRunner::new()),
         );
         (service, root)
     }

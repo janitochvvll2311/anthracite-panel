@@ -35,7 +35,7 @@ pub struct ExecOutput {
     pub status: i32,
 }
 
-pub trait ExecRunner: Send + Sync {
+pub trait ExecRunner: Send + Sync + std::fmt::Debug {
     fn run(&self, spec: &ExecSpec) -> Result<ExecOutput, WireError>;
 }
 
@@ -174,6 +174,17 @@ impl SystemExecRunner {
     }
 }
 
+impl std::fmt::Debug for SystemExecRunner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SystemExecRunner")
+            .field("uid", &self.uid)
+            .field("gid", &self.gid)
+            .field("timeout", &self.timeout)
+            .field("max_output", &self.max_output)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ExecRunner for SystemExecRunner {
     fn run(&self, spec: &ExecSpec) -> Result<ExecOutput, WireError> {
         self.run_inner(spec)
@@ -181,6 +192,7 @@ impl ExecRunner for SystemExecRunner {
 }
 
 /// Deterministic `exec` output for the demo build.
+#[derive(Debug)]
 pub struct DemoExecRunner {
     replies: BTreeMap<String, ExecOutput>,
 }

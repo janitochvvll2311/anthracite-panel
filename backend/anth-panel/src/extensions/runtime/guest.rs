@@ -8,6 +8,7 @@
 
 use std::time::Instant;
 
+use anth_host::exec::ExecRunner;
 use anth_wire::{ErrorKind, WireError};
 use wasmi::{Caller, Extern, Instance, Memory, Store, Val};
 
@@ -27,7 +28,7 @@ pub const MAX_LOG_BYTES: usize = 64 * 1024;
 /// What a guest answered.
 #[derive(Debug)]
 pub struct Reply {
-    /// The guest's status, as an HTTP code. `__ANTH_EXTENSION_ID__::Status` maps its
+    /// The guest's status, as an HTTP code. `anth_plugin::Status` maps its
     /// variants to exactly these, so an extension cannot invent a code the host does
     /// not already classify.
     pub status: u16,
@@ -35,7 +36,7 @@ pub struct Reply {
 }
 
 impl Reply {
-    /// Reads the envelope `__ANTH_EXTENSION_ID__::Response::to_envelope` produces.
+    /// Reads the envelope `anth_plugin::Response::to_envelope` produces.
     ///
     /// The key is `body`, not `value`, and a `null` reply omits it entirely
     /// rather than sending `"body": null`. Both are the guest's contract, so the
@@ -85,6 +86,7 @@ impl Reply {
 /// The store's data: everything the imports may touch.
 pub(crate) struct Host {
     capabilities: Vec<Capability>,
+    exec: std::sync::Arc<dyn ExecRunner>,
     /// Where `anth_log` lines go, and at what level. The extension id is added to
     /// the target so a refusal names the extension that asked for it.
     log: std::sync::Arc<Logger>,
@@ -94,7 +96,7 @@ pub(crate) struct Host {
     started: Instant,
     /// Set when a capability was refused, so the guest's `anth_exec` can return
     /// a sentinel and the host can report the real reason afterwards. The guest
-    /// sees only a `0` pointer, which is what `__ANTH_EXTENSION_ID__` documents.
+    /// sees only a `0` pointer, which is what `anth_plugin` documents.
     pub(crate) refusal: Option<String>,
 }
 
@@ -133,9 +135,14 @@ impl wasmi::ResourceLimiter for Host {
 }
 
 impl Host {
-    pub(crate) fn new(manifest: &Manifest, log: std::sync::Arc<Logger>) -> Self {
+    pub(crate) fn new(
+        manifest: &Manifest,
+        log: std::sync::Arc<Logger>,
+        exec: std::sync::Arc<dyn ExecRunner>,
+    ) -> Self {
         Self {
             capabilities: manifest.capability.clone(),
+            exec,
             log,
             id: manifest.extension.id.clone(),
             calls: 0,
@@ -160,7 +167,7 @@ pub(crate) fn exec(
     args_ptr: i32,
     args_len: i32,
 ) -> i64 {
-    // The capability arrives JSON-encoded because `__ANTH_EXTENSION_ID__` serializes it
+    // The capability arrives JSON-encoded because `anth_plugin` serializes it
     // with `serde_json::to_vec`, so the raw text is `"host.hostname"` with its
     // quotes. Decoding here is what makes the id compare equal to the manifest.
     let capability = match read_guest_string(caller, cap_ptr, cap_len)
@@ -214,7 +221,7 @@ pub(crate) fn exec(
         }
     };
 
-    match super::grant::run(&grant, &args) {
+    match super::grant::run(host.exec.as_ref(), &grant, &args) {
         Ok(output) => match write_host_string(caller, &output) {
             Ok(packed) => packed,
             Err(message) => {
@@ -239,7 +246,7 @@ pub(crate) fn exec(
 /// mapping garbage to `error` would let a guest raise its own priority.
 /// The number a guest sends to the level the daemon filters on.
 ///
-/// These five numbers are `__ANTH_EXTENSION_ID__::LogLevel`'s discriminants, written out
+/// These five numbers are `anth_plugin::LogLevel`'s discriminants, written out
 /// here because the two crates do not depend on each other. A test pins the
 /// table, since a silent drift would relabel every extension line.
 pub(crate) fn level_of(number: i32) -> Level {

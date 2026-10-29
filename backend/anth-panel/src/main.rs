@@ -878,6 +878,7 @@ fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliR
         config.extensions.clone(),
         paths.extensions,
         paths.grants,
+        std::sync::Arc::new(anth_host::exec::SystemExecRunner::unavailable()),
     );
     match command {
         ExtensionCommand::List => {
