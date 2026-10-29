@@ -29,7 +29,7 @@ export type PanelId =
   | 'partitions'
   | 'users'
   | 'groups'
-  | 'extensions'
+  | 'apps'
 
 export interface Section {
   /** Stable id. It is the route and the hash, so it never changes. */
@@ -98,7 +98,7 @@ export function accountsPanels(): Panel[] {
 export function settingsPanels(): Panel[] {
   return [
     { id: 'general', label: msg('General') },
-    { id: 'extensions', label: msg('Extensions') },
+    { id: 'apps', label: msg('Apps') },
   ]
 }
 
@@ -138,7 +138,7 @@ export function routeFrom(hash: string): Route {
   if (parts[0] === 'settings') {
     return {
       section: 'settings',
-      panel: parts[1] === 'extensions' ? 'extensions' : 'general',
+      panel: parts[1] === 'apps' ? 'apps' : 'general',
     }
   }
   return { section: 'home', panel: 'general' }
@@ -176,6 +176,6 @@ export function hashForPanel(panel: PanelId): string {
   if (panel === 'partitions') return '#/storage/partitions'
   if (panel === 'users') return '#/accounts'
   if (panel === 'groups') return '#/accounts/groups'
-  if (panel === 'extensions') return '#/settings/extensions'
+  if (panel === 'apps') return '#/settings/apps'
   return '#/settings'
 }

@@ -143,7 +143,7 @@ export class AnthSettings extends LitElement {
         label: msg('Terminal'),
         value: settings.terminal.enabled,
       },
-      { key: 'extensions.enabled', label: msg('Extensions'), value: settings.extensions.enabled },
+      { key: 'apps.enabled', label: msg('Apps'), value: settings.apps.enabled },
     ]
   }
 

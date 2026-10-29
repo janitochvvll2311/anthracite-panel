@@ -78,7 +78,7 @@ test('the settings client does not call fetch as a method', async () => {
       accounts: { control: false, manage_passwords: false },
       files: { write: false, trash: false },
       auth: { enabled: true, username: 'admin', cookie_secure: false, bootstrap: 'auto' },
-      extensions: { enabled: false },
+      apps: { enabled: false },
     }),
   )
 

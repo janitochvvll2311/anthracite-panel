@@ -60,7 +60,7 @@ enabled = false
 username = "admin"
 cookie_secure = false
 
-[extensions]
+[apps]
 enabled = false
 
 [demo]

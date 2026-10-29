@@ -34,8 +34,8 @@ const IMAGE_EXTENSIONS = new Set([
 ])
 
 function isImage(name: string): boolean {
-  const extension = name.split('.').pop()?.toLowerCase() ?? ''
-  return IMAGE_EXTENSIONS.has(extension)
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  return IMAGE_EXTENSIONS.has(ext)
 }
 
 const ARCHIVE_SUFFIXES = ['.zip', '.tar', '.tar.gz', '.tgz', '.tar.xz', '.txz', '.7z']

@@ -1,11 +1,12 @@
 //! Anthracite Panel: shared library for the daemon, CLI and HTTP API.
 
 pub mod api;
+pub mod app_host;
+pub mod apps;
 pub mod auth;
 pub mod client;
 pub mod config;
 pub mod dispatch;
-pub mod extensions;
 pub mod lifecycle;
 pub mod log;
 pub mod migrate;

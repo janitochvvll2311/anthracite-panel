@@ -70,8 +70,8 @@ The shell shows a **Demo** banner, a chip on each simulated section and a
   involved.
 - Snapshots use the same wire types, so the existing UI and CLI work unchanged.
 
-Each session is independent and lost on restart. Extensions are still the global
-extension service: the fixed demo catalogue is the next phase in
+Each session is independent and lost on restart. Apps are still the global
+app service: the fixed demo catalogue is the next phase in
 `/root/.opencode/plan/anthracite-demo.md`.
 
 ## Host boundary
@@ -114,5 +114,5 @@ proxy terminate TLS and apply public rate limits. The image has no TLS
 configuration on purpose.
 
 The packaged config enables every demo policy, disables real authentication and
-disables extensions. Edit `etc/anth/config.toml` before building the image to change
+disables apps. Edit `etc/anth/config.toml` before building the image to change
 the TTL, session cap or feature matrix.

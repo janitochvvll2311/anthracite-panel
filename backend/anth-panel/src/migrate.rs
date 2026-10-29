@@ -58,7 +58,7 @@ pub fn plan(text: &str) -> Result<MigrationPlan, String> {
         config.socket_path = value.to_string();
     }
     if let Some(value) = root.get("extensions").and_then(Value::as_str) {
-        config.extensions.root = value.to_string();
+        config.apps.root = value.to_string();
     }
     if let Some(value) = root.get("readable").and_then(Value::as_str) {
         config.files.root = value.to_string();
@@ -269,7 +269,7 @@ digest = "dd"
     fn known_values_are_mapped_and_unknown_ones_warn() {
         let plan = plan(fixture()).expect("plan");
         assert_eq!(plan.config.socket_path, "/run/anth.sock");
-        assert_eq!(plan.config.extensions.root, "/var/lib/anth/extensions");
+        assert_eq!(plan.config.apps.root, "/var/lib/anth/extensions");
         assert_eq!(plan.config.files.root, "/srv/www");
         assert!(plan.config.terminal.enabled);
         assert!(plan.config.auth.enabled);

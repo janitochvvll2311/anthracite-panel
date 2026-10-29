@@ -29,10 +29,10 @@ The rule is functional parity, not identical presentation:
 | Change one setting | — (config file) | `PATCH /api/settings` | `config set` |
 | Raw config file | — | — | `config get` |
 | Validate config | — | — | `config validate` |
-| Extension catalogue and install | — (local bundle root) | `GET /api/extensions`, `POST /api/extensions/install` | `extension list`, `extension install` |
-| Enable/disable/approve/remove an extension | — (local grant) | `POST /api/extensions/{id}/…` | `extension enable/disable/approve/remove` |
-| Extension anchor | — (local runtime) | `/api/extensions/{id}/{*path}` | `extension call` |
-| Declared extension UI asset | — | `GET /api/extensions/{id}/web/{*path}`, `GET /e/{id}/{*module}` | — (browser only) |
+| App catalogue and install | — (local bundle root) | `GET /api/apps`, `POST /api/apps/install` | `app list`, `app install` |
+| Enable/disable/approve/remove an app | — (local grant) | `POST /api/apps/{id}/…` | `app enable/disable/approve/remove` |
+| App anchor | — (local runtime) | `/api/apps/{id}/{*path}` | `app call` |
+| Declared app UI asset | — | `GET /api/apps/{id}/web/{*path}`, `GET /e/{id}/{*module}` | — (browser only) |
 
 ### Files
 

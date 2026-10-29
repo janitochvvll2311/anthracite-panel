@@ -1,0 +1,12 @@
+# Read-only WireGuard reference app: root manifest.
+
+manifest_version = 2
+
+[app]
+id = "org.anth.wireguard"
+alias = "wg"
+version = "0.4.0"
+name = "WireGuard"
+
+[runtime]
+kind = "wasm"

@@ -9,7 +9,7 @@ use anth_wire::{
     VolumeSnapshot,
 };
 
-use crate::extensions::ExtensionsView;
+use crate::app_host::AppsView;
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -268,7 +268,7 @@ pub fn firewall(snapshot: &FirewallSnapshot) -> String {
 }
 
 /// Formats the extension catalogue, one line per bundle and its reason when off.
-pub fn extensions(view: &ExtensionsView) -> String {
+pub fn apps(view: &AppsView) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
@@ -277,7 +277,7 @@ pub fn extensions(view: &ExtensionsView) -> String {
         on_off(view.install_from_web),
     );
     let _ = writeln!(out);
-    if view.extensions.is_empty() {
+    if view.apps.is_empty() {
         let _ = writeln!(out, "(no extensions installed)");
         return out.trim_end().to_string();
     }
@@ -286,7 +286,7 @@ pub fn extensions(view: &ExtensionsView) -> String {
         "{:<32} {:<10} {:<9} {:<8} CAPABILITIES",
         "ID", "VERSION", "STATE", "ENABLED"
     );
-    for extension in &view.extensions {
+    for extension in &view.apps {
         let _ = writeln!(
             out,
             "{:<32} {:<10} {:<9} {:<8} {}",

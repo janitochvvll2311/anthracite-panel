@@ -43,8 +43,8 @@ import type { StorageClient } from './storage-client'
 import type { AnthStorage } from './storage'
 import type { AccountClient } from './accounts-client'
 import type { AnthAccounts } from './accounts'
-import type { ExtensionsClient } from './extensions-client'
-import type { AnthExtensions } from './extensions'
+import type { AppsClient } from './apps-client'
+import type { AnthApps } from './apps'
 import { changeLocale, currentLocale } from './i18n'
 import type { PanelLocale } from './i18n'
 import { DRAWER_CLOSE_EVENT } from './nav-drawer'
@@ -64,7 +64,7 @@ import './firewall'
 import './host-info'
 import './nav-drawer'
 import './network'
-import './extensions'
+import './apps'
 import './processes'
 import './settings'
 import './storage'
@@ -98,7 +98,7 @@ export class AnthApp extends HTMLElement {
   static firewallClient: FirewallClient | undefined
   static storageClient: StorageClient | undefined
   static accountsClient: AccountClient | undefined
-  static extensionsClient: ExtensionsClient | undefined
+  static appsClient: AppsClient | undefined
   static settingsClient: SettingsClient | undefined
 
   #auth?: AuthState
@@ -134,7 +134,7 @@ export class AnthApp extends HTMLElement {
   #usersTabSection?: HTMLElement
   #groupsTabSection?: HTMLElement
   #generalTabSection?: HTMLElement
-  #extensionsTabSection?: HTMLElement
+  #appsTabSection?: HTMLElement
   #drawer?: AnthNavDrawer
 
   connectedCallback(): void {
@@ -668,14 +668,14 @@ export class AnthApp extends HTMLElement {
       .map(
         (panel) => `
           <section data-tab="${panel.id}" label="${escape(panel.label)}">
-            ${panel.id === 'extensions' ? '<anth-extensions></anth-extensions>' : '<anth-settings></anth-settings>'}
+            ${panel.id === 'apps' ? '<anth-apps></anth-apps>' : '<anth-settings></anth-settings>'}
           </section>`,
       )
       .join('')
     const generalTabSection =
       settingsPanel.querySelector<HTMLElement>('[data-tab="general"]') ?? undefined
-    const extensionsTabSection =
-      settingsPanel.querySelector<HTMLElement>('[data-tab="extensions"]') ?? undefined
+    const appsTabSection =
+      settingsPanel.querySelector<HTMLElement>('[data-tab="apps"]') ?? undefined
     settingsSection?.append(settingsPanel)
 
     // Assign the clients before the panels join the page: they start reading
@@ -710,9 +710,9 @@ export class AnthApp extends HTMLElement {
     for (const settings of settingsPanel.querySelectorAll<AnthSettings>('anth-settings')) {
       settings.client = AnthApp.settingsClient
     }
-    const extensions = settingsPanel.querySelector<AnthExtensions>('anth-extensions')
-    if (extensions) {
-      extensions.client = AnthApp.extensionsClient
+    const apps = settingsPanel.querySelector<AnthApps>('anth-apps')
+    if (apps) {
+      apps.client = AnthApp.appsClient
     }
 
     container.append(outer)
@@ -739,7 +739,7 @@ export class AnthApp extends HTMLElement {
     this.#usersTabSection = usersTabSection
     this.#groupsTabSection = groupsTabSection
     this.#generalTabSection = generalTabSection
-    this.#extensionsTabSection = extensionsTabSection
+    this.#appsTabSection = appsTabSection
 
     homeSection
       ?.querySelector('anth-fab')
@@ -799,7 +799,7 @@ export class AnthApp extends HTMLElement {
     this.#usersTabSection = undefined
     this.#groupsTabSection = undefined
     this.#generalTabSection = undefined
-    this.#extensionsTabSection = undefined
+    this.#appsTabSection = undefined
     container.innerHTML = ''
   }
 
@@ -823,7 +823,7 @@ export class AnthApp extends HTMLElement {
     this.#usersTabSection?.setAttribute('label', msg('Users'))
     this.#groupsTabSection?.setAttribute('label', msg('Groups'))
     this.#generalTabSection?.setAttribute('label', msg('General'))
-    this.#extensionsTabSection?.setAttribute('label', msg('Extensions'))
+    this.#appsTabSection?.setAttribute('label', msg('Apps'))
     const card = this.#homeSection?.querySelector('[data-host-card]')
     const label = card?.querySelector('.card-head .label')
     if (label) {

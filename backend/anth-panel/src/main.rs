@@ -126,9 +126,9 @@ enum Command {
         command: AccountCommand,
     },
     /// Inspect, install and manage signed extension bundles.
-    Extension {
+    App {
         #[command(subcommand)]
-        command: ExtensionCommand,
+        command: AppCommand,
     },
     /// Read, validate or change the configuration.
     Config {
@@ -150,7 +150,7 @@ enum Command {
 }
 
 #[derive(Subcommand, Debug)]
-enum ExtensionCommand {
+enum AppCommand {
     /// List installed bundles and their state.
     #[command(alias = "ls")]
     List,
@@ -164,7 +164,7 @@ enum ExtensionCommand {
     },
     /// Remove one installed extension and its grant.
     Remove {
-        /// Extension id or alias.
+        /// App id or alias.
         id: String,
         /// Do not ask for confirmation.
         #[arg(long)]
@@ -172,17 +172,17 @@ enum ExtensionCommand {
     },
     /// Switch one extension on.
     Enable {
-        /// Extension id or alias.
+        /// App id or alias.
         id: String,
     },
     /// Switch one extension off without removing it.
     Disable {
-        /// Extension id or alias.
+        /// App id or alias.
         id: String,
     },
     /// Rewrite the grant from the manifest currently on disk.
     Approve {
-        /// Extension id or alias.
+        /// App id or alias.
         id: String,
         /// Confirm the capability surface.
         #[arg(long)]
@@ -190,7 +190,7 @@ enum ExtensionCommand {
     },
     /// Send one request through the extension's `anth_cli` entry.
     Call {
-        /// Extension id or alias.
+        /// App id or alias.
         id: String,
         /// JSON request, or `-` to read it from stdin.
         request: String,
@@ -853,7 +853,7 @@ async fn run() -> CliResult {
         Command::Firewall { command } => firewall_command(&path, command).await,
         Command::Storage { command } => storage_command(&path, command).await,
         Command::Account { command } => account_command(&path, command).await,
-        Command::Extension { command } => extension_command(&path, command),
+        Command::App { command } => app_command(&path, command),
         Command::Migrate { from, write, force } => migrate_command(&path, from, *write, *force),
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
@@ -871,24 +871,24 @@ async fn run() -> CliResult {
     }
 }
 
-fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliResult {
+fn app_command(path: &std::path::Path, command: &AppCommand) -> CliResult {
     let config = Config::load_or_create(path).map_err(|error| (1, error))?;
     let paths = config.paths(path).map_err(|error| (1, error))?;
-    let service = anth_panel::extensions::ExtensionService::new(
-        config.extensions.clone(),
-        paths.extensions,
+    let service = anth_panel::app_host::AppService::new(
+        config.apps.clone(),
+        paths.apps,
         paths.grants,
-        std::sync::Arc::new(anth_host::exec::SystemExecRunner::unavailable()),
+        std::sync::Arc::new(anth_panel::app_host::exec::SystemExecRunner::unavailable()),
     );
     match command {
-        ExtensionCommand::List => {
+        AppCommand::List => {
             let view = service
                 .snapshot()
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            println!("{}", render::extensions(&view));
+            println!("{}", render::apps(&view));
             Ok(())
         }
-        ExtensionCommand::Install {
+        AppCommand::Install {
             bundle,
             accept_capabilities,
         } => {
@@ -898,7 +898,7 @@ fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliR
             println!(
                 "installed {} {} ({} capabilities)",
                 installed.grant.id,
-                installed.grant.extension_version,
+                installed.grant.app_version,
                 installed.grant.allowed_ids().len()
             );
             for capability in installed.grant.allowed_ids() {
@@ -909,8 +909,8 @@ fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliR
             }
             Ok(())
         }
-        ExtensionCommand::Remove { id, yes } => {
-            let id = resolve_extension_id(&service, id)?;
+        AppCommand::Remove { id, yes } => {
+            let id = resolve_app_id(&service, id)?;
             if !yes {
                 confirm(&format!("Remove extension {id} and its grant?"))?;
             }
@@ -920,27 +920,27 @@ fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliR
             println!("removed {id}");
             Ok(())
         }
-        ExtensionCommand::Enable { id } | ExtensionCommand::Disable { id } => {
-            let id = resolve_extension_id(&service, id)?;
-            let enable = matches!(command, ExtensionCommand::Enable { .. });
+        AppCommand::Enable { id } | AppCommand::Disable { id } => {
+            let id = resolve_app_id(&service, id)?;
+            let enable = matches!(command, AppCommand::Enable { .. });
             service
                 .set_enabled(&id, enable)
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
             println!("{} is {}", id, if enable { "enabled" } else { "disabled" });
             Ok(())
         }
-        ExtensionCommand::Approve {
+        AppCommand::Approve {
             id,
             accept_capabilities,
         } => {
-            let id = resolve_extension_id(&service, id)?;
+            let id = resolve_app_id(&service, id)?;
             let grant = service
                 .approve(&id, *accept_capabilities)
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
             println!(
                 "approved {} {} ({} capabilities)",
                 grant.id,
-                grant.extension_version,
+                grant.app_version,
                 grant.allowed_ids().len()
             );
             for capability in grant.allowed_ids() {
@@ -948,8 +948,8 @@ fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliR
             }
             Ok(())
         }
-        ExtensionCommand::Call { id, request } => {
-            let id = resolve_extension_id(&service, id)?;
+        AppCommand::Call { id, request } => {
+            let id = resolve_app_id(&service, id)?;
             let request = if request == "-" {
                 let mut text = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
@@ -977,8 +977,8 @@ fn extension_command(path: &std::path::Path, command: &ExtensionCommand) -> CliR
     }
 }
 
-fn resolve_extension_id(
-    service: &anth_panel::extensions::ExtensionService,
+fn resolve_app_id(
+    service: &anth_panel::app_host::AppService,
     id_or_alias: &str,
 ) -> Result<String, (u8, String)> {
     match service.grants().read(id_or_alias) {
@@ -994,7 +994,7 @@ fn resolve_extension_id(
         .snapshot()
         .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
     let mut matches = view
-        .extensions
+        .apps
         .iter()
         .filter(|extension| extension.alias.as_deref() == Some(id_or_alias));
     let Some(first) = matches.next() else {

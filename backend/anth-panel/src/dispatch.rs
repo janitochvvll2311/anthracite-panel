@@ -16,14 +16,14 @@ use anth_wire::{
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
+use crate::app_host::AppService;
+use crate::app_host::exec::{DemoExecRunner, ExecRunner, SystemExecRunner};
 use crate::config::{Config, Paths};
-use crate::extensions::ExtensionService;
 use crate::firewall::SystemFirewall;
 use crate::lifecycle::{ACTION_GRACE, Lifecycle};
 use crate::log::{Level, Logger};
 use crate::network::SystemNetwork;
 use anth_host::accounts::SystemAccounts;
-use anth_host::exec::{DemoExecRunner, ExecRunner, SystemExecRunner};
 use anth_host::files::SystemFiles;
 use anth_host::process::SystemProcesses;
 use anth_host::terminal::{OpenError, SystemTerminal, resolve_shell, supports_line_editing};
@@ -57,7 +57,7 @@ pub struct Daemon {
     logger: Arc<Logger>,
     lifecycle: Arc<Lifecycle>,
     mode: Mode,
-    extensions: ExtensionService,
+    apps: AppService,
 }
 
 impl Daemon {
@@ -136,9 +136,9 @@ impl Daemon {
                 paths.state_dir.clone(),
                 paths.secrets.clone(),
                 paths.sessions.clone(),
-                paths.extensions.clone(),
+                paths.apps.clone(),
                 paths.grants.clone(),
-                paths.extension_state.clone(),
+                paths.app_state.clone(),
             ];
             if let Ok(executable) = std::env::current_exe() {
                 protected.push(executable);
@@ -169,9 +169,9 @@ impl Daemon {
         } else {
             Arc::new(SystemExecRunner::unavailable())
         };
-        let extensions = ExtensionService::new(
-            config.extensions.clone(),
-            paths.extensions.clone(),
+        let apps = AppService::new(
+            config.apps.clone(),
+            paths.apps.clone(),
             paths.grants.clone(),
             exec,
         );
@@ -181,7 +181,7 @@ impl Daemon {
             logger,
             lifecycle,
             mode,
-            extensions,
+            apps,
         }
     }
 
@@ -237,15 +237,15 @@ impl Daemon {
         self
     }
 
-    /// Replaces the extension service. Tests use it to script an extension root
+    /// Replaces the app service. Tests use it to script an app root
     /// without touching the installation directory.
-    pub fn with_extensions(mut self, extensions: ExtensionService) -> Self {
-        self.extensions = extensions;
+    pub fn with_apps(mut self, extensions: AppService) -> Self {
+        self.apps = extensions;
         self
     }
 
-    pub fn extensions(&self) -> &ExtensionService {
-        &self.extensions
+    pub fn apps(&self) -> &AppService {
+        &self.apps
     }
 
     /// The real terminal, for tests that inspect it directly.

@@ -6,11 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-anth-wire.workspace = true
-libc.workspace = true
-ed25519-dalek.workspace = true
-serde.workspace = true
-toml.workspace = true
+axum.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
-proptest = "1"
+http-body-util.workspace = true
+tower.workspace = true

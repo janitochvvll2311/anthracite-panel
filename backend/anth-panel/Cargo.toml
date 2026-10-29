@@ -8,7 +8,6 @@ rust-version.workspace = true
 [dependencies]
 anth-wire.workspace = true
 anth-host.workspace = true
-anth-extension.workspace = true
 argon2.workspace = true
 axum.workspace = true
 base64.workspace = true
@@ -21,6 +20,7 @@ futures-util.workspace = true
 getrandom.workspace = true
 hmac.workspace = true
 libc.workspace = true
+wait-timeout = "0.2"
 lzma-rs.workspace = true
 lzma-rust2.workspace = true
 portable-pty.workspace = true

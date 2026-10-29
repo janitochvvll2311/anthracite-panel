@@ -19,10 +19,10 @@ pub const DEFAULT_CONFIG_FILE: &str = "config.toml";
 pub const RELEASE_CONFIG_PATH: &str = "/etc/anth/config.toml";
 pub const RELEASE_SOCKET_PATH: &str = "/var/tmp/anth.sock";
 pub const RELEASE_STATE_DIR: &str = "/var/lib/anth";
-pub const RELEASE_EXTENSION_ROOT: &str = "/var/lib/anth/extensions";
+pub const RELEASE_APP_ROOT: &str = "/var/lib/anth/apps";
 pub const SECRETS_FILE: &str = "secrets.toml";
-pub const EXTENSION_GRANTS_DIR: &str = "extensions.d";
-pub const EXTENSION_STATE_FILE: &str = "extensions.state.toml";
+pub const APP_GRANTS_DIR: &str = "apps.d";
+pub const APP_STATE_FILE: &str = "apps.state.toml";
 pub const SESSIONS_FILE: &str = "sessions.toml";
 
 /// First-run credential mode.
@@ -252,7 +252,7 @@ impl Default for AuthConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ExtensionsConfig {
+pub struct AppsConfig {
     pub enabled: bool,
     pub root: String,
     pub install_from_web: bool,
@@ -261,11 +261,11 @@ pub struct ExtensionsConfig {
     pub fuel: u64,
 }
 
-impl Default for ExtensionsConfig {
+impl Default for AppsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            root: RELEASE_EXTENSION_ROOT.to_string(),
+            root: RELEASE_APP_ROOT.to_string(),
             install_from_web: false,
             require_signature: true,
             public_key: String::new(),
@@ -314,7 +314,7 @@ pub struct Config {
     pub accounts: AccountsConfig,
     pub files: FilesConfig,
     pub auth: AuthConfig,
-    pub extensions: ExtensionsConfig,
+    pub apps: AppsConfig,
     pub demo: DemoConfig,
 }
 
@@ -334,7 +334,7 @@ impl Default for Config {
             accounts: AccountsConfig::default(),
             files: FilesConfig::default(),
             auth: AuthConfig::default(),
-            extensions: ExtensionsConfig::default(),
+            apps: AppsConfig::default(),
             demo: DemoConfig::default(),
         }
     }
@@ -381,10 +381,10 @@ impl Config {
         config.accounts.manage_passwords = true;
         config.accounts.allow_system = true;
         config.accounts.allow_privileged_groups = true;
-        config.extensions.enabled = true;
-        config.extensions.root = "./extensions/bundles".to_string();
-        config.extensions.install_from_web = true;
-        config.extensions.require_signature = false;
+        config.apps.enabled = true;
+        config.apps.root = "./apps/bundles".to_string();
+        config.apps.install_from_web = true;
+        config.apps.require_signature = false;
         config.files.write = true;
         config.files.trash = true;
         config
@@ -495,7 +495,7 @@ impl Config {
         {
             return Err("file size limits must be greater than zero".to_string());
         }
-        if self.extensions.fuel == 0 {
+        if self.apps.fuel == 0 {
             return Err("`extensions.fuel` must be greater than zero".to_string());
         }
         Ok(())
@@ -531,7 +531,7 @@ impl Config {
         };
 
         let state_dir = resolve(&self.state_dir);
-        let extensions = resolve(&self.extensions.root);
+        let apps = resolve(&self.apps.root);
         Ok(Paths {
             config: config_path.to_path_buf(),
             config_dir: config_dir.clone(),
@@ -539,9 +539,9 @@ impl Config {
             state_dir: state_dir.clone(),
             secrets: config_dir.join(SECRETS_FILE),
             sessions: state_dir.join(SESSIONS_FILE),
-            extensions,
-            grants: config_dir.join(EXTENSION_GRANTS_DIR),
-            extension_state: state_dir.join(EXTENSION_STATE_FILE),
+            apps,
+            grants: config_dir.join(APP_GRANTS_DIR),
+            app_state: state_dir.join(APP_STATE_FILE),
         })
     }
 
@@ -605,9 +605,9 @@ pub struct Paths {
     pub state_dir: PathBuf,
     pub secrets: PathBuf,
     pub sessions: PathBuf,
-    pub extensions: PathBuf,
+    pub apps: PathBuf,
     pub grants: PathBuf,
-    pub extension_state: PathBuf,
+    pub app_state: PathBuf,
 }
 
 fn set_dotted(document: &mut DocumentMut, key: &str, item: Item) -> Result<(), String> {
@@ -660,12 +660,12 @@ mod tests {
         let dev = Config::dev_default();
         assert_eq!(dev.socket_path, "./anth.sock");
         assert_eq!(dev.state_dir, "./state");
-        assert_eq!(dev.extensions.root, "./extensions/bundles");
+        assert_eq!(dev.apps.root, "./apps/bundles");
 
         let release = Config::default();
         assert_eq!(release.socket_path, RELEASE_SOCKET_PATH);
         assert_eq!(release.state_dir, RELEASE_STATE_DIR);
-        assert_eq!(release.extensions.root, RELEASE_EXTENSION_ROOT);
+        assert_eq!(release.apps.root, RELEASE_APP_ROOT);
     }
 
     #[test]
@@ -685,9 +685,9 @@ mod tests {
         assert!(dev.accounts.manage_passwords);
         assert!(dev.accounts.allow_system);
         assert!(dev.accounts.allow_privileged_groups);
-        assert!(dev.extensions.enabled);
-        assert!(dev.extensions.install_from_web);
-        assert!(!dev.extensions.require_signature);
+        assert!(dev.apps.enabled);
+        assert!(dev.apps.install_from_web);
+        assert!(!dev.apps.require_signature);
         assert!(dev.files.write);
         assert!(dev.files.trash);
         assert!(
@@ -702,7 +702,7 @@ mod tests {
         assert!(!release.volumes.format);
         assert!(!release.accounts.manage_passwords);
         assert!(!release.accounts.allow_system);
-        assert!(release.extensions.require_signature);
+        assert!(release.apps.require_signature);
         assert!(!release.files.write);
     }
 
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(paths.socket, PathBuf::from("/srv/anth/anth.sock"));
         assert_eq!(paths.state_dir, PathBuf::from("/srv/anth/state"));
         assert_eq!(paths.secrets, PathBuf::from("/srv/anth/secrets.toml"));
-        assert_eq!(paths.grants, PathBuf::from("/srv/anth/extensions.d"));
+        assert_eq!(paths.grants, PathBuf::from("/srv/anth/apps.d"));
         assert_eq!(
             paths.sessions,
             PathBuf::from("/srv/anth/state/sessions.toml")

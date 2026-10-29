@@ -18,7 +18,7 @@ use anth_wire::{HostInfo, OsInfo};
 pub mod accounts;
 pub mod backend;
 pub mod demo;
-pub mod exec;
+
 pub mod files;
 pub mod firewall;
 pub mod network;

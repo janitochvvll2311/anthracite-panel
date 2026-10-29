@@ -17,7 +17,7 @@ const settings: Settings = {
   accounts: { control: false, manage_passwords: false },
   files: { write: false, trash: false },
   auth: { enabled: true, username: 'admin', cookie_secure: false, bootstrap: 'auto' },
-  extensions: { enabled: false },
+  apps: { enabled: false },
 }
 
 function fakeClient(overrides: Partial<SettingsClient> = {}): SettingsClient {

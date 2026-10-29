@@ -1,0 +1,8 @@
+[wasm]
+path = "plugin.wasm"
+abi = 3
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[capability]]
+id = "host.hostname"
+program = "hostname"

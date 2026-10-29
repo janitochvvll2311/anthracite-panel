@@ -456,32 +456,32 @@ invalid_account`, `501 account_unsupported` and `500 account_failed`. The
 password travels in the request body and is passed to `chpasswd` on stdin; it is
 never logged or placed in argv.
 
-## Extensions
+## Apps
 
-Extension management is local state: the bundle root and `extensions.d/` grants. These
+App management is local state: the bundle root and `apps.d/` grants. These
 routes require a live session unless auth is disabled; mutations check `Origin`
 against `Host` when the header is present.
 
 | Route | Body | Policy |
 | --- | --- | --- |
-| `GET /api/extensions` | — | catalogue plus `enabled` and `install_from_web` |
-| `POST /api/extensions/install` | `{"bundle_base64":"...","accept_capabilities":false}` | `[extensions] install_from_web` |
-| `POST /api/extensions/{id}/enable` | `{}` | — |
-| `POST /api/extensions/{id}/disable` | `{}` | — |
-| `POST /api/extensions/{id}/remove` | `{}` | — |
-| `POST /api/extensions/{id}/approve` | `{"accept_capabilities":true}` | — |
-| `GET|POST|PUT|PATCH|DELETE /api/extensions/{id}/{*path}` | raw body, max 1 MiB | method/path declared in the grant |
-| `GET /api/extensions/{id}/web/{*path}` | — | declared UI module |
+| `GET /api/apps` | — | catalogue plus `enabled` and `install_from_web` |
+| `POST /api/apps/install` | `{"bundle_base64":"...","accept_capabilities":false}` | `[apps] install_from_web` |
+| `POST /api/apps/{id}/enable` | `{}` | — |
+| `POST /api/apps/{id}/disable` | `{}` | — |
+| `POST /api/apps/{id}/remove` | `{}` | — |
+| `POST /api/apps/{id}/approve` | `{"accept_capabilities":true}` | — |
+| `GET|POST|PUT|PATCH|DELETE /api/apps/{id}/{*path}` | raw body, max 1 MiB | method/path declared in the grant |
+| `GET /api/apps/{id}/web/{*path}` | — | declared UI module |
 | `GET /e/{id}/{*module}` | — | host-owned iframe bootstrap for a declared module |
 
 Install answers `{id,name,version,capabilities,warning?}`. A signed bundle needs
-`[extensions] public_key`; an unsigned one is accepted only when
+`[apps] public_key`; an unsigned one is accepted only when
 `require_signature = false` and carries a warning. A manifest whose capability
-surface changed is `409` with code `extension_capabilities_changed` until approved.
+surface changed is `409` with code `app_capabilities_changed` until approved.
 An anchor runs the guest's `anth_http` entry and maps its
 `{"status":...,"body":...}` reply. A UI module is served only when the grant
 declares it, with an explicit content type, `nosniff` and `no-store`. See
-[extensions.md](extensions.md).
+[apps.md](apps.md).
 
 ## Settings and lifecycle
 

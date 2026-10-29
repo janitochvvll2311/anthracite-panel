@@ -14,7 +14,7 @@ The script:
 1. installs frontend dependencies, builds the shell and stages `www/`;
 2. builds `anth-panel` for `x86_64-unknown-linux-musl` in release mode;
 3. creates a release-default `config.toml.example` with the binary itself;
-4. stages the binary, unit, docs, reference extension sources and Dockerfile;
+4. stages the binary, unit, docs, reference app sources and Dockerfile;
 5. writes `dist/anthracite-panel-<version>-<target>.tar.gz` and its SHA-256.
 
 The tarball layout:
@@ -25,7 +25,7 @@ anthracite-panel-0.3.0a-x86_64-unknown-linux-musl/
   etc/anth/config.toml.example
   lib/systemd/system/anthracite-panel.service
   share/containers/Dockerfile
-  share/doc/anthracite-panel/{README.md,LICENSE,docs/...,extensions/...}
+  share/doc/anthracite-panel/{README.md,LICENSE,docs/...,apps/...}
 ```
 
 ## Install

@@ -13,8 +13,8 @@ Phase 6 is code-complete: the Storage inventory, guarded mount/unmount and
 partition/format operations, plus the Accounts inventory, guarded create/delete
 and password changes, are in place. Accounts success paths were validated on a
 real host; storage mutations still need `CAP_SYS_ADMIN`. Phase 7 has started with
-signed extension bundles, frozen grants, the wasm ABI 3 runtime, guarded HTTP
-anchors, declared UI asset delivery and the extension manager over CLI, HTTP and
+signed app bundles, frozen grants, the wasm ABI 3 runtime, guarded HTTP
+anchors, declared UI asset delivery and the app manager over CLI, HTTP and
 Settings; the sandboxed iframe bridge and the `hello` and read-only WireGuard
 reference bundles are in place. Phase 7 is code-complete. Phase 8 has started
 with the dry-run v0.2 migration, property tests over paths, archives,
@@ -85,12 +85,14 @@ the synthetic network/firewall through the UI and API, and stops both servers.
   and password changes behind `[accounts] control/manage_passwords` with
   system-id and privileged-group opt-ins, over socket, HTTP, CLI and the
   Accounts section's Users and Groups tabs.
-- Extensions: signed zip bundles with manifest v2 and ABI 3, Ed25519 over
-  `manifest.toml`, per-file sha256, frozen per-extension grants under `extensions.d/`,
+- Apps: signed zip bundles with manifest v2 and ABI 3, Ed25519 over
+  `manifest.toml`, per-file sha256, frozen per-app grants under `apps.d/`,
   install/list/enable/disable/remove/approve over local CLI and HTTP, the
-  Settings → Extensions panel, the wasmi ABI 3 runtime, guarded HTTP anchors and
+  Settings → Apps panel, the wasmi ABI 3 runtime, guarded HTTP anchors and
   declared UI asset delivery, the sandboxed iframe bridge, and the `hello` and
-  read-only WireGuard reference bundles.
+  read-only WireGuard reference bundles. An app has three layers: `bin/` is a
+  native extension (`anth-extension`), `wasm/` is a plugin (`anth-plugin`) and
+  `web/` is a widget (`anth-widget`).
 - Auth hardening: failures-only login rate limiting with `Retry-After`, session
   listing and revocation.
 - Lifecycle: `restart` re-execs and re-reads the config; `reboot` is refused
@@ -105,7 +107,7 @@ the synthetic network/firewall through the UI and API, and stops both servers.
   `config set`; CI for backend and frontend.
 
 The remaining work (network mutations, firewall, volumes/partitions/accounts,
-extensions and hardening/release) arrives later. The settings page covers policy
+apps and hardening/release) arrives later. The settings page covers policy
 switches, sessions and lifecycle; it is not a full config editor. The plan is
 [docs/design/v0.3.0.md](docs/design/v0.3.0.md); the accepted Phase 0 contracts
 are [docs/design/phase-0-contracts.md](docs/design/phase-0-contracts.md).
@@ -150,7 +152,7 @@ Debug builds default to relative paths (`./config.toml`, `./anth.sock`,
 `./state`) and a development profile that turns every policy switch on, including
 the sensitive ones: terminal, process control and spawn, network management, the
 firewall, volume mount/partition/format, account management with passwords,
-system and privileged groups, unsigned extension installs, file writes and trash.
+system and privileged groups, unsigned app installs, file writes and trash.
 Release builds default to `/etc/anth/config.toml` and `/var/lib/anth` with every
 switch closed.
 
