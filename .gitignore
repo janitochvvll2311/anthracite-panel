@@ -40,6 +40,9 @@ rustc-ice-*.txt
 /backend/apps/
 /backend/apps.d/
 /backend/anth.sock
+# Crash dumps left by a test or daemon run.
+/backend/core.*
+/backend/anth-panel/core.*
 /dist/
 /frontend/node_modules/
 /frontend/*/node_modules/

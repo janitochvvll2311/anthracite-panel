@@ -12,6 +12,10 @@ use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, nativ
 
 pub type SessionResult<T> = Result<T, String>;
 
+/// Serializes PTY creation. `portable-pty` forks and execs; two concurrent
+/// spawns in one process race inside that unsafe path, so one at a time.
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
 /// The control surface of a running terminal.
 ///
 /// Reading is deliberately *not* here. Output arrives on a blocking file
@@ -49,6 +53,7 @@ impl PtySession {
     /// Returns the control half and the read half. The read half blocks, so it
     /// belongs on a dedicated thread.
     pub fn spawn(program: &str, size: TerminalSize) -> SessionResult<(Self, Box<dyn Read + Send>)> {
+        let _spawn = SPAWN_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         size.validate()?;
 
         let pair = native_pty_system()
