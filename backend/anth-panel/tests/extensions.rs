@@ -117,6 +117,7 @@ fn app(name: &str, require_signature: bool, install_from_web: bool) -> (axum::Ro
         config.extensions.clone(),
         root.join("extensions"),
         root.join("extensions.d"),
+        Arc::new(anth_host::exec::DemoExecRunner::new()),
     );
     let daemon = Arc::new(
         Daemon::new(config, paths.clone(), Arc::clone(&logger)).with_extensions(extensions),
