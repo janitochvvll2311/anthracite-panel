@@ -7,6 +7,7 @@
 //! This module owns the management surface. The wasm runtime, HTTP anchors and
 //! the iframe bridge build on [`AppService::load`] and the grant stored here.
 
+pub mod bin;
 pub mod bundle;
 pub mod exec;
 pub mod runtime;
@@ -55,11 +56,59 @@ pub struct AppsView {
     pub apps: Vec<AppView>,
 }
 
-/// What a guest answered.
+/// What an app answered, already typed for the HTTP proxy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppReply {
     pub status: u16,
-    pub value: serde_json::Value,
+    pub content_type: String,
+    pub body: Vec<u8>,
+}
+
+impl AppReply {
+    /// Wraps a wasm guest's JSON value in the same shape a bin app returns.
+    pub fn json(status: u16, value: serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Null => Self {
+                status,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                body: Vec::new(),
+            },
+            serde_json::Value::String(text) => Self {
+                status,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                body: text.into_bytes(),
+            },
+            other => Self {
+                status,
+                content_type: "application/json".to_string(),
+                body: other.to_string().into_bytes(),
+            },
+        }
+    }
+
+    /// The decoded value, for the CLI and tests.
+    pub fn value(&self) -> serde_json::Value {
+        if self.content_type.starts_with("application/json") {
+            serde_json::from_slice(&self.body).unwrap_or(serde_json::Value::Null)
+        } else if self.body.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(String::from_utf8_lossy(&self.body).into_owned())
+        }
+    }
+}
+
+/// One anchor call as the HTTP surface received it.
+#[derive(Debug, Clone)]
+pub struct AnchorRequest {
+    pub method: String,
+    pub path: String,
+    /// Decoded query pairs, for the wasm `anth_http` envelope.
+    pub query: BTreeMap<String, String>,
+    /// The raw query, so a bin app sees exactly what the caller sent.
+    pub raw_query: Option<String>,
+    pub body: Vec<u8>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +117,8 @@ pub struct AppService {
     root: PathBuf,
     grants: GrantStore,
     exec: Arc<dyn ExecRunner>,
+    /// Sockets the proxy may never reach, starting with the panel's own.
+    denied_sockets: Vec<PathBuf>,
 }
 
 impl AppService {
@@ -82,7 +133,23 @@ impl AppService {
             root,
             grants: GrantStore::new(grants_dir),
             exec,
+            denied_sockets: Vec::new(),
         }
+    }
+
+    /// Refuses to proxy to this socket. The panel adds its own socket so a
+    /// bundle cannot use the local peer-credential path to call the API.
+    pub fn deny_socket(mut self, path: impl Into<PathBuf>) -> Self {
+        self.denied_sockets.push(path.into());
+        self
+    }
+
+    fn is_denied_socket(&self, socket: &Path) -> bool {
+        let target = std::fs::canonicalize(socket).unwrap_or_else(|_| socket.to_path_buf());
+        self.denied_sockets.iter().any(|denied| {
+            let denied = std::fs::canonicalize(denied).unwrap_or_else(|_| denied.clone());
+            denied == target
+        })
     }
 
     pub fn config(&self) -> &AppsConfig {
@@ -284,14 +351,15 @@ impl AppService {
         web::read_asset(&self.root, &grant, module)
     }
 
-    /// Runs one HTTP anchor through the guest's `anth_http` entry.
-    pub fn call_anchor(
+    /// Runs one HTTP anchor, through the guest for a wasm app or over the
+    /// grant's Unix socket for a bin app.
+    ///
+    /// The grant decides both the route and the runtime; the caller only
+    /// supplies the request.
+    pub async fn call_anchor(
         &self,
         id: &str,
-        method: &str,
-        path: &str,
-        query: BTreeMap<String, String>,
-        body: Option<String>,
+        request: AnchorRequest,
         log: std::sync::Arc<Logger>,
     ) -> Result<AppReply, WireError> {
         let grant = self
@@ -303,24 +371,64 @@ impl AppService {
                 "extension `{id}` is disabled"
             )));
         }
-        let method = method.to_uppercase();
-        if !grant
-            .api
-            .iter()
-            .any(|anchor| anchor.method.eq_ignore_ascii_case(&method) && anchor.path == path)
-        {
+        let method = request.method.to_uppercase();
+        if !grant.api.iter().any(|anchor| {
+            anchor.method.eq_ignore_ascii_case(&method) && anchor.path == request.path
+        }) {
             return Err(WireError::not_found(format!(
-                "extension `{id}` declares no anchor {method} {path}"
+                "extension `{id}` declares no anchor {method} {}",
+                request.path
             )));
         }
-        let envelope = serde_json::json!({
-            "method": method,
-            "path": path,
-            "query": query,
-            "body": body,
-        })
-        .to_string();
-        self.call(id, "anth_http", &envelope, log)
+
+        let LoadedBundle {
+            manifest,
+            wasm,
+            dir: _,
+        } = self.load(id)?;
+        if let Some(wasm) = wasm {
+            let exec = Arc::clone(&self.exec);
+            let fuel = self.config.fuel;
+            let body = if request.body.is_empty() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&request.body).into_owned())
+            };
+            let envelope = serde_json::json!({
+                "method": method,
+                "path": request.path,
+                "query": request.query,
+                "body": body,
+            })
+            .to_string();
+            return tokio::task::spawn_blocking(move || {
+                let runtime = runtime::Loaded::load(manifest, &wasm, exec)?;
+                let reply = runtime.call("anth_http", &envelope, log, fuel)?;
+                Ok(AppReply::json(reply.status, reply.value))
+            })
+            .await
+            .map_err(|error| WireError::internal(format!("the app task failed: {error}")))?;
+        }
+
+        let socket = grant.bin_socket.ok_or_else(|| {
+            WireError::invalid(format!(
+                "extension `{id}` has no socket, so its anchors cannot be served"
+            ))
+        })?;
+        if self.is_denied_socket(Path::new(&socket)) {
+            return Err(WireError::forbidden(
+                "an app may not proxy the panel's own socket",
+            ));
+        }
+        bin::call(
+            Path::new(&socket),
+            &method,
+            &request.path,
+            request.raw_query.as_deref(),
+            request.body,
+            request.content_type.as_deref(),
+        )
+        .await
     }
 
     /// Runs one CLI request through the guest's `anth_cli` entry.
@@ -356,15 +464,48 @@ impl AppService {
         let wasm = loaded.wasm.as_deref().ok_or_else(|| {
             WireError::new(
                 anth_wire::ErrorKind::Unsupported,
-                "service_runtime_pending",
-                "bin extensions are not wired into the panel yet",
+                "bin_app_has_no_cli",
+                "bin apps are served over HTTP anchors; anth_cli/anth_direct belong to wasm plugins",
             )
         })?;
         let runtime = runtime::Loaded::load(loaded.manifest, wasm, Arc::clone(&self.exec))?;
         let reply = runtime.call(entry, payload, log, self.config.fuel)?;
-        Ok(AppReply {
-            status: reply.status,
-            value: reply.value,
-        })
+        Ok(AppReply::json(reply.status, reply.value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_host::exec::DemoExecRunner;
+
+    #[test]
+    fn the_panel_socket_is_denied_even_behind_a_symlink() {
+        let root = std::env::temp_dir().join(format!(
+            "anth-denied-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("scratch");
+        let panel = root.join("panel.sock");
+        std::fs::write(&panel, b"").expect("panel socket stand-in");
+        let alias = root.join("alias.sock");
+        std::os::unix::fs::symlink(&panel, &alias).expect("symlink");
+
+        let service = AppService::new(
+            AppsConfig::default(),
+            root.join("apps"),
+            root.join("grants"),
+            Arc::new(DemoExecRunner::new()),
+        )
+        .deny_socket(&panel);
+
+        assert!(service.is_denied_socket(&panel));
+        assert!(service.is_denied_socket(&alias));
+        assert!(!service.is_denied_socket(&root.join("other.sock")));
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 }

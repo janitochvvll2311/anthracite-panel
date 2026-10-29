@@ -213,11 +213,25 @@ optional `warning` when the bundle was unsigned. Errors use the common shape:
 `app_capabilities_changed`, or `400 invalid`.
 
 An anchor must match a `[[api]]` method and path in the frozen grant; an
-undeclared pair is `404`. The body is passed to the guest as text, not parsed by
-the host. A guest reply `{"status":200,"body":...}` becomes that HTTP status;
-a string body is `text/plain`, anything else is JSON, and every response is
-`nosniff`. App log lines go to the daemon log with the app id, never to
-the HTTP response.
+undeclared pair is `404`. The body is not parsed by the host.
+
+A **wasm** anchor goes through the guest's `anth_http` entry as text. A guest
+reply `{"status":200,"body":...}` becomes that HTTP status; a string body is
+`text/plain`, anything else is JSON. App log lines go to the daemon log with the
+app id, never to the HTTP response.
+
+A **bin** anchor is proxied as real HTTP over the absolute Unix socket the grant
+froze. The panel sends the method, path, raw query, body and `Content-Type`, and
+accepts the status, `Content-Type` and body. It never forwards the panel's
+`Cookie` or `Authorization`, never forwards hop-by-hop headers, and never
+returns `Set-Cookie` or `Location` from the app. One call is capped at 30
+seconds and 8 MiB of answer; an unreachable socket is `500 app_unavailable`.
+The panel refuses to proxy its own socket, including through a symlink, so a
+bundle cannot borrow the daemon's local peer-credential path.
+
+Every anchor response carries `nosniff`, `no-store` and
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`,
+so an app that answers HTML still cannot run script on the panel origin.
 
 UI assets are served only when a `[[ui]]` slot declares that exact module. The
 handler canonicalises the path, refuses a symlink that leaves the bundle, caps

@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::app_host::{AppReply, AppsView};
+use crate::app_host::{AnchorRequest, AppReply, AppsView};
 use anth_wire::{
     AccountCreate, AccountDelete, AccountGroupCreate, AccountGroupDelete, AccountSetPassword,
     AccountSnapshot, ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk,
@@ -1894,34 +1894,39 @@ async fn app_anchor(
             "an anchor body is at most {MAX_ANCHOR_BODY} bytes"
         ))));
     }
-    let path = canonical_anchor_path(&path);
-    let query = anchor_query(uri.query());
-    let body = if body.is_empty() {
-        None
-    } else {
-        Some(String::from_utf8_lossy(&body).into_owned())
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let anchor = AnchorRequest {
+        method: method.as_str().to_string(),
+        path: canonical_anchor_path(&path),
+        query: anchor_query(uri.query()),
+        raw_query: uri.query().map(str::to_string),
+        body: body.to_vec(),
+        content_type,
     };
-    let method = method.as_str().to_string();
     let logger = Arc::clone(state.daemon.logger());
-    let reply: AppReply =
-        app_blocking(move || service.call_anchor(&id, &method, &path, query, body, logger)).await?;
+    let reply = service.call_anchor(&id, anchor, logger).await?;
     Ok(app_reply_response(reply))
 }
 
 fn app_reply_response(reply: AppReply) -> HttpResponse {
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let (body, content_type) = match reply.value {
-        serde_json::Value::Null => (String::new(), "text/plain; charset=utf-8"),
-        serde_json::Value::String(text) => (text, "text/plain; charset=utf-8"),
-        other => (other.to_string(), "application/json"),
-    };
     (
         status,
         [
-            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::CONTENT_TYPE, reply.content_type),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            // An anchor is data, not a document. Even if an app answers HTML,
+            // the sandbox stops it from running script on the panel origin.
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox".to_string(),
+            ),
         ],
-        body,
+        reply.body,
     )
         .into_response()
 }

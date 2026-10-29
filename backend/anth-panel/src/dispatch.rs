@@ -173,7 +173,8 @@ impl Daemon {
             paths.apps.clone(),
             paths.grants.clone(),
             exec,
-        );
+        )
+        .deny_socket(paths.socket.clone());
         Self {
             config,
             paths,

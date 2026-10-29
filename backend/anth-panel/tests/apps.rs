@@ -479,3 +479,162 @@ async fn a_changed_surface_needs_an_explicit_approval_route() {
     assert_eq!(response.status(), StatusCode::OK);
     fs::remove_dir_all(root).expect("cleanup");
 }
+
+fn bin_manifest(socket: &std::path::Path) -> String {
+    format!(
+        r#"
+manifest_version = 2
+[app]
+id = "org.anth.service"
+version = "0.4.0"
+name = "Service"
+[runtime]
+kind = "bin"
+
+[bin]
+socket = "{}"
+
+[[api]]
+method = "GET"
+path = "/status"
+
+[[api]]
+method = "POST"
+path = "/echo"
+"#,
+        socket.display()
+    )
+}
+
+fn bin_bundle(socket: &std::path::Path) -> Vec<u8> {
+    let manifest = bin_manifest(socket);
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut bytes);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("manifest.toml", options).expect("manifest");
+        zip.write_all(manifest.as_bytes()).expect("write");
+        zip.finish().expect("finish");
+    }
+    bytes.into_inner()
+}
+
+async fn bin_status(
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let cookie = headers
+        .get("cookie")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("none");
+    let body = json!({ "query": uri.query(), "cookie": cookie }).to_string();
+    let mut response = (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response();
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        axum::http::HeaderValue::from_static("leak=1"),
+    );
+    response
+}
+
+async fn bin_echo(body: axum::body::Bytes) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
+}
+
+#[tokio::test]
+async fn a_bin_anchor_is_proxied_over_its_declared_socket() {
+    let socket = scratch("bin-service").join("service.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let service = axum::Router::new()
+        .route("/status", axum::routing::get(bin_status))
+        .route("/echo", axum::routing::post(bin_echo));
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, service).await;
+    });
+
+    let (router, root) = app("extensions-bin", false, true);
+    let install = json!({
+        "bundle_base64": STANDARD.encode(bin_bundle(&socket)),
+        "accept_capabilities": false,
+    });
+    let response = router
+        .clone()
+        .oneshot(post("/api/apps/install", install))
+        .await
+        .expect("install");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/apps/org.anth.service/status?x=1&y=two")
+                .header("cookie", "anth_access=panel-secret")
+                .header("authorization", "Bearer panel-secret")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("status");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.headers().get("set-cookie").is_none(),
+        "a bin app must not set a panel cookie"
+    );
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/json"
+    );
+    let value = body_json(response).await;
+    assert_eq!(value["query"], "x=1&y=two");
+    assert_eq!(value["cookie"], "none");
+
+    let response = router
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method("POST")
+                .uri("/api/apps/org.anth.service/echo")
+                .header("content-type", "text/plain")
+                .body(Body::from("hello bin"))
+                .expect("request"),
+        )
+        .await
+        .expect("echo");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert_eq!(&bytes[..], b"hello bin");
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/apps/org.anth.service/missing")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("missing");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    server.abort();
+    fs::remove_dir_all(root).expect("cleanup");
+}

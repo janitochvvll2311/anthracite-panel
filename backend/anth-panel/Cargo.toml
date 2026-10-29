@@ -18,6 +18,7 @@ crc32fast.workspace = true
 ed25519-dalek.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
+http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 bytes.workspace = true
@@ -42,7 +43,6 @@ wasmi_core = "2"
 zip.workspace = true
 
 [dev-dependencies]
-http-body-util.workspace = true
 
 proptest = "1"
 wat = "1"

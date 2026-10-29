@@ -879,7 +879,8 @@ fn app_command(path: &std::path::Path, command: &AppCommand) -> CliResult {
         paths.apps,
         paths.grants,
         std::sync::Arc::new(anth_panel::app_host::exec::SystemExecRunner::unavailable()),
-    );
+    )
+    .deny_socket(paths.socket.clone());
     match command {
         AppCommand::List => {
             let view = service
@@ -966,7 +967,7 @@ fn app_command(path: &std::path::Path, command: &AppCommand) -> CliResult {
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
             println!(
                 "{}",
-                serde_json::json!({ "status": reply.status, "value": reply.value })
+                serde_json::json!({ "status": reply.status, "value": reply.value() })
             );
             if reply.status >= 400 {
                 Err((1, String::new()))
