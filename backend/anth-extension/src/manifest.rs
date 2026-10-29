@@ -32,7 +32,7 @@ pub const ABI_VERSION: u32 = 3;
 pub const MANIFEST_FILE: &str = "manifest.toml";
 pub const WASM_MANIFEST_FILE: &str = "wasm/manifest.toml";
 pub const WEB_MANIFEST_FILE: &str = "web/manifest.toml";
-pub const SERVICE_MANIFEST_FILE: &str = "service/manifest.toml";
+pub const BIN_MANIFEST_FILE: &str = "bin/manifest.toml";
 pub const SIGNATURE_FILE: &str = "manifest.sig";
 pub const WASM_FILE: &str = "wasm/extension.wasm";
 
@@ -42,7 +42,7 @@ pub const MANIFEST_FILES: [&str; 4] = [
     MANIFEST_FILE,
     WASM_MANIFEST_FILE,
     WEB_MANIFEST_FILE,
-    SERVICE_MANIFEST_FILE,
+    BIN_MANIFEST_FILE,
 ];
 
 /// Programs a capability may name. The allowlist is the authority: a manifest
@@ -61,7 +61,7 @@ pub struct ExtensionManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm: Option<WasmSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service: Option<ServiceSection>,
+    pub bin: Option<BinSection>,
     #[serde(default)]
     pub capability: Vec<Capability>,
     #[serde(default)]
@@ -80,7 +80,7 @@ pub struct RuntimeSection {
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeKind {
     Wasm,
-    Service,
+    Bin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,7 +103,7 @@ pub struct WasmSection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ServiceSection {
+pub struct BinSection {
     pub socket: String,
 }
 
@@ -215,14 +215,14 @@ impl ExtensionManifest {
                 manifest.ui.push(slot);
             }
         }
-        if let Some(bytes) = files.get(SERVICE_MANIFEST_FILE) {
-            let part: ServiceLayer = parse_layer(bytes, SERVICE_MANIFEST_FILE)?;
-            if manifest.service.is_some() {
+        if let Some(bytes) = files.get(BIN_MANIFEST_FILE) {
+            let part: BinLayer = parse_layer(bytes, BIN_MANIFEST_FILE)?;
+            if manifest.bin.is_some() {
                 return Err(WireError::invalid(
-                    "the service section is declared in both the root and the layer",
+                    "the bin section is declared in both the root and the layer",
                 ));
             }
-            manifest.service = Some(part.service);
+            manifest.bin = Some(part.bin);
         }
         manifest.validate()?;
         manifest.normalize();
@@ -248,9 +248,9 @@ impl ExtensionManifest {
         }
         match self.runtime.kind {
             RuntimeKind::Wasm => {
-                if self.service.is_some() {
+                if self.bin.is_some() {
                     return Err(WireError::invalid(
-                        "a wasm extension cannot declare a service section",
+                        "a wasm extension cannot declare a bin section",
                     ));
                 }
                 let wasm = self.wasm.as_ref().ok_or_else(|| {
@@ -270,26 +270,27 @@ impl ExtensionManifest {
                 }
                 validate_sha256(&wasm.sha256, "the module")?;
             }
-            RuntimeKind::Service => {
+            RuntimeKind::Bin => {
                 if self.wasm.is_some() {
                     return Err(WireError::invalid(
-                        "a service extension cannot declare a wasm section",
+                        "a bin extension cannot declare a wasm section",
                     ));
                 }
                 if !self.capability.is_empty() {
                     return Err(WireError::invalid(
-                        "a service extension declares routes, not capabilities",
+                        "a bin extension declares routes, not capabilities",
                     ));
                 }
-                let service = self.service.as_ref().ok_or_else(|| {
-                    WireError::invalid("a service extension needs a `[service]` section")
-                })?;
+                let service = self
+                    .bin
+                    .as_ref()
+                    .ok_or_else(|| WireError::invalid("a bin extension needs a `[bin]` section"))?;
                 if !service.socket.starts_with('/')
                     || service.socket.contains("..")
                     || service.socket.len() > 256
                 {
                     return Err(WireError::invalid(
-                        "a service socket must be an absolute path without `..`",
+                        "a bin socket must be an absolute path without `..`",
                     ));
                 }
             }
@@ -441,7 +442,7 @@ impl ExtensionManifest {
     pub fn surface(&self) -> ExtensionSurface {
         ExtensionSurface {
             runtime: self.runtime.kind,
-            service_socket: self.service.as_ref().map(|service| service.socket.clone()),
+            bin_socket: self.bin.as_ref().map(|service| service.socket.clone()),
             capability: self.capability.clone(),
             api: self.api.clone(),
             ui: self.ui.clone(),
@@ -465,7 +466,7 @@ impl ExtensionManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionSurface {
     pub runtime: RuntimeKind,
-    pub service_socket: Option<String>,
+    pub bin_socket: Option<String>,
     pub capability: Vec<Capability>,
     pub api: Vec<Anchor>,
     pub ui: Vec<UiSlot>,
@@ -761,9 +762,9 @@ mod proptests {
                         prop_assert_eq!(wasm.abi, ABI_VERSION);
                         prop_assert_eq!(wasm.sha256.len(), 64);
                     }
-                    RuntimeKind::Service => {
+                    RuntimeKind::Bin => {
                         prop_assert!(manifest.wasm.is_none());
-                        prop_assert!(manifest.service.as_ref().is_some_and(|service| service.socket.starts_with('/')));
+                        prop_assert!(manifest.bin.as_ref().is_some_and(|service| service.socket.starts_with('/')));
                     }
                 }
                 prop_assert!(validate_id(&manifest.extension.id).is_ok());
@@ -796,11 +797,11 @@ struct WebLayer {
     ui: Vec<UiSlot>,
 }
 
-/// `service/manifest.toml`.
+/// `bin/manifest.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ServiceLayer {
-    service: ServiceSection,
+struct BinLayer {
+    bin: BinSection,
 }
 
 fn parse_layer<T: serde::de::DeserializeOwned>(bytes: &[u8], name: &str) -> Result<T, WireError> {
@@ -890,18 +891,14 @@ name = "Split"
     }
 
     #[test]
-    fn a_service_manifest_has_no_wasm_and_freezes_the_socket() {
-        let text =
-            core("[runtime]\nkind = \"service\"\n[service]\nsocket = \"/run/anth/podman.sock\"");
+    fn a_bin_manifest_has_no_wasm_and_freezes_the_socket() {
+        let text = core("[runtime]\nkind = \"bin\"\n[bin]\nsocket = \"/run/anth/podman.sock\"");
         let manifest = ExtensionManifest::parse(&text).expect("manifest");
-        assert_eq!(manifest.runtime.kind, RuntimeKind::Service);
+        assert_eq!(manifest.runtime.kind, RuntimeKind::Bin);
         assert!(manifest.wasm.is_none());
         let grant = crate::ExtensionGrant::from_manifest(&manifest, "c".repeat(64), None);
-        assert_eq!(grant.runtime, RuntimeKind::Service);
-        assert_eq!(
-            grant.service_socket.as_deref(),
-            Some("/run/anth/podman.sock")
-        );
+        assert_eq!(grant.runtime, RuntimeKind::Bin);
+        assert_eq!(grant.bin_socket.as_deref(), Some("/run/anth/podman.sock"));
         assert!(grant.wasm_sha256.is_none());
     }
 }

@@ -23,7 +23,7 @@ wasm/manifest.toml     wasm artifact + capabilities
 wasm/extension.wasm    guest module (ABI 3)
 web/manifest.toml      API anchors + UI slots
 web/<module>.js|css    declared UI assets
-service/manifest.toml  service socket (service runtime)
+bin/manifest.toml  bin socket (bin runtime)
 ```
 
 - The root `manifest.toml` is required and owns `manifest_version`, `[extension]`
@@ -88,10 +88,10 @@ module = "hello.js"       # resolves to web/hello.js
 sha256 = "<64 hex characters>"
 ```
 
-For a service extension, `service/manifest.toml` carries:
+For a bin extension, `bin/manifest.toml` carries:
 
 ```toml
-[service]
+[bin]
 socket = "/run/user/1000/anth-podman.sock"
 ```
 

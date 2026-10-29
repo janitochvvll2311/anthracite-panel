@@ -26,7 +26,7 @@ use sha2::{Digest as _, Sha256};
 
 use anth_extension::grants::{ExtensionGrant, GrantStore};
 use anth_extension::manifest::{
-    ExtensionManifest as Manifest, MANIFEST_FILE, MANIFEST_FILES, SERVICE_MANIFEST_FILE,
+    BIN_MANIFEST_FILE, ExtensionManifest as Manifest, MANIFEST_FILE, MANIFEST_FILES,
     SIGNATURE_FILE, WASM_FILE, WASM_MANIFEST_FILE, WEB_MANIFEST_FILE, manifest_message,
 };
 use anth_extension::signature;
@@ -86,7 +86,7 @@ fn is_allowed_member(name: &str) -> bool {
     name == MANIFEST_FILE
         || name == WASM_MANIFEST_FILE
         || name == WEB_MANIFEST_FILE
-        || name == SERVICE_MANIFEST_FILE
+        || name == BIN_MANIFEST_FILE
         || name == WASM_FILE
         || name == SIGNATURE_FILE
         || (name.starts_with("web/")
@@ -908,8 +908,8 @@ id = "org.anth.service"
 version = "0.4.0"
 name = "Service"
 [runtime]
-kind = "service"
-[service]
+kind = "bin"
+[bin]
 socket = "/run/anth/service.sock"
 [[api]]
 method = "GET"
@@ -922,7 +922,7 @@ path = "/status"
         ]);
         let installed = service.install_bytes(&bundle, false).expect("install");
         assert_eq!(
-            installed.grant.service_socket.as_deref(),
+            installed.grant.bin_socket.as_deref(),
             Some("/run/anth/service.sock")
         );
         assert!(installed.grant.wasm_sha256.is_none());

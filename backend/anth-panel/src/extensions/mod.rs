@@ -361,7 +361,7 @@ impl ExtensionService {
             WireError::new(
                 anth_wire::ErrorKind::Unsupported,
                 "service_runtime_pending",
-                "service extensions are not wired into the panel yet",
+                "bin extensions are not wired into the panel yet",
             )
         })?;
         let runtime = runtime::Loaded::load(loaded.manifest, wasm, Arc::clone(&self.exec))?;

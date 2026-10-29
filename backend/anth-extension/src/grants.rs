@@ -41,7 +41,7 @@ pub struct ExtensionGrant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service_socket: Option<String>,
+    pub bin_socket: Option<String>,
     pub capability: Vec<Capability>,
     pub api: Vec<Anchor>,
     pub ui: Vec<UiSlot>,
@@ -65,10 +65,7 @@ impl ExtensionGrant {
             manifest_sha256,
             manifest_signature,
             wasm_sha256: manifest.wasm.as_ref().map(|wasm| wasm.sha256.clone()),
-            service_socket: manifest
-                .service
-                .as_ref()
-                .map(|service| service.socket.clone()),
+            bin_socket: manifest.bin.as_ref().map(|bin| bin.socket.clone()),
             capability: manifest.capability.clone(),
             api: manifest.api.clone(),
             ui: manifest.ui.clone(),
@@ -79,7 +76,7 @@ impl ExtensionGrant {
     pub fn surface(&self) -> ExtensionSurface {
         ExtensionSurface {
             runtime: self.runtime,
-            service_socket: self.service_socket.clone(),
+            bin_socket: self.bin_socket.clone(),
             capability: self.capability.clone(),
             api: self.api.clone(),
             ui: self.ui.clone(),
