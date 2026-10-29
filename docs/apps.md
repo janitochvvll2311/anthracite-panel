@@ -6,6 +6,11 @@ HTTP anchors, iframe bridge and the `hello`/WireGuard reference bundles are the
 next cuts; this document marks what is already enforced and what is still
 pending.
 
+The v0.4.0 capability migration changes this model: wasm-only apps, typed
+exports/imports and a registry. The target contract is in
+[capabilities.md](capabilities.md); the sections below describe the manifest v2
+that the daemon still enforces.
+
 An app extends the panel without receiving authority over the host. The
 manifest is a recipe: it declares which programs an app needs and the shape of
 their arguments. The grant is the policy the operator approved. The guest never

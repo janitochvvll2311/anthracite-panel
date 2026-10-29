@@ -86,6 +86,7 @@ Debug builds default to relative paths (`./config.toml`, `./anth.sock`, `./state
 - `docs/design/ui-reference.md` records the approved Network section as the template for new feature sections: one feed, toolbar state/count/interval/pause, a context strip, a local filter, responsive entity cards and client-derived values. Firewall, Volumes and Accounts follow it.
 - `docs/design/cli-http-parity.md` is the HTTP/CLI inventory. Add its row when a host operation lands; routes without a CLI twin go in its exception table with a reason.
 - `docs/design/client-parity.md` is the Rust/TypeScript client map. Both `anth-client` packages expose one flat client with the same DTO returns, errors, streams and terminal; update the map when an operation lands.
+- `docs/capabilities.md` is the v3 capability contract: wasm-only apps, exact typed exports/imports, namespaced ids, host catalog, grant v3 and approval levels. The daemon still runs manifest v2 until the migration phases land.
 - Docs are written in English, matching the previous trees. Keep them in sync with code as it lands.
 - The root `.gitignore` covers local debug config, secrets, state, app directories, `frontend/node_modules`, `frontend/dist` and the staged `www/`.
 - License is Apache-2.0 (`LICENSE`).
