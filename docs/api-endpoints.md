@@ -1,13 +1,18 @@
 # HTTP API
 
-The panel serves JSON over HTTP and SSE. The same `anth-panel` process can also
-serve the Unix socket.
+The panel serves JSON over HTTP and SSE on TCP and on the Unix socket. The CLI
+is an HTTP client over that socket, authenticated by peer credentials; it uses
+the same routes a browser does. `anth-wire` holds the request and response DTOs.
 
 ## Conventions
 
 - Routes name the command; bodies carry the command's arguments at the top
   level, with no socket `type`/`data` envelope.
-- Every API response carries `X-Anth-Protocol: 2`.
+- Every API response carries `X-Anth-Protocol: 4`. `GET /api/hello` returns
+  `{"protocol_version":4}` and needs no session.
+- The Unix socket requests are authenticated by `peer_cred` (daemon uid or
+  root); they need no cookie or bearer token. A `socket:<uid>` owner is set by
+  the listener and cannot be claimed by a TCP request.
 - Errors use one shape:
 
   ```json
@@ -22,7 +27,7 @@ serve the Unix socket.
 
   `kind` is one of `not_found`, `forbidden`, `unauthorized`, `conflict`,
   `invalid`, `unsupported`, `too_large`, `too_many`, `internal`.
-- The access token lives in the `anth_access` cookie or an
+- Remote requests carry the access token in the `anth_access` cookie or an
   `Authorization: Bearer` header. The refresh token lives in `anth_refresh`,
   scoped to `/api/auth`.
 - Mutating auth requests also check `Origin` against `Host`.
@@ -31,6 +36,12 @@ serve the Unix socket.
 ## `GET /healthz`
 
 Public. Returns `{"status":"ok"}`. It does not read config or credentials.
+
+## `GET /api/hello`
+
+Public. Returns `{"protocol_version":4}`. A client that speaks another version
+stops before it touches a DTO; `X-Anth-Protocol` on every response is the cheap
+check for the rest of the API.
 
 ## Authentication
 
@@ -472,7 +483,7 @@ against `Host` when the header is present.
 | `POST /api/apps/{id}/approve` | `{"accept_capabilities":true}` | — |
 | `GET|POST|PUT|PATCH|DELETE /api/apps/{id}/{*path}` | raw body, max 1 MiB | method/path declared in the grant |
 | `GET /api/apps/{id}/web/{*path}` | — | declared UI module |
-| `GET /e/{id}/{*module}` | — | host-owned iframe bootstrap for a declared module |
+| `GET /app/{id}/{*module}` | — | host-owned iframe bootstrap for a declared module |
 
 Install answers `{id,name,version,capabilities,warning?}`. A signed bundle needs
 `[apps] public_key`; an unsigned one is accepted only when
@@ -755,9 +766,9 @@ of `files.max_upload_bytes`.
 ## Terminal
 
 `GET /api/terminal?cols=80&rows=24` upgrades to a WebSocket. It requires a live
-panel session unless auth is disabled, and the `Origin` header must match
-`Host`. `cols` and `rows` are optional together; omitted means 80×24, and a
-single one is `400`. Sizes outside 1..500 are `400`.
+panel session over TCP or the local peer credentials, and the `Origin` header
+must match `Host` when one is present. `cols` and `rows` are optional together;
+omitted means 80×24, and a single one is `400`. Sizes outside 1..500 are `400`.
 
 The browser and server exchange JSON text frames; bytes are base64:
 
@@ -777,9 +788,11 @@ The browser and server exchange JSON text frames; bytes are base64:
 
 `ready` is sent before any output. An exit carries the remote code when the
 platform reports it. The WebSocket frame cap is 128 KiB. One socket owns one
-PTY; closing it kills the process group. `terminal_disabled`,
-`terminal_capacity` and invalid-size errors are also delivered as an `error`
-frame when they happen after the upgrade.
+PTY; closing it kills the process group. A disabled terminal or an invalid size
+is refused with a normal JSON error before the upgrade (`403
+terminal_disabled`, `400 invalid`); capacity and mid-session failures are
+delivered as an `error` frame after it. The CLI opens this same endpoint over
+the Unix socket.
 
 ## Processes
 

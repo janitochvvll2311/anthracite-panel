@@ -205,7 +205,7 @@ All routes require a live panel session unless auth is disabled. Mutations check
 | `POST /api/apps/{id}/approve` | `{"accept_capabilities":true}` | — |
 | `GET|POST|PUT|PATCH|DELETE /api/apps/{id}/{*path}` | raw body, max 1 MiB | anchor declared in the grant |
 | `GET /api/apps/{id}/web/{*path}` | — | declared UI module |
-| `GET /e/{id}/{*module}` | — | host-owned iframe bootstrap |
+| `GET /app/{id}/{*module}` | — | host-owned iframe bootstrap |
 
 The install answer carries `id`, `name`, `version`, `capabilities` and an
 optional `warning` when the bundle was unsigned. Errors use the common shape:
@@ -287,7 +287,7 @@ A declared UI slot is mounted by `<anth-app-frame>`:
 
 - The iframe uses `sandbox="allow-scripts"` with no `allow-same-origin`, so the
   module has an opaque origin and no panel DOM, cookies or storage.
-- `/e/{id}/{module}` serves a host-owned bootstrap, not the raw module. The
+- `/app/{id}/{module}` serves a host-owned bootstrap, not the raw module. The
   bootstrap inlines the declared source as a blob import, sends `ready`, and
   waits for the parent's init message.
 - The bootstrap CSP is `default-src 'none'`, a per-request nonce for its own

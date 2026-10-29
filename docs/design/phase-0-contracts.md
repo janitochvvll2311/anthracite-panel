@@ -553,8 +553,8 @@ migrate --from FILE [--write]
 
   The sections are Host/OS, CPU + load, Memory and Swap. The exact spacing and
   wording are pinned by render tests; the shape stays stable for `--watch`.
-- `host-info --watch`: one connection; on a TTY overwrite the frame, when
-  redirected separate frames with a blank line; `Ctrl-C` exits `0`; a dropped
+- `host-info --watch`: one SSE stream; on a TTY overwrite the screen, when
+  redirected separate snapshots with a blank line; `Ctrl-C` exits `0`; a dropped
   daemon exits `1`.
 - `auth register` reads the password from the TTY (or `--stdin`), writes
   `secrets.toml` atomically, and closes the web bootstrap.
