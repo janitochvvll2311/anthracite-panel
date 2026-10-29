@@ -1,0 +1,14 @@
+[[api]]
+method = "GET"
+path = "/greeting"
+
+[[api]]
+method = "GET"
+path = "/status"
+
+[[ui]]
+slot = "settings.extension"
+tag = "anth-hello"
+module = "hello.js"
+label = "Hello"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

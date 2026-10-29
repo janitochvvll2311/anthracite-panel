@@ -1,0 +1,16 @@
+# Hello extension: root manifest.
+#
+# The wasm artifact and its capability live in wasm/manifest.toml. The HTTP
+# anchors and UI slot live in web/manifest.toml. package.sh fills the digests
+# and writes manifest.sig.
+
+manifest_version = 2
+
+[extension]
+id = "org.anth.hello"
+alias = "hello"
+version = "0.4.0"
+name = "Hello"
+
+[runtime]
+kind = "wasm"

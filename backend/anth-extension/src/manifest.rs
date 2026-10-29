@@ -9,7 +9,7 @@
 //! argv template whose only variable parts are typed arguments; it never sends
 //! a finished argv. The host validates every value and renders the vector.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use anth_wire::WireError;
 use serde::{Deserialize, Serialize};
@@ -29,9 +29,21 @@ pub const ABI_VERSION: u32 = 3;
 
 /// The module path inside a bundle is pinned, never read from a rewritten
 /// manifest at load time.
-pub const WASM_FILE: &str = "extension.wasm";
-pub const MANIFEST_FILE: &str = "extension.toml";
-pub const SIGNATURE_FILE: &str = "extension.sig";
+pub const MANIFEST_FILE: &str = "manifest.toml";
+pub const WASM_MANIFEST_FILE: &str = "wasm/manifest.toml";
+pub const WEB_MANIFEST_FILE: &str = "web/manifest.toml";
+pub const SERVICE_MANIFEST_FILE: &str = "service/manifest.toml";
+pub const SIGNATURE_FILE: &str = "manifest.sig";
+pub const WASM_FILE: &str = "wasm/extension.wasm";
+
+/// Files that make up one manifest set. The root file is required; layer files
+/// are optional and may be mixed with inline sections.
+pub const MANIFEST_FILES: [&str; 4] = [
+    MANIFEST_FILE,
+    WASM_MANIFEST_FILE,
+    WEB_MANIFEST_FILE,
+    SERVICE_MANIFEST_FILE,
+];
 
 /// Programs a capability may name. The allowlist is the authority: a manifest
 /// cannot introduce a program the host does not know.
@@ -46,7 +58,10 @@ pub struct ExtensionManifest {
     pub manifest_version: u32,
     pub extension: ExtensionSection,
     pub runtime: RuntimeSection,
-    pub wasm: WasmSection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm: Option<WasmSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<ServiceSection>,
     #[serde(default)]
     pub capability: Vec<Capability>,
     #[serde(default)]
@@ -65,6 +80,7 @@ pub struct RuntimeSection {
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeKind {
     Wasm,
+    Service,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,7 +91,6 @@ pub struct ExtensionSection {
     pub alias: Option<String>,
     pub version: String,
     pub name: String,
-    pub abi: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +98,13 @@ pub struct ExtensionSection {
 pub struct WasmSection {
     pub path: String,
     pub sha256: String,
+    pub abi: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceSection {
+    pub socket: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,13 +166,64 @@ impl ExtensionManifest {
     /// Parses and validates a manifest, then sorts its collections so two
     /// manifests that differ only in declaration order compare equal.
     pub fn parse(text: &str) -> Result<Self, WireError> {
-        if text.len() > MAX_MANIFEST_BYTES {
+        let mut files = BTreeMap::new();
+        files.insert(MANIFEST_FILE.to_string(), text.as_bytes().to_vec());
+        Self::parse_files(&files)
+    }
+
+    /// Parses the root file and merges the optional layer manifests.
+    ///
+    /// A layer manifest uses paths relative to its own directory. The loader
+    /// rewrites them to bundle-relative paths once, so the rest of the host only
+    /// sees one canonical manifest.
+    pub fn parse_files(files: &BTreeMap<String, Vec<u8>>) -> Result<Self, WireError> {
+        let core = files
+            .get(MANIFEST_FILE)
+            .ok_or_else(|| WireError::invalid(format!("the bundle has no `{MANIFEST_FILE}`")))?;
+        if core.len() > MAX_MANIFEST_BYTES {
             return Err(WireError::too_large(format!(
                 "the manifest is larger than {MAX_MANIFEST_BYTES} bytes"
             )));
         }
+        let text = std::str::from_utf8(core)
+            .map_err(|_| WireError::invalid(format!("`{MANIFEST_FILE}` is not UTF-8")))?;
         let mut manifest = toml::from_str::<Self>(text)
             .map_err(|error| WireError::invalid(format!("the manifest does not parse: {error}")))?;
+
+        if let Some(bytes) = files.get(WASM_MANIFEST_FILE) {
+            let part: WasmLayer = parse_layer(bytes, WASM_MANIFEST_FILE)?;
+            if let Some(mut wasm) = part.wasm {
+                if manifest.wasm.is_some() {
+                    return Err(WireError::invalid(
+                        "the wasm section is declared in both the root and the layer",
+                    ));
+                }
+                if !wasm.path.starts_with("wasm/") {
+                    wasm.path = format!("wasm/{}", wasm.path);
+                }
+                manifest.wasm = Some(wasm);
+            }
+            manifest.capability.extend(part.capability);
+        }
+        if let Some(bytes) = files.get(WEB_MANIFEST_FILE) {
+            let part: WebLayer = parse_layer(bytes, WEB_MANIFEST_FILE)?;
+            manifest.api.extend(part.api);
+            for mut slot in part.ui {
+                if !slot.module.starts_with("web/") {
+                    slot.module = format!("web/{}", slot.module);
+                }
+                manifest.ui.push(slot);
+            }
+        }
+        if let Some(bytes) = files.get(SERVICE_MANIFEST_FILE) {
+            let part: ServiceLayer = parse_layer(bytes, SERVICE_MANIFEST_FILE)?;
+            if manifest.service.is_some() {
+                return Err(WireError::invalid(
+                    "the service section is declared in both the root and the layer",
+                ));
+            }
+            manifest.service = Some(part.service);
+        }
         manifest.validate()?;
         manifest.normalize();
         Ok(manifest)
@@ -173,19 +246,54 @@ impl ExtensionManifest {
         if self.extension.name.trim().is_empty() {
             return Err(WireError::invalid("the manifest declares no name"));
         }
-        if self.extension.abi != ABI_VERSION {
-            return Err(WireError::invalid(format!(
-                "extension `{}` speaks ABI {}, this daemon speaks {ABI_VERSION}",
-                self.extension.id, self.extension.abi
-            )));
+        match self.runtime.kind {
+            RuntimeKind::Wasm => {
+                if self.service.is_some() {
+                    return Err(WireError::invalid(
+                        "a wasm extension cannot declare a service section",
+                    ));
+                }
+                let wasm = self.wasm.as_ref().ok_or_else(|| {
+                    WireError::invalid("a wasm extension needs a `[wasm]` section")
+                })?;
+                if wasm.path != WASM_FILE {
+                    return Err(WireError::invalid(format!(
+                        "the module path is pinned to `{WASM_FILE}`, the manifest names `{}`",
+                        wasm.path
+                    )));
+                }
+                if wasm.abi != ABI_VERSION {
+                    return Err(WireError::invalid(format!(
+                        "extension `{}` speaks ABI {}, this daemon speaks {ABI_VERSION}",
+                        self.extension.id, wasm.abi
+                    )));
+                }
+                validate_sha256(&wasm.sha256, "the module")?;
+            }
+            RuntimeKind::Service => {
+                if self.wasm.is_some() {
+                    return Err(WireError::invalid(
+                        "a service extension cannot declare a wasm section",
+                    ));
+                }
+                if !self.capability.is_empty() {
+                    return Err(WireError::invalid(
+                        "a service extension declares routes, not capabilities",
+                    ));
+                }
+                let service = self.service.as_ref().ok_or_else(|| {
+                    WireError::invalid("a service extension needs a `[service]` section")
+                })?;
+                if !service.socket.starts_with('/')
+                    || service.socket.contains("..")
+                    || service.socket.len() > 256
+                {
+                    return Err(WireError::invalid(
+                        "a service socket must be an absolute path without `..`",
+                    ));
+                }
+            }
         }
-        if self.wasm.path != WASM_FILE {
-            return Err(WireError::invalid(format!(
-                "the module path is pinned to `{WASM_FILE}`, the manifest names `{}`",
-                self.wasm.path
-            )));
-        }
-        validate_sha256(&self.wasm.sha256, "the module")?;
 
         if self.capability.len() > MAX_ENTRIES
             || self.api.len() > MAX_ENTRIES
@@ -333,6 +441,7 @@ impl ExtensionManifest {
     pub fn surface(&self) -> ExtensionSurface {
         ExtensionSurface {
             runtime: self.runtime.kind,
+            service_socket: self.service.as_ref().map(|service| service.socket.clone()),
             capability: self.capability.clone(),
             api: self.api.clone(),
             ui: self.ui.clone(),
@@ -356,6 +465,7 @@ impl ExtensionManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionSurface {
     pub runtime: RuntimeKind,
+    pub service_socket: Option<String>,
     pub capability: Vec<Capability>,
     pub api: Vec<Anchor>,
     pub ui: Vec<UiSlot>,
@@ -530,13 +640,13 @@ id = "org.anth.hello"
 alias = "hello"
 version = "0.3.0"
 name = "Hello"
-abi = 3
 
 [runtime]
 kind = "wasm"
 
 [wasm]
-path = "extension.wasm"
+path = "wasm/extension.wasm"
+abi = 3
 sha256 = "{}"
 
 [[capability]]
@@ -644,15 +754,154 @@ mod proptests {
         #[test]
         fn arbitrary_manifest_text_never_panics_and_keeps_invariants(text in text()) {
             if let Ok(manifest) = ExtensionManifest::parse(&text) {
-                prop_assert_eq!(manifest.wasm.path.as_str(), WASM_FILE);
-                prop_assert_eq!(manifest.extension.abi, ABI_VERSION);
+                match manifest.runtime.kind {
+                    RuntimeKind::Wasm => {
+                        let wasm = manifest.wasm.as_ref().expect("wasm");
+                        prop_assert_eq!(wasm.path.as_str(), WASM_FILE);
+                        prop_assert_eq!(wasm.abi, ABI_VERSION);
+                        prop_assert_eq!(wasm.sha256.len(), 64);
+                    }
+                    RuntimeKind::Service => {
+                        prop_assert!(manifest.wasm.is_none());
+                        prop_assert!(manifest.service.as_ref().is_some_and(|service| service.socket.starts_with('/')));
+                    }
+                }
                 prop_assert!(validate_id(&manifest.extension.id).is_ok());
-                prop_assert_eq!(manifest.wasm.sha256.len(), 64);
                 prop_assert!(manifest
                     .ui
                     .iter()
                     .all(|slot| slot.module.starts_with("web/") && !slot.module.contains("..")));
             }
         }
+    }
+}
+
+/// `wasm/manifest.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WasmLayer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wasm: Option<WasmSection>,
+    #[serde(default)]
+    capability: Vec<Capability>,
+}
+
+/// `web/manifest.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebLayer {
+    #[serde(default)]
+    api: Vec<Anchor>,
+    #[serde(default)]
+    ui: Vec<UiSlot>,
+}
+
+/// `service/manifest.toml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceLayer {
+    service: ServiceSection,
+}
+
+fn parse_layer<T: serde::de::DeserializeOwned>(bytes: &[u8], name: &str) -> Result<T, WireError> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| WireError::invalid(format!("`{name}` is not UTF-8")))?;
+    toml::from_str(text).map_err(|error| WireError::invalid(format!("`{name}`: {error}")))
+}
+
+/// Stable bytes signed by `manifest.sig`. File order and lengths are explicit,
+/// so a name or a boundary cannot be confused with content.
+pub fn manifest_message(files: &BTreeMap<String, Vec<u8>>) -> Vec<u8> {
+    let mut out = b"anth-extension-manifest-v2\0".to_vec();
+    for name in MANIFEST_FILES {
+        if let Some(bytes) = files.get(name) {
+            out.extend_from_slice(name.as_bytes());
+            out.push(0);
+            out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            out.extend_from_slice(bytes);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    fn core(runtime: &str) -> String {
+        format!(
+            r#"
+manifest_version = 2
+[extension]
+id = "org.anth.split"
+version = "0.4.0"
+name = "Split"
+{runtime}
+"#
+        )
+    }
+
+    #[test]
+    fn layers_can_own_their_manifest_and_paths_are_relative() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            MANIFEST_FILE.to_string(),
+            core("[runtime]\nkind = \"wasm\"").into_bytes(),
+        );
+        files.insert(
+            WASM_MANIFEST_FILE.to_string(),
+            b"[wasm]\npath = \"extension.wasm\"\nabi = 3\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n[[capability]]\nid = \"host.hostname\"\nprogram = \"hostname\"\n".to_vec(),
+        );
+        files.insert(
+            WEB_MANIFEST_FILE.to_string(),
+            format!(
+                "[[api]]\nmethod = \"GET\"\npath = \"/status\"\n\n[[ui]]\nslot = \"settings.extension\"\ntag = \"anth-split\"\nmodule = \"split.js\"\nsha256 = \"{}\"\n",
+                "b".repeat(64)
+            )
+            .into_bytes(),
+        );
+        let manifest = ExtensionManifest::parse_files(&files).expect("manifest");
+        assert_eq!(
+            manifest.wasm.as_ref().expect("wasm").path,
+            "wasm/extension.wasm"
+        );
+        assert_eq!(manifest.ui[0].module, "web/split.js");
+        assert_eq!(manifest.capability.len(), 1);
+        assert_eq!(manifest.api.len(), 1);
+    }
+
+    #[test]
+    fn inline_and_layer_sections_are_mixed() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            MANIFEST_FILE.to_string(),
+            format!(
+                "{}[[capability]]\nid = \"host.uname\"\nprogram = \"uname\"\n",
+                core("[runtime]\nkind = \"wasm\"\n[wasm]\npath = \"wasm/extension.wasm\"\nabi = 3\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"")
+            )
+            .into_bytes(),
+        );
+        files.insert(
+            WASM_MANIFEST_FILE.to_string(),
+            b"[[capability]]\nid = \"host.hostname\"\nprogram = \"hostname\"\n".to_vec(),
+        );
+        let manifest = ExtensionManifest::parse_files(&files).expect("manifest");
+        assert_eq!(manifest.capability.len(), 2);
+    }
+
+    #[test]
+    fn a_service_manifest_has_no_wasm_and_freezes_the_socket() {
+        let text =
+            core("[runtime]\nkind = \"service\"\n[service]\nsocket = \"/run/anth/podman.sock\"");
+        let manifest = ExtensionManifest::parse(&text).expect("manifest");
+        assert_eq!(manifest.runtime.kind, RuntimeKind::Service);
+        assert!(manifest.wasm.is_none());
+        let grant = crate::ExtensionGrant::from_manifest(&manifest, "c".repeat(64), None);
+        assert_eq!(grant.runtime, RuntimeKind::Service);
+        assert_eq!(
+            grant.service_socket.as_deref(),
+            Some("/run/anth/podman.sock")
+        );
+        assert!(grant.wasm_sha256.is_none());
     }
 }

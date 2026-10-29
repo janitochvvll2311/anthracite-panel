@@ -38,12 +38,12 @@ manifest_version = 2
 id = "org.anth.fixed"
 version = "0.3.0"
 name = "Fixed"
-abi = 3
 [runtime]
 kind = "wasm"
 
 [wasm]
-path = "extension.wasm"
+path = "wasm/extension.wasm"
+abi = 3
 sha256 = "{}"
 "#,
         "a".repeat(64)

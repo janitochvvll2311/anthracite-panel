@@ -33,12 +33,15 @@ pub struct ExtensionGrant {
     pub extension_version: String,
     pub runtime: RuntimeKind,
     pub enabled: bool,
-    /// SHA-256 of the raw `extension.toml` bytes the operator approved.
+    /// SHA-256 of the canonical manifest-set message the operator approved.
     pub manifest_sha256: String,
-    /// The detached signature over those bytes, when the bundle had one.
+    /// The detached signature over that message, when the bundle had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest_signature: Option<String>,
-    pub wasm_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_socket: Option<String>,
     pub capability: Vec<Capability>,
     pub api: Vec<Anchor>,
     pub ui: Vec<UiSlot>,
@@ -61,7 +64,11 @@ impl ExtensionGrant {
             enabled: true,
             manifest_sha256,
             manifest_signature,
-            wasm_sha256: manifest.wasm.sha256.clone(),
+            wasm_sha256: manifest.wasm.as_ref().map(|wasm| wasm.sha256.clone()),
+            service_socket: manifest
+                .service
+                .as_ref()
+                .map(|service| service.socket.clone()),
             capability: manifest.capability.clone(),
             api: manifest.api.clone(),
             ui: manifest.ui.clone(),
@@ -72,6 +79,7 @@ impl ExtensionGrant {
     pub fn surface(&self) -> ExtensionSurface {
         ExtensionSurface {
             runtime: self.runtime,
+            service_socket: self.service_socket.clone(),
             capability: self.capability.clone(),
             api: self.api.clone(),
             ui: self.ui.clone(),
@@ -229,12 +237,12 @@ manifest_version = 2
 id = "org.anth.hello"
 version = "0.3.0"
 name = "Hello"
-abi = 3
 [runtime]
 kind = "wasm"
 
 [wasm]
-path = "extension.wasm"
+path = "wasm/extension.wasm"
+abi = 3
 sha256 = "{}"
 "#,
             "a".repeat(64)
@@ -285,11 +293,11 @@ manifest_version = 2
 id = "org.anth.hello"
 version = "0.3.0"
 name = "Hello"
-abi = 3
 [runtime]
 kind = "wasm"
 [wasm]
-path = "extension.wasm"
+path = "wasm/extension.wasm"
+abi = 3
 sha256 = "{}"
 [[capability]]
 id = "host.uname"

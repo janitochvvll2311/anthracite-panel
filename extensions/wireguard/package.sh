@@ -8,24 +8,29 @@ cargo build --release --target wasm32-unknown-unknown \
 wasm=backend/target/wasm32-unknown-unknown/release/anth_plugin_wireguard.wasm
 [ -f "$wasm" ] || { echo "missing $wasm" >&2; exit 1; }
 
-mkdir -p dist/web
-cp "$wasm" dist/extension.wasm
+rm -rf dist
+mkdir -p dist/wasm dist/web
+cp "$wasm" dist/wasm/extension.wasm
 cp web/wireguard.js dist/web/wireguard.js
-wasm_sha=$(sha256sum dist/extension.wasm | cut -d' ' -f1)
+cp manifest.toml dist/manifest.toml
+cp wasm/manifest.toml dist/wasm/manifest.toml
+cp web/manifest.toml dist/web/manifest.toml
+wasm_sha=$(sha256sum dist/wasm/extension.wasm | cut -d' ' -f1)
 asset_sha=$(sha256sum dist/web/wireguard.js | cut -d' ' -f1)
 
 bun -e '
-const [src, dst, wasm, asset] = process.argv.slice(1)
-let i = 0
-const text = (await Bun.file(src).text()).replace(/sha256 = "0+"/g, () =>
-  `sha256 = "${[wasm, asset][i++]}"`)
-if (i !== 2) throw new Error(`expected 2 zero digests, replaced ${i}`)
-await Bun.write(dst, text)
-' extension.toml dist/extension.toml "$wasm_sha" "$asset_sha"
+const [path, digest] = process.argv.slice(1)
+const text = (await Bun.file(path).text()).replace(/sha256 = "0+"/, `sha256 = "${digest}"`)
+await Bun.write(path, text)
+' dist/wasm/manifest.toml "$wasm_sha"
+bun -e '
+const [path, digest] = process.argv.slice(1)
+const text = (await Bun.file(path).text()).replace(/sha256 = "0+"/, `sha256 = "${digest}"`)
+await Bun.write(path, text)
+' dist/web/manifest.toml "$asset_sha"
 
-bun ../sign.mjs dist/extension.toml dist/extension.sig dist/wireguard-key.pem dist/wireguard-public-key.txt
+bun ../sign.mjs dist dist/manifest.sig dist/wireguard-key.pem dist/wireguard-public-key.txt
 
-rm -f dist/org.anth.wireguard.zip
-(cd dist && zip -qr org.anth.wireguard.zip extension.toml extension.wasm extension.sig web)
+(cd dist && zip -qr org.anth.wireguard.zip manifest.toml manifest.sig wasm web)
 echo "wrote dist/org.anth.wireguard.zip"
 echo "public key: $(cat dist/wireguard-public-key.txt)"

@@ -36,7 +36,7 @@ Enforced today:
 - **Commands.** `ip`, `nft`, `mount`, `sfdisk`, `mkfs`, shadow-utils and extension
   capabilities are direct argv vectors; no shell. Values cannot start with `-`
   where the program would read them as flags.
-- **Extensions.** Ed25519 over `extension.toml`, per-file SHA-256, a frozen grant,
+- **Extensions.** Ed25519 over `manifest.toml`, per-file SHA-256, a frozen grant,
   archive member/size caps, a wasmi sandbox (fuel, memory, deadline, call and
   log budgets), grant-checked anchors, and an opaque-origin iframe with CSP and
   a narrow `postMessage` bridge.

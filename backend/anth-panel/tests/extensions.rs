@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::collections::BTreeMap;
+
+use anth_extension::manifest::{MANIFEST_FILE, manifest_message};
 use anth_extension::signature;
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
@@ -46,12 +49,12 @@ id = "org.anth.hello"
 alias = "hello"
 version = "0.3.0"
 name = "Hello"
-abi = 3
 [runtime]
 kind = "wasm"
 
 [wasm]
-path = "extension.wasm"
+path = "wasm/extension.wasm"
+abi = 3
 sha256 = "{}"
 
 [[capability]]
@@ -71,24 +74,30 @@ fn sha2_bytes(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
+fn sign_manifest(text: &str) -> String {
+    let mut files = BTreeMap::new();
+    files.insert(MANIFEST_FILE.to_string(), text.as_bytes().to_vec());
+    signature::encode_hex(&key().sign(&manifest_message(&files)).to_bytes())
+}
+
 fn bundle(capability: &str, signed: bool) -> Vec<u8> {
     bundle_with_wasm(b"\0asm\x01\0\0\0", capability, signed)
 }
 
 fn bundle_with_wasm(wasm: &[u8], capability: &str, signed: bool) -> Vec<u8> {
     let manifest = manifest(wasm, capability);
-    let signature =
-        signed.then(|| signature::encode_hex(&key().sign(manifest.as_bytes()).to_bytes()));
+    let signature = signed.then(|| sign_manifest(&manifest));
     let mut bytes = std::io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut bytes);
         let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("extension.toml", options).expect("manifest");
+        zip.start_file("manifest.toml", options).expect("manifest");
         zip.write_all(manifest.as_bytes()).expect("write");
-        zip.start_file("extension.wasm", options).expect("wasm");
+        zip.start_file("wasm/extension.wasm", options)
+            .expect("wasm");
         zip.write_all(wasm).expect("write");
         if let Some(signature) = &signature {
-            zip.start_file("extension.sig", options).expect("signature");
+            zip.start_file("manifest.sig", options).expect("signature");
             zip.write_all(signature.as_bytes()).expect("write");
         }
         zip.finish().expect("finish");
@@ -239,16 +248,17 @@ sha256 = "{}"
 "#,
         signature::encode_hex(&sha2_bytes(asset))
     ));
-    let signature = signature::encode_hex(&key().sign(manifest.as_bytes()).to_bytes());
+    let signature = sign_manifest(&manifest);
     let mut bytes = std::io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut bytes);
         let options = zip::write::SimpleFileOptions::default();
-        zip.start_file("extension.toml", options).expect("manifest");
+        zip.start_file("manifest.toml", options).expect("manifest");
         zip.write_all(manifest.as_bytes()).expect("write");
-        zip.start_file("extension.wasm", options).expect("wasm");
+        zip.start_file("wasm/extension.wasm", options)
+            .expect("wasm");
         zip.write_all(wasm).expect("write");
-        zip.start_file("extension.sig", options).expect("signature");
+        zip.start_file("manifest.sig", options).expect("signature");
         zip.write_all(signature.as_bytes()).expect("write");
         zip.start_file("web/hello.js", options).expect("asset");
         zip.write_all(asset).expect("write");

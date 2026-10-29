@@ -190,12 +190,12 @@ manifest_version = 2
 id = "org.anth.hello"
 version = "0.3.0"
 name = "Hello"
-abi = 3
 [runtime]
 kind = "wasm"
 
 [wasm]
-path = "extension.wasm"
+path = "wasm/extension.wasm"
+abi = 3
 sha256 = "{}"
 
 [[capability]]
@@ -272,11 +272,11 @@ manifest_version = 2
 id = "org.anth.wireguard"
 version = "0.3.0"
 name = "WireGuard"
-abi = 3
 [runtime]
 kind = "wasm"
 [wasm]
-path = "extension.wasm"
+path = "wasm/extension.wasm"
+abi = 3
 sha256 = "{}"
 [[capability]]
 id = "wg.show"

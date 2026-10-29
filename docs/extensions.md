@@ -14,41 +14,53 @@ the vector from the frozen template.
 
 ## Bundle format
 
-```
-extension.toml        manifest
-extension.wasm        guest module (ABI 3)
-extension.sig         detached Ed25519 signature over extension.toml (optional
-                   when require_signature = false)
-web/<module>.js    declared UI modules, each with a sha256
-web/<module>.css
+A bundle can keep the whole manifest in the root file or split it by layer:
+
+```text
+manifest.toml          root: extension + runtime
+manifest.sig           Ed25519 over the manifest set
+wasm/manifest.toml     wasm artifact + capabilities
+wasm/extension.wasm    guest module (ABI 3)
+web/manifest.toml      API anchors + UI slots
+web/<module>.js|css    declared UI assets
+service/manifest.toml  service socket (service runtime)
 ```
 
-- `extension.sig` signs the raw bytes of `extension.toml`, hex encoded (128
-  characters).
-- The manifest declares the sha256 of the module and of every UI module, so one
-  signature approves every byte the host will load or serve.
+- The root `manifest.toml` is required and owns `manifest_version`, `[extension]`
+  and `[runtime]`.
+- The layer files are optional. A single root file may contain all sections.
+- A layer manifest writes paths relative to its own directory. The host rewrites
+  them to bundle-relative paths once.
+- `manifest.sig` signs the ordered manifest set, not only the root file. The
+  message includes each file name, length and bytes.
+- The manifest declares the sha256 of the wasm module and of every UI module.
 - `manifest_version = 2` and `abi = 3` are explicit; an unknown value is refused.
-- `extension.wasm` is pinned; the manifest cannot point the module somewhere else.
+- `wasm/extension.wasm` is pinned; the manifest cannot point the module somewhere
+  else.
 - UI modules live under `web/`, end in `.js`, `.mjs` or `.css`, and must appear
   in a `[[ui]]` slot with their digest.
 
-Example:
+### Split example
 
 ```toml
+# manifest.toml
 manifest_version = 2
 
 [extension]
 id = "org.anth.hello"
 alias = "hello"
-version = "0.3.0"
+version = "0.4.0"
 name = "Hello"
-abi = 3
 
 [runtime]
 kind = "wasm"
+```
 
+```toml
+# wasm/manifest.toml
 [wasm]
-path = "extension.wasm"
+path = "extension.wasm"   # resolves to wasm/extension.wasm
+abi = 3
 sha256 = "<64 hex characters>"
 
 [[capability]]
@@ -61,7 +73,10 @@ id = "host.named"
 program = "hostname"
 args = ["--alias", "{name}"]
 accept = [{ name = "name", type = "string" }]
+```
 
+```toml
+# web/manifest.toml
 [[api]]
 method = "GET"
 path = "/status"
@@ -69,9 +84,17 @@ path = "/status"
 [[ui]]
 slot = "settings.extension"
 tag = "anth-hello"
-module = "web/hello.js"
+module = "hello.js"       # resolves to web/hello.js
 sha256 = "<64 hex characters>"
 ```
+
+For a service extension, `service/manifest.toml` carries:
+
+```toml
+[service]
+socket = "/run/user/1000/anth-podman.sock"
+```
+
 
 Programs are limited to the host allowlist: `hostname`, `uname`, `id` and `wg`.
 Capability ids and UI slots are lowercase dotted names. Argument placeholders
@@ -109,9 +132,9 @@ Nothing appears under the extension's id until every step passes:
 
 1. Open the zip and reject path escapes, symlinks, duplicate names, unexpected
    members, more than 512 entries or more than 32 MiB expanded.
-2. Read `extension.toml`, hash it and verify `extension.sig` when present.
+2. Read the manifest set, hash it and verify `manifest.sig` when present.
 3. Parse and validate the manifest.
-4. Hash `extension.wasm` and every declared UI module.
+4. Hash `wasm/extension.wasm` and every declared UI module.
 5. Compare the capability, anchor and UI surface with an existing grant. A
    changed surface is `409 extension_capabilities_changed` until
    `extension approve --accept-capabilities` (or the install's

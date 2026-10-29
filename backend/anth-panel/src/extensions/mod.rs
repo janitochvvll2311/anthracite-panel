@@ -357,7 +357,14 @@ impl ExtensionService {
         log: std::sync::Arc<Logger>,
     ) -> Result<ExtensionReply, WireError> {
         let loaded = self.load(id)?;
-        let runtime = runtime::Loaded::load(loaded.manifest, &loaded.wasm, Arc::clone(&self.exec))?;
+        let wasm = loaded.wasm.as_deref().ok_or_else(|| {
+            WireError::new(
+                anth_wire::ErrorKind::Unsupported,
+                "service_runtime_pending",
+                "service extensions are not wired into the panel yet",
+            )
+        })?;
+        let runtime = runtime::Loaded::load(loaded.manifest, wasm, Arc::clone(&self.exec))?;
         let reply = runtime.call(entry, payload, log, self.config.fuel)?;
         Ok(ExtensionReply {
             status: reply.status,

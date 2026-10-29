@@ -86,7 +86,7 @@ the synthetic network/firewall through the UI and API, and stops both servers.
   system-id and privileged-group opt-ins, over socket, HTTP, CLI and the
   Accounts section's Users and Groups tabs.
 - Extensions: signed zip bundles with manifest v2 and ABI 3, Ed25519 over
-  `extension.toml`, per-file sha256, frozen per-extension grants under `extensions.d/`,
+  `manifest.toml`, per-file sha256, frozen per-extension grants under `extensions.d/`,
   install/list/enable/disable/remove/approve over local CLI and HTTP, the
   Settings → Extensions panel, the wasmi ABI 3 runtime, guarded HTTP anchors and
   declared UI asset delivery, the sandboxed iframe bridge, and the `hello` and
