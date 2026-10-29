@@ -1,4 +1,7 @@
 export * from './accounts'
+export * from './errors'
+export * from './format'
+export * from './paths'
 export * from './app-frame'
 export * from './apps'
 export * from './code-editor'

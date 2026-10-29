@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "anth-client": "workspace:*",
     "anth-wire": "workspace:*",
     "@codemirror/language": "^6.13.1",
     "@codemirror/language-data": "^6.5.2",

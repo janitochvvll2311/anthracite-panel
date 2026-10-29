@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
 import './processes'
-import { HttpProcessesClient } from 'anth-wire'
+import { HttpProcessesClient } from 'anth-client'
 import type {
   ProcessSnapshot,
   ProcessesClient,

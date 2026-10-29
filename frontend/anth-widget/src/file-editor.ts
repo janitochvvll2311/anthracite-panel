@@ -5,9 +5,11 @@ import { localized, msg, str } from '@lit/localize'
 
 import { createCodeEditor } from './code-editor'
 import type { CodeEditor } from './code-editor'
-import { describeError } from 'anth-wire'
+import { describeError } from './errors'
+
 import type { FilesClient } from 'anth-wire'
-import { join } from 'anth-wire'
+import { join } from './paths'
+
 import './icon'
 
 /** Fired on `document` after an editor writes a file. */

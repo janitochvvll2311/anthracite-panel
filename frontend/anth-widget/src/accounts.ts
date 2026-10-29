@@ -19,7 +19,8 @@ import type {
   AccountSnapshot,
   AccountUser,
 } from 'anth-wire'
-import { describeError } from 'anth-wire'
+import { describeError } from './errors'
+
 import {
   canDeleteGroup,
   canDeleteUser,

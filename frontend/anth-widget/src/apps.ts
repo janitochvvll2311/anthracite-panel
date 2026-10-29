@@ -6,7 +6,8 @@ import { localized, msg, str } from '@lit/localize'
 
 import './icon'
 import './app-frame'
-import { describeError } from 'anth-wire'
+import { describeError } from './errors'
+
 import type { AppView, AppsClient, AppsView } from 'anth-wire'
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'

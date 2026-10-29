@@ -17,16 +17,11 @@ import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg } from '@lit/localize'
 
 import type { HostInfo, HostInfoClient } from 'anth-wire'
-import { describeError } from 'anth-wire'
+import { describeError } from './errors'
+
 import './icon'
-import {
-  formatKib,
-  formatLoad,
-  formatPercent,
-  formatUptime,
-  loadPercent,
-  usagePercent,
-} from 'anth-wire'
+import { formatKib, formatLoad, formatPercent, formatUptime, loadPercent, usagePercent } from './format'
+
 
 /** The intervals the selector offers, in milliseconds. */
 const INTERVALS = [1000, 2000, 5000, 10000, 30000] as const

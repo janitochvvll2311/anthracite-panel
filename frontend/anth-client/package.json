@@ -1,0 +1,12 @@
+{
+  "name": "anth-client",
+  "private": true,
+  "version": "0.4.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "anth-wire": "workspace:*"
+  }
+}

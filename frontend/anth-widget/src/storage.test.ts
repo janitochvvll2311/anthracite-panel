@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
 import './storage'
-import { HttpStorageClient } from 'anth-wire'
+import { HttpStorageClient } from 'anth-client'
 import type { StorageClient, VolumeDevice, VolumeMount, VolumeSnapshot } from 'anth-wire'
 
 function device(overrides: Partial<VolumeDevice> = {}): VolumeDevice {

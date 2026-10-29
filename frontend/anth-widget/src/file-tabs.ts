@@ -6,7 +6,8 @@ import { localized, msg } from '@lit/localize'
 import type { FilesClient } from 'anth-wire'
 import './file-editor'
 import type { AnthFileEditor } from './file-editor'
-import { baseName, join } from 'anth-wire'
+import { baseName, join } from './paths'
+
 import './icon'
 
 /** Fired when the last tab closes, so the window goes away too. */

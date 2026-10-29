@@ -3,12 +3,15 @@ import { customElement, state } from 'lit/decorators.js'
 import { localized, msg, str } from '@lit/localize'
 
 import { encodeBase64 } from 'anth-wire'
-import { describeError } from 'anth-wire'
+import { describeError } from './errors'
+
 import { FILES_CHANGED_EVENT } from './file-editor'
-import { formatBytes } from 'anth-wire'
-import { parseErrorBody } from 'anth-wire'
+import { formatBytes } from './format'
+
+import { parseErrorBody } from 'anth-client'
 import './icon'
-import { baseName, join } from 'anth-wire'
+import { baseName, join } from './paths'
+
 
 type Direction = 'upload' | 'download'
 type Status = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'

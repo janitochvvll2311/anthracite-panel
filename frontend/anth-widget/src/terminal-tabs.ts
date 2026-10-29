@@ -20,7 +20,7 @@ import {
   ANTH_TERMINAL_STATUS_EVENT,
 } from './terminal-view'
 import { applyStickyModifiers } from './lib/terminal/modifiers'
-import { WebSocketTerminalTransport } from 'anth-wire'
+import { WebSocketTerminalTransport } from 'anth-client'
 import type { TerminalStatus } from 'anth-wire'
 
 /** Fired when the last terminal tab closes. */

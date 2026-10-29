@@ -3,8 +3,10 @@ import { customElement, property, state } from 'lit/decorators.js'
 import { live } from 'lit/directives/live.js'
 import { localized, msg, str } from '@lit/localize'
 
-import { formatBytes } from 'anth-wire'
-import { describeError } from 'anth-wire'
+import { formatBytes } from './format'
+
+import { describeError } from './errors'
+
 import { openFileEditor } from './editor-window'
 import { FILES_CHANGED_EVENT } from './file-editor'
 import type {
@@ -15,8 +17,9 @@ import type {
   TrashEntry,
   TrashListing,
 } from 'anth-wire'
-import type { ResponseError } from 'anth-wire'
-import { join, normalize, parent } from 'anth-wire'
+import type { ResponseError } from 'anth-client'
+import { join, normalize, parent } from './paths'
+
 import { queueDownload, queueUpload } from './transfers'
 import './fab-menu'
 import './icon'

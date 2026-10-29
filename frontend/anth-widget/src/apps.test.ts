@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
 import './apps'
-import { HttpAppsClient } from 'anth-wire'
+import { HttpAppsClient } from 'anth-client'
 import type { AppView, AppsClient, AppsView } from 'anth-wire'
 
 function app(overrides: Partial<AppView> = {}): AppView {

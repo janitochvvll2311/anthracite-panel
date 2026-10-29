@@ -12,8 +12,10 @@ import { customElement, property, state } from 'lit/decorators.js'
 import { localized, msg, str } from '@lit/localize'
 
 import './icon'
-import { describeError } from 'anth-wire'
-import { formatBytes, formatPercent } from 'anth-wire'
+import { describeError } from './errors'
+
+import { formatBytes, formatPercent } from './format'
+
 import {
   allowedDisks,
   deviceRows,

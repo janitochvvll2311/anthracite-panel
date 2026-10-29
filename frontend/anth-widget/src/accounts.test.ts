@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
 import './accounts'
-import { HttpAccountClient } from 'anth-wire'
+import { HttpAccountClient } from 'anth-client'
 import type {
   AccountClient,
   AccountGroup,

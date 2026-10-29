@@ -3,14 +3,14 @@
   "private": true,
   "version": "0.4.0",
   "type": "module",
-  "workspaces": ["anth-app", "anth-widget", "anth-wire"],
+  "workspaces": ["anth-app", "anth-client", "anth-widget", "anth-wire"],
   "scripts": {
     "dev": "bun --cwd=anth-app run dev",
     "build": "bun run i18n:build && bun run typecheck && bun --cwd=anth-app run build",
     "preview": "bun --cwd=anth-app run preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit -p anth-wire && tsc --noEmit -p anth-widget && tsc --noEmit -p anth-app",
+    "typecheck": "tsc --noEmit -p anth-wire && tsc --noEmit -p anth-client && tsc --noEmit -p anth-widget && tsc --noEmit -p anth-app",
     "i18n:extract": "lit-localize extract",
     "i18n:build": "lit-localize build"
   },

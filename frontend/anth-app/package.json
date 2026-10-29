@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "anth-client": "workspace:*",
     "anth-widget": "workspace:*",
     "anth-wire": "workspace:*",
     "@lit/localize": "^0.12.2",

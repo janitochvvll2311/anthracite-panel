@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
 import './firewall'
-import { HttpFirewallClient } from 'anth-wire'
+import { HttpFirewallClient } from 'anth-client'
 import type {
   FirewallClient,
   FirewallRule,

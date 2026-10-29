@@ -1,7 +1,7 @@
 import { afterEach, expect, test, vi } from 'vitest'
 
 import './network'
-import { HttpNetworkClient } from 'anth-wire'
+import { HttpNetworkClient } from 'anth-client'
 import type {
   NetworkClient,
   NetworkHandlers,

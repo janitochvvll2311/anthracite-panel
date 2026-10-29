@@ -5,7 +5,8 @@
  * timestamps, so it is computed here and never guessed by the daemon.
  */
 
-import { formatBytes } from 'anth-wire'
+import { formatBytes } from '../../format'
+
 import type {
   NetworkAddress,
   NetworkInterface,

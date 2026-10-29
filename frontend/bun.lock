@@ -17,9 +17,17 @@
       "version": "0.4.0",
       "dependencies": {
         "@lit/localize": "^0.12.2",
+        "anth-client": "workspace:*",
         "anth-widget": "workspace:*",
         "anth-wire": "workspace:*",
         "lit": "^3.3.3",
+      },
+    },
+    "anth-client": {
+      "name": "anth-client",
+      "version": "0.4.0",
+      "dependencies": {
+        "anth-wire": "workspace:*",
       },
     },
     "anth-widget": {
@@ -34,6 +42,7 @@
         "@lit/localize": "^0.12.2",
         "@xterm/addon-fit": "^0.11",
         "@xterm/xterm": "^6",
+        "anth-client": "workspace:*",
         "anth-wire": "workspace:*",
         "codemirror": "^6.0.2",
         "lit": "^3.3.3",
@@ -224,6 +233,8 @@
     "@xterm/xterm": ["@xterm/xterm@6.0.0", "", {}, "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg=="],
 
     "anth-app": ["anth-app@workspace:anth-app"],
+
+    "anth-client": ["anth-client@workspace:anth-client"],
 
     "anth-widget": ["anth-widget@workspace:anth-widget"],
 

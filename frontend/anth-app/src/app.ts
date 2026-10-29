@@ -26,7 +26,8 @@ import {
   storagePanels,
 } from './destinations'
 import type { PanelId, Route } from './destinations'
-import { describeError } from 'anth-wire'
+import { describeError } from 'anth-widget'
+
 import 'anth-widget'
 import { escape } from 'anth-widget'
 import type { AnthFiles } from 'anth-widget'
