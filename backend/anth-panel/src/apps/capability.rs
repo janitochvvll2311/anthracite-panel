@@ -356,6 +356,11 @@ impl ManifestV3 {
 impl Export {
     fn validate(&self, app_id: &str) -> Result<(), String> {
         validate_capability_id(&self.id)?;
+        if self.id == HOST_NAMESPACE || self.id.starts_with(&format!("{HOST_NAMESPACE}.")) {
+            return Err(format!(
+                "the `{HOST_NAMESPACE}.*` namespace is reserved for the host"
+            ));
+        }
         if self.id != app_id && !self.id.starts_with(&format!("{app_id}.")) {
             return Err(format!(
                 "the export `{}` is outside the app namespace `{app_id}.*`",
@@ -789,6 +794,23 @@ sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 abi = 4
 "#;
         let error = ManifestV3::parse(text).expect_err("reserved");
+        assert!(error.contains("reserved"), "{error}");
+    }
+
+    #[test]
+    fn an_app_cannot_reach_into_the_host_namespace() {
+        let text = manifest(
+            &export(
+                "org.anth.host.info",
+                "kind = \"host\"\noperation = \"host.info\"",
+            ),
+            "",
+            "",
+            "",
+        );
+        // The helper app id is org.example.app, so this also fails ownership;
+        // the dedicated host check runs first and names the reserved namespace.
+        let error = ManifestV3::parse(&text).expect_err("reserved");
         assert!(error.contains("reserved"), "{error}");
     }
 

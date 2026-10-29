@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use anth_client::{Client, EventStream};
 use anth_panel::api::{self, AppState};
+use anth_panel::apps::capability::ManifestV3;
+use anth_panel::apps::registry;
 use anth_panel::auth::AuthService;
 use anth_panel::config::Config;
 use anth_panel::dispatch::Daemon;
@@ -187,6 +189,15 @@ enum AppCommand {
         /// Confirm the capability surface.
         #[arg(long)]
         accept_capabilities: bool,
+    },
+    /// Check a v3 manifest against the host capability catalog.
+    Check {
+        /// Manifest file.
+        #[arg(long, value_name = "FILE")]
+        manifest: PathBuf,
+        /// Print the graph as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Send one request through the extension's `anth_cli` entry.
     Call {
@@ -853,7 +864,12 @@ async fn run() -> CliResult {
         Command::Firewall { command } => firewall_command(&path, command).await,
         Command::Storage { command } => storage_command(&path, command).await,
         Command::Account { command } => account_command(&path, command).await,
-        Command::App { command } => app_command(&path, command),
+        Command::App { command } => {
+            if let AppCommand::Check { manifest, json } = command {
+                return check_app_manifest(manifest, *json);
+            }
+            app_command(&path, command)
+        }
         Command::Migrate { from, write, force } => migrate_command(&path, from, *write, *force),
         Command::Daemon { allow_reboot } => serve(&path, None, *allow_reboot, &cli).await,
         Command::Restart => lifecycle_command(&path, LifecycleRequest::Restart).await,
@@ -868,6 +884,29 @@ async fn run() -> CliResult {
         Command::Run { addr, allow_reboot } => {
             serve(&path, Some(addr.clone()), *allow_reboot, &cli).await
         }
+    }
+}
+
+fn check_app_manifest(manifest: &std::path::Path, json: bool) -> CliResult {
+    let text = std::fs::read_to_string(manifest)
+        .map_err(|error| (1, format!("reading {}: {error}", manifest.display())))?;
+    let parsed = ManifestV3::parse(&text).map_err(|error| (2, error))?;
+    let graph = registry::build(&[parsed]).map_err(|error| (2, error))?;
+    if json {
+        let encoded = serde_json::to_string_pretty(&graph)
+            .map_err(|error| (1, format!("encoding the graph: {error}")))?;
+        println!("{encoded}");
+    } else {
+        print!("{}", render::capability_graph(&graph));
+    }
+    if graph
+        .apps
+        .iter()
+        .all(|app| app.state == anth_panel::apps::registry::AppState::Enabled)
+    {
+        Ok(())
+    } else {
+        Err((1, String::new()))
     }
 }
 
@@ -975,6 +1014,10 @@ fn app_command(path: &std::path::Path, command: &AppCommand) -> CliResult {
                 Ok(())
             }
         }
+        AppCommand::Check { .. } => Err((
+            2,
+            "check is handled before the app service is built".to_string(),
+        )),
     }
 }
 

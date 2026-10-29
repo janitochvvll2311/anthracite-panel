@@ -10,6 +10,7 @@ use anth_wire::{
 };
 
 use crate::app_host::AppsView;
+use crate::apps::registry::Graph;
 
 /// Formats a host snapshot as grouped sections.
 pub fn host_info(info: &HostInfo) -> String {
@@ -610,6 +611,81 @@ fn format_age(modified_ms: u64) -> String {
     } else {
         format!("{}d", seconds / 86_400)
     }
+}
+
+/// Formats a capability graph for `app check`.
+pub fn capability_graph(graph: &Graph) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "HOST");
+    for host in &graph.host {
+        let _ = writeln!(
+            out,
+            "  {}@{}  {}  {}  {}",
+            host.id,
+            host.version,
+            host.risk.as_str(),
+            host.operation,
+            short(&host.signature)
+        );
+    }
+    let _ = writeln!(out);
+    if graph.apps.is_empty() {
+        let _ = writeln!(out, "APPS\n  (none)");
+        return out;
+    }
+    let _ = writeln!(out, "APPS");
+    for app in &graph.apps {
+        let _ = writeln!(out, "  {} {}  {}", app.id, app.version, app.state.as_str());
+        for export in &app.exports {
+            let _ = writeln!(
+                out,
+                "    export  {}@{}  {}  {}",
+                export.id,
+                export.version,
+                export.kind,
+                short(&export.signature)
+            );
+        }
+        for import in &app.imports {
+            match &import.problem {
+                Some(problem) => {
+                    let _ = writeln!(
+                        out,
+                        "    import  {}@{}  {}: {}",
+                        import.id, import.version, problem.code, problem.message
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        out,
+                        "    import  {}@{}  resolved",
+                        import.id, import.version
+                    );
+                }
+            }
+        }
+        for command in &app.cli {
+            let _ = writeln!(out, "    cli     {} -> {}", command.name, command.export);
+        }
+        for route in &app.api {
+            let _ = writeln!(
+                out,
+                "    api     {} {} -> {}",
+                route.method, route.path, route.export
+            );
+        }
+        for slot in &app.ui {
+            let _ = writeln!(out, "    ui      {} {}", slot.slot, slot.tag);
+        }
+        for problem in &app.problems {
+            let _ = writeln!(out, "    problem {}: {}", problem.code, problem.message);
+        }
+    }
+    out
+}
+
+fn short(hash: &str) -> &str {
+    hash.get(..12).unwrap_or(hash)
 }
 
 #[cfg(test)]

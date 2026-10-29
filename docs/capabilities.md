@@ -1,8 +1,9 @@
 # Capability registry
 
-Status: **contract for the v0.4.0 migration**. The daemon still runs manifest
-v2 and the v2 grants. This document is the target the later phases implement;
-it is normative for the new manifest (v3), grant (v3), app ABI (4) and registry.
+Status: **contract for the v0.4.0 migration**. Phase 0 (schemas) and Phase 1
+(registry and `app check`) are implemented. The daemon still runs manifest v2
+and the v2 grants; this document is normative for the new manifest (v3), grant
+(v3), app ABI (4) and registry.
 
 ## Model
 
@@ -226,6 +227,18 @@ New pure module (`apps/registry.rs` in the implementation):
 7. Return the graph and per-app diagnostics.
 
 The result is deterministic and independent of installation order.
+
+### Checking a manifest
+
+```bash
+anth-panel app check --manifest manifest.toml
+anth-panel app check --manifest manifest.toml --json
+```
+
+The command parses and validates the manifest, builds the host-only graph,
+prints it and exits `0` when every app is `enabled`. It exits `1` when an import
+is unresolved or a surface conflicts, and `2` when the manifest itself is
+invalid. It never installs, grants or runs anything.
 
 v1 has no plugin-to-plugin edges. A plugin export is visible in `app show` and
 usable by that plugin's own CLI/API/UI; it is not a provider for other plugins.

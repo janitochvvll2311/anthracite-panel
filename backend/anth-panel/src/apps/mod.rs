@@ -8,6 +8,7 @@ pub mod grant_v3;
 pub mod grants;
 pub mod host_catalog;
 pub mod manifest;
+pub mod registry;
 pub mod schema;
 pub mod signature;
 mod state;
@@ -20,4 +21,5 @@ pub use manifest::{
     MANIFEST_FILE, MANIFEST_FILES, RuntimeKind, RuntimeSection, UiSlot, WASM_MANIFEST_FILE,
     WEB_MANIFEST_FILE, manifest_message, validate_id,
 };
+pub use registry::{AppState, Graph, build as build_graph};
 pub use schema::{Signature, Type};
