@@ -8,20 +8,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config, VolumesConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
 use anth_panel::volumes::{MountOutput, MountRunner, Probe, SystemVolumes};
-use anth_wire::{
-    Request, Response, VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest, VolumeUsage,
-};
+use anth_wire::{VolumeMountRequest, VolumeSnapshot, VolumeUnmountRequest, VolumeUsage};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
+
+mod common;
 
 const LSBLK: &str = r#"{
   "blockdevices": [
@@ -280,22 +279,17 @@ async fn the_socket_unmounts_a_scripted_mount() {
     }]));
     let (daemon, paths) = daemon("mount-api-socket", true, probe, Arc::clone(&runner));
     let listener = socket::bind(&paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&daemon)));
+    let router = common::local_router(Arc::clone(&daemon), &paths);
+    let server = tokio::spawn(socket::serve(listener, router));
 
-    let mut client = Client::connect(&paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
-    match client
-        .call(&Request::VolumesUnmount(VolumeUnmountRequest {
+    let client = anth_client::Client::unix(&paths.socket);
+    let message = client
+        .volume_unmount(&VolumeUnmountRequest {
             target: target_text.clone(),
-        }))
+        })
         .await
-        .expect("unmount")
-    {
-        Response::VolumeChanged { message } => {
-            assert_eq!(message, format!("unmounted {target_text}"));
-        }
-        other => panic!("expected a storage change, got {other:?}"),
-    }
+        .expect("unmount");
+    assert_eq!(message, format!("unmounted {target_text}"));
     assert_eq!(runner.calls()[0].0, "umount");
     server.abort();
     let _ = fs::remove_dir_all(target);
@@ -316,26 +310,21 @@ async fn the_socket_mount_uses_the_same_dispatch() {
         Arc::clone(&runner),
     );
     let listener = socket::bind(&paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&daemon)));
-    let mut client = Client::connect(&paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
+    let router = common::local_router(Arc::clone(&daemon), &paths);
+    let server = tokio::spawn(socket::serve(listener, router));
+    let client = anth_client::Client::unix(&paths.socket);
 
-    match client
-        .call(&Request::VolumesMount(VolumeMountRequest {
+    let message = client
+        .volume_mount(&VolumeMountRequest {
             device: "/dev/sda2".to_string(),
             target: target_text,
             fs_type: None,
             read_only: false,
             allow_removable: false,
-        }))
+        })
         .await
-        .expect("mount")
-    {
-        Response::VolumeChanged { message } => {
-            assert!(message.starts_with("mounted /dev/sda2"));
-        }
-        other => panic!("expected a storage change, got {other:?}"),
-    }
+        .expect("mount");
+    assert!(message.starts_with("mounted /dev/sda2"));
     server.abort();
     let _ = fs::remove_dir_all(target);
 }

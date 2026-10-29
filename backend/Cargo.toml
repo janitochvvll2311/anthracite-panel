@@ -1,5 +1,12 @@
 [workspace]
-members = ["anth-wire", "anth-host", "anth-plugin", "anth-extension", "anth-panel"]
+members = [
+    "anth-wire",
+    "anth-client",
+    "anth-host",
+    "anth-plugin",
+    "anth-extension",
+    "anth-panel",
+]
 resolver = "2"
 
 [workspace.package]
@@ -10,6 +17,7 @@ rust-version = "1.99"
 
 [workspace.dependencies]
 anth-wire = { path = "anth-wire" }
+anth-client = { path = "anth-client" }
 anth-host = { path = "anth-host" }
 anth-plugin = { path = "anth-plugin" }
 anth-extension = { path = "anth-extension" }
@@ -21,7 +29,7 @@ toml_edit = "0.25"
 clap = { version = "4.6.7", features = ["derive"] }
 libc = "0.2"
 axum = { version = "0.8.9", features = ["ws"] }
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 argon2 = { version = "0.5", features = ["std"] }
 ed25519-dalek = { version = "2.1", default-features = false, features = ["std"] }
 getrandom = "0.3"
@@ -42,4 +50,7 @@ sevenz-rust2 = "0.13"
 flate2 = "1"
 portable-pty = "0.9"
 tokio-tungstenite = "0.29"
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+bytes = "1"
 http-body-util = "0.1"

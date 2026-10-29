@@ -190,13 +190,21 @@ async fn the_default_size_is_80x24() {
 }
 
 #[tokio::test]
-async fn a_disabled_terminal_answers_with_an_error_frame() {
+async fn a_disabled_terminal_refuses_the_upgrade() {
     let (address, path, server) = start(config(false, false)).await;
-    let mut socket = connect(address, "").await;
-    let error = next_message(&mut socket).await;
-    assert_eq!(error["type"], "error");
-    assert!(error["detail"].as_str().unwrap().contains("disabled"));
-    let _ = socket.close(None).await;
+    let error =
+        tokio_tungstenite::connect_async(format!("ws://{address}/api/terminal?cols=80&rows=24"))
+            .await
+            .expect_err("disabled");
+    match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let body = response.body().clone().unwrap_or_default();
+            let value: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["error"]["code"], "terminal_disabled");
+        }
+        other => panic!("expected an HTTP refusal, got {other:?}"),
+    }
     server.abort();
     let _ = std::fs::remove_dir_all(path);
 }

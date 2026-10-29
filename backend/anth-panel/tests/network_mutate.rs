@@ -9,18 +9,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::network::{IpError, IpRunner, SystemNetwork};
 use anth_panel::socket;
-use anth_wire::{NetworkCreate, NetworkEdit, Request, Response};
+use anth_wire::{NetworkCreate, NetworkEdit};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
+
+mod common;
 
 #[derive(Default)]
 struct FakeIp {
@@ -318,27 +319,18 @@ async fn the_socket_answers_mutations_through_the_same_dispatch() {
     let ip = Arc::new(FakeIp::default());
     let (daemon, paths) = daemon("network-mutate-socket", service(Arc::clone(&ip)));
     let listener = socket::bind(&paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&daemon)));
+    let router = common::local_router(Arc::clone(&daemon), &paths);
+    let server = tokio::spawn(socket::serve(listener, router));
 
-    let mut client = Client::connect(&paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
-
-    match client
-        .call(&Request::NetworkCreate(create("anthtest5", "bridge")))
+    let client = anth_client::Client::unix(&paths.socket);
+    let message = client
+        .network_create(&create("anthtest5", "bridge"))
         .await
-        .expect("create")
-    {
-        Response::NetworkChanged { message } => {
-            assert_eq!(message, "created bridge interface `anthtest5`");
-        }
-        other => panic!("expected a network change, got {other:?}"),
-    }
+        .expect("create");
+    assert_eq!(message, "created bridge interface `anthtest5`");
 
     let error = client
-        .call(&Request::NetworkSetState {
-            name: "lo".to_string(),
-            up: false,
-        })
+        .network_set_state("lo", false)
         .await
         .expect_err("state");
     assert_eq!(error.code, "protected_interface");

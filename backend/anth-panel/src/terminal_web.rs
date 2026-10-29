@@ -7,9 +7,12 @@
 
 use std::sync::Arc;
 
-use anth_wire::{MAX_TERMINAL_WAIT_MS, Request, Response, TerminalSize, WireError};
+use anth_wire::{
+    MAX_TERMINAL_WAIT_MS, TerminalClientMessage, TerminalServerMessage, TerminalSize, WireError,
+};
+
+use crate::rpc::{Request, Response};
 use axum::extract::ws::WebSocket;
-use serde::{Deserialize, Serialize};
 
 use crate::dispatch::Daemon;
 use crate::ws::JsonWebSocket;
@@ -17,35 +20,6 @@ use crate::ws::JsonWebSocket;
 /// WebSocket frame cap. Input chunks are 16 KiB; base64 and JSON leave plenty
 /// of room under this ceiling.
 pub(crate) const MAX_WEB_MESSAGE: usize = 128 * 1024;
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum ClientMessage {
-    Input { data: String },
-    Resize { cols: u16, rows: u16 },
-    Ping,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum ServerMessage {
-    Ready {
-        shell: String,
-        cols: u16,
-        rows: u16,
-        line_editing: bool,
-    },
-    Output {
-        data: String,
-    },
-    Exit {
-        code: i32,
-    },
-    Error {
-        detail: String,
-    },
-    Pong,
-}
 
 /// Runs one terminal session over an upgraded WebSocket.
 pub(crate) async fn serve_socket(
@@ -56,7 +30,7 @@ pub(crate) async fn serve_socket(
 ) {
     let mut ws = JsonWebSocket::new(socket, MAX_WEB_MESSAGE);
     if let Err(detail) = bridge(&mut ws, &daemon, &owner, size).await {
-        let _ = ws.send(&ServerMessage::Error { detail }).await;
+        let _ = ws.send(&TerminalServerMessage::Error { detail }).await;
     }
     ws.close().await;
 }
@@ -82,7 +56,7 @@ async fn bridge(
         other => return Err(format!("unexpected terminal open answer: {other:?}")),
     };
 
-    ws.send(&ServerMessage::Ready {
+    ws.send(&TerminalServerMessage::Ready {
         shell: opened.program.clone(),
         cols: opened.cols,
         rows: opened.rows,
@@ -94,10 +68,10 @@ async fn bridge(
     let id = opened.id;
     let result = loop {
         tokio::select! {
-            incoming = ws.next::<ClientMessage>() => {
+            incoming = ws.next::<TerminalClientMessage>() => {
                 match incoming.map_err(|error| format!("invalid client message: {error}"))? {
                     None => break Ok(()),
-                    Some(ClientMessage::Input { data }) => {
+                    Some(TerminalClientMessage::Input { data }) => {
                         // The dispatcher decodes and bounds the bytes. Passing the
                         // frame through avoids a decode/encode round trip on every
                         // keystroke.
@@ -112,7 +86,7 @@ async fn bridge(
                             break Ok(());
                         }
                     }
-                    Some(ClientMessage::Resize { cols, rows }) => {
+                    Some(TerminalClientMessage::Resize { cols, rows }) => {
                         let size = TerminalSize { cols, rows };
                         size.validate()?;
                         if let Response::Error(error) = daemon
@@ -127,8 +101,8 @@ async fn bridge(
                             break Ok(());
                         }
                     }
-                    Some(ClientMessage::Ping) => {
-                        ws.send(&ServerMessage::Pong)
+                    Some(TerminalClientMessage::Ping) => {
+                        ws.send(&TerminalServerMessage::Pong)
                             .await
                             .map_err(|error| format!("failed to send pong: {error}"))?;
                     }
@@ -141,14 +115,14 @@ async fn bridge(
                 match response {
                     Response::TerminalOutput(chunk) => {
                         if !chunk.bytes_base64.is_empty() {
-                            ws.send(&ServerMessage::Output {
+                            ws.send(&TerminalServerMessage::Output {
                                 data: chunk.bytes_base64,
                             })
                             .await
                             .map_err(|error| format!("failed to send output: {error}"))?;
                         }
                         if chunk.eof {
-                            ws.send(&ServerMessage::Exit {
+                            ws.send(&TerminalServerMessage::Exit {
                                 code: chunk.exit_code.unwrap_or(-1),
                             })
                             .await
@@ -170,7 +144,7 @@ async fn bridge(
 }
 
 async fn send_error(ws: &mut JsonWebSocket, error: WireError) -> Result<(), String> {
-    ws.send(&ServerMessage::Error {
+    ws.send(&TerminalServerMessage::Error {
         detail: error.message,
     })
     .await

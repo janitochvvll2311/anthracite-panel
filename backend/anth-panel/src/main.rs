@@ -5,17 +5,16 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use anth_client::{Client, EventStream};
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::Config;
 use anth_panel::dispatch::Daemon;
 use anth_panel::lifecycle::{self, Lifecycle};
 use anth_panel::log::{Format, Level, Logger, Out, Settings};
 use anth_panel::{render, socket};
 use anth_wire::{
-    FirewallAction, FirewallChain, FirewallProtocol, PROTOCOL_VERSION, PartitionKind, Request,
-    Response, parse_interval,
+    FirewallAction, FirewallChain, FirewallProtocol, PROTOCOL_VERSION, PageRequest, PartitionKind,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -1109,36 +1108,38 @@ async fn serve(
     daemon.spawn_terminal_reaper();
     let socket_listener =
         socket::bind(&paths.socket).map_err(|error| (1, format!("socket: {error}")))?;
+    let state = AppState::new(Arc::clone(&daemon), auth, logger);
+    let router = api::router(state);
 
     if let Some(addr) = addr {
         let http_listener = TcpListener::bind(&addr)
             .await
             .map_err(|error| (1, format!("binding HTTP {addr}: {error}")))?;
-        let state = AppState::new(Arc::clone(&daemon), auth, logger);
-        let router = api::router(state);
         eprintln!(
-            "anth-panel {} (wire {}) listening on http://{addr} and {}",
+            "anth-panel {} (protocol {}) listening on http://{addr} and {}",
             env!("CARGO_PKG_VERSION"),
             PROTOCOL_VERSION,
             paths.socket.display()
         );
         let http = axum::serve(
             http_listener,
-            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            router
+                .clone()
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
         );
-        let socket = socket::serve(socket_listener, Arc::clone(&daemon));
+        let socket = socket::serve(socket_listener, router);
         tokio::select! {
             result = http => result.map_err(|error| (1, format!("HTTP server: {error}"))),
             result = socket => result.map_err(|error| (1, format!("socket server: {error}"))),
         }
     } else {
         eprintln!(
-            "anth-panel {} (wire {}) listening on {}",
+            "anth-panel {} (protocol {}) listening on {}",
             env!("CARGO_PKG_VERSION"),
             PROTOCOL_VERSION,
             paths.socket.display()
         );
-        socket::serve(socket_listener, daemon)
+        socket::serve(socket_listener, router)
             .await
             .map_err(|error| (1, format!("socket server: {error}")))
     }
@@ -1149,50 +1150,50 @@ enum LifecycleRequest {
     Reboot(u32),
 }
 
-/// Opens the socket and performs the handshake; every client command starts here.
+/// Resolves the socket, checks the protocol and returns a ready client.
 async fn connect(path: &std::path::Path) -> Result<Client, (u8, String)> {
     let config = Config::load_or_default(path);
     let paths = config.paths(path).map_err(|error| (1, error))?;
-    let mut client = Client::connect(&paths.socket)
-        .await
-        .map_err(|error| (1, error.to_string()))?;
-    client
-        .hello()
-        .await
-        .map_err(|error| (1, error.to_string()))?;
-    Ok(client)
+    let client = Client::unix(&paths.socket);
+    match client.hello().await {
+        Ok(hello) if hello.protocol_version == PROTOCOL_VERSION => Ok(client),
+        Ok(hello) => Err((
+            1,
+            format!(
+                "the daemon speaks protocol {}, this CLI speaks {PROTOCOL_VERSION}",
+                hello.protocol_version
+            ),
+        )),
+        Err(error) => Err((1, format!("Failed to connect to the daemon: {error}"))),
+    }
+}
+
+fn fail(error: anth_wire::WireError) -> (u8, String) {
+    (error.kind.exit_code(), error.to_string())
 }
 
 async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) -> CliResult {
-    let mut client = connect(path).await?;
-
-    let request = match command {
-        LifecycleRequest::Restart => Request::Restart,
-        LifecycleRequest::Reboot(delay) => Request::SystemReboot { delay_s: delay },
-    };
-    let response = client
-        .call(&request)
-        .await
-        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-    match response {
-        Response::Restarting { pid } => {
-            println!("restarting the panel (pid {pid}); it re-reads the configuration");
-            Ok(())
-        }
-        Response::Rebooting { delay_s } => {
-            if delay_s == 0 {
-                println!("the host is rebooting");
-            } else {
-                println!("the host reboots in {delay_s}s");
+    let client = connect(path).await?;
+    match command {
+        LifecycleRequest::Restart => match client.restart().await {
+            Ok(answer) => {
+                println!("restarting (pid {})", answer.pid);
+                Ok(())
             }
-            Ok(())
-        }
-        other => Err((1, format!("unexpected response: {other:?}"))),
+            Err(error) => Err(fail(error)),
+        },
+        LifecycleRequest::Reboot(delay) => match client.reboot(delay).await {
+            Ok(answer) => {
+                println!("reboot scheduled in {}s", answer.delay_s);
+                Ok(())
+            }
+            Err(error) => Err(fail(error)),
+        },
     }
 }
 
 async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliResult {
-    let mut client = connect(path).await?;
+    let client = connect(path).await?;
 
     match command {
         FilesCommand::List {
@@ -1200,213 +1201,110 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
             limit,
             cursor,
         } => {
-            let response = client
-                .call(&Request::FilesList {
-                    path: path.clone(),
-                    limit: *limit,
-                    cursor: cursor.clone(),
-                })
-                .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::FilesList(page) => {
-                    print!("{}", render::file_list(&page));
-                    println!();
-                    Ok(())
-                }
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+            let request = PageRequest {
+                limit: *limit,
+                cursor: cursor.clone(),
+            };
+            let page = client.files_list(path, &request).await.map_err(fail)?;
+            print!("{}", render::file_list(&page));
+            println!();
+            Ok(())
         }
         FilesCommand::Read {
             path,
             offset,
             max_bytes,
         } => {
-            let response = client
-                .call(&Request::FilesRead {
-                    path: path.clone(),
-                    offset: *offset,
-                    max_bytes: *max_bytes,
-                })
+            let chunk = client
+                .files_read(path, *offset, *max_bytes)
                 .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::FilesRead(chunk) => {
-                    print!("{}", chunk.text);
-                    if !chunk.text.ends_with('\n') {
-                        println!();
-                    }
-                    if !chunk.eof {
-                        eprintln!(
-                            "[more at offset {}]",
-                            chunk.offset + u64::try_from(chunk.text.len()).unwrap_or(u64::MAX)
-                        );
-                    }
-                    Ok(())
-                }
-                other => Err((1, format!("unexpected response: {other:?}"))),
+                .map_err(fail)?;
+            print!("{}", chunk.text);
+            if !chunk.text.ends_with('\n') {
+                println!();
             }
+            if !chunk.eof {
+                eprintln!(
+                    "[more at offset {}]",
+                    chunk.offset + u64::try_from(chunk.text.len()).unwrap_or(u64::MAX)
+                );
+            }
+            Ok(())
         }
         FilesCommand::Download { path } => {
             use std::io::Write as _;
 
+            let mut body = client.files_download(path).await.map_err(fail)?;
             let stdout = std::io::stdout();
             let mut out = stdout.lock();
-            let mut offset = 0u64;
-            loop {
-                let response = client
-                    .call(&Request::FilesDownload {
-                        path: path.clone(),
-                        offset,
-                        max_bytes: None,
-                    })
-                    .await
-                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-                let chunk = match response {
-                    Response::FilesDownload(chunk) => chunk,
-                    Response::Error(error) => {
-                        return Err((error.kind.exit_code(), error.to_string()));
-                    }
-                    other => return Err((1, format!("unexpected response: {other:?}"))),
-                };
-                let bytes = STANDARD
-                    .decode(chunk.data_base64.as_bytes())
-                    .map_err(|error| (1, format!("the download chunk is not base64: {error}")))?;
-                out.write_all(&bytes)
+            while let Some(chunk) = body.read().await.map_err(fail)? {
+                out.write_all(&chunk)
                     .map_err(|error| (1, format!("writing the download: {error}")))?;
-                if chunk.eof {
-                    break;
-                }
-                if bytes.is_empty() {
-                    return Err((1, "the download stopped before EOF".to_string()));
-                }
-                offset = chunk.offset + u64::try_from(bytes.len()).unwrap_or(u64::MAX);
             }
             out.flush()
                 .map_err(|error| (1, format!("flushing the download: {error}")))?;
             Ok(())
         }
         FilesCommand::Delete { path } => {
-            let response = client
-                .call(&Request::FilesDelete { path: path.clone() })
-                .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::FilesDeleted { path } => {
-                    println!("deleted {path}");
-                    Ok(())
-                }
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+            let deleted = client.files_delete(path).await.map_err(fail)?;
+            println!("deleted {}", deleted.path);
+            Ok(())
         }
         FilesCommand::Write { path, create } => {
             let mut content = String::new();
             std::io::stdin()
                 .read_to_string(&mut content)
                 .map_err(|error| (1, format!("reading stdin: {error}")))?;
-            let response = client
-                .call(&Request::FilesWrite {
-                    path: path.clone(),
-                    content,
-                    create: *create,
-                })
+            let written = client
+                .files_write(path, &content, *create)
                 .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::FilesWritten(written) => {
-                    println!("wrote {} ({} bytes)", written.path, written.size);
-                    Ok(())
-                }
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+                .map_err(fail)?;
+            println!("wrote {} ({} bytes)", written.path, written.size);
+            Ok(())
         }
         FilesCommand::Upload { path, create } => {
             let mut content = Vec::new();
             std::io::stdin()
                 .read_to_end(&mut content)
                 .map_err(|error| (1, format!("reading stdin: {error}")))?;
-            let response = client
-                .call(&Request::FilesUpload {
-                    path: path.clone(),
-                    content_base64: STANDARD.encode(&content),
-                    create: *create,
-                })
+            let written = client
+                .files_upload(path, &STANDARD.encode(&content), *create)
                 .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::FilesWritten(written) => {
-                    println!("wrote {} ({} bytes)", written.path, written.size);
-                    Ok(())
-                }
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+                .map_err(fail)?;
+            println!("wrote {} ({} bytes)", written.path, written.size);
+            Ok(())
         }
         FilesCommand::Trash { path } => {
-            let response = client
-                .call(&Request::FilesTrash { path: path.clone() })
-                .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::FilesTrashed { path, id } => {
-                    println!("trashed {path} as {id}");
-                    Ok(())
-                }
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+            let trashed = client.files_trash(path).await.map_err(fail)?;
+            println!("trashed {} as {}", trashed.path, trashed.id);
+            Ok(())
         }
         FilesCommand::TrashBin { command } => match command {
             TrashBinCommand::List => {
-                let response = client
-                    .call(&Request::FilesTrashList)
-                    .await
-                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-                match response {
-                    Response::FilesTrashList(listing) => {
-                        println!(
-                            "trash: {} entries, {} used",
-                            listing.total, listing.used_bytes
-                        );
-                        for entry in &listing.entries {
-                            println!(
-                                "{}\t{}\t{}",
-                                entry.id,
-                                entry.original_path,
-                                entry.deleted_at.as_deref().unwrap_or("-")
-                            );
-                        }
-                        Ok(())
-                    }
-                    other => Err((1, format!("unexpected response: {other:?}"))),
+                let listing = client.trash_list().await.map_err(fail)?;
+                println!(
+                    "trash: {} entries, {} used",
+                    listing.total, listing.used_bytes
+                );
+                for entry in &listing.entries {
+                    println!(
+                        "{}\t{}\t{}",
+                        entry.id,
+                        entry.original_path,
+                        entry.deleted_at.as_deref().unwrap_or("-")
+                    );
                 }
+                Ok(())
             }
             TrashBinCommand::Restore { id, overwrite } => {
-                let response = client
-                    .call(&Request::FilesTrashRestore {
-                        id: id.clone(),
-                        overwrite: *overwrite,
-                    })
-                    .await
-                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-                match response {
-                    Response::FilesRestored { id, path } => {
-                        println!("restored {id} to {path}");
-                        Ok(())
-                    }
-                    other => Err((1, format!("unexpected response: {other:?}"))),
-                }
+                let restored = client.trash_restore(id, *overwrite).await.map_err(fail)?;
+                println!("restored {} to {}", restored.id, restored.path);
+                Ok(())
             }
             TrashBinCommand::Empty => {
-                let response = client
-                    .call(&Request::FilesTrashEmpty)
-                    .await
-                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-                match response {
-                    Response::FilesTrashEmptied { removed } => {
-                        println!("removed {removed} trashed entries");
-                        Ok(())
-                    }
-                    other => Err((1, format!("unexpected response: {other:?}"))),
-                }
+                let emptied = client.trash_empty().await.map_err(fail)?;
+                println!("removed {} trashed entries", emptied.removed);
+                Ok(())
             }
         },
         FilesCommand::Archive {
@@ -1415,59 +1313,37 @@ async fn files_command(path: &std::path::Path, command: &FilesCommand) -> CliRes
             format,
         } => {
             let format = format.as_deref().map(parse_archive_format).transpose()?;
-            let response = client
-                .call(&Request::FilesArchive {
-                    path: path.clone(),
-                    destination: destination.clone(),
-                    format,
-                })
+            let created = client
+                .archive_create(path, destination.as_deref(), format)
                 .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::FilesArchiveCreated { path } => {
-                    println!("created {path}");
-                    Ok(())
-                }
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+                .map_err(fail)?;
+            println!("created {}", created.path);
+            Ok(())
         }
         FilesCommand::Unarchive { path, list, into } => {
             if *list {
-                let response = client
-                    .call(&Request::FilesArchiveList { path: path.clone() })
-                    .await
-                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-                match response {
-                    Response::FilesArchiveList(listing) => {
-                        if let Some(format) = listing.format {
-                            println!("{} ({})", listing.path, format.label());
-                        }
-                        for entry in &listing.entries {
-                            println!("{}\t{}", entry.name, entry.size);
-                        }
-                        if let Some(warning) = listing.warning {
-                            eprintln!("{warning}");
-                        }
-                        Ok(())
-                    }
-                    other => Err((1, format!("unexpected response: {other:?}"))),
+                let listing = client.archive_list(path).await.map_err(fail)?;
+                if let Some(format) = listing.format {
+                    println!("{} ({})", listing.path, format.label());
+                }
+                for entry in &listing.entries {
+                    println!("{}\t{}", entry.name, entry.size);
+                }
+                if let Some(warning) = listing.warning {
+                    eprintln!("{warning}");
                 }
             } else {
-                let response = client
-                    .call(&Request::FilesArchiveExtract {
-                        path: path.clone(),
-                        into: into.clone(),
-                    })
+                let extracted = client
+                    .archive_extract(path, into.as_deref())
                     .await
-                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-                match response {
-                    Response::FilesArchiveExtracted { path, entries } => {
-                        println!("extracted {path} ({} entries)", entries.len());
-                        Ok(())
-                    }
-                    other => Err((1, format!("unexpected response: {other:?}"))),
-                }
+                    .map_err(fail)?;
+                println!(
+                    "extracted {} ({} entries)",
+                    extracted.path,
+                    extracted.entries.len()
+                );
             }
+            Ok(())
         }
     }
 }
@@ -1488,59 +1364,73 @@ fn parse_archive_format(value: &str) -> Result<anth_wire::ArchiveFormat, (u8, St
 }
 
 async fn host_info(path: &std::path::Path, watch: Option<String>) -> CliResult {
-    let mut client = connect(path).await?;
-
+    let client = connect(path).await?;
     let Some(interval) = watch else {
-        let response = client
-            .call(&Request::HostInfo)
-            .await
-            .map_err(|error| (1, error.to_string()))?;
-        print_host_info(&response)?;
+        let info = client.host_info().await.map_err(fail)?;
+        println!("{}", render::host_info(&info));
         return Ok(());
     };
-
-    watch_loop(&mut client, &interval, &Request::HostInfo, render_response).await
+    let stream = client.watch_host_info(&interval).await.map_err(fail)?;
+    watch_stream(stream, render::host_info).await
 }
 
-fn print_host_info(response: &Response) -> CliResult {
-    println!("{}", render_response(response)?);
-    Ok(())
+/// Prints one snapshot per event until Ctrl-C or the stream ends.
+async fn watch_stream<T, F>(mut stream: EventStream<T>, format: F) -> CliResult
+where
+    T: serde::de::DeserializeOwned,
+    F: Fn(&T) -> String,
+{
+    let terminal = std::io::stdout().is_terminal();
+    let mut first = true;
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => return Ok(()),
+            event = stream.next() => {
+                let Some(value) = event.map_err(fail)? else {
+                    return Ok(());
+                };
+                let text = format(&value);
+                if terminal {
+                    println!("\x1b[2J\x1b[H{text}");
+                } else {
+                    if !first {
+                        println!();
+                    }
+                    println!("{text}");
+                }
+                std::io::stdout().flush().ok();
+                first = false;
+            }
+        }
+    }
 }
 
 async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> CliResult {
-    let mut client = connect(path).await?;
+    let client = connect(path).await?;
 
     match command {
         NetworkCommand::List { watch } => {
             let Some(interval) = watch else {
-                let response = client
-                    .call(&Request::Network)
-                    .await
-                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-                println!("{}", render_network(&response)?);
+                let snapshot = client.network().await.map_err(fail)?;
+                println!("{}", render::network(&snapshot));
                 return Ok(());
             };
-            watch_loop(&mut client, interval, &Request::Network, render_network).await
+            let stream = client.watch_network(interval).await.map_err(fail)?;
+            watch_stream(stream, render::network).await
         }
         NetworkCommand::Up { name } => {
-            network_change(
-                &mut client,
-                Request::NetworkSetState {
-                    name: name.clone(),
-                    up: true,
-                },
-            )
-            .await
+            println!(
+                "{}",
+                client.network_set_state(name, true).await.map_err(fail)?
+            );
+            Ok(())
         }
         NetworkCommand::Down { name } => {
-            network_change(
-                &mut client,
-                Request::NetworkSetState {
-                    name: name.clone(),
-                    up: false,
-                },
-            )
-            .await
+            println!(
+                "{}",
+                client.network_set_state(name, false).await.map_err(fail)?
+            );
+            Ok(())
         }
         NetworkCommand::Create {
             name,
@@ -1555,9 +1445,8 @@ async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> Cl
             if !*yes {
                 confirm(&format!("Create {} interface `{name}`?", kind.label()))?;
             }
-            network_change(
-                &mut client,
-                Request::NetworkCreate(anth_wire::NetworkCreate {
+            let change = client
+                .network_create(&anth_wire::NetworkCreate {
                     name: name.clone(),
                     kind: kind.as_wire().to_string(),
                     peer: peer.clone(),
@@ -1565,9 +1454,11 @@ async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> Cl
                     vlan_id: *vlan_id,
                     mtu: *mtu,
                     up: *up,
-                }),
-            )
-            .await
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         NetworkCommand::Edit {
             name,
@@ -1593,9 +1484,8 @@ async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> Cl
                 };
                 confirm(&format!("{change} on interface `{name}`?"))?;
             }
-            network_change(
-                &mut client,
-                Request::NetworkEdit(anth_wire::NetworkEdit {
+            let change = client
+                .network_edit(&anth_wire::NetworkEdit {
                     name: name.clone(),
                     mtu: *mtu,
                     up: if *up {
@@ -1605,9 +1495,11 @@ async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> Cl
                     } else {
                         None
                     },
-                }),
-            )
-            .await
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         NetworkCommand::Rename {
             name,
@@ -1617,14 +1509,9 @@ async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> Cl
             if !*yes {
                 confirm(&format!("Rename `{name}` to `{new_name}`?"))?;
             }
-            network_change(
-                &mut client,
-                Request::NetworkRename {
-                    name: name.clone(),
-                    new_name: new_name.clone(),
-                },
-            )
-            .await
+            let change = client.network_rename(name, new_name).await.map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         NetworkCommand::Delete { name, yes } => {
             if !*yes {
@@ -1632,51 +1519,20 @@ async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> Cl
                     "Delete interface `{name}`? This cannot be undone and may disconnect the host."
                 ))?;
             }
-            network_change(
-                &mut client,
-                Request::NetworkDelete {
-                    name: name.clone(),
-                    peer: None,
-                },
-            )
-            .await
-        }
-    }
-}
-
-async fn network_change(client: &mut Client, request: Request) -> CliResult {
-    let response = client
-        .call(&request)
-        .await
-        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-    match response {
-        Response::NetworkChanged { message } => {
-            println!("{message}");
+            let change = client.network_delete(name).await.map_err(fail)?;
+            println!("{change}");
             Ok(())
         }
-        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
-    }
-}
-
-fn render_network(response: &Response) -> Result<String, (u8, String)> {
-    match response {
-        Response::Network(snapshot) => Ok(render::network(snapshot)),
-        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
     }
 }
 
 async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> CliResult {
-    let mut client = connect(path).await?;
+    let client = connect(path).await?;
 
     match command {
         FirewallCommand::Status => {
-            let response = client
-                .call(&Request::FirewallStatus)
-                .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            println!("{}", render_firewall(&response)?);
+            let snapshot = client.firewall().await.map_err(fail)?;
+            println!("{}", render::firewall(&snapshot));
             Ok(())
         }
         FirewallCommand::Allow(args) => {
@@ -1686,17 +1542,18 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
                     args.spec.protocol, args.spec.port, args.chain
                 ))?;
             }
-            firewall_change(
-                &mut client,
-                Request::FirewallAdd {
-                    chain: args.chain,
-                    action: FirewallAction::Allow,
-                    protocol: args.spec.protocol,
-                    port: args.spec.port,
-                    comment: args.comment.clone(),
-                },
-            )
-            .await
+            let change = client
+                .firewall_add(
+                    args.chain,
+                    FirewallAction::Allow,
+                    args.spec.protocol,
+                    args.spec.port,
+                    args.comment.as_deref(),
+                )
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         FirewallCommand::Deny(args) => {
             if !args.yes {
@@ -1705,28 +1562,21 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
                     args.spec.protocol, args.spec.port, args.chain
                 ))?;
             }
-            firewall_change(
-                &mut client,
-                Request::FirewallAdd {
-                    chain: args.chain,
-                    action: FirewallAction::Deny,
-                    protocol: args.spec.protocol,
-                    port: args.spec.port,
-                    comment: args.comment.clone(),
-                },
-            )
-            .await
+            let change = client
+                .firewall_add(
+                    args.chain,
+                    FirewallAction::Deny,
+                    args.spec.protocol,
+                    args.spec.port,
+                    args.comment.as_deref(),
+                )
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         FirewallCommand::Edit(args) => {
-            let snapshot = match client
-                .call(&Request::FirewallStatus)
-                .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?
-            {
-                Response::FirewallSnapshot(snapshot) => snapshot,
-                Response::Error(error) => return Err((error.kind.exit_code(), error.to_string())),
-                other => return Err((1, format!("unexpected response: {other:?}"))),
-            };
+            let snapshot = client.firewall().await.map_err(fail)?;
             let rule = snapshot
                 .rules
                 .iter()
@@ -1766,18 +1616,19 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
                     args.handle
                 ))?;
             }
-            firewall_change(
-                &mut client,
-                Request::FirewallUpdate {
-                    handle: args.handle,
+            let change = client
+                .firewall_update(
+                    args.handle,
                     chain,
                     action,
                     protocol,
                     port,
-                    comment,
-                },
-            )
-            .await
+                    comment.as_deref(),
+                )
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         FirewallCommand::Policy(args) => {
             if !args.yes {
@@ -1791,26 +1642,20 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
                     args.chain, args.policy
                 ))?;
             }
-            firewall_change(
-                &mut client,
-                Request::FirewallSetPolicy {
-                    chain: args.chain,
-                    policy: args.policy,
-                },
-            )
-            .await
+            let change = client
+                .firewall_policy(args.chain, args.policy)
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         FirewallCommand::Delete(args) => {
             if !args.yes {
                 confirm(&format!("Delete firewall rule {}?", args.handle))?;
             }
-            firewall_change(
-                &mut client,
-                Request::FirewallDelete {
-                    handle: args.handle,
-                },
-            )
-            .await
+            let change = client.firewall_delete(args.handle).await.map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         FirewallCommand::Flush(args) => {
             if !args.yes {
@@ -1819,50 +1664,20 @@ async fn firewall_command(path: &std::path::Path, command: &FirewallCommand) -> 
                     args.chain
                 ))?;
             }
-            firewall_change(&mut client, Request::FirewallFlush { chain: args.chain }).await
-        }
-    }
-}
-
-async fn firewall_change(client: &mut Client, request: Request) -> CliResult {
-    let response = client
-        .call(&request)
-        .await
-        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-    match response {
-        Response::FirewallChanged { message } => {
-            println!("{message}");
+            let change = client.firewall_flush(args.chain).await.map_err(fail)?;
+            println!("{change}");
             Ok(())
         }
-        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
-    }
-}
-
-fn render_firewall(response: &Response) -> Result<String, (u8, String)> {
-    match response {
-        Response::FirewallSnapshot(snapshot) => Ok(render::firewall(snapshot)),
-        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
     }
 }
 
 async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> CliResult {
-    let mut client = connect(path).await?;
+    let client = connect(path).await?;
     match command {
         StorageCommand::List => {
-            let response = client
-                .call(&Request::Volumes)
-                .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::Volumes(snapshot) => {
-                    println!("{}", render::volumes(&snapshot));
-                    Ok(())
-                }
-                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+            let snapshot = client.volumes().await.map_err(fail)?;
+            println!("{}", render::volumes(&snapshot));
+            Ok(())
         }
         StorageCommand::Mount(args) => {
             if !args.yes {
@@ -1873,29 +1688,31 @@ async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> Cl
                     if args.read_only { " Read-only." } else { "" }
                 ))?;
             }
-            volume_change(
-                &mut client,
-                Request::VolumesMount(anth_wire::VolumeMountRequest {
+            let change = client
+                .volume_mount(&anth_wire::VolumeMountRequest {
                     device: args.device.clone(),
                     target: args.target.clone(),
                     fs_type: args.fs_type.clone(),
                     read_only: args.read_only,
                     allow_removable: args.allow_removable,
-                }),
-            )
-            .await
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         StorageCommand::Unmount(args) => {
             if !args.yes {
                 confirm(&format!("Unmount {}?", args.target))?;
             }
-            volume_change(
-                &mut client,
-                Request::VolumesUnmount(anth_wire::VolumeUnmountRequest {
+            let change = client
+                .volume_unmount(&anth_wire::VolumeUnmountRequest {
                     target: args.target.clone(),
-                }),
-            )
-            .await
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         StorageCommand::Partition { command } => match command {
             StoragePartitionCommand::Create(args) => {
@@ -1907,16 +1724,17 @@ async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> Cl
                         args.disk
                     ))?;
                 }
-                volume_change(
-                    &mut client,
-                    Request::VolumePartitionCreate(anth_wire::VolumePartitionCreate {
+                let change = client
+                    .volume_partition_create(&anth_wire::VolumePartitionCreate {
                         disk: args.disk.clone(),
                         kind: args.kind.into(),
                         start_bytes: args.start_bytes,
                         size_bytes: args.size_bytes,
-                    }),
-                )
-                .await
+                    })
+                    .await
+                    .map_err(fail)?;
+                println!("{change}");
+                Ok(())
             }
             StoragePartitionCommand::Resize(args) => {
                 if !args.yes {
@@ -1925,15 +1743,16 @@ async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> Cl
                         args.number, args.disk, args.size_bytes
                     ))?;
                 }
-                volume_change(
-                    &mut client,
-                    Request::VolumePartitionResize(anth_wire::VolumePartitionResize {
+                let change = client
+                    .volume_partition_resize(&anth_wire::VolumePartitionResize {
                         disk: args.disk.clone(),
                         number: args.number,
                         size_bytes: args.size_bytes,
-                    }),
-                )
-                .await
+                    })
+                    .await
+                    .map_err(fail)?;
+                println!("{change}");
+                Ok(())
             }
             StoragePartitionCommand::Delete(args) => {
                 if !args.yes {
@@ -1942,14 +1761,15 @@ async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> Cl
                         args.number, args.disk
                     ))?;
                 }
-                volume_change(
-                    &mut client,
-                    Request::VolumePartitionDelete(anth_wire::VolumePartitionDelete {
+                let change = client
+                    .volume_partition_delete(&anth_wire::VolumePartitionDelete {
                         disk: args.disk.clone(),
                         number: args.number,
-                    }),
-                )
-                .await
+                    })
+                    .await
+                    .map_err(fail)?;
+                println!("{change}");
+                Ok(())
             }
         },
         StorageCommand::Format(args) => {
@@ -1959,55 +1779,31 @@ async fn storage_command(path: &std::path::Path, command: &StorageCommand) -> Cl
                     args.partition, args.fs_type
                 ))?;
             }
-            volume_change(
-                &mut client,
-                Request::VolumeFormat(anth_wire::VolumeFormatRequest {
+            let change = client
+                .volume_format(&anth_wire::VolumeFormatRequest {
                     partition: args.partition.clone(),
                     fs_type: args.fs_type.clone(),
                     label: args.label.clone(),
-                }),
-            )
-            .await
-        }
-    }
-}
-
-async fn volume_change(client: &mut Client, request: Request) -> CliResult {
-    let response = client
-        .call(&request)
-        .await
-        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-    match response {
-        Response::VolumeChanged { message } => {
-            println!("{message}");
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
             Ok(())
         }
-        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
     }
 }
 
 async fn account_command(path: &std::path::Path, command: &AccountCommand) -> CliResult {
-    let mut client = connect(path).await?;
+    let client = connect(path).await?;
     match command {
         AccountCommand::List => {
-            let response = client
-                .call(&Request::Accounts)
-                .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::Accounts(snapshot) => {
-                    println!("{}", render::accounts(&snapshot));
-                    Ok(())
-                }
-                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+            let snapshot = client.accounts().await.map_err(fail)?;
+            println!("{}", render::accounts(&snapshot));
+            Ok(())
         }
         AccountCommand::Create(args) => {
-            account_change(
-                &mut client,
-                Request::AccountCreate(anth_wire::AccountCreate {
+            let change = client
+                .account_create(&anth_wire::AccountCreate {
                     name: args.name.clone(),
                     uid: args.uid,
                     gid: args.gid,
@@ -2015,9 +1811,11 @@ async fn account_command(path: &std::path::Path, command: &AccountCommand) -> Cl
                     home: args.home.clone(),
                     shell: args.shell.clone(),
                     system: args.system,
-                }),
-            )
-            .await
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         AccountCommand::Delete(args) => {
             if !args.yes {
@@ -2031,66 +1829,55 @@ async fn account_command(path: &std::path::Path, command: &AccountCommand) -> Cl
                     }
                 ))?;
             }
-            account_change(
-                &mut client,
-                Request::AccountDelete(anth_wire::AccountDelete {
+            let change = client
+                .account_delete(&anth_wire::AccountDelete {
                     name: args.name.clone(),
                     remove_home: args.remove_home,
-                }),
-            )
-            .await
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         AccountCommand::Password(args) => {
             let password = read_password_stdin()?;
-            account_change(
-                &mut client,
-                Request::AccountSetPassword(anth_wire::AccountSetPassword {
+            let change = client
+                .account_password(&anth_wire::AccountSetPassword {
                     name: args.name.clone(),
                     password: anth_wire::SecretString::new(password),
-                }),
-            )
-            .await
+                })
+                .await
+                .map_err(fail)?;
+            println!("{change}");
+            Ok(())
         }
         AccountCommand::Group { command } => match command {
             AccountGroupCommand::Create(args) => {
-                account_change(
-                    &mut client,
-                    Request::AccountGroupCreate(anth_wire::AccountGroupCreate {
+                let change = client
+                    .account_group_create(&anth_wire::AccountGroupCreate {
                         name: args.name.clone(),
                         gid: args.gid,
                         system: args.system,
-                    }),
-                )
-                .await
+                    })
+                    .await
+                    .map_err(fail)?;
+                println!("{change}");
+                Ok(())
             }
             AccountGroupCommand::Delete(args) => {
                 if !args.yes {
                     confirm(&format!("Delete group {}?", args.name))?;
                 }
-                account_change(
-                    &mut client,
-                    Request::AccountGroupDelete(anth_wire::AccountGroupDelete {
+                let change = client
+                    .account_group_delete(&anth_wire::AccountGroupDelete {
                         name: args.name.clone(),
-                    }),
-                )
-                .await
+                    })
+                    .await
+                    .map_err(fail)?;
+                println!("{change}");
+                Ok(())
             }
         },
-    }
-}
-
-async fn account_change(client: &mut Client, request: Request) -> CliResult {
-    let response = client
-        .call(&request)
-        .await
-        .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-    match response {
-        Response::AccountChanged { message } => {
-            println!("{message}");
-            Ok(())
-        }
-        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
     }
 }
 
@@ -2127,47 +1914,8 @@ fn read_password_stdin() -> Result<String, (u8, String)> {
     Ok(input)
 }
 
-/// Repeats one request on an interval until Ctrl-C.
-///
-/// A terminal gets the screen cleared for a stable picture; a pipe gets a blank
-/// line between snapshots so the output stays appendable.
-async fn watch_loop(
-    client: &mut Client,
-    interval: &str,
-    request: &Request,
-    format: fn(&Response) -> Result<String, (u8, String)>,
-) -> CliResult {
-    let interval = parse_interval(interval).map_err(|error| (2, error))?;
-    let terminal = std::io::stdout().is_terminal();
-    let mut ticker = tokio::time::interval(interval);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut first = true;
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => return Ok(()),
-            _ = ticker.tick() => {
-                let response = client
-                    .call(request)
-                    .await
-                    .map_err(|error| (1, error.to_string()))?;
-                let text = format(&response)?;
-                if terminal {
-                    println!("\x1b[2J\x1b[H{text}");
-                } else {
-                    if !first {
-                        println!();
-                    }
-                    println!("{text}");
-                }
-                std::io::stdout().flush().ok();
-                first = false;
-            }
-        }
-    }
-}
-
 async fn process_command(path: &std::path::Path, command: &ProcessCommand) -> CliResult {
-    let mut client = connect(path).await?;
+    let client = connect(path).await?;
 
     match command {
         ProcessCommand::List {
@@ -2175,19 +1923,19 @@ async fn process_command(path: &std::path::Path, command: &ProcessCommand) -> Cl
             cursor,
             watch,
         } => {
-            let request = Request::Processes {
-                limit: *limit,
-                cursor: cursor.clone(),
-            };
             let Some(interval) = watch else {
-                let response = client
-                    .call(&request)
+                let snapshot = client
+                    .processes(*limit, cursor.as_deref())
                     .await
-                    .map_err(|error| (1, error.to_string()))?;
-                println!("{}", render_processes(&response)?);
+                    .map_err(fail)?;
+                println!("{}", render::process_list(&snapshot.page));
                 return Ok(());
             };
-            watch_loop(&mut client, interval, &request, render_processes).await
+            let stream = client
+                .watch_processes(interval, *limit)
+                .await
+                .map_err(fail)?;
+            watch_stream(stream, |snapshot| render::process_list(&snapshot.page)).await
         }
         ProcessCommand::Signal {
             pid,
@@ -2197,7 +1945,7 @@ async fn process_command(path: &std::path::Path, command: &ProcessCommand) -> Cl
         } => {
             let signal = anth_wire::ProcessSignal::parse(signal)
                 .ok_or_else(|| (2, format!("`{signal}` is not an allowed signal")))?;
-            let target = find_process(&mut client, *pid).await?;
+            let target = find_process(&client, *pid).await?;
             if !*yes {
                 confirm(&format!(
                     "Send {} to process {pid} ({})?",
@@ -2205,82 +1953,41 @@ async fn process_command(path: &std::path::Path, command: &ProcessCommand) -> Cl
                     target.name
                 ))?;
             }
-            let response = client
-                .call(&Request::ProcessSignal {
-                    pid: *pid,
-                    start_ticks: target.start_ticks,
-                    signal,
-                    group: *group,
-                })
+            let answer = client
+                .process_signal(*pid, target.start_ticks, signal, *group)
                 .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::ProcessSignalled { pid, signal } => {
-                    println!("sent {} to {pid}", signal.as_str());
-                    Ok(())
-                }
-                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+                .map_err(fail)?;
+            println!("sent {} to {}", answer.signal, answer.pid);
+            Ok(())
         }
         ProcessCommand::Spawn { program, args, cwd } => {
-            let response = client
-                .call(&Request::ProcessSpawn {
-                    program: program.clone(),
-                    args: args.clone(),
-                    cwd: cwd.clone(),
-                })
+            let started = client
+                .process_spawn(program, args, cwd.as_deref())
                 .await
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            match response {
-                Response::ProcessStarted(started) => {
-                    println!("started {} (pid {})", started.program, started.pid);
-                    Ok(())
-                }
-                Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-                other => Err((1, format!("unexpected response: {other:?}"))),
-            }
+                .map_err(fail)?;
+            println!("started {} (pid {})", started.program, started.pid);
+            Ok(())
         }
     }
 }
 
 /// Finds one process so a signal can carry its `start_ticks`.
-async fn find_process(
-    client: &mut Client,
-    pid: u32,
-) -> Result<anth_wire::ProcessInfo, (u8, String)> {
+async fn find_process(client: &Client, pid: u32) -> Result<anth_wire::ProcessInfo, (u8, String)> {
     let mut cursor = None;
     for _ in 0..20 {
-        let response = client
-            .call(&Request::Processes {
-                limit: Some(1000),
-                cursor: cursor.clone(),
-            })
+        let snapshot = client
+            .processes(Some(1000), cursor.as_deref())
             .await
-            .map_err(|error| (1, error.to_string()))?;
-        match response {
-            Response::Processes(snapshot) => {
-                if let Some(found) = snapshot.page.items.iter().find(|row| row.pid == pid) {
-                    return Ok(found.clone());
-                }
-                match snapshot.page.next {
-                    Some(next) => cursor = Some(next),
-                    None => break,
-                }
-            }
-            Response::Error(error) => return Err((error.kind.exit_code(), error.to_string())),
-            other => return Err((1, format!("unexpected response: {other:?}"))),
+            .map_err(fail)?;
+        if let Some(found) = snapshot.page.items.iter().find(|row| row.pid == pid) {
+            return Ok(found.clone());
+        }
+        match snapshot.page.next {
+            Some(next) => cursor = Some(next),
+            None => break,
         }
     }
     Err((1, format!("no process `{pid}`")))
-}
-
-fn render_processes(response: &Response) -> Result<String, (u8, String)> {
-    match response {
-        Response::Processes(snapshot) => Ok(render::process_list(&snapshot.page)),
-        Response::Error(error) => Err((error.kind.exit_code(), error.to_string())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
-    }
 }
 
 /// Asks on a TTY; refuses instead of assuming an answer anywhere else.
@@ -2301,14 +2008,6 @@ fn confirm(prompt: &str) -> CliResult {
         Ok(())
     } else {
         Err((1, "aborted".to_string()))
-    }
-}
-
-fn render_response(response: &Response) -> Result<String, (u8, String)> {
-    match response {
-        Response::HostInfo(info) => Ok(render::host_info(info)),
-        Response::Error(error) => Err((error.kind.exit_code(), error.message.clone())),
-        other => Err((1, format!("unexpected response: {other:?}"))),
     }
 }
 

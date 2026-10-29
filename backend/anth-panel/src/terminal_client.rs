@@ -1,22 +1,18 @@
 //! Interactive terminal for the CLI.
 //!
-//! `anth-panel terminal` opens one session through the daemon and connects the
-//! local terminal to it. The socket is strictly request/response, so the CLI
-//! holds two connections: one for input/resize/close and one for the long-poll
-//! output. Both are the same peer uid, which is the owner the daemon assigns.
+//! `anth-panel terminal` opens one session over the same WebSocket endpoint the
+//! browser uses. One task writes keystrokes and resizes; this task prints the
+//! output and returns the shell's exit status.
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
-use std::sync::Arc;
-
-use anth_wire::{DEFAULT_TERMINAL_SIZE, MAX_TERMINAL_WAIT_MS, Request, Response, TerminalSize};
+use anth_client::Client;
+use anth_wire::{DEFAULT_TERMINAL_SIZE, PROTOCOL_VERSION, TerminalServerMessage, TerminalSize};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use tokio::io::AsyncReadExt;
-use tokio::sync::Mutex;
-
-use crate::client::Client;
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 /// Resolves the size from flags, then the local TTY, then the shared default.
 fn resolve_size(cols: Option<u16>, rows: Option<u16>) -> Result<TerminalSize, String> {
@@ -89,6 +85,12 @@ impl Drop for RawMode {
     }
 }
 
+/// One local event, so input and resize keep their order on the socket.
+enum LocalEvent {
+    Input(Vec<u8>),
+    Resize(TerminalSize),
+}
+
 pub async fn run(socket_path: &Path, cols: Option<u16>, rows: Option<u16>) -> Result<(), u8> {
     let size = match resolve_size(cols, rows) {
         Ok(size) => size,
@@ -105,45 +107,50 @@ pub async fn run(socket_path: &Path, cols: Option<u16>, rows: Option<u16>) -> Re
             return Err(1);
         }
     };
-    let socket = paths.socket.as_path();
-
-    // Two connections to the same peer uid: one carries input, resize and
-    // close, the other parks in the long-poll read.
-    let mut output = connect(socket).await?;
-    let mut control = connect(socket).await?;
-
-    let opened = match control
-        .call(&Request::TerminalOpen {
-            cols: size.cols,
-            rows: size.rows,
-        })
-        .await
-    {
-        Ok(Response::TerminalOpened(opened)) => opened,
-        Ok(Response::Error(error)) => {
-            eprintln!("[ERROR] {error}");
-            return Err(1);
-        }
-        Ok(other) => {
-            eprintln!("[ERROR] unexpected terminal open response: {other:?}");
+    let client = Client::unix(&paths.socket);
+    match client.hello().await {
+        Ok(hello) if hello.protocol_version == PROTOCOL_VERSION => {}
+        Ok(hello) => {
+            eprintln!(
+                "[ERROR] the daemon speaks protocol {}, this CLI speaks {PROTOCOL_VERSION}",
+                hello.protocol_version
+            );
             return Err(1);
         }
         Err(error) => {
             eprintln!("[ERROR] {error}");
             return Err(1);
         }
+    }
+
+    let session = match client.terminal(size).await {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            return Err(1);
+        }
     };
 
-    let id = opened.id;
     let _raw = RawMode::enable();
-    let control = Arc::new(Mutex::new(control));
-    forward_input(Arc::clone(&control), id.clone());
-    forward_resize(Arc::clone(&control), id.clone());
+    let (events, mut queue) = unbounded_channel();
+    forward_input(events.clone());
+    forward_resize(events);
 
-    let status = pump_output(&mut output, &id).await;
+    let (mut writer, mut reader) = session.split();
+    let writer_task = tokio::spawn(async move {
+        while let Some(event) = queue.recv().await {
+            let sent = match event {
+                LocalEvent::Input(bytes) => writer.input(&bytes).await,
+                LocalEvent::Resize(size) => writer.resize(size).await,
+            };
+            if sent.is_err() {
+                break;
+            }
+        }
+    });
 
-    let mut client = control.lock().await;
-    let _ = client.call(&Request::TerminalClose { id }).await;
+    let status = pump_output(&mut reader).await;
+    writer_task.abort();
 
     if status == 0 {
         Ok(())
@@ -154,24 +161,8 @@ pub async fn run(socket_path: &Path, cols: Option<u16>, rows: Option<u16>) -> Re
     }
 }
 
-/// Opens one socket connection and completes the handshake.
-async fn connect(socket: &Path) -> Result<Client, u8> {
-    let mut client = match Client::connect(socket).await {
-        Ok(client) => client,
-        Err(error) => {
-            eprintln!("Failed to connect to the daemon: {error}");
-            return Err(1);
-        }
-    };
-    if let Err(error) = client.hello().await {
-        eprintln!("[ERROR] {error}");
-        return Err(1);
-    }
-    Ok(client)
-}
-
-/// Forwards local keystrokes to the daemon until stdin closes.
-fn forward_input(control: Arc<Mutex<Client>>, id: String) {
+/// Forwards local keystrokes until stdin closes.
+fn forward_input(events: UnboundedSender<LocalEvent>) {
     tokio::spawn(async move {
         let mut stdin = tokio::io::stdin();
         let mut buffer = [0u8; 4096];
@@ -180,13 +171,8 @@ fn forward_input(control: Arc<Mutex<Client>>, id: String) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             };
-            let mut client = control.lock().await;
-            if client
-                .call(&Request::TerminalWrite {
-                    id: id.clone(),
-                    bytes_base64: STANDARD.encode(&buffer[..read]),
-                })
-                .await
+            if events
+                .send(LocalEvent::Input(buffer[..read].to_vec()))
                 .is_err()
             {
                 break;
@@ -196,7 +182,7 @@ fn forward_input(control: Arc<Mutex<Client>>, id: String) {
 }
 
 /// Sends the local window size whenever the terminal reports a change.
-fn forward_resize(control: Arc<Mutex<Client>>, id: String) {
+fn forward_resize(events: UnboundedSender<LocalEvent>) {
     tokio::spawn(async move {
         let Ok(mut signal) =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
@@ -207,57 +193,50 @@ fn forward_resize(control: Arc<Mutex<Client>>, id: String) {
             let Some((cols, rows)) = terminal_size() else {
                 continue;
             };
-            let mut client = control.lock().await;
-            let _ = client
-                .call(&Request::TerminalResize {
-                    id: id.clone(),
-                    cols,
-                    rows,
-                })
-                .await;
+            let size = TerminalSize { cols, rows };
+            if events.send(LocalEvent::Resize(size)).is_err() {
+                break;
+            }
         }
     });
 }
 
-/// Copies daemon output to stdout and returns the shell's exit status.
-async fn pump_output(client: &mut Client, id: &str) -> i32 {
+/// Copies terminal output to stdout and returns the shell's exit status.
+async fn pump_output(reader: &mut anth_client::TerminalReader) -> i32 {
     let mut stdout = std::io::stdout();
     loop {
-        let response = match client
-            .call(&Request::TerminalRead {
-                id: id.to_string(),
-                wait_ms: MAX_TERMINAL_WAIT_MS,
-            })
-            .await
-        {
-            Ok(response) => response,
+        let message = match reader.next().await {
+            Ok(Some(message)) => message,
+            Ok(None) => {
+                eprintln!("[ERROR] the daemon closed the terminal");
+                return 1;
+            }
             Err(error) => {
                 eprintln!("[ERROR] {error}");
-                return -1;
+                return 1;
             }
         };
-        match response {
-            Response::TerminalOutput(chunk) => {
-                if !chunk.bytes_base64.is_empty()
-                    && let Ok(bytes) = STANDARD.decode(&chunk.bytes_base64)
-                    && let Err(error) = stdout.write_all(&bytes).and_then(|()| stdout.flush())
-                {
+        match message {
+            TerminalServerMessage::Ready { .. } | TerminalServerMessage::Pong => {}
+            TerminalServerMessage::Output { data } => {
+                let bytes = match STANDARD.decode(data.as_bytes()) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        eprintln!("[ERROR] the daemon sent invalid base64 output");
+                        return 1;
+                    }
+                };
+                if let Err(error) = stdout.write_all(&bytes).and_then(|()| stdout.flush()) {
                     if error.kind() != std::io::ErrorKind::BrokenPipe {
                         eprintln!("Failed to write terminal output: {error}");
                     }
-                    return -1;
-                }
-                if chunk.eof {
-                    return chunk.exit_code.unwrap_or(-1);
+                    return 1;
                 }
             }
-            Response::Error(error) => {
-                eprintln!("[ERROR] {error}");
-                return -1;
-            }
-            other => {
-                eprintln!("[ERROR] unexpected terminal response: {other:?}");
-                return -1;
+            TerminalServerMessage::Exit { code } => return code,
+            TerminalServerMessage::Error { detail } => {
+                eprintln!("[ERROR] {detail}");
+                return 1;
             }
         }
     }

@@ -16,9 +16,9 @@ use anth_wire::{
     AccountSnapshot, ArchiveFormat, ArchiveListing, DEFAULT_TERMINAL_SIZE, ErrorKind, FileChunk,
     FileEntry, FileWritten, FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot,
     NetworkCreate, NetworkEdit, NetworkSnapshot, Page, PageRequest, PartitionKind, ProcessSignal,
-    ProcessSnapshot, Request, Response, SecretString, TerminalSize, TrashListing,
-    VolumeFormatRequest, VolumeMountRequest, VolumePartitionCreate, VolumePartitionDelete,
-    VolumePartitionResize, VolumeSnapshot, VolumeUnmountRequest, WireError,
+    ProcessSnapshot, SecretString, TerminalSize, TrashListing, VolumeFormatRequest,
+    VolumeMountRequest, VolumePartitionCreate, VolumePartitionDelete, VolumePartitionResize,
+    VolumeSnapshot, VolumeUnmountRequest, WireError,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -43,12 +43,20 @@ use crate::auth::{ACCESS_COOKIE, AuthError, AuthService, Grant, REFRESH_COOKIE};
 use crate::config::Config;
 use crate::dispatch::Daemon;
 use crate::log::{Level, Logger};
+use crate::rpc::{Request, Response};
 use crate::www;
 
 const MAX_BODY_BYTES: usize = 8 * 1024;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_ATTEMPTS: usize = 5;
 const DEMO_COOKIE: &str = "anth_demo";
+
+/// The owner the Unix-socket listener assigns after checking `peer_cred`.
+///
+/// Only that listener installs this extension, and a TCP request cannot carry
+/// an extension, so a remote caller can never claim to be local.
+#[derive(Clone, Debug)]
+pub struct LocalOwner(pub String);
 
 /// The owner assigned by the demo cookie middleware.
 #[derive(Clone)]
@@ -96,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/password", post(password))
         .route("/api/auth/sessions", get(list_sessions))
         .route("/api/auth/sessions/revoke", post(revoke_session))
+        .route("/api/hello", get(hello))
         .route("/api/host-info", get(host_info))
         .route("/api/host-info/watch", get(watch_host_info))
         .route("/api/network", get(network))
@@ -205,6 +214,13 @@ async fn demo_session(
 ) -> HttpResponse {
     if !state.daemon.demo_mode() {
         return next.run(request).await;
+    }
+    // A local caller has no browser cookie jar. Its uid is the owner, so every
+    // CLI command lands in the same demo session instead of a fresh one.
+    if let Some(owner) = request.extensions().get::<LocalOwner>() {
+        let sid = format!("local-{}", owner.0);
+        request.extensions_mut().insert(DemoOwner(sid.clone()));
+        return crate::dispatch::with_demo_owner(sid, next.run(request)).await;
     }
     let existing = request
         .headers()
@@ -317,10 +333,18 @@ async fn log_request(
 
 async fn protocol_header(request: AxumRequest, next: axum::middleware::Next) -> HttpResponse {
     let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "x-anth-protocol",
+        HeaderValue::from_str(&anth_wire::PROTOCOL_VERSION.to_string())
+            .expect("a protocol version is a valid header value"),
+    );
     response
-        .headers_mut()
-        .insert("x-anth-protocol", HeaderValue::from_static("2"));
-    response
+}
+
+async fn hello() -> Json<anth_wire::Hello> {
+    Json(anth_wire::Hello {
+        protocol_version: anth_wire::PROTOCOL_VERSION,
+    })
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -347,6 +371,16 @@ impl FromRequestParts<AppState> for Authed {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        if let Some(local) = parts.extensions.get::<LocalOwner>() {
+            // A local demo request must use the session the middleware
+            // assigned, not the raw uid owner, so `--watch` and a plain
+            // command see the same machine.
+            let sid = parts
+                .extensions
+                .get::<DemoOwner>()
+                .map_or_else(|| local.0.clone(), |owner| owner.0.clone());
+            return Ok(Authed { sid });
+        }
         if !state.auth.required() {
             if let Some(owner) = parts.extensions.get::<DemoOwner>() {
                 return Ok(Authed {
@@ -2394,6 +2428,13 @@ async fn ws_terminal(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
     same_origin(&headers)?;
+    if !state.daemon.config().terminal.enabled {
+        return Err(ApiError::from(WireError::new(
+            ErrorKind::Forbidden,
+            "terminal_disabled",
+            "the terminal is disabled; set `[terminal] enabled = true`",
+        )));
+    }
     let Query(query) = query.map_err(|error| ApiError::invalid(error.to_string()))?;
     let size = match (query.cols, query.rows) {
         (None, None) => DEFAULT_TERMINAL_SIZE,

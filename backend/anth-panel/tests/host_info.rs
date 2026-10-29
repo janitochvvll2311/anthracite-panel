@@ -6,16 +6,16 @@ use std::sync::Arc;
 
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
-use anth_wire::{Request, Response};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
+
+mod common;
 
 fn scratch(name: &str) -> (PathBuf, PathBuf) {
     let nanos = std::time::SystemTime::now()
@@ -42,18 +42,14 @@ async fn the_socket_handshake_and_host_info_round_trip() {
     let (root, config_path) = scratch("host-info-socket");
     let (daemon, paths) = daemon(Config::dev_default(), &config_path);
     let listener = socket::bind(&paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&daemon)));
+    let router = common::local_router(Arc::clone(&daemon), &paths);
+    let server = tokio::spawn(socket::serve(listener, router));
 
-    let mut client = Client::connect(&paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
-    let response = client.call(&Request::HostInfo).await.expect("host-info");
-    match response {
-        Response::HostInfo(info) => {
-            assert!(!info.hostname.is_empty());
-            assert!(info.collected_at_ms > 0);
-        }
-        other => panic!("unexpected response: {other:?}"),
-    }
+    let client = anth_client::Client::unix(&paths.socket);
+    assert_eq!(client.hello().await.expect("hello").protocol_version, 4);
+    let info = client.host_info().await.expect("host-info");
+    assert!(!info.hostname.is_empty());
+    assert!(info.collected_at_ms > 0);
 
     server.abort();
     fs::remove_dir_all(root).expect("cleanup");
@@ -88,7 +84,7 @@ async fn http_host_info_and_auth_state_are_reachable_with_auth_off() {
             .headers()
             .get("x-anth-protocol")
             .and_then(|value| value.to_str().ok()),
-        Some("2")
+        Some("4")
     );
 
     let response = router

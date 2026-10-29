@@ -9,10 +9,9 @@ use std::time::Duration;
 use anth_host::backend::{
     Backends, FilesService, FirewallService, NetworkService, TerminalService,
 };
-use anth_wire::{
-    ErrorKind, FileBytes, MAX_TERMINAL_INPUT, PROTOCOL_VERSION, PageRequest, Request, Response,
-    TerminalOpened, TerminalOutput, TerminalSize, WireError,
-};
+use anth_wire::{ErrorKind, MAX_TERMINAL_INPUT, PageRequest, TerminalSize, WireError};
+
+use crate::rpc::{Request, Response, TerminalOpened, TerminalOutput};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
@@ -409,11 +408,6 @@ impl Daemon {
             ));
         }
         match request {
-            Request::Hello {
-                protocol_version,
-                client,
-                features,
-            } => hello(protocol_version, &client, &features),
             Request::HostInfo => {
                 let info = tokio::task::spawn_blocking(anth_host::collect)
                     .await
@@ -608,20 +602,6 @@ impl Daemon {
             } => Ok(Response::FilesRead(
                 files_of(&backends)?.read(&path, offset, max_bytes)?,
             )),
-            Request::FilesDownload {
-                path,
-                offset,
-                max_bytes,
-            } => {
-                let chunk = files_of(&backends)?.download_chunk(&path, offset, max_bytes)?;
-                Ok(Response::FilesDownload(FileBytes {
-                    path: chunk.path,
-                    offset: chunk.offset,
-                    size: chunk.size,
-                    eof: chunk.eof,
-                    data_base64: STANDARD.encode(chunk.bytes),
-                }))
-            }
             Request::FilesDelete { path } => Ok(Response::FilesDeleted {
                 path: files_of(&backends)?.delete(&path)?,
             }),
@@ -768,39 +748,6 @@ impl Daemon {
     }
 }
 
-fn hello(protocol_version: u16, client: &str, features: &[String]) -> Result<Response, WireError> {
-    if protocol_version != PROTOCOL_VERSION {
-        return Err(WireError::new(
-            ErrorKind::Invalid,
-            "protocol_mismatch",
-            format!(
-                "this daemon speaks protocol {PROTOCOL_VERSION}, the client speaks {protocol_version}"
-            ),
-        ));
-    }
-    if client.is_empty() || client.len() > 64 || features.len() > 32 {
-        return Err(WireError::new(
-            ErrorKind::Invalid,
-            "invalid_hello",
-            "the Hello client or feature list is out of bounds",
-        ));
-    }
-    if features.iter().any(|feature| feature.len() > 64) {
-        return Err(WireError::new(
-            ErrorKind::Invalid,
-            "invalid_hello",
-            "a Hello feature is longer than 64 characters",
-        ));
-    }
-
-    Ok(Response::Welcome {
-        protocol_version: PROTOCOL_VERSION,
-        server: "anth-panel".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        features: Vec::new(),
-    })
-}
-
 /// Runs a blocking PTY operation on the blocking pool.
 ///
 /// `portable-pty` spawns processes and reaps them with `waitpid`; doing that on
@@ -852,7 +799,6 @@ fn feature_of(request: &Request) -> Option<&'static str> {
         | Request::AccountGroupDelete(_) => Some("accounts"),
         Request::FilesList { .. }
         | Request::FilesRead { .. }
-        | Request::FilesDownload { .. }
         | Request::FilesDelete { .. }
         | Request::FilesWrite { .. }
         | Request::FilesUpload { .. }
@@ -877,7 +823,6 @@ fn feature_of(request: &Request) -> Option<&'static str> {
 
 fn operation_of(request: &Request) -> &'static str {
     match request {
-        Request::Hello { .. } => "hello",
         Request::HostInfo => "host-info",
         Request::Network => "network",
         Request::NetworkSetState { .. } => "network-set-state",
@@ -908,7 +853,6 @@ fn operation_of(request: &Request) -> &'static str {
         Request::SystemReboot { .. } => "system-reboot",
         Request::FilesList { .. } => "files-list",
         Request::FilesRead { .. } => "files-read",
-        Request::FilesDownload { .. } => "files-download",
         Request::FilesDelete { .. } => "files-delete",
         Request::FilesWrite { .. } => "files-write",
         Request::FilesUpload { .. } => "files-upload",

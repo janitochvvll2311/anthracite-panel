@@ -28,7 +28,9 @@ so it cannot select the real backends by mistake.
 Every browser gets an anonymous `anth_demo` cookie. Its value is generated
 server-side and scopes one complete demo machine: network, firewall, files,
 processes, storage, accounts and terminal state. Two visitors never see each
-other's changes, and a socket CLI keeps its own `daemon` session.
+other's changes. A local caller has no cookie jar, so the Unix socket maps its
+`peer_cred` owner to one shared `local-socket:<uid>` demo session: every CLI
+command sees the state left by the previous one.
 
 - `[demo] session_ttl_seconds` drops a session after that much idle time; `0`
   disables expiry. The reaper runs every 30 seconds.

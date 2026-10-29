@@ -40,10 +40,17 @@ bun install
 The `tests/` project starts the demo, disables auth for the local run, exercises
 the synthetic network/firewall through the UI and API, and stops both servers.
 
-- Rust workspace: `anth-wire`, `anth-host`, `anth-extension`, `anth-plugin`, `anth-panel`.
-- Bun workspace: `anth-wire` (clients/protocol), `anth-widget` (Lit components) and `anth-app` (shell/build).
-- Length-prefixed JSON wire contract with a mandatory `Hello`/`Welcome`,
-  one error type and explicit pagination.
+- Rust workspace: `anth-wire`, `anth-client`, `anth-host`, `anth-extension`,
+  `anth-plugin`, `anth-panel`.
+- Bun workspace: `anth-wire` (DTOs and client interfaces), `anth-client`
+  (HTTP/WebSocket implementations), `anth-widget` (Lit components) and `anth-app`
+  (shell/build).
+- HTTP is the only public dialect. The same router serves TCP (TLS at the proxy) and the Unix
+  socket; the CLI is an HTTP client over the socket. `anth-wire` carries DTOs,
+  one error type and explicit pagination; `GET /api/hello` and
+  `X-Anth-Protocol` carry the version.
+- Snapshots stream over SSE and the terminal is one WebSocket shared by the
+  browser and the CLI.
 - Pure `/proc` and `os-release` parsers with fixture tests.
 - Unix-socket daemon and CLI `host-info`, including the grouped webui-like
   output.

@@ -7,7 +7,7 @@ draft explicitly.
 
 Implementation status: Phase 0 and the Phase 1 host-info slice have landed —
 workspace, `anth-wire`, `anth-host`, config/state atomic writes, logger, CI,
-Unix socket with `Hello`, HTTP + SSE, CLI `host-info`, minimal auth and the Lit
+HTTP over TCP and the Unix socket, SSE, CLI `host-info`, minimal auth and the Lit
 shell with its embed guard. Phase 2 adds login rate limiting, session listing
 and revocation, the settings surface and restart/reboot. Phase 3 is in place:
 file listing, text and image previews, a tabbed create/edit/save editor, a
@@ -43,58 +43,77 @@ the channel and target explicitly in Phase 0 so the install is reproducible.
 
 ---
 
-## 1. Wire v3 minimal contract
+## 1. Wire v4 minimal contract
+
+HTTP is the only public dialect. TCP (TLS at the reverse proxy) serves the browser and remote clients;
+the Unix socket serves the CLI and local integrations with the same router. The
+CLI is an HTTP client, not a second protocol.
 
 ### Constants
 
 ```rust
-pub const PROTOCOL_VERSION: u16 = 3;
-pub const MAX_FRAME_LEN: usize = 64 * 1024 * 1024;
+pub const PROTOCOL_VERSION: u16 = 4;
 pub const DEFAULT_PAGE_LIMIT: u16 = 100;
 pub const MAX_PAGE_LIMIT: u16 = 1000;
 pub const MAX_CURSOR_LEN: usize = 512;
 ```
 
-- Frame: 4-byte big-endian payload length, then JSON.
-- A payload above `MAX_FRAME_LEN` is `TooLarge`, never shortened.
+- Every response carries `X-Anth-Protocol: 4`; a client that speaks another
+  version stops before it misreads a body.
+- `anth-wire` holds data transfer objects only. The daemon's internal command
+  enum lives in `anth-panel` and is not part of the public contract.
 - Pre-1.0.0 breaks are allowed; bump `PROTOCOL_VERSION` and record the break in
   `protocol-changelog.md`.
 
 ### Handshake
 
-```rust
-Request::Hello {
-    protocol_version: u16,
-    client: String,          // "cli/0.3.0", "web/0.3.0", "test/0.3.0"
-    features: Vec<String>,   // reserved; empty today
-}
+```json
+GET /api/hello
 
-Response::Welcome {
-    protocol_version: u16,
-    server: String,          // "anth-panel"
-    version: String,         // CARGO_PKG_VERSION
-    features: Vec<String>,   // empty today
+{ "protocol_version": 4 }
+```
+
+- `/api/hello` is unauthenticated so a client can negotiate before login.
+- A client that speaks another version refuses the response and names both
+  versions; `X-Anth-Protocol` is the cheap check on every other response.
+- There is no `Hello`/`Welcome` frame and no first-frame requirement.
+
+### Local authentication
+
+- The Unix listener checks `peer_cred` on every connection. Only the daemon uid
+  and root are accepted.
+- An accepted connection gets a `socket:<uid>` owner. That extension is set by
+  the listener, never by a header, so a TCP request cannot claim to be local.
+- Remote requests use a session cookie (browser) or a bearer token (custom
+  client). Local requests need neither.
+- The socket file is `0660`.
+
+### Terminal and streams
+
+- Snapshots stream over SSE: `GET /api/{feature}/watch`.
+- The terminal is one WebSocket at `GET /api/terminal?cols=&rows=`. The browser
+  and the CLI share the same JSON messages:
+
+```rust
+enum TerminalClientMessage { Input { data }, Resize { cols, rows }, Ping }
+enum TerminalServerMessage {
+    Ready { shell, cols, rows, line_editing },
+    Output { data },
+    Exit { code },
+    Error { detail },
+    Pong,
 }
 ```
 
-- `Hello` is mandatory as the first socket frame.
-- `client` is non-empty, printable, at most 64 characters; no path or secret.
-- `features` entries are at most 64 characters, at most 32 entries; unknown
-  features are ignored. This is the scaffold for post-1.0 negotiation.
-- A mismatch answers `Invalid` with code `protocol_mismatch`, names both
-  versions, then closes the connection.
-- HTTP sends `X-Anth-Protocol: 2` on responses. A missing request header is
-  accepted; a present mismatching one is `400 invalid_request`. This is a
-  scaffold, not a compatibility promise.
+- `data` is standard base64. The message cap is 128 KiB.
 
 ### Core requests and responses
 
 Phase 0/1 only:
 
-```rust
-Request::HostInfo
-Response::HostInfo(HostInfo)
-Response::Error(WireError)
+```
+GET /api/host-info  ->  HostInfo
+any failure         ->  {"error": WireError}
 ```
 
 `Echo` is deliberately not added: `HostInfo` is the round-trip proof and a
@@ -584,9 +603,10 @@ The `code` is the stable machine tag. The initial registry:
 
 | Code | Kind | When |
 | --- | --- | --- |
-| `protocol_mismatch` | Invalid | `Hello` version differs |
-| `invalid_hello` | Invalid | malformed/missing first frame |
-| `frame_too_large` | TooLarge | frame over 64 MiB |
+| `protocol_mismatch` | Invalid | the client and daemon protocol versions differ |
+| `invalid_endpoint` | Invalid | a client endpoint is not `unix` or `http` |
+| `transport` | Internal | the client could not reach or read the daemon |
+| `terminal_upgrade` | Forbidden/Internal | the terminal WebSocket was refused |
 | `invalid_request` | Invalid | malformed body/enum |
 | `auth_required` | Unauthorized | no session |
 | `invalid_credentials` | Unauthorized | bad login |

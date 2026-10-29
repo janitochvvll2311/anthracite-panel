@@ -8,17 +8,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config, VolumesConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
 use anth_panel::volumes::{Probe, SystemVolumes};
-use anth_wire::{Request, Response, VolumeUsage};
+use anth_wire::VolumeUsage;
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
+
+mod common;
 
 const LSBLK: &str = r#"{
   "blockdevices": [
@@ -176,19 +177,15 @@ async fn the_http_route_returns_the_inventory_and_policy() {
 async fn the_socket_returns_the_same_inventory() {
     let built = daemon("volumes-socket");
     let listener = socket::bind(&built.paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&built.daemon)));
+    let router = common::local_router(Arc::clone(&built.daemon), &built.paths);
+    let server = tokio::spawn(socket::serve(listener, router));
 
-    let mut client = Client::connect(&built.paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
-    match client.call(&Request::Volumes).await.expect("volumes") {
-        Response::Volumes(snapshot) => {
-            assert_eq!(snapshot.devices.len(), 2);
-            assert_eq!(snapshot.mounts.len(), 2);
-            assert_eq!(snapshot.devices[1].parent.as_deref(), Some("sda"));
-            assert_eq!(snapshot.mount_root, "/mnt");
-        }
-        other => panic!("expected a storage snapshot, got {other:?}"),
-    }
+    let client = anth_client::Client::unix(&built.paths.socket);
+    let snapshot = client.volumes().await.expect("volumes");
+    assert_eq!(snapshot.devices.len(), 2);
+    assert_eq!(snapshot.mounts.len(), 2);
+    assert_eq!(snapshot.devices[1].parent.as_deref(), Some("sda"));
+    assert_eq!(snapshot.mount_root, "/mnt");
     server.abort();
 }
 

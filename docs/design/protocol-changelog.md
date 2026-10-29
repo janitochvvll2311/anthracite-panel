@@ -5,15 +5,20 @@ so an operator can tell which side to update.
 
 | Version | Release | State | Notes |
 | --- | --- | --- | --- |
-| 3 | v0.3.0 (draft) | current | Firewall gained `input`/`output` chains, editable rules, per-chain policies and `firewall_update`/`firewall_set_policy`; `firewall_flush` now carries `{ "chain": "input" or "output" }` |
+| 4 | v0.4.0 (draft) | current | HTTP is the only dialect: no length-prefixed frames and no `Hello`/`Welcome`; `GET /api/hello` plus `X-Anth-Protocol: 4` replaces the handshake; the Unix socket serves the same router with `peer_cred` authentication; the terminal is one WebSocket shared by the browser and the CLI; `anth-wire` is DTO-only |
+| 3 | v0.3.0 (draft) | superseded | Firewall gained `input`/`output` chains, editable rules, per-chain policies and `firewall_update`/`firewall_set_policy`; `firewall_flush` now carries `{ "chain": "input" or "output" }` |
 | 2 | v0.3.0 (draft) | superseded | 4-byte length-prefixed JSON, mandatory `Hello`/`Welcome`, pagination, files/trash/archive/terminal/process/network/firewall operations, one `WireError` |
 | 1 | v0.2.0 | superseded | length-prefixed JSON, `Hello`, per-feature wire types |
 | unversioned | v0.1.0 | legacy | newline-delimited JSON, 1 MiB line cap, `type`/`data` envelope |
 
-Version 2 gained files, terminal, process, network and firewall operations during the rewrite.
-Those are additive variants: no existing frame changed shape, and a peer that
-does not know a variant fails loudly at that frame instead of misreading it, so
-that version stayed 2.
+Version 4 removes the frame transport. `anth-wire` no longer exports `Request`,
+`Response`, `read_frame` or `write_frame`; the daemon keeps its internal command
+enum, and every client speaks HTTP. The CLI moved from typed frames to
+`anth-client` over the Unix socket, `--watch` moved from repeated requests to
+SSE, and `files download` streams the HTTP body instead of base64 chunks.
+`FileBytes` and the chunked `files_download` operation are gone. A daemon and
+client from different versions fail at `/api/hello` or on the `X-Anth-Protocol`
+header; the CLI checks both before a command runs.
 
 Version 3 changes the firewall model. `firewall_flush` is no longer a unit
 variant and requires a chain, `firewall_add` and `firewall_update` carry a
@@ -24,20 +29,20 @@ with the daemon. The `volumes`, `volumes_mount`, `volumes_unmount`,
 `volume_partition_delete`, `volume_format`, `accounts`, `account_create`,
 `account_delete`, `account_set_password`, `account_group_create` and
 `account_group_delete` requests and their responses are additive to version 3.
-The `files_download` request and its `FileBytes` response are additive too; they
-give socket clients the binary read that HTTP already had as
-`/api/files/download`.
+
+Version 2 gained files, terminal, process, network and firewall operations
+during the rewrite. Those were additive variants: no existing message changed
+shape, so that version stayed 2.
 
 ## Rules before 1.0.0
 
 - A breaking change bumps `PROTOCOL_VERSION` and is recorded here with the old
   version, the new version and the client action (upgrade, re-login, migrate).
-- `anth-wire`, the CLI, the HTTP adapter, the frontend and the docs change
-  together. A client and daemon from different versions fail at the handshake
-  with both versions named.
-- The `features` list in `Hello`/`Welcome` is reserved. It is empty today; an
-  unknown feature is ignored so a later version can negotiate without changing
-  the handshake.
+- `anth-wire`, `anth-client`, the CLI, the HTTP adapter, the frontend and the
+  docs change together. A client and daemon from different versions fail at
+  `/api/hello` with both versions named.
+- `anth-wire` carries data transfer objects only. A transport change does not
+  add a request enum back to it.
 - Config, plugin manifests and grants are versioned separately. A wire bump does
   not silently reinterpret them.
 

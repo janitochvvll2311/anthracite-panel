@@ -7,17 +7,17 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config, NetworkConfig};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::network::SystemNetwork;
 use anth_panel::socket;
-use anth_wire::{Request, Response};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode, header};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
+
+mod common;
 
 fn scratch(name: &str) -> (PathBuf, PathBuf) {
     let nanos = SystemTime::now()
@@ -206,14 +206,12 @@ async fn the_watch_route_streams_a_network_event() {
 async fn the_socket_answers_a_network_request() {
     let (daemon, paths) = daemon("network-socket");
     let listener = socket::bind(&paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&daemon)));
+    let router = common::local_router(Arc::clone(&daemon), &paths);
+    let server = tokio::spawn(socket::serve(listener, router));
 
-    let mut client = Client::connect(&paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
-    match client.call(&Request::Network).await.expect("network") {
-        Response::Network(snapshot) => check_snapshot(&snapshot),
-        other => panic!("expected a network snapshot, got {other:?}"),
-    }
+    let client = anth_client::Client::unix(&paths.socket);
+    let snapshot = client.network().await.expect("network");
+    check_snapshot(&snapshot);
     server.abort();
 }
 

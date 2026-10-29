@@ -1,0 +1,365 @@
+//! The daemon's internal command vocabulary.
+//!
+//! Each HTTP handler and the app proxy translate a resource request into one
+//! `Request` and hand it to [`crate::dispatch::Daemon`]. Keeping the enum here
+//! means the HTTP surface and the app proxy cannot answer the same command
+//! differently, and it keeps `anth-wire` free of an RPC dialect.
+
+use serde::{Deserialize, Serialize};
+
+use anth_wire::{
+    AccountCreate, AccountDelete, AccountGroupCreate, AccountGroupDelete, AccountSetPassword,
+    AccountSnapshot, ArchiveFormat, ArchiveListing, FileChunk, FileEntry, FileWritten,
+    FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot, HostInfo, NetworkCreate,
+    NetworkEdit, NetworkSnapshot, Page, ProcessSignal, ProcessSnapshot, ProcessStarted,
+    TrashListing, VolumeFormatRequest, VolumeMountRequest, VolumePartitionCreate,
+    VolumePartitionDelete, VolumePartitionResize, VolumeSnapshot, VolumeUnmountRequest, WireError,
+};
+
+/// A terminal now exists under its opaque handle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalOpened {
+    /// Opaque handle. The client never invents one.
+    pub id: String,
+    /// Program the daemon actually spawned.
+    pub program: String,
+    pub cols: u16,
+    pub rows: u16,
+    /// Whether the shell has native line editing and Tab completion.
+    #[serde(default)]
+    pub line_editing: bool,
+}
+
+/// One read from a terminal, or the end of the program.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalOutput {
+    pub id: String,
+    /// Advances only when bytes are returned, so a gap means a lost answer.
+    pub seq: u64,
+    /// Bytes, base64 encoded.
+    pub bytes_base64: String,
+    /// The program has exited. An empty output with `eof` is the end.
+    pub eof: bool,
+    /// Exit code when `eof` is true, when the platform reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum Request {
+    /// One snapshot of the host the daemon runs on.
+    HostInfo,
+    /// One snapshot of the host's network interfaces and default routes.
+    Network,
+    /// Bring one interface up or down. Requires `network.control`.
+    NetworkSetState { name: String, up: bool },
+    /// Create one virtual interface. Requires `network.manage`.
+    NetworkCreate(NetworkCreate),
+    /// Change the MTU or the administrative state. Requires `network.manage`.
+    NetworkEdit(NetworkEdit),
+    /// Rename an interface. It has to be down first.
+    NetworkRename { name: String, new_name: String },
+    /// Delete an interface. Requires `network.manage`.
+    ///
+    /// `peer` is the address the operation arrived from, when the transport
+    /// knows it. The daemon refuses to delete the interface that address is
+    /// routed through, because that is the connection in use.
+    NetworkDelete {
+        name: String,
+        #[serde(default)]
+        peer: Option<String>,
+    },
+    /// One snapshot of the managed `inet anthracite` firewall table.
+    FirewallStatus,
+    /// Add one allow/deny rule for a port. Requires `firewall.control`.
+    FirewallAdd {
+        #[serde(default)]
+        chain: FirewallChain,
+        action: FirewallAction,
+        protocol: FirewallProtocol,
+        port: u16,
+        /// Optional comment, letters/digits/`.`/`_`/`-`, at most 32 chars.
+        #[serde(default)]
+        comment: Option<String>,
+    },
+    /// Change the action, target or comment of one managed rule.
+    /// Requires `firewall.control`.
+    FirewallUpdate {
+        handle: u64,
+        #[serde(default)]
+        chain: FirewallChain,
+        action: FirewallAction,
+        protocol: FirewallProtocol,
+        port: u16,
+        /// Optional comment, letters/digits/`.`/`_`/`-`, at most 32 chars.
+        #[serde(default)]
+        comment: Option<String>,
+    },
+    /// Delete one rule from the managed chain by its nftables handle.
+    FirewallDelete { handle: u64 },
+    /// Remove every rule from one managed chain.
+    FirewallFlush {
+        #[serde(default)]
+        chain: FirewallChain,
+    },
+    /// Change the default policy of one managed base chain.
+    FirewallSetPolicy {
+        chain: FirewallChain,
+        policy: FirewallAction,
+    },
+    /// One snapshot of block devices and mounts.
+    Volumes,
+    /// Mount one device. Requires `[volumes] control`.
+    VolumesMount(VolumeMountRequest),
+    /// Unmount one current mountpoint. Requires `[volumes] control`.
+    VolumesUnmount(VolumeUnmountRequest),
+    /// Create one partition. Requires `[volumes] partition` and `disk_allow`.
+    VolumePartitionCreate(VolumePartitionCreate),
+    /// Resize one partition. Requires `[volumes] partition` and `disk_allow`.
+    VolumePartitionResize(VolumePartitionResize),
+    /// Delete one partition. Requires `[volumes] partition` and `disk_allow`.
+    VolumePartitionDelete(VolumePartitionDelete),
+    /// Format one partition. Requires `[volumes] format` and `disk_allow`.
+    VolumeFormat(VolumeFormatRequest),
+    /// One snapshot of local and directory-resolved users and groups.
+    Accounts,
+    /// Create one locked local user. Requires `[accounts] control`.
+    AccountCreate(AccountCreate),
+    /// Delete one local user. Requires `[accounts] control`.
+    AccountDelete(AccountDelete),
+    /// Set one local user's password. Requires `[accounts] manage_passwords`.
+    AccountSetPassword(AccountSetPassword),
+    /// Create one local group. Requires `[accounts] control`.
+    AccountGroupCreate(AccountGroupCreate),
+    /// Delete one local group. Requires `[accounts] control`.
+    AccountGroupDelete(AccountGroupDelete),
+    /// Replaces this process with a fresh copy of the same command line, which
+    /// re-reads the configuration.
+    Restart,
+    /// Asks the host to reboot after `delay_s` seconds.
+    SystemReboot {
+        /// Seconds to wait before the host goes down. At most
+        /// `anth_panel::lifecycle::MAX_REBOOT_DELAY_S`.
+        #[serde(default)]
+        delay_s: u32,
+    },
+    /// One page of a directory listing.
+    FilesList {
+        /// Path relative to the configured file root; empty or `/` is the root.
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        limit: Option<u16>,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    /// A chunk of a UTF-8 text file.
+    FilesRead {
+        path: String,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default)]
+        max_bytes: Option<u64>,
+    },
+    /// Deletes one regular file under the configured root. Requires
+    /// `files.write`; directories are refused.
+    FilesDelete { path: String },
+    /// Writes one UTF-8 text file under the configured root. Requires
+    /// `files.write`.
+    FilesWrite {
+        path: String,
+        content: String,
+        /// Fail with `conflict` when the file already exists instead of
+        /// replacing it.
+        #[serde(default)]
+        create: bool,
+    },
+    /// Uploads arbitrary bytes under the configured root. Requires
+    /// `files.write`.
+    FilesUpload {
+        path: String,
+        /// The file content, base64 encoded.
+        content_base64: String,
+        /// Fail with `conflict` when the file already exists instead of
+        /// replacing it.
+        #[serde(default)]
+        create: bool,
+    },
+    /// Moves one entry to the freedesktop.org trash. Requires `files.write`
+    /// and `files.trash`.
+    FilesTrash { path: String },
+    /// Lists every trash directory the daemon can see.
+    FilesTrashList,
+    /// Restores one trashed entry to its recorded path.
+    FilesTrashRestore {
+        id: String,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// Deletes everything the trash holds.
+    FilesTrashEmpty,
+    /// Compresses one entry. `destination` and `format` default from `path`.
+    FilesArchive {
+        path: String,
+        #[serde(default)]
+        destination: Option<String>,
+        #[serde(default)]
+        format: Option<ArchiveFormat>,
+    },
+    /// Lists one archive without extracting it.
+    FilesArchiveList { path: String },
+    /// Extracts one archive. `into` defaults beside the archive.
+    FilesArchiveExtract {
+        path: String,
+        #[serde(default)]
+        into: Option<String>,
+    },
+    /// Opens one PTY and returns its opaque handle.
+    TerminalOpen { cols: u16, rows: u16 },
+    /// Waits at most `wait_ms` for output from one session.
+    TerminalRead { id: String, wait_ms: u32 },
+    /// Sends keystrokes to one session.
+    TerminalWrite { id: String, bytes_base64: String },
+    /// Updates the window size and signals the process group.
+    TerminalResize { id: String, cols: u16, rows: u16 },
+    /// Ends one session. Closing an already-closed handle is not an error.
+    TerminalClose { id: String },
+    /// One page of the process table, sorted by accumulated CPU.
+    Processes {
+        #[serde(default)]
+        limit: Option<u16>,
+        #[serde(default)]
+        cursor: Option<String>,
+    },
+    /// Delivers an allowlisted signal to one process. Requires
+    /// `process.control`.
+    ProcessSignal {
+        pid: u32,
+        /// The value the caller saw; a mismatch means the pid was recycled.
+        start_ticks: u64,
+        signal: ProcessSignal,
+        /// Signal the process group led by `pid` instead of only the process.
+        #[serde(default)]
+        group: bool,
+    },
+    /// Starts a program from `process.spawn_allow`. Requires `process.spawn`.
+    ProcessSpawn {
+        /// Absolute path of the program.
+        program: String,
+        #[serde(default)]
+        args: Vec<String>,
+        /// Absolute working directory, or the daemon's own.
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+pub enum Response {
+    HostInfo(HostInfo),
+    /// One network inventory snapshot.
+    Network(NetworkSnapshot),
+    /// A network mutation succeeded. The message is ready for the CLI.
+    NetworkChanged {
+        message: String,
+    },
+    /// The managed firewall table and its rules.
+    FirewallSnapshot(FirewallSnapshot),
+    /// A firewall mutation succeeded. The message is ready for the CLI.
+    FirewallChanged {
+        message: String,
+    },
+    /// One storage inventory snapshot.
+    Volumes(VolumeSnapshot),
+    /// A storage mutation succeeded.
+    VolumeChanged {
+        message: String,
+    },
+    /// One account inventory snapshot.
+    Accounts(AccountSnapshot),
+    /// An account mutation succeeded. The message is ready for the CLI.
+    AccountChanged {
+        message: String,
+    },
+    /// The restart was accepted; this process is about to be replaced.
+    Restarting {
+        /// The pid the new image keeps.
+        pid: u32,
+    },
+    /// The reboot was accepted and is scheduled.
+    Rebooting {
+        /// Seconds until the host goes down.
+        delay_s: u32,
+    },
+    /// One page of a directory listing.
+    FilesList(Page<FileEntry>),
+    /// A chunk of a text file.
+    FilesRead(FileChunk),
+    /// A chunk of arbitrary file bytes.
+    /// The file was deleted.
+    FilesDeleted {
+        path: String,
+    },
+    /// The file was written.
+    FilesWritten(FileWritten),
+    /// The entry moved to the trash.
+    FilesTrashed {
+        path: String,
+        id: String,
+    },
+    /// The contents of every trash directory.
+    FilesTrashList(TrashListing),
+    /// The trash entry was restored.
+    FilesRestored {
+        id: String,
+        path: String,
+    },
+    /// The trash was emptied.
+    FilesTrashEmptied {
+        removed: usize,
+    },
+    /// The archive was created.
+    FilesArchiveCreated {
+        path: String,
+    },
+    /// The members of one archive.
+    FilesArchiveList(ArchiveListing),
+    /// The archive was extracted.
+    FilesArchiveExtracted {
+        path: String,
+        entries: Vec<String>,
+    },
+    /// A terminal now exists under its opaque handle.
+    TerminalOpened(TerminalOpened),
+    /// One read from a terminal, or the end of the program.
+    TerminalOutput(TerminalOutput),
+    /// One page of the process table with the policy the caller must respect.
+    Processes(ProcessSnapshot),
+    /// The signal was delivered.
+    ProcessSignalled {
+        pid: u32,
+        signal: ProcessSignal,
+    },
+    /// The program was started; it is not supervised.
+    ProcessStarted(ProcessStarted),
+    /// A write, resize or close succeeded and has no value to return.
+    Accepted,
+    Error(WireError),
+}
+
+impl Response {
+    pub fn error(&self) -> Option<&WireError> {
+        match self {
+            Response::Error(error) => Some(error),
+            _ => None,
+        }
+    }
+
+    pub fn into_result(self) -> Result<Self, WireError> {
+        match self {
+            Response::Error(error) => Err(error),
+            other => Ok(other),
+        }
+    }
+}

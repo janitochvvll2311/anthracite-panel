@@ -1,15 +1,17 @@
-//! Socket contract for the process table, signals and spawn.
+//! Local HTTP contract for the process table, signals and spawn.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anth_panel::client::Client;
+use anth_client::Client;
 use anth_panel::config::Config;
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
-use anth_wire::{ProcessSignal, Request, Response};
+use anth_wire::ProcessSignal;
+
+mod common;
 
 fn scratch(name: &str) -> (PathBuf, PathBuf) {
     let nanos = SystemTime::now()
@@ -24,7 +26,7 @@ fn scratch(name: &str) -> (PathBuf, PathBuf) {
     (dir.join("anth.sock"), dir.join("config.toml"))
 }
 
-async fn start(name: &str) -> (PathBuf, Arc<Daemon>, tokio::task::JoinHandle<()>) {
+async fn start(name: &str) -> (PathBuf, tokio::task::JoinHandle<()>) {
     let (socket_path, config_path) = scratch(name);
     let config = Config {
         socket_path: socket_path.to_string_lossy().into_owned(),
@@ -32,77 +34,53 @@ async fn start(name: &str) -> (PathBuf, Arc<Daemon>, tokio::task::JoinHandle<()>
     };
     let paths = config.paths(&config_path).unwrap();
     let logger = Arc::new(Logger::buffer(Settings::default()).0);
-    let daemon = Arc::new(Daemon::new(config, paths, logger));
+    let daemon = Arc::new(Daemon::new(config, paths.clone(), logger));
     let listener = socket::bind(&socket_path).unwrap();
-    let serve_daemon = Arc::clone(&daemon);
+    let router = common::local_router(Arc::clone(&daemon), &paths);
     let handle = tokio::spawn(async move {
-        let _ = socket::serve(listener, serve_daemon).await;
+        let _ = socket::serve(listener, router).await;
     });
-    (socket_path, daemon, handle)
+    (socket_path, handle)
 }
 
 async fn connect(path: &std::path::Path) -> Client {
-    let mut client = Client::connect(path).await.expect("connect");
+    let client = Client::unix(path);
     client.hello().await.expect("hello");
     client
 }
 
 #[tokio::test]
-async fn a_socket_snapshot_pages_signals_and_spawns() {
-    let (path, _daemon, server) = start("all").await;
-    let mut client = connect(&path).await;
+async fn a_local_snapshot_pages_signals_and_spawns() {
+    let (path, server) = start("all").await;
+    let client = connect(&path).await;
 
-    let page = match client
-        .call(&Request::Processes {
-            limit: Some(3),
-            cursor: None,
-        })
+    let snapshot = client.processes(Some(3), None).await.expect("processes");
+    assert!(snapshot.page.items.len() <= 3);
+    assert!(snapshot.page.total.unwrap_or(0) > 0);
+    assert!(snapshot.control_enabled);
+
+    let started = client
+        .process_spawn("/bin/sleep", &["30".to_string()], None)
         .await
-        .expect("processes")
-    {
-        Response::Processes(snapshot) => snapshot,
-        other => panic!("expected a snapshot, got {other:?}"),
-    };
-    assert!(page.page.items.len() <= 3);
-    assert!(page.page.total.unwrap_or(0) > 0);
-    assert!(page.control_enabled);
+        .expect("spawn");
 
-    let started = match client
-        .call(&Request::ProcessSpawn {
-            program: "/bin/sleep".to_string(),
-            args: vec!["30".to_string()],
-            cwd: None,
-        })
-        .await
-        .expect("spawn")
-    {
-        Response::ProcessStarted(started) => started,
-        other => panic!("expected a started process, got {other:?}"),
-    };
-
-    let process = find_process(&mut client, started.pid).await;
+    let process = find_process(&client, started.pid).await;
 
     let stale = client
-        .call(&Request::ProcessSignal {
-            pid: started.pid,
-            start_ticks: process.start_ticks + 1,
-            signal: ProcessSignal::Term,
-            group: false,
-        })
+        .process_signal(
+            started.pid,
+            process.start_ticks + 1,
+            ProcessSignal::Term,
+            false,
+        )
         .await
         .expect_err("stale signal");
     assert_eq!(stale.code, "process_changed");
 
-    let signalled = client
-        .call(&Request::ProcessSignal {
-            pid: started.pid,
-            start_ticks: process.start_ticks,
-            signal: ProcessSignal::Kill,
-            group: false,
-        })
+    client
+        .process_signal(started.pid, process.start_ticks, ProcessSignal::Kill, false)
         .await
         .expect("signal");
-    assert!(matches!(signalled, Response::ProcessSignalled { .. }));
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while std::path::Path::new(&format!("/proc/{}", started.pid)).exists() {
@@ -111,11 +89,7 @@ async fn a_socket_snapshot_pages_signals_and_spawns() {
     }
 
     let denied = client
-        .call(&Request::ProcessSpawn {
-            program: "/bin/sh".to_string(),
-            args: Vec::new(),
-            cwd: None,
-        })
+        .process_spawn("/bin/sh", &[], None)
         .await
         .expect_err("denied spawn");
     assert_eq!(denied.code, "program_not_allowed");
@@ -137,66 +111,41 @@ async fn process_requests_are_rejected_when_the_switches_are_off() {
     };
     let paths = config.paths(&config_path).unwrap();
     let logger = Arc::new(Logger::buffer(Settings::default()).0);
-    let daemon = Arc::new(Daemon::new(config, paths, logger));
+    let daemon = Arc::new(Daemon::new(config, paths.clone(), logger));
     let listener = socket::bind(&socket_path).unwrap();
+    let router = common::local_router(Arc::clone(&daemon), &paths);
     let server = tokio::spawn(async move {
-        let _ = socket::serve(listener, daemon).await;
+        let _ = socket::serve(listener, router).await;
     });
-    let mut client = connect(&socket_path).await;
+    let client = connect(&socket_path).await;
 
-    let listing = client
-        .call(&Request::Processes {
-            limit: None,
-            cursor: None,
-        })
-        .await
-        .expect("processes");
-    match listing {
-        Response::Processes(snapshot) => {
-            assert!(!snapshot.control_enabled);
-            assert!(!snapshot.spawn_enabled);
-            assert!(snapshot.spawn_allow.is_empty());
-        }
-        other => panic!("expected a snapshot, got {other:?}"),
-    }
+    let snapshot = client.processes(None, None).await.expect("processes");
+    assert!(!snapshot.control_enabled);
+    assert!(!snapshot.spawn_enabled);
+    assert!(snapshot.spawn_allow.is_empty());
 
     let signal = client
-        .call(&Request::ProcessSignal {
-            pid: 2,
-            start_ticks: 1,
-            signal: ProcessSignal::Term,
-            group: false,
-        })
+        .process_signal(2, 1, ProcessSignal::Term, false)
         .await
         .expect_err("signal");
     assert_eq!(signal.code, "process_control_disabled");
 
     let spawn = client
-        .call(&Request::ProcessSpawn {
-            program: "/bin/sleep".to_string(),
-            args: vec!["1".to_string()],
-            cwd: None,
-        })
+        .process_spawn("/bin/sleep", &["1".to_string()], None)
         .await
         .expect_err("spawn");
     assert_eq!(spawn.code, "process_spawn_disabled");
 
     server.abort();
 }
-async fn find_process(client: &mut Client, pid: u32) -> anth_wire::ProcessInfo {
+
+async fn find_process(client: &Client, pid: u32) -> anth_wire::ProcessInfo {
     let mut cursor = None;
     loop {
-        let snapshot = match client
-            .call(&Request::Processes {
-                limit: Some(1000),
-                cursor,
-            })
+        let snapshot = client
+            .processes(Some(1000), cursor.as_deref())
             .await
-            .expect("processes")
-        {
-            Response::Processes(snapshot) => snapshot,
-            other => panic!("expected a snapshot, got {other:?}"),
-        };
+            .expect("processes");
         let next = snapshot.page.next.clone();
         if let Some(process) = snapshot
             .page

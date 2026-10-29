@@ -62,33 +62,48 @@ pub const MAX_TERMINAL_INPUT: usize = 16 * 1024;
 /// Longest a read waits for output.
 pub const MAX_TERMINAL_WAIT_MS: u32 = 30_000;
 
-/// Reply to [`crate::Request::TerminalOpen`].
+/// One message a client sends on the terminal WebSocket.
+///
+/// The browser and the CLI share this shape, so the daemon has one terminal
+/// bridge instead of one per client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TerminalOpened {
-    /// Opaque handle. The client never invents one.
-    pub id: String,
-    /// Program the daemon actually spawned.
-    pub program: String,
-    pub cols: u16,
-    pub rows: u16,
-    /// Whether the shell has native line editing and Tab completion.
-    #[serde(default)]
-    pub line_editing: bool,
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum TerminalClientMessage {
+    /// Keystrokes, base64 encoded.
+    Input {
+        data: String,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
+    Ping,
 }
 
-/// Answer to [`crate::Request::TerminalRead`].
+/// One message the daemon sends on the terminal WebSocket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TerminalOutput {
-    pub id: String,
-    /// Advances only when bytes are returned, so a gap means a lost answer.
-    pub seq: u64,
-    /// Bytes, base64 encoded.
-    pub bytes_base64: String,
-    /// The program has exited. An empty output with `eof` is the end.
-    pub eof: bool,
-    /// Exit code when `eof` is true, when the platform reports it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum TerminalServerMessage {
+    /// The session exists. `shell` is the program the daemon spawned.
+    Ready {
+        shell: String,
+        cols: u16,
+        rows: u16,
+        line_editing: bool,
+    },
+    /// Terminal bytes, base64 encoded.
+    Output {
+        data: String,
+    },
+    /// The program exited and the session is over.
+    Exit {
+        code: i32,
+    },
+    /// The daemon could not open or continue the session.
+    Error {
+        detail: String,
+    },
+    Pong,
 }
 
 #[cfg(test)]

@@ -9,17 +9,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anth_panel::accounts::{AccountOutput, AccountRunner, HostProbe, LocalFiles, SystemAccounts};
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::{AccountsConfig, AuthConfig, Config};
 use anth_panel::dispatch::Daemon;
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
-use anth_wire::{Request, Response};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
+
+mod common;
 
 const PASSWD: &str = "\
 root:x:0:0:root:/root:/bin/sh
@@ -401,27 +401,19 @@ async fn the_socket_uses_the_same_account_dispatch() {
         Arc::clone(&runner),
     );
     let listener = socket::bind(&paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&daemon)));
+    let router = common::local_router(Arc::clone(&daemon), &paths);
+    let server = tokio::spawn(socket::serve(listener, router));
 
-    let mut client = Client::connect(&paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
-
-    match client.call(&Request::Accounts).await.expect("list") {
-        Response::Accounts(snapshot) => assert_eq!(snapshot.users.len(), 3),
-        other => panic!("expected accounts, got {other:?}"),
-    }
-    match client
-        .call(&Request::AccountGroupDelete(
-            anth_wire::AccountGroupDelete {
-                name: "scratch".to_string(),
-            },
-        ))
+    let client = anth_client::Client::unix(&paths.socket);
+    let snapshot = client.accounts().await.expect("list");
+    assert_eq!(snapshot.users.len(), 3);
+    let message = client
+        .account_group_delete(&anth_wire::AccountGroupDelete {
+            name: "scratch".to_string(),
+        })
         .await
-        .expect("delete group")
-    {
-        Response::AccountChanged { message } => assert_eq!(message, "deleted group scratch"),
-        other => panic!("expected an account change, got {other:?}"),
-    }
+        .expect("delete group");
+    assert_eq!(message, "deleted group scratch");
     assert_eq!(runner.calls()[0].0, "groupdel");
     assert_eq!(runner.calls()[0].1, vec!["scratch"]);
 

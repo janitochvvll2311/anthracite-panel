@@ -8,18 +8,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anth_panel::api::{self, AppState};
 use anth_panel::auth::AuthService;
-use anth_panel::client::Client;
 use anth_panel::config::{AuthConfig, Config};
 use anth_panel::dispatch::Daemon;
 use anth_panel::firewall::{NftOutput, NftRunner, SystemFirewall};
 use anth_panel::log::{Logger, Settings};
 use anth_panel::socket;
-use anth_wire::{FirewallAction, FirewallChain, FirewallProtocol, Request, Response};
+use anth_wire::{FirewallAction, FirewallChain, FirewallProtocol};
 use axum::body::Body;
 use axum::http::{Request as HttpRequest, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
+
+mod common;
 
 #[derive(Default)]
 struct FakeNft {
@@ -388,75 +389,51 @@ async fn the_socket_answers_status_and_mutations() {
     ]));
     let built = daemon("firewall-socket", true, Arc::clone(&nft));
     let listener = socket::bind(&built.paths.socket).expect("bind");
-    let server = tokio::spawn(socket::serve(listener, Arc::clone(&built.daemon)));
+    let router = common::local_router(Arc::clone(&built.daemon), &built.paths);
+    let server = tokio::spawn(socket::serve(listener, router));
 
-    let mut client = Client::connect(&built.paths.socket).await.expect("connect");
-    client.hello().await.expect("hello");
+    let client = anth_client::Client::unix(&built.paths.socket);
+    let snapshot = client.firewall().await.expect("status");
+    assert!(snapshot.initialized);
+    assert_eq!(snapshot.rules.len(), 2);
+    assert_eq!(snapshot.chains[1].chain, FirewallChain::Output);
 
-    match client.call(&Request::FirewallStatus).await.expect("status") {
-        Response::FirewallSnapshot(snapshot) => {
-            assert!(snapshot.initialized);
-            assert_eq!(snapshot.rules.len(), 2);
-            assert_eq!(snapshot.chains[1].chain, FirewallChain::Output);
-        }
-        other => panic!("expected a firewall snapshot, got {other:?}"),
-    }
-
-    match client
-        .call(&Request::FirewallAdd {
-            chain: FirewallChain::Output,
-            action: FirewallAction::Deny,
-            protocol: FirewallProtocol::Udp,
-            port: 53,
-            comment: Some("dns".to_string()),
-        })
+    let message = client
+        .firewall_add(
+            FirewallChain::Output,
+            FirewallAction::Deny,
+            FirewallProtocol::Udp,
+            53,
+            Some("dns"),
+        )
         .await
-        .expect("add")
-    {
-        Response::FirewallChanged { message } => assert_eq!(message, "denied udp/53 on output"),
-        other => panic!("expected a firewall change, got {other:?}"),
-    }
+        .expect("add");
+    assert_eq!(message, "denied udp/53 on output");
 
-    match client
-        .call(&Request::FirewallUpdate {
-            handle: 3,
-            chain: FirewallChain::Input,
-            action: FirewallAction::Allow,
-            protocol: FirewallProtocol::Tcp,
-            port: 443,
-            comment: Some("https".to_string()),
-        })
+    let message = client
+        .firewall_update(
+            3,
+            FirewallChain::Input,
+            FirewallAction::Allow,
+            FirewallProtocol::Tcp,
+            443,
+            Some("https"),
+        )
         .await
-        .expect("update")
-    {
-        Response::FirewallChanged { message } => {
-            assert_eq!(message, "updated firewall rule 3 to allow tcp/443 on input")
-        }
-        other => panic!("expected a firewall change, got {other:?}"),
-    }
+        .expect("update");
+    assert_eq!(message, "updated firewall rule 3 to allow tcp/443 on input");
 
-    match client
-        .call(&Request::FirewallSetPolicy {
-            chain: FirewallChain::Output,
-            policy: FirewallAction::Deny,
-        })
+    let message = client
+        .firewall_policy(FirewallChain::Output, FirewallAction::Deny)
         .await
-        .expect("policy")
-    {
-        Response::FirewallChanged { message } => assert_eq!(message, "set output policy to deny"),
-        other => panic!("expected a firewall change, got {other:?}"),
-    }
+        .expect("policy");
+    assert_eq!(message, "set output policy to deny");
 
-    match client
-        .call(&Request::FirewallFlush {
-            chain: FirewallChain::Input,
-        })
+    let message = client
+        .firewall_flush(FirewallChain::Input)
         .await
-        .expect("flush")
-    {
-        Response::FirewallChanged { message } => assert!(message.starts_with("flushed")),
-        other => panic!("expected a firewall change, got {other:?}"),
-    }
+        .expect("flush");
+    assert!(message.starts_with("flushed"));
 
     server.abort();
 }
