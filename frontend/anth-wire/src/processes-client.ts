@@ -1,3 +1,5 @@
+import type { ProcessSignalled } from './actions'
+
 /** One process row from `/api/processes`. */
 export interface ProcessInfo {
   pid: number
@@ -68,6 +70,6 @@ export interface ProcessesClient {
     startTicks: number,
     signal: ProcessSignal,
     group?: boolean,
-  ): Promise<void>
+  ): Promise<ProcessSignalled>
   spawn(program: string, args: string[], cwd?: string): Promise<ProcessStarted>
 }

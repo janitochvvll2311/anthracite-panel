@@ -1,3 +1,5 @@
+import type { Change } from './actions'
+
 /** One address assigned to an interface. */
 export interface NetworkAddress {
   family: 'inet' | 'inet6'
@@ -90,14 +92,18 @@ export interface NetworkEditRequest {
   up?: boolean
 }
 
+export interface NetworkEdit extends NetworkEditRequest {
+  name: string
+}
+
 export interface NetworkClient {
   get(): Promise<NetworkSnapshot>
   /** Repeats the inventory on an interval until the returned function runs. */
   watch(intervalMs: number, handlers: NetworkHandlers): () => void
   /** Brings one interface up or down. Resolves to the daemon message. */
-  setState(name: string, up: boolean): Promise<string>
-  create(request: NetworkCreateRequest): Promise<string>
-  edit(name: string, request: NetworkEditRequest): Promise<string>
-  rename(name: string, newName: string): Promise<string>
-  remove(name: string): Promise<string>
+  setState(name: string, up: boolean): Promise<Change>
+  create(request: NetworkCreateRequest): Promise<Change>
+  edit(request: NetworkEdit): Promise<Change>
+  rename(name: string, newName: string): Promise<Change>
+  remove(name: string): Promise<Change>
 }

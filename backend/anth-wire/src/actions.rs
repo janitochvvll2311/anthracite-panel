@@ -11,6 +11,12 @@ pub struct Change {
     pub message: String,
 }
 
+impl std::fmt::Display for Change {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
 /// A file or directory was deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileDeleted {

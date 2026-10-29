@@ -393,11 +393,11 @@ test('the HTTP client sends the firewall bodies', async () => {
   }) as unknown as typeof fetch
   const client = new HttpFirewallClient(fakeFetch)
 
-  await expect(client.add('input', 'deny', 'udp', 53, 'dns')).resolves.toBe('ok')
-  await expect(client.update(4, 'output', 'allow', 'tcp', 443, 'https')).resolves.toBe('ok')
-  await expect(client.remove(4)).resolves.toBe('ok')
-  await expect(client.flush('output')).resolves.toBe('ok')
-  await expect(client.setPolicy('input', 'deny')).resolves.toBe('ok')
+  await expect(client.add('input', 'deny', 'udp', 53, 'dns')).resolves.toEqual({ message: 'ok' })
+  await expect(client.update(4, 'output', 'allow', 'tcp', 443, 'https')).resolves.toEqual({ message: 'ok' })
+  await expect(client.remove(4)).resolves.toEqual({ message: 'ok' })
+  await expect(client.flush('output')).resolves.toEqual({ message: 'ok' })
+  await expect(client.setPolicy('input', 'deny')).resolves.toEqual({ message: 'ok' })
 
   expect(calls.map((call) => call.url)).toEqual([
     '/api/firewall/rule',

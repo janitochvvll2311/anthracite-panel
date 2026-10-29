@@ -295,7 +295,7 @@ test('up/down, edit, rename and delete go through the client', async () => {
   mtuForm.querySelector<HTMLInputElement>('input[name="mtu"]')!.value = '1400'
   mtuForm.dispatchEvent(new Event('submit', { cancelable: true }))
   await settle(element)
-  expect(feed.edit).toHaveBeenCalledWith('eth0', { mtu: 1400 })
+  expect(feed.edit).toHaveBeenCalledWith({ name: 'eth0', mtu: 1400 })
   expect(eth0().querySelector('form.inline')).toBeNull()
 
   // wlan0 is down, so it can be renamed and deleted.
@@ -390,13 +390,13 @@ test('the HTTP client sends the mutation bodies the daemon expects', async () =>
   }) as unknown as typeof fetch
   const client = new HttpNetworkClient(fakeFetch)
 
-  await expect(client.setState('eth0', false)).resolves.toBe('ok')
+  await expect(client.setState('eth0', false)).resolves.toEqual({ message: 'ok' })
   await expect(
     client.create({ name: 'v0', kind: 'veth', peer: 'v1', mtu: 1400, up: true }),
-  ).resolves.toBe('ok')
-  await expect(client.edit('eth0', { mtu: 9000, up: false })).resolves.toBe('ok')
-  await expect(client.rename('eth0', 'lan0')).resolves.toBe('ok')
-  await expect(client.remove('eth0')).resolves.toBe('ok')
+  ).resolves.toEqual({ message: 'ok' })
+  await expect(client.edit({ name: 'eth0', mtu: 9000, up: false })).resolves.toEqual({ message: 'ok' })
+  await expect(client.rename('eth0', 'lan0')).resolves.toEqual({ message: 'ok' })
+  await expect(client.remove('eth0')).resolves.toEqual({ message: 'ok' })
 
   expect(calls.map((call) => call.url)).toEqual([
     '/api/network/state',

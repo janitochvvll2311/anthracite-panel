@@ -327,7 +327,7 @@ async fn the_socket_answers_mutations_through_the_same_dispatch() {
         .network_create(&create("anthtest5", "bridge"))
         .await
         .expect("create");
-    assert_eq!(message, "created bridge interface `anthtest5`");
+    assert_eq!(message.message, "created bridge interface `anthtest5`");
 
     let error = client
         .network_set_state("lo", false)

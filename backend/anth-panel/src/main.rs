@@ -15,6 +15,7 @@ use anth_panel::log::{Format, Level, Logger, Out, Settings};
 use anth_panel::{render, socket};
 use anth_wire::{
     FirewallAction, FirewallChain, FirewallProtocol, PROTOCOL_VERSION, PageRequest, PartitionKind,
+    parse_interval,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -1172,6 +1173,12 @@ fn fail(error: anth_wire::WireError) -> (u8, String) {
     (error.kind.exit_code(), error.to_string())
 }
 
+/// Converts a `--watch` value such as `2s` to the milliseconds clients send.
+fn interval_ms(text: &str) -> Result<u64, (u8, String)> {
+    let duration = parse_interval(text).map_err(|error| (2, error))?;
+    Ok(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+}
+
 async fn lifecycle_command(path: &std::path::Path, command: LifecycleRequest) -> CliResult {
     let client = connect(path).await?;
     match command {
@@ -1370,7 +1377,10 @@ async fn host_info(path: &std::path::Path, watch: Option<String>) -> CliResult {
         println!("{}", render::host_info(&info));
         return Ok(());
     };
-    let stream = client.watch_host_info(&interval).await.map_err(fail)?;
+    let stream = client
+        .watch_host_info(interval_ms(&interval)?)
+        .await
+        .map_err(fail)?;
     watch_stream(stream, render::host_info).await
 }
 
@@ -1415,7 +1425,10 @@ async fn network_command(path: &std::path::Path, command: &NetworkCommand) -> Cl
                 println!("{}", render::network(&snapshot));
                 return Ok(());
             };
-            let stream = client.watch_network(interval).await.map_err(fail)?;
+            let stream = client
+                .watch_network(interval_ms(interval)?)
+                .await
+                .map_err(fail)?;
             watch_stream(stream, render::network).await
         }
         NetworkCommand::Up { name } => {
@@ -1932,7 +1945,7 @@ async fn process_command(path: &std::path::Path, command: &ProcessCommand) -> Cl
                 return Ok(());
             };
             let stream = client
-                .watch_processes(interval, *limit)
+                .watch_processes(interval_ms(interval)?, *limit)
                 .await
                 .map_err(fail)?;
             watch_stream(stream, |snapshot| render::process_list(&snapshot.page)).await

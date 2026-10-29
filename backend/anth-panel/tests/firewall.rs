@@ -408,7 +408,7 @@ async fn the_socket_answers_status_and_mutations() {
         )
         .await
         .expect("add");
-    assert_eq!(message, "denied udp/53 on output");
+    assert_eq!(message.message, "denied udp/53 on output");
 
     let message = client
         .firewall_update(
@@ -421,19 +421,22 @@ async fn the_socket_answers_status_and_mutations() {
         )
         .await
         .expect("update");
-    assert_eq!(message, "updated firewall rule 3 to allow tcp/443 on input");
+    assert_eq!(
+        message.message,
+        "updated firewall rule 3 to allow tcp/443 on input"
+    );
 
     let message = client
         .firewall_policy(FirewallChain::Output, FirewallAction::Deny)
         .await
         .expect("policy");
-    assert_eq!(message, "set output policy to deny");
+    assert_eq!(message.message, "set output policy to deny");
 
     let message = client
         .firewall_flush(FirewallChain::Input)
         .await
         .expect("flush");
-    assert!(message.starts_with("flushed"));
+    assert!(message.message.starts_with("flushed"));
 
     server.abort();
 }

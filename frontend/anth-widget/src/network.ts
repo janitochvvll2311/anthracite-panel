@@ -263,7 +263,7 @@ export class AnthNetwork extends LitElement {
       return
     }
     void this.run(
-      (client) => client.edit(iface.name, { mtu: Number(raw) }),
+      (client) => client.edit({ name: iface.name, mtu: Number(raw) }),
       () => {
         this.editing = undefined
       },

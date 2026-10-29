@@ -1,52 +1,65 @@
-import { responseError } from './http'
-import type { VolumeSnapshot, VolumeMountRequest, VolumePartitionCreate, VolumePartitionResize, VolumePartitionDelete, VolumeFormatRequest, StorageClient } from 'anth-wire'
+import type {
+  Change,
+  StorageClient,
+  VolumeFormatRequest,
+  VolumeMountRequest,
+  VolumePartitionCreate,
+  VolumePartitionDelete,
+  VolumePartitionResize,
+  VolumeSnapshot,
+  VolumeUnmountRequest,
+} from 'anth-wire'
+
+import {
+  HttpTransport,
+  asTransport,
+  defaultTransport,
+} from './http'
 
 export class HttpStorageClient implements StorageClient {
-  private readonly fetchImpl: typeof fetch
+  private readonly transport: HttpTransport
 
-  constructor(fetchImpl: typeof fetch = fetch) {
-    // Same rule as the auth client: fetch must not be called as a method.
-    this.fetchImpl = fetchImpl.bind(globalThis)
+  constructor(transport: HttpTransport | typeof fetch = defaultTransport) {
+    this.transport = asTransport(transport)
   }
 
-  async get(): Promise<VolumeSnapshot> {
-    const response = await this.fetchImpl('/api/volumes')
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as VolumeSnapshot
+  get(): Promise<VolumeSnapshot> {
+    return this.transport.json<VolumeSnapshot>('GET', '/api/volumes')
   }
 
-  async mount(request: VolumeMountRequest): Promise<string> {
-    return this.action('/api/volumes/mount', request)
+  mount(request: VolumeMountRequest): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/volumes/mount', request)
   }
 
-  async unmount(target: string): Promise<string> {
-    return this.action('/api/volumes/unmount', { target })
+  unmount(request: VolumeUnmountRequest): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/volumes/unmount', request)
   }
 
-  async createPartition(request: VolumePartitionCreate): Promise<string> {
-    return this.action('/api/volumes/partition/create', request)
+  createPartition(request: VolumePartitionCreate): Promise<Change> {
+    return this.transport.json<Change>(
+      'POST',
+      '/api/volumes/partition/create',
+      request,
+    )
   }
 
-  async resizePartition(request: VolumePartitionResize): Promise<string> {
-    return this.action('/api/volumes/partition/resize', request)
+  resizePartition(request: VolumePartitionResize): Promise<Change> {
+    return this.transport.json<Change>(
+      'POST',
+      '/api/volumes/partition/resize',
+      request,
+    )
   }
 
-  async deletePartition(request: VolumePartitionDelete): Promise<string> {
-    return this.action('/api/volumes/partition/delete', request)
+  deletePartition(request: VolumePartitionDelete): Promise<Change> {
+    return this.transport.json<Change>(
+      'POST',
+      '/api/volumes/partition/delete',
+      request,
+    )
   }
 
-  async formatPartition(request: VolumeFormatRequest): Promise<string> {
-    return this.action('/api/volumes/format', request)
-  }
-
-  private async action(path: string, body: unknown): Promise<string> {
-    const response = await this.fetchImpl(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!response.ok) throw await responseError(response)
-    const result = (await response.json()) as { message?: string }
-    return result.message ?? ''
+  formatPartition(request: VolumeFormatRequest): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/volumes/format', request)
   }
 }

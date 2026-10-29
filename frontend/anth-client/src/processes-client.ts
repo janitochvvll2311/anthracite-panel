@@ -1,89 +1,104 @@
-import { responseError } from './http'
+import type {
+  ProcessSignal,
+  ProcessSignalled,
+  ProcessSnapshot,
+  ProcessStarted,
+  ProcessesClient,
+  ProcessesHandlers,
+} from 'anth-wire'
+
+import { EventStream } from './event-stream'
+import {
+  HttpTransport,
+  asTransport,
+  defaultTransport,
+} from './http'
+
 /** Rows one live page asks for; the API caps a page at 1000. */
 const LIVE_LIMIT = 1000
 
-import type { ProcessSnapshot, ProcessSignal, ProcessStarted, ProcessesHandlers, ProcessesClient } from 'anth-wire'
-
 export class HttpProcessesClient implements ProcessesClient {
-  private readonly fetchImpl: typeof fetch
+  private readonly transport: HttpTransport
 
-  constructor(fetchImpl: typeof fetch = fetch) {
-    // Same rule as the auth client: fetch must not be called as a method.
-    this.fetchImpl = fetchImpl.bind(globalThis)
+  constructor(transport: HttpTransport | typeof fetch = defaultTransport) {
+    this.transport = asTransport(transport)
   }
 
-  async list(limit = LIVE_LIMIT, cursor?: string): Promise<ProcessSnapshot> {
+  list(limit = LIVE_LIMIT, cursor?: string): Promise<ProcessSnapshot> {
     const query = new URLSearchParams({ limit: String(limit) })
     if (cursor) {
       query.set('cursor', cursor)
     }
-    const response = await this.fetchImpl(`/api/processes?${query}`)
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as ProcessSnapshot
+    return this.transport.json<ProcessSnapshot>(
+      'GET',
+      `/api/processes?${query}`,
+    )
+  }
+
+  /** One snapshot per interval, with the same `next()` shape as Rust. */
+  stream(
+    intervalMs: number,
+    limit = LIVE_LIMIT,
+  ): EventStream<ProcessSnapshot> {
+    return new EventStream<ProcessSnapshot>(
+      this.transport.url(
+        `/api/processes/watch?interval=${intervalMs}ms&limit=${limit}`,
+      ),
+      'processes',
+    )
   }
 
   watch(intervalMs: number, handlers: ProcessesHandlers): () => void {
-    const source = new EventSource(
-      `/api/processes/watch?interval=${intervalMs}ms&limit=${LIVE_LIMIT}`,
-    )
+    const stream = this.stream(intervalMs)
     handlers.onStatus?.('connecting')
-
-    const onSnapshot = (event: MessageEvent<string>) => {
-      handlers.onStatus?.('live')
+    void (async () => {
       try {
-        handlers.onSnapshot(JSON.parse(event.data) as ProcessSnapshot)
+        for await (const snapshot of stream) {
+          handlers.onStatus?.('live')
+          handlers.onSnapshot(snapshot)
+        }
       } catch (error) {
-        handlers.onError(error instanceof Error ? error : new Error(String(error)))
+        handlers.onError(
+          error instanceof Error ? error : new Error(String(error)),
+        )
+      } finally {
+        handlers.onStatus?.('closed')
       }
-    }
-
-    source.addEventListener('processes', onSnapshot as EventListener)
-    source.onerror = () => {
-      handlers.onStatus?.('closed')
-      handlers.onError(new Error('the process stream is unavailable'))
-      source.close()
-    }
-
-    return () => {
-      handlers.onStatus?.('closed')
-      source.close()
-    }
+    })()
+    return () => stream.close()
   }
 
-  async signal(
+  signal(
     pid: number,
     startTicks: number,
     signal: ProcessSignal,
     group = false,
-  ): Promise<void> {
-    const response = await this.fetchImpl('/api/processes/signal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  ): Promise<ProcessSignalled> {
+    return this.transport.json<ProcessSignalled>(
+      'POST',
+      '/api/processes/signal',
+      {
         pid,
         start_ticks: startTicks,
         signal,
         group,
-      }),
-    })
-    if (!response.ok) throw await responseError(response)
+      },
+    )
   }
 
-  async spawn(
+  spawn(
     program: string,
     args: string[],
     cwd?: string,
   ): Promise<ProcessStarted> {
-    const response = await this.fetchImpl('/api/processes/spawn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    return this.transport.json<ProcessStarted>(
+      'POST',
+      '/api/processes/spawn',
+      {
         program,
         args,
         ...(cwd ? { cwd } : {}),
-      }),
-    })
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as ProcessStarted
+      },
+    )
   }
 }

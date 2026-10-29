@@ -25,6 +25,7 @@ function authClient(state: AuthState): AuthClient {
     login: vi.fn().mockResolvedValue(undefined),
     register: vi.fn().mockResolvedValue(undefined),
     logout: vi.fn().mockResolvedValue(undefined),
+    password: vi.fn().mockResolvedValue(undefined),
   }
 }
 
@@ -76,8 +77,10 @@ function mountShell(state: AuthState): AnthApp {
   AnthApp.filesClient = {
     list: vi.fn().mockResolvedValue({ items: [], next: null }),
     read: vi.fn(),
+    download: vi.fn(),
     delete: vi.fn(),
     write: vi.fn(),
+    upload: vi.fn(),
     trash: vi.fn(),
     trashList: vi.fn().mockResolvedValue({
       entries: [],

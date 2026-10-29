@@ -1,3 +1,5 @@
+import type { Change } from './actions'
+
 export type FirewallAction = 'allow' | 'deny'
 export type FirewallChain = 'input' | 'output'
 export type FirewallProtocol = 'tcp' | 'udp'
@@ -40,7 +42,7 @@ export interface FirewallClient {
     protocol: FirewallProtocol,
     port: number,
     comment?: string,
-  ): Promise<string>
+  ): Promise<Change>
   update(
     handle: number,
     chain: FirewallChain,
@@ -48,8 +50,8 @@ export interface FirewallClient {
     protocol: FirewallProtocol,
     port: number,
     comment?: string,
-  ): Promise<string>
-  remove(handle: number): Promise<string>
-  flush(chain: FirewallChain): Promise<string>
-  setPolicy(chain: FirewallChain, policy: FirewallAction): Promise<string>
+  ): Promise<Change>
+  remove(handle: number): Promise<Change>
+  flush(chain: FirewallChain): Promise<Change>
+  setPolicy(chain: FirewallChain, policy: FirewallAction): Promise<Change>
 }

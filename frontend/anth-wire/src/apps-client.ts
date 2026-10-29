@@ -1,3 +1,5 @@
+import type { Change } from './actions'
+
 export interface AppAnchor {
   method: string
   path: string
@@ -41,8 +43,8 @@ export interface AppInstallResult {
 export interface AppsClient {
   get(): Promise<AppsView>
   install(bundleBase64: string, acceptCapabilities: boolean): Promise<AppInstallResult>
-  enable(id: string): Promise<string>
-  disable(id: string): Promise<string>
-  remove(id: string): Promise<string>
-  approve(id: string, acceptCapabilities: boolean): Promise<string>
+  enable(id: string): Promise<Change>
+  disable(id: string): Promise<Change>
+  remove(id: string): Promise<Change>
+  approve(id: string, acceptCapabilities: boolean): Promise<Change>
 }

@@ -1,3 +1,5 @@
+import type { Rebooting, Restarting } from './actions'
+
 export interface Settings {
   version: number
   socket_path: string
@@ -29,8 +31,8 @@ export interface SessionsView {
 export interface SettingsClient {
   get(): Promise<Settings>
   update(key: string, value: unknown): Promise<{ restart_required: boolean }>
-  restart(): Promise<void>
-  reboot(delaySeconds: number): Promise<void>
+  restart(): Promise<Restarting>
+  reboot(delaySeconds: number): Promise<Rebooting>
   sessions(): Promise<SessionsView>
   revokeOthers(): Promise<number>
 }

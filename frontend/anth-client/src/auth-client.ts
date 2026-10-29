@@ -1,41 +1,41 @@
-import { responseError } from './http'
-import type { AuthState, AuthClient } from 'anth-wire'
+import type { AuthClient, AuthState } from 'anth-wire'
+
+import {
+  HttpTransport,
+  asTransport,
+  defaultTransport,
+} from './http'
 
 export class HttpAuthClient implements AuthClient {
-  private readonly fetchImpl: typeof fetch
+  private readonly transport: HttpTransport
 
-  constructor(fetchImpl: typeof fetch = fetch) {
-    // Browsers reject `obj.fetch(...)` with "Illegal invocation": fetch must
-    // run with `window` as `this`, never with the client instance.
-    this.fetchImpl = fetchImpl.bind(globalThis)
+  constructor(transport: HttpTransport | typeof fetch = defaultTransport) {
+    this.transport = asTransport(transport)
   }
 
-  async state(): Promise<AuthState> {
-    const response = await this.fetchImpl('/api/auth/state')
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as AuthState
+  state(): Promise<AuthState> {
+    return this.transport.json<AuthState>('GET', '/api/auth/state')
   }
 
-  async login(username: string, password: string): Promise<void> {
-    const response = await this.fetchImpl('/api/auth/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+  login(username: string, password: string): Promise<void> {
+    return this.transport.call('POST', '/api/auth/login', {
+      username,
+      password,
     })
-    if (!response.ok) throw await responseError(response)
   }
 
-  async register(password: string): Promise<void> {
-    const response = await this.fetchImpl('/api/auth/register', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password }),
+  register(password: string): Promise<void> {
+    return this.transport.call('POST', '/api/auth/register', { password })
+  }
+
+  logout(): Promise<void> {
+    return this.transport.call('POST', '/api/auth/logout')
+  }
+
+  password(current: string, next: string): Promise<void> {
+    return this.transport.call('POST', '/api/auth/password', {
+      current_password: current,
+      new_password: next,
     })
-    if (!response.ok) throw await responseError(response)
-  }
-
-  async logout(): Promise<void> {
-    const response = await this.fetchImpl('/api/auth/logout', { method: 'POST' })
-    if (!response.ok) throw await responseError(response)
   }
 }

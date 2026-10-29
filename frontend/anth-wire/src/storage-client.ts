@@ -1,3 +1,5 @@
+import type { Change } from './actions'
+
 export type VolumeKind =
   | 'disk'
   | 'part'
@@ -62,6 +64,10 @@ export interface VolumeMountRequest {
   allow_removable?: boolean
 }
 
+export interface VolumeUnmountRequest {
+  target: string
+}
+
 export type PartitionKind = 'linux' | 'swap' | 'efi'
 
 export interface VolumePartitionCreate {
@@ -90,10 +96,10 @@ export interface VolumeFormatRequest {
 
 export interface StorageClient {
   get(): Promise<VolumeSnapshot>
-  mount(request: VolumeMountRequest): Promise<string>
-  unmount(target: string): Promise<string>
-  createPartition(request: VolumePartitionCreate): Promise<string>
-  resizePartition(request: VolumePartitionResize): Promise<string>
-  deletePartition(request: VolumePartitionDelete): Promise<string>
-  formatPartition(request: VolumeFormatRequest): Promise<string>
+  mount(request: VolumeMountRequest): Promise<Change>
+  unmount(request: VolumeUnmountRequest): Promise<Change>
+  createPartition(request: VolumePartitionCreate): Promise<Change>
+  resizePartition(request: VolumePartitionResize): Promise<Change>
+  deletePartition(request: VolumePartitionDelete): Promise<Change>
+  formatPartition(request: VolumeFormatRequest): Promise<Change>
 }

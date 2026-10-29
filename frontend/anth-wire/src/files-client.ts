@@ -1,3 +1,12 @@
+import type {
+  ArchiveCreated,
+  ArchiveExtracted,
+  FileDeleted,
+  FileRestored,
+  FileTrashed,
+  TrashEmptied,
+} from './actions'
+
 export interface FileEntry {
   name: string
   kind: 'file' | 'dir' | 'symlink' | 'other'
@@ -66,13 +75,16 @@ export interface TrashListing {
 export interface FilesClient {
   list(path: string, cursor?: string | null, limit?: number): Promise<FilePage>
   read(path: string, offset?: number, maxBytes?: number): Promise<FileChunk>
-  delete(path: string): Promise<void>
+  /** Streams any file as a blob; the same bytes `files download` prints. */
+  download(path: string): Promise<Blob>
+  delete(path: string): Promise<FileDeleted>
   write(path: string, content: string, create: boolean): Promise<FileWritten>
-  trash(path: string): Promise<{ path: string; id: string }>
+  upload(path: string, contentBase64: string, create: boolean): Promise<FileWritten>
+  trash(path: string): Promise<FileTrashed>
   trashList(): Promise<TrashListing>
-  restore(id: string, overwrite?: boolean): Promise<void>
-  emptyTrash(): Promise<number>
-  archive(path: string, destination?: string, format?: ArchiveFormat): Promise<string>
+  restore(id: string, overwrite?: boolean): Promise<FileRestored>
+  emptyTrash(): Promise<TrashEmptied>
+  archive(path: string, destination?: string, format?: ArchiveFormat): Promise<ArchiveCreated>
   archiveList(path: string): Promise<ArchiveListing>
-  extractArchive(path: string, into?: string): Promise<{ path: string; entries: string[] }>
+  extractArchive(path: string, into?: string): Promise<ArchiveExtracted>
 }

@@ -11,4 +11,6 @@ export interface AuthClient {
   login(username: string, password: string): Promise<void>
   register(password: string): Promise<void>
   logout(): Promise<void>
+  /** Changes the panel password and revokes the other web sessions. */
+  password(current: string, next: string): Promise<void>
 }

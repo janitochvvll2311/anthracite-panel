@@ -206,7 +206,7 @@ test('sets a password with confirmation and rejects a mismatch', async () => {
   confirm.value = 'long enough'
   form.dispatchEvent(new Event('submit', { cancelable: true }))
   await settle(element)
-  expect(feed.setPassword).toHaveBeenCalledWith('alice', 'long enough')
+  expect(feed.setPassword).toHaveBeenCalledWith({ name: 'alice', password: 'long enough' })
   expect(element.shadowRoot?.textContent).toContain('Change applied.')
 })
 
@@ -248,7 +248,7 @@ test('creates and deletes groups from the groups view', async () => {
   const confirm = card(element, 'builders').querySelector<HTMLElement>('.confirm')!
   button(confirm, 'Delete').click()
   await settle(element)
-  expect(feed.deleteGroup).toHaveBeenCalledWith('builders')
+  expect(feed.deleteGroup).toHaveBeenCalledWith({ name: 'builders' })
 })
 
 test('read-only and disabled entries offer no actions', async () => {
@@ -287,13 +287,13 @@ test('the http client calls every account route with the right body', async () =
   }) as unknown as typeof fetch
   const client = new HttpAccountClient(fetchImpl)
 
-  await expect(client.createUser({ name: 'carol', system: false })).resolves.toBe('ok')
+  await expect(client.createUser({ name: 'carol', system: false })).resolves.toEqual({ message: 'ok' })
   await expect(
     client.deleteUser({ name: 'bob', remove_home: true }),
-  ).resolves.toBe('ok')
-  await expect(client.setPassword('bob', 'long enough')).resolves.toBe('ok')
-  await expect(client.createGroup({ name: 'devs', system: false })).resolves.toBe('ok')
-  await expect(client.deleteGroup('builders')).resolves.toBe('ok')
+  ).resolves.toEqual({ message: 'ok' })
+  await expect(client.setPassword({ name: 'bob', password: 'long enough' })).resolves.toEqual({ message: 'ok' })
+  await expect(client.createGroup({ name: 'devs', system: false })).resolves.toEqual({ message: 'ok' })
+  await expect(client.deleteGroup({ name: 'builders' })).resolves.toEqual({ message: 'ok' })
 
   expect(calls.map((call) => call.url)).toEqual([
     '/api/accounts/users',

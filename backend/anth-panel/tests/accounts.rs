@@ -413,7 +413,7 @@ async fn the_socket_uses_the_same_account_dispatch() {
         })
         .await
         .expect("delete group");
-    assert_eq!(message, "deleted group scratch");
+    assert_eq!(message.message, "deleted group scratch");
     assert_eq!(runner.calls()[0].0, "groupdel");
     assert_eq!(runner.calls()[0].1, vec!["scratch"]);
 

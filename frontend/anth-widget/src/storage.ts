@@ -242,7 +242,7 @@ export class AnthStorage extends LitElement {
 
   private unmount(target: string): void {
     void this.run(
-      (client) => client.unmount(target),
+      (client) => client.unmount({ target }),
       () => {
         this.confirmingUnmount = undefined
       },

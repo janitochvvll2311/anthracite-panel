@@ -336,7 +336,7 @@ export class AnthFiles extends LitElement {
     try {
       const created = await client.archive(path)
       await this.open(this.path)
-      this.notice = msg(str`Created ${created}`)
+      this.notice = msg(str`Created ${created.path}`)
     } catch (error) {
       this.error = describeError(error)
     } finally {

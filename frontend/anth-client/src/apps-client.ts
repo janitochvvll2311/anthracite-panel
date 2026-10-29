@@ -1,62 +1,56 @@
-import { responseError } from './http'
-import type { AppsView, AppInstallResult, AppsClient } from 'anth-wire'
+import type {
+  AppInstallResult,
+  AppsClient,
+  AppsView,
+  Change,
+} from 'anth-wire'
+
+import {
+  HttpTransport,
+  asTransport,
+  defaultTransport,
+} from './http'
 
 export class HttpAppsClient implements AppsClient {
-  private readonly fetchImpl: typeof fetch
+  private readonly transport: HttpTransport
 
-  constructor(fetchImpl: typeof fetch = fetch) {
-    // Same rule as the auth client: fetch must not be called as a method.
-    this.fetchImpl = fetchImpl.bind(globalThis)
+  constructor(transport: HttpTransport | typeof fetch = defaultTransport) {
+    this.transport = asTransport(transport)
   }
 
-  async get(): Promise<AppsView> {
-    const response = await this.fetchImpl('/api/apps')
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as AppsView
+  get(): Promise<AppsView> {
+    return this.transport.json<AppsView>('GET', '/api/apps')
   }
 
-  async install(
+  install(
     bundleBase64: string,
     acceptCapabilities: boolean,
   ): Promise<AppInstallResult> {
-    const response = await this.fetchImpl('/api/apps/install', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bundle_base64: bundleBase64,
-        accept_capabilities: acceptCapabilities,
-      }),
+    return this.transport.json<AppInstallResult>('POST', '/api/apps/install', {
+      bundle_base64: bundleBase64,
+      accept_capabilities: acceptCapabilities,
     })
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as AppInstallResult
   }
 
-  async enable(id: string): Promise<string> {
+  enable(id: string): Promise<Change> {
     return this.action(`/api/apps/${encodeURIComponent(id)}/enable`)
   }
 
-  async disable(id: string): Promise<string> {
+  disable(id: string): Promise<Change> {
     return this.action(`/api/apps/${encodeURIComponent(id)}/disable`)
   }
 
-  async remove(id: string): Promise<string> {
+  remove(id: string): Promise<Change> {
     return this.action(`/api/apps/${encodeURIComponent(id)}/remove`)
   }
 
-  async approve(id: string, acceptCapabilities: boolean): Promise<string> {
+  approve(id: string, acceptCapabilities: boolean): Promise<Change> {
     return this.action(`/api/apps/${encodeURIComponent(id)}/approve`, {
       accept_capabilities: acceptCapabilities,
     })
   }
 
-  private async action(path: string, body: unknown = {}): Promise<string> {
-    const response = await this.fetchImpl(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!response.ok) throw await responseError(response)
-    const result = (await response.json()) as { message?: string }
-    return result.message ?? ''
+  private action(path: string, body: unknown = {}): Promise<Change> {
+    return this.transport.json<Change>('POST', path, body)
   }
 }

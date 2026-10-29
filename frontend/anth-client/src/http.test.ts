@@ -31,5 +31,7 @@ test('falls back to the HTTP status when the body is empty', async () => {
   )
 
   expect(error.message).toBe('500 Server Error')
-  expect(error.code).toBeUndefined()
+  expect(error.kind).toBe('internal')
+  expect(error.code).toBe('internal')
+  expect(error.status).toBe(500)
 })

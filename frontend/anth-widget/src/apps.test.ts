@@ -248,10 +248,10 @@ test('the http client calls every app route', async () => {
 
   await expect(client.get()).resolves.toEqual(snapshot())
   await expect(client.install('AQID', false)).resolves.toBeTruthy()
-  await expect(client.enable('org.anth.hello')).resolves.toBe('ok')
-  await expect(client.disable('org.anth.hello')).resolves.toBe('ok')
-  await expect(client.remove('org.anth.hello')).resolves.toBe('ok')
-  await expect(client.approve('org.anth.hello', true)).resolves.toBe('ok')
+  await expect(client.enable('org.anth.hello')).resolves.toEqual({ message: 'ok' })
+  await expect(client.disable('org.anth.hello')).resolves.toEqual({ message: 'ok' })
+  await expect(client.remove('org.anth.hello')).resolves.toEqual({ message: 'ok' })
+  await expect(client.approve('org.anth.hello', true)).resolves.toEqual({ message: 'ok' })
 
   expect(calls.map((call) => call.url)).toEqual([
     '/api/apps',

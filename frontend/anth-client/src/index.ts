@@ -1,4 +1,7 @@
 export * from './http'
+export * from './client'
+export * from './event-stream'
+export * from './terminal-session'
 export * from './accounts-client'
 export * from './apps-client'
 export * from './auth-client'

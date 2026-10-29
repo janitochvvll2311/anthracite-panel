@@ -289,7 +289,7 @@ async fn the_socket_unmounts_a_scripted_mount() {
         })
         .await
         .expect("unmount");
-    assert_eq!(message, format!("unmounted {target_text}"));
+    assert_eq!(message.message, format!("unmounted {target_text}"));
     assert_eq!(runner.calls()[0].0, "umount");
     server.abort();
     let _ = fs::remove_dir_all(target);
@@ -324,7 +324,7 @@ async fn the_socket_mount_uses_the_same_dispatch() {
         })
         .await
         .expect("mount");
-    assert!(message.starts_with("mounted /dev/sda2"));
+    assert!(message.message.starts_with("mounted /dev/sda2"));
     server.abort();
     let _ = fs::remove_dir_all(target);
 }

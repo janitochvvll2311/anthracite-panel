@@ -95,16 +95,13 @@ impl Client {
         self.get("/api/host-info").await
     }
 
-    /// One host snapshot per `interval`.
+    /// One host snapshot per interval, in milliseconds.
     pub async fn watch_host_info(
         &self,
-        interval: &str,
+        interval_ms: u64,
     ) -> Result<EventStream<HostInfo>, WireError> {
-        self.stream(&format!(
-            "/api/host-info/watch?interval={}",
-            encode(interval)
-        ))
-        .await
+        self.stream(&format!("/api/host-info/watch?interval={}ms", interval_ms))
+            .await
     }
 
     // ---- network ---------------------------------------------------------
@@ -114,51 +111,41 @@ impl Client {
         self.get("/api/network").await
     }
 
-    /// One network snapshot per `interval`.
+    /// One network snapshot per interval, in milliseconds.
     pub async fn watch_network(
         &self,
-        interval: &str,
+        interval_ms: u64,
     ) -> Result<EventStream<NetworkSnapshot>, WireError> {
-        self.stream(&format!("/api/network/watch?interval={}", encode(interval)))
+        self.stream(&format!("/api/network/watch?interval={interval_ms}ms"))
             .await
     }
 
     /// Brings one interface up or down.
-    pub async fn network_set_state(&self, name: &str, up: bool) -> Result<String, WireError> {
+    pub async fn network_set_state(&self, name: &str, up: bool) -> Result<Change, WireError> {
         let body = serde_json::json!({ "name": name, "up": up });
-        self.post::<_, Change>("/api/network/state", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/network/state", &body).await
     }
 
     /// Creates one virtual interface.
-    pub async fn network_create(&self, body: &NetworkCreate) -> Result<String, WireError> {
-        self.post::<_, Change>("/api/network/create", body)
-            .await
-            .map(|change| change.message)
+    pub async fn network_create(&self, body: &NetworkCreate) -> Result<Change, WireError> {
+        self.post::<_, Change>("/api/network/create", body).await
     }
 
     /// Changes an interface's MTU or administrative state.
-    pub async fn network_edit(&self, body: &NetworkEdit) -> Result<String, WireError> {
-        self.post::<_, Change>("/api/network/edit", body)
-            .await
-            .map(|change| change.message)
+    pub async fn network_edit(&self, body: &NetworkEdit) -> Result<Change, WireError> {
+        self.post::<_, Change>("/api/network/edit", body).await
     }
 
     /// Renames one interface.
-    pub async fn network_rename(&self, name: &str, new_name: &str) -> Result<String, WireError> {
+    pub async fn network_rename(&self, name: &str, new_name: &str) -> Result<Change, WireError> {
         let body = serde_json::json!({ "name": name, "new_name": new_name });
-        self.post::<_, Change>("/api/network/rename", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/network/rename", &body).await
     }
 
     /// Deletes one interface. The daemon refuses to cut the connection in use.
-    pub async fn network_delete(&self, name: &str) -> Result<String, WireError> {
+    pub async fn network_delete(&self, name: &str) -> Result<Change, WireError> {
         let body = serde_json::json!({ "name": name });
-        self.post::<_, Change>("/api/network/delete", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/network/delete", &body).await
     }
 
     // ---- firewall --------------------------------------------------------
@@ -176,7 +163,7 @@ impl Client {
         protocol: FirewallProtocol,
         port: u16,
         comment: Option<&str>,
-    ) -> Result<String, WireError> {
+    ) -> Result<Change, WireError> {
         let body = serde_json::json!({
             "chain": chain,
             "action": action,
@@ -184,9 +171,7 @@ impl Client {
             "port": port,
             "comment": comment,
         });
-        self.post::<_, Change>("/api/firewall/rule", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/firewall/rule", &body).await
     }
 
     /// Changes one managed rule.
@@ -199,7 +184,7 @@ impl Client {
         protocol: FirewallProtocol,
         port: u16,
         comment: Option<&str>,
-    ) -> Result<String, WireError> {
+    ) -> Result<Change, WireError> {
         let body = serde_json::json!({
             "handle": handle,
             "chain": chain,
@@ -208,25 +193,19 @@ impl Client {
             "port": port,
             "comment": comment,
         });
-        self.post::<_, Change>("/api/firewall/update", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/firewall/update", &body).await
     }
 
     /// Deletes one managed rule by handle.
-    pub async fn firewall_delete(&self, handle: u64) -> Result<String, WireError> {
+    pub async fn firewall_delete(&self, handle: u64) -> Result<Change, WireError> {
         let body = serde_json::json!({ "handle": handle });
-        self.post::<_, Change>("/api/firewall/delete", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/firewall/delete", &body).await
     }
 
     /// Removes every rule from one managed chain.
-    pub async fn firewall_flush(&self, chain: FirewallChain) -> Result<String, WireError> {
+    pub async fn firewall_flush(&self, chain: FirewallChain) -> Result<Change, WireError> {
         let body = serde_json::json!({ "chain": chain });
-        self.post::<_, Change>("/api/firewall/flush", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/firewall/flush", &body).await
     }
 
     /// Sets the default policy of one managed base chain.
@@ -234,11 +213,9 @@ impl Client {
         &self,
         chain: FirewallChain,
         policy: FirewallAction,
-    ) -> Result<String, WireError> {
+    ) -> Result<Change, WireError> {
         let body = serde_json::json!({ "chain": chain, "policy": policy });
-        self.post::<_, Change>("/api/firewall/policy", &body)
-            .await
-            .map(|change| change.message)
+        self.post::<_, Change>("/api/firewall/policy", &body).await
     }
 
     // ---- storage ---------------------------------------------------------
@@ -249,54 +226,45 @@ impl Client {
     }
 
     /// Mounts one device.
-    pub async fn volume_mount(&self, body: &VolumeMountRequest) -> Result<String, WireError> {
-        self.post::<_, Change>("/api/volumes/mount", body)
-            .await
-            .map(|change| change.message)
+    pub async fn volume_mount(&self, body: &VolumeMountRequest) -> Result<Change, WireError> {
+        self.post::<_, Change>("/api/volumes/mount", body).await
     }
 
     /// Unmounts one target.
-    pub async fn volume_unmount(&self, body: &VolumeUnmountRequest) -> Result<String, WireError> {
-        self.post::<_, Change>("/api/volumes/unmount", body)
-            .await
-            .map(|change| change.message)
+    pub async fn volume_unmount(&self, body: &VolumeUnmountRequest) -> Result<Change, WireError> {
+        self.post::<_, Change>("/api/volumes/unmount", body).await
     }
 
     /// Creates one partition.
     pub async fn volume_partition_create(
         &self,
         body: &VolumePartitionCreate,
-    ) -> Result<String, WireError> {
+    ) -> Result<Change, WireError> {
         self.post::<_, Change>("/api/volumes/partition/create", body)
             .await
-            .map(|change| change.message)
     }
 
     /// Resizes one partition.
     pub async fn volume_partition_resize(
         &self,
         body: &VolumePartitionResize,
-    ) -> Result<String, WireError> {
+    ) -> Result<Change, WireError> {
         self.post::<_, Change>("/api/volumes/partition/resize", body)
             .await
-            .map(|change| change.message)
     }
 
     /// Deletes one partition.
     pub async fn volume_partition_delete(
         &self,
         body: &VolumePartitionDelete,
-    ) -> Result<String, WireError> {
+    ) -> Result<Change, WireError> {
         self.post::<_, Change>("/api/volumes/partition/delete", body)
             .await
-            .map(|change| change.message)
     }
 
     /// Formats one partition.
-    pub async fn volume_format(&self, body: &VolumeFormatRequest) -> Result<String, WireError> {
-        self.post::<_, Change>("/api/volumes/format", body)
-            .await
-            .map(|change| change.message)
+    pub async fn volume_format(&self, body: &VolumeFormatRequest) -> Result<Change, WireError> {
+        self.post::<_, Change>("/api/volumes/format", body).await
     }
 
     // ---- accounts --------------------------------------------------------
@@ -307,44 +275,37 @@ impl Client {
     }
 
     /// Creates one local user.
-    pub async fn account_create(&self, body: &AccountCreate) -> Result<String, WireError> {
-        self.post::<_, Change>("/api/accounts/users", body)
-            .await
-            .map(|change| change.message)
+    pub async fn account_create(&self, body: &AccountCreate) -> Result<Change, WireError> {
+        self.post::<_, Change>("/api/accounts/users", body).await
     }
 
     /// Deletes one local user.
-    pub async fn account_delete(&self, body: &AccountDelete) -> Result<String, WireError> {
+    pub async fn account_delete(&self, body: &AccountDelete) -> Result<Change, WireError> {
         self.post::<_, Change>("/api/accounts/users/delete", body)
             .await
-            .map(|change| change.message)
     }
 
     /// Sets one local user's password.
-    pub async fn account_password(&self, body: &AccountSetPassword) -> Result<String, WireError> {
+    pub async fn account_password(&self, body: &AccountSetPassword) -> Result<Change, WireError> {
         self.post::<_, Change>("/api/accounts/users/password", body)
             .await
-            .map(|change| change.message)
     }
 
     /// Creates one local group.
     pub async fn account_group_create(
         &self,
         body: &AccountGroupCreate,
-    ) -> Result<String, WireError> {
-        self.post::<_, Change>("/api/accounts/groups", body)
-            .await
-            .map(|change| change.message)
+    ) -> Result<Change, WireError> {
+        self.post::<_, Change>("/api/accounts/groups", body).await
     }
 
     /// Deletes one local group.
     pub async fn account_group_delete(
         &self,
         body: &AccountGroupDelete,
-    ) -> Result<String, WireError> {
+    ) -> Result<Change, WireError> {
         self.post::<_, Change>("/api/accounts/groups/delete", body)
             .await
-            .map(|change| change.message)
     }
 
     // ---- processes -------------------------------------------------------
@@ -373,10 +334,10 @@ impl Client {
     /// One process snapshot per `interval`.
     pub async fn watch_processes(
         &self,
-        interval: &str,
+        interval_ms: u64,
         limit: Option<u16>,
     ) -> Result<EventStream<ProcessSnapshot>, WireError> {
-        let mut path = format!("/api/processes/watch?interval={}", encode(interval));
+        let mut path = format!("/api/processes/watch?interval={}ms", interval_ms);
         if let Some(limit) = limit {
             path.push_str(&format!("&limit={limit}"));
         }

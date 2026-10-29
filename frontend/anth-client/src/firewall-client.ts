@@ -1,28 +1,37 @@
-import { responseError } from './http'
-import type { FirewallAction, FirewallChain, FirewallProtocol, FirewallSnapshot, FirewallClient } from 'anth-wire'
+import type {
+  Change,
+  FirewallAction,
+  FirewallChain,
+  FirewallClient,
+  FirewallProtocol,
+  FirewallSnapshot,
+} from 'anth-wire'
+
+import {
+  HttpTransport,
+  asTransport,
+  defaultTransport,
+} from './http'
 
 export class HttpFirewallClient implements FirewallClient {
-  private readonly fetchImpl: typeof fetch
+  private readonly transport: HttpTransport
 
-  constructor(fetchImpl: typeof fetch = fetch) {
-    // Same rule as the auth client: fetch must not be called as a method.
-    this.fetchImpl = fetchImpl.bind(globalThis)
+  constructor(transport: HttpTransport | typeof fetch = defaultTransport) {
+    this.transport = asTransport(transport)
   }
 
-  async get(): Promise<FirewallSnapshot> {
-    const response = await this.fetchImpl('/api/firewall')
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as FirewallSnapshot
+  get(): Promise<FirewallSnapshot> {
+    return this.transport.json<FirewallSnapshot>('GET', '/api/firewall')
   }
 
-  async add(
+  add(
     chain: FirewallChain,
     action: FirewallAction,
     protocol: FirewallProtocol,
     port: number,
     comment?: string,
-  ): Promise<string> {
-    return this.action('/api/firewall/rule', {
+  ): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/firewall/rule', {
       chain,
       action,
       protocol,
@@ -31,15 +40,15 @@ export class HttpFirewallClient implements FirewallClient {
     })
   }
 
-  async update(
+  update(
     handle: number,
     chain: FirewallChain,
     action: FirewallAction,
     protocol: FirewallProtocol,
     port: number,
     comment?: string,
-  ): Promise<string> {
-    return this.action('/api/firewall/update', {
+  ): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/firewall/update', {
       handle,
       chain,
       action,
@@ -49,26 +58,22 @@ export class HttpFirewallClient implements FirewallClient {
     })
   }
 
-  async remove(handle: number): Promise<string> {
-    return this.action('/api/firewall/delete', { handle })
-  }
-
-  async flush(chain: FirewallChain): Promise<string> {
-    return this.action('/api/firewall/flush', { chain })
-  }
-
-  async setPolicy(chain: FirewallChain, policy: FirewallAction): Promise<string> {
-    return this.action('/api/firewall/policy', { chain, policy })
-  }
-
-  private async action(path: string, body: unknown): Promise<string> {
-    const response = await this.fetchImpl(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+  remove(handle: number): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/firewall/delete', {
+      handle,
     })
-    if (!response.ok) throw await responseError(response)
-    const result = (await response.json()) as { message?: string }
-    return result.message ?? ''
+  }
+
+  flush(chain: FirewallChain): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/firewall/flush', {
+      chain,
+    })
+  }
+
+  setPolicy(chain: FirewallChain, policy: FirewallAction): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/firewall/policy', {
+      chain,
+      policy,
+    })
   }
 }

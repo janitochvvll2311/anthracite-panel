@@ -203,7 +203,7 @@ export class AnthAccounts extends LitElement {
       return
     }
     void this.run(
-      (client) => client.setPassword(user.name, password),
+      (client) => client.setPassword({ name: user.name, password }),
       () => {
         this.passwordFor = undefined
       },
@@ -226,7 +226,7 @@ export class AnthAccounts extends LitElement {
 
   private submitDeleteGroup(group: AccountGroup): void {
     void this.run(
-      (client) => client.deleteGroup(group.name),
+      (client) => client.deleteGroup({ name: group.name }),
       () => {
         this.confirmingDelete = undefined
       },

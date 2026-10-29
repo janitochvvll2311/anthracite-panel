@@ -234,7 +234,7 @@ test('unmounts a non-virtual mount after confirmation', async () => {
   expect(row.querySelector('.confirm')?.textContent).toContain('Unmount /mnt/data?')
   row.querySelector<HTMLButtonElement>('.confirm .danger')!.click()
   await settle(element)
-  expect(feed.unmount).toHaveBeenCalledWith('/mnt/data')
+  expect(feed.unmount).toHaveBeenCalledWith({ target: '/mnt/data' })
 })
 
 test('control off hides the mount form and the unmount button', async () => {
@@ -363,20 +363,20 @@ test('the HTTP client sends mount and unmount bodies', async () => {
       read_only: true,
       allow_removable: false,
     }),
-  ).resolves.toBe('ok')
-  await expect(client.unmount('/mnt/data')).resolves.toBe('ok')
+  ).resolves.toEqual({ message: 'ok' })
+  await expect(client.unmount({ target: '/mnt/data' })).resolves.toEqual({ message: 'ok' })
   await expect(
     client.createPartition({ disk: '/dev/sdb', kind: 'linux', size_bytes: 1024 }),
-  ).resolves.toBe('ok')
+  ).resolves.toEqual({ message: 'ok' })
   await expect(
     client.resizePartition({ disk: '/dev/sdb', number: 1, size_bytes: 2048 }),
-  ).resolves.toBe('ok')
+  ).resolves.toEqual({ message: 'ok' })
   await expect(
     client.deletePartition({ disk: '/dev/sdb', number: 1 }),
-  ).resolves.toBe('ok')
+  ).resolves.toEqual({ message: 'ok' })
   await expect(
     client.formatPartition({ partition: '/dev/sdb1', fs_type: 'ext4' }),
-  ).resolves.toBe('ok')
+  ).resolves.toEqual({ message: 'ok' })
 
   expect(calls.map((call) => call.url)).toEqual([
     '/api/volumes/mount',

@@ -1,48 +1,60 @@
-import { responseError } from './http'
-import type { AccountSnapshot, AccountCreate, AccountDelete, AccountGroupCreate, AccountClient } from 'anth-wire'
+import type {
+  AccountClient,
+  AccountCreate,
+  AccountDelete,
+  AccountGroupCreate,
+  AccountGroupDelete,
+  AccountSetPassword,
+  AccountSnapshot,
+  Change,
+} from 'anth-wire'
+
+import {
+  HttpTransport,
+  asTransport,
+  defaultTransport,
+} from './http'
 
 export class HttpAccountClient implements AccountClient {
-  private readonly fetchImpl: typeof fetch
+  private readonly transport: HttpTransport
 
-  constructor(fetchImpl: typeof fetch = fetch) {
-    // Same rule as the auth client: fetch must not be called as a method.
-    this.fetchImpl = fetchImpl.bind(globalThis)
+  constructor(transport: HttpTransport | typeof fetch = defaultTransport) {
+    this.transport = asTransport(transport)
   }
 
-  async get(): Promise<AccountSnapshot> {
-    const response = await this.fetchImpl('/api/accounts')
-    if (!response.ok) throw await responseError(response)
-    return (await response.json()) as AccountSnapshot
+  get(): Promise<AccountSnapshot> {
+    return this.transport.json<AccountSnapshot>('GET', '/api/accounts')
   }
 
-  async createUser(request: AccountCreate): Promise<string> {
-    return this.action('/api/accounts/users', request)
+  createUser(request: AccountCreate): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/accounts/users', request)
   }
 
-  async deleteUser(request: AccountDelete): Promise<string> {
-    return this.action('/api/accounts/users/delete', request)
+  deleteUser(request: AccountDelete): Promise<Change> {
+    return this.transport.json<Change>(
+      'POST',
+      '/api/accounts/users/delete',
+      request,
+    )
   }
 
-  async setPassword(name: string, password: string): Promise<string> {
-    return this.action('/api/accounts/users/password', { name, password })
+  setPassword(request: AccountSetPassword): Promise<Change> {
+    return this.transport.json<Change>(
+      'POST',
+      '/api/accounts/users/password',
+      request,
+    )
   }
 
-  async createGroup(request: AccountGroupCreate): Promise<string> {
-    return this.action('/api/accounts/groups', request)
+  createGroup(request: AccountGroupCreate): Promise<Change> {
+    return this.transport.json<Change>('POST', '/api/accounts/groups', request)
   }
 
-  async deleteGroup(name: string): Promise<string> {
-    return this.action('/api/accounts/groups/delete', { name })
-  }
-
-  private async action(path: string, body: unknown): Promise<string> {
-    const response = await this.fetchImpl(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!response.ok) throw await responseError(response)
-    const result = (await response.json()) as { message?: string }
-    return result.message ?? ''
+  deleteGroup(request: AccountGroupDelete): Promise<Change> {
+    return this.transport.json<Change>(
+      'POST',
+      '/api/accounts/groups/delete',
+      request,
+    )
   }
 }

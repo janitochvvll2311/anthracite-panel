@@ -1,3 +1,5 @@
+import type { Change } from './actions'
+
 export type AccountSource = 'local' | 'nss'
 
 export interface AccountUser {
@@ -54,11 +56,20 @@ export interface AccountGroupCreate {
   system: boolean
 }
 
+export interface AccountGroupDelete {
+  name: string
+}
+
+export interface AccountSetPassword {
+  name: string
+  password: string
+}
+
 export interface AccountClient {
   get(): Promise<AccountSnapshot>
-  createUser(request: AccountCreate): Promise<string>
-  deleteUser(request: AccountDelete): Promise<string>
-  setPassword(name: string, password: string): Promise<string>
-  createGroup(request: AccountGroupCreate): Promise<string>
-  deleteGroup(name: string): Promise<string>
+  createUser(request: AccountCreate): Promise<Change>
+  deleteUser(request: AccountDelete): Promise<Change>
+  setPassword(request: AccountSetPassword): Promise<Change>
+  createGroup(request: AccountGroupCreate): Promise<Change>
+  deleteGroup(request: AccountGroupDelete): Promise<Change>
 }
