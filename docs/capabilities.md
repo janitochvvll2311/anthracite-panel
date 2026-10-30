@@ -338,6 +338,10 @@ export = "org.anth.podman.containers.list"
 
 - CLI: `anth-panel app <app-id> <name>`.
 - API: `/api/apps/<app-id>/<path>`; the panel keeps auth, Origin and CSP.
+  The route resolves to an export; for a `wasm` export the host validates the
+  anchor envelope `{method, path, query, body}` against the export input, calls
+  the export entry, and validates the reply body against the export output.
+  Non-wasm exports are not served through anchors yet.
 - UI: `slot` is a host enum; `tag` is `anth-<app>-...`; module is hashed and
   served from the bundle under the iframe bridge.
 

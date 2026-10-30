@@ -24,7 +24,7 @@ use crate::app_host::exec::ExecRunner;
 use anth_wire::WireError;
 use serde::{Deserialize, Serialize};
 
-use crate::apps::capability::ManifestV3;
+use crate::apps::capability::{Implementation, ManifestV3};
 use crate::apps::grant_v3::{self, ApprovalFlags, GrantV3};
 use crate::apps::grants_v3::GrantStoreV3;
 use crate::apps::manifest::MANIFEST_FILE;
@@ -824,32 +824,66 @@ impl AppService {
             )));
         }
         let method = request.method.to_uppercase();
-        if !manifest
+        let route = manifest
             .api
             .iter()
-            .any(|route| route.method.eq_ignore_ascii_case(&method) && route.path == request.path)
-        {
-            return Err(WireError::not_found(format!(
-                "app `{id}` declares no anchor {method} {}",
-                request.path
-            )));
-        }
+            .find(|route| route.method.eq_ignore_ascii_case(&method) && route.path == request.path)
+            .ok_or_else(|| {
+                WireError::not_found(format!(
+                    "app `{id}` declares no anchor {method} {}",
+                    request.path
+                ))
+            })?;
+        let export = manifest
+            .export
+            .iter()
+            .find(|export| export.id == route.export)
+            .ok_or_else(|| {
+                WireError::internal(format!(
+                    "app `{id}` maps an anchor to the missing export `{}`",
+                    route.export
+                ))
+            })?;
+        let entry = match &export.implementation {
+            Implementation::Wasm { entry } => entry.clone(),
+            _ => {
+                return Err(WireError::new(
+                    anth_wire::ErrorKind::Unsupported,
+                    "anchor_export_kind",
+                    "this anchor maps to a non-wasm export; that dispatch is not wired yet",
+                ));
+            }
+        };
         let body = if request.body.is_empty() {
             None
         } else {
             Some(String::from_utf8_lossy(&request.body).into_owned())
         };
-        let envelope = serde_json::json!({
+        let input = serde_json::json!({
             "method": method,
             "path": request.path,
             "query": request.query,
             "body": body,
-        })
-        .to_string();
+        });
+        export.input.validate_value(&input).map_err(|error| {
+            WireError::internal(format!(
+                "app `{id}` built an anchor request outside its export schema: {error}"
+            ))
+        })?;
+        let payload = serde_json::to_string(&input).map_err(|error| {
+            WireError::internal(format!("encoding the anchor request: {error}"))
+        })?;
+        let output = export.output.clone();
+        let app_id = id.to_string();
         let loaded = self.load_v3(id)?;
         let fuel = self.config.fuel;
         tokio::task::spawn_blocking(move || {
-            let reply = loaded.call("anth_http", &envelope, log, fuel)?;
+            let reply = loaded.call(&entry, &payload, log, fuel)?;
+            output.validate_value(&reply.value).map_err(|error| {
+                WireError::internal(format!(
+                    "app `{app_id}` answered outside its export schema: {error}"
+                ))
+            })?;
             Ok(AppReply::json(reply.status, reply.value))
         })
         .await

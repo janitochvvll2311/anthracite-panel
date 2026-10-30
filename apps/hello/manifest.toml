@@ -19,8 +19,13 @@ abi = 4
 [[export]]
 id = "org.anth.hello.respond"
 version = 1
-input = { type = "record", fields = {} }
-output = { type = "record", fields = {} }
+input = { type = "record", fields = {
+  method = { type = "string" },
+  path = { type = "string" },
+  query = { type = "json" },
+  body = { type = "nullable", value = { type = "string" } }
+} }
+output = { type = "json" }
 
 [export.implementation]
 kind = "wasm"

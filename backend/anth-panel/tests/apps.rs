@@ -646,7 +646,7 @@ async fn a_v3_bundle_installs_approves_and_serves_a_host_info_anchor() {
     };
     use anth_panel::apps::host_catalog;
     use anth_panel::apps::manifest::{AppSection, RuntimeKind, RuntimeSection, WASM_FILE};
-    use anth_panel::apps::schema::Type;
+    use anth_panel::apps::schema::{Field, Type};
     use sha2::{Digest as _, Sha256};
 
     let guest = r#"
@@ -698,8 +698,18 @@ async fn a_v3_bundle_installs_approves_and_serves_a_host_info_anchor() {
             id: export_id.clone(),
             version: 1,
             reason: None,
-            input: Type::record([]),
-            output: Type::record([]),
+            input: Type::Record {
+                fields: BTreeMap::from([
+                    ("method".to_string(), Field::required(Type::string())),
+                    ("path".to_string(), Field::required(Type::string())),
+                    ("query".to_string(), Field::required(Type::Json)),
+                    (
+                        "body".to_string(),
+                        Field::required(Type::nullable(Type::string())),
+                    ),
+                ]),
+            },
+            output: Type::Json,
             implementation: Implementation::Wasm {
                 entry: "anth_http".to_string(),
             },
