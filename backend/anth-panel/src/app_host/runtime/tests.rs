@@ -107,3 +107,100 @@ fn a_guest_without_an_entry_is_refused() {
     .expect_err("entry");
     assert!(error.message.contains("exports none"), "{error}");
 }
+
+// ---------------------------------------------------------------- ABI 4 ---
+
+const V3_GUEST: &str = r#"
+(module
+  (import "env" "anth_capability_call"
+    (func $call (param i32 i32 i32 i32) (result i64)))
+  (memory (export "memory") 1)
+  (data (i32.const 256) "org.anth.host.info")
+  (data (i32.const 300) "{}")
+  (data (i32.const 600) "{\"status\":200,\"body\":")
+  (func (export "anth_abi_version") (result i32) i32.const 4)
+  (func (export "anth_alloc") (param i32) (result i32) i32.const 4096)
+  (func (export "anth_http") (param i32 i32) (result i64)
+    (local $packed i64)
+    (local $ptr i32)
+    (local $len i32)
+    i32.const 256 i32.const 18 i32.const 300 i32.const 2 call $call
+    local.set $packed
+    local.get $packed i64.const 32 i64.shr_u i32.wrap_i64 local.set $ptr
+    local.get $packed i32.wrap_i64 local.set $len
+    i32.const 621 local.get $ptr local.get $len memory.copy
+    i32.const 621 local.get $len i32.add
+    i32.const 125
+    i32.store8
+    i64.const 600 i64.const 32 i64.shl
+    i32.const 22 local.get $len i32.add i64.extend_i32_u
+    i64.or)
+)
+"#;
+
+fn host_import() -> crate::apps::capability::Import {
+    let host = crate::apps::host_catalog::exports().remove(0);
+    crate::apps::capability::Import {
+        id: host.signature.id,
+        version: host.signature.version,
+        provider: "host".to_string(),
+        input: host.signature.input,
+        output: host.signature.output,
+    }
+}
+
+fn v3_manifest(
+    imports: Vec<crate::apps::capability::Import>,
+) -> crate::apps::capability::ManifestV3 {
+    crate::apps::capability::ManifestV3 {
+        manifest_version: 3,
+        app: crate::apps::manifest::AppSection {
+            id: "org.anth.v3".to_string(),
+            alias: None,
+            version: "0.4.0".to_string(),
+            name: "V3".to_string(),
+        },
+        runtime: crate::apps::manifest::RuntimeSection {
+            kind: crate::apps::manifest::RuntimeKind::Wasm,
+        },
+        wasm: crate::apps::capability::WasmSectionV3 {
+            path: crate::apps::manifest::WASM_FILE.to_string(),
+            sha256: "a".repeat(64),
+            abi: 4,
+        },
+        export: Vec::new(),
+        import: imports,
+        cli: Vec::new(),
+        api: Vec::new(),
+        ui: Vec::new(),
+    }
+}
+
+#[test]
+fn a_v3_guest_reaches_host_info_through_capability_call() {
+    let wasm = wat::parse_str(V3_GUEST).expect("wat");
+    let loaded = LoadedV3::load(v3_manifest(vec![host_import()]), &wasm).expect("load");
+    let reply = loaded
+        .call("anth_http", "{}", logger(), 10_000_000)
+        .expect("call");
+    assert_eq!(reply.status, 200, "{}", reply.value);
+    assert!(reply.value["hostname"].is_string(), "{}", reply.value);
+    assert!(reply.value["os"]["kernel"].is_string());
+}
+
+#[test]
+fn an_unimported_v3_capability_is_refused() {
+    let wasm = wat::parse_str(V3_GUEST).expect("wat");
+    let loaded = LoadedV3::load(v3_manifest(Vec::new()), &wasm).expect("load");
+    let error = loaded
+        .call("anth_http", "{}", logger(), 10_000_000)
+        .expect_err("refused");
+    assert!(error.message.contains("imports no capability"), "{error}");
+}
+
+#[test]
+fn a_v3_guest_with_the_wrong_abi_is_refused() {
+    let wasm = wat::parse_str(V3_GUEST.replace("i32.const 4", "i32.const 3")).expect("wat");
+    let error = LoadedV3::load(v3_manifest(vec![host_import()]), &wasm).expect_err("abi");
+    assert!(error.message.contains("ABI 3"), "{error}");
+}

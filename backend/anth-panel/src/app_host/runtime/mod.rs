@@ -14,6 +14,8 @@
 //! `Response`, never a hung daemon.
 
 use crate::app_host::exec::ExecRunner;
+use crate::apps::capability::{APP_ABI_VERSION, ManifestV3};
+use crate::apps::host_catalog::{self, HostExport};
 use anth_wire::{ErrorKind, WireError};
 use wasmi::{Config, Engine, Instance, Linker, Module, ResourceLimiter, Store};
 
@@ -165,39 +167,179 @@ impl Loaded {
     }
 
     pub(crate) fn instantiate(&self, store: &mut Store<Host>) -> Result<Instance, WireError> {
-        let mut linker = Linker::new(&self.engine);
-
-        // Exactly two imports, both host functions. A guest that asks for
-        // anything else fails to link, which is what stops it from reaching a
-        // host handle by name.
-        linker
-            .func_wrap(
-                "env",
-                "anth_exec",
-                |mut caller: wasmi::Caller<'_, Host>,
-                 cap_ptr: i32,
-                 cap_len: i32,
-                 args_ptr: i32,
-                 args_len: i32|
-                 -> i64 {
-                    guest::exec(&mut caller, cap_ptr, cap_len, args_ptr, args_len)
-                },
-            )
-            .and_then(|linker| {
-                linker.func_wrap(
-                    "env",
-                    "anth_log",
-                    |mut caller: wasmi::Caller<'_, Host>, level: i32, ptr: i32, len: i32| {
-                        guest::log(&mut caller, level, ptr, len);
-                    },
-                )
-            })
-            .map_err(|e| WireError::internal(format!("building the import table: {e}")))?;
-
+        let linker = linker(&self.engine)?;
         linker
             .instantiate_and_start(&mut *store, &self.module)
             .map_err(|e| crate::app_host::runtime::instantiation_error(&self.manifest.app.id, e))
     }
+}
+
+/// A loaded v3 extension: wasm plus the host imports its manifest resolved.
+#[derive(Debug)]
+pub struct LoadedV3 {
+    pub manifest: ManifestV3,
+    module: Module,
+    engine: Engine,
+    host_exports: Vec<HostExport>,
+}
+
+impl LoadedV3 {
+    /// Verifies the manifest, resolves imports and compiles the module.
+    pub fn load(manifest: ManifestV3, wasm: &[u8]) -> Result<Self, WireError> {
+        manifest.validate().map_err(WireError::invalid)?;
+        let host_exports = resolve_imports(&manifest)?;
+        let engine = engine();
+        let module = Module::new(&engine, wasm).map_err(|error| {
+            WireError::invalid(format!(
+                "extension `{}` is not a valid module: {error}",
+                manifest.app.id
+            ))
+        })?;
+        for required in ["anth_abi_version", "anth_alloc", "memory"] {
+            if module.get_export(required).is_none() {
+                return Err(WireError::invalid(format!(
+                    "extension `{}` does not export `{required}`",
+                    manifest.app.id
+                )));
+            }
+        }
+        if module.get_export("anth_http").is_none()
+            && module.get_export("anth_cli").is_none()
+            && module.get_export("anth_direct").is_none()
+        {
+            return Err(WireError::invalid(format!(
+                "extension `{}` exports none of anth_http, anth_cli or anth_direct",
+                manifest.app.id
+            )));
+        }
+        let loaded = Self {
+            manifest,
+            module,
+            engine,
+            host_exports,
+        };
+        loaded.verify_abi()?;
+        Ok(loaded)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.manifest.app.id
+    }
+
+    fn verify_abi(&self) -> Result<(), WireError> {
+        let log = std::sync::Arc::new(crate::log::Logger::silent());
+        let mut store = self.new_store(log, FUEL_PER_CALL);
+        let instance = self.instantiate(&mut store)?;
+        let version = instance
+            .get_typed_func::<(), i32>(&store, "anth_abi_version")
+            .map_err(|error| {
+                WireError::invalid(format!("anth_abi_version has the wrong signature: {error}"))
+            })?
+            .call(&mut store, ())
+            .map_err(|error| WireError::invalid(format!("anth_abi_version trapped: {error}")))?;
+        if version != APP_ABI_VERSION as i32 {
+            return Err(WireError::invalid(format!(
+                "extension `{}` answers ABI {version}, this daemon speaks {APP_ABI_VERSION}",
+                self.manifest.app.id
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn new_store(
+        &self,
+        log: std::sync::Arc<crate::log::Logger>,
+        fuel: u64,
+    ) -> Store<Host> {
+        let mut store = Store::new(
+            &self.engine,
+            Host::new_v3(&self.manifest, self.host_exports.clone(), log),
+        );
+        store.limiter(|host| host as &mut dyn ResourceLimiter);
+        store
+            .set_fuel(fuel.max(1))
+            .expect("the engine enables fuel");
+        store
+    }
+
+    pub(crate) fn instantiate(&self, store: &mut Store<Host>) -> Result<Instance, WireError> {
+        let linker = linker(&self.engine)?;
+        linker
+            .instantiate_and_start(&mut *store, &self.module)
+            .map_err(|error| instantiation_error(&self.manifest.app.id, error))
+    }
+
+    pub fn call(
+        &self,
+        entry: &str,
+        payload: &str,
+        log: std::sync::Arc<crate::log::Logger>,
+        fuel: u64,
+    ) -> Result<Reply, WireError> {
+        guest::run_v3(self, entry, payload, log, fuel)
+    }
+}
+
+fn resolve_imports(manifest: &ManifestV3) -> Result<Vec<HostExport>, WireError> {
+    let mut resolved = Vec::new();
+    for import in &manifest.import {
+        let export = host_catalog::find(&import.id, import.version).ok_or_else(|| {
+            WireError::invalid(format!(
+                "extension `{}` imports `{}@{}`; the host does not provide it",
+                manifest.app.id, import.id, import.version
+            ))
+        })?;
+        let expected = import.signature().hash().map_err(WireError::invalid)?;
+        let actual = export.signature.hash().map_err(WireError::invalid)?;
+        if expected != actual {
+            return Err(WireError::invalid(format!(
+                "extension `{}` imports `{}@{}` with a signature the host does not provide",
+                manifest.app.id, import.id, import.version
+            )));
+        }
+        resolved.push(export);
+    }
+    Ok(resolved)
+}
+
+fn linker(engine: &Engine) -> Result<Linker<Host>, WireError> {
+    let mut linker = Linker::new(engine);
+    linker
+        .func_wrap(
+            "env",
+            "anth_exec",
+            |mut caller: wasmi::Caller<'_, Host>,
+             cap_ptr: i32,
+             cap_len: i32,
+             args_ptr: i32,
+             args_len: i32|
+             -> i64 { guest::exec(&mut caller, cap_ptr, cap_len, args_ptr, args_len) },
+        )
+        .map_err(|e| WireError::internal(format!("building the import table: {e}")))?;
+    linker
+        .func_wrap(
+            "env",
+            "anth_capability_call",
+            |mut caller: wasmi::Caller<'_, Host>,
+             name_ptr: i32,
+             name_len: i32,
+             args_ptr: i32,
+             args_len: i32|
+             -> i64 {
+                guest::capability(&mut caller, name_ptr, name_len, args_ptr, args_len)
+            },
+        )
+        .map_err(|e| WireError::internal(format!("building the import table: {e}")))?;
+    linker
+        .func_wrap(
+            "env",
+            "anth_log",
+            |mut caller: wasmi::Caller<'_, Host>, level: i32, ptr: i32, len: i32| {
+                guest::log(&mut caller, level, ptr, len);
+            },
+        )
+        .map_err(|e| WireError::internal(format!("building the import table: {e}")))?;
+    Ok(linker)
 }
 
 fn engine() -> Engine {

@@ -324,8 +324,15 @@ impl ManifestV3 {
         }
 
         let mut import_ids = BTreeSet::new();
+        let mut import_names = BTreeSet::new();
         for import in &self.import {
             import.validate(&self.app.id)?;
+            if !import_names.insert(import.id.clone()) {
+                return Err(format!(
+                    "the import `{}` is declared more than once; a guest calls it by id",
+                    import.id
+                ));
+            }
             let key = format!("{}@{}", import.id, import.version);
             if !import_ids.insert(key.clone()) {
                 return Err(format!("the import `{key}` is declared twice"));

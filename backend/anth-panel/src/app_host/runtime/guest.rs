@@ -13,6 +13,8 @@ use anth_wire::{ErrorKind, WireError};
 use wasmi::{Caller, Extern, Instance, Memory, Store, Val};
 
 use super::{DEADLINE, trap_kind};
+use crate::apps::capability::{Import, ManifestV3};
+use crate::apps::host_catalog::HostExport;
 use crate::apps::manifest::{AppManifest as Manifest, Capability};
 use crate::log::{Level, Logger};
 
@@ -86,7 +88,10 @@ impl Reply {
 /// The store's data: everything the imports may touch.
 pub(crate) struct Host {
     capabilities: Vec<Capability>,
-    exec: std::sync::Arc<dyn ExecRunner>,
+    /// v3 imports, resolved against the host catalog at load.
+    imports: Vec<Import>,
+    host_exports: Vec<HostExport>,
+    exec: Option<std::sync::Arc<dyn ExecRunner>>,
     /// Where `anth_log` lines go, and at what level. The extension id is added to
     /// the target so a refusal names the extension that asked for it.
     log: std::sync::Arc<Logger>,
@@ -142,7 +147,9 @@ impl Host {
     ) -> Self {
         Self {
             capabilities: manifest.capability.clone(),
-            exec,
+            imports: Vec::new(),
+            host_exports: Vec::new(),
+            exec: Some(exec),
             log,
             id: manifest.app.id.clone(),
             calls: 0,
@@ -150,6 +157,54 @@ impl Host {
             started: Instant::now(),
             refusal: None,
         }
+    }
+
+    pub(crate) fn new_v3(
+        manifest: &ManifestV3,
+        host_exports: Vec<HostExport>,
+        log: std::sync::Arc<Logger>,
+    ) -> Self {
+        Self {
+            capabilities: Vec::new(),
+            imports: manifest.import.clone(),
+            host_exports,
+            exec: None,
+            log,
+            id: manifest.app.id.clone(),
+            calls: 0,
+            log_bytes: 0,
+            started: Instant::now(),
+            refusal: None,
+        }
+    }
+
+    /// Resolves one v3 import to its host operation and returns the JSON answer.
+    fn capability_json(&self, name: &str, args: &str) -> Result<String, String> {
+        serde_json::from_str::<serde_json::Value>(args)
+            .map_err(|error| format!("the arguments are not JSON: {error}"))?;
+        let import = self
+            .imports
+            .iter()
+            .find(|import| import.id == name)
+            .ok_or_else(|| format!("the manifest imports no capability `{name}`"))?;
+        let export = self
+            .host_exports
+            .iter()
+            .find(|export| {
+                export.signature.id == import.id && export.signature.version == import.version
+            })
+            .ok_or_else(|| format!("the host did not resolve `{name}` at load"))?;
+        let value = match export.operation {
+            "host.info" => serde_json::to_value(anth_host::collect())
+                .map_err(|error| format!("encoding the host snapshot: {error}"))?,
+            other => {
+                return Err(format!(
+                    "the host operation `{other}` is not wired into this runtime yet"
+                ));
+            }
+        };
+        serde_json::to_string(&value)
+            .map_err(|error| format!("encoding the capability answer: {error}"))
     }
 }
 
@@ -221,7 +276,11 @@ pub(crate) fn exec(
         }
     };
 
-    match super::grant::run(host.exec.as_ref(), &grant, &args) {
+    let Some(exec) = host.exec.clone() else {
+        host.refusal = Some("a v3 capability import cannot use the legacy exec bridge".to_string());
+        return 0;
+    };
+    match super::grant::run(exec.as_ref(), &grant, &args) {
         Ok(output) => match write_host_string(caller, &output) {
             Ok(packed) => packed,
             Err(message) => {
@@ -229,6 +288,61 @@ pub(crate) fn exec(
                 0
             }
         },
+        Err(message) => {
+            caller.data_mut().refusal = Some(message);
+            0
+        }
+    }
+}
+
+/// Runs one v3 import and writes its JSON answer into guest memory.
+pub(crate) fn capability(
+    caller: &mut Caller<'_, Host>,
+    name_ptr: i32,
+    name_len: i32,
+    args_ptr: i32,
+    args_len: i32,
+) -> i64 {
+    let name = match read_guest_string(caller, name_ptr, name_len) {
+        Ok(name) => name,
+        Err(message) => {
+            caller.data_mut().refusal = Some(message);
+            return 0;
+        }
+    };
+    let args = match read_guest_string(caller, args_ptr, args_len) {
+        Ok(args) => args,
+        Err(message) => {
+            caller.data_mut().refusal = Some(message);
+            return 0;
+        }
+    };
+    {
+        let host = caller.data_mut();
+        if host.started.elapsed() > DEADLINE {
+            host.refusal = Some(format!(
+                "the extension ran past the {} second limit",
+                DEADLINE.as_secs()
+            ));
+            return 0;
+        }
+        host.calls += 1;
+        if host.calls > MAX_CAPABILITY_CALLS {
+            host.refusal = Some(format!(
+                "the extension asked for more than {MAX_CAPABILITY_CALLS} capabilities in one call"
+            ));
+            return 0;
+        }
+    }
+    let answer = match caller.data().capability_json(&name, &args) {
+        Ok(answer) => answer,
+        Err(message) => {
+            caller.data_mut().refusal = Some(message);
+            return 0;
+        }
+    };
+    match write_host_string(caller, &answer) {
+        Ok(packed) => packed,
         Err(message) => {
             caller.data_mut().refusal = Some(message);
             0
@@ -304,6 +418,43 @@ pub(crate) fn run(
 
     // A refusal is the reason the guest saw a null pointer, so it outranks the
     // trap the guest may have raised while handling one.
+    if let Some(reason) = store.data_mut().refusal.take() {
+        return Err(WireError::new(
+            ErrorKind::Forbidden,
+            "extension_refused",
+            reason,
+        ));
+    }
+
+    let text = read_payload(&store, &instance, packed, loaded.id())?;
+    Ok(Reply::decode(&text))
+}
+
+/// Runs one v3 entry. The only difference from [`run`] is the store's imports.
+pub(crate) fn run_v3(
+    loaded: &super::LoadedV3,
+    entry: &str,
+    payload: &str,
+    log: std::sync::Arc<Logger>,
+    fuel: u64,
+) -> Result<Reply, WireError> {
+    let mut store = loaded.new_store(log, fuel);
+    let instance = loaded.instantiate(&mut store)?;
+
+    let func = instance
+        .get_typed_func::<(i32, i32), i64>(&store, entry)
+        .map_err(|e| {
+            WireError::invalid(format!(
+                "extension `{}` has no usable `{entry}`: {e}",
+                loaded.id()
+            ))
+        })?;
+
+    let (ptr, len) = write_payload(&mut store, &instance, payload, loaded.id())?;
+    let packed = func
+        .call(&mut store, (ptr, len))
+        .map_err(|e| trap_kind(loaded.id(), &e))?;
+
     if let Some(reason) = store.data_mut().refusal.take() {
         return Err(WireError::new(
             ErrorKind::Forbidden,
