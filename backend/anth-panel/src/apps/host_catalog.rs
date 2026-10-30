@@ -66,6 +66,20 @@ fn host_info() -> Type {
     ])
 }
 
+/// Looks up one host operation by its dispatch name.
+pub fn operation(name: &str) -> Option<HostExport> {
+    exports()
+        .into_iter()
+        .find(|export| export.operation == name)
+}
+
+/// Looks up one host signature by id and version.
+pub fn find(id: &str, version: u32) -> Option<HostExport> {
+    exports()
+        .into_iter()
+        .find(|export| export.signature.id == id && export.signature.version == version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -210,6 +210,17 @@ pub enum SandboxProfile {
     Host,
 }
 
+impl SandboxProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Resource => "resource",
+            Self::Network => "network",
+            Self::Host => "host",
+        }
+    }
+}
+
 /// One resource the panel opens for a native implementation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -544,6 +555,21 @@ fn validate_binary_common(
 }
 
 impl Resource {
+    /// A deterministic string the grant stores.
+    pub fn canonical(&self) -> String {
+        match self {
+            Self::Socket { path, .. } => format!("socket:{path}"),
+            Self::Device { path, .. } => format!("device:{path}"),
+            Self::Dir { path, write } => {
+                if *write {
+                    format!("dir:{path}:rw")
+                } else {
+                    format!("dir:{path}")
+                }
+            }
+        }
+    }
+
     fn validate(&self) -> Result<(), String> {
         match self {
             Self::Socket { path, alias } | Self::Device { path, alias } => {
@@ -556,6 +582,24 @@ impl Resource {
 }
 
 impl Limits {
+    /// A deterministic summary the grant stores.
+    pub fn canonical(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(value) = self.memory_bytes {
+            parts.push(format!("mem={value}"));
+        }
+        if let Some(value) = self.pids {
+            parts.push(format!("pids={value}"));
+        }
+        if let Some(value) = self.wall_seconds {
+            parts.push(format!("wall={value}s"));
+        }
+        if let Some(value) = self.output_bytes {
+            parts.push(format!("out={value}"));
+        }
+        (!parts.is_empty()).then(|| parts.join(","))
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.memory_bytes == Some(0) || self.memory_bytes.is_some_and(|value| value > 1 << 30) {
             return Err("a memory limit is 1 byte to 1 GiB".to_string());

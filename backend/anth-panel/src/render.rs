@@ -635,7 +635,21 @@ pub fn capability_graph(graph: &Graph) -> String {
     }
     let _ = writeln!(out, "APPS");
     for app in &graph.apps {
-        let _ = writeln!(out, "  {} {}  {}", app.id, app.version, app.state.as_str());
+        match app.risk {
+            Some(risk) => {
+                let _ = writeln!(
+                    out,
+                    "  {} {}  {}  {}",
+                    app.id,
+                    app.version,
+                    app.state.as_str(),
+                    risk.as_str()
+                );
+            }
+            None => {
+                let _ = writeln!(out, "  {} {}  {}", app.id, app.version, app.state.as_str());
+            }
+        }
         for export in &app.exports {
             let _ = writeln!(
                 out,

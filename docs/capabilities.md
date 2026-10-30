@@ -1,9 +1,9 @@
 # Capability registry
 
-Status: **contract for the v0.4.0 migration**. Phase 0 (schemas) and Phase 1
-(registry and `app check`) are implemented. The daemon still runs manifest v2
-and the v2 grants; this document is normative for the new manifest (v3), grant
-(v3), app ABI (4) and registry.
+Status: **contract for the v0.4.0 migration**. Phase 0 (schemas), Phase 1
+(registry and `app check`) and the grant/risk preview of Phase 2 are implemented.
+The daemon still runs manifest v2 and the v2 grants; this document is normative
+for the new manifest (v3), grant (v3), app ABI (4) and registry.
 
 ## Model
 
@@ -240,23 +240,27 @@ prints it and exits `0` when every app is `enabled`. It exits `1` when an import
 is unresolved or a surface conflicts, and `2` when the manifest itself is
 invalid. It never installs, grants or runs anything.
 
+`--grant` prints the normalized grant (TOML, or JSON with `--json`) instead of
+the graph. It includes the app risk, per-capability risk, normalized resources
+and limits, and the approved imports. It is a preview: no file is written.
+
 v1 has no plugin-to-plugin edges. A plugin export is visible in `app show` and
 usable by that plugin's own CLI/API/UI; it is not a provider for other plugins.
 
 ## Grant v3
 
 ```toml
-grant_version = 3
-
-[app]
+version = 3
 id = "org.anth.podman"
+name = "Podman"
+app_version = "0.1.0"
+enabled = true
 manifest_sha256 = "..."
 wasm_sha256 = "..."
-
 risk = "admin"
 approved_at_ms = 1767225600000
 approved_by = "uid:0"
-signature = "..."
+manifest_signature = "..."
 
 [[capability]]
 id = "org.anth.podman.containers.list"
@@ -266,7 +270,18 @@ implementation_sha256 = "..."
 sandbox = "resource"
 resource = ["socket:/run/user/1000/podman.sock"]
 limits = "mem=64MiB,pids=32,wall=30s"
+risk = "admin"
+
+[[import]]
+id = "org.anth.host.info"
+version = 1
+provider = "host"
+risk = "read"
 ```
+
+The grant stores both exports and imports. Its risk is the highest capability
+or import risk; a grant whose stored risk is lower than one of its capabilities
+is refused.
 
 The grant stores the normalized capability set, not the raw manifest. A field
 the grant does not cover is refused at load. A change to a manifest, wasm or
@@ -282,7 +297,7 @@ helper hash changes the surface and requires the same approval again.
 | Binary/service with no privileged resource | `manage` |
 | Binary/service with socket, device or network | `admin` |
 | `argv = "any"` or `sandbox = "host"` | `host` |
-| System package installation | `host` (separate approval) |
+| System package installation | `host` (separate `--accept-package`) |
 
 The manifest cannot set or downgrade the risk.
 

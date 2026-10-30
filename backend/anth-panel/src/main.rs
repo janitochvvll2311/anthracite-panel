@@ -198,6 +198,9 @@ enum AppCommand {
         /// Print the graph as JSON.
         #[arg(long)]
         json: bool,
+        /// Print the normalized grant instead of the graph.
+        #[arg(long)]
+        grant: bool,
     },
     /// Send one request through the extension's `anth_cli` entry.
     Call {
@@ -865,8 +868,13 @@ async fn run() -> CliResult {
         Command::Storage { command } => storage_command(&path, command).await,
         Command::Account { command } => account_command(&path, command).await,
         Command::App { command } => {
-            if let AppCommand::Check { manifest, json } = command {
-                return check_app_manifest(manifest, *json);
+            if let AppCommand::Check {
+                manifest,
+                json,
+                grant,
+            } = command
+            {
+                return check_app_manifest(manifest, *json, *grant);
             }
             app_command(&path, command)
         }
@@ -887,10 +895,31 @@ async fn run() -> CliResult {
     }
 }
 
-fn check_app_manifest(manifest: &std::path::Path, json: bool) -> CliResult {
+fn check_app_manifest(manifest: &std::path::Path, json: bool, grant: bool) -> CliResult {
     let text = std::fs::read_to_string(manifest)
         .map_err(|error| (1, format!("reading {}: {error}", manifest.display())))?;
     let parsed = ManifestV3::parse(&text).map_err(|error| (2, error))?;
+    if grant {
+        use sha2::Digest as _;
+        let hash = anth_panel::apps::signature::encode_hex(&sha2::Sha256::digest(text.as_bytes()));
+        let preview =
+            anth_panel::apps::GrantV3::from_manifest(&parsed, hash, None, "preview".to_string(), 0)
+                .map_err(|error| (1, error))?;
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&preview)
+                    .map_err(|error| (1, format!("encoding the grant: {error}")))?
+            );
+        } else {
+            println!(
+                "{}",
+                toml::to_string(&preview)
+                    .map_err(|error| (1, format!("encoding the grant: {error}")))?
+            );
+        }
+        return Ok(());
+    }
     let graph = registry::build(&[parsed]).map_err(|error| (2, error))?;
     if json {
         let encoded = serde_json::to_string_pretty(&graph)

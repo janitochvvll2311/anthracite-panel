@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use super::capability::{HOST_NAMESPACE, Import, ManifestV3};
-use super::grant_v3::Risk;
+use super::grant_v3::{self, Risk};
 use super::host_catalog;
 
 /// The whole graph.
@@ -54,6 +54,8 @@ pub struct AppEntry {
     pub id: String,
     pub version: String,
     pub state: AppState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk: Option<Risk>,
     pub exports: Vec<ExportEntry>,
     pub imports: Vec<ImportEntry>,
     pub cli: Vec<CliEntry>,
@@ -261,10 +263,16 @@ pub fn build(manifests: &[ManifestV3]) -> Result<Graph, String> {
         } else {
             AppState::Enabled
         };
+        let risk = if state == AppState::Enabled {
+            Some(grant_v3::risk(manifest)?)
+        } else {
+            None
+        };
         apps.push(AppEntry {
             id: manifest.app.id.clone(),
             version: manifest.app.version.clone(),
             state,
+            risk,
             exports,
             imports,
             cli,
@@ -397,8 +405,8 @@ mod tests {
             reason: None,
             input: Type::record([]),
             output: Type::record([]),
-            implementation: Implementation::Host {
-                operation: "program.action".to_string(),
+            implementation: Implementation::Wasm {
+                entry: "action".to_string(),
             },
         }
     }
@@ -409,6 +417,7 @@ mod tests {
         manifest.import.push(host_import());
         let graph = build(&[manifest]).expect("graph");
         assert_eq!(graph.apps[0].state, AppState::Enabled);
+        assert_eq!(graph.apps[0].risk, Some(Risk::Read));
         assert!(graph.apps[0].imports[0].resolved);
     }
 
