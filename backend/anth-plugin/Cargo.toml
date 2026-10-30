@@ -11,3 +11,8 @@ description = "The plugin contract for Anthracite Panel: request envelopes, repl
 [dependencies]
 serde = { workspace = true }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[features]
+default = []
+# Compile the ABI 4 host bridge: `anth_capability_call` instead of `anth_exec`.
+abi4 = []

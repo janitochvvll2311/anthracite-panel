@@ -7,6 +7,14 @@
 
 use super::*;
 
+#[test]
+fn the_abi_version_follows_the_feature() {
+    #[cfg(feature = "abi4")]
+    assert_eq!(ABI_VERSION, 4);
+    #[cfg(not(feature = "abi4"))]
+    assert_eq!(ABI_VERSION, 3);
+}
+
 /// The plugin's own vocabulary: actions, requests and statuses.
 mod message {
     use super::*;

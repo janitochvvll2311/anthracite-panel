@@ -32,6 +32,13 @@ use alloc::string::ToString;
 /// Version 2 replaced the single `anth_handle` with one entry per transport, so
 /// an `abi = 1` bundle has no `anth_http` for the host to call and is refused
 /// rather than silently broken.
+///
+/// Version 4 replaces `anth_exec` with `anth_capability_call` and uses the
+/// v3 capability ids. It is behind the `abi4` feature so an app that still
+/// speaks ABI 3 keeps building and running unchanged.
+#[cfg(feature = "abi4")]
+pub const ABI_VERSION: i32 = 4;
+#[cfg(not(feature = "abi4"))]
 pub const ABI_VERSION: i32 = 3;
 
 /// The level a guest attaches to a log line.
@@ -66,7 +73,16 @@ mod host {
     #[link(wasm_import_module = "env")]
     unsafe extern "C" {
         /// Runs one frozen capability. JSON in, `(ptr << 32) | len` out.
+        #[cfg(not(feature = "abi4"))]
         pub fn anth_exec(cap_ptr: i32, cap_len: i32, args_ptr: i32, args_len: i32) -> i64;
+        /// Runs one v3 import by capability id. Raw name in, `(ptr << 32) | len` out.
+        #[cfg(feature = "abi4")]
+        pub fn anth_capability_call(
+            name_ptr: i32,
+            name_len: i32,
+            args_ptr: i32,
+            args_len: i32,
+        ) -> i64;
         /// Appends one line to the daemon log at `level` (0 error … 4 trace).
         pub fn anth_log(level: i32, ptr: i32, len: i32);
     }
@@ -97,19 +113,37 @@ impl crate::exec::Executor for HostExecutor {
     }
 }
 
+/// Calls the host bridge for the ABI the crate was compiled for.
+#[cfg(all(target_arch = "wasm32", not(feature = "abi4")))]
+fn call_host(capability: &str, args: &[u8]) -> Result<i64, String> {
+    let name = serde_json::to_vec(capability).map_err(|error| error.to_string())?;
+    Ok(unsafe {
+        host::anth_exec(
+            name.as_ptr() as i32,
+            name.len() as i32,
+            args.as_ptr() as i32,
+            args.len() as i32,
+        )
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "abi4"))]
+fn call_host(capability: &str, args: &[u8]) -> Result<i64, String> {
+    Ok(unsafe {
+        host::anth_capability_call(
+            capability.as_ptr() as i32,
+            capability.len() as i32,
+            args.as_ptr() as i32,
+            args.len() as i32,
+        )
+    })
+}
+
 #[cfg(target_arch = "wasm32")]
 impl crate::exec::Executor for HostExecutor {
     fn exec(&mut self, capability: &str, args: &Value) -> Result<Value, String> {
-        let capability_json = serde_json::to_vec(capability).map_err(|error| error.to_string())?;
         let args_json = serde_json::to_vec(args).map_err(|error| error.to_string())?;
-        let packed = unsafe {
-            host::anth_exec(
-                capability_json.as_ptr() as i32,
-                capability_json.len() as i32,
-                args_json.as_ptr() as i32,
-                args_json.len() as i32,
-            )
-        };
+        let packed = call_host(capability, &args_json)?;
         if packed == 0 {
             return Err(String::from(
                 "the host refused the capability with no detail",

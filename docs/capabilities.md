@@ -355,6 +355,13 @@ first entry is:
 The schema is the `HostInfo` shape (hostname, os, uptime, cpu, load, memory,
 collected_at_ms). The next entries land when hello/wireguard/Podman need them.
 
+## SDK
+
+`anth-plugin` compiles ABI 3 by default. The `abi4` feature switches
+`ABI_VERSION` to 4 and `HostExecutor` to `anth_capability_call`; the app code
+keeps using `Executor::exec(capability, args)`. A v3 bundle is built with
+`--features abi4` and declares `abi = 4`.
+
 ## Implementation kinds
 
 | Kind | Source | Runtime |
