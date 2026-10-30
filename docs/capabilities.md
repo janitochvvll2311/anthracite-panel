@@ -1,7 +1,7 @@
 # Capability registry
 
 Status: **contract for the v0.4.0 migration**. Phase 0 (schemas), Phase 1
-(registry and `app check`) and the grant/risk preview of Phase 2 are implemented.
+(registry and `app check`) and the grant, risk and approval preview of Phase 2 are implemented.
 The daemon still runs manifest v2 and the v2 grants; this document is normative
 for the new manifest (v3), grant (v3), app ABI (4) and registry.
 
@@ -236,7 +236,8 @@ anth-panel app check --manifest manifest.toml --json
 ```
 
 The command parses and validates the manifest, builds the host-only graph,
-prints it and exits `0` when every app is `enabled`. It exits `1` when an import
+prints it, including the computed risk and the approval flags, and exits `0`
+when every app is `enabled`. It exits `1` when an import
 is unresolved or a surface conflicts, and `2` when the manifest itself is
 invalid. It never installs, grants or runs anything.
 

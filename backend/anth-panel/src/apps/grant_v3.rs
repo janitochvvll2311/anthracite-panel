@@ -70,6 +70,27 @@ pub struct GrantV3 {
     pub import: Vec<ApprovedImport>,
 }
 
+/// The confirmation flags an install or update must present.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Approval {
+    Capabilities,
+    Admin,
+    Host,
+    Package,
+}
+
+impl Approval {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Capabilities => "capabilities",
+            Self::Admin => "admin",
+            Self::Host => "host",
+            Self::Package => "package",
+        }
+    }
+}
+
 /// Host-computed authority level. The manifest cannot set it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -111,6 +132,46 @@ pub fn risk(manifest: &ManifestV3) -> Result<Risk, String> {
         risk = risk.max(export_risk(export, host_risk)?);
     }
     Ok(risk)
+}
+
+/// The flags an operator must present for this manifest.
+///
+/// The levels are cumulative: a host-exec capability needs the admin and host
+/// confirmations; a package needs admin and the package confirmation.
+pub fn approvals(manifest: &ManifestV3) -> Result<Vec<Approval>, String> {
+    let risk = risk(manifest)?;
+    let mut levels = vec![Approval::Capabilities];
+    if risk >= Risk::Admin {
+        levels.push(Approval::Admin);
+    }
+    let mut host = false;
+    let mut package = false;
+    for export in &manifest.export {
+        match &export.implementation {
+            Implementation::Host { operation } => {
+                if host_catalog::operation(operation).is_some_and(|host| host.risk == Risk::Host) {
+                    host = true;
+                }
+            }
+            Implementation::Binary(binary) => {
+                host |= binary.sandbox == SandboxProfile::Host
+                    || matches!(binary.argv, super::capability::ArgvPolicy::Any);
+                package |= binary.source == BinarySource::Package;
+            }
+            Implementation::Service(service) => {
+                host |= service.sandbox == SandboxProfile::Host;
+                package |= service.source == BinarySource::Package;
+            }
+            Implementation::Wasm { .. } => {}
+        }
+    }
+    if host {
+        levels.push(Approval::Host);
+    }
+    if package {
+        levels.push(Approval::Package);
+    }
+    Ok(levels)
 }
 
 impl GrantV3 {
@@ -444,6 +505,46 @@ mod tests {
             package: None,
             package_version: None,
         }
+    }
+
+    #[test]
+    fn approvals_follow_the_authority_not_the_label() {
+        let mut read = base();
+        read.import.push(host_import());
+        assert_eq!(
+            approvals(&read).expect("read"),
+            vec![Approval::Capabilities]
+        );
+
+        let mut admin = base();
+        admin.export.push(binary_export(binary()));
+        assert_eq!(
+            approvals(&admin).expect("admin"),
+            vec![Approval::Capabilities, Approval::Admin]
+        );
+
+        let mut any = binary();
+        any.argv = ArgvPolicy::Any;
+        any.resource.clear();
+        let mut host = base();
+        host.export.push(binary_export(any));
+        assert_eq!(
+            approvals(&host).expect("host"),
+            vec![Approval::Capabilities, Approval::Admin, Approval::Host]
+        );
+
+        let mut package = binary();
+        package.source = BinarySource::Package;
+        package.package = Some("example".to_string());
+        package.package_version = Some("1.0.0".to_string());
+        package.path = "/usr/bin/example".to_string();
+        package.resource.clear();
+        let mut app = base();
+        app.export.push(binary_export(package));
+        assert_eq!(
+            approvals(&app).expect("package"),
+            vec![Approval::Capabilities, Approval::Admin, Approval::Package]
+        );
     }
 
     #[test]

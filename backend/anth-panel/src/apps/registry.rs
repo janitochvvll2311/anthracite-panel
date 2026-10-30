@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use super::capability::{HOST_NAMESPACE, Import, ManifestV3};
-use super::grant_v3::{self, Risk};
+use super::grant_v3::{self, Approval, Risk};
 use super::host_catalog;
 
 /// The whole graph.
@@ -56,6 +56,8 @@ pub struct AppEntry {
     pub state: AppState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<Risk>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub approvals: Vec<Approval>,
     pub exports: Vec<ExportEntry>,
     pub imports: Vec<ImportEntry>,
     pub cli: Vec<CliEntry>,
@@ -268,11 +270,17 @@ pub fn build(manifests: &[ManifestV3]) -> Result<Graph, String> {
         } else {
             None
         };
+        let approvals = if state == AppState::Enabled {
+            grant_v3::approvals(manifest)?
+        } else {
+            Vec::new()
+        };
         apps.push(AppEntry {
             id: manifest.app.id.clone(),
             version: manifest.app.version.clone(),
             state,
             risk,
+            approvals,
             exports,
             imports,
             cli,

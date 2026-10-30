@@ -650,6 +650,10 @@ pub fn capability_graph(graph: &Graph) -> String {
                 let _ = writeln!(out, "  {} {}  {}", app.id, app.version, app.state.as_str());
             }
         }
+        if !app.approvals.is_empty() {
+            let flags: Vec<&str> = app.approvals.iter().map(|level| level.as_str()).collect();
+            let _ = writeln!(out, "    approval {}", flags.join(", "));
+        }
         for export in &app.exports {
             let _ = writeln!(
                 out,
