@@ -1,8 +1,9 @@
 # Hello
 
-The smallest reference app. It declares one capability (`host.hostname`), two
-HTTP anchors and one UI slot, and answers `GET /greeting` by running the frozen
-`hostname` argv.
+The smallest reference app. It declares one import (`org.anth.host.info`), two
+HTTP anchors and one UI slot, and answers `GET /greeting` from the host snapshot.
+It is an ABI 4 wasm guest and a v3 manifest; the build enables the `abi4` feature
+of `anth-plugin`.
 
 ```bash
 ./package.sh

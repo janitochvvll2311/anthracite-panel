@@ -6,6 +6,7 @@
 pub mod capability;
 pub mod grant_v3;
 pub mod grants;
+pub mod grants_v3;
 pub mod host_catalog;
 pub mod manifest;
 pub mod registry;
@@ -16,6 +17,7 @@ mod state;
 pub use capability::{ApiRoute, CliCommand, Export, Import, ManifestV3};
 pub use grant_v3::{GrantV3, Risk};
 pub use grants::{AppGrant, GrantStore};
+pub use grants_v3::GrantStoreV3;
 pub use manifest::{
     Anchor, AppManifest, AppSection, AppSurface, BIN_MANIFEST_FILE, BinSection, Capability,
     MANIFEST_FILE, MANIFEST_FILES, RuntimeKind, RuntimeSection, UiSlot, WASM_MANIFEST_FILE,

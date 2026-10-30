@@ -57,7 +57,7 @@ impl LoadedBundle {
     }
 }
 
-fn staging_root(root: &Path) -> Result<PathBuf, WireError> {
+pub(super) fn staging_root(root: &Path) -> Result<PathBuf, WireError> {
     fs::create_dir_all(root).map_err(|error| {
         WireError::internal(format!(
             "creating the extension directory {}: {error}",
@@ -89,6 +89,7 @@ fn is_allowed_member(name: &str) -> bool {
         || name == BIN_MANIFEST_FILE
         || name == WASM_FILE
         || name == SIGNATURE_FILE
+        || name.starts_with("helpers/")
         || (name.starts_with("web/")
             && (name.ends_with(".js") || name.ends_with(".mjs") || name.ends_with(".css")))
 }
@@ -111,7 +112,7 @@ fn is_symlink(mode: Option<u32>) -> bool {
     mode.is_some_and(|mode| mode & 0o170_000 == 0o120_000)
 }
 
-fn extract<R: Read + Seek>(
+pub(super) fn extract<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     staging: &Path,
 ) -> Result<(), WireError> {
@@ -136,7 +137,7 @@ fn extract<R: Read + Seek>(
         let name = relative.to_string_lossy().replace('\\', "/");
         if !is_allowed_member(&name) {
             return Err(WireError::forbidden(format!(
-                "`{name}` is not part of a bundle; a bundle holds `{MANIFEST_FILE}`, `{WASM_FILE}`, `{SIGNATURE_FILE}` and `web/*.js|mjs|css`"
+                "`{name}` is not part of a bundle; a bundle holds manifests, `{WASM_FILE}`, `{SIGNATURE_FILE}`, `helpers/*` and `web/*.js|mjs|css`"
             )));
         }
         if is_symlink(entry.unix_mode()) {
@@ -184,11 +185,11 @@ fn extract<R: Read + Seek>(
     Ok(())
 }
 
-fn sha256(bytes: &[u8]) -> String {
+pub(super) fn sha256(bytes: &[u8]) -> String {
     signature::encode_hex(&Sha256::digest(bytes))
 }
 
-fn read_manifest_files(staging: &Path) -> Result<BTreeMap<String, Vec<u8>>, WireError> {
+pub(super) fn read_manifest_files(staging: &Path) -> Result<BTreeMap<String, Vec<u8>>, WireError> {
     let mut files = BTreeMap::new();
     for name in MANIFEST_FILES {
         let path = staging.join(name);
@@ -222,7 +223,7 @@ fn read_manifest_files(staging: &Path) -> Result<BTreeMap<String, Vec<u8>>, Wire
 ///
 /// Returns the signature hex to freeze in the grant. A present signature is
 /// always verified; the switch only decides whether a missing one is fatal.
-fn verify_signature(
+pub(super) fn verify_signature(
     staging: &Path,
     manifest: &[u8],
     require_signature: bool,
@@ -256,7 +257,7 @@ fn verify_signature(
     }
 }
 
-fn verify_hash(path: &Path, expected: &str, what: &str) -> Result<Vec<u8>, WireError> {
+pub(super) fn verify_hash(path: &Path, expected: &str, what: &str) -> Result<Vec<u8>, WireError> {
     let bytes = fs::read(path).map_err(|error| {
         WireError::invalid(format!("reading {what} {}: {error}", path.display()))
     })?;

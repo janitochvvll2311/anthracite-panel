@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the hello bundle: wasm guest, layer manifests, signature and zip.
+# Build the hello bundle: wasm guest, one root manifest, signature and zip.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$here"
@@ -14,21 +14,20 @@ mkdir -p dist/wasm dist/web
 cp "$wasm" dist/wasm/plugin.wasm
 cp web/hello.js dist/web/hello.js
 cp manifest.toml dist/manifest.toml
-cp wasm/manifest.toml dist/wasm/manifest.toml
-cp web/manifest.toml dist/web/manifest.toml
+
 wasm_sha=$(sha256sum dist/wasm/plugin.wasm | cut -d' ' -f1)
 asset_sha=$(sha256sum dist/web/hello.js | cut -d' ' -f1)
 
 bun -e '
 const [path, digest] = process.argv.slice(1)
-const text = (await Bun.file(path).text()).replace(/sha256 = "0+"/, `sha256 = "${digest}"`)
+const text = (await Bun.file(path).text()).replace("__WASM_SHA__", digest)
 await Bun.write(path, text)
-' dist/wasm/manifest.toml "$wasm_sha"
+' dist/manifest.toml "$wasm_sha"
 bun -e '
 const [path, digest] = process.argv.slice(1)
-const text = (await Bun.file(path).text()).replace(/sha256 = "0+"/, `sha256 = "${digest}"`)
+const text = (await Bun.file(path).text()).replace("__WEB_SHA__", digest)
 await Bun.write(path, text)
-' dist/web/manifest.toml "$asset_sha"
+' dist/manifest.toml "$asset_sha"
 
 bun ../sign.mjs dist dist/manifest.sig dist/hello-key.pem dist/hello-public-key.txt
 

@@ -9,11 +9,13 @@
 
 pub mod bin;
 pub mod bundle;
+pub mod bundle_v3;
 pub mod exec;
 pub mod runtime;
 pub mod web;
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -22,6 +24,10 @@ use crate::app_host::exec::ExecRunner;
 use anth_wire::WireError;
 use serde::{Deserialize, Serialize};
 
+use crate::apps::capability::ManifestV3;
+use crate::apps::grant_v3::{self, ApprovalFlags, GrantV3};
+use crate::apps::grants_v3::GrantStoreV3;
+use crate::apps::manifest::MANIFEST_FILE;
 use crate::config::AppsConfig;
 use crate::log::Logger;
 
@@ -29,6 +35,14 @@ pub use crate::apps::{
     Anchor, AppGrant, AppManifest as Manifest, Capability, GrantStore, UiSlot, validate_id,
 };
 pub use bundle::{BundleInstall, LoadedBundle};
+pub use bundle_v3::InstalledV3;
+
+/// The result of installing a bundle, whichever manifest version it speaks.
+#[derive(Debug, Clone)]
+pub enum Installed {
+    V2(BundleInstall),
+    V3(InstalledV3),
+}
 
 /// One entry in the catalogue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +130,7 @@ pub struct AppService {
     config: AppsConfig,
     root: PathBuf,
     grants: GrantStore,
+    grants_v3: GrantStoreV3,
     exec: Arc<dyn ExecRunner>,
     /// Sockets the proxy may never reach, starting with the panel's own.
     denied_sockets: Vec<PathBuf>,
@@ -128,10 +143,12 @@ impl AppService {
         grants_dir: PathBuf,
         exec: Arc<dyn ExecRunner>,
     ) -> Self {
+        let grants_v3 = GrantStoreV3::new(grants_dir.join("v3"));
         Self {
             config,
             root,
             grants: GrantStore::new(grants_dir),
+            grants_v3,
             exec,
             denied_sockets: Vec::new(),
         }
@@ -164,19 +181,164 @@ impl AppService {
         &self.grants
     }
 
+    pub fn grants_v3(&self) -> &GrantStoreV3 {
+        &self.grants_v3
+    }
+
     /// Lists every installed bundle, including disabled and broken ones so the
     /// operator sees why an entry is not serving.
     pub fn snapshot(&self) -> Result<AppsView, WireError> {
         let entries = bundle::installed(&self.root, &self.grants)?;
-        let mut apps = Vec::with_capacity(entries.len());
-        for (id, grant) in entries {
+        let mut by_id: BTreeMap<String, Option<AppGrant>> = entries.into_iter().collect();
+        let mut apps = Vec::new();
+
+        match fs::read_dir(&self.root) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(|error| {
+                        WireError::internal(format!("reading {}: {error}", self.root.display()))
+                    })?;
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                        continue;
+                    };
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                    match self.v3_manifest(name) {
+                        Ok(Some(manifest)) => {
+                            by_id.remove(name);
+                            apps.push(self.v3_view(name, &manifest));
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            by_id.remove(name);
+                            apps.push(AppView {
+                                id: name.to_string(),
+                                alias: None,
+                                name: name.to_string(),
+                                version: String::new(),
+                                enabled: false,
+                                state: "error".to_string(),
+                                error: Some(error.message),
+                                capabilities: Vec::new(),
+                                api: Vec::new(),
+                                ui: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(WireError::internal(format!(
+                    "reading {}: {error}",
+                    self.root.display()
+                )));
+            }
+        }
+
+        for (id, grant) in by_id {
             apps.push(self.view(&id, grant.as_ref()));
         }
+        apps.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(AppsView {
             enabled: self.config.enabled,
             install_from_web: self.config.install_from_web,
             apps,
         })
+    }
+
+    /// Reads one installed v3 manifest, or `None` when the directory is v2.
+    fn v3_manifest(&self, id: &str) -> Result<Option<ManifestV3>, WireError> {
+        validate_id(id)?;
+        let path = self.root.join(id).join(MANIFEST_FILE);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(WireError::internal(format!(
+                    "reading {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        let value: toml::Value = toml::from_str(&text)
+            .map_err(|error| WireError::invalid(format!("{}: {error}", path.display())))?;
+        if value
+            .get("manifest_version")
+            .and_then(toml::Value::as_integer)
+            != Some(i64::from(crate::apps::capability::MANIFEST_VERSION))
+        {
+            return Ok(None);
+        }
+        ManifestV3::parse(&text)
+            .map(Some)
+            .map_err(WireError::invalid)
+    }
+
+    /// The hash the grant freezes for a v3 manifest set.
+    fn v3_manifest_hash(&self, id: &str) -> Result<String, WireError> {
+        let files = bundle::read_manifest_files(&self.root.join(id))?;
+        Ok(bundle::sha256(&crate::apps::manifest::manifest_message(
+            &files,
+        )))
+    }
+
+    fn v3_view(&self, id: &str, manifest: &ManifestV3) -> AppView {
+        let grant = self.grants_v3.read(id).ok().flatten();
+        let hash_ok = grant
+            .as_ref()
+            .map(|grant| {
+                self.v3_manifest_hash(id)
+                    .map(|hash| hash == grant.manifest_sha256)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        let (enabled, state, error) = match grant {
+            None => (
+                false,
+                "unapproved".to_string(),
+                Some("the app is installed but not approved".to_string()),
+            ),
+            Some(_) if !hash_ok => (
+                false,
+                "unapproved".to_string(),
+                Some("the manifest changed; approve it again".to_string()),
+            ),
+            Some(grant) if !grant.enabled => (
+                false,
+                "disabled".to_string(),
+                Some("the operator switched this app off".to_string()),
+            ),
+            Some(_) => (true, "enabled".to_string(), None),
+        };
+        AppView {
+            id: id.to_string(),
+            alias: manifest.app.alias.clone(),
+            name: manifest.app.name.clone(),
+            version: manifest.app.version.clone(),
+            enabled,
+            state,
+            error,
+            capabilities: manifest
+                .export
+                .iter()
+                .map(|export| export.id.clone())
+                .collect(),
+            api: manifest
+                .api
+                .iter()
+                .map(|route| Anchor {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                })
+                .collect(),
+            ui: manifest.ui.clone(),
+        }
     }
 
     fn view(&self, id: &str, grant: Option<&AppGrant>) -> AppView {
@@ -274,7 +436,96 @@ impl AppService {
         )
     }
 
-    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<AppGrant, WireError> {
+    /// Installs whichever manifest version the bundle carries.
+    pub fn install_any_bytes(
+        &self,
+        bytes: &[u8],
+        accept_capabilities: bool,
+    ) -> Result<Installed, WireError> {
+        if !self.config.enabled {
+            return Err(WireError::forbidden(
+                "extensions are disabled; set `[extensions] enabled = true`",
+            ));
+        }
+        match bundle_v3::manifest_version(bytes)? {
+            3 => Ok(Installed::V3(self.install_v3_bytes(bytes)?)),
+            2 => Ok(Installed::V2(
+                self.install_bytes(bytes, accept_capabilities)?,
+            )),
+            other => Err(WireError::new(
+                anth_wire::ErrorKind::Unsupported,
+                "manifest_version",
+                format!("manifest version {other} is not supported"),
+            )),
+        }
+    }
+
+    pub fn install_any_file(
+        &self,
+        bundle: &Path,
+        accept_capabilities: bool,
+    ) -> Result<Installed, WireError> {
+        if !self.config.enabled {
+            return Err(WireError::forbidden(
+                "extensions are disabled; set `[extensions] enabled = true`",
+            ));
+        }
+        match bundle_v3::manifest_version_file(bundle)? {
+            3 => Ok(Installed::V3(self.install_v3_file(bundle)?)),
+            2 => Ok(Installed::V2(
+                self.install_file(bundle, accept_capabilities)?,
+            )),
+            other => Err(WireError::new(
+                anth_wire::ErrorKind::Unsupported,
+                "manifest_version",
+                format!("manifest version {other} is not supported"),
+            )),
+        }
+    }
+
+    pub fn install_v3_bytes(&self, bytes: &[u8]) -> Result<InstalledV3, WireError> {
+        if !self.config.enabled {
+            return Err(WireError::forbidden(
+                "extensions are disabled; set `[extensions] enabled = true`",
+            ));
+        }
+        bundle_v3::install_bytes(
+            bytes,
+            &self.root,
+            self.config.require_signature,
+            &self.config.public_key,
+        )
+    }
+
+    pub fn install_v3_file(&self, bundle: &Path) -> Result<InstalledV3, WireError> {
+        if !self.config.enabled {
+            return Err(WireError::forbidden(
+                "extensions are disabled; set `[extensions] enabled = true`",
+            ));
+        }
+        bundle_v3::install_file(
+            bundle,
+            &self.root,
+            self.config.require_signature,
+            &self.config.public_key,
+        )
+    }
+
+    pub fn is_v3(&self, id: &str) -> Result<bool, WireError> {
+        Ok(self.v3_manifest(id)?.is_some())
+    }
+
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), WireError> {
+        if self.v3_manifest(id)?.is_some() {
+            let mut grant = self.grants_v3.read(id)?.ok_or_else(|| {
+                WireError::forbidden(format!(
+                    "app `{id}` is installed but not approved; approve it first"
+                ))
+            })?;
+            grant.enabled = enabled;
+            self.grants_v3.write(&grant)?;
+            return Ok(());
+        }
         validate_id(id)?;
         let mut grant = self
             .grants
@@ -282,10 +533,25 @@ impl AppService {
             .ok_or_else(|| WireError::not_found(format!("extension `{id}` is not installed")))?;
         grant.enabled = enabled;
         self.grants.write(&grant)?;
-        Ok(grant)
+        Ok(())
     }
 
     pub fn remove(&self, id: &str) -> Result<(), WireError> {
+        if self.v3_manifest(id)?.is_some() {
+            self.grants_v3.remove(id)?;
+            let dir = self.root.join(id);
+            match fs::remove_dir_all(&dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(WireError::internal(format!(
+                        "removing {}: {error}",
+                        dir.display()
+                    )));
+                }
+            }
+            return Ok(());
+        }
         bundle::remove(&self.root, &self.grants, id)
     }
 
@@ -303,6 +569,61 @@ impl AppService {
             self.config.require_signature,
             &self.config.public_key,
         )
+    }
+
+    /// Freezes a v3 grant after checking every approval flag the manifest needs.
+    pub fn approve_v3(&self, id: &str, flags: ApprovalFlags) -> Result<GrantV3, WireError> {
+        let manifest = self
+            .v3_manifest(id)?
+            .ok_or_else(|| WireError::not_found(format!("no v3 app `{id}` is installed")))?;
+        let required = grant_v3::approvals(&manifest).map_err(WireError::invalid)?;
+        let missing = flags.missing(&required);
+        if !missing.is_empty() {
+            let names: Vec<&str> = missing.iter().map(|level| level.as_str()).collect();
+            return Err(WireError::invalid(format!(
+                "missing approval: {}",
+                names.join(", ")
+            )));
+        }
+        let hash = self.v3_manifest_hash(id)?;
+        let signature = fs::read_to_string(self.root.join(id).join("manifest.sig"))
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty());
+        let grant =
+            GrantV3::from_manifest(&manifest, hash, signature, "local".to_string(), now_ms())
+                .map_err(WireError::invalid)?;
+        self.grants_v3.write(&grant)?;
+        Ok(grant)
+    }
+
+    /// Loads one approved, enabled v3 extension.
+    pub fn load_v3(&self, id: &str) -> Result<runtime::LoadedV3, WireError> {
+        if !self.config.enabled {
+            return Err(WireError::forbidden(
+                "extensions are disabled; set `[extensions] enabled = true`",
+            ));
+        }
+        let manifest = self
+            .v3_manifest(id)?
+            .ok_or_else(|| WireError::not_found(format!("no v3 app `{id}` is installed")))?;
+        let grant = self.grants_v3.read(id)?.ok_or_else(|| {
+            WireError::forbidden(format!("app `{id}` is not approved; run `app approve`"))
+        })?;
+        if !grant.enabled {
+            return Err(WireError::forbidden(format!("app `{id}` is disabled")));
+        }
+        if self.v3_manifest_hash(id)? != grant.manifest_sha256 {
+            return Err(WireError::forbidden(format!(
+                "app `{id}` changed since approval; approve it again"
+            )));
+        }
+        let wasm = bundle::verify_hash(
+            &self.root.join(id).join(&manifest.wasm.path),
+            &manifest.wasm.sha256,
+            "module",
+        )?;
+        runtime::LoadedV3::load(manifest, &wasm)
     }
 
     /// Loads one enabled extension, re-verifying its grant and every file hash.
@@ -339,6 +660,9 @@ impl AppService {
             ));
         }
         validate_id(id)?;
+        if let Some(manifest) = self.v3_manifest(id)? {
+            return self.v3_asset(id, &manifest, module);
+        }
         let grant = self
             .grants
             .read(id)?
@@ -349,6 +673,53 @@ impl AppService {
             )));
         }
         web::read_asset(&self.root, &grant, module)
+    }
+
+    fn v3_asset(
+        &self,
+        id: &str,
+        manifest: &ManifestV3,
+        module: &str,
+    ) -> Result<Vec<u8>, WireError> {
+        let grant = self.grants_v3.read(id)?.ok_or_else(|| {
+            WireError::forbidden(format!("app `{id}` is not approved; run `app approve`"))
+        })?;
+        if !grant.enabled {
+            return Err(WireError::forbidden(format!("app `{id}` is disabled")));
+        }
+        if self.v3_manifest_hash(id)? != grant.manifest_sha256 {
+            return Err(WireError::forbidden(format!(
+                "app `{id}` changed since approval; approve it again"
+            )));
+        }
+        let slot = manifest
+            .ui
+            .iter()
+            .find(|slot| slot.module == module)
+            .ok_or_else(|| {
+                WireError::not_found(format!("app `{id}` declares no UI module `{module}`"))
+            })?;
+        let dir = self.root.join(id);
+        let base = dir
+            .canonicalize()
+            .map_err(|error| WireError::not_found(format!("reading app `{id}`: {error}")))?;
+        let path = dir.join(module).canonicalize().map_err(|error| {
+            WireError::not_found(format!("reading `{module}` from `{id}`: {error}"))
+        })?;
+        if !path.starts_with(&base) || !path.is_file() {
+            return Err(WireError::forbidden(format!(
+                "`{module}` is not a regular file inside the app"
+            )));
+        }
+        let metadata = fs::metadata(&path)
+            .map_err(|error| WireError::internal(format!("reading {module}: {error}")))?;
+        if metadata.len() > bundle::MAX_ASSET_BYTES {
+            return Err(WireError::too_large(format!(
+                "`{module}` is larger than {} bytes",
+                bundle::MAX_ASSET_BYTES
+            )));
+        }
+        bundle::verify_hash(&path, &slot.sha256, "UI module")
     }
 
     /// Runs one HTTP anchor, through the guest for a wasm app or over the
@@ -362,6 +733,9 @@ impl AppService {
         request: AnchorRequest,
         log: std::sync::Arc<Logger>,
     ) -> Result<AppReply, WireError> {
+        if let Some(manifest) = self.v3_manifest(id)? {
+            return self.call_anchor_v3(id, manifest, request, log).await;
+        }
         let grant = self
             .grants
             .read(id)?
@@ -431,6 +805,57 @@ impl AppService {
         .await
     }
 
+    async fn call_anchor_v3(
+        &self,
+        id: &str,
+        manifest: ManifestV3,
+        request: AnchorRequest,
+        log: std::sync::Arc<Logger>,
+    ) -> Result<AppReply, WireError> {
+        let grant = self.grants_v3.read(id)?.ok_or_else(|| {
+            WireError::forbidden(format!("app `{id}` is not approved; run `app approve`"))
+        })?;
+        if !grant.enabled {
+            return Err(WireError::forbidden(format!("app `{id}` is disabled")));
+        }
+        if self.v3_manifest_hash(id)? != grant.manifest_sha256 {
+            return Err(WireError::forbidden(format!(
+                "app `{id}` changed since approval; approve it again"
+            )));
+        }
+        let method = request.method.to_uppercase();
+        if !manifest
+            .api
+            .iter()
+            .any(|route| route.method.eq_ignore_ascii_case(&method) && route.path == request.path)
+        {
+            return Err(WireError::not_found(format!(
+                "app `{id}` declares no anchor {method} {}",
+                request.path
+            )));
+        }
+        let body = if request.body.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&request.body).into_owned())
+        };
+        let envelope = serde_json::json!({
+            "method": method,
+            "path": request.path,
+            "query": request.query,
+            "body": body,
+        })
+        .to_string();
+        let loaded = self.load_v3(id)?;
+        let fuel = self.config.fuel;
+        tokio::task::spawn_blocking(move || {
+            let reply = loaded.call("anth_http", &envelope, log, fuel)?;
+            Ok(AppReply::json(reply.status, reply.value))
+        })
+        .await
+        .map_err(|error| WireError::internal(format!("the app task failed: {error}")))?
+    }
+
     /// Runs one CLI request through the guest's `anth_cli` entry.
     pub fn call_cli(
         &self,
@@ -460,6 +885,13 @@ impl AppService {
         payload: &str,
         log: std::sync::Arc<Logger>,
     ) -> Result<AppReply, WireError> {
+        if self.v3_manifest(id)?.is_some() {
+            return Err(WireError::new(
+                anth_wire::ErrorKind::Unsupported,
+                "v3_cli_pending",
+                "v3 CLI dispatch is not wired yet; use the app's HTTP anchors",
+            ));
+        }
         let loaded = self.load(id)?;
         let wasm = loaded.wasm.as_deref().ok_or_else(|| {
             WireError::new(
@@ -472,6 +904,13 @@ impl AppService {
         let reply = runtime.call(entry, payload, log, self.config.fuel)?;
         Ok(AppReply::json(reply.status, reply.value))
     }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

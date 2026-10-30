@@ -189,6 +189,15 @@ enum AppCommand {
         /// Confirm the capability surface.
         #[arg(long)]
         accept_capabilities: bool,
+        /// Confirm an admin capability (socket, device, network).
+        #[arg(long)]
+        accept_admin: bool,
+        /// Confirm host-exec authority.
+        #[arg(long)]
+        accept_host: bool,
+        /// Confirm installing a system package.
+        #[arg(long)]
+        accept_package: bool,
     },
     /// Check a v3 manifest against the host capability catalog.
     Check {
@@ -992,24 +1001,52 @@ fn app_command(path: &std::path::Path, command: &AppCommand) -> CliResult {
         AppCommand::Install {
             bundle,
             accept_capabilities,
-        } => {
-            let installed = service
-                .install_file(bundle, *accept_capabilities)
-                .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
-            println!(
-                "installed {} {} ({} capabilities)",
-                installed.grant.id,
-                installed.grant.app_version,
-                installed.grant.allowed_ids().len()
-            );
-            for capability in installed.grant.allowed_ids() {
-                println!("  {capability}");
+        } => match service
+            .install_any_file(bundle, *accept_capabilities)
+            .map_err(|error| (error.kind.exit_code(), error.to_string()))?
+        {
+            anth_panel::app_host::Installed::V2(installed) => {
+                println!(
+                    "installed {} {} ({} capabilities)",
+                    installed.grant.id,
+                    installed.grant.app_version,
+                    installed.grant.allowed_ids().len()
+                );
+                for capability in installed.grant.allowed_ids() {
+                    println!("  {capability}");
+                }
+                if let Some(warning) = installed.warning {
+                    eprintln!("warning: {warning}");
+                }
+                Ok(())
             }
-            if let Some(warning) = installed.warning {
-                eprintln!("warning: {warning}");
+            anth_panel::app_host::Installed::V3(installed) => {
+                println!(
+                    "installed {} {} ({} exports; not approved)",
+                    installed.manifest.app.id,
+                    installed.manifest.app.version,
+                    installed.manifest.export.len()
+                );
+                for export in &installed.manifest.export {
+                    println!("  {}@{}", export.id, export.version);
+                }
+                if let Some(warning) = installed.warning {
+                    eprintln!("warning: {warning}");
+                }
+                let levels = anth_panel::apps::grant_v3::approvals(&installed.manifest)
+                    .map_err(|error| (2, error))?;
+                let flags: Vec<String> = levels
+                    .iter()
+                    .map(|level| format!("--accept-{}", level.as_str()))
+                    .collect();
+                println!(
+                    "run: anth-panel app approve {} {}",
+                    installed.manifest.app.id,
+                    flags.join(" ")
+                );
+                Ok(())
             }
-            Ok(())
-        }
+        },
         AppCommand::Remove { id, yes } => {
             let id = resolve_app_id(&service, id)?;
             if !yes {
@@ -1033,8 +1070,44 @@ fn app_command(path: &std::path::Path, command: &AppCommand) -> CliResult {
         AppCommand::Approve {
             id,
             accept_capabilities,
+            accept_admin,
+            accept_host,
+            accept_package,
         } => {
             let id = resolve_app_id(&service, id)?;
+            if service
+                .is_v3(&id)
+                .map_err(|error| (error.kind.exit_code(), error.to_string()))?
+            {
+                let flags = anth_panel::apps::grant_v3::ApprovalFlags {
+                    capabilities: *accept_capabilities,
+                    admin: *accept_admin,
+                    host: *accept_host,
+                    package: *accept_package,
+                };
+                let grant = service
+                    .approve_v3(&id, flags)
+                    .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
+                println!(
+                    "approved {} {} (risk {})",
+                    grant.id,
+                    grant.app_version,
+                    grant.risk.as_str()
+                );
+                for capability in &grant.capability {
+                    println!(
+                        "  {}@{} ({}, {})",
+                        capability.id,
+                        capability.version,
+                        capability.kind,
+                        capability.risk.as_str()
+                    );
+                }
+                for import in &grant.import {
+                    println!("  import {}@{}", import.id, import.version);
+                }
+                return Ok(());
+            }
             let grant = service
                 .approve(&id, *accept_capabilities)
                 .map_err(|error| (error.kind.exit_code(), error.to_string()))?;
@@ -1086,6 +1159,9 @@ fn resolve_app_id(
     service: &anth_panel::app_host::AppService,
     id_or_alias: &str,
 ) -> Result<String, (u8, String)> {
+    if service.is_v3(id_or_alias).unwrap_or(false) {
+        return Ok(id_or_alias.to_string());
+    }
     match service.grants().read(id_or_alias) {
         Ok(Some(_)) => return Ok(id_or_alias.to_string()),
         Ok(None) => {}

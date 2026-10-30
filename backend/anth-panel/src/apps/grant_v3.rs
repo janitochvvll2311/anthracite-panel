@@ -91,6 +91,35 @@ impl Approval {
     }
 }
 
+/// The flags an operator passes to approve a manifest.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ApprovalFlags {
+    pub capabilities: bool,
+    pub admin: bool,
+    pub host: bool,
+    pub package: bool,
+}
+
+impl ApprovalFlags {
+    pub fn allows(self, level: Approval) -> bool {
+        match level {
+            Approval::Capabilities => self.capabilities,
+            Approval::Admin => self.admin,
+            Approval::Host => self.host,
+            Approval::Package => self.package,
+        }
+    }
+
+    /// The levels the caller did not present.
+    pub fn missing(self, required: &[Approval]) -> Vec<Approval> {
+        required
+            .iter()
+            .copied()
+            .filter(|level| !self.allows(*level))
+            .collect()
+    }
+}
+
 /// Host-computed authority level. The manifest cannot set it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -2,10 +2,12 @@
 
 Status: **contract for the v0.4.0 migration**. Phase 0 (schemas), Phase 1
 (registry and `app check`) and the grant, risk and approval preview of Phase 2 are implemented.
-The daemon still runs manifest v2 and the v2 grants, but the runtime now has
-an ABI 4 host bridge with `anth_capability_call` and `org.anth.host.info`; the
-SDK, install path and migration are still pending. This document is normative
-for the new manifest (v3), grant (v3), app ABI (4) and registry.
+Manifest v2 and the v2 grants still load for existing bundles, and the v3 path
+is live: signed v3 bundles install, approve, enable, disable, remove, serve
+anchors and UI assets, and the runtime accepts ABI 4 with
+`anth_capability_call` and `org.anth.host.info`. `hello` is migrated; WireGuard
+and the Podman helper are pending. This document is normative for the new
+manifest (v3), grant (v3), app ABI (4) and registry.
 
 ## Model
 

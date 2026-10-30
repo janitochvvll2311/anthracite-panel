@@ -1,10 +1,4 @@
-# Hello app: root manifest.
-#
-# The wasm artifact and its capability live in wasm/manifest.toml. The HTTP
-# anchors and UI slot live in web/manifest.toml. package.sh fills the digests
-# and writes manifest.sig.
-
-manifest_version = 2
+manifest_version = 3
 
 [app]
 id = "org.anth.hello"
@@ -14,3 +8,61 @@ name = "Hello"
 
 [runtime]
 kind = "wasm"
+
+[wasm]
+path = "wasm/plugin.wasm"
+sha256 = "__WASM_SHA__"
+abi = 4
+
+# One wasm entry answers both routes; the routes are the HTTP surface of the
+# same export.
+[[export]]
+id = "org.anth.hello.respond"
+version = 1
+input = { type = "record", fields = {} }
+output = { type = "record", fields = {} }
+
+[export.implementation]
+kind = "wasm"
+entry = "anth_http"
+
+[[import]]
+id = "org.anth.host.info"
+version = 1
+provider = "host"
+input = { type = "record", fields = {} }
+output = { type = "record", fields = {
+  hostname = { type = "string" },
+  os = { type = "record", fields = {
+    name = { type = "string" }, version = { type = "string" },
+    kernel = { type = "string" }, arch = { type = "string" }
+  } },
+  uptime_seconds = { type = "int", min = 0 },
+  cpu_model = { type = "string" },
+  logical_cores = { type = "int", min = 1 },
+  load = { type = "record", fields = {
+    one = { type = "float" }, five = { type = "float" }, fifteen = { type = "float" }
+  } },
+  memory = { type = "record", fields = {
+    total_kib = { type = "int", min = 0 }, available_kib = { type = "int", min = 0 },
+    swap_total_kib = { type = "int", min = 0 }, swap_free_kib = { type = "int", min = 0 }
+  } },
+  collected_at_ms = { type = "timestamp" }
+} }
+
+[[api]]
+method = "GET"
+path = "/greeting"
+export = "org.anth.hello.respond"
+
+[[api]]
+method = "GET"
+path = "/status"
+export = "org.anth.hello.respond"
+
+[[ui]]
+slot = "settings.app"
+tag = "anth-hello"
+module = "web/hello.js"
+label = "Hello"
+sha256 = "__WEB_SHA__"

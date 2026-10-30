@@ -6,7 +6,7 @@
 
 use anth_plugin::{Executor, Method, Response};
 
-/// The anchor that reads the host's name; must match `[[api]]` in `plugin.toml`.
+/// The anchor that reads the host's name; must match `[[api]]` in `manifest.toml`.
 pub const GREETING_PATH: &str = "/greeting";
 
 /// A second anchor that runs no capability, so `plugin call` has something to
@@ -16,28 +16,28 @@ pub const STATUS_PATH: &str = "/status";
 
 /// Every route this plugin declares.
 ///
-/// A test compares this with `plugin.toml`, because v0.1.0 shipped a manifest
+/// A test compares this with `manifest.toml`, because v0.1.0 shipped a manifest
 /// that named a route no module served and nothing failed until mount time.
 pub const ROUTES: &[(Method, &str)] = &[(Method::Get, GREETING_PATH), (Method::Get, STATUS_PATH)];
 
-/// The capability it runs; must match `[[capability]]` in `plugin.toml`.
-const HOSTNAME: &str = "host.hostname";
+/// The capability it runs; must match `[[import]]` in `manifest.toml`.
+const HOST_INFO: &str = "org.anth.host.info";
 
 /// The capability name, exposed so a test can compare it with the manifest.
-pub fn hostname_capability() -> &'static str {
-    HOSTNAME
+pub fn host_info_capability() -> &'static str {
+    HOST_INFO
 }
 
 /// `GET /greeting` reads the host's name and answers it.
 ///
-/// The capability is declared in `plugin.toml` with a frozen argv; the guest
+/// The capability is declared in `manifest.toml` with a frozen argv; the guest
 /// supplies no program and no argument, only the request to run it. `exec_bare`
 /// passes `{}` rather than `null`, which the host's argument map would refuse.
 pub fn greeting(executor: &mut dyn Executor) -> Response {
-    match executor.exec_bare(HOSTNAME) {
+    match executor.exec_bare(HOST_INFO) {
         Ok(reply) => {
             let hostname = reply
-                .get("stdout")
+                .get("hostname")
                 .and_then(|value| value.as_str())
                 .unwrap_or("unknown")
                 .trim();
@@ -82,8 +82,8 @@ mod tests {
         fn answering(stdout: &str) -> Self {
             let mut replies = BTreeMap::new();
             replies.insert(
-                HOSTNAME.to_string(),
-                Ok(serde_json::json!({"ok": true, "stdout": stdout, "stderr": ""})),
+                HOST_INFO.to_string(),
+                Ok(serde_json::json!({"hostname": stdout.trim()})),
             );
             Self {
                 replies,
@@ -129,7 +129,7 @@ mod tests {
             "the trailing newline must be trimmed"
         );
         assert_eq!(fake.asked.len(), 1);
-        assert_eq!(fake.asked[0].0, HOSTNAME);
+        assert_eq!(fake.asked[0].0, HOST_INFO);
     }
 
     /// The host decodes arguments into a map, so `null` is refused while `{}`
@@ -147,8 +147,8 @@ mod tests {
     fn a_refused_capability_is_a_500_carrying_the_host_detail() {
         let mut fake = Fake {
             replies: BTreeMap::from([(
-                HOSTNAME.to_string(),
-                Err("`hostname` is not installed".to_string()),
+                HOST_INFO.to_string(),
+                Err("the host refuses `org.anth.host.info`".to_string()),
             )]),
             asked: Vec::new(),
         };
@@ -158,14 +158,14 @@ mod tests {
         assert_eq!(reply.status, anth_plugin::Status::Failed);
         assert_eq!(
             reply.value["error"],
-            serde_json::json!("`hostname` is not installed")
+            serde_json::json!("the host refuses `org.anth.host.info`")
         );
     }
 
     #[test]
-    fn a_reply_without_stdout_still_answers() {
+    fn a_reply_without_hostname_still_answers() {
         let mut fake = Fake {
-            replies: BTreeMap::from([(HOSTNAME.to_string(), Ok(serde_json::json!({"ok": true})))]),
+            replies: BTreeMap::from([(HOST_INFO.to_string(), Ok(serde_json::json!({})))]),
             asked: Vec::new(),
         };
 
@@ -189,7 +189,7 @@ mod tests {
     }
 
     /// Every declared route maps and answers, which is the property the manifest
-    /// test relies on when it compares `ROUTES` with `plugin.toml`.
+    /// test relies on when it compares `ROUTES` with `manifest.toml`.
     #[test]
     fn every_declared_route_answers() {
         for (_, path) in ROUTES {

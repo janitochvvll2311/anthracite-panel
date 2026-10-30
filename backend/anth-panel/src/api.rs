@@ -1623,14 +1623,29 @@ async fn app_install(
     }
     let service = state.daemon.apps().clone();
     let accepted = body.accept_capabilities;
-    let installed = app_blocking(move || service.install_bytes(&bytes, accepted)).await?;
-    Ok(Json(json!({
-        "id": installed.grant.id,
-        "name": installed.manifest.app.name,
-        "version": installed.grant.app_version,
-        "capabilities": installed.grant.allowed_ids(),
-        "warning": installed.warning,
-    })))
+    let installed = app_blocking(move || service.install_any_bytes(&bytes, accepted)).await?;
+    Ok(Json(match installed {
+        crate::app_host::Installed::V2(installed) => json!({
+            "id": installed.grant.id,
+            "name": installed.manifest.app.name,
+            "version": installed.grant.app_version,
+            "capabilities": installed.grant.allowed_ids(),
+            "warning": installed.warning,
+        }),
+        crate::app_host::Installed::V3(installed) => json!({
+            "id": installed.manifest.app.id,
+            "name": installed.manifest.app.name,
+            "version": installed.manifest.app.version,
+            "capabilities": installed
+                .manifest
+                .export
+                .iter()
+                .map(|export| export.id.clone())
+                .collect::<Vec<_>>(),
+            "warning": installed.warning,
+            "state": "unapproved",
+        }),
+    }))
 }
 
 async fn app_enable(
@@ -1673,6 +1688,12 @@ async fn app_remove(
 struct PluginApproveBody {
     #[serde(default)]
     accept_capabilities: bool,
+    #[serde(default)]
+    accept_admin: bool,
+    #[serde(default)]
+    accept_host: bool,
+    #[serde(default)]
+    accept_package: bool,
 }
 
 async fn app_approve(
@@ -1685,6 +1706,24 @@ async fn app_approve(
     same_origin(&headers)?;
     let Json(body) = body.map_err(|error| ApiError::invalid(error.to_string()))?;
     let service = state.daemon.apps().clone();
+    let probe = service.clone();
+    let probe_id = id.clone();
+    let is_v3 = app_blocking(move || probe.is_v3(&probe_id)).await?;
+    if is_v3 {
+        let flags = crate::apps::grant_v3::ApprovalFlags {
+            capabilities: body.accept_capabilities,
+            admin: body.accept_admin,
+            host: body.accept_host,
+            package: body.accept_package,
+        };
+        let grant = app_blocking(move || service.approve_v3(&id, flags)).await?;
+        return Ok(Json(json!({
+            "id": grant.id,
+            "risk": grant.risk.as_str(),
+            "capabilities": grant.capability.iter().map(|capability| capability.id.clone()).collect::<Vec<_>>(),
+            "imports": grant.import.iter().map(|import| import.id.clone()).collect::<Vec<_>>(),
+        })));
+    }
     let accepted = body.accept_capabilities;
     let grant = app_blocking(move || service.approve(&id, accepted)).await?;
     Ok(Json(json!({

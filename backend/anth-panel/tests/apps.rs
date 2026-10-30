@@ -638,3 +638,135 @@ async fn a_bin_anchor_is_proxied_over_its_declared_socket() {
     server.abort();
     fs::remove_dir_all(root).expect("cleanup");
 }
+
+#[tokio::test]
+async fn a_v3_bundle_installs_approves_and_serves_a_host_info_anchor() {
+    use anth_panel::apps::capability::{
+        ApiRoute, Export, Implementation, Import, ManifestV3, WasmSectionV3,
+    };
+    use anth_panel::apps::host_catalog;
+    use anth_panel::apps::manifest::{AppSection, RuntimeKind, RuntimeSection, WASM_FILE};
+    use anth_panel::apps::schema::Type;
+    use sha2::{Digest as _, Sha256};
+
+    let guest = r#"
+(module
+  (import "env" "anth_capability_call"
+    (func $call (param i32 i32 i32 i32) (result i64)))
+  (memory (export "memory") 1)
+  (data (i32.const 256) "org.anth.host.info")
+  (data (i32.const 300) "{}")
+  (data (i32.const 600) "{\"status\":200,\"body\":")
+  (func (export "anth_abi_version") (result i32) i32.const 4)
+  (func (export "anth_alloc") (param i32) (result i32) i32.const 4096)
+  (func (export "anth_http") (param i32 i32) (result i64)
+    (local $packed i64) (local $ptr i32) (local $len i32)
+    i32.const 256 i32.const 18 i32.const 300 i32.const 2 call $call
+    local.set $packed
+    local.get $packed i64.const 32 i64.shr_u i32.wrap_i64 local.set $ptr
+    local.get $packed i32.wrap_i64 local.set $len
+    i32.const 621 local.get $ptr local.get $len memory.copy
+    i32.const 621 local.get $len i32.add
+    i32.const 125 i32.store8
+    i64.const 600 i64.const 32 i64.shl
+    i32.const 22 local.get $len i32.add i64.extend_i32_u
+    i64.or)
+)
+"#;
+    let wasm = wat::parse_str(guest).expect("wat");
+    let sha = |bytes: &[u8]| anth_panel::apps::signature::encode_hex(&Sha256::digest(bytes));
+
+    let host = host_catalog::exports().remove(0);
+    let export_id = "org.anth.v3test.status".to_string();
+    let manifest = ManifestV3 {
+        manifest_version: 3,
+        app: AppSection {
+            id: "org.anth.v3test".to_string(),
+            alias: None,
+            version: "0.1.0".to_string(),
+            name: "V3 Test".to_string(),
+        },
+        runtime: RuntimeSection {
+            kind: RuntimeKind::Wasm,
+        },
+        wasm: WasmSectionV3 {
+            path: WASM_FILE.to_string(),
+            sha256: sha(&wasm),
+            abi: 4,
+        },
+        export: vec![Export {
+            id: export_id.clone(),
+            version: 1,
+            reason: None,
+            input: Type::record([]),
+            output: Type::record([]),
+            implementation: Implementation::Wasm {
+                entry: "anth_http".to_string(),
+            },
+        }],
+        import: vec![Import {
+            id: host.signature.id,
+            version: host.signature.version,
+            provider: "host".to_string(),
+            input: host.signature.input,
+            output: host.signature.output,
+        }],
+        cli: Vec::new(),
+        api: vec![ApiRoute {
+            method: "GET".to_string(),
+            path: "/status".to_string(),
+            export: export_id,
+        }],
+        ui: Vec::new(),
+    };
+    let text = toml::to_string(&manifest).expect("manifest toml");
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut bytes);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("manifest.toml", options).unwrap();
+        zip.write_all(text.as_bytes()).unwrap();
+        zip.start_file("wasm/plugin.wasm", options).unwrap();
+        zip.write_all(&wasm).unwrap();
+        zip.finish().unwrap();
+    }
+
+    let (router, root) = app("extensions-v3", false, true);
+    let response = router
+        .clone()
+        .oneshot(post(
+            "/api/apps/install",
+            json!({
+                "bundle_base64": STANDARD.encode(bytes.into_inner()),
+                "accept_capabilities": false,
+            }),
+        ))
+        .await
+        .expect("install");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .clone()
+        .oneshot(post(
+            "/api/apps/org.anth.v3test/approve",
+            json!({ "accept_capabilities": true }),
+        ))
+        .await
+        .expect("approve");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = router
+        .oneshot(
+            HttpRequest::builder()
+                .uri("/api/apps/org.anth.v3test/status")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("anchor");
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = body_json(response).await;
+    assert!(value["hostname"].is_string(), "{value}");
+
+    fs::remove_dir_all(root).expect("cleanup");
+}
