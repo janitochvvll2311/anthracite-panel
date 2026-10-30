@@ -10,6 +10,7 @@ use anth_wire::{
 };
 
 use crate::app_host::AppsView;
+use crate::apps::grant_v3::GrantDiff;
 use crate::apps::registry::Graph;
 
 /// Formats a host snapshot as grouped sections.
@@ -611,6 +612,53 @@ fn format_age(modified_ms: u64) -> String {
     } else {
         format!("{}d", seconds / 86_400)
     }
+}
+
+/// Formats an authority diff for `app check --previous`.
+pub fn grant_diff(diff: &GrantDiff) -> String {
+    let mut out = String::new();
+    if diff.is_empty() {
+        return "no authority change\n".to_string();
+    }
+    if diff.manifest_changed {
+        let _ = writeln!(out, "manifest changed");
+    }
+    if diff.wasm_changed {
+        let _ = writeln!(out, "wasm changed");
+    }
+    if let Some(change) = &diff.app_version {
+        let _ = writeln!(out, "app version {} -> {}", change.from, change.to);
+    }
+    if let Some(change) = &diff.risk {
+        let _ = writeln!(out, "risk {} -> {}", change.from, change.to);
+    }
+    for id in &diff.added {
+        let _ = writeln!(out, "+ capability {id}");
+    }
+    for id in &diff.removed {
+        let _ = writeln!(out, "- capability {id}");
+    }
+    for change in &diff.changed {
+        let _ = writeln!(
+            out,
+            "~ capability {} {}: {} -> {}",
+            change.id, change.field, change.from, change.to
+        );
+    }
+    for id in &diff.import_added {
+        let _ = writeln!(out, "+ import {id}");
+    }
+    for id in &diff.import_removed {
+        let _ = writeln!(out, "- import {id}");
+    }
+    for change in &diff.import_changed {
+        let _ = writeln!(
+            out,
+            "~ import {} {}: {} -> {}",
+            change.id, change.field, change.from, change.to
+        );
+    }
+    out
 }
 
 /// Formats a capability graph for `app check`.

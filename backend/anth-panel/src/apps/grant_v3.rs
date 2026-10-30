@@ -4,7 +4,7 @@
 //! runtime still writes v2 grants. This module is the contract the registry and
 //! the approval flow use after the migration.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -235,13 +235,15 @@ impl GrantV3 {
         let mut capability = Vec::new();
         for export in &manifest.export {
             let risk = export_risk(export, host_risk)?;
+            let mut resource = resources(export);
+            resource.sort();
             capability.push(ApprovedCapability {
                 id: export.id.clone(),
                 version: export.version,
                 kind: export.implementation.kind().to_string(),
                 implementation_sha256: implementation_hash(export, manifest),
                 sandbox: sandbox(export),
-                resource: resources(export),
+                resource,
                 limits: limits(export),
                 risk,
             });
@@ -422,6 +424,202 @@ fn limits(export: &Export) -> Option<String> {
 
 fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// One field that changed between two grants.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GrantChange {
+    pub id: String,
+    pub field: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// The authority diff an operator reviews before approving an update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GrantDiff {
+    pub manifest_changed: bool,
+    pub wasm_changed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<GrantChange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk: Option<GrantChange>,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub changed: Vec<GrantChange>,
+    pub import_added: Vec<String>,
+    pub import_removed: Vec<String>,
+    pub import_changed: Vec<GrantChange>,
+}
+
+impl GrantDiff {
+    pub fn is_empty(&self) -> bool {
+        !self.manifest_changed
+            && !self.wasm_changed
+            && self.app_version.is_none()
+            && self.risk.is_none()
+            && self.added.is_empty()
+            && self.removed.is_empty()
+            && self.changed.is_empty()
+            && self.import_added.is_empty()
+            && self.import_removed.is_empty()
+            && self.import_changed.is_empty()
+    }
+}
+
+impl GrantV3 {
+    /// Compares the approved set with a new one.
+    pub fn diff(previous: &Self, next: &Self) -> GrantDiff {
+        let mut diff = GrantDiff {
+            manifest_changed: previous.manifest_sha256 != next.manifest_sha256,
+            wasm_changed: previous.wasm_sha256 != next.wasm_sha256,
+            app_version: (previous.app_version != next.app_version).then(|| GrantChange {
+                id: next.id.clone(),
+                field: "app_version".to_string(),
+                from: previous.app_version.clone(),
+                to: next.app_version.clone(),
+            }),
+            risk: (previous.risk != next.risk).then(|| GrantChange {
+                id: next.id.clone(),
+                field: "risk".to_string(),
+                from: previous.risk.as_str().to_string(),
+                to: next.risk.as_str().to_string(),
+            }),
+            added: Vec::new(),
+            removed: Vec::new(),
+            changed: Vec::new(),
+            import_added: Vec::new(),
+            import_removed: Vec::new(),
+            import_changed: Vec::new(),
+        };
+
+        let old: BTreeMap<String, &ApprovedCapability> = previous
+            .capability
+            .iter()
+            .map(|capability| (key(&capability.id, capability.version), capability))
+            .collect();
+        let new: BTreeMap<String, &ApprovedCapability> = next
+            .capability
+            .iter()
+            .map(|capability| (key(&capability.id, capability.version), capability))
+            .collect();
+        for (id, capability) in &new {
+            match old.get(id) {
+                None => diff.added.push(id.clone()),
+                Some(before) => {
+                    compare(
+                        &mut diff.changed,
+                        id,
+                        "kind",
+                        &before.kind,
+                        &capability.kind,
+                    );
+                    compare(
+                        &mut diff.changed,
+                        id,
+                        "implementation_sha256",
+                        &option(&before.implementation_sha256),
+                        &option(&capability.implementation_sha256),
+                    );
+                    compare(
+                        &mut diff.changed,
+                        id,
+                        "sandbox",
+                        &option(&before.sandbox),
+                        &option(&capability.sandbox),
+                    );
+                    compare(
+                        &mut diff.changed,
+                        id,
+                        "resource",
+                        &before.resource.join(","),
+                        &capability.resource.join(","),
+                    );
+                    compare(
+                        &mut diff.changed,
+                        id,
+                        "limits",
+                        &option(&before.limits),
+                        &option(&capability.limits),
+                    );
+                    compare(
+                        &mut diff.changed,
+                        id,
+                        "risk",
+                        before.risk.as_str(),
+                        capability.risk.as_str(),
+                    );
+                }
+            }
+        }
+        for id in old.keys() {
+            if !new.contains_key(id) {
+                diff.removed.push(id.clone());
+            }
+        }
+
+        let old: BTreeMap<String, &ApprovedImport> = previous
+            .import
+            .iter()
+            .map(|import| (key(&import.id, import.version), import))
+            .collect();
+        let new: BTreeMap<String, &ApprovedImport> = next
+            .import
+            .iter()
+            .map(|import| (key(&import.id, import.version), import))
+            .collect();
+        for (id, import) in &new {
+            match old.get(id) {
+                None => diff.import_added.push(id.clone()),
+                Some(before) => {
+                    compare(
+                        &mut diff.import_changed,
+                        id,
+                        "provider",
+                        &before.provider,
+                        &import.provider,
+                    );
+                    compare(
+                        &mut diff.import_changed,
+                        id,
+                        "risk",
+                        before.risk.as_str(),
+                        import.risk.as_str(),
+                    );
+                }
+            }
+        }
+        for id in old.keys() {
+            if !new.contains_key(id) {
+                diff.import_removed.push(id.clone());
+            }
+        }
+
+        diff.added.sort();
+        diff.removed.sort();
+        diff.import_added.sort();
+        diff.import_removed.sort();
+        diff
+    }
+}
+
+fn key(id: &str, version: u32) -> String {
+    format!("{id}@{version}")
+}
+
+fn option(value: &Option<String>) -> String {
+    value.clone().unwrap_or_default()
+}
+
+fn compare(out: &mut Vec<GrantChange>, id: &str, field: &str, from: &str, to: &str) {
+    if from != to {
+        out.push(GrantChange {
+            id: id.to_string(),
+            field: field.to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+        });
+    }
 }
 
 #[cfg(test)]
@@ -664,6 +862,39 @@ mod tests {
             GrantV3::from_manifest(&manifest, SHA.to_string(), None, "uid:0".to_string(), 1)
                 .expect_err("unresolved");
         assert!(error.contains("unresolved"), "{error}");
+    }
+
+    #[test]
+    fn a_diff_reports_additions_removals_and_risk_changes() {
+        let mut before = base();
+        before.import.push(host_import());
+        before.export.push(binary_export(binary()));
+        let previous =
+            GrantV3::from_manifest(&before, SHA.to_string(), None, "uid:0".to_string(), 1)
+                .expect("previous");
+
+        let mut after = base();
+        let mut host = binary();
+        host.sandbox = SandboxProfile::Host;
+        host.resource.clear();
+        let mut changed = binary_export(host);
+        changed.id = "org.example.app.action".to_string();
+        after.export.push(changed);
+        let mut extra = binary_export(binary());
+        extra.id = "org.example.app.extra".to_string();
+        after.export.push(extra);
+        let next = GrantV3::from_manifest(&after, SHA.to_string(), None, "uid:0".to_string(), 2)
+            .expect("next");
+
+        let diff = GrantV3::diff(&previous, &next);
+        assert!(!diff.is_empty());
+        assert_eq!(diff.import_removed, vec!["org.anth.host.info@1"]);
+        assert_eq!(diff.added, vec!["org.example.app.extra@1"]);
+        assert_eq!(diff.risk.as_ref().unwrap().to, "host");
+        assert!(diff.changed.iter().any(|change| change.field == "sandbox"));
+
+        let same = GrantV3::diff(&next, &next);
+        assert!(same.is_empty());
     }
 
     #[test]

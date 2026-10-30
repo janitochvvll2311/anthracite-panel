@@ -233,6 +233,8 @@ The result is deterministic and independent of installation order.
 ```bash
 anth-panel app check --manifest manifest.toml
 anth-panel app check --manifest manifest.toml --json
+anth-panel app check --manifest manifest.toml --grant
+anth-panel app check --manifest manifest.toml --grant --previous old-grant.toml
 ```
 
 The command parses and validates the manifest, builds the host-only graph,
@@ -244,6 +246,10 @@ invalid. It never installs, grants or runs anything.
 `--grant` prints the normalized grant (TOML, or JSON with `--json`) instead of
 the graph. It includes the app risk, per-capability risk, normalized resources
 and limits, and the approved imports. It is a preview: no file is written.
+
+`--previous old-grant.toml` (with `--grant`) prints the authority diff:
+added/removed/changed capabilities, imports and risk. It is the review the
+operator gets before approving an update.
 
 v1 has no plugin-to-plugin edges. A plugin export is visible in `app show` and
 usable by that plugin's own CLI/API/UI; it is not a provider for other plugins.

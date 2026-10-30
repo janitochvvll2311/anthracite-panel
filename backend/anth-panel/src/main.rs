@@ -201,6 +201,9 @@ enum AppCommand {
         /// Print the normalized grant instead of the graph.
         #[arg(long)]
         grant: bool,
+        /// Compare against a previous grant file (requires --grant).
+        #[arg(long, value_name = "FILE")]
+        previous: Option<PathBuf>,
     },
     /// Send one request through the extension's `anth_cli` entry.
     Call {
@@ -872,9 +875,10 @@ async fn run() -> CliResult {
                 manifest,
                 json,
                 grant,
+                previous,
             } = command
             {
-                return check_app_manifest(manifest, *json, *grant);
+                return check_app_manifest(manifest, *json, *grant, previous.as_deref());
             }
             app_command(&path, command)
         }
@@ -895,7 +899,15 @@ async fn run() -> CliResult {
     }
 }
 
-fn check_app_manifest(manifest: &std::path::Path, json: bool, grant: bool) -> CliResult {
+fn check_app_manifest(
+    manifest: &std::path::Path,
+    json: bool,
+    grant: bool,
+    previous: Option<&std::path::Path>,
+) -> CliResult {
+    if previous.is_some() && !grant {
+        return Err((2, "`--previous` requires `--grant`".to_string()));
+    }
     let text = std::fs::read_to_string(manifest)
         .map_err(|error| (1, format!("reading {}: {error}", manifest.display())))?;
     let parsed = ManifestV3::parse(&text).map_err(|error| (2, error))?;
@@ -905,6 +917,26 @@ fn check_app_manifest(manifest: &std::path::Path, json: bool, grant: bool) -> Cl
         let preview =
             anth_panel::apps::GrantV3::from_manifest(&parsed, hash, None, "preview".to_string(), 0)
                 .map_err(|error| (1, error))?;
+        if let Some(previous) = previous {
+            let text = std::fs::read_to_string(previous)
+                .map_err(|error| (1, format!("reading {}: {error}", previous.display())))?;
+            let before: anth_panel::apps::GrantV3 = toml::from_str(&text)
+                .map_err(|error| (2, format!("parsing the previous grant: {error}")))?;
+            before
+                .validate()
+                .map_err(|error| (2, format!("the previous grant is invalid: {error}")))?;
+            let diff = anth_panel::apps::GrantV3::diff(&before, &preview);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&diff)
+                        .map_err(|error| (1, format!("encoding the diff: {error}")))?
+                );
+            } else {
+                print!("{}", render::grant_diff(&diff));
+            }
+            return Ok(());
+        }
         if json {
             println!(
                 "{}",
