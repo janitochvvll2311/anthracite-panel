@@ -1,9 +1,12 @@
 # Anthracite v0.5.0 — an engine that composes apps
 
-Status: **proposal, not accepted**. This document replaces the v0.3.0 design and
-the v0.4.0 capability plan as the architecture of record. Those remain useful as
-a *feature* reference (frozen at tag `v0.4.0-freeze`) and as a catalogue of
-mistakes to avoid, not as a template.
+Status: **accepted**. This document replaces the v0.3.0 design and the v0.4.0
+capability plan as the architecture of record. Those remain useful as a *feature*
+reference (frozen at tag `v0.4.0-freeze`) and as a catalogue of mistakes to
+avoid, not as a template.
+
+Decisions taken during review are recorded in §16. They are binding: a change to
+one of them is a design change, not an implementation detail.
 
 ---
 
@@ -14,26 +17,28 @@ mistakes to avoid, not as a template.
 > itself — is one of those apps.
 
 The engine owns mechanism: boot, supervision, transport, authority, storage
-namespaces, events, audit. Nothing in the engine knows what a file is, what a
-terminal is, or how a firewall rule looks. Those are policies, and policies are
-apps.
+namespaces, audit. Nothing in the engine knows what a file is, what a terminal
+is, or how a firewall rule looks. Those are policies, and policies are apps.
 
 The product we are building in v0.5.0 is therefore not a feature set. It is the
 **scaffold**: the contract, the resolver, the runtime, the broker and the
 conformance kit that let somebody else write an app we have never seen and have
 it run, safely, without editing our code.
 
+**v0.5.0 stops at M3.** It ships the platform and the apps that prove it
+(`shell`, `hello`). The feature apps that existed in v0.4.0 return in v0.6.0 as
+system apps. This is deliberate: the platform is judged by its contract, not by
+its catalogue.
+
 Success is measurable:
 
-> **The acid test.** A developer outside this repository writes a bundle that
-> imports a filesystem capability, exposes one route, contributes one UI slot and
-> publishes one event. They install it, approve it and compose it. The app
-> appears in the shell, answers over HTTP and exposes a CLI verb — with **zero
-> changes to any engine source file**.
+> **The acid test.** An app is written outside the engine source tree, imports a
+> filesystem capability, contributes one route and one UI slot. It is installed,
+> approved and composed. It appears in the shell and answers over HTTP and the
+> CLI — with **zero changes to any engine source file**.
 
-If that sentence is true, v0.5.0 succeeded. If adding an app requires touching
-the daemon, the router, the CLI and the shell, we have rebuilt v0.4.0 with new
-names.
+In v0.5.0 we execute the acid test ourselves. In v0.6.0 somebody who is not us
+must be able to.
 
 ---
 
@@ -45,18 +50,14 @@ a signed bundle format. It also demonstrated the failure mode we are escaping:
 every feature edited the host crate, the router, the CLI and the shell, because
 features lived *inside* the product instead of *on* it.
 
-The v0.4.0 daemon knows too much. Its `AppService` both installs bundles and
-serves their anchors; its router both authenticates and enumerates feature
-endpoints; its shell both renders the system and hard-codes the sections. Adding
-"files" meant editing platform code. That is the thing we are removing.
-
 v0.5.0 keeps the *lessons* and discards the *structure*:
 
 - keep: one HTTP dialect, typed contracts, frozen grants, signature and hash
   verification, hash-pinned assets, the "manifest is a proposal, the grant is the
   contract" rule;
 - discard: feature code in the host, a monolithic `AppService`, a router that
-  knows feature routes, a shell that knows feature sections.
+  knows feature routes, a shell that knows feature sections, a home-grown type
+  language and a hand-rolled ABI.
 
 ---
 
@@ -67,21 +68,21 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
 2. **One contract, no side doors.** There is no privileged path around the app
    contract — not for our own apps, not for the shell.
 3. **The manifest is a proposal; the grant is the contract.** Runtime behaviour is
-   validated against the frozen grant, never against the manifest currently on
-   disk.
+   validated against the frozen grant, and the component's real type must match
+   it before anything is linked.
 4. **Composition is data.** What runs, and who provides what, is a file an
    operator can read, diff and review — not code.
-5. **Authority is explicit and typed.** An app receives exactly the imports it was
-   granted, at exactly the versions it was granted, with exactly the schemas it
-   was granted.
-6. **The native capability set is closed.** The engine provides a small, fixed
-   list of environment capabilities (§9.2). Growing that list is a design
-   change, not a commit.
-7. **Failure is local.** One broken app degrades itself and its dependents; it
+5. **The type system is WIT.** We do not invent a second one. Interfaces are
+   versioned, exact and checked structurally.
+6. **Interfaces are small and single-purpose.** The grant scopes at interface
+   granularity, so a god-interface would be a god-grant.
+7. **The native capability set is closed.** The engine provides a small, fixed
+   list of environment interfaces (§9.2). Growing that list is a design change.
+8. **Failure is local.** One broken app degrades itself and its dependents; it
    never takes the engine down.
-8. **The platform is done when adding an app needs no engine change.**
-9. **Everything is observable.** Composition state, grants and denials are
-   queryable and auditable without reading logs.
+9. **The platform is done when adding an app needs no engine change.**
+10. **Everything is observable.** Composition state, grants and denials are
+    queryable and auditable without reading logs.
 
 ---
 
@@ -89,17 +90,18 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
 
 | Term | Meaning |
 | --- | --- |
-| **Engine** | The daemon. Mechanism only: config, transport, supervision, runtime, broker, store, bus, audit. |
-| **App** | A unit of policy and product: a bundle with a manifest, an implementation and an authority surface. |
-| **Bundle** | The signed zip: manifest, wasm module, optional service binary, UI assets. |
-| **Manifest** | The app's *proposal*: exports, imports, routes, slots, events, limits. |
-| **Export** | A typed, versioned entry point an app offers: `id@version` plus input/output types. |
-| **Import** | A typed, versioned entry point an app requires. Must match a provider exactly. |
+| **Engine** | The daemon. Mechanism only: config, transport, supervision, runtime, broker, store, audit. |
+| **App** | A unit of policy and product: a bundle with a manifest, a component and an authority surface. |
+| **Bundle** | The signed zip: manifest, component, WIT, optional service binary, UI assets. |
+| **Manifest** | The app's *proposal*: an index of interfaces, imports, routes, slots and limits. Carries no types. |
+| **Interface** | A WIT interface: `namespace:package/interface@semver`. The unit of capability, versioning and grants. |
+| **Export** | An interface the app implements. |
+| **Import** | An interface the app requires. Must match a provider exactly, by name and type. |
 | **Grant** | The frozen, operator-approved authority derived from a manifest. The runtime contract. |
-| **Route** | An HTTP binding from `METHOD /path` to an export. |
+| **Route** | An HTTP binding from `METHOD /path` to `interface#function`. |
 | **Slot** | A named place in the shell where an app may render UI. |
 | **Composition** | The declarative answer to "what is installed, what is composed, who provides what". |
-| **Surface** | The runtime result of a composition: routes, slots, CLI verbs, event wiring. |
+| **Surface** | The runtime result of a composition: routes, slots, CLI verbs, links. |
 | **Tier** | `engine`, `system`, `third-party`. Determines what authority may be requested at all. |
 
 ---
@@ -110,11 +112,11 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
                      ┌───────────────── engine (mechanism) ─────────────────┐
    browser  ────────►│ router · sessions · asset host                        │
    cli      ────────►│    │                                                  │
-   (HTTP/SSE/WS)     │  composer ── registry ── grant store ── audit          │
+   (HTTP)            │  composer ── registry ── grant store ── audit          │
                      │    │                                                  │
-                     │  supervisor ── runtime(wasm) ── broker ── store ── bus │
+                     │  supervisor ── runtime(wasmtime) ── broker ── store    │
                      └────┼──────────────────────────────────────────────────┘
-                          │  typed calls only
+                          │  typed component links + host interface calls
         ┌─────────────────┼───────────────┬──────────────────┐
    org.anth.shell   org.anth.fs     org.anth.terminal   third-party app
       (ui app)     (system app)       (system app)       (wasm + ui)
@@ -136,11 +138,6 @@ Four separate questions, four separate answers, four separate files on disk:
 | What is active? | `composition.toml` | operator |
 | What is reachable now? | the surface | composer |
 
-v0.4.0 partially merged these (an install could create a grant, a grant implied
-execution). v0.5.0 keeps them apart, because "installed but not approved",
-"approved but not composed" and "composed but degraded" are legitimate states an
-operator must be able to see.
-
 ---
 
 ## 6. The engine
@@ -150,14 +147,13 @@ operator must be able to see.
 | Subsystem | Contract |
 | --- | --- |
 | **boot** | Read config, open the store, load the composition, start apps in dependency order, expose the surface. No feature logic. |
-| **router** | One HTTP surface over the Unix socket and TCP: `/` (shell asset), `/api/engine/*`, `/api/apps/<id>/*`. Auth, origin and CSP live here and only here. |
-| **registry** | Install, list, verify, remove bundles. Verifies zip paths, signatures, hashes and manifest shape. Never grants. |
+| **router** | One HTTP surface over the Unix socket and TCP: `/` (bootstrap document), `/api/engine/*`, `/api/apps/<id>/*`. Auth, origin and CSP live here and only here. |
+| **registry** | Install, list, verify, remove bundles. Verifies zip paths, signatures, hashes, manifest shape and WIT. Never grants. |
 | **composer** | Resolve `composition.toml` + installed manifests into a surface. Deterministic. Reports unresolved/duplicate/degraded. |
-| **supervisor** | Own the process tree: wasm instances in-process, service apps as children. Restart policy, timeouts, resource limits, teardown. |
-| **runtime** | Execute wasm guests: instantiate, honour fuel/memory limits, expose the ABI, mediate every host call. |
-| **broker** | The only path from app code to anything outside the app. Validates against the grant, enforces quotas, records denials. |
-| **store** | Per-app namespaces: `state/` (durable), `cache/` (evictable), `blobs/` (quota'd). No app sees another's. |
-| **bus** | Typed topics. Publish and subscribe require grants. Bounded queues, explicit overflow errors. |
+| **supervisor** | Own the process tree: component instances in-process, service apps as children. Restart policy, timeouts, resource limits, teardown. |
+| **runtime** | Instantiate components with wasmtime, enforce fuel/memory limits, validate the component world against the grant, satisfy host imports through the broker, link app imports. |
+| **broker** | The only path from app code to the host. Validates against the grant, enforces quotas, records denials. |
+| **store** | Per-app namespaces exposed as interfaces: `anth:store/kv`, `anth:store/blobs`. No paths, no sharing. |
 | **audit** | Append-only record of install/approve/compose/enable/disable/denials. |
 
 ### 6.2 What the engine must not contain
@@ -170,10 +166,44 @@ not a feature.
 | know about files, terminals, processes, network, storage or accounts | those are apps (`org.anth.*`) |
 | enumerate feature endpoints in the router | routes come from the surface, computed at compose time |
 | render or know sections of the UI | the shell is an app; slots are data |
-| hard-code a CLI verb per feature | CLI verbs are projected from exports (§6.9) |
+| hard-code a CLI verb per feature | CLI verbs are projected from WIT (§7.9) |
 | grant authority at install time | approval is a separate, explicit act |
 | trust the manifest at runtime | the grant is the contract |
 | grow the native capability set casually | the set is closed by design (§9.2) |
+| hand a filesystem path to an app | a path is ambient authority; state is an interface (§7.10) |
+
+### 6.3 Runtime backend and deployment profiles
+
+v0.5.0 ships **one** backend: **wasmtime with Cranelift**. It is the reference
+implementation of the component model, it has fuel accounting, epoch-based
+interruption and memory limits, and it is where every document, example and bug
+fix lives. It is also the only backend that lets wasm do real work, which keeps
+the "everything heavy can be an app" rule honest.
+
+What that commits us to, explicitly:
+
+- The daemon must be able to map **executable memory**. Hosts that forbid it
+  (`deny_execmem`, grsecurity/PaX, a seccomp policy that rejects `PROT_EXEC`) are
+  not supported by this build. This is a documented requirement, not a bug.
+- The daemon binary grows by roughly the size of a wasm compiler. Only the daemon
+  pays: `anth-cli` is a thin HTTP client.
+
+**Pulley is deferred, not rejected.** A hardened profile (`anth-engine-pulley`)
+that interprets instead of generating code is documented for a later version. We
+do not build it, test it or ship it in v0.5.0. What we do keep is the scaffolding
+that makes it a build flag rather than a redesign:
+
+- `anth-runtime` is the only crate that names `wasmtime`; nothing above it sees a
+  runtime type.
+- A single `Backend` enum is the only place a backend is chosen.
+- Limits are expressed in **fuel and memory**, never in time, so a limit means
+  the same thing on both backends.
+- No precompiled artifact ever enters a grant, so an engine upgrade never
+  invalidates an installed app.
+
+Consequence for the app model: **wasm may do heavy compute** — archives, image
+decoding, hashing. Service apps exist only for what must touch the kernel: PTYs,
+`ip`, `nft`, `sfdisk`.
 
 ---
 
@@ -182,9 +212,10 @@ not a feature.
 ### 7.1 Bundle layout
 
 ```
-manifest.toml            # the proposal; single signable file
-manifest.sig             # detached signature over the manifest set
-wasm/<name>.wasm         # logic (required for a wasm export)
+manifest.toml            # the proposal; the signable index
+manifest.sig             # detached signature over manifest + WIT + hashes
+wit/<interface>.wit      # one file per exported interface (the contract, readable)
+wasm/<name>.wasm         # the component (required)
 bin/<name>               # optional service binary (system tier only)
 web/<name>.js            # optional UI module(s), hash-pinned by the manifest
 ```
@@ -195,11 +226,16 @@ hash verified before the bundle becomes visible.
 
 ### 7.2 Manifest
 
+The manifest is an **index**, not a type definition. Types live in WIT, so the
+manifest only says *which* interfaces, *where* they are and *how* they are
+reached.
+
 ```toml
-manifest_version = 1
+manifest_version = 2
 
 [app]
 id = "org.example.notes"
+namespace = "example:notes"        # every exported interface lives under this
 name = "Notes"
 version = "0.1.0"
 summary = "A tiny notes app."
@@ -208,83 +244,93 @@ license = "Apache-2.0"
 [requires]
 engine = ">=0.5,<0.6"
 
-# ---- implementation ----
 [wasm]
 path = "wasm/notes.wasm"
 sha256 = "…"
-abi = 1
 
 # ---- what it offers ----
 [[export]]
-id = "org.example.notes.list"
-version = 1
-input  = { type = "record", fields = { dir = { type = "string" } } }
-output = { type = "record", fields = {
-  entries = { type = "list", of = { type = "string" } }
-} }
-[export.implementation]
-kind = "wasm"
-entry  = "anth_call"
+interface = "example:notes/list@1.0.0"
+path = "wit/list.wit"
+sha256 = "…"
 
 # ---- what it needs ----
 [[import]]
-id = "org.anth.fs.list"
-version = 1
-input  = { type = "record", fields = { path = { type = "string" } } }
-output = { type = "record", fields = {
-  entries = { type = "list", of = { type = "string" } }
-} }
+interface = "anth:fs/list@1.0.0"
+
+[[import]]
+interface = "anth:store/kv@1.0.0"
 
 # ---- HTTP surface ----
 [[route]]
 method = "GET"
 path   = "/notes"
-export = "org.example.notes.list"
+call   = "example:notes/list@1.0.0#all"
 
 # ---- UI surface ----
 [[slot]]
-id     = "shell.main"          # contributed by the shell app
+id     = "shell.main"
 tag    = "anth-notes"
 module = "web/notes.js"
 sha256 = "…"
 label  = "Notes"
 
-# ---- events ----
-[[publish]]
-topic   = "org.example.notes.changed"
-payload = { type = "record", fields = { id = { type = "string" } } }
-
-[[subscribe]]
-topic = "org.anth.fs.changed"
+# ---- CLI surface ----
+[[cli]]
+call = "example:notes/list@1.0.0#all"
+verb = "notes list"
 
 # ---- limits ----
 [limits]
 fuel         = 10_000_000
-memory_pages = 256
-wall_ms      = 5_000
+memory-pages = 256
+wall-ms      = 5_000            # backstop only, never the primary limit
 ```
 
 A manifest is a *claim*. Nothing in it is trusted until the composer resolves it
-against the catalog and the operator approves the resulting grant.
+and the operator approves the resulting grant.
 
-### 7.3 Types
+### 7.3 WIT as the contract
 
-One type language, used identically in manifests, grants, calls and errors:
+Interfaces are WIT, in the canonical form:
 
+```wit
+package anth:fs@1.0.0;
+
+interface list {
+  use anth:error@1.0.0.{error};
+
+  record entry {
+    name: string,
+    kind: enum { file, dir, link },
+    size: u64,
+    modified-ms: u64,
+  }
+
+  all: func(dir: string) -> result<list<entry>, error>;
+}
 ```
-string · int · float · bool · bytes · timestamp · json
-list<T> · map<T> · record{…} · enum[…] · nullable<T> · union<…>
-```
 
-Rules:
+**Identity.** Interfaces are `namespace:package/interface@semver`. The `anth`
+namespace is reserved for the engine; an app cannot claim it. App ids stay in
+reverse-DNS (`org.example.notes`) because that is what DNS-shaped ids are for,
+while the app's WIT namespace (`example:notes`) is declared in the manifest and
+must be unique across a composition.
 
-- **Exact matching.** A provider satisfies an import only when the types are
-  structurally identical. No widening, no duck typing, no coercions.
-- **Versioned, not negotiated.** `id@1` and `id@2` are different capabilities.
-  An app may request both.
-- **Validated twice.** The caller's argument is checked against the *grant's*
-  frozen input type; the reply is checked against the frozen output type. A guest
-  that answers outside its schema produces a typed internal error, never data.
+**Versioning is exact.** The component `Linker` resolves imports by name, so
+`@1.0.0` and `@1.0.1` are different interfaces and do not link. This is not a
+policy choice, it is what the tool does. To evolve an interface, a provider
+exports the old and the new version side by side and consumers migrate on their
+own schedule. No ranges, no negotiation, no silent widening.
+
+**Files, not strings.** WIT lives in `wit/*.wit` inside the bundle, hashed in the
+manifest and covered by the signature. It is a language with tooling: embedding
+it in TOML would make it unformattable and unreviewable.
+
+**Two sources, one truth.** The manifest declares imports and exports so the
+composer can resolve *before* instantiating. The component embeds the real world.
+The engine compares them and refuses the app on any difference (§7.12). The
+manifest lets us plan; the component is what we check.
 
 ### 7.4 App kinds
 
@@ -293,7 +339,7 @@ them.
 
 | Kind | Runs as | May request | Typical use |
 | --- | --- | --- | --- |
-| `wasm` | in-process, sandboxed, fuel-metered | any granted capability | all logic |
+| `wasm` | in-process component, sandboxed, fuel-metered | any granted interface | all logic, including heavy compute |
 | `service` | supervised child process, fixed argv, no ambient env | `exec`/`socket`/`device` (system tier only) | the few operations that need the kernel: PTYs, `ip`, `nft`, `sfdisk` |
 | `ui` | sandboxed iframe served by the engine | RPC to its own app only | rendering |
 
@@ -302,46 +348,48 @@ route and a limit. What it does *not* have is unrestricted host access — the
 supervisor hands it a narrow, declared interface (a socket, a set of argv
 templates, a device file) and nothing else.
 
-### 7.5 Entry points
+### 7.5 The component world
 
-The ABI stays deliberately small. Version 1:
+An app's component has one world. A minimal one:
 
-```
-anth_abi_version() -> i32
-anth_alloc(len) -> ptr
-anth_call(capability_ptr, capability_len, request_ptr, request_len) -> packed
-```
+```wit
+package example:notes@0.1.0;
 
-`packed` is `(ptr << 32) | len` pointing at `{"status":u16,"body":any}` in guest
-memory. A `service` app receives the same envelope over its declared socket, so
-the same app logic can move between kinds without a rewrite.
+world app {
+  import anth:fs/list@1.0.0;
+  import anth:store/kv@1.0.0;
 
-Denial is a typed value, always:
-
-```json
-{"error":{"code":"denied","capability":"org.anth.fs.list","reason":"not granted"}}
+  export list;
+}
 ```
 
-Never a panic, never a silent `null`, never a partially-validated reply.
+That is the entire ABI. There is no `anth_call`, no packed pointers, no JSON
+envelope for host calls: values are lifted and lowered by the canonical ABI, and
+every host import is an interface the broker implements.
+
+Cross-app calls are component links: the composer satisfies `anth:fs/list@1.0.0`
+with the instance of the app that exports it. No serialization, no router, no
+broker.
 
 ### 7.6 Routes
 
-A route is `METHOD /path -> export`. The engine mounts them under
+A route is `METHOD /path -> interface#function`. The engine mounts them under
 `/api/apps/<app-id>/`, so two apps may both declare `/status` without colliding
 and an operator can tell from the URL whose code is answering.
 
 ```
-GET  /api/apps/org.example.notes/notes
+GET /api/apps/org.example.notes/notes
 ```
 
-The anchor envelope handed to the export is fixed:
+The engine maps the HTTP request to function arguments using the WIT types:
 
-```json
-{"method":"GET","path":"/notes","query":{…},"body":null}
-```
+- record fields become named query parameters (`GET`) or a JSON object body;
+- `bytes` accepts a body up to the route's limit;
+- `result` maps to the status codes of §7.11;
+- a guest trap maps to `internal` with a distinct code, sanitized at the boundary.
 
-and the reply is validated against the export's output type before it leaves the
-engine.
+Argument and reply values are type-checked at the canonical ABI boundary by
+construction; there is no second validation pass to forget.
 
 ### 7.7 UI slots
 
@@ -355,32 +403,111 @@ fills is simply empty — the shell has no hard-coded section list.
 
 ### 7.8 Events
 
-Topics are typed and namespaced (`org.example.notes.changed`). Publishing and
-subscribing are separate grants. Delivery is at-least-once with a bounded queue;
-overflow is a typed error to the publisher, not silent loss. A subscriber that
-cannot keep up is marked degraded, not stopped.
+**Not in v0.5.0.** The model is agreed — an event is a typed notification
+interface, the graph is fixed at compose time, and there is no dynamic topic
+bus — but the mechanism needs either component async streams (v0.6.0, when WASI
+0.3 is in play) or generated glue that bridges dynamic WIT types. Neither
+belongs in a milestone whose job is to prove routes and slots.
 
-### 7.9 CLI projection
+What v0.5.0 does: reserves the `anth:notify` namespace, and lets an app refresh
+by being called. A UI that needs to poll calls its own app's route; the shell
+does not push.
 
-Every export is reachable over HTTP. A *subset* is also reachable from the CLI,
-derived from the export id — `org.anth.fs.list` becomes `anth app fs list` — so
-the CLI cannot drift from the HTTP surface. Apps that want a friendlier verb
-declare `cli = "fs ls"` on the export; they do not get to hand-write a parser.
+The intended shape, for the record:
 
-The Rust and TypeScript clients are generated from the same registry of exports,
-so CLI, HTTP and browser stay one surface with three renderings.
+```wit
+package anth:fs@1.0.0;
+
+interface changed {
+  record event { path: string, kind: enum { created, modified, removed } }
+  on-change: func(event: event);
+}
+```
+
+Consumers import it, the publisher emits it, the engine fans out. No strings, no
+payload schemas, no subscription grants.
+
+### 7.9 CLI and clients
+
+One generator, three outputs, all derived from WIT:
+
+- **CLI verbs** — function parameters become flags (named from the WIT record
+  fields, typed from WIT).
+- **Rust client** — one method per exported function.
+- **TypeScript client** — the same, for the shell and app UIs.
+
+A manifest may add a `[[cli]]` alias so system apps read well (`anth app fs ls`
+instead of a mechanical path), but nobody hand-writes a parser. The v0.4.0 lesson
+is that hand-written CLI and hand-written clients drift from the server; the fix
+is generation, not discipline.
 
 ### 7.10 State
 
-| Namespace | Durability | Quota | Owner |
-| --- | --- | --- | --- |
-| `state/` | durable | app-declared | the app, opaque to the engine |
-| `cache/` | evictable | bounded | the engine may delete at will |
-| `blobs/` | durable | app-declared | the app, content-addressed by the engine |
+Hard rule: **no app ever receives a filesystem path.** A path is ambient
+authority in disguise.
 
-The engine stores the manifest and the grant; it never interprets app state. An
-app that changes its state layout ships a migration and runs it on first boot of
-the new version.
+| Interface | Shape | Use |
+| --- | --- | --- |
+| `anth:store/kv@1.0.0` | `get`/`set`/`delete`/`list`, namespaced per app | small state |
+| `anth:store/blobs@1.0.0` | `put`/`get` by hash, quota'd | large data |
+
+Both are host interfaces (§9.2), so they are audited and quota'd by the broker.
+In v0.5.0 blobs travel as `bytes` with a cap; when streams land they become
+`stream<u8>` without changing any app's contract.
+
+Durability and migrations are the app's business: it declares a schema version
+and migrates on first boot of the new version. The engine never interprets app
+state.
+
+### 7.11 Errors
+
+One interface, used by every host call and every route:
+
+```wit
+package anth:error@1.0.0;
+
+interface kinds {
+  variant error {
+    denied(string),
+    unavailable(string),
+    invalid(string),
+    not-found(string),
+    too-large(u64),
+    internal(string),
+  }
+}
+```
+
+The engine fixes the HTTP mapping, so HTTP, CLI and both clients cannot disagree:
+
+| Variant | HTTP | Typical cause |
+| --- | --- | --- |
+| `denied` | 403 | capability not granted |
+| `unavailable` | 503 | provider missing or degraded |
+| `invalid` | 400 | arguments refused by the app |
+| `not-found` | 404 | unknown resource or route |
+| `too-large` | 413 | payload over the route limit |
+| `internal` | 500 | app bug or trap; message sanitized |
+
+`internal` messages are scrubbed at the HTTP boundary: a third-party app never
+gets to leak host paths or engine internals to a browser.
+
+### 7.12 Enforcement: the world must match the grant
+
+This is the security core, and it happens before a single instruction runs:
+
+1. Parse the WIT the grant froze and build the expected world.
+2. Read the component's real type with `Component::component_type()`.
+3. Compare imports and exports: names, versions and structural types. Any
+   difference, including an extra import, is a refusal.
+4. Link only the imports the grant lists, and only to the providers the
+   composition names.
+5. Only then instantiate.
+
+A component that lies in its manifest does not start. A component that imports
+something it was not granted does not start. A component whose types drifted from
+the approved WIT does not start. All three are conformance tests, not review
+practices.
 
 ---
 
@@ -393,13 +520,13 @@ version = 1
 
 [[profile]]
 id   = "default"
-apps = ["org.anth.shell", "org.anth.fs", "org.anth.terminal", "org.example.notes"]
+apps = ["org.anth.shell", "org.anth.fs", "org.example.notes"]
 
 # Explicit provider choices. Omit to accept the unique provider, if there is one.
 [provide]
-"org.anth.fs.list"    = "org.anth.fs"
-"org.anth.fs.write"   = "org.anth.fs"
-"org.anth.host.info"  = "@engine"
+"anth:fs/list@1.0.0"   = "org.anth.fs"
+"anth:fs/read@1.0.0"   = "org.anth.fs"
+"anth:env/info@1.0.0"  = "@engine"
 
 [surface]
 root = "org.anth.shell"      # owns "/" and the slot definitions
@@ -411,42 +538,57 @@ Deterministic, in this order:
 
 1. Load the composition; reject unknown keys (typos are errors).
 2. Resolve each app id to exactly one installed manifest; `id@version` pins.
-3. Union every import of every composed app.
+3. Union every import of every composed app, keyed by interface id.
 4. For each import, pick a provider: explicit `[provide]` wins; otherwise a
-   unique composed exporter; otherwise `@engine` if the id is in the native set;
-   otherwise **unresolved**.
-5. Check exact type equality and version equality; check the consumer's grant
-   includes that import.
-6. Order apps so providers boot before consumers. Cycles are allowed only through
-   events; a call cycle is a composition error.
-7. Build the surface: routes, slots, CLI verbs, event wiring.
+   unique composed exporter; otherwise `@engine` if the interface is in the
+   native set; otherwise **unresolved**.
+5. Check that the provider's granted export and the consumer's granted import are
+   the same interface, exactly.
+6. Order apps so providers boot before consumers. Cycles are a composition error:
+   typed links cannot be cyclic.
+7. Build the surface: routes, slots, CLI verbs, links.
 8. Start apps in order with per-app timeouts. A failure marks that app and its
    dependents `degraded` and the boot continues.
 
 ### 8.3 Rules
 
-- **One provider per import.** Two composed providers of the same `id@version` is
-  a configuration error. Silent "first one wins" is how platforms rot.
+- **One provider per interface.** Two composed providers of the same interface id
+  is a configuration error. Silent "first one wins" is how platforms rot.
 - **No implicit providers.** `@engine` only for the closed native set.
 - **No partial composition.** If an import is unresolved, the consumer does not
   start; it does not start with a stub.
 - **Composition does not grant.** Composing an unapproved app is an error that
   names the missing approval.
+- **Exact means exact.** No minor-version satisfaction, no structural coercion.
 
-### 8.4 Degraded mode
+### 8.4 Linking model
+
+- **App → app**: a typed component link, created by the composer only when the
+  grant lists that import. No broker, no serialization, no per-call quota.
+- **App → host**: an interface call implemented by the broker, which validates
+  against the grant, enforces quotas and records denials.
+
+The rule, stated precisely: *the broker is the only exit from the composition;
+inside it, authority was exercised when the composition was built.* This is why
+the grant must be checked against the component's real world (§7.12): a link is
+authority.
+
+Consequence we accept: a trapping provider traps its linked consumers, and
+cross-app calls are not individually audited. If that ever needs to change, the
+change is to the linker, not to every app.
+
+### 8.5 Degraded mode
 
 A missing or failed provider yields a typed `503` on its consumers' routes:
 
-```json
-{"error":{"code":"provider_unavailable",
-          "message":"org.anth.fs.list has no provider in this composition",
-          "app":"org.example.notes"}}
+```
+{"error":"unavailable","message":"anth:fs/list@1.0.0 has no provider in this composition","app":"org.example.notes"}
 ```
 
 The engine stays up, the shell still renders, the operator sees which app is
 degraded and why. `anth engine composition` prints the full state.
 
-### 8.5 Recompose
+### 8.6 Recompose
 
 v0.5.0 recomposes by restarting the engine process. It is boring, it is
 predictable, and it keeps state assumptions honest. Per-app restart is a later
@@ -466,19 +608,20 @@ optimization, gated on the store being fully externalized (it is, by §7.10).
 
 Third-party `service` apps are out of scope for v0.5.0. When they land, they get
 their own design: a service is a host process, and "run arbitrary binaries" is
-not a capability we can hand out with a checkbox.
+not a capability we hand out with a checkbox.
 
 ### 9.2 The closed native capability set
 
-The engine provides exactly these, because they are mechanism-adjacent and every
-app needs them:
+The engine provides exactly these interfaces, because they are mechanism-adjacent
+and every app needs them:
 
-```
-anth.env.info     host facts (hostname, os, arch, uptime, cpu, memory)
-anth.env.time     clock, monotonic and wall
-anth.env.log      structured logging into the engine log
-anth.env.random   cryptographically secure bytes
-anth.store.kv     the app's own key/value namespace
+```wit
+anth:env/info@1.0.0      host facts (hostname, os, arch, uptime, cpu, memory)
+anth:env/time@1.0.0      clock, monotonic and wall
+anth:env/log@1.0.0       structured logging into the engine log
+anth:env/random@1.0.0    cryptographically secure bytes
+anth:store/kv@1.0.0      the app's own key/value namespace
+anth:store/blobs@1.0.0   the app's own content-addressed blobs
 ```
 
 Anything else — files, processes, terminals, network, storage, accounts, the app
@@ -486,9 +629,13 @@ manager itself — is an app that another app imports.
 
 ### 9.3 Grants and approval
 
-A grant freezes: app id, version, manifest hash, signature, each export with its
-implementation hash, each import with its resolved provider, the risk level, the
-approval levels the operator presented, who approved and when.
+A grant freezes: app id, version, manifest hash, signature, WIT hash, each
+exported interface, each imported interface with its resolved provider, the risk
+level, the approval levels the operator presented, who approved and when.
+
+Grants scope **per interface**, which is why §3.6 insists on small interfaces. A
+grant for `anth:fs/read@1.0.0` covers the functions that interface declares and
+nothing else.
 
 Risk is computed by the engine, never declared by the manifest:
 
@@ -506,13 +653,13 @@ level gets a refusal that names it.
 
 ### 9.4 What an app can never do
 
-- call another app's export without a granted import;
+- call an interface it was not granted;
 - see another app's state, cache or blobs;
-- read its own manifest from disk and act on it (the grant wins);
+- receive a filesystem path;
 - reach the engine's socket, the panel's socket, or the network, unless a granted
-  capability says so;
+  interface says so;
 - mutate its own grant;
-- publish or subscribe to a topic it was not granted.
+- change its exports without a new approval, because the WIT hash is in the grant.
 
 ---
 
@@ -520,25 +667,26 @@ level gets a refusal that names it.
 
 ```
 Cargo.toml
+wit/                  canonical host interfaces: anth:env, anth:store, anth:error
 crates/
-  anth-contract/      types, schemas, manifest, grants, composition, errors (no I/O)
-  anth-engine/        boot, config, router, supervisor, store, bus, audit
-  anth-runtime/       wasm host, ABI, envelope validation
-  anth-broker/        capability dispatch, quota enforcement, denial recording
+  anth-contract/      manifest, composition, grants, errors (no I/O, no runtime)
+  anth-engine/        boot, config, router, supervisor, store, audit
+  anth-runtime/       the only crate that names wasmtime; component world checks
+  anth-broker/        host interface dispatch, quota enforcement, denials
   anth-compose/       registry, grant store, resolver, surface projection
-  anth-cli/           the `anth` binary: engine control + app verbs
-  anth-client/        Rust HTTP/SSE/WS client
+  anth-cli/           the `anth` binary: engine control + generated app verbs
+  anth-client/        generated HTTP client
 apps/
   shell/              the reference UI app: nav, main, settings slots
-  hello/              the smallest wasm app: one export, one import, one route
-  fs/ terminal/ proc/ net/ storage/ accounts/ manager/     (M4)
+  hello/              the smallest component: one export, one import, one route
+  fs/ terminal/ proc/ net/ storage/ accounts/ manager/     (v0.6.0)
 frontend/
   anth-sdk/           Lit + bridge: slots, RPC, i18n
-  anth-client/        TypeScript client, generated from the same contract
+  anth-client/        generated TypeScript client
   anth-shell/         the shell app build
 docs/
   DESIGN.md           this file
-  contracts/          manifest, ABI, composition, errors
+  contracts/          manifest, composition, error mapping
 tests/
   conformance/        the kit a third party runs against their bundle
   fixtures/           golden compositions: cycles, duplicates, missing providers
@@ -551,23 +699,27 @@ and nothing depends on the engine. That direction is the architecture.
 
 ## 11. The scaffold: what we build
 
-Milestones are ordered so each one is demonstrable on its own. The platform is
-M0–M3; M4 is the proof that it holds; M5 is the exit.
+Milestones are ordered so each one is demonstrable on its own.
 
-### M0 — Kernel (no features)
+### v0.5.0 — the platform (M0–M3)
+
+**M0 — Kernel (no features)**
 
 - Workspace, `anth-contract`, config, logging, one router over UDS + TCP.
 - `/api/engine/health`, `/api/engine/version`, `/api/engine/composition`.
 - Session auth, origin checks, CSP — in the router, once.
 - Supervisor skeleton and orderly shutdown.
+- Toolchain gate: `wit-bindgen` builds a component and wasmtime instantiates it,
+  offline, with the pinned toolchain.
 
 **Done when:** `anth engine run` boots with an empty composition, `anth engine
 doctor` is green, and contract tests cover config and error shapes.
 
-### M1 — Composition
+**M1 — Composition**
 
-- Registry: install, list, verify, remove; zip path safety, signatures, hashes.
-- Manifest v1 parser, type checker, risk computation.
+- Registry: install, list, verify, remove; zip path safety, signatures, hashes,
+  WIT validation.
+- Manifest v2 parser, interface catalog, risk computation.
 - Grant store and `anth app approve` with the `--accept-*` levels.
 - Resolver with the eight steps of §8.2, plus typed errors for cycle, duplicate
   provider, unresolved import and unapproved app.
@@ -576,43 +728,48 @@ doctor` is green, and contract tests cover config and error shapes.
 **Done when:** fixture compositions produce golden surfaces, and every failure
 mode in `tests/fixtures/` yields its specific typed error.
 
-### M2 — First app
+**M2 — First app**
 
-- Wasm runtime (fuel, memory, wall clock), ABI 1, envelope validation against the
-  grant.
-- Native capability set of §9.2.
-- Routes, error mapping, HTTP surface for one app.
-- `apps/hello`: one export, one import (`anth.env.info`), one route.
+- Component runtime with fuel, memory and wall backstop.
+- World-vs-grant validation (§7.12) and the three refusal tests.
+- Host interfaces `anth:env/*` and `anth:store/kv`.
+- Routes to `interface#function`, HTTP mapping per §7.11.
+- `apps/hello`: one exported interface, one imported interface, one route, CLI
+  verb generated from WIT.
 
-**Done when:** the acid-test app answers over HTTP through the engine, and a
-deliberately broken guest (out-of-schema reply, fuel exhaustion, denial) yields
-the right typed error instead of a crash.
+**Done when:** `hello` answers over HTTP and CLI, and a deliberately broken
+component (extra import, drifted type, fuel exhaustion, denial) yields the right
+typed error instead of a crash.
 
-### M3 — Shell and slots
+**M3 — Shell and slots**
 
 - `apps/shell`: declares `shell.nav`, `shell.main`, `shell.settings`; renders
-  contributions; owns `/`.
+  contributions; owns `/` behind the engine's bootstrap document.
 - Asset serving from bundles, hash-pinned, CSP-clean.
 - Iframe bridge and `postMessage` RPC restricted to the owning app.
-- `anth-sdk` and the TypeScript client generated from the contract.
+- `anth-sdk`, and the TypeScript client generated from WIT.
 
-**Done when:** `hello` renders in a slot and the shell lists a composed app it
-was never compiled against.
+**Done when:** `hello` renders in a slot, and the shell lists a composed app it
+was never compiled against. **That is the v0.5.0 acid test.**
 
-### M4 — System apps (features return as apps)
+### v0.6.0 — the proof (M4–M5)
+
+**M4 — System apps**
 
 `fs`, `terminal`, `proc`, `net`, `storage`, `accounts`, `manager`. Each is a
-bundle with a manifest; each is removable; none requires an engine edit.
+bundle with a manifest; each is removable; none requires an engine edit. Heavy
+compute (archives, previews, hashing) stays in wasm.
 
 **Done when:** a composition of system apps reproduces the v0.4.0 feature
-baseline, and removing `net` leaves a working system with that section gone —
-not a broken shell.
+baseline, and removing `net` leaves a working system with that section gone — not
+a broken shell.
 
-### M5 — Third party
+**M5 — Third party**
 
+- Typed events (§7.8) over component async streams.
 - Conformance kit published; `anth-conformance` runs against a bundle offline.
 - Quotas, audit report, approval/diff UI in the shell's settings slot.
-- Sandbox hardening: no ambient env for services, seccomp-style argv allowlists.
+- Sandbox hardening for services; decision on shipping the Pulley profile.
 
 **Done when:** an app that lives outside this repository installs, composes,
 renders and answers — the acid test, executed by someone who is not us.
@@ -631,17 +788,25 @@ renders and answers — the acid test, executed by someone who is not us.
 
 The platform is tested by *contract*, not by feature coverage.
 
-- **Contract tests** for schemas, manifests, grants, composition and error shapes,
-  including property tests over path safety, manifest parsing and resolver
-  determinism.
-- **Golden compositions**: a directory of small fixtures, each asserting a full
-  surface (routes, slots, order, degraded set) and a specific error for the
-  invalid ones.
-- **ABI conformance guests**: hand-written WAT guests for each failure path —
-  out-of-schema reply, fuel exhaustion, denial, oversized payload, panic.
+- **Contract tests** for manifests, interfaces, grants, composition and error
+  shapes, including property tests over path safety, manifest parsing and
+  resolver determinism.
+- **World-vs-grant tests**: extra import, missing export, drifted type, wrong
+  version — each must refuse with its own error and no instantiation.
+- **Golden compositions**: fixtures asserting a full surface (routes, slots,
+  order, degraded set) and a specific error for the invalid ones.
+- **Component conformance guests**: small components for each failure path —
+  trap, fuel exhaustion, denial, oversized payload.
 - **Golden HTTP traces**: the surface's responses, including degraded 503s.
 - **The conformance kit** is the same suite a third party runs against their
   bundle. If our tests and their tests are different, the platform is not real.
+
+Two rules for the suite:
+
+- **Assert outputs, never durations.** Fuel is per-instruction and portable
+  between backends; the clock is not.
+- **The backend is not a contract.** Nothing asserts Cranelift-specific
+  behaviour. If the Pulley profile ever ships, the same suite must pass on it.
 
 e2e (browser) tests exercise the shell and one contributed slot, not every
 feature.
@@ -655,14 +820,14 @@ Nothing is ported wholesale. `v0.4.0-freeze` is a library of decisions:
 | Keep | Drop |
 | --- | --- |
 | one HTTP dialect, UDS + TCP | feature modules inside `anth-panel` |
-| typed exports/imports, exact match | `AppService` doing install *and* serve |
-| frozen grants, risk, approval levels | v2/v3 dual manifest paths |
-| hash-pinned assets, signed bundles | router that enumerates feature endpoints |
-| argv-based `ip`/`nft`/`sfdisk` with `pid+start_ticks` guards | a shell that hard-codes sections |
-| `host.info` as a snapshot | a global catalog the engine must own |
+| frozen grants, risk, approval levels | `AppService` doing install *and* serve |
+| hash-pinned assets, signed bundles | v2/v3 dual manifest paths |
+| argv-based `ip`/`nft`/`sfdisk` with `pid+start_ticks` guards | router that enumerates feature endpoints |
+| `host.info` as a snapshot | a shell that hard-codes sections |
+| per-export anchor dispatch | the home-grown type language and flat ABI 4 |
 
-The v0.4.0 features are re-implemented as apps in M4, from their behaviour, not
-by copying their code.
+The v0.4.0 features are re-implemented as apps in v0.6.0, from their behaviour,
+not by copying their code.
 
 ---
 
@@ -671,51 +836,71 @@ by copying their code.
 | Risk | Mitigation |
 | --- | --- |
 | The contract becomes a framework, and apps fight it. | Ship `hello` and `shell` first; every ergonomic complaint is a contract change, not a local workaround. |
-| Broker hops make the system slow. | Measure the acid test; if a call costs more than a millisecond, fix the ABI before M4, not after. |
-| Wasm ABI churn (component model). | Keep the ABI behind `anth-runtime`; a second backend must not touch apps. |
-| The iframe bridge hurts UX. | Slots are the shell's contract; if iframe isolation is too heavy, that is a design change with measurements attached. |
-| Services reintroduce ambient authority. | Tier rules: third party never gets a service in v0.5.0. |
-| Composition files confuse operators. | `anth compose --explain` prints the resolution; every error names the file, the app and the import. |
+| The component model moves under us (WASI 0.3 async landed in 2026). | Pin wasmtime; treat async as a v0.6.0 dependency, not a v0.5.0 one. |
+| JIT requires executable memory. | Documented requirement; the Pulley profile is the escape hatch and the scaffolding stays. |
+| Binary size grows with a wasm compiler. | Only the daemon pays; curated wasmtime features, `opt-level=s`, LTO, strip, measured in M0. |
+| Exact interface versioning forces coordinated upgrades. | Providers export two versions during a transition; that is the documented path. |
+| Dynamic WIT glue (events) is expensive to build. | Deferred to v0.6.0 with streams as the intended mechanism. |
+| Services reintroduce ambient authority. | Tier rules: third party never gets a service in v0.5.0 or v0.6.0. |
 | We rebuild v0.4.0 feature-first and lose the platform. | M0–M3 gate M4: no system app starts before the acid test passes. |
 
 ---
 
 ## 15. Open decisions
 
-Each needs a decision before its milestone; the recommendation is the default if
-nobody objects.
-
 | # | Decision | Recommendation | By |
 | --- | --- | --- | --- |
-| D1 | Wasm component model vs. flat ABI | Flat ABI behind `anth-runtime`; revisit after M3 | M2 |
-| D2 | Manifest inline types vs. a separate schema dir | Inline: one signable file | M1 |
-| D3 | Composition scope: system-wide vs. per-user | System-wide; per-user profiles later | M1 |
-| D4 | Recompose: process restart vs. per-app restart | Process restart; revisit at M4 | M1 |
-| D5 | UI isolation: iframe vs. shadow DOM | Iframe with a scoped bridge | M3 |
-| D6 | Third-party `service` apps | Not in v0.5.0 | M5 |
-| D7 | Event delivery guarantees | At-least-once, bounded, explicit overflow | M1 |
-| D8 | CLI verb projection | Generated from exports; apps may alias | M2 |
-| D9 | App state: engine KV vs. app-owned files | Both: KV for small state, dir for blobs | M2 |
-| D10 | Is the shell an app or engine-served static? | An app — it is the proof the platform works | M3 |
+| D1 | Composition scope: system-wide vs. per-user | System-wide; per-user profiles later | M1 |
+| D2 | Recompose: process restart vs. per-app restart | Process restart; revisit after M3 | M3 |
+| D3 | Event mechanism: async streams vs. generated glue | Streams, once WASI 0.3 async is in the runtime | M5 |
+| D4 | When to ship the Pulley profile | Only if a deployment target requires it; never as default | M5 |
+| D5 | Signing keys for third-party apps | Distribution key for `system`, operator-trusted keys for the rest | M5 |
+| D6 | Blob transfer shape in v0.5.0 | `bytes` with a cap; `stream<u8>` in v0.6.0 | M2 |
+
+---
+
+## 16. Decision log
+
+Decisions taken during the v0.5.0 review. Binding until superseded.
+
+| ID | Decision | Why |
+| --- | --- | --- |
+| R1.1 | v0.5.0 ends at M3; features return in v0.6.0 | The platform is judged by its contract, not its catalogue |
+| R1.2 | WebAssembly Component Model + WIT from day one | One type system, real tooling, multi-language apps |
+| R1.3 | Shell is an app; the engine serves only a bootstrap document | Otherwise the engine knows UI and the thesis is false |
+| R1.4 | Iframe sandbox per app | The authority model matters more than theming convenience |
+| R1.5 | Install, approve and compose are separate acts | Three different questions, three auditable states |
+| D-Runtime | wasmtime + Cranelift, single backend | Reference implementation; lets wasm do heavy work |
+| D-Pulley | Pulley documented, not shipped | W^X hosts are a deployment profile, not the default |
+| D-Linking | Direct typed links app→app; broker only for host interfaces | Fighting the linker costs weeks and buys little |
+| R2.1 | WIT ids for interfaces; reverse-DNS for apps; app WIT namespace declared | WIT cannot express DNS-shaped names |
+| R2.2 | Exact interface versions | What the linker requires; evolve by exporting two versions |
+| R2.3 | Manifest is an index; WIT in `wit/*.wit`, hashed and signed | WIT is a language, not a config string |
+| R2.4 | Events are typed notifications, not a topic bus | Confirmed; deferred to v0.6.0 because the mechanism needs streams |
+| R2.5 | CLI and clients generated from WIT | Hand-written surfaces drift; v0.4.0 proved it |
+| R2.6 | State is interfaces only; never paths | A path is ambient authority |
+| R2.7 | `anth:error@1` with a fixed HTTP mapping | One error model for HTTP, CLI and clients |
+| R2.8 | The component world is validated against the grant before linking | A link is authority; a lying manifest must not run |
 
 ---
 
 ## Appendix A — the smallest vertical slice
 
-What "one app composed over the engine" looks like end to end. It is the M2
-demo, and the shape every later app repeats.
+What "one app composed over the engine" looks like end to end. It is the M3 demo,
+and the shape every later app repeats.
 
 ```bash
 # 1. install (content only; nothing is granted)
 anth app install ./notes.zip
-#    installed org.example.notes 0.1.0 (1 export, 1 import, 1 route, 1 slot)
+#    installed org.example.notes 0.1.0 (1 export, 2 imports, 1 route, 1 slot)
 #    not approved: run `anth app approve org.example.notes`
 
 # 2. approve (authority is frozen; risk is computed, not declared)
 anth app approve org.example.notes --accept-read
 #    approved org.example.notes 0.1.0 (risk read)
-#    export  org.example.notes.list@1  wasm
-#    import  org.anth.fs.list@1        -> org.anth.fs
+#    export  example:notes/list@1.0.0      wasm
+#    import  anth:fs/list@1.0.0            -> org.anth.fs
+#    import  anth:store/kv@1.0.0           -> @engine
 
 # 3. compose (what runs is data)
 anth compose --add org.example.notes
@@ -723,23 +908,29 @@ anth compose --add org.example.notes
 # 4. use it
 curl --unix-socket /run/anth/engine.sock \
      http://localhost/api/apps/org.example.notes/notes?dir=/tmp
-#    {"entries":["…"]}
+#    {"entries":[{"name":"…","kind":"dir","size":4096,"modified-ms":…}]}
 
 anth app notes list --dir /tmp
-#    same data, one surface, two renderings
+#    same data, same types, another rendering
 ```
 
-And the failure the platform must produce, not crash on:
+And the failures the platform must produce, not crash on:
 
 ```bash
+# a dependency left the composition
 anth compose --remove org.anth.fs
-#    warning: org.example.notes is degraded: org.anth.fs.list has no provider
+#    warning: org.example.notes is degraded: anth:fs/list@1.0.0 has no provider
 #    the engine is up; 1 app degraded
 
 curl --unix-socket /run/anth/engine.sock \
      http://localhost/api/apps/org.example.notes/notes
 #    HTTP/1.1 503 Service Unavailable
-#    {"error":{"code":"provider_unavailable",
-#              "message":"org.anth.fs.list has no provider in this composition",
-#              "app":"org.example.notes"}}
+#    {"error":"unavailable","message":"anth:fs/list@1.0.0 has no provider in this composition","app":"org.example.notes"}
+```
+
+```bash
+# a component that asks for more than it was granted
+anth app install ./sneaky.zip
+#    refused: the component imports anth:fs/write@1.0.0 but the grant lists
+#             only anth:fs/list@1.0.0
 ```
