@@ -598,34 +598,59 @@ Consequence we accept: a trapping provider traps its linked consumers, and
 cross-app calls are not individually audited. If that ever needs to change, the
 change is to the linker, not to every app.
 
-### 8.5 Degraded mode
+### 8.5 Missing and failed providers
 
-A missing or failed provider yields a typed `503` on its consumers' routes:
+Two situations that look alike and must not behave alike:
+
+| Situation | Behaviour |
+| --- | --- |
+| **Static**: at resolve time an import has no provider — disabled, uninstalled, or not composed | **Error.** The composition does not start. `--allow-degraded` is the explicit override. |
+| **Dynamic**: a composed provider traps or crashes at runtime | **Degraded.** The engine stays up and consumers answer `unavailable`. |
+
+Disabling a provider is almost always an operator mistake, and a system that
+silently boots degraded hides it. A crash is not a mistake to punish: it must
+never take the engine down.
+
+A degraded consumer answers with the typed error of §7.11:
 
 ```
-{"error":"unavailable","message":"anth:fs/list@1.0.0 has no provider in this composition","app":"org.example.notes"}
+{"error":"unavailable","message":"anth:fs/list@1.0.0 is not available","app":"org.example.notes"}
 ```
 
-The engine stays up, the shell still renders, the operator sees which app is
-degraded and why. `anth engine composition` prints the full state.
+`anth engine composition` prints which app is degraded and why, without reading
+logs.
 
 ### 8.6 Recompose
 
-v0.5.0 recomposes by restarting the engine process. It is boring, it is
-predictable, and it keeps state assumptions honest. Per-app restart is a later
-optimization, gated on the store being fully externalized (it is, by §7.10).
+v0.5.0 recomposes by restarting the engine process. `anth compose` says so and
+accepts `--now`. It is boring, it is predictable, and it keeps state assumptions
+honest. Per-app restart is a later optimization, gated on the store being fully
+externalized (it is, by §7.10).
 
 ---
 
 ## 9. Authority
 
-### 9.1 Tiers
+### 9.1 Tiers and signing
 
 | Tier | Source | May request |
 | --- | --- | --- |
 | `engine` | compiled in | nothing; it *provides* the native set |
 | `system` | signed by the distribution key, shipped in `apps/` | wasm, ui, service, `exec`/`socket`/`device` |
-| `third-party` | any other signer, operator-approved | wasm, ui only |
+| `third-party` | any other signer, approved by the operator | wasm, ui only |
+
+The **distribution key is compiled into the binary**. Rotating it requires a
+release; no configuration file can mint a `system` app. An operator may add keys
+to a keyring (`anth key add <fingerprint>`), and everything trusted that way is
+`third-party`: the keyring can extend trust, never privilege.
+
+An unsigned bundle is accepted only with `[apps] require_signature = false`, and
+it is `third-party` regardless of its id — a manifest that claims `org.anth.*`
+gains nothing.
+
+Revocation is manual in v0.5.0: uninstall the app, or rotate the distribution key
+in a release. There is no CRL, and that is a documented limitation, not an
+oversight.
 
 Third-party `service` apps are out of scope for v0.5.0. When they land, they get
 their own design: a service is a host process, and "run arbitrary binaries" is
@@ -658,7 +683,24 @@ Grants scope **per interface**, which is why §3.6 insists on small interfaces. 
 grant for `anth:fs/read@1.0.0` covers the functions that interface declares and
 nothing else.
 
-Risk is computed by the engine, never declared by the manifest:
+**Risk is a property of the graph, not a field of the manifest.** A manifest that
+could declare its own risk could declare itself harmless while importing
+`anth:fs/write`. The engine computes it instead:
+
+1. Each host interface carries a fixed risk in the engine's catalog.
+2. An app's risk is the maximum over the transitive closure of its resolved
+   imports, plus the class of every service it declares (`nft` → `admin`, an
+   arbitrary binary → `host`, a package install → `package`).
+3. An app-owned interface contributes no risk of its own; it contributes what it
+   can reach.
+4. A manifest may declare intent — which service, with which argv class — but can
+   never lower the computed result.
+
+Because cycles are a composition error (§8.2), the closure is a finite DAG.
+
+**One interface, one risk level.** An interface that both reads and writes would
+force every grant to the higher level, so it is split instead (`anth:fs/read@1.0.0`,
+`anth:fs/write@1.0.0`). That is what makes a read-only grant actually read-only.
 
 | Level | Trigger (examples) |
 | --- | --- |
@@ -681,6 +723,27 @@ level gets a refusal that names it.
   interface says so;
 - mutate its own grant;
 - change its exports without a new approval, because the WIT hash is in the grant.
+
+### 9.5 Updates and re-approval
+
+There is no auto-update. `anth app upgrade <bundle>` stages the new content, swaps
+it atomically, and takes the app out of service until the question is settled:
+
+- **Empty authority delta** — same interfaces, same providers, same limits, same
+  tier — applies without re-approval. Hashes and signature are updated and the
+  grant is rewritten around them.
+- **Non-empty delta** requires approval. `anth app show --diff` prints it:
+  interfaces added (with their computed risk) and removed, providers that
+  changed, limits that grew, tier or signer changes.
+- Approving requires the flags for the *new* risk. Removing a capability never
+  requires re-approving the capability that went away.
+
+A running app does not keep its old grant while an upgrade waits. It stops at
+recompose and returns only approved. Half-applying an authority change is worse
+than downtime.
+
+Rollback in v0.5.0 is "install the previous zip again": documented, not
+implemented.
 
 ---
 
@@ -859,6 +922,24 @@ Nothing is ported wholesale. `v0.4.0-freeze` is a library of decisions:
 The v0.4.0 features are re-implemented as apps in v0.6.0, from their behaviour,
 not by copying their code.
 
+### Safety invariants that survive the port
+
+The layout, the component structure and the code do not carry over. These
+behaviours do, and they are what the v0.6.0 apps are judged against:
+
+| Area | Invariant |
+| --- | --- |
+| Auth | local session, same-origin and CSP enforced in one boundary |
+| Files | freedesktop trash semantics; upload conflict resolution; no path escapes |
+| Terminal | owner/seq/idle limits per session |
+| Processes | signals guarded by `pid + start_ticks`, never `pid` alone |
+| Network | `ip` by argv, never a shell; up/down guarded by policy |
+| Firewall | `nft` by argv against a managed table |
+| Storage | `sfdisk`/`mkfs` by argv, explicit device allowlist |
+| Accounts | `chpasswd` on stdin; `allow_privileged_groups` respected |
+
+Anything not in this table is presentation, and presentation is free to change.
+
 ---
 
 ## 14. Risks
@@ -885,8 +966,8 @@ not by copying their code.
 | D2 | Recompose: process restart vs. per-app restart | Process restart; revisit after M3 | M3 |
 | D3 | PTY shape: two `stream<u8>` vs. a `resource` with methods for resize and signals | A resource, so control messages do not become protocol bytes | M5 |
 | D4 | When to ship the Pulley profile | Only if a deployment target requires it; never as default | M5 |
-| D5 | Signing keys for third-party apps | Distribution key for `system`, operator-trusted keys for the rest | M5 |
-| D6 | Blob transfer shape in v0.5.0 | `bytes` with a cap; `stream<u8>` in v0.6.0 | M2 |
+| D5 | Blob transfer shape in v0.5.0 | `bytes` with a cap; `stream<u8>` in v0.6.0 | M2 |
+| D6 | Revocation model: CRL, key rotation, or both | Key rotation in a release first; a CRL only if a real fleet needs it | v0.6.0 |
 
 ---
 
@@ -913,6 +994,12 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | R2.7 | `anth:error@1` with a fixed HTTP mapping | One error model for HTTP, CLI and clients |
 | R2.8 | The component world is validated against the grant before linking | A link is authority; a lying manifest must not run |
 | D-Streams | Streams and typed events land in v0.6.0/M5, designed against the terminal; the runtime is pre-shaped now | A stream designed without a real consumer gets redesigned at the PTY anyway |
+| R3.1 | Risk is computed over the resolved import graph, never declared by the manifest | A manifest that declares its own risk can lie about it |
+| R3.2 | One interface, one risk level; split mixed interfaces | Grants are per interface, so a mixed interface forces the highest level |
+| R3.3 | Distribution key compiled in; the operator keyring only extends `third-party` trust | A config file must never be able to mint privilege |
+| R3.4 | An upgrade auto-applies only on an empty authority delta | Re-approving every patch trains operators to click through approvals |
+| R3.5 | Static misses fail the composition; runtime failures degrade | A silent degraded boot hides operator mistakes; a crash must not take the engine down |
+| R3.6 | No revocation in v0.5.0: uninstall or rotate the distribution key | Honest limitation; a CRL only when a fleet needs it |
 
 ---
 
