@@ -150,8 +150,8 @@ Four separate questions, four separate answers, four separate files on disk:
 | **router** | One HTTP surface over the Unix socket and TCP: `/` (bootstrap document), `/api/engine/*`, `/api/apps/<id>/*`. Auth, origin and CSP live here and only here. |
 | **registry** | Install, list, verify, remove bundles. Verifies zip paths, signatures, hashes, manifest shape and WIT. Never grants. |
 | **composer** | Resolve `composition.toml` + installed manifests into a surface. Deterministic. Reports unresolved/duplicate/degraded. |
-| **supervisor** | Own the process tree: component instances in-process, service apps as children. Restart policy, timeouts, resource limits, teardown. |
-| **runtime** | Instantiate components with wasmtime, enforce fuel/memory limits, validate the component world against the grant, satisfy host imports through the broker, link app imports. |
+| **supervisor** | Own the process tree and a registry of component instances with `acquire`/`release`/`evict`. Service apps as children. Restart policy, timeouts, resource budgets, teardown. |
+| **runtime** | Behind one `async` trait: instantiate components with wasmtime, enforce the budget, validate the component world against the grant, satisfy host imports through the broker, link app imports. |
 | **broker** | The only path from app code to the host. Validates against the grant, enforces quotas, records denials. |
 | **store** | Per-app namespaces exposed as interfaces: `anth:store/kv`, `anth:store/blobs`. No paths, no sharing. |
 | **audit** | Append-only record of install/approve/compose/enable/disable/denials. |
@@ -200,6 +200,13 @@ that makes it a build flag rather than a redesign:
   the same thing on both backends.
 - No precompiled artifact ever enters a grant, so an engine upgrade never
   invalidates an installed app.
+
+The runtime boundary is one `async fn` behind a `Runtime` trait, and its second
+implementation is a fake backend used by the engine's own tests. Nothing above
+that trait depends on wasmtime's semantics. Together with the instance registry
+(§6.1), that is what makes streams a later change *inside* `anth-runtime` instead
+of a platform redesign. M0 probes the async toolchain and records the result; it
+does not enable it.
 
 Consequence for the app model: **wasm may do heavy compute** — archives, image
 decoding, hashing. Service apps exist only for what must touch the kernel: PTYs,
@@ -282,10 +289,17 @@ verb = "notes list"
 
 # ---- limits ----
 [limits]
-fuel         = 10_000_000
-memory-pages = 256
-wall-ms      = 5_000            # backstop only, never the primary limit
+fuel          = 10_000_000      # per invocation, per-instruction accounting
+memory-pages  = 256
+wall-ms       = 5_000           # backstop only, never the primary limit
+bytes-total   = 8_388_608       # reserved: unused until streams land (v0.6.0)
+bytes-per-sec = 1_048_576       # reserved: unused until streams land (v0.6.0)
 ```
+
+Limits are a **budget**, not arguments scattered through calls: the runtime gets
+one budget per instance and enforces it the same way whether the work is a single
+call or a stream. The `bytes-*` keys exist now so that the enforcement path does
+not change shape later.
 
 A manifest is a *claim*. Nothing in it is trusted until the composer resolves it
 and the operator approves the resulting grant.
@@ -443,8 +457,15 @@ is generation, not discipline.
 
 ### 7.10 State
 
-Hard rule: **no app ever receives a filesystem path.** A path is ambient
-authority in disguise.
+Two hard rules:
+
+1. **No app ever receives a filesystem path.** A path is ambient authority in
+   disguise.
+2. **No app may assume a fresh instance per call.** State lives in
+   `anth:store/*`; the instance is a runtime detail. This is the one assumption
+   that would be expensive to retrofit: instances become long-lived the moment a
+   stream exists, and an app that relied on a clean instance would silently
+   change behaviour when that happens.
 
 | Interface | Shape | Use |
 | --- | --- | --- |
@@ -708,9 +729,14 @@ Milestones are ordered so each one is demonstrable on its own.
 - Workspace, `anth-contract`, config, logging, one router over UDS + TCP.
 - `/api/engine/health`, `/api/engine/version`, `/api/engine/composition`.
 - Session auth, origin checks, CSP — in the router, once.
-- Supervisor skeleton and orderly shutdown.
+- Supervisor skeleton with the instance registry, and orderly shutdown.
+- The `Runtime` trait with a working fake backend, so engine tests never need
+  wasmtime and nothing above the trait learns its semantics.
 - Toolchain gate: `wit-bindgen` builds a component and wasmtime instantiates it,
   offline, with the pinned toolchain.
+- Async probe, recorded and not shipped: build a component with a `stream` under
+  WASI 0.3 and run it on the pinned wasmtime. Its result is what M5 designs the
+  PTY against.
 
 **Done when:** `anth engine run` boots with an empty composition, `anth engine
 doctor` is green, and contract tests cover config and error shapes.
@@ -766,9 +792,13 @@ a broken shell.
 
 **M5 — Third party**
 
-- Typed events (§7.8) over component async streams.
+- Streams, designed against the terminal rather than a toy. Backpressure,
+  cancellation, half-close and error-after-partial-data each need a conformance
+  test or the feature does not ship.
+- Typed events (§7.8) on top of those streams, as `subscribe() -> stream<event>`.
+- Quotas per stream (bytes/s and total) enforced from the budget.
 - Conformance kit published; `anth-conformance` runs against a bundle offline.
-- Quotas, audit report, approval/diff UI in the shell's settings slot.
+- Audit report, approval/diff UI in the shell's settings slot.
 - Sandbox hardening for services; decision on shipping the Pulley profile.
 
 **Done when:** an app that lives outside this repository installs, composes,
@@ -841,6 +871,7 @@ not by copying their code.
 | Binary size grows with a wasm compiler. | Only the daemon pays; curated wasmtime features, `opt-level=s`, LTO, strip, measured in M0. |
 | Exact interface versioning forces coordinated upgrades. | Providers export two versions during a transition; that is the documented path. |
 | Dynamic WIT glue (events) is expensive to build. | Deferred to v0.6.0 with streams as the intended mechanism. |
+| The pre-shaped runtime boundary turns out to be wrong. | A `Runtime` trait with a fake backend is exercised by engine tests from M0, and the M0 async probe checks the real toolchain before M5 depends on it. |
 | Services reintroduce ambient authority. | Tier rules: third party never gets a service in v0.5.0 or v0.6.0. |
 | We rebuild v0.4.0 feature-first and lose the platform. | M0–M3 gate M4: no system app starts before the acid test passes. |
 
@@ -852,7 +883,7 @@ not by copying their code.
 | --- | --- | --- | --- |
 | D1 | Composition scope: system-wide vs. per-user | System-wide; per-user profiles later | M1 |
 | D2 | Recompose: process restart vs. per-app restart | Process restart; revisit after M3 | M3 |
-| D3 | Event mechanism: async streams vs. generated glue | Streams, once WASI 0.3 async is in the runtime | M5 |
+| D3 | PTY shape: two `stream<u8>` vs. a `resource` with methods for resize and signals | A resource, so control messages do not become protocol bytes | M5 |
 | D4 | When to ship the Pulley profile | Only if a deployment target requires it; never as default | M5 |
 | D5 | Signing keys for third-party apps | Distribution key for `system`, operator-trusted keys for the rest | M5 |
 | D6 | Blob transfer shape in v0.5.0 | `bytes` with a cap; `stream<u8>` in v0.6.0 | M2 |
@@ -881,6 +912,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | R2.6 | State is interfaces only; never paths | A path is ambient authority |
 | R2.7 | `anth:error@1` with a fixed HTTP mapping | One error model for HTTP, CLI and clients |
 | R2.8 | The component world is validated against the grant before linking | A link is authority; a lying manifest must not run |
+| D-Streams | Streams and typed events land in v0.6.0/M5, designed against the terminal; the runtime is pre-shaped now | A stream designed without a real consumer gets redesigned at the PTY anyway |
 
 ---
 
