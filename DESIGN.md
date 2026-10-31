@@ -12,33 +12,38 @@ one of them is a design change, not an implementation detail.
 
 ## 1. The thesis
 
-> Anthracite is not a panel that grew features. It is a small engine that
-> composes apps into a running system, and every feature — including the panel
-> itself — is one of those apps.
+> Anthracite is a headless engine that composes apps. A panel is the application
+> that hosts them, and every feature is one of those apps.
 
 The engine owns mechanism: boot, supervision, transport, authority, storage
-namespaces, audit. Nothing in the engine knows what a file is, what a terminal
-is, or how a firewall rule looks. Those are policies, and policies are apps.
+namespaces, audit. It serves an API, not a UI. Nothing in the engine knows what a
+file is, what a terminal is, how a firewall rule looks, or where a navigation item
+goes. Those are policies, and policies are apps.
+
+On top of the engine sits a **panel**: an application that links the engine,
+serves a web UI and mounts the contributions of the composed apps. The official
+panel is ours; the SDK is what makes another one possible.
 
 The product we are building in v0.5.0 is therefore not a feature set. It is the
-**scaffold**: the contract, the resolver, the runtime, the broker and the
-conformance kit that let somebody else write an app we have never seen and have
-it run, safely, without editing our code.
+**scaffold**: the contract, the resolver, the runtime, the broker, the SDK and the
+conformance kit that let somebody else write an app, or a whole panel, that we
+have never seen and have it run, safely, without editing our code.
 
-**v0.5.0 stops at M3.** It ships the platform and the apps that prove it
-(`shell`, `hello`). The feature apps that existed in v0.4.0 return in v0.6.0 as
-system apps. This is deliberate: the platform is judged by its contract, not by
-its catalogue.
+**v0.5.0 stops at M3.** It ships the platform, a minimal official panel and the
+apps that prove both (`panel` and `hello`). The feature apps that existed in
+v0.4.0 return in v0.6.0 as system apps. This is deliberate: the platform is judged
+by its contract, not by its catalogue.
 
 Success is measurable:
 
 > **The acid test.** An app is written outside the engine source tree, imports a
 > filesystem capability, contributes one route and one UI slot. It is installed,
-> approved and composed. It appears in the shell and answers over HTTP and the
-> CLI — with **zero changes to any engine source file**.
+> approved and composed. It appears in a panel that was never compiled against it
+> — the official one or a custom one — and answers over HTTP and the CLI, with
+> **zero changes to any engine source file**.
 
-In v0.5.0 we execute the acid test ourselves. In v0.6.0 somebody who is not us
-must be able to.
+In v0.5.0 we execute the acid test ourselves, against the official panel and a
+minimal custom one. In v0.6.0 somebody who is not us must be able to.
 
 ---
 
@@ -66,7 +71,7 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
 1. **Mechanism in the engine, policy in apps.** If it can be expressed as an app,
    it must be.
 2. **One contract, no side doors.** There is no privileged path around the app
-   contract — not for our own apps, not for the shell.
+   contract — not for our own apps, not for the panel.
 3. **The manifest is a proposal; the grant is the contract.** Runtime behaviour is
    validated against the frozen grant, and the component's real type must match
    it before anything is linked.
@@ -83,6 +88,11 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
 9. **The platform is done when adding an app needs no engine change.**
 10. **Everything is observable.** Composition state, grants and denials are
     queryable and auditable without reading logs.
+11. **The engine serves no UI.** Not a page, not a section, not a slot. A panel
+    does that, and a panel is replaceable.
+12. **The SDK is the compatibility boundary.** A panel or an app depends on the
+    SDK, never on engine internals — and the SDK must work over HTTP, so a remote
+    panel is a transport question, not a redesign.
 
 ---
 
@@ -90,7 +100,9 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
 
 | Term | Meaning |
 | --- | --- |
-| **Engine** | The daemon. Mechanism only: config, transport, supervision, runtime, broker, store, audit. |
+| **Engine** | The headless daemon. Mechanism only: config, transport, supervision, runtime, broker, store, audit. No UI. |
+| **Panel** | An application that links the engine, serves a web UI and mounts app contributions. Official or custom. |
+| **SDK** | The supported surface for panels and apps: Rust guest, Rust panel, Rust CLI, TypeScript bridge and client. |
 | **App** | A unit of policy and product: a bundle with a manifest, a component and an authority surface. |
 | **Bundle** | The signed zip: manifest, component, WIT, optional service binary, UI assets. |
 | **Manifest** | The app's *proposal*: an index of interfaces, imports, routes, slots and limits. Carries no types. |
@@ -99,7 +111,7 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
 | **Import** | An interface the app requires. Must match a provider exactly, by name and type. |
 | **Grant** | The frozen, operator-approved authority derived from a manifest. The runtime contract. |
 | **Route** | An HTTP binding from `METHOD /path` to `interface#function`. |
-| **Slot** | A named place in the shell where an app may render UI. |
+| **Slot** | A named place declared by a panel that an app may render into. |
 | **Composition** | The declarative answer to "what is installed, what is composed, who provides what". |
 | **Surface** | The runtime result of a composition: routes, slots, CLI verbs, links. |
 | **Tier** | `engine`, `system`, `third-party`. Determines what authority may be requested at all. |
@@ -109,18 +121,26 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
 ## 5. Architecture at a glance
 
 ```
-                     ┌───────────────── engine (mechanism) ─────────────────┐
-   browser  ────────►│ router · sessions · asset host                        │
-   cli      ────────►│    │                                                  │
-   (HTTP)            │  composer ── registry ── grant store ── audit          │
-                     │    │                                                  │
-                     │  supervisor ── runtime(wasmtime) ── broker ── store    │
-                     └────┼──────────────────────────────────────────────────┘
-                          │  typed component links + host interface calls
-        ┌─────────────────┼───────────────┬──────────────────┐
-   org.anth.shell   org.anth.fs     org.anth.terminal   third-party app
-      (ui app)     (system app)       (system app)       (wasm + ui)
+┌────────────────────────────── panel (application) ──────────────────────────┐
+│  web UI, built with Bun and embedded                                        │
+│  slots · iframe host · SDK                                                  │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │ mounts the engine router in-process
+┌────────────────────────────────┴────────────────────────────────────────────┐
+│  engine (mechanism, no UI)                                                  │
+│  router · sessions · origin · assets                                        │
+│  composer · registry · grant store · audit                                  │
+│  supervisor · runtime (wasmtime) · broker · store                           │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │ typed component links + host interface calls
+      ┌──────────────────┬───────┴───────┬──────────────────┐
+  org.anth.fs      org.anth.terminal   org.anth.hello   third-party app
+  (system app)        (system app)      (reference)      (wasm + ui)
 ```
+
+The CLI is another consumer of the same API — in-process today, over HTTP
+tomorrow — which is why the engine must never depend on being co-located with its
+client.
 
 The lifecycle of one app:
 
@@ -147,7 +167,7 @@ Four separate questions, four separate answers, four separate files on disk:
 | Subsystem | Contract |
 | --- | --- |
 | **boot** | Read config, open the store, load the composition, start apps in dependency order, expose the surface. No feature logic. |
-| **router** | One HTTP surface over the Unix socket and TCP: `/` (bootstrap document), `/api/engine/*`, `/api/apps/<id>/*`. Auth, origin and CSP live here and only here. |
+| **router** | One HTTP surface over the Unix socket and TCP: `/api/engine/*`, `/api/apps/<id>/*`, `/api/apps/<id>/assets/*`. No `/`. Auth, origin and CSP live here and only here. |
 | **registry** | Install, list, verify, remove bundles. Verifies zip paths, signatures, hashes, manifest shape and WIT. Never grants. |
 | **composer** | Resolve `composition.toml` + installed manifests into a surface. Deterministic. Reports unresolved/duplicate/degraded. |
 | **supervisor** | Own the process tree and a registry of component instances with `acquire`/`release`/`evict`. Service apps as children. Restart policy, timeouts, resource budgets, teardown. |
@@ -165,12 +185,13 @@ not a feature.
 | --- | --- |
 | know about files, terminals, processes, network, storage or accounts | those are apps (`org.anth.*`) |
 | enumerate feature endpoints in the router | routes come from the surface, computed at compose time |
-| render or know sections of the UI | the shell is an app; slots are data |
+| **serve any UI, or own a slot** | the engine is headless; a panel hosts apps and declares slots |
 | hard-code a CLI verb per feature | CLI verbs are projected from WIT (§7.9) |
 | grant authority at install time | approval is a separate, explicit act |
 | trust the manifest at runtime | the grant is the contract |
 | grow the native capability set casually | the set is closed by design (§9.2) |
 | hand a filesystem path to an app | a path is ambient authority; state is an interface (§7.10) |
+| assume its client runs in the same process | a panel may be remote (§15) |
 
 ### 6.3 Runtime backend and deployment profiles
 
@@ -186,7 +207,7 @@ What that commits us to, explicitly:
   (`deny_execmem`, grsecurity/PaX, a seccomp policy that rejects `PROT_EXEC`) are
   not supported by this build. This is a documented requirement, not a bug.
 - The daemon binary grows by roughly the size of a wasm compiler. Only the daemon
-  pays: `anth-cli` is a thin HTTP client.
+  pays: the CLI in `sdk/rust/cli` is a thin client.
 
 **Pulley is deferred, not rejected.** A hardened profile (`anth-engine-pulley`)
 that interprets instead of generating code is documented for a later version. We
@@ -276,7 +297,7 @@ call   = "example:notes/list@1.0.0#all"
 
 # ---- UI surface ----
 [[slot]]
-id     = "shell.main"
+id     = "panel.main"
 tag    = "anth-notes"
 module = "web/notes.js"
 sha256 = "…"
@@ -407,13 +428,17 @@ construction; there is no second validation pass to forget.
 
 ### 7.7 UI slots
 
-The shell app declares slots; apps contribute modules. A slot contribution names
-a tag, a module path and a hash. The engine serves the module from the bundle,
-never from disk on demand, and the shell mounts it in a sandboxed iframe with a
-`postMessage` RPC scoped to that app's routes only.
+A **panel** declares the slots it offers; apps contribute modules to them. A slot
+contribution names a tag, a module path and a hash. The engine serves the module
+from the bundle, never from disk on demand, and the panel mounts it in a sandboxed
+iframe with a `postMessage` RPC scoped to that app's routes only.
 
-Slots in v0.5.0: `shell.nav`, `shell.main`, `shell.settings`. A slot that nobody
-fills is simply empty — the shell has no hard-coded section list.
+The engine knows none of this: it exposes the slot contributions as part of the
+composition view and serves the asset. Which slots exist is the panel's business.
+
+Slots in v0.5.0, declared by the official panel: `panel.nav`, `panel.main`,
+`panel.settings`. A slot that nobody fills is simply empty — a panel has no
+hard-coded section list.
 
 ### 7.8 Events
 
@@ -424,7 +449,7 @@ bus — but the mechanism needs either component async streams (v0.6.0, when WAS
 belongs in a milestone whose job is to prove routes and slots.
 
 What v0.5.0 does: reserves the `anth:notify` namespace, and lets an app refresh
-by being called. A UI that needs to poll calls its own app's route; the shell
+by being called. A UI that needs to poll calls its own app's route; the panel
 does not push.
 
 The intended shape, for the record:
@@ -448,7 +473,7 @@ One generator, three outputs, all derived from WIT:
 - **CLI verbs** — function parameters become flags (named from the WIT record
   fields, typed from WIT).
 - **Rust client** — one method per exported function.
-- **TypeScript client** — the same, for the shell and app UIs.
+- **TypeScript client** — the same, for panel and app UIs.
 
 A manifest may add a `[[cli]]` alias so system apps read well (`anth app fs ls`
 instead of a mechanical path), but nobody hand-writes a parser. The v0.4.0 lesson
@@ -541,17 +566,17 @@ version = 1
 
 [[profile]]
 id   = "default"
-apps = ["org.anth.shell", "org.anth.fs", "org.example.notes"]
+apps = ["org.anth.fs", "org.anth.terminal", "org.example.notes"]
 
 # Explicit provider choices. Omit to accept the unique provider, if there is one.
 [provide]
 "anth:fs/list@1.0.0"   = "org.anth.fs"
 "anth:fs/read@1.0.0"   = "org.anth.fs"
 "anth:env/info@1.0.0"  = "@engine"
-
-[surface]
-root = "org.anth.shell"      # owns "/" and the slot definitions
 ```
+
+The panel is not in this file. It is an application, not an app: it reads the
+composition and decides where to render each contribution.
 
 ### 8.2 Resolution
 
@@ -749,35 +774,82 @@ implemented.
 
 ## 10. Workspace
 
+Four Rust workspaces and three Bun ones. They are separate on purpose: a
+dependency that should not exist becomes unrepresentable instead of merely
+discouraged.
+
 ```
-Cargo.toml
-wit/                  canonical host interfaces: anth:env, anth:store, anth:error
-crates/
-  anth-contract/      manifest, composition, grants, errors (no I/O, no runtime)
-  anth-engine/        boot, config, router, supervisor, store, audit
-  anth-runtime/       the only crate that names wasmtime; component world checks
-  anth-broker/        host interface dispatch, quota enforcement, denials
-  anth-compose/       registry, grant store, resolver, surface projection
-  anth-cli/           the `anth` binary: engine control + generated app verbs
-  anth-client/        generated HTTP client
-apps/
-  shell/              the reference UI app: nav, main, settings slots
-  hello/              the smallest component: one export, one import, one route
+engine/                    Rust workspace: the platform
+  Cargo.toml
+  wit/                     anth:env, anth:store, anth:error
+  contract/                manifest, composition, grants, errors (no I/O)
+  runtime/                 the only crate that names wasmtime; world checks
+  host/                    kernel boundary: exec, pty, dev, proc
+  broker/                  host interface dispatch, quotas, denials
+  compose/                 registry, grant store, resolver, surface projection
+  api/                     router, sessions, origin, assets, UDS + TCP
+  daemon/                  lib + bin `anth-engine` (headless)
+
+sdk/                       the compatibility boundary
+  rust/
+    guest/                 bindings for wasm apps
+    panel/                 panel contract: slots, descriptors, asset URLs
+    cli/                   the commands; `panel/backend` wires the binary
+  ts/
+    panel/                 iframe bridge, slot mounting, base components
+    client/                generated TypeScript client
+
+panel/                     the official implementation
+  backend/                 Rust workspace: bin `anth-panel`, embeds web/dist
+  web/                     Bun workspace: the web app source
+
+apps/                      backend-frontend app catalogue
+  hello/                   the smallest component: one export, one import, one route
   fs/ terminal/ proc/ net/ storage/ accounts/ manager/     (v0.6.0)
-frontend/
-  anth-sdk/           Lit + bridge: slots, RPC, i18n
-  anth-client/        generated TypeScript client
-  anth-shell/         the shell app build
+
+demo/                      simulation catalogue, consumes the SDK
+
 docs/
-  DESIGN.md           this file
-  contracts/          manifest, composition, error mapping
+  contracts/               manifest, composition, error mapping, keyring
+
 tests/
-  conformance/        the kit a third party runs against their bundle
-  fixtures/           golden compositions: cycles, duplicates, missing providers
+  e2e/                     Playwright against a running panel
+  fixtures/                golden compositions and bundles
+
+scripts/
+  codegen.ts               WIT -> CLI commands, Rust client, TS client
+  dev.sh
+  package.sh
 ```
 
-`anth-contract` has no dependencies on the rest. Everything else depends on it,
-and nothing depends on the engine. That direction is the architecture.
+### 10.1 The edges we forbid
+
+```
+engine/*        <-  sdk/rust/panel  <-  panel/backend
+engine/*        <-  sdk/rust/guest  <-  apps/*
+engine/*        <-  sdk/rust/cli
+sdk/ts/panel    <-  panel/web,  apps/*/web
+
+forbidden:  panel/backend -> engine/*        (only through the SDK)
+forbidden:  engine/*      -> sdk, panel, apps
+forbidden:  apps/*        -> sdk/rust/panel
+```
+
+`engine/contract` has no dependencies on the rest of the engine; everything else
+depends on it. That direction is the architecture.
+
+The edges are checked in CI with `cargo metadata` and fail the build. A rule that
+only lives in a document is a rule that will be broken.
+
+### 10.2 One target directory
+
+The three Rust workspaces share `build.target-dir` through the root
+`.cargo/config.toml`. Without it, `wasmtime` is compiled three times and every
+full build pays for it. Separate workspaces buy isolation, not separate compilers.
+
+`apps/` is its own workspace and is never built for the host: `cargo build
+--workspace` in the root workspaces must not produce wasm artifacts, and the apps
+build only with `--target wasm32-wasip2`.
 
 ---
 
@@ -789,20 +861,23 @@ Milestones are ordered so each one is demonstrable on its own.
 
 **M0 — Kernel (no features)**
 
-- Workspace, `anth-contract`, config, logging, one router over UDS + TCP.
+- The three Rust workspaces and the three Bun ones, with the shared target dir.
+- `engine/contract`, config, logging, one router over UDS + TCP.
 - `/api/engine/health`, `/api/engine/version`, `/api/engine/composition`.
 - Session auth, origin checks, CSP — in the router, once.
 - Supervisor skeleton with the instance registry, and orderly shutdown.
 - The `Runtime` trait with a working fake backend, so engine tests never need
   wasmtime and nothing above the trait learns its semantics.
+- The CI edge check: `cargo metadata` fails on a forbidden dependency.
 - Toolchain gate: `wit-bindgen` builds a component and wasmtime instantiates it,
   offline, with the pinned toolchain.
 - Async probe, recorded and not shipped: build a component with a `stream` under
   WASI 0.3 and run it on the pinned wasmtime. Its result is what M5 designs the
   PTY against.
 
-**Done when:** `anth engine run` boots with an empty composition, `anth engine
-doctor` is green, and contract tests cover config and error shapes.
+**Done when:** `anth-engine --config …` boots with an empty composition, `anth
+doctor` (from the SDK) is green against it, the edge check fails on a seeded
+violation, and contract tests cover config and error shapes.
 
 **M1 — Composition**
 
@@ -812,7 +887,9 @@ doctor` is green, and contract tests cover config and error shapes.
 - Grant store and `anth app approve` with the `--accept-*` levels.
 - Resolver with the eight steps of §8.2, plus typed errors for cycle, duplicate
   provider, unresolved import and unapproved app.
-- `anth compose` and degraded mode.
+- The composition view over HTTP: what is installed, what is composed, which app
+  contributes which slot.
+- `anth compose` and the static/dynamic failure split of §8.5.
 
 **Done when:** fixture compositions produce golden surfaces, and every failure
 mode in `tests/fixtures/` yields its specific typed error.
@@ -823,23 +900,28 @@ mode in `tests/fixtures/` yields its specific typed error.
 - World-vs-grant validation (§7.12) and the three refusal tests.
 - Host interfaces `anth:env/*` and `anth:store/kv`.
 - Routes to `interface#function`, HTTP mapping per §7.11.
-- `apps/hello`: one exported interface, one imported interface, one route, CLI
-  verb generated from WIT.
+- `sdk/rust/guest` plus the codegen that turns WIT into CLI commands and clients.
+- `apps/hello`: one exported interface, one imported interface, one route, one
+  slot contribution, CLI verb generated from WIT.
 
 **Done when:** `hello` answers over HTTP and CLI, and a deliberately broken
 component (extra import, drifted type, fuel exhaustion, denial) yields the right
 typed error instead of a crash.
 
-**M3 — Shell and slots**
+**M3 — Panels**
 
-- `apps/shell`: declares `shell.nav`, `shell.main`, `shell.settings`; renders
-  contributions; owns `/` behind the engine's bootstrap document.
+- `sdk/rust/panel` and `sdk/ts/panel`: the panel contract, slot registry, iframe
+  bridge and scoped `postMessage` RPC.
+- `panel/backend`: links the SDK, mounts the engine router, wires the CLI, embeds
+  `panel/web/dist` and fails the release build without it.
+- `panel/web`: a Bun project and a minimal but real UI — navigation, main area,
+  settings, slot rendering.
 - Asset serving from bundles, hash-pinned, CSP-clean.
-- Iframe bridge and `postMessage` RPC restricted to the owning app.
-- `anth-sdk`, and the TypeScript client generated from WIT.
+- A **second, minimal panel** written against the SDK only, to prove the SDK is
+  the boundary rather than a description of our own panel.
 
-**Done when:** `hello` renders in a slot, and the shell lists a composed app it
-was never compiled against. **That is the v0.5.0 acid test.**
+**Done when:** `hello` renders in a slot of both panels, and neither was compiled
+against it. **That is the v0.5.0 acid test.**
 
 ### v0.6.0 — the proof (M4–M5)
 
@@ -851,7 +933,7 @@ compute (archives, previews, hashing) stays in wasm.
 
 **Done when:** a composition of system apps reproduces the v0.4.0 feature
 baseline, and removing `net` leaves a working system with that section gone — not
-a broken shell.
+a broken panel.
 
 **M5 — Third party**
 
@@ -861,7 +943,7 @@ a broken shell.
 - Typed events (§7.8) on top of those streams, as `subscribe() -> stream<event>`.
 - Quotas per stream (bytes/s and total) enforced from the budget.
 - Conformance kit published; `anth-conformance` runs against a bundle offline.
-- Audit report, approval/diff UI in the shell's settings slot.
+- Audit report, approval/diff UI in the panel's settings slot.
 - Sandbox hardening for services; decision on shipping the Pulley profile.
 
 **Done when:** an app that lives outside this repository installs, composes,
@@ -869,11 +951,12 @@ renders and answers — the acid test, executed by someone who is not us.
 
 ### The platform's definition of done
 
-1. `anth engine run` with no apps is a valid, healthy system.
+1. `anth-engine` with no apps is a valid, healthy system.
 2. Every feature is a bundle under `apps/`, removable from the composition.
-3. No engine source file mentions a feature name.
+3. No engine source file mentions a feature name, a slot, or a pixel.
 4. A new app requires zero engine changes.
-5. The conformance kit fails loudly on a bundle that lies.
+5. A new panel requires zero engine changes — only the SDK.
+6. The conformance kit fails loudly on a bundle that lies.
 
 ---
 
@@ -891,6 +974,11 @@ The platform is tested by *contract*, not by feature coverage.
 - **Component conformance guests**: small components for each failure path —
   trap, fuel exhaustion, denial, oversized payload.
 - **Golden HTTP traces**: the surface's responses, including degraded 503s.
+- **Panel tests**: the official panel and the minimal custom panel both render a
+  slot contributed by an app neither was compiled against. The custom panel is
+  the test that keeps the SDK honest.
+- **Edge tests**: `cargo metadata` asserts the forbidden edges of §10.1; a seeded
+  violation must fail the build.
 - **The conformance kit** is the same suite a third party runs against their
   bundle. If our tests and their tests are different, the platform is not real.
 
@@ -901,8 +989,8 @@ Two rules for the suite:
 - **The backend is not a contract.** Nothing asserts Cranelift-specific
   behaviour. If the Pulley profile ever ships, the same suite must pass on it.
 
-e2e (browser) tests exercise the shell and one contributed slot, not every
-feature.
+e2e (browser) tests exercise the official panel and one contributed slot, not
+every feature.
 
 ---
 
@@ -916,7 +1004,7 @@ Nothing is ported wholesale. `v0.4.0-freeze` is a library of decisions:
 | frozen grants, risk, approval levels | `AppService` doing install *and* serve |
 | hash-pinned assets, signed bundles | v2/v3 dual manifest paths |
 | argv-based `ip`/`nft`/`sfdisk` with `pid+start_ticks` guards | router that enumerates feature endpoints |
-| `host.info` as a snapshot | a shell that hard-codes sections |
+| `host.info` as a snapshot | a panel that hard-codes sections |
 | per-export anchor dispatch | the home-grown type language and flat ABI 4 |
 
 The v0.4.0 features are re-implemented as apps in v0.6.0, from their behaviour,
@@ -946,7 +1034,9 @@ Anything not in this table is presentation, and presentation is free to change.
 
 | Risk | Mitigation |
 | --- | --- |
-| The contract becomes a framework, and apps fight it. | Ship `hello` and `shell` first; every ergonomic complaint is a contract change, not a local workaround. |
+| The contract becomes a framework, and apps fight it. | Ship `hello` and the minimal panel first; every ergonomic complaint is a contract change, not a local workaround. |
+| The SDK becomes a public API we must keep stable. | It only exposes what a panel or an app needs; the minimal custom panel in M3 is the compatibility test, not a demo. |
+| The engine grows an in-process shortcut that a remote panel cannot use. | The SDK panel API is transport-neutral from M0; the edge test and the M3 custom panel both run against it. |
 | The component model moves under us (WASI 0.3 async landed in 2026). | Pin wasmtime; treat async as a v0.6.0 dependency, not a v0.5.0 one. |
 | JIT requires executable memory. | Documented requirement; the Pulley profile is the escape hatch and the scaffolding stays. |
 | Binary size grows with a wasm compiler. | Only the daemon pays; curated wasmtime features, `opt-level=s`, LTO, strip, measured in M0. |
@@ -968,6 +1058,7 @@ Anything not in this table is presentation, and presentation is free to change.
 | D4 | When to ship the Pulley profile | Only if a deployment target requires it; never as default | M5 |
 | D5 | Blob transfer shape in v0.5.0 | `bytes` with a cap; `stream<u8>` in v0.6.0 | M2 |
 | D6 | Revocation model: CRL, key rotation, or both | Key rotation in a release first; a CRL only if a real fleet needs it | v0.6.0 |
+| D7 | Remote panel: when, and over which transport (HTTP + session, or a thin RPC) | Design-capable now, implement after M3; HTTP with the same session model | v0.6.0 |
 
 ---
 
@@ -979,7 +1070,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | --- | --- | --- |
 | R1.1 | v0.5.0 ends at M3; features return in v0.6.0 | The platform is judged by its contract, not its catalogue |
 | R1.2 | WebAssembly Component Model + WIT from day one | One type system, real tooling, multi-language apps |
-| R1.3 | Shell is an app; the engine serves only a bootstrap document | Otherwise the engine knows UI and the thesis is false |
+| R1.3 | *Superseded by R1.3-rev.* Shell as an app, with a bootstrap document served by the engine | First pass; replaced once the panel became an application |
 | R1.4 | Iframe sandbox per app | The authority model matters more than theming convenience |
 | R1.5 | Install, approve and compose are separate acts | Three different questions, three auditable states |
 | D-Runtime | wasmtime + Cranelift, single backend | Reference implementation; lets wasm do heavy work |
@@ -1000,6 +1091,11 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | R3.4 | An upgrade auto-applies only on an empty authority delta | Re-approving every patch trains operators to click through approvals |
 | R3.5 | Static misses fail the composition; runtime failures degrade | A silent degraded boot hides operator mistakes; a crash must not take the engine down |
 | R3.6 | No revocation in v0.5.0: uninstall or rotate the distribution key | Honest limitation; a CRL only when a fleet needs it |
+| R1.3-rev | The engine serves no UI. The panel is an application that hosts apps | A shell bundled as an app still put UI concerns in the platform; a headless engine keeps the thesis literal |
+| D-Workspace | Four Rust workspaces and three Bun ones, with a shared target dir and CI-checked forbidden edges | The isolation must be unrepresentable, not merely documented |
+| D-CLI | The CLI lives in `sdk/rust/cli`; `panel/backend` wires it into the binary | The engine's commands are not a panel's private feature |
+| D-Remote | The engine must stay usable by a panel in another process; v0.5.0 ships only the linked mode | The API is the product boundary; an in-process shortcut would quietly close that door |
+| D-Target | One shared `build.target-dir` for the three Rust workspaces | Separate workspaces buy isolation, not a second compiler |
 
 ---
 
@@ -1007,6 +1103,9 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 
 What "one app composed over the engine" looks like end to end. It is the M3 demo,
 and the shape every later app repeats.
+
+The `anth` commands below come from the SDK; `panel/backend` wires them into the
+official panel binary, and a custom panel can wire the same ones.
 
 ```bash
 # 1. install (content only; nothing is granted)
