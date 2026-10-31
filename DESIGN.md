@@ -235,6 +235,71 @@ decoding, hashing. Service apps exist only for what must touch the kernel: PTYs,
 
 ---
 
+### 6.4 HTTP surface
+
+The API is a set of **resources**, not a list of commands. Actions become resource
+mutations wherever a resource exists; `POST` is reserved for the one thing that is
+not a resource.
+
+| Resource | GET | PUT | PATCH | DELETE | POST |
+| --- | --- | --- | --- | --- | --- |
+| `/api/engine/health` | state | — | — | — | — |
+| `/api/engine/version` | version and protocol | — | — | — | — |
+| `/api/engine/composition` | composition and surface | replace the document | — | — | — |
+| `/api/engine/apps` | catalogue | — | — | — | — |
+| `/api/engine/apps/{id}` | descriptor and grant | install or replace the bundle | `enabled`, alias | uninstall | — |
+| `/api/engine/apps/{id}/grant` | frozen grant | approve with the accepted levels | — | revoke | — |
+| `/api/engine/audit` | paginated log | — | — | — | — |
+| `/api/engine/session` | current session | — | — | log out | log in |
+| `/api/engine/restart` | — | — | — | — | restart |
+| `/api/apps/{id}/<path>` | per `[[route]]` | per `[[route]]` | per `[[route]]` | per `[[route]]` | per `[[route]]` |
+| `/api/apps/{id}/assets/{module}` | UI module | — | — | — | — |
+
+Why these verbs:
+
+- **`PUT` installs and approves.** A bundle and a grant are documents with a known
+  identity: `PUT /apps/{id}` creates or replaces, and an upgrade is the same verb
+  under the rule of §9.5. A manifest that declares a different id is `409`.
+  Retrying is safe.
+- **`PATCH` enables, disables and renames.** `{"enabled": false}` is a partial
+  mutation of a resource, not an invented action endpoint.
+- **`DELETE` removes and revokes.** `DELETE /apps/{id}` uninstalls;
+  `DELETE /apps/{id}/grant` revokes the authority and keeps the content.
+- **`PUT` replaces the whole composition**, not `POST /compose/add`. The
+  composition is a document; adding and removing are client-side edits to it,
+  guarded by `ETag` and `If-Match` so a concurrent edit cannot be lost.
+- **`POST` only for restart.** It is a process transition, not a resource.
+
+Method rules:
+
+- An unsupported method is `405` with an `Allow` header, never a `404`.
+- `OPTIONS` is answered by the engine for its own resources, with `Allow`. There
+  is no CORS in v0.5.0: the browser always speaks to one origin, whether the panel
+  mounted the router or proxied it.
+- `HEAD` works on assets, and on app routes that declare it. The engine never
+  fabricates a `HEAD` by calling a `GET`.
+- `GET`, `HEAD` and `DELETE` carry no body; one is `400`. `PUT`, `PATCH` and
+  `POST` have a per-resource cap.
+- `PUT` that creates answers `201` with `Location`; that replaces, `200`.
+  `PATCH`, `200` with the resource. `DELETE`, `204`, or `404` when absent.
+  `If-Match` failure, `412`. Id or provider conflict, `409`.
+- `PUT`, `PATCH` and `DELETE` are idempotent; `POST` is not, and no client may
+  retry it blindly.
+
+Assets use the hash we already verified:
+
+- `ETag` is the module's `sha256`, and `Cache-Control: immutable`.
+- `If-None-Match` answers `304` without reading the file.
+- `HEAD` is free.
+
+App routes declare their verb, and the engine matches it exactly: no implicit
+`HEAD`, no automatic `OPTIONS`, no `POST` standing in for `PUT`. `[[route]]`
+accepts `GET`, `POST`, `PUT`, `PATCH`, `DELETE` and `HEAD`; `OPTIONS` belongs to
+the engine.
+
+A remote panel proxies the API unchanged — method, body and headers. A proxy that
+rewrites methods makes the SDK lie.
+
 ## 7. The app
 
 ### 7.1 Bundle layout
@@ -410,7 +475,8 @@ broker.
 
 A route is `METHOD /path -> interface#function`. The engine mounts them under
 `/api/apps/<app-id>/`, so two apps may both declare `/status` without colliding
-and an operator can tell from the URL whose code is answering.
+and an operator can tell from the URL whose code is answering. The accepted verbs
+and the exactness of the match are fixed in §6.4.
 
 ```
 GET /api/apps/org.example.notes/notes
@@ -435,6 +501,8 @@ iframe with a `postMessage` RPC scoped to that app's routes only.
 
 The engine knows none of this: it exposes the slot contributions as part of the
 composition view and serves the asset. Which slots exist is the panel's business.
+Modules are served with `ETag` set to their pinned hash and `Cache-Control:
+immutable` (§6.4), so a panel reload is a `304`, not a download.
 
 Slots in v0.5.0, declared by the official panel: `panel.nav`, `panel.main`,
 `panel.settings`. A slot that nobody fills is simply empty — a panel has no
@@ -577,6 +645,10 @@ apps = ["org.anth.fs", "org.anth.terminal", "org.example.notes"]
 
 The panel is not in this file. It is an application, not an app: it reads the
 composition and decides where to render each contribution.
+
+`PUT /api/engine/composition` replaces this document, guarded by `ETag` and
+`If-Match` (§6.4). Adding or removing an app is a client-side edit of the
+document, and the engine validates the result before accepting it.
 
 ### 8.2 Resolution
 
@@ -1096,6 +1168,8 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-CLI | The CLI lives in `sdk/rust/cli`; `panel/backend` wires it into the binary | The engine's commands are not a panel's private feature |
 | D-Remote | The engine must stay usable by a panel in another process; v0.5.0 ships only the linked mode | The API is the product boundary; an in-process shortcut would quietly close that door |
 | D-Target | One shared `build.target-dir` for the three Rust workspaces | Separate workspaces buy isolation, not a second compiler |
+| D-HTTP | The API is resources, not commands: `PUT` installs and approves, `PATCH` toggles state, `DELETE` removes and revokes, `POST` is only for restart | Actions exposed as invented verbs drift from the resources they mutate, and cannot be retried safely |
+| D-Compose-PUT | The composition is replaced as a whole document with `If-Match` | A read-modify-write of a document needs a precondition, not an `add` endpoint |
 
 ---
 
