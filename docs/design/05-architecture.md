@@ -17,12 +17,15 @@
                                  │ typed component links + host interface calls
       ┌──────────────────┬───────┴───────┬──────────────────┐
   org.anth.fs      org.anth.terminal   org.anth.hello   third-party app
-  (system app)        (system app)      (reference)      (wasm + ui)
+    (v0.6.0)           (v0.6.0)         (reference)      (wasm + ui)
 ```
 
 The CLI is another consumer of the same API — in-process today, over HTTP
 tomorrow — which is why the engine must never depend on being co-located with its
 client.
+
+The SDK sits between both: panels and apps depend on it, and it depends on the
+engine's contract, never the reverse.
 
 The lifecycle of one app:
 
@@ -31,7 +34,7 @@ bundle ──install──► installed ──approve──► granted ──com
           (verify)              (freeze)              (wire)
 ```
 
-Four separate questions, four separate answers, four separate files on disk:
+Four separate questions, four separate answers — three of them files:
 
 | Question | Answer | Owner |
 | --- | --- | --- |

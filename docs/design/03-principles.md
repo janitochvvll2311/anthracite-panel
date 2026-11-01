@@ -17,9 +17,9 @@
    granularity, so a god-interface would be a god-grant.
 7. **The native capability set is closed.** The engine provides a small, fixed
    list of environment interfaces (§9.2). Growing that list is a design change.
-8. **Failure is local.** One broken app degrades itself and its dependents; it
-   never takes the engine down.
-9. **The platform is done when adding an app needs no engine change.**
+8. **Failure is local at runtime.** A degraded app never takes the engine down; a
+   broken composition is a configuration error and fails fast (§8.5).
+9. **The platform is done when adding an app or a panel needs no engine change.**
 10. **Everything is observable.** Composition state, grants and denials are
     queryable and auditable without reading logs.
 11. **The engine serves no UI.** Not a page, not a section, not a slot. A panel
@@ -27,5 +27,8 @@
 12. **The SDK is the compatibility boundary.** A panel or an app depends on the
     SDK, never on engine internals — and the SDK must work over HTTP, so a remote
     panel is a transport question, not a redesign.
+13. **No ambient authority.** An app never receives a path, an implicit identity
+    or an inherited environment. Everything it can reach is an interface it was
+    granted.
 
 ---

@@ -17,4 +17,7 @@ v0.5.0 keeps the *lessons* and discards the *structure*:
   knows feature routes, a shell that knows feature sections, a home-grown type
   language and a hand-rolled ABI.
 
+The cost is explicit: v0.5.0 has no features. They return as apps in v0.6.0, and
+the platform exists so that returning them does not touch the engine.
+
 ---
