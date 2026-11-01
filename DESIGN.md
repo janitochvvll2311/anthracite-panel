@@ -167,7 +167,7 @@ Four separate questions, four separate answers, four separate files on disk:
 | Subsystem | Contract |
 | --- | --- |
 | **boot** | Read config, open the store, load the composition, start apps in dependency order, expose the surface. No feature logic. |
-| **router** | One HTTP surface over the Unix socket and TCP: `/api/engine/*`, `/api/apps/<id>/*`, `/api/apps/<id>/assets/*`. No `/`. Auth, origin and CSP live here and only here. |
+| **router** | One HTTP surface over the Unix socket and TCP: `/health`, `/api/health`, `/api/engine/*`, `/api/apps/<id>/*`, `/api/apps/<id>/assets/*`. No `/`. Auth, origin and CSP live here and only here. |
 | **registry** | Install, list, verify, remove bundles. Verifies zip paths, signatures, hashes, manifest shape and WIT. Never grants. |
 | **composer** | Resolve `composition.toml` + installed manifests into a surface. Deterministic. Reports unresolved/duplicate/degraded. |
 | **supervisor** | Own the process tree and a registry of component instances with `acquire`/`release`/`evict`. Service apps as children. Restart policy, timeouts, resource budgets, teardown. |
@@ -243,13 +243,15 @@ not a resource.
 
 | Resource | GET | PUT | PATCH | DELETE | POST |
 | --- | --- | --- | --- | --- | --- |
-| `/api/engine/health` | state | — | — | — | — |
+| `/health` | liveness, unauthenticated | — | — | — | — |
+| `/api/health` | readiness, authenticated | — | — | — | — |
 | `/api/engine/version` | version and protocol | — | — | — | — |
 | `/api/engine/composition` | composition and surface | replace the document | — | — | — |
 | `/api/engine/apps` | catalogue | — | — | — | — |
 | `/api/engine/apps/{id}` | descriptor and grant | install or replace the bundle | `enabled`, alias | uninstall | — |
 | `/api/engine/apps/{id}/grant` | frozen grant | approve with the accepted levels | — | revoke | — |
 | `/api/engine/audit` | paginated log | — | — | — | — |
+| `/api/engine/operator` | operator identity | — | change password | — | — |
 | `/api/engine/session` | current session | — | — | log out | log in |
 | `/api/engine/restart` | — | — | — | — | restart |
 | `/api/apps/{id}/<path>` | per `[[route]]` | per `[[route]]` | per `[[route]]` | per `[[route]]` | per `[[route]]` |
@@ -292,6 +294,21 @@ Assets use the hash we already verified:
 - `If-None-Match` answers `304` without reading the file.
 - `HEAD` is free.
 
+Health answers two different questions, so it is two endpoints rather than one
+endpoint with a mode:
+
+| Endpoint | Auth | Answers | Body |
+| --- | --- | --- | --- |
+| `GET /health` | no | is the process alive? `200` once the socket is bound | `{"status":"ok"}` |
+| `GET /api/health` | yes | can it serve? `200` when ready, `503` while starting or degraded | `{"status":"ready"}` |
+
+Both stay minimal on purpose: no version, no counts, no app names. The detail an
+operator needs lives in `GET /api/engine/composition`, which is authenticated and
+names what is degraded and why.
+
+`/health` is what systemd and containers probe; `/api/health` is what `anth
+doctor` and a panel use before rendering anything.
+
 App routes declare their verb, and the engine matches it exactly: no implicit
 `HEAD`, no automatic `OPTIONS`, no `POST` standing in for `PUT`. `[[route]]`
 accepts `GET`, `POST`, `PUT`, `PATCH`, `DELETE` and `HEAD`; `OPTIONS` belongs to
@@ -299,6 +316,49 @@ the engine.
 
 A remote panel proxies the API unchanged — method, body and headers. A proxy that
 rewrites methods makes the SDK lie.
+
+### 6.5 Boot and lifecycle
+
+Boot order, and the reason for it:
+
+1. Config and logging.
+2. Store, audit, and first-boot credentials.
+3. Registry, grants and `composition.toml`.
+4. Resolve the composition into a surface. A static miss is fatal (§8.5), and
+   `anth doctor` explains it without a daemon.
+5. Bind the socket. `/health` answers `200` from here on.
+6. Supervisor: instantiate apps in dependency order with a per-app timeout.
+7. `/api/health` flips to `200 ready`.
+
+Binding before starting apps is deliberate: a slow app must be diagnosable, not
+indistinguishable from a hang. Until step 7, app routes answer `503 unavailable`.
+
+**First-boot credentials.** The engine generates an operator name and password,
+writes them to `state/credentials.txt` with mode `0600`, and logs only the path.
+There is no default account and no secret in the log. The first session carries
+`must_change_password`, and every other endpoint answers `403
+password_change_required` until the password changes — one gate, not a warning.
+Losing the file means `anth-engine --reset-credentials`, which requires
+filesystem access to the state directory.
+
+**Mounting a panel.** The engine owns `/api/*`; a panel owns `/` and its own
+assets. A panel that registers a colliding route fails to start: the last writer
+never wins. The panel reads the composition through the API and never touches the
+registry or the grants.
+
+**Failure behaviour.**
+
+| Failure | Behaviour |
+| --- | --- |
+| Invalid config | exit non-zero, naming the file and line |
+| Unresolved import (static) | exit non-zero; `anth doctor` explains it offline |
+| App traps (dynamic) | engine stays up, app degraded, consumers answer `503` |
+| Remote panel cannot reach the engine | panel starts, renders a disconnected state, retries with backoff |
+
+**Restart.** `POST /api/engine/restart` shuts down gracefully and re-execs the
+same binary with the same arguments. In a linked panel that restarts the panel
+too, which is what "restart the service" means. It answers `202 Accepted` with
+`Location: /api/health` and never claims success before it is ready.
 
 ## 7. The app
 
@@ -935,7 +995,7 @@ Milestones are ordered so each one is demonstrable on its own.
 
 - The three Rust workspaces and the three Bun ones, with the shared target dir.
 - `engine/contract`, config, logging, one router over UDS + TCP.
-- `/api/engine/health`, `/api/engine/version`, `/api/engine/composition`.
+- `/health`, `/api/health`, `/api/engine/version`, `/api/engine/composition`.
 - Session auth, origin checks, CSP — in the router, once.
 - Supervisor skeleton with the instance registry, and orderly shutdown.
 - The `Runtime` trait with a working fake backend, so engine tests never need
@@ -1170,6 +1230,9 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Target | One shared `build.target-dir` for the three Rust workspaces | Separate workspaces buy isolation, not a second compiler |
 | D-HTTP | The API is resources, not commands: `PUT` installs and approves, `PATCH` toggles state, `DELETE` removes and revokes, `POST` is only for restart | Actions exposed as invented verbs drift from the resources they mutate, and cannot be retried safely |
 | D-Compose-PUT | The composition is replaced as a whole document with `If-Match` | A read-modify-write of a document needs a precondition, not an `add` endpoint |
+| D-Credentials | First boot generates operator name and password into `state/credentials.txt` (`0600`) and forces a change on first login | A default account is a hole, and a secret in the log is a leak |
+| D-Health | `/health` is unauthenticated liveness; `/api/health` is authenticated readiness and answers `503` until ready | Liveness and readiness answer different questions; one endpoint cannot be both |
+| D-Remote-Impl | Only the linked panel is implemented in v0.5.0; HTTP stays as a designed transport | The SDK keeps the door open without paying for it |
 
 ---
 
