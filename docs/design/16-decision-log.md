@@ -1,0 +1,47 @@
+# 16. Decision log
+
+> Part of the [design index](../../DESIGN.md).
+
+Decisions taken during the v0.5.0 review. Binding until superseded.
+
+| ID | Decision | Why |
+| --- | --- | --- |
+| R1.1 | v0.5.0 ends at M3; features return in v0.6.0 | The platform is judged by its contract, not its catalogue |
+| R1.2 | WebAssembly Component Model + WIT from day one | One type system, real tooling, multi-language apps |
+| R1.3 | *Superseded by R1.3-rev.* Shell as an app, with a bootstrap document served by the engine | First pass; replaced once the panel became an application |
+| R1.4 | Iframe sandbox per app | The authority model matters more than theming convenience |
+| R1.5 | Install, approve and compose are separate acts | Three different questions, three auditable states |
+| D-Runtime | wasmtime + Cranelift, single backend | Reference implementation; lets wasm do heavy work |
+| D-Pulley | Pulley documented, not shipped | W^X hosts are a deployment profile, not the default |
+| D-Linking | Direct typed links app→app; broker only for host interfaces | Fighting the linker costs weeks and buys little |
+| R2.1 | WIT ids for interfaces; reverse-DNS for apps; app WIT namespace declared | WIT cannot express DNS-shaped names |
+| R2.2 | Exact interface versions | What the linker requires; evolve by exporting two versions |
+| R2.3 | Manifest is an index; WIT in `wit/*.wit`, hashed and signed | WIT is a language, not a config string |
+| R2.4 | Events are typed notifications, not a topic bus | Confirmed; deferred to v0.6.0 because the mechanism needs streams |
+| R2.5 | CLI and clients generated from WIT | Hand-written surfaces drift; v0.4.0 proved it |
+| R2.6 | State is interfaces only; never paths | A path is ambient authority |
+| R2.7 | `anth:error@1` with a fixed HTTP mapping | One error model for HTTP, CLI and clients |
+| R2.8 | The component world is validated against the grant before linking | A link is authority; a lying manifest must not run |
+| D-Streams | Streams and typed events land in v0.6.0/M5, designed against the terminal; the runtime is pre-shaped now | A stream designed without a real consumer gets redesigned at the PTY anyway |
+| R3.1 | Risk is computed over the resolved import graph, never declared by the manifest | A manifest that declares its own risk can lie about it |
+| R3.2 | One interface, one risk level; split mixed interfaces | Grants are per interface, so a mixed interface forces the highest level |
+| R3.3 | Distribution key compiled in; the operator keyring only extends `third-party` trust | A config file must never be able to mint privilege |
+| R3.4 | An upgrade auto-applies only on an empty authority delta | Re-approving every patch trains operators to click through approvals |
+| R3.5 | Static misses fail the composition; runtime failures degrade | A silent degraded boot hides operator mistakes; a crash must not take the engine down |
+| R3.6 | No revocation in v0.5.0: uninstall or rotate the distribution key | Honest limitation; a CRL only when a fleet needs it |
+| R1.3-rev | The engine serves no UI. The panel is an application that hosts apps | A shell bundled as an app still put UI concerns in the platform; a headless engine keeps the thesis literal |
+| D-Workspace | Four Rust workspaces and three Bun ones, with a shared target dir and CI-checked forbidden edges | The isolation must be unrepresentable, not merely documented |
+| D-CLI | The CLI lives in `sdk/rust/cli`; `panel/backend` wires it into the binary | The engine's commands are not a panel's private feature |
+| D-Remote | The engine must stay usable by a panel in another process; v0.5.0 ships only the linked mode | The API is the product boundary; an in-process shortcut would quietly close that door |
+| D-Target | One shared `build.target-dir` for the three Rust workspaces | Separate workspaces buy isolation, not a second compiler |
+| D-HTTP | The API is resources, not commands: `PUT` installs and approves, `PATCH` toggles state, `DELETE` removes and revokes, `POST` is only for restart | Actions exposed as invented verbs drift from the resources they mutate, and cannot be retried safely |
+| D-Compose-PUT | The composition is replaced as a whole document with `If-Match` | A read-modify-write of a document needs a precondition, not an `add` endpoint |
+| D-Credentials | First boot generates operator name and password into `state/credentials.txt` (`0600`) and forces a change on first login | A default account is a hole, and a secret in the log is a leak |
+| D-Health | `/health` is unauthenticated liveness; `/api/health` is authenticated readiness and answers `503` until ready | Liveness and readiness answer different questions; one endpoint cannot be both |
+| D-Remote-Impl | Only the linked panel is implemented in v0.5.0; HTTP stays as a designed transport | The SDK keeps the door open without paying for it |
+| D-Namespace | `anth` for the engine, `anthracite` for first-party apps, everything else for third parties | A reserved namespace only the engine can use prevents an app from impersonating the host |
+| D-Mapping | One HTTP ↔ WIT mapping, implemented once in the router and reused by codegen | Three implementations of the same rule is three chances to disagree |
+| D-Slot-Contract | A slot contribution is an ES module exporting `mount(root, ctx) -> cleanup` | Without a written contract, every panel invites a different module shape |
+| D-Signature-Message | Signature covers a canonical, sorted, length-prefixed manifest set (`manifest.toml` + `wit/*.wit`) | The format must be written once and pinned by a test vector, not inferred from code |
+
+---

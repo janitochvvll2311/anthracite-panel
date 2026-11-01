@@ -1,0 +1,119 @@
+# 9. Authority
+
+> Part of the [design index](../../DESIGN.md).
+
+### 9.1 Tiers and signing
+
+| Tier | Source | May request |
+| --- | --- | --- |
+| `engine` | compiled in | nothing; it *provides* the native set |
+| `system` | signed by the distribution key, shipped in `apps/` | wasm, ui, service, `exec`/`socket`/`device` |
+| `third-party` | any other signer, approved by the operator | wasm, ui only |
+
+The **distribution key is compiled into the binary**. Rotating it requires a
+release; no configuration file can mint a `system` app. An operator may add keys
+to a keyring (`anth key add <fingerprint>`), and everything trusted that way is
+`third-party`: the keyring can extend trust, never privilege.
+
+An unsigned bundle is accepted only with `[apps] require_signature = false`, and
+it is `third-party` regardless of its id — a manifest that claims `org.anth.*`
+gains nothing.
+
+Revocation is manual in v0.5.0: uninstall the app, or rotate the distribution key
+in a release. There is no CRL, and that is a documented limitation, not an
+oversight.
+
+Third-party `service` apps are out of scope for v0.5.0. When they land, they get
+their own design: a service is a host process, and "run arbitrary binaries" is
+not a capability we hand out with a checkbox.
+
+### 9.2 The closed native capability set
+
+The engine provides exactly these interfaces, because they are mechanism-adjacent
+and every app needs them:
+
+```wit
+anth:env/info@1.0.0      host facts (hostname, os, arch, uptime, cpu, memory)
+anth:env/time@1.0.0      clock, monotonic and wall
+anth:env/log@1.0.0       structured logging into the engine log
+anth:env/random@1.0.0    cryptographically secure bytes
+anth:store/kv@1.0.0      the app's own key/value namespace
+anth:store/blobs@1.0.0   the app's own content-addressed blobs
+```
+
+Anything else — files, processes, terminals, network, storage, accounts, the app
+manager itself — is an app that another app imports.
+
+### 9.3 Grants and approval
+
+A grant freezes: app id, version, manifest hash, signature, WIT hash, each
+exported interface, each imported interface with its resolved provider, the risk
+level, the approval levels the operator presented, who approved and when.
+
+Grants scope **per interface**, which is why §3.6 insists on small interfaces. A
+grant for `anth:fs/read@1.0.0` covers the functions that interface declares and
+nothing else.
+
+**Risk is a property of the graph, not a field of the manifest.** A manifest that
+could declare its own risk could declare itself harmless while importing
+`anth:fs/write`. The engine computes it instead:
+
+1. Each host interface carries a fixed risk in the engine's catalog.
+2. An app's risk is the maximum over the transitive closure of its resolved
+   imports, plus the class of every service it declares (`nft` → `admin`, an
+   arbitrary binary → `host`, a package install → `package`).
+3. An app-owned interface contributes no risk of its own; it contributes what it
+   can reach.
+4. A manifest may declare intent — which service, with which argv class — but can
+   never lower the computed result.
+
+Because cycles are a composition error (§8.2), the closure is a finite DAG.
+
+**One interface, one risk level.** An interface that both reads and writes would
+force every grant to the higher level, so it is split instead (`anth:fs/read@1.0.0`,
+`anth:fs/write@1.0.0`). That is what makes a read-only grant actually read-only.
+
+| Level | Trigger (examples) |
+| --- | --- |
+| `read` | environment reads, clock, logs |
+| `write` | mutating state, filesystem writes |
+| `admin` | sockets, devices, network configuration |
+| `host` | executing a binary, spawning a process |
+| `package` | installing a system package |
+
+Approval levels are derived from the risk of the whole set: `--accept-write`,
+`--accept-admin`, `--accept-host`, `--accept-package`. An operator who skips a
+level gets a refusal that names it.
+
+### 9.4 What an app can never do
+
+- call an interface it was not granted;
+- see another app's state, cache or blobs;
+- receive a filesystem path;
+- reach the engine's socket, the panel's socket, or the network, unless a granted
+  interface says so;
+- mutate its own grant;
+- change its exports without a new approval, because the WIT hash is in the grant.
+
+### 9.5 Updates and re-approval
+
+There is no auto-update. `anth app upgrade <bundle>` stages the new content, swaps
+it atomically, and takes the app out of service until the question is settled:
+
+- **Empty authority delta** — same interfaces, same providers, same limits, same
+  tier — applies without re-approval. Hashes and signature are updated and the
+  grant is rewritten around them.
+- **Non-empty delta** requires approval. `anth app show --diff` prints it:
+  interfaces added (with their computed risk) and removed, providers that
+  changed, limits that grew, tier or signer changes.
+- Approving requires the flags for the *new* risk. Removing a capability never
+  requires re-approving the capability that went away.
+
+A running app does not keep its old grant while an upgrade waits. It stops at
+recompose and returns only approved. Half-applying an authority change is worse
+than downtime.
+
+Rollback in v0.5.0 is "install the previous zip again": documented, not
+implemented.
+
+---

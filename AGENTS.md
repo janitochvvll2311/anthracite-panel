@@ -8,8 +8,8 @@ decision log is binding.
 
 ## State
 
-`v0.5.0` is a blank tree plus `DESIGN.md` and this file. Nothing is implemented
-yet. The next milestone is M0 (`DESIGN.md` §11).
+`v0.5.0` is a blank tree plus the design documents and this file. Nothing is implemented
+yet. The next milestone is M0 (`docs/design/11-roadmap.md`).
 
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.
@@ -39,7 +39,7 @@ dependency that should not exist becomes unrepresentable instead of discouraged.
 - `apps/` — app bundles. Its own workspace; never built for the host.
 - Bun: `sdk/ts/`, `panel/web/`, `apps/*/web/`.
 
-The forbidden edges are listed in `DESIGN.md` §10.1 and checked in CI with
+The forbidden edges are listed in `docs/design/10-workspace.md` and checked in CI with
 `cargo metadata`. `panel/backend` must not depend on `engine/*` directly, and apps
 must not depend on the panel SDK.
 
