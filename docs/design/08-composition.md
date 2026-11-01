@@ -13,8 +13,8 @@ apps = ["org.anth.fs", "org.anth.terminal", "org.example.notes"]
 
 # Explicit provider choices. Omit to accept the unique provider, if there is one.
 [provide]
-"anth:fs/list@1.0.0"   = "org.anth.fs"
-"anth:fs/read@1.0.0"   = "org.anth.fs"
+"anthracite:fs/list@1.0.0"   = "org.anth.fs"
+"anthracite:fs/read@1.0.0"   = "org.anth.fs"
 "anth:env/info@1.0.0"  = "@engine"
 ```
 
@@ -86,7 +86,7 @@ never take the engine down.
 A degraded consumer answers with the typed error of §7.11:
 
 ```
-{"error":"unavailable","message":"anth:fs/list@1.0.0 is not available","app":"org.example.notes"}
+{"error":"unavailable","message":"anthracite:fs/list@1.0.0 is not available","app":"org.example.notes"}
 ```
 
 `anth engine composition` prints which app is degraded and why, without reading

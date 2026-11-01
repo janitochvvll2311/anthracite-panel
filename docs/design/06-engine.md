@@ -38,8 +38,8 @@ not a feature.
 v0.5.0 ships **one** backend: **wasmtime with Cranelift**. It is the reference
 implementation of the component model, it has fuel accounting, epoch-based
 interruption and memory limits, and it is where every document, example and bug
-fix lives. It is also the only backend that lets wasm do real work, which keeps
-the "everything heavy can be an app" rule honest.
+fix lives. It is also the only backend fast enough to keep the "everything heavy
+can be an app" rule honest.
 
 What that commits us to, explicitly:
 
@@ -56,9 +56,11 @@ that makes it a build flag rather than a redesign:
 
 - `anth-runtime` is the only crate that names `wasmtime`; nothing above it sees a
   runtime type.
-- A single `Backend` enum is the only place a backend is chosen.
-- Limits are expressed in **fuel and memory**, never in time, so a limit means
-  the same thing on both backends.
+- A single `Backend` enum in `anth-runtime` is the only place a backend is
+  chosen.
+- Limits are expressed in **fuel and memory**; wall time exists only as a
+  backstop, never as the primary budget. A limit means the same thing on both
+  backends.
 - No precompiled artifact ever enters a grant, so an engine upgrade never
   invalidates an installed app.
 
@@ -196,9 +198,10 @@ registry or the grants.
 | Remote panel cannot reach the engine | panel starts, renders a disconnected state, retries with backoff |
 
 **Restart.** `POST /api/engine/restart` shuts down gracefully and re-execs the
-same binary with the same arguments. In a linked panel that restarts the panel
-too, which is what "restart the service" means. It answers `202 Accepted` with
-`Location: /api/health` and never claims success before it is ready.
+process that hosts the engine, with the same arguments. In a linked panel that
+restarts the panel too, which is what "restart the service" means. It answers `202
+Accepted` with `Location: /api/health` and never claims success before it is
+ready.
 
 ### 6.6 The contract crate
 
@@ -217,6 +220,7 @@ somewhere else.
 | `catalog` | the closed native set and the risk of each interface |
 | `world` | the expected world and the comparison against a grant |
 | `view` | the API DTOs the SDK re-exports |
+| `signature` | the canonical signed message over the manifest set |
 | `error` | `ErrorKind` and the single HTTP mapping |
 
 Four decisions inside it:

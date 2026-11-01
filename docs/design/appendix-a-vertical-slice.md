@@ -18,7 +18,7 @@ anth app install ./notes.zip
 anth app approve org.example.notes --accept-read
 #    approved org.example.notes 0.1.0 (risk read)
 #    export  example:notes/list@1.0.0      wasm
-#    import  anth:fs/list@1.0.0            -> org.anth.fs
+#    import  anthracite:fs/list@1.0.0            -> org.anth.fs
 #    import  anth:store/kv@1.0.0           -> @engine
 
 # 3. compose (what runs is data)
@@ -38,18 +38,18 @@ And the failures the platform must produce, not crash on:
 ```bash
 # a dependency left the composition
 anth compose --remove org.anth.fs
-#    warning: org.example.notes is degraded: anth:fs/list@1.0.0 has no provider
+#    warning: org.example.notes is degraded: anthracite:fs/list@1.0.0 has no provider
 #    the engine is up; 1 app degraded
 
 curl --unix-socket /run/anth/engine.sock \
      http://localhost/api/apps/org.example.notes/notes
 #    HTTP/1.1 503 Service Unavailable
-#    {"error":"unavailable","message":"anth:fs/list@1.0.0 has no provider in this composition","app":"org.example.notes"}
+#    {"error":"unavailable","message":"anthracite:fs/list@1.0.0 has no provider in this composition","app":"org.example.notes"}
 ```
 
 ```bash
 # a component that asks for more than it was granted
 anth app install ./sneaky.zip
-#    refused: the component imports anth:fs/write@1.0.0 but the grant lists
-#             only anth:fs/list@1.0.0
+#    refused: the component imports anthracite:fs/write@1.0.0 but the grant lists
+#             only anthracite:fs/list@1.0.0
 ```

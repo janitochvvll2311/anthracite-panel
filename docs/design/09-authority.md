@@ -51,12 +51,12 @@ exported interface, each imported interface with its resolved provider, the risk
 level, the approval levels the operator presented, who approved and when.
 
 Grants scope **per interface**, which is why §3.6 insists on small interfaces. A
-grant for `anth:fs/read@1.0.0` covers the functions that interface declares and
+grant for `anthracite:fs/read@1.0.0` covers the functions that interface declares and
 nothing else.
 
 **Risk is a property of the graph, not a field of the manifest.** A manifest that
 could declare its own risk could declare itself harmless while importing
-`anth:fs/write`. The engine computes it instead:
+`anthracite:fs/write`. The engine computes it instead:
 
 1. Each host interface carries a fixed risk in the engine's catalog.
 2. An app's risk is the maximum over the transitive closure of its resolved
@@ -70,8 +70,8 @@ could declare its own risk could declare itself harmless while importing
 Because cycles are a composition error (§8.2), the closure is a finite DAG.
 
 **One interface, one risk level.** An interface that both reads and writes would
-force every grant to the higher level, so it is split instead (`anth:fs/read@1.0.0`,
-`anth:fs/write@1.0.0`). That is what makes a read-only grant actually read-only.
+force every grant to the higher level, so it is split instead (`anthracite:fs/read@1.0.0`,
+`anthracite:fs/write@1.0.0`). That is what makes a read-only grant actually read-only.
 
 | Level | Trigger (examples) |
 | --- | --- |

@@ -6,7 +6,7 @@
 
 ```
 manifest.toml            # the proposal; the signable index
-manifest.sig             # detached signature over manifest + WIT + hashes
+manifest.sig             # detached signature over the manifest set
 wit/<interface>.wit      # one file per exported interface (the contract, readable)
 wasm/<name>.wasm         # the component (required)
 bin/<name>               # optional service binary (system tier only)
@@ -54,7 +54,7 @@ sha256 = "…"
 
 # ---- what it needs ----
 [[import]]
-interface = "anth:fs/list@1.0.0"
+interface = "anthracite:fs/list@1.0.0"
 
 [[import]]
 interface = "anth:store/kv@1.0.0"
@@ -100,7 +100,7 @@ and the operator approves the resulting grant.
 Interfaces are WIT, in the canonical form:
 
 ```wit
-package anth:fs@1.0.0;
+package anthracite:fs@1.0.0;
 
 interface list {
   use anth:error@1.0.0.{error};
@@ -121,7 +121,7 @@ owned by tiers:
 
 | Namespace | Owner | Example |
 | --- | --- | --- |
-| `anth` | the engine | `anth:fs/list@1.0.0` |
+| `anth` | the engine | `anth:env/info@1.0.0` |
 | `anthracite` | first-party apps | `anthracite:hello/greeting@1.0.0` |
 | anything else | third-party apps | `example:notes/list@1.0.0` |
 
@@ -186,7 +186,7 @@ An app's component has one world. A minimal one:
 package example:notes@0.1.0;
 
 world app {
-  import anth:fs/list@1.0.0;
+  import anthracite:fs/list@1.0.0;
   import anth:store/kv@1.0.0;
 
   export list;
@@ -197,7 +197,7 @@ That is the entire ABI. There is no `anth_call`, no packed pointers, no JSON
 envelope for host calls: values are lifted and lowered by the canonical ABI, and
 every host import is an interface the broker implements.
 
-Cross-app calls are component links: the composer satisfies `anth:fs/list@1.0.0`
+Cross-app calls are component links: the composer satisfies `anthracite:fs/list@1.0.0`
 with the instance of the app that exports it. No serialization, no router, no
 broker.
 
@@ -212,12 +212,9 @@ and the exactness of the match are fixed in §6.4.
 GET /api/apps/org.example.notes/notes
 ```
 
-The engine maps the HTTP request to function arguments using the WIT types:
-
-- record fields become named query parameters (`GET`) or a JSON object body;
-- `bytes` accepts a body up to the route's limit;
-- `result` maps to the status codes of §7.11;
-- a guest trap maps to `internal` with a distinct code, sanitized at the boundary.
+The engine maps the HTTP request to function arguments with the single rule of
+§7.13, and the reply to the status codes of §7.11. A guest trap maps to `internal`
+with a distinct code, sanitized at the boundary.
 
 Argument and reply values are type-checked at the canonical ABI boundary by
 construction; there is no second validation pass to forget.
@@ -253,7 +250,7 @@ does not push.
 The intended shape, for the record:
 
 ```wit
-package anth:fs@1.0.0;
+package anthracite:fs@1.0.0;
 
 interface changed {
   record event { path: string, kind: enum { created, modified, removed } }
@@ -360,13 +357,17 @@ invent their own. There is one, and it is total:
 
 | WIT | Query (`GET`, `HEAD`) | Body (`POST`, `PUT`, `PATCH`) |
 | --- | --- | --- |
-| `string`, `u8..u64`, `f32`, `f64` | one key per parameter | object field |
+| `string`, `u8..u64`, `s8..s64`, `f32`, `f64` | one key per parameter | object field |
 | `bool` | `true` / `false` | boolean |
 | `enum` | the variant name, kebab-case | string |
 | `list<T>` | repeated key | array |
 | `option<T>` | absent means `none` | absent or `null` |
 | `record` | not allowed in a query | the object itself when it is the only parameter |
 | `bytes` | not allowed | raw body when it is the only parameter |
+
+Only the types in that table are allowed in a route signature. `tuple`, `flags`,
+`char` and a nested `result` are refused at install time with a clear error,
+rather than mapped by guesswork.
 
 Rules that remove ambiguity:
 
