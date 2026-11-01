@@ -255,7 +255,7 @@ not a resource.
 | `/api/engine/session` | current session | — | — | log out | log in |
 | `/api/engine/restart` | — | — | — | — | restart |
 | `/api/apps/{id}/<path>` | per `[[route]]` | per `[[route]]` | per `[[route]]` | per `[[route]]` | per `[[route]]` |
-| `/api/apps/{id}/assets/{module}` | UI module | — | — | — | — |
+| `/api/apps/{id}/assets/{*module}` | UI module | — | — | — | — |
 
 Why these verbs:
 
@@ -360,6 +360,41 @@ same binary with the same arguments. In a linked panel that restarts the panel
 too, which is what "restart the service" means. It answers `202 Accepted` with
 `Location: /api/health` and never claims success before it is ready.
 
+### 6.6 The contract crate
+
+`engine/contract` holds the shared vocabulary and the pure rules: identifiers,
+manifest, composition, grant, risk, world checks, API DTOs and the error mapping.
+No I/O, no `wasmtime`, no async, no HTTP types. If a rule can be a function of
+values it lives here; if it needs a file, a socket or a component, it lives
+somewhere else.
+
+| Module | Holds |
+| --- | --- |
+| `id` | `InterfaceId` and `AppId`, parse, validate and render canonically |
+| `manifest` | the v2 index: app, wasm, export, import, route, slot, cli, limits |
+| `composition` | profiles and providers (`App` or `Engine`) |
+| `grant` | granted interfaces, risk, approvals, diff |
+| `catalog` | the closed native set and the risk of each interface |
+| `world` | the expected world and the comparison against a grant |
+| `view` | the API DTOs the SDK re-exports |
+| `error` | `ErrorKind` and the single HTTP mapping |
+
+Four decisions inside it:
+
+1. **The API DTOs live here** and the SDK re-exports them as stable. Duplicating
+   them in the SDK would create two truths and a translation layer to drift.
+2. **Parsing is a feature.** TOML and WIT parsing sit behind `features =
+   ["parse"]`, enabled by the engine and the CLI; the clients only deserialize
+   JSON and do not carry `wit-parser`.
+3. **The catalog lives here**, so `anth doctor` can validate a manifest with no
+   daemon running — which is the only moment it matters.
+4. **The world check is split.** Contract owns `World` and `check_world`; the
+   runtime extracts the real world from wasmtime. The rule is testable with
+   values; the runtime supplies only what cannot be faked.
+
+`deny_unknown_fields` is on for every document type: a typo in `[[route]]` must
+fail loudly. Documents are TOML and the API is JSON, over the same structs.
+
 ## 7. The app
 
 ### 7.1 Bundle layout
@@ -376,6 +411,11 @@ web/<name>.js            # optional UI module(s), hash-pinned by the manifest
 Rules inherited from v0.4.0, kept because they worked: no absolute paths, no
 `..`, no symlinks, a bounded entry count, a bounded size per file, every declared
 hash verified before the bundle becomes visible.
+
+An app author gets the host interfaces from `sdk/rust/guest`, which packages
+`anth:env`, `anth:store` and `anth:error`: depend on the crate and the `import`s
+resolve. `engine/wit/` stays the source of truth and a CI check compares the two,
+so the packaged copy cannot drift.
 
 ### 7.2 Manifest
 
@@ -471,11 +511,24 @@ interface list {
 }
 ```
 
-**Identity.** Interfaces are `namespace:package/interface@semver`. The `anth`
-namespace is reserved for the engine; an app cannot claim it. App ids stay in
-reverse-DNS (`org.example.notes`) because that is what DNS-shaped ids are for,
-while the app's WIT namespace (`example:notes`) is declared in the manifest and
-must be unique across a composition.
+**Identity.** Interfaces are `namespace:package/interface@semver`. Namespaces are
+owned by tiers:
+
+| Namespace | Owner | Example |
+| --- | --- | --- |
+| `anth` | the engine | `anth:fs/list@1.0.0` |
+| `anthracite` | first-party apps | `anthracite:hello/greeting@1.0.0` |
+| anything else | third-party apps | `example:notes/list@1.0.0` |
+
+An app cannot claim `anth` or `anthracite` unless its tier matches. App ids stay
+in reverse-DNS (`org.example.notes`) because that is what DNS-shaped ids are for,
+while the app's WIT namespace is declared in the manifest and must be unique
+across a composition.
+
+**Two version numbers, two meanings.** The package version follows the app
+(`anthracite:hello@0.5.0`); the interface version is its own semver and changes
+only when its types change (`greeting@1.0.0`). An app may ship 0.5.1 with an
+unchanged `greeting@1.0.0`, and consumers do not notice.
 
 **Versioning is exact.** The component `Linker` resolves imports by name, so
 `@1.0.0` and `@1.0.1` are different interfaces and do not link. This is not a
@@ -491,6 +544,18 @@ it in TOML would make it unformattable and unreviewable.
 composer can resolve *before* instantiating. The component embeds the real world.
 The engine compares them and refuses the app on any difference (§7.12). The
 manifest lets us plan; the component is what we check.
+
+**What the signature covers.** One detached signature over a canonical message:
+
+```
+"anth-manifest-v2\0"
+for each file in sorted order, currently `manifest.toml` and `wit/*.wit`:
+    name, "\0", length as little-endian u64, bytes
+```
+
+The wasm and the UI modules are not in the message; they are covered by their
+hashes inside the manifest, and those hashes are covered by the signature. One
+rule, written once, checked by one test with a fixed vector.
 
 ### 7.4 App kinds
 
@@ -682,6 +747,55 @@ A component that lies in its manifest does not start. A component that imports
 something it was not granted does not start. A component whose types drifted from
 the approved WIT does not start. All three are conformance tests, not review
 practices.
+
+### 7.13 HTTP and WIT: one mapping
+
+Without a written mapping, the runtime, the CLI and the generated clients each
+invent their own. There is one, and it is total:
+
+| WIT | Query (`GET`, `HEAD`) | Body (`POST`, `PUT`, `PATCH`) |
+| --- | --- | --- |
+| `string`, `u8..u64`, `f32`, `f64` | one key per parameter | object field |
+| `bool` | `true` / `false` | boolean |
+| `enum` | the variant name, kebab-case | string |
+| `list<T>` | repeated key | array |
+| `option<T>` | absent means `none` | absent or `null` |
+| `record` | not allowed in a query | the object itself when it is the only parameter |
+| `bytes` | not allowed | raw body when it is the only parameter |
+
+Rules that remove ambiguity:
+
+- A missing required parameter is `invalid` (400); a missing optional one is
+  `none`.
+- Multiple parameters in a body become an object keyed by parameter name. There is
+  no positional form.
+- `result<T, error>` maps to `200` with `T`, or to the codes of §7.11.
+- `option<T>` in a reply is JSON `null`.
+- A body on `GET`, `HEAD` or `DELETE` is `400`.
+- An argument that fails its WIT type is `invalid`, never `internal`.
+
+The mapping is implemented once, in the router, and the generated CLI and clients
+are produced from the same rule. That is the only way the three agree.
+
+### 7.14 The UI module contract
+
+A slot contribution is an ES module with one required export:
+
+```ts
+export function mount(root: HTMLElement, ctx: SlotContext): () => void;
+```
+
+- `root` is an empty element owned by the panel.
+- `ctx` carries `slot`, `app` (id and display name) and `api`, a client already
+  scoped to that app's routes — `/api/apps/<id>/...`, never an absolute URL.
+- The returned function unmounts: the panel calls it before replacing the
+  contribution and the module must release listeners and timers.
+- If `mount` throws, the panel renders a placeholder for that slot and keeps the
+  rest of the interface alive.
+
+The module runs inside a sandboxed iframe, but it must not assume it: `ctx.api`
+returns relative URLs, so the same module works behind a panel that proxies the
+API (§15).
 
 ---
 
@@ -924,7 +1038,7 @@ engine/                    Rust workspace: the platform
 
 sdk/                       the compatibility boundary
   rust/
-    guest/                 bindings for wasm apps
+    guest/                 bindings for wasm apps; packages the host WIT
     panel/                 panel contract: slots, descriptors, asset URLs
     cli/                   the commands; `panel/backend` wires the binary
   ts/
@@ -1031,7 +1145,8 @@ mode in `tests/fixtures/` yields its specific typed error.
 - Component runtime with fuel, memory and wall backstop.
 - World-vs-grant validation (§7.12) and the three refusal tests.
 - Host interfaces `anth:env/*` and `anth:store/kv`.
-- Routes to `interface#function`, HTTP mapping per §7.11.
+- Routes to `interface#function`, with the value mapping of §7.13 and the error
+  mapping of §7.11.
 - `sdk/rust/guest` plus the codegen that turns WIT into CLI commands and clients.
 - `apps/hello`: one exported interface, one imported interface, one route, one
   slot contribution, CLI verb generated from WIT.
@@ -1233,6 +1348,10 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Credentials | First boot generates operator name and password into `state/credentials.txt` (`0600`) and forces a change on first login | A default account is a hole, and a secret in the log is a leak |
 | D-Health | `/health` is unauthenticated liveness; `/api/health` is authenticated readiness and answers `503` until ready | Liveness and readiness answer different questions; one endpoint cannot be both |
 | D-Remote-Impl | Only the linked panel is implemented in v0.5.0; HTTP stays as a designed transport | The SDK keeps the door open without paying for it |
+| D-Namespace | `anth` for the engine, `anthracite` for first-party apps, everything else for third parties | A reserved namespace only the engine can use prevents an app from impersonating the host |
+| D-Mapping | One HTTP ↔ WIT mapping, implemented once in the router and reused by codegen | Three implementations of the same rule is three chances to disagree |
+| D-Slot-Contract | A slot contribution is an ES module exporting `mount(root, ctx) -> cleanup` | Without a written contract, every panel invites a different module shape |
+| D-Signature-Message | Signature covers a canonical, sorted, length-prefixed manifest set (`manifest.toml` + `wit/*.wit`) | The format must be written once and pinned by a test vector, not inferred from code |
 
 ---
 
