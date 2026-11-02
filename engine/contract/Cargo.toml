@@ -1,0 +1,18 @@
+[package]
+name = "anth-contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The shared vocabulary of the Anthracite platform: identifiers, manifests and errors"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+semver = { workspace = true }
+toml = { workspace = true, optional = true }
+
+[features]
+default = []
+# Parsing TOML is only needed where a document is read: the engine and the CLI.
+# Clients deserialize JSON and must not carry the parser.
+parse = ["dep:toml"]

@@ -336,7 +336,9 @@ generic HTTP client holding an operator's credentials.
   requires the full id instead of guessing.
 - `verb` is one token, unique within the app.
 - `list`, `show`, `install`, `upgrade`, `remove`, `approve`, `revoke`, `enable` and
-  `disable` are reserved: neither an alias nor a verb may use them.
+  `disable` are reserved: an **alias** may not use them, because `anth app list`
+  must mean one thing. A verb never collides, since it is always the second token
+  (`anth app notes list`).
 - The full id is always accepted: `anth app org.example.notes list`.
 
 **Where the surface comes from.** `GET /api/engine/composition` carries
