@@ -27,7 +27,7 @@ The platform is tested by *contract*, not by feature coverage.
 - **Panel tests**: the official panel and the minimal custom panel both render a
   slot contributed by an app neither was compiled against. The custom panel is
   the test that keeps the SDK honest.
-- **Edge tests**: `cargo metadata` asserts the forbidden edges of §10.1; a seeded
+- **Edge tests**: `cargo metadata` asserts the forbidden edges of [§10.1](10-workspace.md#101-the-edges-we-forbid); a seeded
   violation must fail the build.
 - **The conformance kit** is the same suite a third party runs against their
   bundle. If our tests and their tests are different, the platform is not real.

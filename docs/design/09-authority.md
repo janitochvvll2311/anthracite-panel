@@ -46,7 +46,7 @@ Anything else — files, processes, terminals, network, storage, accounts, the a
 manager itself — is an app that another app imports.
 
 `anth:error` is not in this list because it is not a capability: it is a package of
-types, injected when a package is parsed (§7.3), never granted and never risked.
+types, injected when a package is parsed ([§7.3](07-app.md#73-wit-as-the-contract)), never granted and never risked.
 
 `anth:store/blobs` is not in this set yet: it lands with transfers in v0.6.0.
 Declaring it before implementing it would make the resolver promise a capability
@@ -62,7 +62,7 @@ The provider is a composition fact, not a grant fact: it changes when the operat
 edits the composition, without the app changing. Freezing it would either
 invalidate every consumer's grant on a composition edit or leave it lying.
 
-Grants scope **per interface**, which is why §3.6 insists on small interfaces. A
+Grants scope **per interface**, which is why [§3.6](appendix-a-vertical-slice.md) insists on small interfaces. A
 grant for `anthracite:fs/read@1.0.0` covers the functions that interface declares and
 nothing else.
 
@@ -81,13 +81,13 @@ could declare its own risk could declare itself harmless while importing
 4. A manifest may declare intent — which service, with which argv class — but can
    never lower the computed result.
 
-Because cycles are a composition error (§8.2), the closure is a finite DAG.
+Because cycles are a composition error ([§8.2](08-composition.md#82-resolution)), the closure is a finite DAG.
 
 **When it is computed.** At approval, over the installed apps, so the operator sees
 a meaningful number. At compose time, again, over the actual graph. If an app's
 effective risk has grown past what was approved — because a provider was replaced
 by one that reaches further, for example — the app is **blocked** and needs
-re-approval (§8.5). A grant approves an authority; it cannot stay valid while the
+re-approval ([§8.5](08-composition.md#85-missing-and-failed)). A grant approves an authority; it cannot stay valid while the
 authority it represents grows underneath it.
 
 **One interface, one risk level.** An interface that both reads and writes would
@@ -136,7 +136,7 @@ recompose and returns only approved. Half-applying an authority change is worse
 than downtime.
 
 The engine must still boot in that state, because approving is an engine
-operation: an unapproved app degrades and `anth status` names it (§8.5). Otherwise
+operation: an unapproved app degrades and `anth status` names it ([§8.5](08-composition.md#85-missing-and-failed)). Otherwise
 an upgrade would lock the operator out of the tool that approves it.
 
 ```bash
@@ -148,7 +148,7 @@ anth restart
 ```
 
 Removing an app, revoking its grant or disabling it while others depend on it
-returns `409` and needs `--acknowledge dependents` (§6.4). The engine records the
+returns `409` and needs `--acknowledge dependents` ([§6.4](06-engine.md#64-http-surface)). The engine records the
 acknowledgment with the dependents it broke.
 
 Rollback in v0.5.0 is "install the previous zip again": documented, not

@@ -16,9 +16,9 @@
 6. **Interfaces are small and single-purpose.** The grant scopes at interface
    granularity, so a god-interface would be a god-grant.
 7. **The native capability set is closed.** The engine provides a small, fixed
-   list of environment interfaces (§9.2). Growing that list is a design change.
+   list of environment interfaces ([§9.2](09-authority.md#92-the-closed-native-capability-set)). Growing that list is a design change.
 8. **Failure is local at runtime.** A degraded app never takes the engine down; a
-   broken composition is a configuration error and fails fast (§8.5).
+   broken composition is a configuration error and fails fast ([§8.5](08-composition.md#85-missing-and-failed)).
 9. **The platform is done when adding an app or a panel needs no engine change.**
 10. **Everything is observable.** Composition state, grants and denials are
     queryable and auditable without reading logs.

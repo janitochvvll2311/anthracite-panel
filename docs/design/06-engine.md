@@ -26,12 +26,12 @@ not a feature.
 | know about files, terminals, processes, network, storage or accounts | those are apps (`org.anth.*`) |
 | enumerate feature endpoints in the router | routes come from the surface, computed at compose time |
 | **serve any UI, or own a slot** | the engine is headless; a panel hosts apps and declares slots |
-| hard-code a CLI verb per feature | CLI verbs are projected from WIT (§7.9) |
+| hard-code a CLI verb per feature | CLI verbs are projected from WIT ([§7.9](07-app.md#79-cli-and-clients)) |
 | grant authority at install time | approval is a separate, explicit act |
 | trust the manifest at runtime | the grant is the contract |
-| grow the native capability set casually | the set is closed by design (§9.2) |
-| hand a filesystem path to an app | a path is ambient authority; state is an interface (§7.10) |
-| assume its client runs in the same process | a panel may be remote (§15) |
+| grow the native capability set casually | the set is closed by design ([§9.2](09-authority.md#92-the-closed-native-capability-set)) |
+| hand a filesystem path to an app | a path is ambient authority; state is an interface ([§7.10](07-app.md#710-state)) |
+| assume its client runs in the same process | a panel may be remote ([§15](15-open-decisions.md#15-open-decisions)) |
 
 ### 6.3 Runtime backend and deployment profiles
 
@@ -67,7 +67,7 @@ that makes it a build flag rather than a redesign:
 The runtime boundary is one `async fn` behind a `Runtime` trait, and its second
 implementation is a fake backend used by the engine's own tests. Nothing above
 that trait depends on wasmtime's semantics. Together with the instance registry
-(§6.1), that is what makes streams a later change *inside* `anth-runtime` instead
+([§6.1](06-engine.md#61-subsystems)), that is what makes streams a later change *inside* `anth-runtime` instead
 of a platform redesign. M0 probes the async toolchain and records the result; it
 does not enable it.
 
@@ -170,7 +170,7 @@ the engine.
 A remote panel proxies the API unchanged — method, body and headers. A proxy that
 rewrites methods makes the SDK lie.
 
-Errors always use the envelope of §7.11.
+Errors always use the envelope of [§7.11](07-app.md#711-errors).
 
 **Breaking actions ask for acknowledgment.** `PATCH /apps/{id}` with
 `{"enabled":false}`, `DELETE /apps/{id}` and `DELETE /apps/{id}/grant` return `409`
@@ -196,7 +196,7 @@ Boot order, and the reason for it:
 1. Config and logging.
 2. Store, audit, and first-boot credentials.
 3. Registry, grants and `composition.toml`.
-4. Resolve the composition into a surface. A static miss is fatal (§8.5), and
+4. Resolve the composition into a surface. A static miss is fatal ([§8.5](08-composition.md#85-missing-and-failed)), and
    `anth doctor` explains it without a daemon.
 5. Bind the socket. `/health` answers `200` from here on.
 6. Supervisor: instantiate apps in dependency order with a per-app timeout.

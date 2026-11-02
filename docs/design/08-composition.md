@@ -23,11 +23,11 @@ interface is in the native set. A second implementation is a different interface
 not a second provider of the same one.
 
 `PUT /api/engine/composition` replaces this document, guarded by `ETag` and
-`If-Match` (§6.4). Adding or removing an app is a client-side edit of the
+`If-Match` ([§6.4](06-engine.md#64-http-surface)). Adding or removing an app is a client-side edit of the
 document, and the engine validates the result before accepting it.
 
 v0.5.0 has exactly one profile. The array form exists because per-user profiles
-are a known open decision (§15), and the validator rejects a second profile until
+are a known open decision ([§15](15-open-decisions.md#15-open-decisions)), and the validator rejects a second profile until
 then.
 
 ### 8.2 Resolution
@@ -55,7 +55,7 @@ Deterministic, in this order:
    app and its dependents `degraded` and the boot continues.
 
 `unresolved` and `duplicate` are fatal; `blocked` and a failed instantiation are
-degraded. The reason is in §8.5.
+degraded. The reason is in [§8.5](08-composition.md#85-missing-and-failed).
 
 ### 8.3 Rules
 
@@ -67,7 +67,7 @@ degraded. The reason is in §8.5.
   choice to make and nothing to declare.
 - **An app that cannot run provides nothing usable.** Unapproved or disabled is
   not the same as absent: it turns what would be a fatal miss into a degradation,
-  because the fix needs the engine that is booting (§8.5).
+  because the fix needs the engine that is booting ([§8.5](08-composition.md#85-missing-and-failed)).
 - **Composition does not grant.** Composing an unapproved app is allowed — it will
   be degraded — but the engine never writes a grant to make it run.
 - **Exact means exact.** No minor-version satisfaction, no structural coercion.
@@ -81,7 +81,7 @@ degraded. The reason is in §8.5.
 
 The rule, stated precisely: *the broker is the only exit from the composition;
 inside it, authority was exercised when the composition was built.* This is why
-the grant must be checked against the component's real world (§7.12): a link is
+the grant must be checked against the component's real world ([§7.12](07-app.md#712-enforcement-the-world-must-match-the-grant)): a link is
 authority.
 
 Consequence we accept: a trapping provider traps its linked consumers, and
@@ -116,7 +116,7 @@ Instantiating a component that fails its world check against the grant is a
 security event, not a configuration error: it is audited and the app degrades. One
 app must not be able to stop the engine from starting.
 
-A degraded consumer answers with the error envelope of §7.11:
+A degraded consumer answers with the error envelope of [§7.11](07-app.md#711-errors):
 
 ```json
 {"error":{"code":"unavailable",
@@ -131,7 +131,7 @@ accepts `--now`. It is boring, it is predictable, and it keeps state assumptions
 honest.
 
 It is **not** justified yet by "the store is externalized": apps may hold state in
-a long-lived instance (§7.10). Per-app restart becomes safe when apps treat the
+a long-lived instance ([§7.10](07-app.md#710-state)). Per-app restart becomes safe when apps treat the
 store as their only durable state, and that is a property of the apps, not of the
 engine. Until then, a restart loses in-memory app state, and that is the accepted
 cost.

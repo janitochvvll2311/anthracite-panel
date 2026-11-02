@@ -14,9 +14,9 @@ web/<name>.js            # optional UI module(s), hash-pinned by the manifest
 
 `wit/` holds the package and nothing else. `wit/deps/` is not needed: the engine
 resolves `use` against its own host catalog and the packages of installed
-providers (§7.3), so a vendored copy cannot go stale.
+providers ([§7.3](07-app.md#73-wit-as-the-contract)), so a vendored copy cannot go stale.
 
-A `bin/` entry joins this layout in v0.6.0 with the first service app (§7.4).
+A `bin/` entry joins this layout in v0.6.0 with the first service app ([§7.4](07-app.md#74-app-kinds)).
 
 Rules inherited from v0.4.0, kept because they worked: no absolute paths, no
 `..`, no symlinks, a bounded entry count, a bounded size per file, every declared
@@ -165,7 +165,7 @@ against what the author shipped.
 
 **Two sources, one truth.** The manifest declares imports and exports so the
 composer can resolve *before* instantiating. The component embeds the real world.
-The engine compares them and refuses the app on any difference (§7.12). The
+The engine compares them and refuses the app on any difference ([§7.12](07-app.md#712-enforcement-the-world-must-match-the-grant)). The
 manifest lets us plan; the component is what we check.
 
 **What the signature covers.** One detached signature over a canonical message:
@@ -192,7 +192,7 @@ them.
 
 **`service` arrives in v0.6.0, with the terminal.** A service is a supervised child
 process, and it is the one kind that cannot speak WIT: it is a binary, and the only
-way to reach it is a socket. That is an exception to §3.5, and an exception needs
+way to reach it is a socket. That is an exception to [§3.5](appendix-a-vertical-slice.md), and an exception needs
 its first real consumer — a PTY, with half-close and out-of-band control — to be
 designed correctly. Until then the tier rule already stands: **a third-party app
 never gets a service.**
@@ -230,14 +230,14 @@ broker.
 A route is `METHOD /path -> interface#function`. The engine mounts them under
 `/api/apps/<app-id>/`, so two apps may both declare `/status` without colliding
 and an operator can tell from the URL whose code is answering. The accepted verbs
-and the exactness of the match are fixed in §6.4.
+and the exactness of the match are fixed in [§6.4](06-engine.md#64-http-surface).
 
 ```
 GET /api/apps/org.example.notes/notes
 ```
 
 The engine maps the HTTP request to function arguments with the single rule of
-§7.13, and the reply to the status codes of §7.11. A guest trap maps to `internal`
+[§7.13](07-app.md#713-http-and-wit-one-mapping), and the reply to the status codes of [§7.11](07-app.md#711-errors). A guest trap maps to `internal`
 with a distinct code, sanitized at the boundary.
 
 Argument and reply values are type-checked at the canonical ABI boundary by
@@ -273,7 +273,7 @@ the panel reports it in development and the composition view lists it, so an
 operator can see it exists.
 
 Modules are served with `ETag` set to their pinned hash and `Cache-Control:
-immutable` (§6.4), so a panel reload is a `304`, not a download.
+immutable` ([§6.4](06-engine.md#64-http-surface)), so a panel reload is a `304`, not a download.
 
 ### 7.8 Events
 
@@ -322,7 +322,7 @@ generic HTTP client holding an operator's credentials.
 A consequence worth stating: **only composed apps have verbs**. An installed but
 uncomposed app can be managed, not invoked — it has no instance to answer.
 
-**Flags** are the inverse of §7.13: one flag per parameter, named after it,
+**Flags** are the inverse of [§7.13](07-app.md#713-http-and-wit-one-mapping): one flag per parameter, named after it,
 optional for `option<T>`, repeated for `list<T>`, and `--flag` / `--no-flag` for
 `bool`.
 
@@ -340,7 +340,7 @@ columns from its keys, a record becomes a key/value table, a scalar a single lin
 and an empty list has no columns and prints `(no rows)`. Width never changes the
 content, so the same command yields the same cells on a terminal and in a pipe.
 
-**Exit codes** follow §7.11 and are documented once, so a script can tell "does not
+**Exit codes** follow [§7.11](07-app.md#711-errors) and are documented once, so a script can tell "does not
 exist" from "not allowed" without parsing text.
 
 **Clients.** The same generator emits the Rust client and the TypeScript client
@@ -356,7 +356,7 @@ server; v0.4.0 proved it, and the fix is generation, not discipline.
 | `anth compose [--show\|--add\|--remove\|--now]` | `GET`/`PUT /api/engine/composition` | read and edit the composition |
 | `anth restart` | `POST /api/engine/restart` | restart the service |
 | `anth login` / `anth logout` | `POST`/`DELETE /api/engine/session` | session over TCP |
-| `anth app list\|show\|install\|upgrade\|approve\|revoke\|enable\|disable\|remove` | the app resources of §6.4 | lifecycle |
+| `anth app list\|show\|install\|upgrade\|approve\|revoke\|enable\|disable\|remove` | the app resources of [§6.4](06-engine.md#64-http-surface) | lifecycle |
 | `anth key add\|list\|remove` | `/api/engine/keys` | the third-party keyring |
 | `anth audit` | `GET /api/engine/audit` | the log |
 
@@ -400,7 +400,7 @@ Two hard rules:
 | --- | --- | --- |
 | `anth:store/kv@1.0.0` | `get`/`set`/`delete`/`list`, namespaced per app | small state |
 
-It is a host interface (§9.2), so it is audited and quota'd by the broker.
+It is a host interface ([§9.2](09-authority.md#92-the-closed-native-capability-set)), so it is audited and quota'd by the broker.
 
 Blobs are **not** in v0.5.0. They arrive with transfers in v0.6.0 as
 `stream<u8>`, because a `bytes` cap cannot carry a large file and switching the
@@ -469,7 +469,7 @@ need a closed enum.
 
 `detail` carries what a client needs in order to act. Two shapes exist today:
 `too-large` → `{"limit":n}`, and `conflict` on a breaking operation →
-`{"dependents":[…],"acknowledge":["dependents"]}` (§6.4).
+`{"dependents":[…],"acknowledge":["dependents"]}` ([§6.4](06-engine.md#64-http-surface)).
 
 Exit `0` means success. The mapping is defined once, so a script can branch on the
 kind instead of parsing a message.
@@ -520,7 +520,7 @@ Rules that remove ambiguity:
   `none`.
 - Multiple parameters in a body become an object keyed by parameter name. There is
   no positional form.
-- `result<T, error>` maps to `200` with `T`, or to the codes of §7.11.
+- `result<T, error>` maps to `200` with `T`, or to the codes of [§7.11](07-app.md#711-errors).
 - `option<T>` in a reply is JSON `null`.
 - A body on `GET`, `HEAD` or `DELETE` is `400`.
 - An argument that fails its WIT type is `invalid`, never `internal`.
@@ -552,6 +552,6 @@ export function mount(root: HTMLElement, ctx: SlotContext): () => void;
 
 The module runs inside a sandboxed iframe, but it must not assume it: `ctx.api`
 returns relative URLs, so the same module works behind a panel that proxies the
-API (§15).
+API ([§15](15-open-decisions.md#15-open-decisions)).
 
 ---

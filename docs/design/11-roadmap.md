@@ -34,14 +34,14 @@ violation, and contract tests cover config and error shapes.
   hashes, WIT validation. Creating is `POST`, replacing is `PUT`.
 - Manifest v2 parser, interface catalog, risk computation.
 - Grant store and `anth app approve` with the `--accept-*` levels.
-- Resolver with the eight steps of §8.2, plus typed errors for cycle, duplicate
+- Resolver with the eight steps of [§8.2](08-composition.md#82-resolution), plus typed errors for cycle, duplicate
   export, unresolved import and blocked app.
 - The composition view over HTTP: what is installed, what is composed, which app
   contributes which slot, and the CLI surface per app.
-- `anth compose` and the three failure phases of §8.5.
+- `anth compose` and the three failure phases of [§8.5](08-composition.md#85-missing-and-failed).
 - `/api/engine/keys` and `anth key`, so a third-party signer can be trusted.
 - The acknowledgment pattern: breaking actions return `409` with the tokens they
-  need (§6.4).
+  need ([§6.4](06-engine.md#64-http-surface)).
 - `anth status` over health plus composition.
 
 **Done when:** fixture compositions produce golden surfaces, and every failure
@@ -50,10 +50,10 @@ mode in `tests/fixtures/` yields its specific typed error.
 **M2 — First app**
 
 - Component runtime with fuel, memory and wall backstop.
-- World-vs-grant validation (§7.12) and the three refusal tests.
+- World-vs-grant validation ([§7.12](07-app.md#712-enforcement-the-world-must-match-the-grant)) and the three refusal tests.
 - Host interfaces `anth:env/*` and `anth:store/kv`.
-- Routes to `interface#function`, with the value mapping of §7.13 and the error
-  mapping of §7.11.
+- Routes to `interface#function`, with the value mapping of [§7.13](07-app.md#713-http-and-wit-one-mapping) and the error
+  mapping of [§7.11](07-app.md#711-errors).
 - `sdk/rust/guest` plus the codegen that turns WIT into CLI commands and clients.
 - `apps/hello`: one exported interface, one imported interface, one route, one
   slot contribution, CLI verb generated from WIT.
@@ -95,7 +95,7 @@ a broken panel.
 - Streams, designed against the terminal rather than a toy. Backpressure,
   cancellation, half-close and error-after-partial-data each need a conformance
   test or the feature does not ship.
-- Typed events (§7.8) on top of those streams, as `subscribe() -> stream<event>`.
+- Typed events ([§7.8](07-app.md#78-events)) on top of those streams, as `subscribe() -> stream<event>`.
 - Quotas per stream (bytes/s and total) enforced from the budget.
 - Conformance kit published; `anth-conformance` runs against a bundle offline.
 - Audit report, approval/diff UI in the panel's settings slot.
