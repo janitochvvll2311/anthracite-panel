@@ -12,7 +12,6 @@ engine/                    Rust workspace: the platform
   wit/                     anth:env, anth:store, anth:error
   contract/                manifest, composition, grants, errors (no I/O)
   runtime/                 the only crate that names wasmtime; world checks
-  host/                    kernel boundary: exec, pty, dev, proc
   broker/                  host interface dispatch, quotas, denials
   compose/                 registry, grant store, resolver, surface projection
   api/                     router, sessions, origin, assets, UDS + TCP

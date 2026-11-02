@@ -28,8 +28,8 @@ violation, and contract tests cover config and error shapes.
 
 **M1 — Composition**
 
-- Registry: install, list, verify, remove; zip path safety, signatures, hashes,
-  WIT validation.
+- Registry: install, list, verify, replace, remove; zip path safety, signatures,
+  hashes, WIT validation. Creating is `POST`, replacing is `PUT`.
 - Manifest v2 parser, interface catalog, risk computation.
 - Grant store and `anth app approve` with the `--accept-*` levels.
 - Resolver with the eight steps of §8.2, plus typed errors for cycle, duplicate

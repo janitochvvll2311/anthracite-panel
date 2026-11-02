@@ -7,7 +7,7 @@
 | Tier | Source | May request |
 | --- | --- | --- |
 | `engine` | compiled in | nothing; it *provides* the native set |
-| `system` | signed by the distribution key, shipped in `apps/` | wasm, ui, service, `exec`/`socket`/`device` |
+| `system` | signed by the distribution key, shipped in `apps/` | wasm, ui; services in v0.6.0 |
 | `third-party` | any other signer, approved by the operator | wasm, ui only |
 
 The **distribution key is compiled into the binary**. Rotating it requires a
@@ -23,9 +23,10 @@ Revocation is manual in v0.5.0: uninstall the app, or rotate the distribution ke
 in a release. There is no CRL, and that is a documented limitation, not an
 oversight.
 
-Third-party `service` apps are out of scope for v0.5.0. When they land, they get
-their own design: a service is a host process, and "run arbitrary binaries" is
-not a capability we hand out with a checkbox.
+A third-party app never gets a service (`D-Services`). Services arrive in v0.6.0
+with the terminal, and even then they stay `system`-tier: a service is a host
+process, and "run arbitrary binaries" is not a capability we hand out with a
+checkbox.
 
 ### 9.2 The closed native capability set
 
@@ -61,7 +62,9 @@ could declare its own risk could declare itself harmless while importing
 1. Each host interface carries a fixed risk in the engine's catalog.
 2. An app's risk is the maximum over the transitive closure of its resolved
    imports, plus the class of every service it declares (`nft` → `admin`, an
-   arbitrary binary → `host`, a package install → `package`).
+   arbitrary binary → `host`, a package install → `package`). In v0.5.0 no app can
+   declare a service, so nobody reaches `admin` or `host`; the levels stay defined
+   because the enum is part of the contract.
 3. An app-owned interface contributes no risk of its own; it contributes what it
    can reach.
 4. A manifest may declare intent — which service, with which argv class — but can

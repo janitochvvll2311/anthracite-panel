@@ -10,7 +10,7 @@
 | **router** | One HTTP surface over the Unix socket and TCP: `/health`, `/api/health`, `/api/engine/*`, `/api/apps/<id>/*`, `/api/apps/<id>/assets/*`. No `/`. Auth, origin and CSP live here and only here. |
 | **registry** | Install, list, verify, remove bundles. Verifies zip paths, signatures, hashes, manifest shape and WIT. Never grants. |
 | **composer** | Resolve `composition.toml` + installed manifests into a surface. Deterministic. Reports unresolved/duplicate/degraded. |
-| **supervisor** | Own the process tree and a registry of component instances with `acquire`/`release`/`evict`. Service apps as children. Restart policy, timeouts, resource budgets, teardown. |
+| **supervisor** | Own the process tree and a registry of component instances with `acquire`/`release`/`evict`. Restart policy, timeouts, resource budgets, teardown. Child processes arrive with services in v0.6.0. |
 | **runtime** | Behind one `async` trait: instantiate components with wasmtime, enforce the budget, validate the component world against the grant, satisfy host imports through the broker, link app imports. |
 | **broker** | The only path from app code to the host. Validates against the grant, enforces quotas, records denials. |
 | **store** | Per-app namespaces exposed as interfaces: `anth:store/kv`, `anth:store/blobs`. No paths, no sharing. |
@@ -89,8 +89,8 @@ not a resource.
 | `/api/health` | readiness, authenticated | — | — | — | — |
 | `/api/engine/version` | version and protocol | — | — | — | — |
 | `/api/engine/composition` | composition and surface | replace the document | — | — | — |
-| `/api/engine/apps` | catalogue | — | — | — | — |
-| `/api/engine/apps/{id}` | descriptor and grant | install or replace the bundle | `enabled`, alias | uninstall | — |
+| `/api/engine/apps` | catalogue | — | — | — | install, id derived from the bundle |
+| `/api/engine/apps/{id}` | descriptor and grant | replace the bundle | `enabled`, alias | uninstall | — |
 | `/api/engine/apps/{id}/grant` | frozen grant | approve with the accepted levels | — | revoke | — |
 | `/api/engine/audit` | paginated log | — | — | — | — |
 | `/api/engine/operator` | operator identity | — | change password | — | — |
@@ -101,10 +101,13 @@ not a resource.
 
 Why these verbs:
 
-- **`PUT` installs and approves.** A bundle and a grant are documents with a known
-  identity: `PUT /apps/{id}` creates or replaces, and an upgrade is the same verb
-  under the rule of §9.5. A manifest that declares a different id is `409`.
-  Retrying is safe.
+- **`POST` installs, `PUT` replaces.** The id lives inside the bundle, so a client
+  cannot name it before uploading: `POST /apps` derives it and answers `201` with
+  `Location`. Replacing an installed app is `PUT /apps/{id}`, where the id is known
+  and a bundle declaring a different one is `409`. A retried install cannot
+  duplicate: the second attempt finds the id and gets `409 app_exists`.
+- **`PUT` approves.** A grant is a document with a known identity; `PUT
+  /apps/{id}/grant` freezes exactly the authority the operator accepted.
 - **`PATCH` enables, disables and renames.** `{"enabled": false}` is a partial
   mutation of a resource, not an invented action endpoint.
 - **`DELETE` removes and revokes.** `DELETE /apps/{id}` uninstalls;
@@ -112,7 +115,7 @@ Why these verbs:
 - **`PUT` replaces the whole composition**, not `POST /compose/add`. The
   composition is a document; adding and removing are client-side edits to it,
   guarded by `ETag` and `If-Match` so a concurrent edit cannot be lost.
-- **`POST` only for restart.** It is a process transition, not a resource.
+- **`POST` for restart.** It is a process transition, not a resource.
 
 Method rules:
 
@@ -123,7 +126,8 @@ Method rules:
 - `HEAD` works on assets, and on app routes that declare it. The engine never
   fabricates a `HEAD` by calling a `GET`.
 - `GET`, `HEAD` and `DELETE` carry no body; one is `400`. `PUT`, `PATCH` and
-  `POST` have a per-resource cap.
+  `POST` have a per-resource cap; an install body is a raw `application/zip`
+  capped at 32 MiB by default.
 - `PUT` that creates answers `201` with `Location`; that replaces, `200`.
   `PATCH`, `200` with the resource. `DELETE`, `204`, or `404` when absent.
   `If-Match` failure, `412`. Id or provider conflict, `409`.

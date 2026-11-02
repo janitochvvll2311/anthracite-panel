@@ -8,10 +8,11 @@
 manifest.toml            # the proposal; the signable index
 manifest.sig             # detached signature over the manifest set
 wit/<interface>.wit      # one file per exported interface (the contract, readable)
-wasm/<name>.wasm         # the component (required)
-bin/<name>               # optional service binary (system tier only)
+wasm/<name>.wasm         # the component; required when the app exports an interface
 web/<name>.js            # optional UI module(s), hash-pinned by the manifest
 ```
+
+A `bin/` entry joins this layout in v0.6.0 with the first service app (§7.4).
 
 Rules inherited from v0.4.0, kept because they worked: no absolute paths, no
 `..`, no symlinks, a bounded entry count, a bounded size per file, every declared
@@ -170,13 +171,19 @@ them.
 | Kind | Runs as | May request | Typical use |
 | --- | --- | --- | --- |
 | `wasm` | in-process component, sandboxed, fuel-metered | any granted interface | all logic, including heavy compute |
-| `service` | supervised child process, fixed argv, no ambient env | `exec`/`socket`/`device` (system tier only) | the few operations that need the kernel: PTYs, `ip`, `nft`, `sfdisk` |
 | `ui` | sandboxed iframe served by the engine | RPC to its own app only | rendering |
 
-A `service` is an app, not an engine module: it has an id, a manifest, a grant, a
-route and a limit. What it does *not* have is unrestricted host access — the
-supervisor hands it a narrow, declared interface (a socket, a set of argv
-templates, a device file) and nothing else.
+**`service` arrives in v0.6.0, with the terminal.** A service is a supervised child
+process, and it is the one kind that cannot speak WIT: it is a binary, and the only
+way to reach it is a socket. That is an exception to §3.5, and an exception needs
+its first real consumer — a PTY, with half-close and out-of-band control — to be
+designed correctly. Until then the tier rule already stands: **a third-party app
+never gets a service.**
+
+An app may be wasm-only (a provider such as `fs`), ui-only (a slot contribution
+with no logic), or both. `[wasm]` is required if and only if the app declares at
+least one `[[export]]`; the validator says so in the error rather than letting an
+author ship an empty component.
 
 ### 7.5 The component world
 
