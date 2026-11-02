@@ -60,6 +60,7 @@ and a change to one of them is a design change, not an implementation detail.
 | 14 | [Risks](docs/design/14-risks.md) | What could go wrong and the answer to each |
 | 15 | [Open decisions](docs/design/15-open-decisions.md) | What is still undecided, with a recommendation and a deadline |
 | 16 | [Decision log](docs/design/16-decision-log.md) | Every binding decision taken during the review |
+| 17 | [Deferred](docs/design/17-deferred.md) | Everything postponed to v0.6.0, with the reason and the trigger |
 | A | [Vertical slice](docs/design/appendix-a-vertical-slice.md) | `hello` end to end: install, approve, compose, call |
 
 ---
