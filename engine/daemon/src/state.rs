@@ -138,9 +138,24 @@ mod tests {
     #[test]
     fn a_missing_composition_is_empty() {
         let root = scratch("composition");
-        ensure(&root).expect("ensure");
+        // Deliberately no `ensure`: the point is the file that does not exist.
+        fs::create_dir_all(&root).expect("mkdir");
         let composition = load_composition(&root).expect("load");
         assert_eq!(composition, Composition::empty());
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn an_existing_composition_is_read() {
+        let root = scratch("composition-present");
+        ensure(&root).expect("ensure");
+        fs::write(
+            root.join("composition.toml"),
+            "version = 1\n\n[[profile]]\nid = \"default\"\napps = [\"org.example.notes\"]\n",
+        )
+        .expect("write");
+        let composition = load_composition(&root).expect("load");
+        assert_eq!(composition.profile[0].apps, ["org.example.notes"]);
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
