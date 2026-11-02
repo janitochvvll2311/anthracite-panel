@@ -18,11 +18,12 @@ Milestones are ordered so each one is demonstrable on its own.
 - The `Runtime` trait with a working fake backend, so engine tests never need
   wasmtime and nothing above the trait learns its semantics.
 - The CI edge check: `cargo metadata` fails on a forbidden dependency.
-- Toolchain gate: `wit-bindgen` builds a component and wasmtime instantiates it,
-  offline, with the pinned toolchain.
-- Async probe, recorded and not shipped: build a component with a `stream` under
-  WASI 0.3 and run it on the pinned wasmtime. Its result is what M5 designs the
-  PTY against.
+- Toolchain gate, already proven in the spike: a component built for
+  `wasm32-unknown-unknown`, embedded and wrapped with `wasm-tools`, instantiates
+  under wasmtime with a typed host import and a fuel trap.
+- Async probe, already done and recorded: `stream<u8>` survives the whole
+  pipeline and a guest reads it with `block_on` inside a synchronous export.
+  `async func` also works, and is deliberately not used ([§7.15](07-app.md#715-streams)).
 
 **Done when:** `anth-engine --config …` boots with an empty composition, `anth
 doctor` (from the SDK) is green against it, the edge check fails on a seeded
@@ -54,7 +55,8 @@ mode in `tests/fixtures/` yields its specific typed error.
 - Host interfaces `anth:env/*` and `anth:store/kv`.
 - Routes to `interface#function`, with the value mapping of [§7.13](07-app.md#713-http-and-wit-one-mapping) and the error
   mapping of [§7.11](07-app.md#711-errors).
-- `sdk/rust/guest` plus the codegen that turns WIT into CLI commands and clients.
+- `sdk/rust/guest` plus the codegen that turns WIT into CLI commands and clients,
+  and the build wrapper that runs `embed` + `component new`.
 - `apps/hello`: one exported interface, one imported interface, one route, one
   slot contribution, CLI verb generated from WIT.
 

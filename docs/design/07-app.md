@@ -18,6 +18,23 @@ providers ([§7.3](07-app.md#73-wit-as-the-contract)), so a vendored copy cannot
 
 A `bin/` entry joins this layout in v0.6.0 with the first service app ([§7.4](07-app.md#74-app-kinds)).
 
+**How the component is built.** The target is `wasm32-unknown-unknown`, not
+`wasm32-wasip2`:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown
+wasm-tools component embed --world app wit/ target/…/<name>.wasm -o embedded.wasm
+wasm-tools component new embedded.wasm -o wasm/<name>.wasm
+```
+
+`wasm32-wasip2` also produces a component, but it links the WASI preview 2
+interfaces the standard library uses — `wasi:cli`, `wasi:io`, `wasi:clocks` — and
+those imports are ambient authority nobody granted. The world check of
+[§7.12](07-app.md#712-enforcement-the-world-must-match-the-grant) would refuse
+every app built that way, including our own. The core target keeps `std` and
+produces a component with exactly the imports the app declared. The SDK wraps
+these three commands so an author never types them.
+
 Rules inherited from v0.4.0, kept because they worked: no absolute paths, no
 `..`, no symlinks, a bounded entry count, a bounded size per file, every declared
 hash verified before the bundle becomes visible.
@@ -555,3 +572,44 @@ returns relative URLs, so the same module works behind a panel that proxies the
 API ([§15](15-open-decisions.md#15-open-decisions)).
 
 ---
+
+### 7.15 Streams
+
+Streams and futures are **values**, not a different calling convention:
+
+```wit
+follow: func(path: string) -> result<stream<line>, error>;
+```
+
+The function is synchronous and returns a handle. The caller decides what to do
+with it, and that decision is local:
+
+- consuming is `block_on(reader.read(buf))` inside an ordinary `fn`;
+- producing is `start_task` plus a writer, because a stream cannot be returned
+  before something exists to fill it.
+
+`async func` in WIT is **not used**. It works — the async ABI is in wasmtime and
+in `wit-bindgen` — but it makes asynchrony contagious: one async export forces its
+consumers to await, up to the router, and gives the HTTP surface two shapes
+instead of one. With streams as values, an app that reads a blocking source still
+exports a plain function, and the concurrency stays inside it.
+
+The door stays open: interfaces are versioned, so `anthracite:fs/read@1.1.0` could
+be async while `@1.0.0` stays synchronous. Adopting it is a decision with a real
+case behind it, not a default.
+
+**The engine runs calls concurrently anyway.** A guest blocked on a stream must not
+block the daemon, so the concurrent store and the long-lived instances live in
+`anth-runtime` (§6.3). The contract stays simple; the runtime does the work.
+
+**HTTP mapping.** A route whose function returns a stream maps by element type,
+because a stream has no other meaning over HTTP:
+
+| Result | Response |
+| --- | --- |
+| `stream<list<u8>>` | `application/octet-stream`, chunked |
+| `stream<record>` | `text/event-stream`, one JSON object per event |
+| `future<T>` | `200` with `T` once it resolves |
+
+Cancelling the response cancels the stream: the guest's writer observes
+`Dropped`, which is the component model's cancellation signal.

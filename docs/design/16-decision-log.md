@@ -61,3 +61,5 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Risk-Recheck | Risk is computed at approval over installed apps and re-checked at compose; a growth blocks the app until re-approved | An app cannot gain authority because its provider was swapped |
 
 ---
+| D-Build-Target | Apps build for `wasm32-unknown-unknown` and are wrapped with `wasm-tools component embed` + `component new`; `wasm32-wasip2` is not used | The wasip2 target links WASI interfaces nobody granted, and the world check would refuse every app built with it |
+| D-Streams-Contract | Streams and futures are values returned by synchronous functions; `async func` is not used in WIT; concurrency lives inside the guest and in `anth-runtime` | An async export makes asynchrony contagious up to the router and gives HTTP two shapes |

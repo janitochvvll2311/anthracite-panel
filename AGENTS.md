@@ -17,9 +17,11 @@ code, its crates or its structure.
 ## Toolchain
 
 - Rust `1.99.1` (`CARGO_HOME=/tools/cargo`, `RUSTUP_HOME=/tools/rustup`).
-- Installed target: `x86_64-unknown-linux-musl` only. Components need
-  `wasm32-wasip2` plus a component toolchain (`cargo-component` or `wasm-tools`);
-  install them before starting M0.
+- Installed targets: `x86_64-unknown-linux-musl`, `wasm32-unknown-unknown` and
+  `wasm32-wasip2`. **Apps build for `wasm32-unknown-unknown`**; `wasm32-wasip2`
+  links WASI and every app built with it would fail the world check.
+- `wasm-tools` (`/tools/cargo/bin/wasm-tools`) wraps the module into a component
+  and feeds the codegen. `cargo-component` is not needed.
 - Bun `1.4.4` under `/tools/bun` (`BUN_INSTALL=/tools/bun`).
 - If a wrapper is missing after an environment rebuild, run `. /tools/env.sh`.
 - The three Rust workspaces share one `build.target-dir` through the root
@@ -54,7 +56,11 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings   # inside each workspace
 
 bun install && bun run build                            # from the repo root
-cargo build --manifest-path apps/Cargo.toml --release --target wasm32-wasip2
+
+# an app bundle (the SDK wraps these three steps)
+cargo build --manifest-path apps/Cargo.toml --release --target wasm32-unknown-unknown
+wasm-tools component embed --world app apps/<app>/wit <module>.wasm -o embedded.wasm
+wasm-tools component new embedded.wasm -o wasm/<name>.wasm
 ```
 
 A release build of the panel fails without `panel/web/dist`, by design.
