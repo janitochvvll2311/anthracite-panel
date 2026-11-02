@@ -1,0 +1,4 @@
+[build]
+# One target directory for every Rust workspace in this repository. Without it,
+# wasmtime is compiled once per workspace and a full build pays for it each time.
+target-dir = "target"

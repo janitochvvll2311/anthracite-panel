@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [v0.5.0]
+  pull_request:
+    branches: [v0.5.0]
+
+jobs:
+  contract:
+    name: engine / contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt, clippy
+
+      - name: Format
+        run: cargo fmt --all --check
+        working-directory: engine
+
+      - name: Lint
+        run: cargo clippy -p anth-contract --features parse --all-targets -- -D warnings
+        working-directory: engine
+
+      - name: Test
+        run: cargo test -p anth-contract --features parse
+        working-directory: engine
