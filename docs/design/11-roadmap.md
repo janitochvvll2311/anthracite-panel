@@ -8,10 +8,12 @@ Milestones are ordered so each one is demonstrable on its own.
 
 **M0 — Kernel (no features)**
 
-- The three Rust workspaces and the three Bun ones, with the shared target dir.
+- The engine, SDK and panel workspaces, and the Bun ones, with the shared target
+  directory. `apps/` arrives in M2 with `hello`.
 - `engine/contract`, config, logging, one router over UDS + TCP.
 - `/health`, `/api/health`, `/api/engine/version`, `/api/engine/composition`.
-- Session auth, origin checks, CSP — in the router, once.
+- Auth once in the router: peer credentials on the socket, sessions over TCP,
+  origin checks and CSP.
 - Supervisor skeleton with the instance registry, and orderly shutdown.
 - The `Runtime` trait with a working fake backend, so engine tests never need
   wasmtime and nothing above the trait learns its semantics.
@@ -33,10 +35,14 @@ violation, and contract tests cover config and error shapes.
 - Manifest v2 parser, interface catalog, risk computation.
 - Grant store and `anth app approve` with the `--accept-*` levels.
 - Resolver with the eight steps of §8.2, plus typed errors for cycle, duplicate
-  provider, unresolved import and unapproved app.
+  export, unresolved import and blocked app.
 - The composition view over HTTP: what is installed, what is composed, which app
-  contributes which slot.
-- `anth compose` and the static/dynamic failure split of §8.5.
+  contributes which slot, and the CLI surface per app.
+- `anth compose` and the three failure phases of §8.5.
+- `/api/engine/keys` and `anth key`, so a third-party signer can be trusted.
+- The acknowledgment pattern: breaking actions return `409` with the tokens they
+  need (§6.4).
+- `anth status` over health plus composition.
 
 **Done when:** fixture compositions produce golden surfaces, and every failure
 mode in `tests/fixtures/` yields its specific typed error.
@@ -101,7 +107,8 @@ renders and answers — the acid test, executed by someone who is not us.
 ### The platform's definition of done
 
 1. `anth-engine` with no apps is a valid, healthy system.
-2. Every feature is a bundle under `apps/`, removable from the composition.
+2. Every product feature **except the panel** is a bundle under `apps/`, removable
+   from the composition; the panel is an application built on the SDK.
 3. No engine source file mentions a feature name, a slot, or a pixel.
 4. A new app requires zero engine changes.
 5. A new panel requires zero engine changes — only the SDK.

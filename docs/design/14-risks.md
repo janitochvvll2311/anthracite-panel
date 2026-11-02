@@ -15,5 +15,7 @@
 | The pre-shaped runtime boundary turns out to be wrong. | A `Runtime` trait with a fake backend is exercised by engine tests from M0, and the M0 async probe checks the real toolchain before M5 depends on it. |
 | Services reintroduce ambient authority. | Tier rules: third party never gets a service in v0.5.0 or v0.6.0. |
 | We rebuild v0.4.0 feature-first and lose the platform. | M0–M3 gate M4: no system app starts before the acid test passes. |
+| The headless path rots because only the linked panel is built and tested. | The SDK is transport-neutral from M0, the engine boots with no UI, and `doctor` plus the HTTP suite run against a headless daemon in CI. |
+| The acknowledgment becomes reflex noise and stops protecting anything. | It only appears when consumers would actually break, and every use is audited with the names it broke. |
 
 ---

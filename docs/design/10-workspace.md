@@ -21,7 +21,8 @@ sdk/                       the compatibility boundary
   rust/
     guest/                 bindings for wasm apps; packages the host WIT
     panel/                 panel contract: slots, descriptors, asset URLs
-    cli/                   the commands; `panel/backend` wires the binary
+    cli/                   the commands; builds the `anth` binary
+    conformance/           bin `anth-conformance`; the kit third parties run
   ts/
     panel/                 iframe bridge, slot mounting, base components
     client/                generated TypeScript client
@@ -36,9 +37,6 @@ apps/                      backend-frontend app catalogue
 
 demo/                      simulation catalogue, consumes the SDK
 
-docs/
-  contracts/               manifest, composition, error mapping, keyring
-
 tests/
   e2e/                     Playwright against a running panel
   fixtures/                golden compositions and bundles
@@ -48,6 +46,14 @@ scripts/
   dev.sh
   package.sh
 ```
+
+The `anth` binary comes from `sdk/rust/cli`; the official distribution ships it
+next to `anth-panel` instead of having the panel compile it, so a headless
+deployment still has a client.
+
+The normative artifacts are `engine/wit/` and the documents under `docs/design/`.
+There is no separate `docs/contracts/`: a second copy of the contract is a second
+truth.
 
 ### 10.1 The edges we forbid
 

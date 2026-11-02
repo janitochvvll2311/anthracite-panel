@@ -268,3 +268,37 @@ Four decisions inside it:
 
 `deny_unknown_fields` is on for every document type: a typo in `[[route]]` must
 fail loudly. Documents are TOML and the API is JSON, over the same structs.
+
+### 6.7 Configuration
+
+One TOML file, created on first boot if missing, validated by `anth doctor` with
+no daemon. Unknown keys are errors, like every other document.
+
+| Key | Type | Release default | Notes |
+| --- | --- | --- | --- |
+| `version` | int | `1` | schema version |
+| `socket` | path | `/run/anth/engine.sock` | the Unix socket |
+| `listen` | address | unset | TCP is off by default |
+| `state` | path | `/var/lib/anth` | apps, grants, composition, credentials |
+| `log.level` | enum | `info` | `error`, `warn`, `info`, `debug` |
+| `log.format` | enum | `text` | `text` or `json` |
+| `auth.session-ttl` | duration | `12h` | TCP only; the socket uses peer credentials |
+| `apps.require-signature` | bool | `true` | `false` only in development |
+| `apps.allow-unverified-assets` | bool | `false` | development only: skips UI asset hashes, never signatures or grants |
+| `apps.max-bundle-bytes` | int | `33554432` | the install body cap |
+| `limits.fuel` | int | per app | default when the manifest omits it |
+| `limits.memory-pages` | int | `256` | |
+| `limits.wall-ms` | int | `5000` | backstop |
+| `backend` | enum | `cranelift` | reserved: the Pulley profile selects `pulley` |
+
+Rules:
+
+- **Debug builds default open, release builds closed.** A debug binary uses
+  relative paths and permissive switches so a developer does not need root; a
+  release binary uses absolute paths and refuses the permissive ones.
+- **The file is created, not required.** The first boot writes the release
+  defaults with their keys commented, so the operator sees what can be changed.
+- **`anth config set` edits one dotted key and keeps the comments.** That is part
+  of why the format is TOML (`D-Format`).
+- **Secrets never live here.** Operator credentials are in
+  `state/credentials.txt`; trusted keys are in the engine's keyring.

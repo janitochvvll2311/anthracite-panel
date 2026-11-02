@@ -4,7 +4,7 @@
 
 | # | Decision | Recommendation | By |
 | --- | --- | --- | --- |
-| D1 | Composition scope: system-wide vs. per-user | System-wide; per-user profiles later | M1 |
+| D1 | Composition scope: system-wide vs. per-user | System-wide; per-user profiles later. The schema already has `[[profile]]`, so this is a scoping decision, not a format change | M1 |
 | D2 | Recompose: process restart vs. per-app restart | Process restart; revisit after M3 | M3 |
 | D3 | PTY shape: two `stream<u8>` vs. a `resource` with methods for resize and signals | A resource, so control messages do not become protocol bytes | M5 |
 | D4 | When to ship the Pulley profile | Only if a deployment target requires it; never as default | M5 |

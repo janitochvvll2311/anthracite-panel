@@ -11,7 +11,7 @@ Nothing is ported wholesale. `v0.4.0-freeze` is a library of decisions:
 | hash-pinned assets, signed bundles | v2/v3 dual manifest paths |
 | argv-based `ip`/`nft`/`sfdisk` with `pid+start_ticks` guards | router that enumerates feature endpoints |
 | `host.info` as a snapshot | a panel that hard-codes sections |
-| per-export anchor dispatch | the home-grown type language and flat ABI 4 |
+| route → `interface#function` dispatch | the home-grown type language and flat ABI 4 |
 
 The v0.4.0 features are re-implemented as apps in v0.6.0, from their behaviour,
 not by copying their code.
@@ -23,7 +23,7 @@ behaviours do, and they are what the v0.6.0 apps are judged against:
 
 | Area | Invariant |
 | --- | --- |
-| Auth | local session, same-origin and CSP enforced in one boundary |
+| Auth | peer credentials on the socket, sessions over TCP, same-origin and CSP in one boundary |
 | Files | freedesktop trash semantics; upload conflict resolution; no path escapes |
 | Terminal | owner/seq/idle limits per session |
 | Processes | signals guarded by `pid + start_ticks`, never `pid` alone |
