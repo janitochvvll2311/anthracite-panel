@@ -13,7 +13,7 @@
 | **supervisor** | Own the process tree and a registry of component instances with `acquire`/`release`/`evict`. Restart policy, timeouts, resource budgets, teardown. Child processes arrive with services in v0.6.0. |
 | **runtime** | Behind one `async` trait: instantiate components with wasmtime, enforce the budget, validate the component world against the grant, satisfy host imports through the broker, link app imports. |
 | **broker** | The only path from app code to the host. Validates against the grant, enforces quotas, records denials. |
-| **store** | Per-app namespaces exposed as interfaces: `anth:store/kv`, `anth:store/blobs`. No paths, no sharing. |
+| **store** | Per-app namespaces exposed as interfaces: `anth:store/kv` in v0.5.0, `anth:store/blobs` with transfers in v0.6.0. No paths, no sharing. |
 | **audit** | Append-only record of install/approve/compose/enable/disable/denials. |
 
 ### 6.2 What the engine must not contain

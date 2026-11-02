@@ -19,9 +19,9 @@ Rules inherited from v0.4.0, kept because they worked: no absolute paths, no
 hash verified before the bundle becomes visible.
 
 An app author gets the host interfaces from `sdk/rust/guest`, which packages
-`anth:env`, `anth:store` and `anth:error`: depend on the crate and the `import`s
-resolve. `engine/wit/` stays the source of truth and a CI check compares the two,
-so the packaged copy cannot drift.
+`anth:env`, `anth:store/kv` and `anth:error`: depend on the crate and the
+`import`s resolve. `engine/wit/` stays the source of truth and a CI check compares
+the two, so the packaged copy cannot drift.
 
 ### 7.2 Manifest
 
@@ -315,11 +315,14 @@ Two hard rules:
 | Interface | Shape | Use |
 | --- | --- | --- |
 | `anth:store/kv@1.0.0` | `get`/`set`/`delete`/`list`, namespaced per app | small state |
-| `anth:store/blobs@1.0.0` | `put`/`get` by hash, quota'd | large data |
 
-Both are host interfaces (§9.2), so they are audited and quota'd by the broker.
-In v0.5.0 blobs travel as `bytes` with a cap; when streams land they become
-`stream<u8>` without changing any app's contract.
+It is a host interface (§9.2), so it is audited and quota'd by the broker.
+
+Blobs are **not** in v0.5.0. They arrive with transfers in v0.6.0 as
+`stream<u8>`, because a `bytes` cap cannot carry a large file and switching the
+contract later would break the first app that used it. The native set is what the
+resolver treats as always available, so declaring a capability that the broker
+does not implement would turn a manifest error into a runtime `503`.
 
 Durability and migrations are the app's business: it declares a schema version
 and migrates on first boot of the new version. The engine never interprets app

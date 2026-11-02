@@ -39,11 +39,14 @@ anth:env/time@1.0.0      clock, monotonic and wall
 anth:env/log@1.0.0       structured logging into the engine log
 anth:env/random@1.0.0    cryptographically secure bytes
 anth:store/kv@1.0.0      the app's own key/value namespace
-anth:store/blobs@1.0.0   the app's own content-addressed blobs
 ```
 
 Anything else — files, processes, terminals, network, storage, accounts, the app
 manager itself — is an app that another app imports.
+
+`anth:store/blobs` is not in this set yet: it lands with transfers in v0.6.0.
+Declaring it before implementing it would make the resolver promise a capability
+the broker cannot answer.
 
 ### 9.3 Grants and approval
 
