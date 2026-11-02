@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use anth_contract::Error;
+use anth_contract::{Composition, Error};
 use axum::extract::{connect_info::Connected, ConnectInfo, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -26,6 +26,8 @@ pub struct EngineState {
     pub protocol: u32,
     /// The uid that owns the daemon; root is always accepted as well.
     pub allowed_uid: u32,
+    /// What is composed. Empty until the operator adds an app.
+    pub composition: Arc<Composition>,
 }
 
 impl EngineState {
@@ -34,7 +36,14 @@ impl EngineState {
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: 1,
             allowed_uid,
+            composition: Arc::new(Composition::empty()),
         }
+    }
+
+    /// What the daemon loaded from the composition file.
+    pub fn with_composition(mut self, composition: Composition) -> Self {
+        self.composition = Arc::new(composition);
+        self
     }
 }
 
@@ -66,6 +75,7 @@ pub fn router(state: Arc<EngineState>) -> Router {
     let api = Router::new()
         .route("/health", get(readiness))
         .route("/engine/version", get(version))
+        .route("/engine/composition", get(composition))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
     Router::new()
@@ -95,6 +105,17 @@ async fn version(State(state): State<Arc<EngineState>>) -> Json<Value> {
     Json(json!({
         "engine": state.version,
         "protocol": state.protocol,
+    }))
+}
+
+/// What is composed, plus the surface the composer derived from it.
+///
+/// With no apps the surface is empty; the projection arrives with the resolver
+/// (M1), and this endpoint is what the panel reads either way.
+async fn composition(State(state): State<Arc<EngineState>>) -> Json<Value> {
+    Json(json!({
+        "composition": state.composition.as_ref(),
+        "surface": { "apps": [] },
     }))
 }
 
@@ -194,6 +215,25 @@ mod tests {
     async fn the_service_user_and_root_are_accepted() {
         assert_eq!(status("/api/health", Some(1000)).await, StatusCode::OK);
         assert_eq!(status("/api/health", Some(0)).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_composition_is_served_with_an_empty_surface() {
+        let response = router(state())
+            .oneshot(request("/api/engine/composition", Some(1000)))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(value["composition"]["version"], 1);
+        assert_eq!(value["composition"]["profile"][0]["id"], "default");
+        assert!(value["surface"]["apps"]
+            .as_array()
+            .expect("apps")
+            .is_empty());
     }
 
     #[tokio::test]

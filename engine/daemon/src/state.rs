@@ -8,10 +8,7 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-use anth_contract::Error;
-
-/// The composition written on first boot: empty, but valid.
-pub const EMPTY_COMPOSITION: &str = "version = 1\n\n[[profile]]\nid = \"default\"\napps = []\n";
+use anth_contract::{Composition, Error};
 
 /// Creates the tree if it is missing and checks the shape if it is not.
 pub fn ensure(root: &Path) -> Result<(), Error> {
@@ -19,7 +16,9 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     for name in ["apps", "grants", "keys"] {
         create_dir(&root.join(name))?;
     }
-    write_missing(&root.join("composition.toml"), EMPTY_COMPOSITION.as_bytes())?;
+    let composition = toml::to_string_pretty(&Composition::empty())
+        .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?;
+    write_missing(&root.join("composition.toml"), composition.as_bytes())?;
     write_missing(&root.join("audit.jsonl"), b"")?;
     Ok(())
 }
@@ -109,7 +108,8 @@ mod tests {
             assert_eq!(mode, 0o700, "{} should be 0700", path.display());
         }
         let composition = fs::read_to_string(root.join("composition.toml")).expect("read");
-        assert_eq!(composition, EMPTY_COMPOSITION);
+        let parsed = Composition::parse(&composition).expect("parse");
+        assert_eq!(parsed, Composition::empty());
         let mode = fs::metadata(root.join("composition.toml"))
             .unwrap()
             .permissions()

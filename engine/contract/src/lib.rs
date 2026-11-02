@@ -4,11 +4,13 @@
 //! function of values it belongs here; if it needs a file, a socket or a
 //! component, it belongs somewhere else.
 
+pub mod composition;
 pub mod error;
 pub mod id;
 pub mod manifest;
 pub mod world;
 
+pub use composition::{Composition, Profile, COMPOSITION_VERSION};
 pub use error::{Error, ErrorEnvelope, ErrorKind};
 pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use manifest::{Manifest, MANIFEST_VERSION};
