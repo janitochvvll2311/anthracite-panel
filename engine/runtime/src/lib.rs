@@ -9,16 +9,20 @@
 //! rather than a platform redesign (§6.3).
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 
-use anth_contract::{Error, World};
+use anth_contract::{id::is_kebab, Error, InterfaceId, World};
 use serde_json::Value;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// What one instance may spend.
+///
+/// There is no default on purpose: the values come from the configuration
+/// (§6.7) or from the manifest, and a second copy here would drift from both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     pub fuel: u64,
@@ -26,33 +30,52 @@ pub struct Budget {
     pub wall_ms: u64,
 }
 
-impl Default for Budget {
-    fn default() -> Self {
+impl Budget {
+    pub const fn new(fuel: u64, memory_pages: u32, wall_ms: u64) -> Self {
         Self {
-            fuel: 10_000_000,
-            memory_pages: 256,
-            wall_ms: 5_000,
+            fuel,
+            memory_pages,
+            wall_ms,
         }
     }
 }
 
 /// The content and the budget one instance is created from.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InstanceSpec {
     pub app: String,
     pub wasm: Vec<u8>,
     pub budget: Budget,
 }
 
+impl fmt::Debug for InstanceSpec {
+    /// A component is tens of kilobytes; a log line with the bytes in it is not
+    /// a log line, it is a dump.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InstanceSpec")
+            .field("app", &self.app)
+            .field("wasm_bytes", &self.wasm.len())
+            .field("budget", &self.budget)
+            .finish()
+    }
+}
+
 /// An instance the supervisor owns and lends to calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceId(pub u64);
+
+/// What instantiation produced: the handle to call, and the world to check.
+#[derive(Debug, Clone)]
+pub struct Instance {
+    pub id: InstanceId,
+    pub world: World,
+}
 
 /// One call: `interface#function` with an input value.
 #[derive(Debug, Clone)]
 pub struct Call {
     pub instance: InstanceId,
-    pub interface: String,
+    pub interface: InterfaceId,
     pub function: String,
     pub input: Value,
 }
@@ -65,10 +88,11 @@ pub struct Reply {
 /// The boundary every other crate sees.
 ///
 /// `async fn` in traits is not dyn-compatible, so the futures are boxed by hand
-/// rather than pulling a macro crate in for two methods.
+/// rather than pulling a macro crate in for three methods.
 pub trait Runtime: Send + Sync {
-    /// Instantiates the component and reports the world it declares.
-    fn instantiate(&self, spec: InstanceSpec) -> BoxFuture<'_, Result<World, Error>>;
+    /// Instantiates the component and reports the handle plus the world it
+    /// declares. The caller cannot guess the id, so it is returned.
+    fn instantiate(&self, spec: InstanceSpec) -> BoxFuture<'_, Result<Instance, Error>>;
 
     /// Calls one exported function. The runtime owns the budget, not the caller.
     fn call(&self, call: Call) -> BoxFuture<'_, Result<Reply, Error>>;
@@ -87,8 +111,8 @@ pub struct FakeRuntime {
 #[derive(Debug, Default)]
 struct FakeState {
     world: World,
-    /// interface → function → (output, fuel cost)
-    replies: BTreeMap<(String, String), (Value, u64)>,
+    /// (interface, function) → (output, fuel cost)
+    replies: BTreeMap<(InterfaceId, String), (Value, u64)>,
     next_instance: u64,
     instances: BTreeMap<InstanceId, Budget>,
     calls: usize,
@@ -106,11 +130,12 @@ impl FakeRuntime {
     }
 
     /// Registers an answer, with the fuel it costs.
-    pub fn answer(self, interface: &str, function: &str, output: Value, fuel: u64) -> Self {
-        self.inner.lock().expect("fake runtime").replies.insert(
-            (interface.to_string(), function.to_string()),
-            (output, fuel),
-        );
+    pub fn answer(self, interface: InterfaceId, function: &str, output: Value, fuel: u64) -> Self {
+        self.inner
+            .lock()
+            .expect("fake runtime")
+            .replies
+            .insert((interface, function.to_string()), (output, fuel));
         self
     }
 
@@ -125,18 +150,27 @@ impl FakeRuntime {
 }
 
 impl Runtime for FakeRuntime {
-    fn instantiate(&self, spec: InstanceSpec) -> BoxFuture<'_, Result<World, Error>> {
+    fn instantiate(&self, spec: InstanceSpec) -> BoxFuture<'_, Result<Instance, Error>> {
         Box::pin(async move {
             let mut state = self.inner.lock().expect("fake runtime");
             state.next_instance += 1;
             let id = InstanceId(state.next_instance);
             state.instances.insert(id, spec.budget);
-            Ok(state.world.clone())
+            Ok(Instance {
+                id,
+                world: state.world.clone(),
+            })
         })
     }
 
     fn call(&self, call: Call) -> BoxFuture<'_, Result<Reply, Error>> {
         Box::pin(async move {
+            if !is_kebab(&call.function) {
+                return Err(Error::invalid(format!(
+                    "`{}` is not a function name",
+                    call.function
+                )));
+            }
             let mut state = self.inner.lock().expect("fake runtime");
             state.calls += 1;
             let budget = *state
@@ -146,8 +180,8 @@ impl Runtime for FakeRuntime {
             let key = (call.interface.clone(), call.function.clone());
             let (output, cost) = state.replies.get(&key).cloned().ok_or_else(|| {
                 Error::not_found(format!(
-                    "`{}` is not exported by this app",
-                    format_args!("{}#{}", call.interface, call.function)
+                    "`{}#{}` is not exported by this app",
+                    call.interface, call.function
                 ))
             })?;
             if cost > budget.fuel {
@@ -175,52 +209,54 @@ impl Runtime for FakeRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anth_contract::InterfaceId;
+
+    fn id(text: &str) -> InterfaceId {
+        InterfaceId::parse(text).expect("id")
+    }
 
     fn spec(fuel: u64) -> InstanceSpec {
         InstanceSpec {
             app: "org.example.notes".to_string(),
-            wasm: Vec::new(),
-            budget: Budget {
-                fuel,
-                ..Budget::default()
-            },
+            wasm: vec![0, 97, 115, 109],
+            budget: Budget::new(fuel, 256, 5_000),
         }
     }
 
     fn world() -> World {
         World::new(
-            [InterfaceId::parse("anth:store/kv@1.0.0").unwrap()].into(),
-            [InterfaceId::parse("example:notes/list@1.0.0").unwrap()].into(),
+            [id("anth:store/kv@1.0.0")].into(),
+            [id("example:notes/list@1.0.0")].into(),
         )
     }
 
+    fn call(instance: InstanceId, function: &str) -> Call {
+        Call {
+            instance,
+            interface: id("example:notes/list@1.0.0"),
+            function: function.to_string(),
+            input: serde_json::json!({}),
+        }
+    }
+
     #[tokio::test]
-    async fn an_instance_reports_its_world() {
+    async fn an_instance_reports_its_id_and_world() {
         let runtime = FakeRuntime::new().with_world(world());
-        let declared = runtime.instantiate(spec(1_000)).await.expect("instantiate");
-        assert_eq!(declared, world());
+        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        assert_eq!(instance.id, InstanceId(1));
+        assert_eq!(instance.world, world());
         assert_eq!(runtime.instances(), 1);
     }
 
     #[tokio::test]
-    async fn a_registered_function_answers() {
+    async fn the_returned_id_is_the_one_to_call() {
         let runtime = FakeRuntime::new().answer(
-            "example:notes/list@1.0.0",
+            id("example:notes/list@1.0.0"),
             "all",
             serde_json::json!({"entries": []}),
             10,
         );
-        let _ = runtime.instantiate(spec(1_000)).await.expect("instantiate");
-        let reply = runtime
-            .call(Call {
-                instance: InstanceId(1),
-                interface: "example:notes/list@1.0.0".to_string(),
-                function: "all".to_string(),
-                input: serde_json::json!({}),
-            })
-            .await
-            .expect("call");
+        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let reply = runtime.call(call(instance.id, "all")).await.expect("call");
         assert_eq!(reply.output, serde_json::json!({"entries": []}));
         assert_eq!(runtime.calls(), 1);
     }
@@ -228,35 +264,36 @@ mod tests {
     #[tokio::test]
     async fn an_unexported_function_is_not_found() {
         let runtime = FakeRuntime::new();
-        let _ = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
         let error = runtime
-            .call(Call {
-                instance: InstanceId(1),
-                interface: "example:notes/list@1.0.0".to_string(),
-                function: "secret".to_string(),
-                input: serde_json::json!({}),
-            })
+            .call(call(instance.id, "secret"))
             .await
             .expect_err("unknown function");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
     }
 
     #[tokio::test]
+    async fn a_malformed_function_name_is_refused() {
+        let runtime = FakeRuntime::new();
+        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let error = runtime
+            .call(call(instance.id, "Not A Function"))
+            .await
+            .expect_err("bad name");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+    }
+
+    #[tokio::test]
     async fn a_call_over_budget_is_exhausted() {
         let runtime = FakeRuntime::new().answer(
-            "example:notes/list@1.0.0",
+            id("example:notes/list@1.0.0"),
             "all",
             serde_json::json!(null),
             5_000,
         );
-        let _ = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
         let error = runtime
-            .call(Call {
-                instance: InstanceId(1),
-                interface: "example:notes/list@1.0.0".to_string(),
-                function: "all".to_string(),
-                input: serde_json::json!({}),
-            })
+            .call(call(instance.id, "all"))
             .await
             .expect_err("over budget");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Exhausted);
@@ -266,21 +303,16 @@ mod tests {
     #[tokio::test]
     async fn a_released_instance_cannot_be_called() {
         let runtime = FakeRuntime::new().answer(
-            "example:notes/list@1.0.0",
+            id("example:notes/list@1.0.0"),
             "all",
             serde_json::json!(null),
             1,
         );
-        let _ = runtime.instantiate(spec(1_000)).await.expect("instantiate");
-        runtime.release(InstanceId(1)).await;
+        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        runtime.release(instance.id).await;
         assert_eq!(runtime.instances(), 0);
         let error = runtime
-            .call(Call {
-                instance: InstanceId(1),
-                interface: "example:notes/list@1.0.0".to_string(),
-                function: "all".to_string(),
-                input: serde_json::json!({}),
-            })
+            .call(call(instance.id, "all"))
             .await
             .expect_err("gone");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
@@ -294,10 +326,9 @@ mod tests {
     }
 
     #[test]
-    fn the_default_budget_matches_the_configuration() {
-        let budget = Budget::default();
-        assert_eq!(budget.fuel, 10_000_000);
-        assert_eq!(budget.memory_pages, 256);
-        assert_eq!(budget.wall_ms, 5_000);
+    fn the_debug_form_does_not_dump_the_component() {
+        let text = format!("{:?}", spec(1_000));
+        assert!(text.contains("wasm_bytes: 4"), "{text}");
+        assert!(!text.contains("97, 115"), "{text}");
     }
 }
