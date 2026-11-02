@@ -12,4 +12,6 @@
 | D6 | Revocation model: CRL, key rotation, or both | Key rotation in a release first; a CRL only if a real fleet needs it | v0.6.0 |
 | D7 | Remote panel: when, and over which transport (HTTP + session, or a thin RPC) | Design-capable now, implement after M3; HTTP with the same session model | v0.6.0 |
 
+| D8 | Multiple operators, and what each may do | Single operator in v0.5.0; roles when a real deployment asks | v0.6.0 |
+
 ---

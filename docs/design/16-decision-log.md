@@ -60,8 +60,13 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Grant-Scope | A grant freezes what an app imports, not who provides it | The provider changes with the composition, and a grant must not lie when it does |
 | D-Risk-Recheck | Risk is computed at approval over installed apps and re-checked at compose; a growth blocks the app until re-approved | An app cannot gain authority because its provider was swapped |
 
----
 | D-Build-Target | Apps build for `wasm32-unknown-unknown` and are wrapped with `wasm-tools component embed` + `component new`; `wasm32-wasip2` is not used | The wasip2 target links WASI interfaces nobody granted, and the world check would refuse every app built with it |
 | D-Streams-Contract | Streams and futures are values returned by synchronous functions; `async func` is not used in WIT; concurrency lives inside the guest and in `anth-runtime` | An async export makes asynchrony contagious up to the router and gives HTTP two shapes |
 | D-Exhausted | A budget trap maps to `exhausted` (503, exit 5) with `detail.budget`, not `internal` | Running out of granted fuel is a policy outcome, not a bug |
 | D-Type-Introspection | The router reads parameter and result types from `component_type()` at runtime; unsupported types are refused at install | An installed app is an artifact, so its signature is read rather than assumed |
+| D-Protocol | The API speaks protocol `1`; a client refuses an unknown protocol instead of guessing | v0.5.0 shares nothing with the v0.4.0 protocol `4`, and inheriting the number would imply compatibility that does not exist |
+| D-State-Layout | `state/` has one fixed tree (apps, grants, composition, credentials, keys, audit) with `0700`/`0600` and no symlinks | A directory the engine creates on first boot cannot be left to interpretation |
+| D-Audit | One JSON object per line, append-only, with `at`, `actor`, `action`, `app`, `result`, `detail`; denials are recorded even when nothing changed | The record of what an app tried is the point of having an audit |
+| D-Demo | The demo is a composition profile in v0.6.0, not a build mode | Simulation is a different set of providers, not a different engine |
+
+---

@@ -125,6 +125,12 @@ Why these verbs:
   guarded by `ETag` and `If-Match` so a concurrent edit cannot be lost.
 - **`POST` for restart.** It is a process transition, not a resource.
 
+**Protocol.** `GET /api/engine/version` answers
+`{"engine":"0.5.0","protocol":1}`. A client that does not know the protocol
+refuses to talk instead of guessing: the number changes when a request or response
+shape does, not when the engine version does. v0.5.0 is protocol `1` because the
+API has nothing in common with the v0.4.0 protocol `4` that preceded it.
+
 Method rules:
 
 - An unsupported method is `405` with an `Allow` header, never a `404`.
@@ -219,6 +225,18 @@ password_change_required` until the password changes — one gate, not a warning
 Losing the file means `anth-engine --reset-credentials`, which requires
 filesystem access to the state directory.
 
+**One operator, for now.** v0.5.0 has a single operator, created on first boot.
+`approved_by` in a grant and `actor` in the audit record its name. Multiple
+operators, and what each may do, is an open decision ([§15](15-open-decisions.md)).
+
+**Login attempts are limited.** Five failures per minute per source, then
+backoff, and every failure is audited. A panel exposed without a rate limit turns
+a password into a guessing game.
+
+**Security headers cover the panel too.** The router applies origin checks, CSP
+and the rest to every response it produces, including the panel's `/`. The panel
+does not get to serve HTML without the engine's headers.
+
 **Mounting a panel.** The engine owns `/api/*`; a panel owns `/` and its own
 assets. A panel that registers a colliding route fails to start: the last writer
 never wins. The panel reads the composition through the API and never touches the
@@ -308,3 +326,36 @@ Rules:
   of why the format is TOML (`D-Format`).
 - **Secrets never live here.** Operator credentials are in
   `state/credentials.txt`; trusted keys are in the engine's keyring.
+
+### 6.8 State and audit
+
+Everything the engine owns lives under `state` (§6.7):
+
+```
+state/
+  apps/<app-id>/            installed bundle contents, verified before visible
+  grants/<app-id>.toml      the frozen grant of each installed app
+  composition.toml          the composition document (§8.1)
+  credentials.txt           operator name and password, written once (§6.5)
+  keys/<fingerprint>.toml   trusted third-party keys (§9.1)
+  audit.jsonl               append-only audit
+```
+
+Directories are `0700` and files `0600`. The engine creates the tree on first boot,
+and refuses to start if one of these paths is a symlink.
+
+**Audit entries.** One JSON object per line, append-only, never rewritten:
+
+```json
+{"at":"2026-11-02T18:40:12Z","actor":"operator-3f2a","action":"app.approve",
+ "app":"org.anth.hello","result":"ok","detail":{"risk":"read"}}
+```
+
+`at` is UTC, `actor` is the operator name or `system`, and `action` is one of
+`app.install`, `app.upgrade`, `app.approve`, `app.revoke`, `app.enable`,
+`app.disable`, `app.remove`, `compose`, `key.add`, `key.remove`, `acknowledge`,
+`deny`, `session.login`. `detail` carries what the action needs: the risk, the
+dependents broken, the capability denied.
+
+A denial is audited even when nothing changed. The record of what an app tried is
+the point of having one.

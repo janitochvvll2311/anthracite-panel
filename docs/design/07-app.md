@@ -249,6 +249,11 @@ A route is `METHOD /path -> interface#function`. The engine mounts them under
 and an operator can tell from the URL whose code is answering. The accepted verbs
 and the exactness of the match are fixed in [§6.4](06-engine.md#64-http-surface).
 
+**Path rules, checked at install.** A route path starts with `/`, has no empty
+segment, and contains no `..`. Under `/api/apps/<id>/`, `assets` is reserved for UI
+modules: a route whose path is `assets` or starts with `assets/` is refused, so an
+app cannot shadow the delivery of its own UI.
+
 ```
 GET /api/apps/org.example.notes/notes
 ```
