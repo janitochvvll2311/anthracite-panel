@@ -5,15 +5,18 @@
 
 mod config;
 mod log;
+mod socket;
 mod state;
 
-use std::path::{Path, PathBuf};
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anth_contract::Error;
 use config::{Config, Profile};
 use log::Logger;
-use tokio::net::UnixListener;
+use tokio::net::TcpListener;
+use tokio::sync::watch;
 
 struct Args {
     config: PathBuf,
@@ -45,29 +48,32 @@ fn main() -> ExitCode {
 impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut config = None;
-        let mut profile = Profile::Release;
+        let mut profile = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--config" => {
                     config = Some(args.next().ok_or("`--config` needs a path")?);
                 }
-                "--debug" => profile = Profile::Debug,
+                "--debug" => profile = Some(Profile::Debug),
+                "--release" => profile = Some(Profile::Release),
                 "--help" | "-h" => {
-                    return Err("usage: anth-engine [--config <path>] [--debug]".to_string());
+                    return Err(
+                        "usage: anth-engine [--config <path>] [--debug|--release]".to_string()
+                    );
                 }
                 other => return Err(format!("unknown argument `{other}`")),
             }
         }
         Ok(Self {
             config: PathBuf::from(config.unwrap_or_else(|| "config.toml".to_string())),
-            profile,
+            profile: profile.unwrap_or_default(),
         })
     }
 }
 
 async fn run(args: Args) -> Result<(), Error> {
     let config = Config::load_or_create(&args.config, args.profile)?;
-    config.validate()?;
+    config.validate(args.profile)?;
     let logger = Logger::new(config.log.clone());
 
     state::ensure(&config.state)?;
@@ -76,59 +82,63 @@ async fn run(args: Args) -> Result<(), Error> {
         config.state.display()
     ));
 
-    let listener = bind(&config.socket, &logger).await?;
+    let socket = socket::bind(&config.socket, &logger).await?;
+    socket::restrict(&config.socket)?;
     logger.info(&format!("listening on {}", config.socket.display()));
 
-    let state = anth_api::state();
-    axum::serve(listener, anth_api::router(state))
-        .with_graceful_shutdown(shutdown())
+    let router = anth_api::router(anth_api::state());
+    let (stop, stopped) = watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop.send(true);
+    });
+
+    let tcp = match &config.listen {
+        Some(address) => {
+            let address: SocketAddr = address
+                .parse()
+                .map_err(|_| Error::invalid(format!("`{address}` is not a socket address")))?;
+            let listener = TcpListener::bind(address)
+                .await
+                .map_err(|error| Error::internal(format!("binding {address}: {error}")))?;
+            logger.info(&format!("listening on http://{address}"));
+            let router = router.clone();
+            let stopped = stopped.clone();
+            Some(tokio::spawn(async move {
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(wait(stopped))
+                    .await
+            }))
+        }
+        None => None,
+    };
+
+    axum::serve(socket, router)
+        .with_graceful_shutdown(wait(stopped))
         .await
         .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
 
+    if let Some(task) = tcp {
+        let _ = task.await;
+    }
     logger.info("stopped");
     Ok(())
 }
 
-/// Binds the socket, replacing a stale one but never a live one.
-async fn bind(path: &Path, logger: &Logger) -> Result<UnixListener, Error> {
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() {
-            return Err(Error::invalid(format!(
-                "{} is a symlink; the socket must be a real file",
-                path.display()
-            )));
+/// Resolves when the shutdown signal fires.
+async fn wait(mut stopped: watch::Receiver<bool>) {
+    loop {
+        if *stopped.borrow() {
+            return;
         }
-        match tokio::net::UnixStream::connect(path).await {
-            Ok(_) => {
-                return Err(Error::conflict(format!(
-                    "another engine is listening on {}",
-                    path.display()
-                )));
-            }
-            Err(_) => {
-                logger.warn(&format!("removing the stale socket {}", path.display()));
-                std::fs::remove_file(path).map_err(|error| {
-                    Error::internal(format!(
-                        "removing the stale socket {}: {error}",
-                        path.display()
-                    ))
-                })?;
-            }
+        if stopped.changed().await.is_err() {
+            return;
         }
     }
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| Error::internal(format!("creating {}: {error}", parent.display())))?;
-    }
-    UnixListener::bind(path)
-        .map_err(|error| Error::internal(format!("binding {}: {error}", path.display())))
 }
 
 /// Ctrl-C or SIGTERM, whichever comes first.
-async fn shutdown() {
+async fn shutdown_signal() {
     let mut terminate =
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
             Ok(signal) => signal,

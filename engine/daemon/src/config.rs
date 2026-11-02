@@ -21,6 +21,18 @@ pub enum Profile {
     Debug,
 }
 
+impl Default for Profile {
+    /// A debug build defaults to open so a developer does not need root; a
+    /// release build defaults to closed. The flags override it either way.
+    fn default() -> Self {
+        if cfg!(debug_assertions) {
+            Self::Debug
+        } else {
+            Self::Release
+        }
+    }
+}
+
 /// The whole file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -233,8 +245,10 @@ impl Config {
         Ok(config)
     }
 
-    /// Checks what a bad file can get wrong.
-    pub fn validate(&self) -> Result<(), Error> {
+    /// Checks what a bad file can get wrong. A release build refuses the
+    /// permissive switches even when the file asks for them: a debug build may
+    /// be open, a shipped one may not.
+    pub fn validate(&self, profile: Profile) -> Result<(), Error> {
         if self.version != 1 {
             return Err(Error::invalid(format!(
                 "configuration version {} is not supported; this engine speaks 1",
@@ -261,6 +275,33 @@ impl Config {
             return Err(Error::invalid(
                 "`auth.session-ttl` must be greater than zero",
             ));
+        }
+        if let Some(address) = &self.listen {
+            address
+                .parse::<std::net::SocketAddr>()
+                .map_err(|_| Error::invalid(format!("`{address}` is not a socket address")))?;
+        }
+        if profile == Profile::Release {
+            if !self.socket.is_absolute() {
+                return Err(Error::invalid(
+                    "a release build needs an absolute `socket` path",
+                ));
+            }
+            if !self.state.is_absolute() {
+                return Err(Error::invalid(
+                    "a release build needs an absolute `state` path",
+                ));
+            }
+            if !self.apps.require_signature {
+                return Err(Error::invalid(
+                    "`apps.require-signature` cannot be false in a release build",
+                ));
+            }
+            if self.apps.allow_unverified_assets {
+                return Err(Error::invalid(
+                    "`apps.allow-unverified-assets` is a development switch",
+                ));
+            }
         }
         Ok(())
     }
@@ -294,21 +335,28 @@ impl Serialize for HumanDuration {
 impl<'de> Deserialize<'de> for HumanDuration {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
-        let (number, unit) = text.split_at(text.len().saturating_sub(1));
+        // The last character is the unit; slicing at a byte index found by
+        // char_indices cannot split a multi-byte character.
+        let mut chars = text.char_indices();
+        let Some((index, unit)) = chars.next_back() else {
+            return Err(serde::de::Error::custom("a duration cannot be empty"));
+        };
+        let number = &text[..index];
         let value: u64 = number
             .parse()
             .map_err(|_| serde::de::Error::custom(format!("`{text}` is not a duration")))?;
         let seconds = match unit {
-            "s" => value,
-            "m" => value * 60,
-            "h" => value * 3_600,
-            "d" => value * 86_400,
-            _ => {
-                return Err(serde::de::Error::custom(format!(
-                    "`{text}` has no s, m, h or d suffix"
-                )));
-            }
-        };
+            's' => Some(value),
+            'm' => value.checked_mul(60),
+            'h' => value.checked_mul(3_600),
+            'd' => value.checked_mul(86_400),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "`{text}` is not a duration with an s, m, h or d suffix"
+            ))
+        })?;
         Ok(Self(Duration::from_secs(seconds)))
     }
 }
@@ -343,14 +391,26 @@ mod tests {
     fn a_zero_limit_is_refused() {
         let mut config = Config::release();
         config.limits.fuel = 0;
-        assert!(config.validate().is_err());
+        assert!(config.validate(Profile::Release).is_err());
     }
 
     #[test]
     fn a_bad_version_is_refused() {
         let text = TEMPLATE.replace("version = 1", "version = 2");
         let config = Config::parse(&text).expect("parse");
-        assert!(config.validate().is_err());
+        assert!(config.validate(Profile::Release).is_err());
+    }
+
+    #[test]
+    fn a_release_build_refuses_the_permissive_switches() {
+        let mut config = Config::release();
+        config.apps.require_signature = false;
+        assert!(config.validate(Profile::Release).is_err());
+        assert!(config.validate(Profile::Debug).is_ok());
+
+        let mut relative = Config::release();
+        relative.state = PathBuf::from("./state");
+        assert!(relative.validate(Profile::Release).is_err());
     }
 
     #[test]
@@ -372,6 +432,23 @@ mod tests {
     #[test]
     fn a_duration_without_a_unit_is_refused() {
         assert!(toml::from_str::<Table>("d = \"12\"").is_err());
+    }
+
+    #[test]
+    fn a_duration_never_panics_on_bad_input() {
+        for text in [
+            "\"12é\"",
+            "\"\"",
+            "\"é\"",
+            "\"99999999999999999999d\"",
+            "\"18446744073709551615d\"",
+        ] {
+            let source = format!("d = {text}");
+            assert!(
+                toml::from_str::<Table>(&source).is_err(),
+                "{source} should be refused"
+            );
+        }
     }
 
     #[derive(Deserialize)]
