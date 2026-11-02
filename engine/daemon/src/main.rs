@@ -3,18 +3,13 @@
 //! A headless deployment runs this binary; the official panel links the same
 //! crates and mounts the same router in its own process (§6.5).
 
-mod config;
-mod log;
-mod socket;
-mod state;
-
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anth_contract::Error;
-use config::{Config, Profile};
-use log::Logger;
+use anth_engine::config::{Config, Profile};
+use anth_engine::log::Logger;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -99,16 +94,16 @@ async fn run(args: Args) -> Result<(), Error> {
     config.validate(args.profile)?;
     let logger = Logger::new(config.log.clone());
 
-    state::ensure(&config.state)?;
-    let composition = state::load_composition(&config.state)?;
+    anth_engine::state::ensure(&config.state)?;
+    let composition = anth_engine::state::load_composition(&config.state)?;
     composition.validate()?;
     logger.info(&format!(
         "state ready at {} (apps, grants, keys, composition, audit)",
         config.state.display()
     ));
 
-    let socket = socket::bind(&config.socket, &logger).await?;
-    socket::restrict(&config.socket)?;
+    let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
+    anth_engine::socket::restrict(&config.socket)?;
     logger.info(&format!("listening on {}", config.socket.display()));
 
     // SAFETY: `geteuid` has no preconditions.
@@ -187,7 +182,7 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::choose_profile;
-    use crate::config::Profile;
+    use anth_engine::config::Profile;
 
     #[test]
     fn a_release_build_cannot_be_forced_open() {
