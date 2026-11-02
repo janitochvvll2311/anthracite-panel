@@ -63,3 +63,5 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 ---
 | D-Build-Target | Apps build for `wasm32-unknown-unknown` and are wrapped with `wasm-tools component embed` + `component new`; `wasm32-wasip2` is not used | The wasip2 target links WASI interfaces nobody granted, and the world check would refuse every app built with it |
 | D-Streams-Contract | Streams and futures are values returned by synchronous functions; `async func` is not used in WIT; concurrency lives inside the guest and in `anth-runtime` | An async export makes asynchrony contagious up to the router and gives HTTP two shapes |
+| D-Exhausted | A budget trap maps to `exhausted` (503, exit 5) with `detail.budget`, not `internal` | Running out of granted fuel is a policy outcome, not a bug |
+| D-Type-Introspection | The router reads parameter and result types from `component_type()` at runtime; unsupported types are refused at install | An installed app is an artifact, so its signature is read rather than assumed |

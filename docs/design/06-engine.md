@@ -49,6 +49,12 @@ What that commits us to, explicitly:
 - The daemon binary grows by roughly the size of a wasm compiler. Only the daemon
   pays: the CLI in `sdk/rust/cli` is a thin client.
 
+Measured on the spike, x86_64 release without LTO or strip: a host embedding
+wasmtime with the component model and Cranelift is **17.1 MB**, and **17.7 MB**
+with the async features on. A cold build of `wasmtime` takes about **12 minutes**
+on this machine, which is a CI cost, not a product one. A component is **19 KB**
+without streams and **53 KB** with them.
+
 **Pulley is deferred, not rejected.** A hardened profile (`anth-engine-pulley`)
 that interprets instead of generating code is documented for a later version. We
 do not build it, test it or ship it in v0.5.0. What we do keep is the scaffolding

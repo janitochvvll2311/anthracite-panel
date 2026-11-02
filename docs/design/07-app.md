@@ -476,9 +476,14 @@ The mapping from the variant is total: every case produces a code, and
 | `conflict` | 409 | 2 | id exists, duplicate provider, broken dependents |
 | `precondition-failed` | 412 | 2 | `If-Match` does not match |
 | `method-not-allowed` | 405 | 2 | the verb is not declared |
+| `exhausted` | 503 | 5 | the call exceeded its fuel, memory or wall budget; `detail.budget` |
 
 The first six are the ones an app can produce, because they are the variant. The
-last four belong to the engine's own API.
+last five belong to the engine's own API.
+
+A budget trap is `exhausted`, not `internal`: the app did not crash, it ran out of
+the time or memory the operator granted it. The distinction matters to whoever
+reads the log, and to the client deciding whether to retry.
 
 **Forward compatibility.** A client that does not know a `code` treats it as
 `internal`. Adding a code is therefore not a breaking change, and the SDK does not
@@ -544,6 +549,16 @@ Rules that remove ambiguity:
 
 The mapping is implemented once, in the router, and the generated CLI and clients
 are produced from the same rule. That is the only way the three agree.
+
+**What the router needs.** A route names `interface@version#function`. The version
+is part of the exported name — a component exposes `example:spike/ping@0.1.0`, not
+`example:spike/ping` — so the router resolves the instance first and the function
+inside it.
+
+The parameter and result types come from `Component::component_type()` at runtime,
+not from a compile-time binding: an installed app is an artifact, so its signature
+is read rather than assumed. A function whose types fall outside the table above is
+refused at install, with the offending type named.
 
 ### 7.14 The UI module contract
 
