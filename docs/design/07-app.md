@@ -7,10 +7,14 @@
 ```
 manifest.toml            # the proposal; the signable index
 manifest.sig             # detached signature over the manifest set
-wit/<interface>.wit      # one file per exported interface (the contract, readable)
+wit/                     # the app's WIT package: interfaces and exactly one world
 wasm/<name>.wasm         # the component; required when the app exports an interface
 web/<name>.js            # optional UI module(s), hash-pinned by the manifest
 ```
+
+`wit/` holds the package and nothing else. `wit/deps/` is not needed: the engine
+resolves `use` against its own host catalog and the packages of installed
+providers (§7.3), so a vendored copy cannot go stale.
 
 A `bin/` entry joins this layout in v0.6.0 with the first service app (§7.4).
 
@@ -26,8 +30,10 @@ the two, so the packaged copy cannot drift.
 ### 7.2 Manifest
 
 The manifest is an **index**, not a type definition. Types live in WIT, so the
-manifest only says *which* interfaces, *where* they are and *how* they are
-reached.
+manifest only says *which* interfaces and *how* they are reached. `[app] namespace`
+and `[app] version` are the identity of the WIT package: the validator requires the
+`package` line under `wit/` to match both, so a package name is written in exactly
+one place.
 
 ```toml
 manifest_version = 2
@@ -50,8 +56,6 @@ sha256 = "…"
 # ---- what it offers ----
 [[export]]
 interface = "example:notes/list@1.0.0"
-path = "wit/list.wit"
-sha256 = "…"
 
 # ---- what it needs ----
 [[import]]
@@ -144,9 +148,19 @@ policy choice, it is what the tool does. To evolve an interface, a provider
 exports the old and the new version side by side and consumers migrate on their
 own schedule. No ranges, no negotiation, no silent widening.
 
-**Files, not strings.** WIT lives in `wit/*.wit` inside the bundle, hashed in the
-manifest and covered by the signature. It is a language with tooling: embedding
-it in TOML would make it unformattable and unreviewable.
+**Files, not strings.** WIT lives in `wit/` inside the bundle, covered by the
+signature. It is a language with tooling: embedding it in TOML would make it
+unformattable and unreviewable.
+
+**One package, one world.** `wit/` holds exactly one package, and that package
+declares exactly one world — the one the component implements. Zero or two worlds
+is an install error, not a convention to infer.
+
+**Resolution at install time.** The package's `use`s are resolved against the
+engine's host catalog plus the packages of installed providers. Nothing is
+vendored: a copy of `anth:error` inside a bundle would be a second truth that
+drifts, and validating against what is installed is stronger than validating
+against what the author shipped.
 
 **Two sources, one truth.** The manifest declares imports and exports so the
 composer can resolve *before* instantiating. The component embeds the real world.
@@ -157,7 +171,7 @@ manifest lets us plan; the component is what we check.
 
 ```
 "anth-manifest-v2\0"
-for each file in sorted order, currently `manifest.toml` and `wit/*.wit`:
+for each file in sorted order — `manifest.toml` and every file under `wit/`:
     name, "\0", length as little-endian u64, bytes
 ```
 
@@ -365,7 +379,8 @@ gets to leak host paths or engine internals to a browser.
 
 This is the security core, and it happens before a single instruction runs:
 
-1. Parse the WIT the grant froze and build the expected world.
+1. Parse the package under `wit/`, with the host catalog and the installed
+   providers injected, and build the expected world.
 2. Read the component's real type with `Component::component_type()`.
 3. Compare imports and exports: names, versions and structural types. Any
    difference, including an extra import, is a refusal.
