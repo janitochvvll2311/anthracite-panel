@@ -57,19 +57,6 @@ impl Composition {
             .map_err(|error| Error::invalid(format!("the composition is not valid TOML: {error}")))
     }
 
-    /// Reads the composition, or returns the empty one when the file is missing.
-    #[cfg(feature = "parse")]
-    pub fn load(path: &std::path::Path) -> Result<Self, Error> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::empty()),
-            Err(error) => Err(Error::internal(format!(
-                "reading {}: {error}",
-                path.display()
-            ))),
-        }
-    }
-
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != COMPOSITION_VERSION {
             return Err(Error::invalid(format!(
@@ -90,11 +77,17 @@ impl Composition {
                     profile.id
                 )));
             }
+            let mut seen = std::collections::BTreeSet::new();
             for entry in &profile.apps {
                 let id = Profile::app_id(entry);
                 AppId::parse(id)?;
                 if let Some(version) = Profile::app_version(entry) {
                     parse_version(version)?;
+                }
+                if !seen.insert(id.to_string()) {
+                    return Err(Error::invalid(format!(
+                        "`{id}` is composed twice; one app runs once"
+                    )));
                 }
             }
         }
@@ -102,7 +95,7 @@ impl Composition {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parse"))]
 mod tests {
     use super::*;
 
@@ -134,6 +127,14 @@ mod tests {
     fn an_unknown_key_is_refused() {
         let text = "version = 1\n\n[[profile]]\nid = \"default\"\naps = []\n";
         assert!(Composition::parse(text).is_err());
+    }
+
+    #[test]
+    fn the_same_app_cannot_be_composed_twice() {
+        let text = "version = 1\n\n[[profile]]\nid = \"default\"\napps = [\"org.example.notes@1.0.0\", \"org.example.notes@2.0.0\"]\n";
+        let composition = Composition::parse(text).expect("parse");
+        let error = composition.validate().expect_err("duplicate");
+        assert!(error.message().contains("composed twice"), "{error}");
     }
 
     #[test]

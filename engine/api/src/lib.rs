@@ -237,6 +237,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_composed_app_is_echoed() {
+        use anth_contract::Profile;
+        let composition = Composition {
+            version: 1,
+            profile: vec![Profile {
+                id: "default".to_string(),
+                apps: vec!["org.example.notes".to_string()],
+            }],
+        };
+        let state = Arc::new(EngineState::new(1000).with_composition(composition));
+        let response = router(state)
+            .oneshot(request("/api/engine/composition", Some(1000)))
+            .await
+            .expect("response");
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(
+            value["composition"]["profile"][0]["apps"][0],
+            "org.example.notes"
+        );
+        // The surface stays empty until the resolver projects it (M1); this test
+        // pins that the document reaches the endpoint unchanged.
+        assert!(value["surface"]["apps"]
+            .as_array()
+            .expect("apps")
+            .is_empty());
+    }
+
+    #[tokio::test]
     async fn readiness_is_a_different_word_than_liveness() {
         let response = router(state())
             .oneshot(request("/api/health", Some(1000)))

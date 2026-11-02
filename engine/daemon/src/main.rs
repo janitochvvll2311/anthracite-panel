@@ -100,7 +100,7 @@ async fn run(args: Args) -> Result<(), Error> {
     let logger = Logger::new(config.log.clone());
 
     state::ensure(&config.state)?;
-    let composition = anth_contract::Composition::load(&config.state.join("composition.toml"))?;
+    let composition = state::load_composition(&config.state)?;
     composition.validate()?;
     logger.info(&format!(
         "state ready at {} (apps, grants, keys, composition, audit)",

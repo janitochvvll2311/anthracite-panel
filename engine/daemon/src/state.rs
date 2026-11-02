@@ -10,6 +10,22 @@ use std::path::Path;
 
 use anth_contract::{Composition, Error};
 
+/// Reads the composition, or returns the empty one when the file does not exist.
+///
+/// The contract crate parses documents; the daemon is what touches the disk
+/// (§6.6).
+pub fn load_composition(state: &Path) -> Result<Composition, Error> {
+    let path = state.join("composition.toml");
+    match fs::read_to_string(&path) {
+        Ok(text) => Composition::parse(&text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Composition::empty()),
+        Err(error) => Err(Error::internal(format!(
+            "reading {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
 /// Creates the tree if it is missing and checks the shape if it is not.
 pub fn ensure(root: &Path) -> Result<(), Error> {
     create_dir(root)?;
@@ -116,6 +132,15 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_missing_composition_is_empty() {
+        let root = scratch("composition");
+        ensure(&root).expect("ensure");
+        let composition = load_composition(&root).expect("load");
+        assert_eq!(composition, Composition::empty());
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
