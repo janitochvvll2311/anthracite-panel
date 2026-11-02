@@ -76,12 +76,12 @@ only lives in a document is a rule that will be broken.
 
 ### 10.2 One target directory
 
-The three Rust workspaces share `build.target-dir` through the root
+The engine, SDK and panel workspaces share `build.target-dir` through the root
 `.cargo/config.toml`. Without it, `wasmtime` is compiled three times and every
 full build pays for it. Separate workspaces buy isolation, not separate compilers.
 
 `apps/` is its own workspace and is never built for the host: `cargo build
---workspace` in the root workspaces must not produce wasm artifacts, and the apps
-build only with `--target wasm32-wasip2`.
+--workspace` in the root workspaces must not produce wasm artifacts. Apps build
+for `wasm32-unknown-unknown` and are wrapped with `wasm-tools` ([§7.1](07-app.md#71-bundle-layout)).
 
 ---
