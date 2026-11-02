@@ -60,9 +60,22 @@ impl fmt::Debug for InstanceSpec {
     }
 }
 
-/// An instance the supervisor owns and lends to calls.
+/// A handle the runtime mints. There is no public constructor: an id that a
+/// caller invented cannot name an instance, so the type does not allow it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InstanceId(pub u64);
+pub struct InstanceId(u64);
+
+impl InstanceId {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for InstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// What instantiation produced: the handle to call, and the world to check.
 #[derive(Debug, Clone)]
@@ -103,18 +116,27 @@ pub trait Runtime: Send + Sync {
 
 /// A backend that answers from a table. Tests use it so the engine never needs
 /// wasmtime, and so the seam is exercised by something other than the real one.
+///
+/// It models several apps: an answer belongs to an app, an interface and a
+/// function, so two apps exporting the same interface do not collide.
 #[derive(Debug, Default)]
 pub struct FakeRuntime {
     inner: Mutex<FakeState>,
 }
 
+#[derive(Debug)]
+struct Running {
+    app: String,
+    budget: Budget,
+}
+
 #[derive(Debug, Default)]
 struct FakeState {
     world: World,
-    /// (interface, function) → (output, fuel cost)
-    replies: BTreeMap<(InterfaceId, String), (Value, u64)>,
+    /// (app, interface, function) → (output, fuel cost)
+    replies: BTreeMap<(String, InterfaceId, String), (Value, u64)>,
     next_instance: u64,
-    instances: BTreeMap<InstanceId, Budget>,
+    instances: BTreeMap<InstanceId, Running>,
     calls: usize,
 }
 
@@ -129,13 +151,19 @@ impl FakeRuntime {
         self
     }
 
-    /// Registers an answer, with the fuel it costs.
-    pub fn answer(self, interface: InterfaceId, function: &str, output: Value, fuel: u64) -> Self {
-        self.inner
-            .lock()
-            .expect("fake runtime")
-            .replies
-            .insert((interface, function.to_string()), (output, fuel));
+    /// Registers an answer for one app, with the fuel it costs.
+    pub fn answer(
+        self,
+        app: &str,
+        interface: InterfaceId,
+        function: &str,
+        output: Value,
+        fuel: u64,
+    ) -> Self {
+        self.inner.lock().expect("fake runtime").replies.insert(
+            (app.to_string(), interface, function.to_string()),
+            (output, fuel),
+        );
         self
     }
 
@@ -147,6 +175,16 @@ impl FakeRuntime {
     pub fn instances(&self) -> usize {
         self.inner.lock().expect("fake runtime").instances.len()
     }
+
+    /// The app an instance belongs to, for assertions about which one answered.
+    pub fn app_of(&self, instance: InstanceId) -> Option<String> {
+        self.inner
+            .lock()
+            .expect("fake runtime")
+            .instances
+            .get(&instance)
+            .map(|running| running.app.clone())
+    }
 }
 
 impl Runtime for FakeRuntime {
@@ -155,7 +193,13 @@ impl Runtime for FakeRuntime {
             let mut state = self.inner.lock().expect("fake runtime");
             state.next_instance += 1;
             let id = InstanceId(state.next_instance);
-            state.instances.insert(id, spec.budget);
+            state.instances.insert(
+                id,
+                Running {
+                    app: spec.app,
+                    budget: spec.budget,
+                },
+            );
             Ok(Instance {
                 id,
                 world: state.world.clone(),
@@ -173,11 +217,13 @@ impl Runtime for FakeRuntime {
             }
             let mut state = self.inner.lock().expect("fake runtime");
             state.calls += 1;
-            let budget = *state
+            let running = state
                 .instances
                 .get(&call.instance)
                 .ok_or_else(|| Error::not_found("no such instance"))?;
-            let key = (call.interface.clone(), call.function.clone());
+            let app = running.app.clone();
+            let budget = running.budget;
+            let key = (app, call.interface.clone(), call.function.clone());
             let (output, cost) = state.replies.get(&key).cloned().ok_or_else(|| {
                 Error::not_found(format!(
                     "`{}#{}` is not exported by this app",
@@ -209,14 +255,18 @@ impl Runtime for FakeRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    const NOTES: &str = "org.example.notes";
+    const OTHER: &str = "org.example.other";
 
     fn id(text: &str) -> InterfaceId {
         InterfaceId::parse(text).expect("id")
     }
 
-    fn spec(fuel: u64) -> InstanceSpec {
+    fn spec(app: &str, fuel: u64) -> InstanceSpec {
         InstanceSpec {
-            app: "org.example.notes".to_string(),
+            app: app.to_string(),
             wasm: vec![0, 97, 115, 109],
             budget: Budget::new(fuel, 256, 5_000),
         }
@@ -239,32 +289,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_runtime_is_usable_behind_a_trait_object() {
+        let runtime: Arc<dyn Runtime> = Arc::new(FakeRuntime::new().answer(
+            NOTES,
+            id("example:notes/list@1.0.0"),
+            "all",
+            serde_json::json!(1),
+            1,
+        ));
+        let instance = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("instantiate");
+        let reply = runtime.call(call(instance.id, "all")).await.expect("call");
+        assert_eq!(reply.output, 1);
+    }
+
+    #[tokio::test]
     async fn an_instance_reports_its_id_and_world() {
         let runtime = FakeRuntime::new().with_world(world());
-        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
-        assert_eq!(instance.id, InstanceId(1));
+        let instance = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("instantiate");
+        assert_eq!(instance.id.get(), 1);
         assert_eq!(instance.world, world());
         assert_eq!(runtime.instances(), 1);
+        assert_eq!(runtime.app_of(instance.id).as_deref(), Some(NOTES));
     }
 
     #[tokio::test]
     async fn the_returned_id_is_the_one_to_call() {
         let runtime = FakeRuntime::new().answer(
+            NOTES,
             id("example:notes/list@1.0.0"),
             "all",
             serde_json::json!({"entries": []}),
             10,
         );
-        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let instance = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("instantiate");
         let reply = runtime.call(call(instance.id, "all")).await.expect("call");
         assert_eq!(reply.output, serde_json::json!({"entries": []}));
         assert_eq!(runtime.calls(), 1);
     }
 
     #[tokio::test]
+    async fn two_apps_exporting_the_same_interface_do_not_collide() {
+        let runtime = FakeRuntime::new()
+            .answer(
+                NOTES,
+                id("example:notes/list@1.0.0"),
+                "all",
+                serde_json::json!({"from": NOTES}),
+                1,
+            )
+            .answer(
+                OTHER,
+                id("example:notes/list@1.0.0"),
+                "all",
+                serde_json::json!({"from": OTHER}),
+                1,
+            );
+        let notes = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("notes");
+        let other = runtime
+            .instantiate(spec(OTHER, 1_000))
+            .await
+            .expect("other");
+
+        let first = runtime
+            .call(call(notes.id, "all"))
+            .await
+            .expect("notes call");
+        let second = runtime
+            .call(call(other.id, "all"))
+            .await
+            .expect("other call");
+        assert_eq!(first.output["from"], NOTES);
+        assert_eq!(second.output["from"], OTHER);
+    }
+
+    #[tokio::test]
     async fn an_unexported_function_is_not_found() {
         let runtime = FakeRuntime::new();
-        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let instance = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("instantiate");
         let error = runtime
             .call(call(instance.id, "secret"))
             .await
@@ -275,7 +391,10 @@ mod tests {
     #[tokio::test]
     async fn a_malformed_function_name_is_refused() {
         let runtime = FakeRuntime::new();
-        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let instance = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("instantiate");
         let error = runtime
             .call(call(instance.id, "Not A Function"))
             .await
@@ -286,12 +405,16 @@ mod tests {
     #[tokio::test]
     async fn a_call_over_budget_is_exhausted() {
         let runtime = FakeRuntime::new().answer(
+            NOTES,
             id("example:notes/list@1.0.0"),
             "all",
             serde_json::json!(null),
             5_000,
         );
-        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
+        let instance = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("instantiate");
         let error = runtime
             .call(call(instance.id, "all"))
             .await
@@ -303,18 +426,20 @@ mod tests {
     #[tokio::test]
     async fn a_released_instance_cannot_be_called() {
         let runtime = FakeRuntime::new().answer(
+            NOTES,
             id("example:notes/list@1.0.0"),
             "all",
             serde_json::json!(null),
             1,
         );
-        let instance = runtime.instantiate(spec(1_000)).await.expect("instantiate");
-        runtime.release(instance.id).await;
-        assert_eq!(runtime.instances(), 0);
-        let error = runtime
-            .call(call(instance.id, "all"))
+        let instance = runtime
+            .instantiate(spec(NOTES, 1_000))
             .await
-            .expect_err("gone");
+            .expect("instantiate");
+        let id = instance.id;
+        runtime.release(id).await;
+        assert_eq!(runtime.instances(), 0);
+        let error = runtime.call(call(id, "all")).await.expect_err("gone");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
     }
 
@@ -327,7 +452,7 @@ mod tests {
 
     #[test]
     fn the_debug_form_does_not_dump_the_component() {
-        let text = format!("{:?}", spec(1_000));
+        let text = format!("{:?}", spec(NOTES, 1_000));
         assert!(text.contains("wasm_bytes: 4"), "{text}");
         assert!(!text.contains("97, 115"), "{text}");
     }
