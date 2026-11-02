@@ -8,6 +8,7 @@ version = "0.5.0"
 dependencies = [
  "anth-contract",
  "axum",
+ "libc",
  "serde",
  "serde_json",
  "tokio",

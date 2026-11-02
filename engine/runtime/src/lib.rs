@@ -132,7 +132,8 @@ struct Running {
 
 #[derive(Debug, Default)]
 struct FakeState {
-    world: World,
+    /// app → the world its component declares
+    worlds: BTreeMap<String, World>,
     /// (app, interface, function) → (output, fuel cost)
     replies: BTreeMap<(String, InterfaceId, String), (Value, u64)>,
     next_instance: u64,
@@ -145,9 +146,14 @@ impl FakeRuntime {
         Self::default()
     }
 
-    /// Sets what the next instantiation reports as its world.
-    pub fn with_world(self, world: World) -> Self {
-        self.inner.lock().expect("fake runtime").world = world;
+    /// Sets the world one app reports. A composition has several apps, and each
+    /// one declares its own imports and exports.
+    pub fn with_world(self, app: &str, world: World) -> Self {
+        self.inner
+            .lock()
+            .expect("fake runtime")
+            .worlds
+            .insert(app.to_string(), world);
         self
     }
 
@@ -193,6 +199,7 @@ impl Runtime for FakeRuntime {
             let mut state = self.inner.lock().expect("fake runtime");
             state.next_instance += 1;
             let id = InstanceId(state.next_instance);
+            let world = state.worlds.get(&spec.app).cloned().unwrap_or_default();
             state.instances.insert(
                 id,
                 Running {
@@ -200,10 +207,7 @@ impl Runtime for FakeRuntime {
                     budget: spec.budget,
                 },
             );
-            Ok(Instance {
-                id,
-                world: state.world.clone(),
-            })
+            Ok(Instance { id, world })
         })
     }
 
@@ -255,6 +259,7 @@ impl Runtime for FakeRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     const NOTES: &str = "org.example.notes";
@@ -307,7 +312,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_instance_reports_its_id_and_world() {
-        let runtime = FakeRuntime::new().with_world(world());
+        let runtime = FakeRuntime::new().with_world(NOTES, world());
         let instance = runtime
             .instantiate(spec(NOTES, 1_000))
             .await
@@ -316,6 +321,24 @@ mod tests {
         assert_eq!(instance.world, world());
         assert_eq!(runtime.instances(), 1);
         assert_eq!(runtime.app_of(instance.id).as_deref(), Some(NOTES));
+    }
+
+    #[tokio::test]
+    async fn each_app_reports_its_own_world() {
+        let other = World::new(BTreeSet::new(), [id("example:other/run@1.0.0")].into());
+        let runtime = FakeRuntime::new()
+            .with_world(NOTES, world())
+            .with_world(OTHER, other.clone());
+        let notes = runtime
+            .instantiate(spec(NOTES, 1_000))
+            .await
+            .expect("notes");
+        let other_instance = runtime
+            .instantiate(spec(OTHER, 1_000))
+            .await
+            .expect("other");
+        assert_eq!(notes.world, world());
+        assert_eq!(other_instance.world, other);
     }
 
     #[tokio::test]
