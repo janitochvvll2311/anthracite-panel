@@ -92,12 +92,16 @@ compute (archives, previews, hashing) stays in wasm.
 baseline, and removing `net` leaves a working system with that section gone — not
 a broken panel.
 
-The **demo** belongs here too, and as a composition rather than a flag:
-`compositions/demo.toml` lists demo apps that export the same interfaces with
-generated data. The engine does not know it is a demo; a demo provider is a normal
-app. Per-browser isolated state is the one part that waits on per-user profiles
-([§15](15-open-decisions.md)), so v0.6.0 demo state is shared unless that decision
-lands first.
+The **demo** belongs here too, and as a separate instance rather than a flag: a
+`config.demo.toml` with its own `state` that composes `compositions/demo.toml`, whose
+apps export the real interfaces with generated, deterministic data. The engine does
+not know it is a demo; a demo provider is a normal app. One composition lives in one
+state directory ([§8.1](08-composition.md)), so switching between real and demo means
+running a second instance, not changing a mode.
+
+Per-browser isolated state is the part that still waits on per-user profiles
+([§15](15-open-decisions.md)); until that decision lands, a demo instance shares
+state across browsers.
 
 **M5 — Third party**
 

@@ -35,7 +35,7 @@ apps/                      backend-frontend app catalogue
   hello/                   the smallest component: one export, one import, one route
   fs/ terminal/ proc/ net/ storage/ accounts/ manager/     (v0.6.0)
 
-demo/                      (v0.6.0) simulation catalogue; a composition, not a mode
+demo/                      (v0.6.0) a demo instance: config, composition and demo apps
 
 tests/
   e2e/                     Playwright against a running panel
