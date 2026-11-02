@@ -40,6 +40,7 @@ manifest_version = 2
 
 [app]
 id = "org.example.notes"
+alias = "notes"                    # the CLI name; falls back to the id's last segment
 namespace = "example:notes"        # every exported interface lives under this
 name = "Notes"
 version = "0.1.0"
@@ -83,7 +84,7 @@ sha256 = "…"
 # ---- CLI surface ----
 [[cli]]
 call = "example:notes/list@1.0.0#all"
-verb = "notes list"
+verb = "list"
 
 # ---- limits ----
 [limits]
@@ -302,17 +303,49 @@ payload schemas, no subscription grants.
 
 ### 7.9 CLI and clients
 
-One generator, three outputs, all derived from WIT:
+WIT gives the shape; the manifest chooses the surface. Every command is a
+`[[cli]]` entry naming an `interface#function`; anything else would make the CLI a
+generic HTTP client holding an operator's credentials.
 
-- **CLI verbs** — function parameters become flags (named from the WIT record
-  fields, typed from WIT).
-- **Rust client** — one method per exported function.
-- **TypeScript client** — the same, for panel and app UIs.
+**Invocation.** `anth app <alias> <verb>`:
 
-A manifest may add a `[[cli]]` alias so system apps read well (`anth app fs ls`
-instead of a mechanical path), but nobody hand-writes a parser. The v0.4.0 lesson
-is that hand-written CLI and hand-written clients drift from the server; the fix
-is generation, not discipline.
+- `alias` comes from `[app] alias`, falling back to the last segment of the id. If
+  two composed apps collide on that fallback and neither declares an alias, the CLI
+  requires the full id instead of guessing.
+- `verb` is one token, unique within the app.
+- `list`, `show`, `install`, `upgrade`, `remove`, `approve`, `revoke`, `enable` and
+  `disable` are reserved: neither an alias nor a verb may use them.
+- The full id is always accepted: `anth app org.example.notes list`.
+
+**Where the surface comes from.** `GET /api/engine/composition` carries
+`cli: [{verb, interface, function}]` per app, so the CLI never parses a manifest.
+A consequence worth stating: **only composed apps have verbs**. An installed but
+uncomposed app can be managed, not invoked — it has no instance to answer.
+
+**Flags** are the inverse of §7.13: one flag per parameter, named after it,
+optional for `option<T>`, repeated for `list<T>`, and `--flag` / `--no-flag` for
+`bool`.
+
+**Output.** The engine always answers JSON; the CLI renders it. Three mutually
+exclusive views, with `--table` as the default:
+
+| Flag | Use |
+| --- | --- |
+| `--table` | human reading; columns inferred from the value |
+| `--json` | scripts and tests; the only format golden tests use |
+| `--yaml` | human reading of nested values |
+
+The table is inferred from the value, not from WIT types: a list of records becomes
+columns from its keys, a record becomes a key/value table, a scalar a single line,
+and an empty list has no columns and prints `(no rows)`. Width never changes the
+content, so the same command yields the same cells on a terminal and in a pipe.
+
+**Exit codes** follow §7.11 and are documented once, so a script can tell "does not
+exist" from "not allowed" without parsing text.
+
+**Clients.** The same generator emits the Rust client and the TypeScript client
+from the same WIT. Hand-written CLI and hand-written clients drift from the
+server; v0.4.0 proved it, and the fix is generation, not discipline.
 
 ### 7.10 State
 
@@ -361,16 +394,20 @@ interface kinds {
 }
 ```
 
-The engine fixes the HTTP mapping, so HTTP, CLI and both clients cannot disagree:
+The engine fixes the HTTP and exit-code mapping, so HTTP, CLI and both clients
+cannot disagree:
 
-| Variant | HTTP | Typical cause |
-| --- | --- | --- |
-| `denied` | 403 | capability not granted |
-| `unavailable` | 503 | provider missing or degraded |
-| `invalid` | 400 | arguments refused by the app |
-| `not-found` | 404 | unknown resource or route |
-| `too-large` | 413 | payload over the route limit |
-| `internal` | 500 | app bug or trap; message sanitized |
+| Variant | HTTP | Exit | Typical cause |
+| --- | --- | --- | --- |
+| `denied` | 403 | 3 | capability not granted |
+| `unavailable` | 503 | 5 | provider missing or degraded |
+| `invalid` | 400 | 2 | arguments refused by the app |
+| `not-found` | 404 | 4 | unknown resource or route |
+| `too-large` | 413 | 6 | payload over the route limit |
+| `internal` | 500 | 1 | app bug or trap; message sanitized |
+
+Exit `0` means success. The mapping is defined once, so a script can branch on the
+kind instead of parsing a message.
 
 `internal` messages are scrubbed at the HTTP boundary: a third-party app never
 gets to leak host paths or engine internals to a browser.

@@ -88,7 +88,7 @@ not a resource.
 | `/health` | liveness, unauthenticated | — | — | — | — |
 | `/api/health` | readiness, authenticated | — | — | — | — |
 | `/api/engine/version` | version and protocol | — | — | — | — |
-| `/api/engine/composition` | composition and surface | replace the document | — | — | — |
+| `/api/engine/composition` | composition, surface and CLI verbs | replace the document | — | — | — |
 | `/api/engine/apps` | catalogue | — | — | — | install, id derived from the bundle |
 | `/api/engine/apps/{id}` | descriptor and grant | replace the bundle | `enabled`, alias | uninstall | — |
 | `/api/engine/apps/{id}/grant` | frozen grant | approve with the accepted levels | — | revoke | — |
