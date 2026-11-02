@@ -229,6 +229,12 @@ filesystem access to the state directory.
 `approved_by` in a grant and `actor` in the audit record its name. Multiple
 operators, and what each may do, is an open decision ([§15](15-open-decisions.md)).
 
+**The socket authenticates who connects.** The kernel reports the peer's uid and
+the engine accepts the service user and root; a TCP connection has no peer
+credential, so it serves only `/health` until sessions exist. An administration
+group arrives with multi-operator, because it asks the same question — who is
+allowed to act.
+
 **Login attempts are limited.** Five failures per minute per source, then
 backoff, and every failure is audited. A panel exposed without a rate limit turns
 a password into a guessing game.
@@ -241,6 +247,11 @@ does not get to serve HTML without the engine's headers.
 assets. A panel that registers a colliding route fails to start: the last writer
 never wins. The panel reads the composition through the API and never touches the
 registry or the grants.
+
+A request that reaches the router in-process has no peer credential, so the
+embedding host marks it `Trusted` once it has authenticated the browser; a socket
+request carries its credential instead. Sessions (M1) move that decision into the
+router and make the marker unnecessary.
 
 **Failure behaviour.**
 
