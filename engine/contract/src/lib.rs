@@ -7,7 +7,9 @@
 pub mod error;
 pub mod id;
 pub mod manifest;
+pub mod world;
 
 pub use error::{Error, ErrorEnvelope, ErrorKind};
 pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use manifest::{Manifest, MANIFEST_VERSION};
+pub use world::World;
