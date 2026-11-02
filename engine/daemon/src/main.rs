@@ -100,6 +100,8 @@ async fn run(args: Args) -> Result<(), Error> {
     let logger = Logger::new(config.log.clone());
 
     state::ensure(&config.state)?;
+    let composition = state::load_composition(&config.state)?;
+    composition.validate()?;
     logger.info(&format!(
         "state ready at {} (apps, grants, keys, composition, audit)",
         config.state.display()
@@ -111,7 +113,8 @@ async fn run(args: Args) -> Result<(), Error> {
 
     // SAFETY: `geteuid` has no preconditions.
     let allowed_uid = unsafe { libc::geteuid() };
-    let state = std::sync::Arc::new(anth_api::EngineState::new(allowed_uid));
+    let state =
+        std::sync::Arc::new(anth_api::EngineState::new(allowed_uid).with_composition(composition));
     let public = anth_api::public_router();
     let (stop, stopped) = watch::channel(false);
     tokio::spawn(async move {

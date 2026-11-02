@@ -8,10 +8,23 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
-use anth_contract::Error;
+use anth_contract::{Composition, Error};
 
-/// The composition written on first boot: empty, but valid.
-pub const EMPTY_COMPOSITION: &str = "version = 1\n\n[[profile]]\nid = \"default\"\napps = []\n";
+/// Reads the composition, or returns the empty one when the file does not exist.
+///
+/// The contract crate parses documents; the daemon is what touches the disk
+/// (§6.6).
+pub fn load_composition(state: &Path) -> Result<Composition, Error> {
+    let path = state.join("composition.toml");
+    match fs::read_to_string(&path) {
+        Ok(text) => Composition::parse(&text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Composition::empty()),
+        Err(error) => Err(Error::internal(format!(
+            "reading {}: {error}",
+            path.display()
+        ))),
+    }
+}
 
 /// Creates the tree if it is missing and checks the shape if it is not.
 pub fn ensure(root: &Path) -> Result<(), Error> {
@@ -19,7 +32,9 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     for name in ["apps", "grants", "keys"] {
         create_dir(&root.join(name))?;
     }
-    write_missing(&root.join("composition.toml"), EMPTY_COMPOSITION.as_bytes())?;
+    let composition = toml::to_string_pretty(&Composition::empty())
+        .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?;
+    write_missing(&root.join("composition.toml"), composition.as_bytes())?;
     write_missing(&root.join("audit.jsonl"), b"")?;
     Ok(())
 }
@@ -109,13 +124,38 @@ mod tests {
             assert_eq!(mode, 0o700, "{} should be 0700", path.display());
         }
         let composition = fs::read_to_string(root.join("composition.toml")).expect("read");
-        assert_eq!(composition, EMPTY_COMPOSITION);
+        let parsed = Composition::parse(&composition).expect("parse");
+        assert_eq!(parsed, Composition::empty());
         let mode = fs::metadata(root.join("composition.toml"))
             .unwrap()
             .permissions()
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_missing_composition_is_empty() {
+        let root = scratch("composition");
+        // Deliberately no `ensure`: the point is the file that does not exist.
+        fs::create_dir_all(&root).expect("mkdir");
+        let composition = load_composition(&root).expect("load");
+        assert_eq!(composition, Composition::empty());
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn an_existing_composition_is_read() {
+        let root = scratch("composition-present");
+        ensure(&root).expect("ensure");
+        fs::write(
+            root.join("composition.toml"),
+            "version = 1\n\n[[profile]]\nid = \"default\"\napps = [\"org.example.notes\"]\n",
+        )
+        .expect("write");
+        let composition = load_composition(&root).expect("load");
+        assert_eq!(composition.profile[0].apps, ["org.example.notes"]);
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
