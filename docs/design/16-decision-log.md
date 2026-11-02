@@ -51,4 +51,12 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Slot-Contract | A slot contribution is an ES module exporting `mount(root, ctx) -> cleanup` | Without a written contract, every panel invites a different module shape |
 | D-Signature-Message | Signature covers a canonical, sorted, length-prefixed manifest set (`manifest.toml` + `wit/*.wit`) | The format must be written once and pinned by a test vector, not inferred from code |
 
+| D-Binding | No provider map: the interface id is the binding, and a second implementation is a different interface | A configuration table with nothing to decide is a source of contradictions |
+| D-Failure-Phases | Failures are classified by phase: resolve failures are fatal, instantiation and runtime failures degrade | A graph error and a broken app deserve different severity |
+| D-Fatal-Rule | A composition error is fatal only when it can be fixed without the engine running | Otherwise the engine locks the operator out of the tool that repairs it |
+| D-Error-Envelope | `{"error":{"code","message","app?","detail?"}}`; the app's six codes plus four engine codes; unknown codes read as `internal` | One contract shared by HTTP, CLI and clients, extensible without breaking readers |
+| D-Cli-Surface | The CLI has generated app verbs and a fixed engine command set; `anth status` reads health plus composition | The management half was never specified, which is how a command that does not exist gets cited |
+| D-Peer-Auth | The Unix socket authenticates by peer credentials; TCP authenticates by session | The kernel-issued identity needs no stored secret, and remote access keeps a real session |
+| D-Acknowledge | Breaking actions return `409` with `detail.acknowledge`; `--acknowledge <token>` proceeds and is audited | In a security contingency the operator must be able to act, and the record of acting knowingly is worth more than a prohibition |
+
 ---

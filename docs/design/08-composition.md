@@ -9,49 +9,67 @@ version = 1
 
 [[profile]]
 id   = "default"
-apps = ["org.anth.fs", "org.anth.terminal", "org.example.notes"]
+apps = ["org.anth.hello", "org.example.notes"]
 
-# Explicit provider choices. Omit to accept the unique provider, if there is one.
-[provide]
-"anthracite:fs/list@1.0.0"   = "org.anth.fs"
-"anthracite:fs/read@1.0.0"   = "org.anth.fs"
-"anth:env/info@1.0.0"  = "@engine"
+# Pin a version when the app must not drift: "org.example.notes@0.1.0".
 ```
 
 The panel is not in this file. It is an application, not an app: it reads the
 composition and decides where to render each contribution.
 
+There is no provider map. **The interface id is the binding**: an import is
+satisfied by the unique composed app that exports it, or by `@engine` when the
+interface is in the native set. A second implementation is a different interface,
+not a second provider of the same one.
+
 `PUT /api/engine/composition` replaces this document, guarded by `ETag` and
 `If-Match` (§6.4). Adding or removing an app is a client-side edit of the
 document, and the engine validates the result before accepting it.
+
+v0.5.0 has exactly one profile. The array form exists because per-user profiles
+are a known open decision (§15), and the validator rejects a second profile until
+then.
 
 ### 8.2 Resolution
 
 Deterministic, in this order:
 
-1. Load the composition; reject unknown keys (typos are errors).
+1. Load the composition; reject unknown keys (typos are errors) and a second
+   profile.
 2. Resolve each app id to exactly one installed manifest; `id@version` pins.
-3. Union every import of every composed app, keyed by interface id.
-4. For each import, pick a provider: explicit `[provide]` wins; otherwise a
-   unique composed exporter; otherwise `@engine` if the interface is in the
-   native set; otherwise **unresolved**.
+3. Union the imports of every app that will run — approved and enabled. An app
+   that cannot run contributes no imports and no exports.
+4. For each import, look for candidates among the composed apps that export it,
+   whatever their state:
+   - none and the interface is native → `@engine`;
+   - none and the interface is not native → **unresolved**;
+   - one that runs → link;
+   - one that cannot run (unapproved or disabled) → its consumers are **blocked**;
+   - more than one → **duplicate**.
 5. Check that the provider's granted export and the consumer's granted import are
    the same interface, exactly.
 6. Order apps so providers boot before consumers. Cycles are a composition error:
    typed links cannot be cyclic.
 7. Build the surface: routes, slots, CLI verbs, links.
-8. Start apps in order with per-app timeouts. A failure marks that app and its
-   dependents `degraded` and the boot continues.
+8. Start apps in order with per-app timeouts. A failure to instantiate marks that
+   app and its dependents `degraded` and the boot continues.
+
+`unresolved` and `duplicate` are fatal; `blocked` and a failed instantiation are
+degraded. The reason is in §8.5.
 
 ### 8.3 Rules
 
-- **One provider per interface.** Two composed providers of the same interface id
-  is a configuration error. Silent "first one wins" is how platforms rot.
-- **No implicit providers.** `@engine` only for the closed native set.
-- **No partial composition.** If an import is unresolved, the consumer does not
-  start; it does not start with a stub.
-- **Composition does not grant.** Composing an unapproved app is an error that
-  names the missing approval.
+- **One provider per interface.** Two composed apps exporting the same interface
+  id is a configuration error, named with both apps. Silent "first one wins" is
+  how platforms rot.
+- **The interface id is the binding.** `@engine` is the provider for the closed
+  native set, implicitly. An app cannot export `anth:*`, so there is never a
+  choice to make and nothing to declare.
+- **An app that cannot run provides nothing usable.** Unapproved or disabled is
+  not the same as absent: it turns what would be a fatal miss into a degradation,
+  because the fix needs the engine that is booting (§8.5).
+- **Composition does not grant.** Composing an unapproved app is allowed — it will
+  be degraded — but the engine never writes a grant to make it run.
 - **Exact means exact.** No minor-version satisfaction, no structural coercion.
 
 ### 8.4 Linking model
@@ -70,33 +88,52 @@ Consequence we accept: a trapping provider traps its linked consumers, and
 cross-app calls are not individually audited. If that ever needs to change, the
 change is to the linker, not to every app.
 
-### 8.5 Missing and failed providers
+### 8.5 Missing and failed
 
-Two situations that look alike and must not behave alike:
+Failure is classified by phase, and by one question: **can the operator fix it
+without the engine running?** If the only fix is an engine operation, failing the
+boot would lock the operator out of the tool that repairs the system.
 
-| Situation | Behaviour |
-| --- | --- |
-| **Static**: at resolve time an import has no provider — disabled, uninstalled, or not composed | **Error.** The composition does not start. `--allow-degraded` is the explicit override. |
-| **Dynamic**: a composed provider traps or crashes at runtime | **Degraded.** The engine stays up and consumers answer `unavailable`. |
+| Phase | Situation | Behaviour |
+| --- | --- | --- |
+| Resolve | an import has **no candidate** at all | **fatal**, unless `--allow-degraded` |
+| Resolve | **two** apps export the same interface | **fatal** |
+| Resolve | the composition names an app that is **not installed** | **fatal** |
+| Resolve | an import's only candidate is **unapproved** or **disabled** | **blocked**, degraded |
+| Instantiate | the component fails to load, link or start | degraded, audited |
+| Run | a call traps, times out or exhausts its budget | degraded |
 
-Disabling a provider is almost always an operator mistake, and a system that
-silently boots degraded hides it. A crash is not a mistake to punish: it must
-never take the engine down.
+The three fatal cases share a property: **the composition file is the error
+message**. They are fixed by editing a TOML or installing an app, without a
+daemon. The blocked case is the opposite: approving an app or enabling it is an
+engine operation, so the engine has to boot to be fixable.
 
-A degraded consumer answers with the typed error of §7.11:
+"A degraded app" means it is not running: there is no instance that could answer,
+and its consumers receive `unavailable`. `anth status` names the app and the
+reason without reading logs.
 
+Instantiating a component that fails its world check against the grant is a
+security event, not a configuration error: it is audited and the app degrades. One
+app must not be able to stop the engine from starting.
+
+A degraded consumer answers with the error envelope of §7.11:
+
+```json
+{"error":{"code":"unavailable",
+          "message":"anthracite:fs/list@1.0.0 is not available",
+          "app":"org.example.notes"}}
 ```
-{"error":"unavailable","message":"anthracite:fs/list@1.0.0 is not available","app":"org.example.notes"}
-```
-
-`anth engine composition` prints which app is degraded and why, without reading
-logs.
 
 ### 8.6 Recompose
 
 v0.5.0 recomposes by restarting the engine process. `anth compose` says so and
 accepts `--now`. It is boring, it is predictable, and it keeps state assumptions
-honest. Per-app restart is a later optimization, gated on the store being fully
-externalized (it is, by §7.10).
+honest.
+
+It is **not** justified yet by "the store is externalized": apps may hold state in
+a long-lived instance (§7.10). Per-app restart becomes safe when apps treat the
+store as their only durable state, and that is a property of the apps, not of the
+engine. Until then, a restart loses in-memory app state, and that is the accepted
+cost.
 
 ---

@@ -347,6 +347,43 @@ exist" from "not allowed" without parsing text.
 from the same WIT. Hand-written CLI and hand-written clients drift from the
 server; v0.4.0 proved it, and the fix is generation, not discipline.
 
+**The engine commands** are fixed, not generated:
+
+| Command | HTTP | Purpose |
+| --- | --- | --- |
+| `anth status` | `GET /api/health` + `/api/engine/composition` | summary, degraded apps and why |
+| `anth doctor` | — (offline) | validate config, composition and grants with no daemon |
+| `anth compose [--show\|--add\|--remove\|--now]` | `GET`/`PUT /api/engine/composition` | read and edit the composition |
+| `anth restart` | `POST /api/engine/restart` | restart the service |
+| `anth login` / `anth logout` | `POST`/`DELETE /api/engine/session` | session over TCP |
+| `anth app list\|show\|install\|upgrade\|approve\|revoke\|enable\|disable\|remove` | the app resources of §6.4 | lifecycle |
+| `anth key add\|list\|remove` | `/api/engine/keys` | the third-party keyring |
+| `anth audit` | `GET /api/engine/audit` | the log |
+
+`doctor` answers "would this boot?" without a daemon; `status` answers "is it
+healthy now?" with one. The first is what saves you when the engine does not
+start.
+
+**Breaking actions ask for acknowledgment.** Disabling, removing or revoking an app
+that other composed apps depend on returns `409` with
+`detail.dependents` and `detail.acknowledge`. The CLI prints the warning and asks;
+`--acknowledge <token>` skips the question:
+
+```
+$ anth app disable org.anth.fs
+warning: org.anth.fs is required by org.example.notes, org.anth.report
+rerun with --acknowledge dependents to proceed
+$ anth app disable org.anth.fs --acknowledge dependents
+```
+
+The token is never guessed: it comes from `detail.acknowledge`. Without a TTY and
+without the flag, the command fails with that message instead of waiting for an
+answer that will never come.
+
+The pattern is general: **any action that breaks consumers, revokes authority or
+cannot be undone returns the tokens it needs, and the engine audits the
+acknowledgment with the names of what was broken.**
+
 ### 7.10 State
 
 Two hard rules:
@@ -394,17 +431,45 @@ interface kinds {
 }
 ```
 
-The engine fixes the HTTP and exit-code mapping, so HTTP, CLI and both clients
-cannot disagree:
+Every error, from an app or from the engine, uses one envelope:
 
-| Variant | HTTP | Exit | Typical cause |
+```json
+{"error":{"code":"unavailable","message":"…","app":"org.example.notes"}}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `code` | yes | the discriminant; stable |
+| `message` | yes | sanitized at the HTTP boundary |
+| `app` | no | the app involved, when there is one |
+| `detail` | no | structured extras, keyed by code |
+
+The mapping from the variant is total: every case produces a code, and
+`too-large(u64)` also produces `detail.limit`.
+
+| Code | HTTP | Exit | Produced by |
 | --- | --- | --- | --- |
-| `denied` | 403 | 3 | capability not granted |
+| `denied` | 403 | 3 | an app refusing, or a capability not granted |
 | `unavailable` | 503 | 5 | provider missing or degraded |
-| `invalid` | 400 | 2 | arguments refused by the app |
+| `invalid` | 400 | 2 | arguments refused |
 | `not-found` | 404 | 4 | unknown resource or route |
-| `too-large` | 413 | 6 | payload over the route limit |
-| `internal` | 500 | 1 | app bug or trap; message sanitized |
+| `too-large` | 413 | 6 | payload over the limit; `detail.limit` |
+| `internal` | 500 | 1 | app bug or trap; sanitized |
+| `unauthenticated` | 401 | 3 | no session, or an expired one |
+| `conflict` | 409 | 2 | id exists, duplicate provider, broken dependents |
+| `precondition-failed` | 412 | 2 | `If-Match` does not match |
+| `method-not-allowed` | 405 | 2 | the verb is not declared |
+
+The first six are the ones an app can produce, because they are the variant. The
+last four belong to the engine's own API.
+
+**Forward compatibility.** A client that does not know a `code` treats it as
+`internal`. Adding a code is therefore not a breaking change, and the SDK does not
+need a closed enum.
+
+`detail` carries what a client needs in order to act. Two shapes exist today:
+`too-large` → `{"limit":n}`, and `conflict` on a breaking operation →
+`{"dependents":[…],"acknowledge":["dependents"]}` (§6.4).
 
 Exit `0` means success. The mapping is defined once, so a script can branch on the
 kind instead of parsing a message.

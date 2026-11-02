@@ -36,15 +36,33 @@ anth app notes list --dir /tmp
 And the failures the platform must produce, not crash on:
 
 ```bash
-# a dependency left the composition
+# removing a provider that others need is a configuration error, not a warning
 anth compose --remove org.anth.fs
-#    warning: org.example.notes is degraded: anthracite:fs/list@1.0.0 has no provider
+#    refused: org.example.notes imports anthracite:fs/list@1.0.0 and would be
+#             unresolved; remove the consumer first
+```
+
+```bash
+# a composed app that is not approved degrades instead of blocking the boot
+anth app upgrade ./fs.zip         # the authority changed
+anth restart
 #    the engine is up; 1 app degraded
 
 curl --unix-socket /run/anth/engine.sock \
      http://localhost/api/apps/org.example.notes/notes
 #    HTTP/1.1 503 Service Unavailable
-#    {"error":"unavailable","message":"anthracite:fs/list@1.0.0 has no provider in this composition","app":"org.example.notes"}
+#    {"error":{"code":"unavailable",
+#              "message":"anthracite:fs/list@1.0.0 is not available",
+#              "app":"org.example.notes"}}
+```
+
+```bash
+# an action that breaks consumers asks first, and obeys when acknowledged
+anth app disable org.anth.fs
+#    warning: org.anth.fs is required by org.example.notes
+#    rerun with --acknowledge dependents to proceed
+anth app disable org.anth.fs --acknowledge dependents
+#    disabled org.anth.fs (1 dependent broken, acknowledged)
 ```
 
 ```bash

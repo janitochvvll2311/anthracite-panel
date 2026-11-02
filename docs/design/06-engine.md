@@ -93,6 +93,8 @@ not a resource.
 | `/api/engine/apps/{id}` | descriptor and grant | replace the bundle | `enabled`, alias | uninstall | — |
 | `/api/engine/apps/{id}/grant` | frozen grant | approve with the accepted levels | — | revoke | — |
 | `/api/engine/audit` | paginated log | — | — | — | — |
+| `/api/engine/keys` | trusted keys | — | — | — | add a third-party key |
+| `/api/engine/keys/{fingerprint}` | — | — | — | remove | — |
 | `/api/engine/operator` | operator identity | — | change password | — | — |
 | `/api/engine/session` | current session | — | — | log out | log in |
 | `/api/engine/restart` | — | — | — | — | restart |
@@ -155,6 +157,11 @@ names what is degraded and why.
 `/health` is what systemd and containers probe; `/api/health` is what `anth
 doctor` and a panel use before rendering anything.
 
+Operationally: **`/health` is liveness, `/api/health` is readiness.** A `503` from
+readiness means "up and needs attention", not "restart me". An orchestrator that
+treats readiness as liveness would restart the engine precisely when the operator
+needs it to fix the degradation.
+
 App routes declare their verb, and the engine matches it exactly: no implicit
 `HEAD`, no automatic `OPTIONS`, no `POST` standing in for `PUT`. `[[route]]`
 accepts `GET`, `POST`, `PUT`, `PATCH`, `DELETE` and `HEAD`; `OPTIONS` belongs to
@@ -162,6 +169,25 @@ the engine.
 
 A remote panel proxies the API unchanged — method, body and headers. A proxy that
 rewrites methods makes the SDK lie.
+
+Errors always use the envelope of §7.11.
+
+**Breaking actions ask for acknowledgment.** `PATCH /apps/{id}` with
+`{"enabled":false}`, `DELETE /apps/{id}` and `DELETE /apps/{id}/grant` return `409`
+when other composed apps depend on what they remove. The error carries
+`detail.dependents` and `detail.acknowledge`; repeating the request with
+
+```
+X-Anth-Acknowledge: dependents
+```
+
+proceeds, and the engine audits the acknowledgment together with the names of the
+apps that were broken. The header is a token list so that future breaking actions
+can require their own token without inventing a new mechanism.
+
+This is deliberately a confirmation and not a refusal: in a security contingency
+an operator must be able to yank an app immediately, and the record of having done
+it knowingly is worth more than a prohibition.
 
 ### 6.5 Boot and lifecycle
 

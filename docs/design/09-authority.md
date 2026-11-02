@@ -119,6 +119,22 @@ A running app does not keep its old grant while an upgrade waits. It stops at
 recompose and returns only approved. Half-applying an authority change is worse
 than downtime.
 
+The engine must still boot in that state, because approving is an engine
+operation: an unapproved app degrades and `anth status` names it (§8.5). Otherwise
+an upgrade would lock the operator out of the tool that approves it.
+
+```bash
+anth app upgrade ./fs.zip
+anth restart                  # boots; fs degraded; its consumers 503
+anth status                   # "org.anth.fs: unapproved"
+anth app approve org.anth.fs --accept-write
+anth restart
+```
+
+Removing an app, revoking its grant or disabling it while others depend on it
+returns `409` and needs `--acknowledge dependents` (§6.4). The engine records the
+acknowledgment with the dependents it broke.
+
 Rollback in v0.5.0 is "install the previous zip again": documented, not
 implemented.
 
