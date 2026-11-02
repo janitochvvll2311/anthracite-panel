@@ -58,5 +58,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Cli-Surface | The CLI has generated app verbs and a fixed engine command set; `anth status` reads health plus composition | The management half was never specified, which is how a command that does not exist gets cited |
 | D-Peer-Auth | The Unix socket authenticates by peer credentials; TCP authenticates by session | The kernel-issued identity needs no stored secret, and remote access keeps a real session |
 | D-Acknowledge | Breaking actions return `409` with `detail.acknowledge`; `--acknowledge <token>` proceeds and is audited | In a security contingency the operator must be able to act, and the record of acting knowingly is worth more than a prohibition |
+| D-Grant-Scope | A grant freezes what an app imports, not who provides it | The provider changes with the composition, and a grant must not lie when it does |
+| D-Risk-Recheck | Risk is computed at approval over installed apps and re-checked at compose; a growth blocks the app until re-approved | An app cannot gain authority because its provider was swapped |
 
 ---

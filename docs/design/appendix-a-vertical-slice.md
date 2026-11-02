@@ -15,11 +15,11 @@ anth app install ./notes.zip
 #    not approved: run `anth app approve org.example.notes`
 
 # 2. approve (authority is frozen; risk is computed, not declared)
-anth app approve org.example.notes --accept-read
+anth app approve org.example.notes
 #    approved org.example.notes 0.1.0 (risk read)
-#    export  example:notes/list@1.0.0      wasm
-#    import  anthracite:fs/list@1.0.0            -> org.anth.fs
-#    import  anth:store/kv@1.0.0           -> @engine
+#    export  example:notes/list@1.0.0   wasm
+#    import  anthracite:fs/list@1.0.0
+#    import  anth:store/kv@1.0.0
 
 # 3. compose (what runs is data)
 anth compose --add org.example.notes

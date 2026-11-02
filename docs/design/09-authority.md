@@ -12,8 +12,9 @@
 
 The **distribution key is compiled into the binary**. Rotating it requires a
 release; no configuration file can mint a `system` app. An operator may add keys
-to a keyring (`anth key add <fingerprint>`), and everything trusted that way is
-`third-party`: the keyring can extend trust, never privilege.
+to a keyring through `POST /api/engine/keys` (`anth key add <fingerprint>`), and
+everything trusted that way is `third-party`: the keyring can extend trust, never
+privilege.
 
 An unsigned bundle is accepted only with `[apps] require_signature = false`, and
 it is `third-party` regardless of its id — a manifest that claims `org.anth.*`
@@ -44,15 +45,22 @@ anth:store/kv@1.0.0      the app's own key/value namespace
 Anything else — files, processes, terminals, network, storage, accounts, the app
 manager itself — is an app that another app imports.
 
+`anth:error` is not in this list because it is not a capability: it is a package of
+types, injected when a package is parsed (§7.3), never granted and never risked.
+
 `anth:store/blobs` is not in this set yet: it lands with transfers in v0.6.0.
 Declaring it before implementing it would make the resolver promise a capability
 the broker cannot answer.
 
 ### 9.3 Grants and approval
 
-A grant freezes: app id, version, manifest hash, signature, WIT hash, each
-exported interface, each imported interface with its resolved provider, the risk
+A grant freezes: app id, version, manifest hash, signature, the WIT set hash, each
+exported interface, each imported interface — **not who provides it** — the risk
 level, the approval levels the operator presented, who approved and when.
+
+The provider is a composition fact, not a grant fact: it changes when the operator
+edits the composition, without the app changing. Freezing it would either
+invalidate every consumer's grant on a composition edit or leave it lying.
 
 Grants scope **per interface**, which is why §3.6 insists on small interfaces. A
 grant for `anthracite:fs/read@1.0.0` covers the functions that interface declares and
@@ -75,6 +83,13 @@ could declare its own risk could declare itself harmless while importing
 
 Because cycles are a composition error (§8.2), the closure is a finite DAG.
 
+**When it is computed.** At approval, over the installed apps, so the operator sees
+a meaningful number. At compose time, again, over the actual graph. If an app's
+effective risk has grown past what was approved — because a provider was replaced
+by one that reaches further, for example — the app is **blocked** and needs
+re-approval (§8.5). A grant approves an authority; it cannot stay valid while the
+authority it represents grows underneath it.
+
 **One interface, one risk level.** An interface that both reads and writes would
 force every grant to the higher level, so it is split instead (`anthracite:fs/read@1.0.0`,
 `anthracite:fs/write@1.0.0`). That is what makes a read-only grant actually read-only.
@@ -87,9 +102,10 @@ force every grant to the higher level, so it is split instead (`anthracite:fs/re
 | `host` | executing a binary, spawning a process |
 | `package` | installing a system package |
 
-Approval levels are derived from the risk of the whole set: `--accept-write`,
-`--accept-admin`, `--accept-host`, `--accept-package`. An operator who skips a
-level gets a refusal that names it.
+Approval flags are derived from the risk of the whole set: `--accept-write`,
+`--accept-admin`, `--accept-host`, `--accept-package`. `read` needs no flag: it is
+the baseline, and requiring one for everything teaches operators to pass flags
+without reading them. An operator who skips a level gets a refusal that names it.
 
 ### 9.4 What an app can never do
 
