@@ -5,8 +5,9 @@
 What "one app composed over the engine" looks like end to end. It is the M3 demo,
 and the shape every later app repeats.
 
-The `anth` commands below come from the SDK; `panel/backend` wires them into the
-official panel binary, and a custom panel can wire the same ones.
+The `anth` commands below come from the SDK, which builds the `anth` binary; the
+official distribution ships it beside the panel, and a custom panel can ship the
+same one.
 
 ```bash
 # 1. install (content only; nothing is granted)
@@ -66,8 +67,8 @@ anth app disable org.anth.fs --acknowledge dependents
 ```
 
 ```bash
-# a component that asks for more than it was granted
+# a component that asks for more than its manifest declares
 anth app install ./sneaky.zip
-#    refused: the component imports anthracite:fs/write@1.0.0 but the grant lists
-#             only anthracite:fs/list@1.0.0
+#    refused: the component imports anthracite:fs/write@1.0.0 but the manifest
+#             declares only anthracite:fs/list@1.0.0
 ```

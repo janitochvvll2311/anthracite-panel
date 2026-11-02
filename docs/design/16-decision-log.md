@@ -16,7 +16,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Linking | Direct typed links app→app; broker only for host interfaces | Fighting the linker costs weeks and buys little |
 | R2.1 | WIT ids for interfaces; reverse-DNS for apps; app WIT namespace declared | WIT cannot express DNS-shaped names |
 | R2.2 | Exact interface versions | What the linker requires; evolve by exporting two versions |
-| R2.3 | Manifest is an index; WIT in `wit/*.wit`, hashed and signed | WIT is a language, not a config string |
+| R2.3 | Manifest is an index; the WIT package lives under `wit/` and is signed (refined by D-Wit-Package) | WIT is a language, not a config string |
 | R2.4 | Events are typed notifications, not a topic bus | Confirmed; deferred to v0.6.0 because the mechanism needs streams |
 | R2.5 | CLI and clients generated from WIT | Hand-written surfaces drift; v0.4.0 proved it |
 | R2.6 | State is interfaces only; never paths | A path is ambient authority |
@@ -27,13 +27,13 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | R3.2 | One interface, one risk level; split mixed interfaces | Grants are per interface, so a mixed interface forces the highest level |
 | R3.3 | Distribution key compiled in; the operator keyring only extends `third-party` trust | A config file must never be able to mint privilege |
 | R3.4 | An upgrade auto-applies only on an empty authority delta | Re-approving every patch trains operators to click through approvals |
-| R3.5 | Static misses fail the composition; runtime failures degrade | A silent degraded boot hides operator mistakes; a crash must not take the engine down |
+| R3.5 | Static misses fail the composition; runtime failures degrade (refined by D-Fatal-Rule) | A silent degraded boot hides operator mistakes; a crash must not take the engine down |
 | R3.6 | No revocation in v0.5.0: uninstall or rotate the distribution key | Honest limitation; a CRL only when a fleet needs it |
 | R1.3-rev | The engine serves no UI. The panel is an application that hosts apps | A shell bundled as an app still put UI concerns in the platform; a headless engine keeps the thesis literal |
 | D-Workspace | Four Rust workspaces and three Bun ones, with a shared target dir and CI-checked forbidden edges | The isolation must be unrepresentable, not merely documented |
-| D-CLI | The CLI lives in `sdk/rust/cli`; `panel/backend` wires it into the binary | The engine's commands are not a panel's private feature |
+| D-CLI | The CLI lives in `sdk/rust/cli` and builds the `anth` binary; the distribution ships it beside the panel (refined by D-Cli-Surface) | The engine's commands are not a panel's private feature |
 | D-Remote | The engine must stay usable by a panel in another process; v0.5.0 ships only the linked mode | The API is the product boundary; an in-process shortcut would quietly close that door |
-| D-Target | One shared `build.target-dir` for the three Rust workspaces | Separate workspaces buy isolation, not a second compiler |
+| D-Target | One shared `build.target-dir` for the Rust workspaces | Separate workspaces buy isolation, not a second compiler |
 | D-HTTP | The API is resources, not commands: `POST` installs, `PUT` replaces and approves, `PATCH` toggles state, `DELETE` removes and revokes | Actions exposed as invented verbs drift from the resources they mutate, and cannot be retried safely |
 | D-Compose-PUT | The composition is replaced as a whole document with `If-Match` | A read-modify-write of a document needs a precondition, not an `add` endpoint |
 | D-Install | `POST /api/engine/apps` creates and derives the id; `PUT /apps/{id}` only replaces | The id lives inside the bundle, so a client cannot name it before uploading |
@@ -49,8 +49,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Namespace | `anth` for the engine, `anthracite` for first-party apps, everything else for third parties | A reserved namespace only the engine can use prevents an app from impersonating the host |
 | D-Mapping | One HTTP ↔ WIT mapping, implemented once in the router and reused by codegen | Three implementations of the same rule is three chances to disagree |
 | D-Slot-Contract | A slot contribution is an ES module exporting `mount(root, ctx) -> cleanup` | Without a written contract, every panel invites a different module shape |
-| D-Signature-Message | Signature covers a canonical, sorted, length-prefixed manifest set (`manifest.toml` + `wit/*.wit`) | The format must be written once and pinned by a test vector, not inferred from code |
-
+| D-Signature-Message | Signature covers a canonical, sorted, length-prefixed manifest set (`manifest.toml` + every file under `wit/`) | The format must be written once and pinned by a test vector, not inferred from code |
 | D-Binding | No provider map: the interface id is the binding, and a second implementation is a different interface | A configuration table with nothing to decide is a source of contradictions |
 | D-Failure-Phases | Failures are classified by phase: resolve failures are fatal, instantiation and runtime failures degrade | A graph error and a broken app deserve different severity |
 | D-Fatal-Rule | A composition error is fatal only when it can be fixed without the engine running | Otherwise the engine locks the operator out of the tool that repairs it |
