@@ -38,6 +38,14 @@ impl EngineState {
     }
 }
 
+/// A marker the embedding host sets once it has authenticated a request.
+///
+/// A panel that mounts this router receives browser requests that carry no peer
+/// credential. It authenticates them and marks the request; the router still owns
+/// the decision of what an authenticated request may reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Trusted;
+
 /// The uid the kernel reports for a socket connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeerUid(pub u32);
@@ -96,6 +104,9 @@ async fn require_peer(
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    if request.extensions().get::<Trusted>().is_some() {
+        return Ok(next.run(request).await);
+    }
     let peer = request
         .extensions()
         .get::<ConnectInfo<PeerUid>>()
@@ -185,6 +196,44 @@ mod tests {
             .expect("body");
         let value: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(value["status"], "ready");
+    }
+
+    #[tokio::test]
+    async fn a_trusted_in_process_request_is_accepted() {
+        let mut request = request("/api/health", None);
+        request.extensions_mut().insert(Trusted);
+        let response = router(state()).oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_real_socket_connection_carries_the_peer_uid() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = std::env::temp_dir().join(format!("anth-api-uds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("engine.sock");
+
+        let listener = UnixListener::bind(&path).expect("bind");
+        let app = router(state()).into_make_service_with_connect_info::<PeerUid>();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let mut stream = tokio::net::UnixStream::connect(&path)
+            .await
+            .expect("connect");
+        stream
+            .write_all(b"GET /api/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write");
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.expect("read");
+        let text = String::from_utf8_lossy(&response);
+        assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+        assert!(text.contains("ready"), "{text}");
+
+        server.abort();
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[tokio::test]

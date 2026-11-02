@@ -248,6 +248,11 @@ assets. A panel that registers a colliding route fails to start: the last writer
 never wins. The panel reads the composition through the API and never touches the
 registry or the grants.
 
+A request that reaches the router in-process has no peer credential, so the
+embedding host marks it `Trusted` once it has authenticated the browser; a socket
+request carries its credential instead. Sessions (M1) move that decision into the
+router and make the marker unnecessary.
+
 **Failure behaviour.**
 
 | Failure | Behaviour |
