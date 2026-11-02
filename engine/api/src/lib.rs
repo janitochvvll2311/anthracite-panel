@@ -1,38 +1,74 @@
 //! The engine's HTTP surface.
 //!
 //! The router is a library value on purpose: the official panel mounts it in its
-//! own process (§6.5), and a headless deployment serves it directly. Nothing
-//! here knows about panels, slots or features.
+//! own process (§6.5), and a headless deployment serves it directly.
+//!
+//! Two routers: the full one, meant for the Unix socket where a peer credential
+//! exists, and the public one, which is all a TCP listener serves until sessions
+//! arrive. `/health` is public on both; everything under `/api` needs a peer.
 
 use std::sync::Arc;
 
+use anth_contract::Error;
+use axum::extract::{connect_info::Connected, ConnectInfo, Request, State};
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tokio::net::UnixListener;
 
 /// What the router needs from the engine.
 #[derive(Debug, Clone)]
 pub struct EngineState {
-    /// The engine's version, answered by `/api/engine/version`.
     pub version: String,
-    /// The API protocol; see §6.4.
     pub protocol: u32,
+    /// The uid that owns the daemon; root is always accepted as well.
+    pub allowed_uid: u32,
 }
 
-impl Default for EngineState {
-    fn default() -> Self {
+impl EngineState {
+    pub fn new(allowed_uid: u32) -> Self {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: 1,
+            allowed_uid,
         }
     }
 }
 
-/// Builds the engine router.
+/// The uid the kernel reports for a socket connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerUid(pub u32);
+
+impl Connected<axum::serve::IncomingStream<'_, UnixListener>> for PeerUid {
+    fn connect_info(stream: axum::serve::IncomingStream<'_, UnixListener>) -> Self {
+        let uid = stream
+            .io()
+            .peer_cred()
+            .map(|credential| credential.uid())
+            .unwrap_or(u32::MAX);
+        Self(uid)
+    }
+}
+
+/// The full surface, for the Unix socket.
 pub fn router(state: Arc<EngineState>) -> Router {
+    let api = Router::new()
+        .route("/health", get(readiness))
+        .route("/engine/version", get(version))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
+
     Router::new()
         .route("/health", get(health))
+        .nest("/api", api)
         .with_state(state)
+}
+
+/// Only what a TCP listener may serve before sessions exist.
+pub fn public_router() -> Router {
+    Router::new().route("/health", get(health))
 }
 
 /// Liveness: 200 once the socket is bound, nothing else.
@@ -40,43 +76,152 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-/// A small helper so callers do not build the state by hand.
-pub fn state() -> Arc<EngineState> {
-    Arc::new(EngineState::default())
+/// Readiness: 200 once the surface can serve. There is nothing to start yet, so
+/// bound means ready; the moment apps load this answers `503 starting` first.
+async fn readiness() -> Json<Value> {
+    Json(json!({ "status": "ready" }))
+}
+
+/// Readiness and the protocol version.
+async fn version(State(state): State<Arc<EngineState>>) -> Json<Value> {
+    Json(json!({
+        "engine": state.version,
+        "protocol": state.protocol,
+    }))
+}
+
+/// Every `/api` route needs a peer credential from the service user or root.
+async fn require_peer(
+    State(state): State<Arc<EngineState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<PeerUid>>()
+        .map(|ConnectInfo(uid)| uid.0);
+    match peer {
+        None => Err(ApiError(Error::unauthenticated(
+            "this surface needs a local peer credential",
+        ))),
+        Some(uid) if uid == 0 || uid == state.allowed_uid => Ok(next.run(request).await),
+        Some(_) => Err(ApiError(Error::unauthenticated(
+            "the peer is not the service user or root",
+        ))),
+    }
+}
+
+/// An error rendered with the one envelope of §7.11.
+pub struct ApiError(pub Error);
+
+impl From<Error> for ApiError {
+    fn from(error: Error) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status =
+            StatusCode::from_u16(self.0.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(self.0.envelope())).into_response()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::http::Request;
     use tower::ServiceExt;
 
+    fn state() -> Arc<EngineState> {
+        Arc::new(EngineState::new(1000))
+    }
+
+    fn request(uri: &str, peer: Option<u32>) -> Request<Body> {
+        let mut request = Request::builder()
+            .uri(uri)
+            .body(Body::empty())
+            .expect("request");
+        if let Some(uid) = peer {
+            request.extensions_mut().insert(ConnectInfo(PeerUid(uid)));
+        }
+        request
+    }
+
+    async fn status(uri: &str, peer: Option<u32>) -> StatusCode {
+        router(state())
+            .oneshot(request(uri, peer))
+            .await
+            .expect("response")
+            .status()
+    }
+
     #[tokio::test]
-    async fn health_answers_ok() {
+    async fn health_is_public() {
+        assert_eq!(status("/health", None).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_api_needs_a_peer_credential() {
+        assert_eq!(status("/api/health", None).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn the_service_user_and_root_are_accepted() {
+        assert_eq!(status("/api/health", Some(1000)).await, StatusCode::OK);
+        assert_eq!(status("/api/health", Some(0)).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn readiness_is_a_different_word_than_liveness() {
         let response = router(state())
-            .oneshot(
-                Request::builder()
-                    .uri("/health")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(request("/api/health", Some(1000)))
+            .await
+            .expect("response");
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(value["status"], "ready");
+    }
+
+    #[tokio::test]
+    async fn any_other_peer_is_refused() {
+        assert_eq!(
+            status("/api/health", Some(4242)).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn version_reports_the_protocol() {
+        let response = router(state())
+            .oneshot(request("/api/engine/version", Some(1000)))
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(value["protocol"], 1);
     }
 
     #[tokio::test]
-    async fn an_unknown_path_is_not_found() {
-        let response = router(state())
-            .oneshot(Request::builder().uri("/nope").body(Body::empty()).unwrap())
+    async fn the_public_router_serves_only_health() {
+        let public = public_router();
+        let ok = public
+            .clone()
+            .oneshot(request("/health", None))
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[test]
-    fn the_protocol_is_one() {
-        assert_eq!(EngineState::default().protocol, 1);
+        assert_eq!(ok.status(), StatusCode::OK);
+        let missing = public
+            .oneshot(request("/api/health", None))
+            .await
+            .expect("response");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 anth-api = { path = "../api" }
+libc = "0.2"
 anth-contract = { path = "../contract", features = ["parse"] }
 axum = { workspace = true }
 humantime = "2"

@@ -109,7 +109,10 @@ async fn run(args: Args) -> Result<(), Error> {
     socket::restrict(&config.socket)?;
     logger.info(&format!("listening on {}", config.socket.display()));
 
-    let router = anth_api::router(anth_api::state());
+    // SAFETY: `geteuid` has no preconditions.
+    let allowed_uid = unsafe { libc::geteuid() };
+    let state = std::sync::Arc::new(anth_api::EngineState::new(allowed_uid));
+    let public = anth_api::public_router();
     let (stop, stopped) = watch::channel(false);
     tokio::spawn(async move {
         shutdown_signal().await;
@@ -125,10 +128,9 @@ async fn run(args: Args) -> Result<(), Error> {
                 .await
                 .map_err(|error| Error::internal(format!("binding {address}: {error}")))?;
             logger.info(&format!("listening on http://{address}"));
-            let router = router.clone();
             let stopped = stopped.clone();
             Some(tokio::spawn(async move {
-                axum::serve(listener, router)
+                axum::serve(listener, public)
                     .with_graceful_shutdown(wait(stopped))
                     .await
             }))
@@ -136,10 +138,13 @@ async fn run(args: Args) -> Result<(), Error> {
         None => None,
     };
 
-    axum::serve(socket, router)
-        .with_graceful_shutdown(wait(stopped))
-        .await
-        .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
+    axum::serve(
+        socket,
+        anth_api::router(state).into_make_service_with_connect_info::<anth_api::PeerUid>(),
+    )
+    .with_graceful_shutdown(wait(stopped))
+    .await
+    .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
 
     if let Some(task) = tcp {
         let _ = task.await;

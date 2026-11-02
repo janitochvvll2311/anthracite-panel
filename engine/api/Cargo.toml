@@ -7,10 +7,10 @@ description = "The engine's HTTP surface"
 
 [dependencies]
 anth-contract = { path = "../contract" }
+tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
 tower = { workspace = true }
