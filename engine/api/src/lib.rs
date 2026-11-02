@@ -146,8 +146,19 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
+    fn state_with(uid: u32) -> Arc<EngineState> {
+        Arc::new(EngineState::new(uid))
+    }
+
     fn state() -> Arc<EngineState> {
-        Arc::new(EngineState::new(1000))
+        state_with(1000)
+    }
+
+    /// The uid this test process runs as. CI does not run as root, so a fixed
+    /// number here would pass locally and fail there.
+    fn current_euid() -> u32 {
+        // SAFETY: `geteuid` has no preconditions.
+        unsafe { libc::geteuid() }
     }
 
     fn request(uri: &str, peer: Option<u32>) -> Request<Body> {
@@ -216,7 +227,8 @@ mod tests {
         let path = dir.join("engine.sock");
 
         let listener = UnixListener::bind(&path).expect("bind");
-        let app = router(state()).into_make_service_with_connect_info::<PeerUid>();
+        let app =
+            router(state_with(current_euid())).into_make_service_with_connect_info::<PeerUid>();
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
         let mut stream = tokio::net::UnixStream::connect(&path)

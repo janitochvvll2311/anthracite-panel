@@ -1,0 +1,13 @@
+[package]
+name = "anth-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The execution seam: the one contract the wasm backend and the fakes implement"
+
+[dependencies]
+anth-contract = { path = "../contract" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
