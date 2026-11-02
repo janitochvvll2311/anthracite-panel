@@ -1,0 +1,16 @@
+[package]
+name = "anth-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The engine's HTTP surface"
+
+[dependencies]
+anth-contract = { path = "../contract" }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tower = { workspace = true }
