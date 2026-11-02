@@ -62,14 +62,15 @@ typed error instead of a crash.
   bridge and scoped `postMessage` RPC.
 - `panel/backend`: links the SDK, mounts the engine router, wires the CLI, embeds
   `panel/web/dist` and fails the release build without it.
-- `panel/web`: a Bun project and a minimal but real UI — navigation, main area,
-  settings, slot rendering.
+- `panel/web`: a Bun project and a real shell — sidebar, tabbed views, an action
+  button and detachable floating windows — rendering the three standard slots.
 - Asset serving from bundles, hash-pinned, CSP-clean.
-- A **second, minimal panel** written against the SDK only, to prove the SDK is
-  the boundary rather than a description of our own panel.
+- A **second, minimal panel** written against the SDK only. It implements
+  `panel.view` at minimum; that is what proves the vocabulary belongs to the
+  contract and not to our panel.
 
-**Done when:** `hello` renders in a slot of both panels, and neither was compiled
-against it. **That is the v0.5.0 acid test.**
+**Done when:** `hello` renders in both panels, in a tab that can be detached, and
+neither was compiled against it. **That is the v0.5.0 acid test.**
 
 ### v0.6.0 — the proof (M4–M5)
 

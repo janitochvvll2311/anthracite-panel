@@ -38,6 +38,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Compose-PUT | The composition is replaced as a whole document with `If-Match` | A read-modify-write of a document needs a precondition, not an `add` endpoint |
 | D-Install | `POST /api/engine/apps` creates and derives the id; `PUT /apps/{id}` only replaces | The id lives inside the bundle, so a client cannot name it before uploading |
 | D-Services | `service` apps arrive in v0.6.0 with the terminal; v0.5.0 ships wasm and ui | A binary that cannot speak WIT is an exception to the type system, and it needs its first real consumer to be designed |
+| D-Slots | The SDK owns the slot vocabulary (`panel.view`, `panel.action`, `panel.settings`); a panel declares which it implements; the engine validates only the format | Portable apps need a contract-owned vocabulary, and the engine must not learn UI |
 | D-Credentials | First boot generates operator name and password into `state/credentials.txt` (`0600`) and forces a change on first login | A default account is a hole, and a secret in the log is a leak |
 | D-Health | `/health` is unauthenticated liveness; `/api/health` is authenticated readiness and answers `503` until ready | Liveness and readiness answer different questions; one endpoint cannot be both |
 | D-Remote-Impl | Only the linked panel is implemented in v0.5.0; HTTP stays as a designed transport | The SDK keeps the door open without paying for it |

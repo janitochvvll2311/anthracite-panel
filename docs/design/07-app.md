@@ -68,11 +68,13 @@ call   = "example:notes/list@1.0.0#all"
 
 # ---- UI surface ----
 [[slot]]
-id     = "panel.main"
+id     = "panel.view"
+label  = "Notes"
+icon   = "notes"
+order  = 10
 tag    = "anth-notes"
 module = "web/notes.js"
 sha256 = "…"
-label  = "Notes"
 
 # ---- CLI surface ----
 [[cli]]
@@ -228,19 +230,35 @@ construction; there is no second validation pass to forget.
 
 ### 7.7 UI slots
 
-A **panel** declares the slots it offers; apps contribute modules to them. A slot
-contribution names a tag, a module path and a hash. The engine serves the module
-from the bundle, never from disk on demand, and the panel mounts it in a sandboxed
-iframe with a `postMessage` RPC scoped to that app's routes only.
+A slot is a named mount point in a panel's layout. Three parties know different
+things: the panel knows where its holes are, the app knows where it wants to
+appear, and **the engine knows neither** — it stores the contribution and serves
+the asset, nothing else.
 
-The engine knows none of this: it exposes the slot contributions as part of the
-composition view and serves the asset. Which slots exist is the panel's business.
+The **SDK defines the vocabulary**; a panel declares which slots it implements.
+`panel.` is the prefix of the contract, not a brand: a third-party panel that
+implements `panel.view` is implementing the contract, not borrowing our name.
+
+| Slot | The app provides | The panel does |
+| --- | --- | --- |
+| `panel.view` | `label`, `icon`, `order`, `tag`, `module`, `sha256` | derives the sidebar entry, opens the view as a tab, and may detach it to a floating window |
+| `panel.action` | `label`, `icon`, `order`, and a `target` — its own view or a `METHOD /path` of the same app | lists it in the action button |
+| `panel.settings` | `label`, `order`, `tag`, `module`, `sha256` | renders it as a section inside settings |
+
+A panel may declare slots of its own, but those are not portable: an app targeting
+them will not appear anywhere else.
+
+`order` is an integer, default `0`, ties broken by app id, so a contribution's
+position is deterministic instead of depending on map iteration.
+
+The engine validates only the **format** of a slot id (`[a-z][a-z0-9.-]*`, bounded
+length). It cannot validate membership, because it does not know the panel — and it
+must not learn. A contribution to a slot the panel does not implement is ignored;
+the panel reports it in development and the composition view lists it, so an
+operator can see it exists.
+
 Modules are served with `ETag` set to their pinned hash and `Cache-Control:
 immutable` (§6.4), so a panel reload is a `304`, not a download.
-
-Slots in v0.5.0, declared by the official panel: `panel.nav`, `panel.main`,
-`panel.settings`. A slot that nobody fills is simply empty — a panel has no
-hard-coded section list.
 
 ### 7.8 Events
 
@@ -403,6 +421,12 @@ export function mount(root: HTMLElement, ctx: SlotContext): () => void;
   scoped to that app's routes — `/api/apps/<id>/...`, never an absolute URL.
 - The returned function unmounts: the panel calls it before replacing the
   contribution and the module must release listeners and timers.
+- **The panel owns the lifetime.** A mounted view stays mounted while its tab
+  exists: switching tabs hides it instead of unmounting it, so an editor keeps
+  half-written state. Modules must tolerate being hidden and shown.
+- **A view must be re-mountable.** Detaching to a floating window unmounts from one
+  root and mounts into another. Anything global — listeners, timers, state kept in
+  the document — has to be released by the cleanup function.
 - If `mount` throws, the panel renders a placeholder for that slot and keeps the
   rest of the interface alive.
 
