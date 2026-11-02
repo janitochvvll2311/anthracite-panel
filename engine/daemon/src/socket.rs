@@ -27,7 +27,8 @@ pub async fn bind(path: &Path, logger: &Logger) -> Result<UnixListener, Error> {
                     path.display()
                 )));
             }
-            Err(_) => {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if is_stale(&error) => {
                 logger.warn(&format!("removing the stale socket {}", path.display()));
                 std::fs::remove_file(path).map_err(|error| {
                     Error::internal(format!(
@@ -35,6 +36,14 @@ pub async fn bind(path: &Path, logger: &Logger) -> Result<UnixListener, Error> {
                         path.display()
                     ))
                 })?;
+            }
+            Err(error) => {
+                // A permission error is not staleness: the socket may be live and
+                // owned by someone else, and deleting it would be an attack.
+                return Err(Error::conflict(format!(
+                    "cannot tell whether another engine is listening on {}: {error}",
+                    path.display()
+                )));
             }
         }
     }
@@ -60,6 +69,12 @@ pub fn restrict(path: &Path) -> Result<(), Error> {
     })
 }
 
+/// Only a refused connection means nobody is listening; every other error is
+/// ambiguous and must not lead to deleting the socket.
+fn is_stale(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::ConnectionRefused
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +89,23 @@ mod tests {
 
     fn logger() -> Logger {
         Logger::new(LogSection::default())
+    }
+
+    #[test]
+    fn only_a_refused_connection_is_stale() {
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::ConnectionReset,
+        ] {
+            assert!(
+                !is_stale(&std::io::Error::from(kind)),
+                "{kind:?} is not stale"
+            );
+        }
+        assert!(is_stale(&std::io::Error::from(
+            std::io::ErrorKind::ConnectionRefused
+        )));
     }
 
     #[tokio::test]

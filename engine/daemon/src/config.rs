@@ -345,17 +345,19 @@ impl<'de> Deserialize<'de> for HumanDuration {
         let value: u64 = number
             .parse()
             .map_err(|_| serde::de::Error::custom(format!("`{text}` is not a duration")))?;
-        let seconds = match unit {
-            's' => Some(value),
-            'm' => value.checked_mul(60),
-            'h' => value.checked_mul(3_600),
-            'd' => value.checked_mul(86_400),
-            _ => None,
-        }
-        .ok_or_else(|| {
-            serde::de::Error::custom(format!(
-                "`{text}` is not a duration with an s, m, h or d suffix"
-            ))
+        let factor = match unit {
+            's' => 1,
+            'm' => 60,
+            'h' => 3_600,
+            'd' => 86_400,
+            _ => {
+                return Err(serde::de::Error::custom(format!(
+                    "`{text}` has no s, m, h or d suffix"
+                )));
+            }
+        };
+        let seconds = value.checked_mul(factor).ok_or_else(|| {
+            serde::de::Error::custom(format!("`{text}` is too large to be a duration"))
         })?;
         Ok(Self(Duration::from_secs(seconds)))
     }

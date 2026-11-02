@@ -48,14 +48,15 @@ fn main() -> ExitCode {
 impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut config = None;
-        let mut profile = None;
+        let mut debug = false;
+        let mut release = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--config" => {
                     config = Some(args.next().ok_or("`--config` needs a path")?);
                 }
-                "--debug" => profile = Some(Profile::Debug),
-                "--release" => profile = Some(Profile::Release),
+                "--debug" => debug = true,
+                "--release" => release = true,
                 "--help" | "-h" => {
                     return Err(
                         "usage: anth-engine [--config <path>] [--debug|--release]".to_string()
@@ -66,9 +67,31 @@ impl Args {
         }
         Ok(Self {
             config: PathBuf::from(config.unwrap_or_else(|| "config.toml".to_string())),
-            profile: profile.unwrap_or_default(),
+            profile: choose_profile(debug, release, cfg!(debug_assertions))?,
         })
     }
+}
+
+/// A release binary never opens the permissive profile, even when asked: the
+/// build decides what it can be, and the flag only narrows it.
+fn choose_profile(debug: bool, release: bool, debug_build: bool) -> Result<Profile, String> {
+    if debug && release {
+        return Err("`--debug` and `--release` are mutually exclusive".to_string());
+    }
+    if debug {
+        if !debug_build {
+            return Err("this is a release build; `--debug` is not available".to_string());
+        }
+        return Ok(Profile::Debug);
+    }
+    if release {
+        return Ok(Profile::Release);
+    }
+    Ok(if debug_build {
+        Profile::Debug
+    } else {
+        Profile::Release
+    })
 }
 
 async fn run(args: Args) -> Result<(), Error> {
@@ -150,5 +173,30 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         _ = terminate.recv() => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::choose_profile;
+    use crate::config::Profile;
+
+    #[test]
+    fn a_release_build_cannot_be_forced_open() {
+        let error = choose_profile(true, false, false).expect_err("no debug in release");
+        assert!(error.contains("release build"), "{error}");
+    }
+
+    #[test]
+    fn the_default_follows_the_build() {
+        assert_eq!(choose_profile(false, false, true), Ok(Profile::Debug));
+        assert_eq!(choose_profile(false, false, false), Ok(Profile::Release));
+    }
+
+    #[test]
+    fn the_flags_narrow_the_default() {
+        assert_eq!(choose_profile(false, true, true), Ok(Profile::Release));
+        assert_eq!(choose_profile(true, false, true), Ok(Profile::Debug));
+        assert!(choose_profile(true, true, true).is_err());
     }
 }
