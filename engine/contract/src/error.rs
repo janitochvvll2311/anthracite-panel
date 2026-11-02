@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Every error the API can report.
@@ -67,6 +67,25 @@ impl ErrorKind {
             Self::MethodNotAllowed => 405,
             Self::Internal => 500,
         }
+    }
+
+    /// The kind a wire code names. An unknown code is not an error: clients
+    /// treat it as `internal`, which is what forward compatibility requires.
+    pub fn from_code(code: &str) -> Option<Self> {
+        Some(match code {
+            "denied" => Self::Denied,
+            "unauthenticated" => Self::Unauthenticated,
+            "invalid" => Self::Invalid,
+            "not-found" => Self::NotFound,
+            "too-large" => Self::TooLarge,
+            "unavailable" => Self::Unavailable,
+            "conflict" => Self::Conflict,
+            "precondition-failed" => Self::PreconditionFailed,
+            "method-not-allowed" => Self::MethodNotAllowed,
+            "internal" => Self::Internal,
+            "exhausted" => Self::Exhausted,
+            _ => return None,
+        })
     }
 
     /// The CLI exit code, so a script can branch without parsing text.
@@ -167,7 +186,7 @@ impl Error {
     pub fn envelope(&self) -> ErrorEnvelope {
         ErrorEnvelope {
             error: ErrorBody {
-                code: self.kind.code(),
+                code: self.kind.code().to_string(),
                 message: self.message.clone(),
                 app: self.app.clone(),
                 detail: self.detail.clone(),
@@ -184,15 +203,16 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The serialized envelope. Serializes to `{"error":{…}}`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// The serialized envelope. Serializes to `{"error":{…}}` and reads back, so a
+/// client parses errors and responses with the same types.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ErrorEnvelope {
     pub error: ErrorBody,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ErrorBody {
-    pub code: &'static str,
+    pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
@@ -233,6 +253,25 @@ mod tests {
         assert_eq!(value["error"]["message"], "bad");
         assert!(value["error"].get("app").is_none());
         assert!(value["error"].get("detail").is_none());
+    }
+
+    #[test]
+    fn an_envelope_reads_back() {
+        let error = Error::too_large("over the cap")
+            .with_app("org.example.notes")
+            .with_detail(serde_json::json!({"limit": 32}));
+        let text = serde_json::to_string(&error.envelope()).expect("json");
+        let back: ErrorEnvelope = serde_json::from_str(&text).expect("parse");
+        assert_eq!(back.error.code, "too-large");
+        assert_eq!(back.error.message, "over the cap");
+        assert_eq!(back.error.app.as_deref(), Some("org.example.notes"));
+        assert_eq!(back.error.detail.expect("detail")["limit"], 32);
+    }
+
+    #[test]
+    fn an_unknown_code_is_not_a_known_kind() {
+        assert_eq!(ErrorKind::from_code("invalid"), Some(ErrorKind::Invalid));
+        assert_eq!(ErrorKind::from_code("something-new"), None);
     }
 
     #[test]

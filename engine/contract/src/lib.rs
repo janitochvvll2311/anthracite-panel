@@ -9,5 +9,5 @@ pub mod id;
 pub mod manifest;
 
 pub use error::{Error, ErrorEnvelope, ErrorKind};
-pub use id::{AppId, InterfaceId, Namespace, Version};
+pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use manifest::{Manifest, MANIFEST_VERSION};

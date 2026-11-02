@@ -1,6 +1,6 @@
 //! Interface and app identifiers.
 //!
-//! An interface is `namespace:package/interface@major.minor.patch`; an app is a
+//! An interface is `namespace:package/interface@semver`; an app is a
 //! reverse-DNS id. Both are parsed once and rendered canonically, because
 //! comparing raw strings is how `@1.0` and `@1.0.0` become different things.
 
@@ -12,58 +12,16 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::Error;
 
 /// A semantic version, as the interface id carries it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Version {
-    pub major: u64,
-    pub minor: u64,
-    pub patch: u64,
-}
+///
+/// Full semver, because WIT package versions are: `1.0.0-rc.1` is a different
+/// interface from `1.0.0`, and a parser that dropped the pre-release would make
+/// them collide.
+pub use semver::Version;
 
-impl Version {
-    pub fn new(major: u64, minor: u64, patch: u64) -> Self {
-        Self {
-            major,
-            minor,
-            patch,
-        }
-    }
-
-    pub fn parse(input: &str) -> Result<Self, Error> {
-        let mut parts = input.split('.');
-        let major = parts.next();
-        let minor = parts.next();
-        let patch = parts.next();
-        let (Some(major), Some(minor), Some(patch), None) = (major, minor, patch, parts.next())
-        else {
-            return Err(Error::invalid(format!(
-                "`{input}` is not a version of the form major.minor.patch"
-            )));
-        };
-        Ok(Self::new(
-            parse_number(major, input)?,
-            parse_number(minor, input)?,
-            parse_number(patch, input)?,
-        ))
-    }
-}
-
-fn parse_number(input: &str, whole: &str) -> Result<u64, Error> {
-    if input.is_empty() || (input.len() > 1 && input.starts_with('0')) {
-        return Err(Error::invalid(format!(
-            "`{whole}` has a version component that is not a canonical number"
-        )));
-    }
-    input.parse::<u64>().map_err(|_| {
-        Error::invalid(format!(
-            "`{whole}` has a version component that is not a number"
-        ))
-    })
-}
-
-impl fmt::Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
+/// Parses a version and reports a contract error instead of a semver one.
+pub fn parse_version(input: &str) -> Result<Version, Error> {
+    Version::parse(input)
+        .map_err(|_| Error::invalid(format!("`{input}` is not a semantic version")))
 }
 
 /// Who owns a namespace.
@@ -87,7 +45,7 @@ impl Namespace {
     }
 }
 
-/// `namespace:package/interface@major.minor.patch`.
+/// `namespace:package/interface@semver`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InterfaceId {
     namespace: String,
@@ -138,7 +96,7 @@ impl InterfaceId {
                 "`{input}` has more than one interface segment"
             )));
         }
-        Self::new(namespace, package, interface, Version::parse(version)?)
+        Self::new(namespace, package, interface, parse_version(version)?)
     }
 
     pub fn namespace(&self) -> &str {
@@ -153,8 +111,8 @@ impl InterfaceId {
         &self.interface
     }
 
-    pub fn version(&self) -> Version {
-        self.version
+    pub fn version(&self) -> &Version {
+        &self.version
     }
 
     pub fn namespace_kind(&self) -> Namespace {
@@ -227,7 +185,7 @@ impl AppId {
         &self.0
     }
 
-    /// The last label, used as the CLI name when the manifest declares no alias.
+    /// The last label, which the CLI uses when the manifest declares no alias.
     pub fn last_label(&self) -> &str {
         self.0.rsplit('.').next().unwrap_or(&self.0)
     }
@@ -314,10 +272,18 @@ mod tests {
         assert_eq!(id.namespace(), "anth");
         assert_eq!(id.package(), "fs");
         assert_eq!(id.interface(), "list");
-        assert_eq!(id.version(), Version::new(1, 2, 3));
+        assert_eq!(id.version(), &Version::new(1, 2, 3));
         assert_eq!(id.to_string(), "anth:fs/list@1.2.3");
         assert_eq!(id.package_id(), "anth:fs");
         assert_eq!(id.namespace_kind(), Namespace::Engine);
+    }
+
+    #[test]
+    fn a_pre_release_is_a_different_interface() {
+        let release = InterfaceId::parse("example:notes/list@1.0.0").unwrap();
+        let candidate = InterfaceId::parse("example:notes/list@1.0.0-rc.1").unwrap();
+        assert_ne!(release, candidate);
+        assert_eq!(candidate.to_string(), "example:notes/list@1.0.0-rc.1");
     }
 
     #[test]
@@ -335,6 +301,7 @@ mod tests {
             "anth:fs/list@1.0",
             "anth:fs/list@1.0.0.0",
             "anth:fs/list@01.0.0",
+            "anth:fs/list@+1.0.0",
             "Anth:fs/list@1.0.0",
             "anth:Fs/list@1.0.0",
             "anth:fs/-list@1.0.0",

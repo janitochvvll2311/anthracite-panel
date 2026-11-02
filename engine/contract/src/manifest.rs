@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::id::{is_kebab, is_sha256, AppId, InterfaceId, Version};
+use crate::id::{is_kebab, is_sha256, parse_version, AppId, InterfaceId};
 
 /// The manifest schema this version speaks.
 pub const MANIFEST_VERSION: u32 = 2;
@@ -139,6 +139,21 @@ impl Manifest {
             .map_err(|error| Error::invalid(format!("the manifest is not valid TOML: {error}")))
     }
 
+    /// The short name the CLI uses: the alias, or the id's last label when that
+    /// label is not a reserved command. `None` means the CLI must use the full
+    /// id, which is better than a short name that means something else.
+    pub fn cli_name(&self) -> Option<&str> {
+        if let Some(alias) = &self.app.alias {
+            return Some(alias.as_str());
+        }
+        let last = self.app.id.rsplit('.').next()?;
+        if RESERVED_ALIASES.contains(&last) {
+            None
+        } else {
+            Some(last)
+        }
+    }
+
     /// Every rule that does not need a component or the catalog.
     pub fn validate(&self) -> Result<(), Error> {
         if self.manifest_version != MANIFEST_VERSION {
@@ -149,7 +164,7 @@ impl Manifest {
         }
 
         AppId::parse(&self.app.id)?;
-        Version::parse(&self.app.version)?;
+        parse_version(&self.app.version)?;
         if let Some(alias) = &self.app.alias {
             if !is_kebab(alias) {
                 return Err(Error::invalid(format!(
@@ -395,7 +410,7 @@ fn is_slot_id(input: &str) -> bool {
         && !input.contains("..")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parse"))]
 mod tests {
     use super::*;
 
@@ -527,6 +542,18 @@ wall-ms = 5000
         manifest.limits.fuel = Some(0);
         let error = manifest.validate().expect_err("fuel");
         assert!(error.message().contains("greater than zero"), "{error}");
+    }
+
+    #[test]
+    fn the_cli_name_falls_back_only_to_a_free_label() {
+        let partial = Manifest::parse(VALID).expect("parse");
+        assert_eq!(partial.cli_name(), Some("notes"));
+
+        let text = VALID
+            .replace("alias = \"notes\"\n", "")
+            .replace("org.example.notes", "org.example.install");
+        let manifest = Manifest::parse(&text).expect("parse");
+        assert_eq!(manifest.cli_name(), None);
     }
 
     #[test]
