@@ -1,0 +1,45 @@
+# Anthracite engine configuration.
+#
+# Written on first boot with the release defaults. `anth config set` edits one
+# key and keeps these comments (§6.7).
+
+version = 1
+
+# The Unix socket the engine listens on. The socket authenticates by peer
+# credentials: only the service user and the administration group are accepted.
+socket = "/run/anth/engine.sock"
+
+# TCP is off by default. Sessions, not peer credentials, apply here.
+# listen = "127.0.0.1:8080"
+
+# Everything the engine owns: apps, grants, the composition, the operator
+# credentials, the keyring and the audit log (§6.8).
+state = "/var/lib/anth"
+
+# `cranelift` is the only backend in v0.5.0; `pulley` is reserved for the
+# hardened profile and is not built.
+backend = "cranelift"
+
+[log]
+# error, warn, info, debug
+level = "info"
+# text or json
+format = "text"
+
+[auth]
+# Sessions live on TCP only; the socket uses peer credentials.
+session-ttl = "12h"
+
+[apps]
+# An unsigned bundle is only accepted with this off, and it is never `system`.
+require-signature = true
+# Development only: serves UI modules without checking their hash. It never
+# relaxes signatures, grants or the world check.
+allow-unverified-assets = false
+max-bundle-bytes = 33_554_432
+
+[limits]
+# Defaults for an app whose manifest omits them.
+fuel = 10_000_000
+memory-pages = 256
+wall-ms = 5_000
