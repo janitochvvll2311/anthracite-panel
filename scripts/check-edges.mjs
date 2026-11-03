@@ -1,61 +1,106 @@
 #!/usr/bin/env bun
 // The forbidden edges of §10.1, checked instead of documented.
 //
-// The engine is the platform: it may depend on crates from crates.io, never on
-// the SDK, the panel or an app. Those live in other workspaces, so the rule is
-// "no path dependency leaves engine/", plus "the contract depends on nothing we
-// own" — it is the base everything else builds on.
+// Three rules, by zone:
+//
+//   engine/*  may not depend on anything outside engine/
+//   panel/*   may not depend on engine/* directly: it goes through the SDK
+//   apps/*    may not depend on sdk/rust/panel: that crate is for panels
+//
+// plus "engine/contract depends on nothing we own", because it is the base
+// everything else builds on. A workspace that does not exist yet is skipped, so
+// the check grows with the repository instead of failing on day one.
 //
 // Run from anywhere: `bun scripts/check-edges.mjs`.
 
 import { spawnSync } from "node:child_process";
-import { dirname, relative, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(dirname(new URL(import.meta.url).pathname), "..");
-const engine = resolve(root, "engine");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const cargo = spawnSync(
-  "cargo",
-  [
-    "metadata",
-    "--format-version",
-    "1",
-    "--no-deps",
-    "--manifest-path",
-    `${engine}/Cargo.toml`,
-  ],
-  { encoding: "utf8" },
-);
-if (cargo.status !== 0) {
-  console.error("cargo metadata failed:");
-  console.error(cargo.stderr);
+const WORKSPACES = [
+  "engine/Cargo.toml",
+  "sdk/rust/Cargo.toml",
+  "panel/backend/Cargo.toml",
+  "apps/Cargo.toml",
+];
+
+const violations = [];
+const packages = [];
+const seen = [];
+
+for (const manifest of WORKSPACES) {
+  const absolute = resolve(root, manifest);
+  if (!existsSync(absolute)) continue;
+  seen.push(manifest.split("/")[0]);
+
+  const result = spawnSync(
+    "cargo",
+    [
+      "metadata",
+      "--format-version",
+      "1",
+      "--no-deps",
+      "--manifest-path",
+      absolute,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    console.error(`cargo metadata failed for ${manifest}:`);
+    console.error(result.stderr);
+    process.exit(1);
+  }
+  for (const pkg of JSON.parse(result.stdout).packages) {
+    packages.push({ ...pkg, manifest: resolve(pkg.manifest_path) });
+  }
+}
+
+// A gate that passes when it found nothing to check is worse than no gate.
+if (packages.length === 0) {
+  console.error("no workspace packages found; the edge check has nothing to read");
   process.exit(1);
 }
 
-const metadata = JSON.parse(cargo.stdout);
-const packages = metadata.packages;
-const names = new Set(packages.map((pkg) => pkg.name));
-const violations = [];
+/** The top-level directory a path lives in: engine, sdk, panel, apps, … */
+function zone(path) {
+  return relative(root, path).split(sep)[0];
+}
+
+/** The path relative to the repository root, with forward slashes. */
+function rel(path) {
+  return relative(root, path).split(sep).join("/");
+}
 
 for (const pkg of packages) {
-  const manifest = resolve(pkg.manifest_path);
-  const rel = relative(engine, manifest);
-  if (rel.startsWith("..")) {
-    violations.push(`${pkg.name}: lives outside engine/ (${manifest})`);
-  }
+  const from = zone(pkg.manifest);
+  const manifest = rel(pkg.manifest);
 
   for (const dep of pkg.dependencies) {
     if (!dep.path) continue;
-    const depDir = resolve(dep.path);
-    const outside = relative(engine, depDir).startsWith("..");
-    if (outside) {
+    const target = resolve(dep.path);
+    const to = zone(target);
+
+    if (from === "engine" && to !== "engine") {
       violations.push(
-        `${pkg.name} -> ${dep.name} (${depDir}): the engine must not depend outside its workspace`,
+        `${pkg.name} -> ${dep.name} (${rel(target)}): the engine must not depend outside engine/`,
       );
     }
-    if (pkg.name === "anth-contract") {
+    if (from === "panel" && to === "engine") {
       violations.push(
-        `${pkg.name} -> ${dep.name}: the contract is the base and depends on nothing we own`,
+        `${pkg.name} -> ${dep.name} (${rel(target)}): a panel depends on the SDK, never on the engine directly`,
+      );
+    }
+    if (from === "apps" && rel(target).startsWith("sdk/rust/panel")) {
+      violations.push(
+        `${pkg.name} -> ${dep.name} (${rel(target)}): an app must not depend on the panel SDK`,
+      );
+    }
+    if (manifest === "engine/contract/Cargo.toml") {
+      violations.push(
+        `${pkg.name} -> ${dep.name} (${rel(target)}): the contract is the base and depends on nothing we own`,
       );
     }
   }
@@ -68,5 +113,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `edges ok: ${packages.length} workspace packages (${[...names].sort().join(", ")}), no path dependency leaves engine/`,
+  `edges ok: ${packages.length} packages in ${seen.join(", ") || "no workspace"}; no forbidden path dependency`,
 );
