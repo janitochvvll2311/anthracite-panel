@@ -373,12 +373,28 @@ mod tests {
 
     #[tokio::test]
     async fn different_apps_start_without_waiting_for_each_other() {
+        use std::time::Duration;
+        use tokio::sync::Barrier;
+        use tokio::time::timeout;
+
+        // The runtime only lets an instantiation finish when *two* of them meet.
+        // With a global lifecycle lock the second never starts, the first waits
+        // forever, and this test times out; with a per-app lock both meet.
         let fake = Arc::new(FakeRuntime::new());
-        let supervisor = Supervisor::new(Arc::new(SlowRuntime(Arc::clone(&fake))));
-        let (a, b) = tokio::join!(
-            supervisor.start(NOTES, Vec::new(), budget()),
-            supervisor.start(OTHER, Vec::new(), budget())
-        );
+        let supervisor = Supervisor::new(Arc::new(RendezvousRuntime {
+            inner: Arc::clone(&fake),
+            barrier: Arc::new(Barrier::new(2)),
+        }));
+
+        let both = async {
+            tokio::join!(
+                supervisor.start(NOTES, Vec::new(), budget()),
+                supervisor.start(OTHER, Vec::new(), budget())
+            )
+        };
+        let (a, b) = timeout(Duration::from_secs(5), both)
+            .await
+            .expect("different apps must not serialise: the second never reached the barrier");
         a.expect("notes");
         b.expect("other");
         assert_eq!(supervisor.running().await.len(), 2);
@@ -437,6 +453,35 @@ mod tests {
 
         fn release(&self, _: InstanceId) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
             Box::pin(async {})
+        }
+    }
+
+    /// Blocks an instantiation until two of them are in flight.
+    struct RendezvousRuntime {
+        inner: Arc<FakeRuntime>,
+        barrier: Arc<tokio::sync::Barrier>,
+    }
+
+    impl Runtime for RendezvousRuntime {
+        fn instantiate(
+            &self,
+            spec: InstanceSpec,
+        ) -> Pin<Box<dyn Future<Output = Result<Instance, Error>> + Send + '_>> {
+            Box::pin(async move {
+                self.barrier.wait().await;
+                self.inner.instantiate(spec).await
+            })
+        }
+
+        fn call(
+            &self,
+            call: anth_runtime::Call,
+        ) -> Pin<Box<dyn Future<Output = Result<Reply, Error>> + Send + '_>> {
+            self.inner.call(call)
+        }
+
+        fn release(&self, instance: InstanceId) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.inner.release(instance)
         }
     }
 
