@@ -5,11 +5,15 @@
 //! when to drop it. That is this module's job, and it is why a caller never sees
 //! an `InstanceId` it has to track.
 //!
-//! Two locks: `lifecycle` serialises start and stop end to end, because a start
-//! is "release the old, instantiate, record the new" and any interleaving leaks
-//! or loses an instance. `instances` guards the map itself and is held only for a
-//! lookup or an insert, never across an await, so calls are not blocked by a slow
-//! instantiation.
+//! Locking, in order:
+//!
+//! - `barrier`: a read guard for `start` and `stop`, a write guard for
+//!   `stop_all`. Starting two different apps does not wait; stopping everything
+//!   waits for the starts in flight.
+//! - `app_locks`: one mutex per app, because two starts of the *same* app would
+//!   otherwise both see the registry empty and leak an instance.
+//! - `instances`: guards the map itself, held only for a lookup or an insert and
+//!   never across an await, so a call is not blocked by a slow instantiation.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -17,7 +21,7 @@ use std::sync::Arc;
 use anth_contract::{AppId, Error, InterfaceId, World};
 use anth_runtime::{Budget, InstanceId, Reply, Runtime};
 use serde_json::Value;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 /// What starting an app produced.
 #[derive(Debug, Clone)]
@@ -36,7 +40,8 @@ pub struct Running {
 
 pub struct Supervisor {
     runtime: Arc<dyn Runtime>,
-    lifecycle: Mutex<()>,
+    barrier: RwLock<()>,
+    app_locks: Mutex<BTreeMap<AppId, Arc<Mutex<()>>>>,
     instances: Mutex<BTreeMap<AppId, InstanceId>>,
 }
 
@@ -44,7 +49,8 @@ impl Supervisor {
     pub fn new(runtime: Arc<dyn Runtime>) -> Self {
         Self {
             runtime,
-            lifecycle: Mutex::new(()),
+            barrier: RwLock::new(()),
+            app_locks: Mutex::new(BTreeMap::new()),
             instances: Mutex::new(BTreeMap::new()),
         }
     }
@@ -57,7 +63,9 @@ impl Supervisor {
     /// that no longer exists.
     pub async fn start(&self, app: &str, wasm: Vec<u8>, budget: Budget) -> Result<Started, Error> {
         let app_id = AppId::parse(app)?;
-        let _lifecycle = self.lifecycle.lock().await;
+        let _barrier = self.barrier.read().await;
+        let app_lock = self.app_lock(&app_id).await;
+        let _app = app_lock.lock_owned().await;
 
         let previous = self.instances.lock().await.remove(&app_id);
         if let Some(id) = previous {
@@ -113,7 +121,9 @@ impl Supervisor {
         let Ok(app_id) = AppId::parse(app) else {
             return false;
         };
-        let _lifecycle = self.lifecycle.lock().await;
+        let _barrier = self.barrier.read().await;
+        let app_lock = self.app_lock(&app_id).await;
+        let _app = app_lock.lock_owned().await;
         let id = self.instances.lock().await.remove(&app_id);
         match id {
             Some(id) => {
@@ -126,7 +136,7 @@ impl Supervisor {
 
     /// Stops everything, for an orderly shutdown.
     pub async fn stop_all(&self) {
-        let _lifecycle = self.lifecycle.lock().await;
+        let _barrier = self.barrier.write().await;
         let ids: Vec<InstanceId> = {
             let mut instances = self.instances.lock().await;
             let ids = instances.values().copied().collect();
@@ -136,6 +146,16 @@ impl Supervisor {
         for id in ids {
             self.runtime.release(id).await;
         }
+    }
+
+    /// The mutex that serialises the lifecycle of one app.
+    async fn app_lock(&self, app: &AppId) -> Arc<Mutex<()>> {
+        self.app_locks
+            .lock()
+            .await
+            .entry(app.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     /// What is running, sorted by app.
@@ -335,8 +355,8 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_starts_of_the_same_app_leave_one_instance() {
-        let runtime = Arc::new(SlowRuntime(Arc::new(FakeRuntime::new())));
-        let supervisor = Supervisor::new(Arc::clone(&runtime) as Arc<dyn Runtime>);
+        let fake = Arc::new(FakeRuntime::new());
+        let supervisor = Supervisor::new(Arc::new(SlowRuntime(Arc::clone(&fake))));
         let (a, b) = tokio::join!(
             supervisor.start(NOTES, Vec::new(), budget()),
             supervisor.start(NOTES, Vec::new(), budget())
@@ -344,6 +364,25 @@ mod tests {
         a.expect("first");
         b.expect("second");
         assert_eq!(supervisor.running().await.len(), 1);
+        assert_eq!(
+            fake.instances(),
+            1,
+            "a second instantiation would be an orphan the registry never names"
+        );
+    }
+
+    #[tokio::test]
+    async fn different_apps_start_without_waiting_for_each_other() {
+        let fake = Arc::new(FakeRuntime::new());
+        let supervisor = Supervisor::new(Arc::new(SlowRuntime(Arc::clone(&fake))));
+        let (a, b) = tokio::join!(
+            supervisor.start(NOTES, Vec::new(), budget()),
+            supervisor.start(OTHER, Vec::new(), budget())
+        );
+        a.expect("notes");
+        b.expect("other");
+        assert_eq!(supervisor.running().await.len(), 2);
+        assert_eq!(fake.instances(), 2);
     }
 
     #[tokio::test]
