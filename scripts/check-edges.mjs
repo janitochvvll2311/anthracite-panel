@@ -93,7 +93,11 @@ for (const pkg of packages) {
         `${pkg.name} -> ${dep.name} (${rel(target)}): a panel depends on the SDK, never on the engine directly`,
       );
     }
-    if (from === "apps" && rel(target).startsWith("sdk/rust/panel")) {
+    if (
+      from === "apps" &&
+      (rel(target) === "sdk/rust/panel" ||
+        rel(target).startsWith("sdk/rust/panel/"))
+    ) {
       violations.push(
         `${pkg.name} -> ${dep.name} (${rel(target)}): an app must not depend on the panel SDK`,
       );
