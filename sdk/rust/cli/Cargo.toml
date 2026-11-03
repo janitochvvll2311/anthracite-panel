@@ -1,0 +1,13 @@
+[package]
+name = "anth-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The `anth` command: a thin client for the Anthracite engine"
+
+[[bin]]
+name = "anth"
+path = "src/main.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
