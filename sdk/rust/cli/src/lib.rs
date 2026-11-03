@@ -145,7 +145,7 @@ fn doctor(config: Option<PathBuf>, profile: Option<Profile>) -> Result<u8, Error
     }
     let status = command
         .status()
-        .map_err(|error| Error::internal(format!("running {}: {error}", engine.display())))?;
+        .map_err(|error| Error::invalid(format!("cannot run {}: {error}", engine.display())))?;
     Ok(status.code().unwrap_or(1) as u8)
 }
 

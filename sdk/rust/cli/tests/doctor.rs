@@ -82,6 +82,18 @@ fn doctor_with_a_non_executable_engine_says_so() {
 }
 
 #[test]
+fn doctor_with_a_file_that_cannot_exec_is_invalid_not_internal() {
+    let dir = scratch("bad-format");
+    let engine = dir.join("engine");
+    fs::write(&engine, b"this is not a program").expect("write");
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).expect("chmod");
+    let output = doctor(&engine, &["doctor"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot run"), "{stderr}");
+}
+
+#[test]
 fn help_and_version_do_not_need_an_engine() {
     let output = Command::new(env!("CARGO_BIN_EXE_anth"))
         .arg("--help")
