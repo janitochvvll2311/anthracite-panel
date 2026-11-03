@@ -39,6 +39,62 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Verifies the shape of an existing tree without creating or fixing anything.
+pub fn check(root: &Path) -> Result<(), Error> {
+    for name in ["", "apps", "grants", "keys"] {
+        let path = if name.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(name)
+        };
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::not_found(format!(
+                    "{} is missing; start the engine once to create it",
+                    path.display()
+                ))
+            } else {
+                Error::internal(format!("inspecting {}: {error}", path.display()))
+            }
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(Error::invalid(format!(
+                "{} is a symlink; the state tree must be real directories",
+                path.display()
+            )));
+        }
+        if !metadata.is_dir() {
+            return Err(Error::invalid(format!(
+                "{} is not a directory",
+                path.display()
+            )));
+        }
+    }
+    for name in ["composition.toml", "audit.jsonl"] {
+        let path = root.join(name);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::not_found(format!(
+                    "{} is missing; start the engine once to create it",
+                    path.display()
+                ))
+            } else {
+                Error::internal(format!("inspecting {}: {error}", path.display()))
+            }
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(Error::invalid(format!(
+                "{} is a symlink; the state tree must be real files",
+                path.display()
+            )));
+        }
+        if !metadata.is_file() {
+            return Err(Error::invalid(format!("{} is not a file", path.display())));
+        }
+    }
+    Ok(())
+}
+
 fn create_dir(path: &Path) -> Result<(), Error> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -133,6 +189,21 @@ mod tests {
             & 0o777;
         assert_eq!(mode, 0o600);
         fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_created_tree_checks_clean() {
+        let root = scratch("check");
+        ensure(&root).expect("ensure");
+        check(&root).expect("check");
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_missing_tree_is_not_found() {
+        let root = scratch("check-missing");
+        let error = check(&root).expect_err("missing");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
     }
 
     #[test]
