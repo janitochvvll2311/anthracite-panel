@@ -60,3 +60,26 @@ jobs:
 
       - name: Test, with the parser
         run: cargo test -p anth-contract --features parse
+
+      # The client is a wrapper, so the test that proves it is one against the
+      # real binary — before and after the engine has created its state.
+      - name: Build the client
+        run: cargo build --manifest-path ../sdk/rust/Cargo.toml
+
+      - name: Doctor against the real engine
+        run: |
+          set -eu
+          dir="$(mktemp -d)"
+          printf 'version = 1\nsocket = "%s/engine.sock"\nstate = "%s/state"\n' "$dir" "$dir" > "$dir/config.toml"
+
+          ../target/debug/anth doctor --config "$dir/config.toml"
+
+          ../target/debug/anth-engine --debug --config "$dir/config.toml" &
+          engine=$!
+          trap 'kill "$engine" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 100); do
+            [ -S "$dir/engine.sock" ] && break
+            sleep 0.1
+          done
+
+          ../target/debug/anth doctor --config "$dir/config.toml"
