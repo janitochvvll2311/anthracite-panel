@@ -106,7 +106,16 @@ fn choose_profile(debug: bool, release: bool, debug_build: bool) -> Result<Profi
 async fn check(config_path: PathBuf, profile: Profile) -> Result<(), Error> {
     let config = Config::load(&config_path)?;
     config.validate(profile)?;
-    anth_engine::state::check(&config.state)?;
+    match anth_engine::state::check(&config.state)? {
+        anth_engine::state::StateStatus::Missing => {
+            println!(
+                "ok: no state at {} yet; the first boot creates it",
+                config.state.display()
+            );
+            return Ok(());
+        }
+        anth_engine::state::StateStatus::Ready => {}
+    }
     let composition = anth_engine::state::load_composition(&config.state)?;
     composition.validate()?;
     println!(
