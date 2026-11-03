@@ -83,8 +83,10 @@ jobs:
             [ -S "$dir/engine.sock" ] && break
             sleep 0.1
           done
+          test -S "$dir/engine.sock" || { echo "the engine never bound its socket"; exit 1; }
 
-          ../target/debug/anth doctor --config "$dir/config.toml"
+          ../target/debug/anth doctor --config "$dir/config.toml" | tee "$dir/doctor.txt"
+          grep -q "composition are valid" "$dir/doctor.txt"
 
       - uses: oven-sh/setup-bun@v2
         with:
