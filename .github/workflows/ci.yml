@@ -37,3 +37,12 @@ jobs:
 
       - name: Test, with the parser
         run: cargo test -p anth-contract --features parse
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      # The engine may not depend on the SDK, the panel or an app (§10.1).
+      - name: Forbidden edges
+        run: bun scripts/check-edges.mjs
+        working-directory: .
