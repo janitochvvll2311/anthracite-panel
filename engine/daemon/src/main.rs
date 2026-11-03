@@ -16,6 +16,8 @@ use tokio::sync::watch;
 struct Args {
     config: PathBuf,
     profile: Profile,
+    /// Validate and exit: what the doctor command runs.
+    check: bool,
 }
 
 fn main() -> ExitCode {
@@ -30,8 +32,13 @@ fn main() -> ExitCode {
         .enable_all()
         .build()
         .map_err(|error| Error::internal(format!("starting the runtime: {error}")))
-        .and_then(|runtime| runtime.block_on(run(args)))
-    {
+        .and_then(|runtime| {
+            if args.check {
+                runtime.block_on(check(args.config, args.profile))
+            } else {
+                runtime.block_on(run(args))
+            }
+        }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{}: {}", error.kind().code(), error.message());
@@ -45,6 +52,7 @@ impl Args {
         let mut config = None;
         let mut debug = false;
         let mut release = false;
+        let mut check = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--config" => {
@@ -52,9 +60,11 @@ impl Args {
                 }
                 "--debug" => debug = true,
                 "--release" => release = true,
+                "--check" => check = true,
                 "--help" | "-h" => {
                     return Err(
-                        "usage: anth-engine [--config <path>] [--debug|--release]".to_string()
+                        "usage: anth-engine [--config <path>] [--debug|--release] [--check]"
+                            .to_string(),
                     );
                 }
                 other => return Err(format!("unknown argument `{other}`")),
@@ -63,6 +73,7 @@ impl Args {
         Ok(Self {
             config: PathBuf::from(config.unwrap_or_else(|| "config.toml".to_string())),
             profile: choose_profile(debug, release, cfg!(debug_assertions))?,
+            check,
         })
     }
 }
@@ -87,6 +98,31 @@ fn choose_profile(debug: bool, release: bool, debug_build: bool) -> Result<Profi
     } else {
         Profile::Release
     })
+}
+
+/// Reads what a boot would read, without creating or binding anything. This is
+/// the whole of the doctor command: a daemon that is not running can still be
+/// configured wrong.
+async fn check(config_path: PathBuf, profile: Profile) -> Result<(), Error> {
+    let config = Config::load(&config_path)?;
+    config.validate(profile)?;
+    match anth_engine::state::check(&config.state)? {
+        anth_engine::state::StateStatus::Missing => {
+            println!(
+                "ok: no state at {} yet; the first boot creates it",
+                config.state.display()
+            );
+            return Ok(());
+        }
+        anth_engine::state::StateStatus::Ready => {}
+    }
+    let composition = anth_engine::state::load_composition(&config.state)?;
+    composition.validate()?;
+    println!(
+        "ok: configuration, state and composition are valid ({} apps composed)",
+        composition.profile[0].apps.len()
+    );
+    Ok(())
 }
 
 async fn run(args: Args) -> Result<(), Error> {
