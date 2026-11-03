@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("anth-doctor-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir()
+        .join("anthracite-panel")
+        .join(format!("anth-doctor-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("mkdir");
     dir
@@ -66,6 +68,17 @@ fn doctor_without_an_engine_binary_is_not_found() {
     assert_eq!(output.status.code(), Some(4));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("ANTH_ENGINE"), "{stderr}");
+}
+
+#[test]
+fn doctor_with_a_non_executable_engine_says_so() {
+    let dir = scratch("not-executable");
+    let engine = dir.join("engine");
+    fs::write(&engine, b"").expect("write");
+    let output = doctor(&engine, &["doctor"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not executable"), "{stderr}");
 }
 
 #[test]

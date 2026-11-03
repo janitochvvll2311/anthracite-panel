@@ -51,12 +51,15 @@ pub enum Invocation {
 }
 
 /// Parses arguments without touching the filesystem.
-pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Error> {
+///
+/// Flags are compared as text, but a path is kept as [`OsString`]: a state
+/// directory with non-UTF-8 bytes is unusual, not invalid.
+pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Error> {
     let mut args = args.into_iter();
     let Some(command) = args.next() else {
         return Ok(Invocation::Help);
     };
-    match command.as_str() {
+    match as_text(&command)? {
         "doctor" => parse_doctor(args),
         "help" | "--help" | "-h" => Ok(Invocation::Help),
         "--version" | "-V" | "version" => Ok(Invocation::Version),
@@ -64,12 +67,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation, Error
     }
 }
 
-fn parse_doctor(args: impl Iterator<Item = String>) -> Result<Invocation, Error> {
+fn as_text(arg: &OsString) -> Result<&str, Error> {
+    arg.to_str()
+        .ok_or_else(|| usage("an option is not valid UTF-8".to_string()))
+}
+
+fn parse_doctor(args: impl Iterator<Item = OsString>) -> Result<Invocation, Error> {
     let mut config = None;
     let mut profile = None;
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
-        match arg.as_str() {
+        match as_text(&arg)? {
             "--config" => {
                 let path = args
                     .next()
@@ -160,24 +168,29 @@ fn locate(
 ) -> Result<PathBuf, Error> {
     if let Some(path) = override_path {
         let path = PathBuf::from(path);
-        return if path.is_file() {
-            Ok(path)
-        } else {
-            Err(Error::not_found(format!(
+        if !path.is_file() {
+            return Err(Error::not_found(format!(
                 "{ENGINE_ENV} points to {}, which is not a file",
                 path.display()
-            )))
-        };
+            )));
+        }
+        if !is_executable(&path) {
+            return Err(Error::invalid(format!(
+                "{ENGINE_ENV} points to {}, which is not executable",
+                path.display()
+            )));
+        }
+        return Ok(path);
     }
     if let Some(candidate) = exe_dir.map(|dir| dir.join(ENGINE_BINARY)) {
-        if candidate.is_file() {
+        if is_executable(&candidate) {
             return Ok(candidate);
         }
     }
     if let Some(path) = path {
         for dir in env::split_paths(&path) {
             let candidate = dir.join(ENGINE_BINARY);
-            if candidate.is_file() {
+            if is_executable(&candidate) {
                 return Ok(candidate);
             }
         }
@@ -187,13 +200,40 @@ fn locate(
     )))
 }
 
+/// A candidate that exists but cannot run would fail later with a confusing
+/// permission error; the search skips it and the override says so plainly.
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .map(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::PermissionsExt;
 
-    fn args(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| value.to_string()).collect()
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-cli-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    /// An executable stand-in: `locate` only checks the mode.
+    fn engine_file(path: &Path) {
+        fs::write(path, b"").expect("write");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
     #[test]
@@ -258,20 +298,42 @@ mod tests {
         assert!(parse(args(&["doctor", "--config"])).is_err());
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("anth-cli-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("mkdir");
-        dir
+    #[test]
+    fn a_non_utf8_config_path_is_kept_as_bytes() {
+        let mut path = b"/tmp/".to_vec();
+        path.push(0xff);
+        path.extend_from_slice(b"/anth.toml");
+        let parsed = parse(vec![
+            OsString::from("doctor"),
+            OsString::from("--config"),
+            OsString::from_vec(path.clone()),
+        ])
+        .expect("parse");
+        assert_eq!(
+            parsed,
+            Invocation::Doctor {
+                config: Some(PathBuf::from(OsString::from_vec(path))),
+                profile: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_option_is_refused_instead_of_panicking() {
+        let mut flag = b"--".to_vec();
+        flag.push(0xff);
+        let error =
+            parse(vec![OsString::from("doctor"), OsString::from_vec(flag)]).expect_err("non-utf8");
+        assert!(error.message().contains("UTF-8"), "{error}");
     }
 
     #[test]
     fn the_override_wins_over_the_sibling() {
         let dir = scratch("override");
         let engine = dir.join("custom-engine");
-        fs::write(&engine, b"").expect("write");
+        engine_file(&engine);
         let sibling = dir.join(ENGINE_BINARY);
-        fs::write(&sibling, b"").expect("write");
+        engine_file(&sibling);
         let found = locate(Some(engine.clone().into_os_string()), Some(dir), None).expect("find");
         assert_eq!(found, engine);
     }
@@ -280,7 +342,7 @@ mod tests {
     fn the_sibling_is_found_without_an_override() {
         let dir = scratch("sibling");
         let sibling = dir.join(ENGINE_BINARY);
-        fs::write(&sibling, b"").expect("write");
+        engine_file(&sibling);
         let found = locate(None, Some(dir), None).expect("find");
         assert_eq!(found, sibling);
     }
@@ -289,8 +351,19 @@ mod tests {
     fn a_path_entry_with_the_engine_is_used() {
         let dir = scratch("path");
         let engine = dir.join(ENGINE_BINARY);
-        fs::write(&engine, b"").expect("write");
+        engine_file(&engine);
         let found = locate(None, None, Some(dir.into_os_string())).expect("find");
+        assert_eq!(found, engine);
+    }
+
+    #[test]
+    fn a_non_executable_candidate_is_skipped_and_the_next_one_wins() {
+        let first = scratch("skip-first");
+        let second = scratch("skip-second");
+        fs::write(first.join(ENGINE_BINARY), b"").expect("write");
+        let engine = second.join(ENGINE_BINARY);
+        engine_file(&engine);
+        let found = locate(None, Some(first), Some(second.into_os_string())).expect("find");
         assert_eq!(found, engine);
     }
 
@@ -299,6 +372,16 @@ mod tests {
         let error = locate(Some("/nonexistent/engine".into()), None, None).expect_err("missing");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
         assert!(error.message().contains(ENGINE_ENV), "{error}");
+    }
+
+    #[test]
+    fn a_non_executable_override_is_reported_as_invalid() {
+        let dir = scratch("not-executable");
+        let engine = dir.join("engine");
+        fs::write(&engine, b"").expect("write");
+        let error = locate(Some(engine.into_os_string()), None, None).expect_err("not executable");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        assert!(error.message().contains("not executable"), "{error}");
     }
 
     #[test]
