@@ -5,12 +5,17 @@ edition.workspace = true
 license.workspace = true
 description = "The Anthracite engine: a headless daemon that composes apps"
 
+[lib]
+name = "anth_engine"
+path = "src/lib.rs"
+
 [[bin]]
 name = "anth-engine"
 path = "src/main.rs"
 
 [dependencies]
 anth-api = { path = "../api" }
+anth-runtime = { path = "../runtime" }
 libc = "0.2"
 anth-contract = { path = "../contract", features = ["parse"] }
 axum = { workspace = true }
@@ -19,3 +24,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
+
+[dev-dependencies]
+# Only the supervisor's parallelism test needs a timer; a normal build does not.
+tokio = { workspace = true, features = ["time"] }
