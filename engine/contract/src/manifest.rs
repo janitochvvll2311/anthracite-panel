@@ -187,6 +187,12 @@ impl Manifest {
                 self.app.namespace
             )));
         }
+        if Namespace::of(ns) == Namespace::Engine {
+            return Err(Error::invalid(format!(
+                "`{}` uses the engine's `anth` namespace; an app owns its own",
+                self.app.namespace
+            )));
+        }
 
         let mut exports = Vec::with_capacity(self.export.len());
         for export in &self.export {
@@ -494,12 +500,22 @@ wall-ms = 5000
     #[test]
     fn an_app_cannot_export_a_native_interface() {
         let mut manifest = valid();
-        manifest.app.namespace = "anth:env".to_string();
         manifest.export[0].interface = "anth:env/info@1.0.0".to_string();
         manifest.route.clear();
         manifest.cli.clear();
         let error = manifest.validate().expect_err("native export");
         assert!(error.message().contains("native set"), "{error}");
+    }
+
+    #[test]
+    fn an_app_cannot_use_the_engine_namespace() {
+        let mut manifest = valid();
+        manifest.app.namespace = "anth:tools".to_string();
+        manifest.export[0].interface = "anth:tools/list@1.0.0".to_string();
+        manifest.route[0].call = "anth:tools/list@1.0.0#all".to_string();
+        manifest.cli[0].call = "anth:tools/list@1.0.0#all".to_string();
+        let error = manifest.validate().expect_err("namespace");
+        assert!(error.message().contains("owns its own"), "{error}");
     }
 
     #[test]

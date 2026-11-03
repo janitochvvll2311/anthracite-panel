@@ -11,7 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use anth_contract::catalog;
-use anth_contract::{parse_version, AppId, Composition, Error, InterfaceId, Manifest, Profile};
+use anth_contract::{
+    parse_version, AppId, Composition, Error, InterfaceId, Manifest, Profile, Risk,
+};
 
 /// What the registry knows about one installed app at compose time.
 #[derive(Debug, Clone)]
@@ -42,6 +44,11 @@ pub struct Resolution {
     pub degraded: BTreeMap<AppId, Degraded>,
     /// One link per import of every app that runs.
     pub links: Vec<Link>,
+    /// The effective risk of each app that runs: the maximum over the
+    /// transitive closure of its resolved imports (§9.3). At approval this is
+    /// compared with the risk the operator accepted; a growth blocks the app
+    /// until it is re-approved (D-Risk-Recheck).
+    pub risk: BTreeMap<AppId, Risk>,
 }
 
 impl Resolution {
@@ -158,17 +165,16 @@ impl fmt::Display for ResolutionError {
 
 impl std::error::Error for ResolutionError {}
 
-/// One manifest, parsed into the ids resolution compares.
-struct Entry<'a> {
+/// One composed app, parsed into the ids resolution compares.
+struct Entry {
     id: AppId,
-    manifest: &'a Manifest,
     approved: bool,
     enabled: bool,
     exports: Vec<InterfaceId>,
     imports: Vec<InterfaceId>,
 }
 
-impl Entry<'_> {
+impl Entry {
     fn runs(&self) -> bool {
         self.approved && self.enabled
     }
@@ -183,38 +189,35 @@ pub fn resolve(
         .validate()
         .map_err(ResolutionError::InvalidComposition)?;
 
-    let mut entries: Vec<Entry> = Vec::with_capacity(installed.len());
-    let mut by_id: BTreeMap<AppId, usize> = BTreeMap::new();
+    // Installed apps are only inspected when the composition names them: a
+    // broken app that nobody composes must not stop a boot.
+    let mut installed_by_id: BTreeMap<AppId, Vec<&InstalledApp>> = BTreeMap::new();
     for app in installed {
-        app.manifest
-            .validate()
-            .map_err(ResolutionError::InvalidManifest)?;
-        let id = AppId::parse(&app.manifest.app.id).map_err(ResolutionError::InvalidManifest)?;
-        let entry = Entry {
-            id: id.clone(),
-            manifest: &app.manifest,
-            approved: app.approved,
-            enabled: app.enabled,
-            exports: parse_interfaces(app.manifest.export.iter().map(|e| &e.interface))?,
-            imports: parse_interfaces(app.manifest.import.iter().map(|i| &i.interface))?,
-        };
-        if by_id.insert(id.clone(), entries.len()).is_some() {
-            return Err(ResolutionError::DuplicateInstalled {
-                app: id.to_string(),
-            });
+        if let Ok(id) = AppId::parse(&app.manifest.app.id) {
+            installed_by_id.entry(id).or_default().push(app);
         }
-        entries.push(entry);
     }
 
     // Step 2: each composed id resolves to exactly one installed manifest.
-    let mut composed: Vec<&Entry> = Vec::new();
+    let mut composed: Vec<Entry> = Vec::with_capacity(composition.profile[0].apps.len());
     for entry in &composition.profile[0].apps {
         let id_text = Profile::app_id(entry);
         let id = AppId::parse(id_text).map_err(ResolutionError::InvalidComposition)?;
-        let index = *by_id
-            .get(&id)
-            .ok_or_else(|| ResolutionError::NotInstalled { app: entry.clone() })?;
-        let found = &entries[index];
+        let found = match installed_by_id.get(&id).map(Vec::as_slice).unwrap_or(&[]) {
+            [] => {
+                return Err(ResolutionError::NotInstalled { app: entry.clone() });
+            }
+            [found] => *found,
+            _ => {
+                return Err(ResolutionError::DuplicateInstalled {
+                    app: id.to_string(),
+                });
+            }
+        };
+        found
+            .manifest
+            .validate()
+            .map_err(ResolutionError::InvalidManifest)?;
         if let Some(pin) = Profile::app_version(entry) {
             let wanted = parse_version(pin).map_err(ResolutionError::InvalidComposition)?;
             let installed_version = parse_version(&found.manifest.app.version)
@@ -227,7 +230,13 @@ pub fn resolve(
                 });
             }
         }
-        composed.push(found);
+        composed.push(Entry {
+            id,
+            approved: found.approved,
+            enabled: found.enabled,
+            exports: parse_interfaces(found.manifest.export.iter().map(|e| &e.interface))?,
+            imports: parse_interfaces(found.manifest.import.iter().map(|i| &i.interface))?,
+        });
     }
 
     // Step 4, first half: an interface has one provider or none. Two is a
@@ -270,6 +279,24 @@ pub fn resolve(
         })
         .collect();
 
+    // Step 4: every import of an app that will run needs a provider. This is
+    // checked before blocking: unresolved is a hole in the composition, and a
+    // composition that would not boot must not look bootable because the app
+    // that shows the hole is also blocked.
+    for entry in &composed {
+        if !running.contains(&entry.id) {
+            continue;
+        }
+        for import in &entry.imports {
+            if !exporters.contains_key(import) && !catalog::is_native(import) {
+                return Err(ResolutionError::UnresolvedImport {
+                    app: entry.id.to_string(),
+                    interface: import.to_string(),
+                });
+            }
+        }
+    }
+
     loop {
         let mut blocked: Vec<(AppId, DegradedReason)> = Vec::new();
         for entry in &composed {
@@ -279,8 +306,7 @@ pub fn resolve(
             for import in &entry.imports {
                 let providers = exporters.get(import).map(Vec::as_slice).unwrap_or(&[]);
                 match providers {
-                    // Unresolved is decided after blocking: an app that cannot
-                    // run contributes no imports (§8.2, step 3).
+                    // A native or missing provider was decided above.
                     [] => continue,
                     [provider] => {
                         if !running.contains(&provider.id) {
@@ -308,21 +334,6 @@ pub fn resolve(
         }
     }
 
-    // Step 4: what a running app imports must now have a provider.
-    for entry in &composed {
-        if !running.contains(&entry.id) {
-            continue;
-        }
-        for import in &entry.imports {
-            if !exporters.contains_key(import) && !catalog::is_native(import) {
-                return Err(ResolutionError::UnresolvedImport {
-                    app: entry.id.to_string(),
-                    interface: import.to_string(),
-                });
-            }
-        }
-    }
-
     // Step 6: providers boot before consumers. Step 7's input: the links a
     // running app actually holds.
     let mut links = Vec::new();
@@ -347,18 +358,20 @@ pub fn resolve(
     });
 
     let order = boot_order(&composed, &running, &links)?;
+    let risk = effective_risk(&composed, &order, &exporters);
 
     Ok(Resolution {
         order,
         degraded,
         links,
+        risk,
     })
 }
 
 /// Kahn's algorithm with a `BTreeSet` frontier: independent apps keep their
 /// composition order, so two runs of the same input produce the same surface.
 fn boot_order(
-    composed: &[&Entry],
+    composed: &[Entry],
     running: &BTreeSet<AppId>,
     links: &[Link],
 ) -> Result<Vec<AppId>, ResolutionError> {
@@ -407,14 +420,76 @@ fn boot_order(
         }
     }
     if order.len() != running.len() {
-        let cyclic: Vec<String> = running
-            .iter()
-            .filter(|app| !order.contains(app))
-            .map(|app| app.to_string())
-            .collect();
-        return Err(ResolutionError::Cycle { apps: cyclic });
+        return Err(ResolutionError::Cycle {
+            apps: cycle_members(&consumers, running, &order),
+        });
     }
     Ok(order)
+}
+
+/// The apps actually inside a cycle.
+///
+/// The leftovers of Kahn are the cycles plus everything downstream of them, so
+/// naming all leftovers blames apps that would boot as soon as the cycle is
+/// gone. A node is in a cycle when it can reach itself by following consumer
+/// edges.
+fn cycle_members(
+    consumers: &BTreeMap<AppId, BTreeSet<AppId>>,
+    running: &BTreeSet<AppId>,
+    ordered: &[AppId],
+) -> Vec<String> {
+    let mut cyclic = Vec::new();
+    for start in running.iter().filter(|app| !ordered.contains(app)) {
+        let mut seen: BTreeSet<&AppId> = BTreeSet::new();
+        let mut stack: Vec<&AppId> = consumers
+            .get(start)
+            .map(|next| next.iter().collect())
+            .unwrap_or_default();
+        let mut found = false;
+        while let Some(node) = stack.pop() {
+            if node == start {
+                found = true;
+                break;
+            }
+            if !seen.insert(node) {
+                continue;
+            }
+            if let Some(next) = consumers.get(node) {
+                stack.extend(next.iter());
+            }
+        }
+        if found {
+            cyclic.push(start.to_string());
+        }
+    }
+    cyclic
+}
+
+/// Risk travels from provider to consumer: an app is as risky as the riskiest
+/// thing it can reach. Boot order visits providers first, so one pass suffices.
+fn effective_risk(
+    composed: &[Entry],
+    order: &[AppId],
+    exporters: &BTreeMap<InterfaceId, Vec<&Entry>>,
+) -> BTreeMap<AppId, Risk> {
+    let mut risk: BTreeMap<AppId, Risk> = BTreeMap::new();
+    for id in order {
+        let Some(entry) = composed.iter().find(|entry| &entry.id == id) else {
+            continue;
+        };
+        let mut level = Risk::Read;
+        for import in &entry.imports {
+            let reached = match exporters.get(import).and_then(|p| p.first()) {
+                Some(provider) => *risk
+                    .get(&provider.id)
+                    .expect("providers boot before consumers"),
+                None => catalog::risk_of(import).expect("an unprovided import is native"),
+            };
+            level = level.max(reached);
+        }
+        risk.insert(id.clone(), level);
+    }
+    risk
 }
 
 fn parse_interfaces<'a>(
@@ -520,6 +595,35 @@ mod tests {
             Provider::Engine,
             "a native interface needs no app"
         );
+    }
+
+    #[test]
+    fn risk_is_the_maximum_over_what_an_app_can_reach() {
+        // The consumer only imports the provider's greeting, but the provider
+        // reaches the store: the authority travels with the link.
+        let provider = installed(manifest(
+            PROVIDER,
+            "example:provider",
+            &[GREETING],
+            &["anth:store/kv@1.0.0"],
+        ));
+        let resolution = resolve(
+            &composition(&[CONSUMER, PROVIDER]),
+            &[consumer(&[GREETING]), provider],
+        )
+        .expect("resolve");
+        assert_eq!(resolution.risk[&app(PROVIDER)], Risk::Write);
+        assert_eq!(resolution.risk[&app(CONSUMER)], Risk::Write);
+    }
+
+    #[test]
+    fn environment_reads_are_read_risk() {
+        let resolution = resolve(
+            &composition(&[CONSUMER]),
+            &[consumer(&["anth:env/time@1.0.0"])],
+        )
+        .expect("resolve");
+        assert_eq!(resolution.risk[&app(CONSUMER)], Risk::Read);
     }
 
     #[test]
@@ -696,6 +800,44 @@ mod tests {
     }
 
     #[test]
+    fn a_cycle_error_names_only_the_apps_in_the_cycle() {
+        let a = "org.example.a";
+        let b = "org.example.b";
+        let c = "org.example.c";
+        let a_interface = "example:a/x@1.0.0";
+        let b_interface = "example:b/y@1.0.0";
+        let a_app = installed(manifest(a, "example:a", &[a_interface], &[b_interface]));
+        let b_app = installed(manifest(b, "example:b", &[b_interface], &[a_interface]));
+        let downstream = installed(manifest(c, "example:c", &[], &[a_interface]));
+        let error =
+            resolve(&composition(&[a, b, c]), &[a_app, b_app, downstream]).expect_err("cycle");
+        assert_eq!(
+            error,
+            ResolutionError::Cycle {
+                apps: vec![a.to_string(), b.to_string()],
+            },
+            "the app waiting on the cycle is not part of it"
+        );
+    }
+
+    #[test]
+    fn an_installed_app_outside_the_composition_is_ignored() {
+        // The registry guarantees valid manifests, but a boot must not depend
+        // on an app the composition does not name.
+        let broken = InstalledApp {
+            manifest: Manifest::parse(
+                "manifest_version = 2\n\n[app]\nid = \"org.example.broken\"\nnamespace = \"example:broken\"\nname = \"Broken\"\nversion = \"not-a-version\"\n",
+            )
+            .expect("parse"),
+            approved: true,
+            enabled: true,
+        };
+        let resolution = resolve(&composition(&[PROVIDER]), &[broken, provider()])
+            .expect("the composed app still resolves");
+        assert_eq!(resolution.order, [app(PROVIDER)]);
+    }
+
+    #[test]
     fn an_unapproved_app_contributes_no_imports() {
         // The import is unresolved, but this app cannot run, so it does not
         // matter; it degrades instead of failing the boot (§8.5).
@@ -725,19 +867,20 @@ mod tests {
     }
 
     #[test]
-    fn a_blocked_app_does_not_report_its_unresolved_imports() {
-        // Blocking wins: this app cannot run for a reason the engine can fix,
-        // so its other imports contribute nothing and must not stop the boot.
+    fn an_unresolved_import_wins_over_a_blocked_provider() {
+        // The app cannot run while the provider is unapproved, but the missing
+        // interface is still a hole in the composition: reporting only
+        // "blocked" would declare bootable what is not.
         let mut provider = provider();
         provider.approved = false;
         let consumer = consumer(&["example:other/x@1.0.0", GREETING]);
-        let resolution = resolve(&composition(&[CONSUMER, PROVIDER]), &[consumer, provider])
-            .expect("blocked, not unresolved");
+        let error = resolve(&composition(&[CONSUMER, PROVIDER]), &[consumer, provider])
+            .expect_err("unresolved");
         assert_eq!(
-            resolution.degraded[&app(CONSUMER)].reason,
-            DegradedReason::Blocked {
-                interface: interface(GREETING),
-                provider: app(PROVIDER),
+            error,
+            ResolutionError::UnresolvedImport {
+                app: CONSUMER.to_string(),
+                interface: "example:other/x@1.0.0".to_string(),
             }
         );
     }
