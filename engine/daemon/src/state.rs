@@ -73,10 +73,7 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
             return Ok(StateStatus::Missing);
         }
         Err(error) => {
-            return Err(Error::internal(format!(
-                "inspecting {}: {error}",
-                root.display()
-            )));
+            return Err(inspect_error(root, error));
         }
         Ok(metadata) => {
             if metadata.file_type().is_symlink() {
@@ -130,9 +127,19 @@ fn inspect(path: &Path) -> Result<fs::Metadata, Error> {
                 path.display()
             ))
         } else {
-            Error::internal(format!("inspecting {}: {error}", path.display()))
+            inspect_error(path, error)
         }
     })
+}
+
+/// A tree the operator cannot read is a denial to explain, not a bug in the
+/// engine: `internal` would send them looking at logs for a permissions problem.
+fn inspect_error(path: &Path, error: std::io::Error) -> Error {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        Error::denied(format!("cannot read {}: {error}", path.display()))
+    } else {
+        Error::internal(format!("inspecting {}: {error}", path.display()))
+    }
 }
 
 /// A missing root is only "not created yet" if the first boot could create it.
@@ -176,10 +183,7 @@ fn existing_ancestor(root: &Path) -> Result<PathBuf, Error> {
                 ancestor = next;
             }
             Err(error) => {
-                return Err(Error::internal(format!(
-                    "inspecting {}: {error}",
-                    ancestor.display()
-                )));
+                return Err(inspect_error(&ancestor, error));
             }
         }
     }
@@ -357,6 +361,22 @@ mod tests {
             dir
         );
         fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn an_unreadable_tree_is_reported_as_denied() {
+        // Root reads through the mode bits, so this only means something as a
+        // normal user.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let root = scratch("unreadable");
+        ensure(&root).expect("ensure");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).expect("chmod");
+        let error = check(&root).expect_err("denied");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("chmod back");
+        fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]
