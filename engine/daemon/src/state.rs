@@ -6,7 +6,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anth_contract::{Composition, Error};
 
@@ -142,29 +142,54 @@ fn inspect(path: &Path) -> Result<fs::Metadata, Error> {
 /// configured path. The nearest existing ancestor is the one `create_dir_all`
 /// would need to write into.
 fn check_creatable(root: &Path) -> Result<(), Error> {
-    let mut ancestor = root.parent();
-    while let Some(dir) = ancestor {
-        match fs::metadata(dir) {
-            Ok(metadata) if metadata.is_dir() => return ensure_writable(root, dir),
+    let dir = existing_ancestor(root)?;
+    ensure_writable(root, &dir)
+}
+
+/// The directory `create_dir_all(root)` would write into.
+///
+/// A single-component relative path (`state`) has an **empty** parent, which is
+/// not a path: it means the current directory. Treating it as nothing is how the
+/// check used to pass on a read-only working directory without inspecting it.
+fn existing_ancestor(root: &Path) -> Result<PathBuf, Error> {
+    let mut ancestor = current_dir_or(root.parent());
+    loop {
+        match fs::metadata(&ancestor) {
+            Ok(metadata) if metadata.is_dir() => return Ok(ancestor),
             Ok(_) => {
                 return Err(Error::invalid(format!(
                     "{} exists and is not a directory; {} cannot be created",
-                    dir.display(),
+                    ancestor.display(),
                     root.display()
                 )));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                ancestor = dir.parent();
+                let next = current_dir_or(ancestor.parent());
+                if next == ancestor {
+                    // `.` (or `/`) does not exist: there is nowhere to write.
+                    return Err(Error::invalid(format!(
+                        "cannot create {}: {} does not exist",
+                        root.display(),
+                        ancestor.display()
+                    )));
+                }
+                ancestor = next;
             }
             Err(error) => {
                 return Err(Error::internal(format!(
                     "inspecting {}: {error}",
-                    dir.display()
+                    ancestor.display()
                 )));
             }
         }
     }
-    Ok(())
+}
+
+fn current_dir_or(path: Option<&Path>) -> PathBuf {
+    match path {
+        Some(path) if !path.as_os_str().is_empty() => path.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
 }
 
 fn ensure_writable(root: &Path, dir: &Path) -> Result<(), Error> {
@@ -307,6 +332,31 @@ mod tests {
             !root.exists(),
             "check must not create the tree; boot does that"
         );
+    }
+
+    #[test]
+    fn a_single_component_relative_path_is_checked_against_the_current_directory() {
+        // `Path::new("state").parent()` is `Some("")`, and an empty path must
+        // mean ".", not "nothing to check".
+        assert_eq!(
+            existing_ancestor(Path::new("state")).expect("ancestor"),
+            PathBuf::from(".")
+        );
+        assert_eq!(
+            existing_ancestor(Path::new("missing/state")).expect("ancestor"),
+            PathBuf::from(".")
+        );
+    }
+
+    #[test]
+    fn an_absolute_path_uses_its_nearest_existing_ancestor() {
+        let dir = scratch("ancestor");
+        fs::create_dir_all(&dir).expect("mkdir");
+        assert_eq!(
+            existing_ancestor(&dir.join("a/b/state")).expect("ancestor"),
+            dir
+        );
+        fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]
