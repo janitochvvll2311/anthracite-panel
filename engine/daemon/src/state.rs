@@ -13,8 +13,10 @@ use anth_contract::{Composition, Error};
 /// The directories the tree owns, relative to its root.
 pub const DIRS: &[&str] = &["apps", "grants", "keys"];
 /// The files the tree owns, relative to its root.
-pub const FILES: &[&str] = &["composition.toml", "audit.jsonl"];
+pub const FILES: &[&str] = &[COMPOSITION, AUDIT];
 
+const COMPOSITION: &str = "composition.toml";
+const AUDIT: &str = "audit.jsonl";
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 
@@ -33,7 +35,7 @@ pub enum StateStatus {
 /// The contract crate parses documents; the daemon is what touches the disk
 /// (§6.6).
 pub fn load_composition(state: &Path) -> Result<Composition, Error> {
-    let path = state.join("composition.toml");
+    let path = state.join(COMPOSITION);
     match fs::read_to_string(&path) {
         Ok(text) => Composition::parse(&text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Composition::empty()),
@@ -52,8 +54,8 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     }
     let composition = toml::to_string_pretty(&Composition::empty())
         .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?;
-    write_missing(&root.join("composition.toml"), composition.as_bytes())?;
-    write_missing(&root.join("audit.jsonl"), b"")?;
+    write_missing(&root.join(COMPOSITION), composition.as_bytes())?;
+    write_missing(&root.join(AUDIT), b"")?;
     Ok(())
 }
 
@@ -61,7 +63,13 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
 /// names, types, no symlinks, and the modes §6.8 requires.
 pub fn check(root: &Path) -> Result<StateStatus, Error> {
     match fs::symlink_metadata(root) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            check_creatable(root)?;
             return Ok(StateStatus::Missing);
         }
         Err(error) => {
@@ -125,6 +133,57 @@ fn inspect(path: &Path) -> Result<fs::Metadata, Error> {
             Error::internal(format!("inspecting {}: {error}", path.display()))
         }
     })
+}
+
+/// A missing root is only "not created yet" if the first boot could create it.
+///
+/// `access` is the read-only way to ask: it reports both a missing permission
+/// and a read-only mount (`EROFS`), without writing a probe file or touching the
+/// configured path. The nearest existing ancestor is the one `create_dir_all`
+/// would need to write into.
+fn check_creatable(root: &Path) -> Result<(), Error> {
+    let mut ancestor = root.parent();
+    while let Some(dir) = ancestor {
+        match fs::metadata(dir) {
+            Ok(metadata) if metadata.is_dir() => return ensure_writable(root, dir),
+            Ok(_) => {
+                return Err(Error::invalid(format!(
+                    "{} exists and is not a directory; {} cannot be created",
+                    dir.display(),
+                    root.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                ancestor = dir.parent();
+            }
+            Err(error) => {
+                return Err(Error::internal(format!(
+                    "inspecting {}: {error}",
+                    dir.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_writable(root: &Path, dir: &Path) -> Result<(), Error> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes())
+        .map_err(|_| Error::invalid(format!("{} contains a NUL byte", dir.display())))?;
+    // SAFETY: `path` is a valid NUL-terminated string for the call, and `access`
+    // only reads filesystem metadata.
+    let writable = unsafe { libc::access(path.as_ptr(), libc::W_OK | libc::X_OK) } == 0;
+    if !writable {
+        let error = std::io::Error::last_os_error();
+        return Err(Error::invalid(format!(
+            "cannot create {}: {} is not writable ({error})",
+            root.display(),
+            dir.display()
+        )));
+    }
+    Ok(())
 }
 
 fn check_mode(path: &Path, metadata: &fs::Metadata, expected: u32) -> Result<(), Error> {
@@ -248,6 +307,34 @@ mod tests {
             !root.exists(),
             "check must not create the tree; boot does that"
         );
+    }
+
+    #[test]
+    fn a_missing_tree_below_a_file_cannot_be_created() {
+        let dir = scratch("blocked");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"").expect("write");
+        let error = check(&blocker.join("state")).expect_err("blocked");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        assert!(error.message().contains("not a directory"), "{error}");
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn a_missing_tree_below_an_unwritable_parent_cannot_be_created() {
+        // Root can write anywhere; on a developer machine the check would pass
+        // for the wrong reason, so this only runs as a normal user.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = scratch("read-only-parent");
+        fs::create_dir_all(&dir).expect("mkdir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o500)).expect("chmod");
+        let error = check(&dir.join("state")).expect_err("read only");
+        assert!(error.message().contains("not writable"), "{error}");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("chmod back");
+        fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]
