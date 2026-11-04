@@ -344,7 +344,7 @@ Everything the engine owns lives under `state` (§6.7):
 
 ```
 state/
-  apps/<app-id>/            bundle contents + descriptor.toml (enabled, alias, signer, tier, installed at), verified before visible
+  apps/<app-id>/            bundle contents (verified before visible) + descriptor.toml (engine-written: enabled, alias, signer, tier, installed at)
   grants/<app-id>.toml      the frozen grant of each installed app
   composition.toml          the composition document (§8.1)
   credentials.txt           operator name and password, written once (§6.5)

@@ -242,8 +242,22 @@ impl Registry {
         Ok(installed)
     }
 
-    /// Sets the operator's CLI alias for the app.
+    /// Sets the operator's CLI alias for the app. It overrides the manifest's
+    /// alias and must be unique among installed apps.
     pub fn set_alias(&self, app: &AppId, alias: Option<String>) -> Result<Installed, Error> {
+        if let Some(alias) = &alias {
+            for other in self.list()? {
+                if other.manifest.app.id == app.as_str() {
+                    continue;
+                }
+                if effective_alias(&other) == Some(alias.as_str()) {
+                    return Err(Error::conflict(format!(
+                        "`{alias}` is already the CLI alias of `{}`",
+                        other.manifest.app.id
+                    )));
+                }
+            }
+        }
         let mut installed = self.installed(app)?;
         installed.descriptor.alias = alias;
         self.save_descriptor(app, &installed.descriptor)?;
@@ -410,7 +424,15 @@ fn read_manifest(dir: &Path) -> Result<Manifest, Error> {
     Ok(manifest)
 }
 
-/// Makes the rename durable before answering: a published app is on disk.
+/// The alias the CLI uses: the operator's override, then the manifest's.
+fn effective_alias(installed: &Installed) -> Option<&str> {
+    installed
+        .descriptor
+        .alias
+        .as_deref()
+        .or_else(|| installed.manifest.cli_name())
+}
+
 /// Reads the manifest and the descriptor and refuses a pair that names two
 /// different apps: the directory is one app or it is corrupt.
 fn read_installed(dir: &Path) -> Result<Installed, Error> {
@@ -432,22 +454,50 @@ fn read_installed(dir: &Path) -> Result<Installed, Error> {
 
 fn read_descriptor(dir: &Path) -> Result<Descriptor, Error> {
     let path = dir.join("descriptor.toml");
-    let text = fs::read_to_string(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            Error::invalid(format!(
-                "{} has no descriptor; the installed tree is corrupt",
-                dir.display()
-            ))
-        } else {
-            Error::internal(format!("reading {}: {error}", path.display()))
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        // An app installed before the descriptor existed: synthesize the
+        // defaults instead of making the whole registry unreadable.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return legacy_descriptor(dir);
         }
-    })?;
+        Err(error) => {
+            return Err(Error::internal(format!(
+                "reading {}: {error}",
+                path.display()
+            )));
+        }
+    };
     let descriptor = Descriptor::parse(&text)
         .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
     descriptor
         .validate()
         .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+    if descriptor.tier == Tier::System {
+        return Err(Error::invalid(format!(
+            "{} claims the system tier; v0.5.0 has no distribution key",
+            path.display()
+        )));
+    }
     Ok(descriptor)
+}
+
+/// The descriptor a pre-descriptor install would have had.
+fn legacy_descriptor(dir: &Path) -> Result<Descriptor, Error> {
+    let manifest = read_manifest(dir)?;
+    let installed_at = fs::metadata(dir)
+        .and_then(|metadata| metadata.modified())
+        .map(|time| humantime::format_rfc3339_seconds(time).to_string())
+        .unwrap_or_else(|_| now());
+    Ok(Descriptor {
+        version: DESCRIPTOR_VERSION,
+        app: AppId::parse(&manifest.app.id)?,
+        enabled: true,
+        alias: None,
+        signer: None,
+        tier: Tier::ThirdParty,
+        installed_at,
+    })
 }
 
 /// Writes the descriptor into the staging tree before it becomes visible, so an
@@ -461,7 +511,16 @@ fn write_staged_descriptor(root: &Path, descriptor: &Descriptor) -> Result<(), E
         .create_new(true)
         .mode(store::FILE_MODE)
         .open(&path)
-        .map_err(|error| Error::internal(format!("creating {}: {error}", path.display())))?;
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::invalid(format!(
+                    "{} already has a descriptor; the engine owns that file",
+                    root.display()
+                ))
+            } else {
+                Error::internal(format!("creating {}: {error}", path.display()))
+            }
+        })?;
     file.write_all(text.as_bytes())
         .and_then(|()| file.sync_all())
         .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
@@ -472,6 +531,7 @@ fn now() -> String {
     humantime::format_rfc3339_seconds(SystemTime::now()).to_string()
 }
 
+/// Makes the rename durable before answering: a published app is on disk.
 fn sync_dir(dir: &Path) -> Result<(), Error> {
     fs::File::open(dir)
         .and_then(|dir| dir.sync_all())
@@ -531,6 +591,15 @@ mod tests {
             ),
             ("wit/notes.wit".to_string(), WIT.as_bytes().to_vec()),
             ("wasm/notes.wasm".to_string(), wasm.to_vec()),
+        ])
+    }
+
+    fn other_bundle() -> Vec<u8> {
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.other\"\nnamespace = \"example:other\"\nname = \"Other\"\nversion = \"0.1.0\"\n";
+        let wit = "package example:other@1.0.0;\nworld app {}\n";
+        zip(&[
+            ("manifest.toml".to_string(), manifest.as_bytes().to_vec()),
+            ("wit/other.wit".to_string(), wit.as_bytes().to_vec()),
         ])
     }
 
@@ -836,6 +905,71 @@ mod tests {
         fs::write(&path, text).expect("write");
         let error = registry.get(&app).expect_err("mismatch");
         assert!(error.message().contains("descriptor names"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_old_install_gets_a_default_descriptor() {
+        let state = scratch("legacy");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        fs::remove_file(registry.dir().join("org.example.notes/descriptor.toml"))
+            .expect("remove descriptor");
+        let installed = registry.get(&app).expect("get").expect("installed");
+        assert!(installed.descriptor.enabled);
+        assert_eq!(installed.descriptor.tier, Tier::ThirdParty);
+        assert!(installed.descriptor.signer.is_none());
+        // The next write creates the file again.
+        registry.set_enabled(&app, false).expect("disable");
+        assert!(registry
+            .dir()
+            .join("org.example.notes/descriptor.toml")
+            .is_file());
+        assert!(!registry.get(&app).unwrap().unwrap().descriptor.enabled);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn the_system_tier_is_refused_in_v0_5() {
+        let state = scratch("system-tier");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        let path = registry.dir().join("org.example.notes/descriptor.toml");
+        let text = fs::read_to_string(&path)
+            .expect("read")
+            .replace("tier = \"third-party\"", "tier = \"system\"");
+        fs::write(&path, text).expect("write");
+        let error = registry.get(&app).expect_err("system tier");
+        assert!(error.message().contains("distribution key"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_operator_alias_must_be_unique() {
+        let state = scratch("alias-unique");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install notes");
+        registry
+            .install(&other_bundle(), &options())
+            .expect("install other");
+        // `other` has no manifest alias, so its effective alias is the last
+        // label of its id.
+        let error = registry
+            .set_alias(&app, Some("other".to_string()))
+            .expect_err("duplicate alias");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        registry
+            .set_alias(&app, Some("notes".to_string()))
+            .expect("free alias");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 

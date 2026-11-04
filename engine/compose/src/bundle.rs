@@ -261,6 +261,11 @@ fn check_layout(root: &Path) -> Result<(), Error> {
         if !is_file {
             continue;
         }
+        if relative == "descriptor.toml" {
+            return Err(Error::invalid(
+                "the bundle must not carry `descriptor.toml`; the engine writes it",
+            ));
+        }
         let ok = relative == "manifest.toml"
             || relative == "manifest.sig"
             || relative.strip_prefix("wit/").is_some_and(|name| {
@@ -731,6 +736,21 @@ mod tests {
         files.push(("wasm/other.wasm".to_string(), b"extra".to_vec()));
         let error = extract(&zip(&files), &state, &options(false), &keyring).expect_err("extra");
         assert!(error.message().contains("not declared"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_bundle_may_not_carry_its_own_descriptor() {
+        // The descriptor is engine-written install metadata, never signed
+        // bundle content.
+        let state = scratch("bundle-descriptor");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push(("descriptor.toml".to_string(), b"version = 1\n".to_vec()));
+        let error = extract(&zip(&files), &state, &options(false), &keyring)
+            .expect_err("bundled descriptor");
+        assert!(error.message().contains("must not carry"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 

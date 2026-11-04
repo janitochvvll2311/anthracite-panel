@@ -30,7 +30,8 @@ pub struct Descriptor {
     /// The operator's switch. Installed apps start enabled.
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// The CLI alias the operator chose, when it differs from the manifest's.
+    /// The CLI alias the operator chose. It overrides the manifest's alias and
+    /// must be unique among installed apps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
     /// The fingerprint that signed, or `None` for an accepted unsigned bundle.
