@@ -41,32 +41,42 @@ pub fn fingerprint(text: &str) -> Result<String, Error> {
     Ok(hex_encode(&Sha256::digest(public_key(text)?)))
 }
 
-/// Whether `text` has the shape of a fingerprint, before touching the disk.
-pub fn is_fingerprint(text: &str) -> bool {
-    text.len() == 64
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
 /// Verifies `signature` over `message` with `public_key_hex`.
 ///
 /// `verify_strict` rejects small-order and non-canonical keys, which is the
 /// right default for an artifact that grants authority.
 pub fn verify(message: &[u8], signature: &str, public_key_hex: &str) -> Result<(), Error> {
-    let signature = Ed25519Signature::from_bytes(&parse_signature(signature)?);
-    let key = VerifyingKey::from_bytes(&public_key(public_key_hex)?).map_err(|error| {
-        Error::invalid(format!(
-            "`{public_key_hex}` is not an Ed25519 public key: {error}"
-        ))
+    let signature = parse_signature(signature)?;
+    verify_bytes(message, &signature, public_key_hex)
+}
+
+/// The same check when the signature was already parsed. A keyring parses once
+/// and tries every key, so a corrupt signature is `invalid`, not `denied`.
+pub fn verify_bytes(
+    message: &[u8],
+    signature: &[u8; SIGNATURE_BYTES],
+    public_key_hex: &str,
+) -> Result<(), Error> {
+    let key = verifying_key(public_key_hex)?;
+    key.verify_strict(message, &Ed25519Signature::from_bytes(signature))
+        .map_err(|_| Error::denied("the signature does not verify for this key"))
+}
+
+/// Whether the key can actually verify: it decompresses and is not low-order.
+pub fn check_public_key(text: &str) -> Result<(), Error> {
+    verifying_key(text).map(drop)
+}
+
+fn verifying_key(text: &str) -> Result<VerifyingKey, Error> {
+    let key = VerifyingKey::from_bytes(&public_key(text)?).map_err(|error| {
+        Error::invalid(format!("`{text}` is not an Ed25519 public key: {error}"))
     })?;
     if key.is_weak() {
         return Err(Error::invalid(format!(
-            "`{public_key_hex}` is a weak (small-order) public key"
+            "`{text}` is a weak (small-order) public key"
         )));
     }
-    key.verify_strict(message, &signature)
-        .map_err(|_| Error::denied("the signature does not verify for this key"))
+    Ok(key)
 }
 
 fn hex_decode(text: &str) -> Result<Vec<u8>, Error> {

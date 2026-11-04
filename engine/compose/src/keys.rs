@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anth_contract::id::is_sha256;
 use anth_contract::{Error, TrustedKey};
 
 use crate::{signature, store};
@@ -30,6 +31,9 @@ impl Keyring {
     /// idempotent: the file is the fingerprint.
     pub fn add(&self, key: &TrustedKey) -> Result<String, Error> {
         key.validate()?;
+        // Shape is not enough: a key that does not decompress can never verify,
+        // and trusting it would only produce confusing denials later.
+        signature::check_public_key(&key.public_key)?;
         let fingerprint = signature::fingerprint(&key.public_key)?;
         store::write_atomic(
             &self.dir,
@@ -51,6 +55,8 @@ impl Keyring {
         let key = TrustedKey::parse(&text)
             .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
         key.validate()
+            .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+        signature::check_public_key(&key.public_key)
             .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
         let actual = signature::fingerprint(&key.public_key)?;
         if actual != fingerprint {
@@ -92,8 +98,11 @@ impl Keyring {
     /// keyring, trying each key is simpler than inventing a second artifact and
     /// keeps the bundle to one signature file.
     pub fn verify(&self, message: &[u8], signature_b64: &str) -> Result<String, Error> {
+        // Parse once: a signature that is not base64 or not 64 bytes is an
+        // invalid artifact, not a permission denial.
+        let signature = signature::parse_signature(signature_b64)?;
         for (fingerprint, key) in self.all()? {
-            if signature::verify(message, signature_b64, &key.public_key).is_ok() {
+            if signature::verify_bytes(message, &signature, &key.public_key).is_ok() {
                 return Ok(fingerprint);
             }
         }
@@ -102,7 +111,7 @@ impl Keyring {
 }
 
 fn check_fingerprint(fingerprint: &str) -> Result<(), Error> {
-    if signature::is_fingerprint(fingerprint) {
+    if is_sha256(fingerprint) {
         Ok(())
     } else {
         Err(Error::invalid(format!(
@@ -134,6 +143,15 @@ mod tests {
 
     fn public_hex() -> String {
         signing_key()
+            .verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn other_public_hex() -> String {
+        SigningKey::from_bytes(&[9u8; 32])
             .verifying_key()
             .to_bytes()
             .iter()
@@ -196,12 +214,9 @@ mod tests {
         let state = scratch("all");
         let keyring = Keyring::new(&state);
         let one = keyring.add(&trusted_key()).expect("add");
-        let mut other = signing_key().verifying_key().to_bytes();
-        other[0] ^= 0xff;
-        let other_hex: String = other.iter().map(|byte| format!("{byte:02x}")).collect();
-        let mut other_key = trusted_key();
-        other_key.public_key = other_hex;
-        let two = keyring.add(&other_key).expect("add");
+        let mut other = trusted_key();
+        other.public_key = other_public_hex();
+        let two = keyring.add(&other).expect("add");
         let fingerprints: Vec<String> = keyring
             .all()
             .expect("all")
@@ -273,12 +288,41 @@ mod tests {
         let keyring = Keyring::new(&state);
         // A key exists, but it is not the one that signed.
         let mut other = trusted_key();
-        other.public_key = "0".repeat(64);
+        other.public_key = other_public_hex();
         keyring.add(&other).expect("add");
         let signature = signing_key().sign(b"x");
         let encoded = signature::signature_base64(&signature.to_bytes());
         let error = keyring.verify(b"x", &encoded).expect_err("untrusted");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_corrupt_signature_is_invalid_not_denied() {
+        let state = scratch("corrupt");
+        let keyring = Keyring::new(&state);
+        keyring.add(&trusted_key()).expect("add");
+        let error = keyring.verify(b"x", "not base64!").expect_err("corrupt");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_key_that_can_never_sign_is_refused() {
+        let state = scratch("unusable");
+        let keyring = Keyring::new(&state);
+        for public_key in [
+            // Does not decompress to an Edwards point (y = 2).
+            "02".to_string() + &"00".repeat(31),
+            // The identity point: weak (small order).
+            "01".to_string() + &"00".repeat(31),
+        ] {
+            let mut key = trusted_key();
+            key.public_key = public_key;
+            let error = keyring.add(&key).expect_err("unusable key");
+            assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        }
+        assert!(keyring.all().expect("all").is_empty());
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
