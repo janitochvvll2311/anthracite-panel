@@ -99,6 +99,15 @@ impl Grant {
                 )));
             }
         }
+        let mut levels: Vec<Risk> = Vec::with_capacity(self.accepted.len());
+        for level in &self.accepted {
+            if levels.contains(level) {
+                return Err(Error::invalid(format!(
+                    "`{level}` is accepted twice in the grant"
+                )));
+            }
+            levels.push(*level);
+        }
 
         check_unique(&self.export, "exported")?;
         check_unique(&self.import, "imported")?;
@@ -180,6 +189,14 @@ mod tests {
         grant
             .validate()
             .expect("over-accepting does not change the risk");
+    }
+
+    #[test]
+    fn an_accepted_level_cannot_be_repeated() {
+        let mut grant = grant();
+        grant.accepted = vec![Risk::Write, Risk::Write];
+        let error = grant.validate().expect_err("duplicate");
+        assert!(error.message().contains("twice"), "{error}");
     }
 
     #[test]
