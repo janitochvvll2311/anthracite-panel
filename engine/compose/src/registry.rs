@@ -26,6 +26,16 @@ pub struct Installed {
     pub descriptor: Descriptor,
 }
 
+impl Installed {
+    /// The alias the CLI uses: the operator's override, then the manifest's.
+    pub fn alias(&self) -> Option<&str> {
+        self.descriptor
+            .alias
+            .as_deref()
+            .or_else(|| self.manifest.cli_name())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Registry {
     apps: PathBuf,
@@ -66,13 +76,21 @@ impl Registry {
         }
         let descriptor = Descriptor {
             version: DESCRIPTOR_VERSION,
-            app: id,
+            app: id.clone(),
             enabled: true,
             alias: None,
             signer: staged.signer().map(str::to_string),
             tier: Tier::ThirdParty,
             installed_at: now(),
         };
+        // A fallback alias may collide with another fallback (§7.9 resolves it
+        // with the full id), but not with an operator alias.
+        if let Some(other) = self.alias_conflict(&id, manifest.cli_name(), false)? {
+            return Err(Error::conflict(format!(
+                "the CLI alias `{}` belongs to `{other}`",
+                manifest.cli_name().unwrap_or_default()
+            )));
+        }
         write_staged_descriptor(staged.root(), &descriptor)?;
         publish(staged, &target)?;
         sync_dir(&self.apps)?;
@@ -243,22 +261,16 @@ impl Registry {
     }
 
     /// Sets the operator's CLI alias for the app. It overrides the manifest's
-    /// alias and must be unique among installed apps.
+    /// alias and must not be ambiguous with another app's effective alias.
     pub fn set_alias(&self, app: &AppId, alias: Option<String>) -> Result<Installed, Error> {
-        if let Some(alias) = &alias {
-            for other in self.list()? {
-                if other.manifest.app.id == app.as_str() {
-                    continue;
-                }
-                if effective_alias(&other) == Some(alias.as_str()) {
-                    return Err(Error::conflict(format!(
-                        "`{alias}` is already the CLI alias of `{}`",
-                        other.manifest.app.id
-                    )));
-                }
-            }
-        }
         let mut installed = self.installed(app)?;
+        let effective = alias.as_deref().or_else(|| installed.manifest.cli_name());
+        if let Some(other) = self.alias_conflict(app, effective, alias.is_some())? {
+            return Err(Error::conflict(format!(
+                "`{}` is already the CLI alias of `{other}`",
+                effective.unwrap_or_default()
+            )));
+        }
         installed.descriptor.alias = alias;
         self.save_descriptor(app, &installed.descriptor)?;
         Ok(installed)
@@ -276,6 +288,31 @@ impl Registry {
         sync_dir(&dir)
     }
 
+    /// Whether `alias` on `app` is ambiguous with another installed app.
+    ///
+    /// A fallback may collide with another fallback (§7.9 resolves it with the
+    /// full id); an operator alias may not collide with anything, and no
+    /// fallback may shadow another app's operator alias.
+    fn alias_conflict(
+        &self,
+        app: &AppId,
+        alias: Option<&str>,
+        operator: bool,
+    ) -> Result<Option<AppId>, Error> {
+        let Some(alias) = alias else {
+            return Ok(None);
+        };
+        for other in self.readable() {
+            if other.manifest.app.id == app.as_str() {
+                continue;
+            }
+            if other.alias() == Some(alias) && (operator || other.descriptor.alias.is_some()) {
+                return Ok(Some(AppId::parse(&other.manifest.app.id)?));
+            }
+        }
+        Ok(None)
+    }
+
     /// Extracts into `apps/` with the packages of installed providers added to
     /// the set the bundle is allowed to import.
     fn extract(&self, bundle: &[u8], options: &Options) -> Result<StagedBundle, Error> {
@@ -289,20 +326,27 @@ impl Registry {
     /// One corrupt install must not stop the operator from installing or
     /// replacing something else; `list` is where corruption is reported.
     fn known_packages(&self) -> Vec<String> {
-        let mut packages = Vec::new();
+        self.readable()
+            .into_iter()
+            .map(|installed| installed.manifest.app.namespace)
+            .collect()
+    }
+
+    /// The installed apps that can be read, skipping a corrupt tree.
+    fn readable(&self) -> Vec<Installed> {
+        let mut apps = Vec::new();
         let Ok(entries) = fs::read_dir(&self.apps) else {
-            return packages;
+            return apps;
         };
         for entry in entries.flatten() {
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.') {
+            if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
-            if let Ok(manifest) = read_manifest(&entry.path()) {
-                packages.push(manifest.app.namespace);
+            if let Ok(installed) = read_installed(&entry.path()) {
+                apps.push(installed);
             }
         }
-        packages
+        apps
     }
 
     /// A free `.old-*` name. A crashed process can leave one behind, and a
@@ -422,15 +466,6 @@ fn read_manifest(dir: &Path) -> Result<Manifest, Error> {
         .validate()
         .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
     Ok(manifest)
-}
-
-/// The alias the CLI uses: the operator's override, then the manifest's.
-fn effective_alias(installed: &Installed) -> Option<&str> {
-    installed
-        .descriptor
-        .alias
-        .as_deref()
-        .or_else(|| installed.manifest.cli_name())
 }
 
 /// Reads the manifest and the descriptor and refuses a pair that names two
@@ -594,13 +629,22 @@ mod tests {
         ])
     }
 
-    fn other_bundle() -> Vec<u8> {
-        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.other\"\nnamespace = \"example:other\"\nname = \"Other\"\nversion = \"0.1.0\"\n";
-        let wit = "package example:other@1.0.0;\nworld app {}\n";
+    fn plain_bundle(id: &str, namespace: &str, alias: Option<&str>) -> Vec<u8> {
+        let alias_line = alias
+            .map(|alias| format!("alias = \"{alias}\"\n"))
+            .unwrap_or_default();
+        let manifest = format!(
+            "manifest_version = 2\n\n[app]\nid = \"{id}\"\n{alias_line}namespace = \"{namespace}\"\nname = \"Test\"\nversion = \"0.1.0\"\n"
+        );
+        let wit = format!("package {namespace}@1.0.0;\nworld app {{}}\n");
         zip(&[
-            ("manifest.toml".to_string(), manifest.as_bytes().to_vec()),
-            ("wit/other.wit".to_string(), wit.as_bytes().to_vec()),
+            ("manifest.toml".to_string(), manifest.into_bytes()),
+            ("wit/test.wit".to_string(), wit.into_bytes()),
         ])
+    }
+
+    fn other_bundle() -> Vec<u8> {
+        plain_bundle("org.example.other", "example:other", None)
     }
 
     fn options() -> Options {
@@ -970,6 +1014,89 @@ mod tests {
         registry
             .set_alias(&app, Some("notes".to_string()))
             .expect("free alias");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn the_operator_alias_wins_over_the_manifest() {
+        let state = scratch("alias-precedence");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        assert_eq!(registry.get(&app).unwrap().unwrap().alias(), Some("notes"));
+        let installed = registry
+            .set_alias(&app, Some("custom".to_string()))
+            .expect("alias");
+        assert_eq!(installed.alias(), Some("custom"));
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_fallback_may_share_another_fallback() {
+        let state = scratch("fallback-collision");
+        let registry = Registry::new(&state);
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install notes");
+        // `com.example.notes` falls back to `notes` too; §7.9 resolves it with
+        // the full id, so installing it is allowed.
+        registry
+            .install(
+                &plain_bundle("com.example.notes", "example:sharednotes", None),
+                &options(),
+            )
+            .expect("fallback collision is allowed");
+        assert_eq!(registry.list().expect("list").len(), 2);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_install_may_not_shadow_an_operator_alias() {
+        let state = scratch("shadow-alias");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        registry
+            .set_alias(&app, Some("custom".to_string()))
+            .expect("alias");
+        let error = registry
+            .install(
+                &plain_bundle("org.example.custom", "example:custom", None),
+                &options(),
+            )
+            .expect_err("shadowed operator alias");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn clearing_an_alias_checks_the_fallback() {
+        let state = scratch("clear-alias");
+        let registry = Registry::new(&state);
+        let notes = AppId::parse("org.example.notes").unwrap();
+        let other = AppId::parse("org.example.other").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install notes");
+        registry
+            .install(&other_bundle(), &options())
+            .expect("install other");
+        registry
+            .set_alias(&notes, Some("custom".to_string()))
+            .expect("notes is custom");
+        // `other` may take `notes` now: the notes app no longer uses it.
+        registry
+            .set_alias(&other, Some("notes".to_string()))
+            .expect("notes is free");
+        // Clearing notes falls back to `notes`, which `other` now owns.
+        let error = registry
+            .set_alias(&notes, None)
+            .expect_err("fallback shadowed");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
