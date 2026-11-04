@@ -294,11 +294,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unrelated_broken_app_is_ignored() {
+    fn an_unrelated_broken_app_does_not_block_approval() {
         let mut apps = chain();
         apps.push(installed(broken_manifest("org.example.broken")));
+        let grant = approve(&app(CONSUMER), &apps, approval()).expect("approval over the closure");
         assert_eq!(
-            app_risk(&app(CONSUMER), &apps).expect("risk"),
+            grant.risk,
             Risk::Write,
             "only the approved app's closure is inspected"
         );
