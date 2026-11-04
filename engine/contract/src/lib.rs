@@ -4,6 +4,7 @@
 //! function of values it belongs here; if it needs a file, a socket or a
 //! component, it belongs somewhere else.
 
+pub mod audit;
 pub mod catalog;
 pub mod composition;
 pub mod error;
@@ -12,6 +13,7 @@ pub mod id;
 pub mod manifest;
 pub mod world;
 
+pub use audit::{AuditAction, AuditEntry, Outcome};
 pub use catalog::{is_native, risk_of, NativeInterface, Risk, NATIVE};
 pub use composition::{Composition, Profile, COMPOSITION_VERSION};
 pub use error::{Error, ErrorEnvelope, ErrorKind};
