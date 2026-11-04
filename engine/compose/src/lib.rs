@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub mod grant;
+pub mod risk;
 
 use anth_contract::catalog;
 use anth_contract::{
@@ -110,10 +111,12 @@ pub enum ResolutionError {
     InvalidComposition(Error),
     /// An installed manifest is malformed (the registry should have refused it).
     InvalidManifest(Error),
-    /// The composition names an app that is not installed. `malformed` carries
-    /// the parse error of an id in the installed set that could not be read:
-    /// the composed app is still missing, but the operator should know the other
-    /// problem exists.
+    /// A grant built or supplied for approval does not satisfy its own rules.
+    InvalidGrant(Error),
+    /// An app the caller needs is not installed: composed, or being approved.
+    /// `malformed` carries the parse error of an id in the installed set that
+    /// could not be read: the app is still missing, but the operator should
+    /// know the other problem exists.
     NotInstalled {
         app: String,
         malformed: Option<String>,
@@ -144,8 +147,9 @@ impl fmt::Display for ResolutionError {
                 write!(f, "the composition is invalid: {error}")
             }
             Self::InvalidManifest(error) => write!(f, "an installed manifest is invalid: {error}"),
+            Self::InvalidGrant(error) => write!(f, "the grant is invalid: {error}"),
             Self::NotInstalled { app, malformed } => {
-                write!(f, "`{app}` is composed but not installed")?;
+                write!(f, "`{app}` is not installed")?;
                 if let Some(malformed) = malformed {
                     write!(
                         f,
@@ -544,7 +548,7 @@ fn boot_order(
 /// naming all leftovers blames apps that would boot as soon as the cycle is
 /// gone. A node is in a cycle when it can reach itself by following consumer
 /// edges.
-fn cycle_members(
+pub(crate) fn cycle_members(
     consumers: &BTreeMap<AppId, BTreeSet<AppId>>,
     running: &BTreeSet<AppId>,
     ordered: &[AppId],
@@ -583,18 +587,43 @@ fn effective_risk(
     order: &[AppId],
     exporters: &BTreeMap<InterfaceId, Vec<&Entry>>,
 ) -> BTreeMap<AppId, Risk> {
+    risk_over(
+        order,
+        |id| {
+            composed
+                .iter()
+                .find(|entry| &entry.id == id)
+                .map(|entry| entry.imports.clone())
+                .unwrap_or_default()
+        },
+        |import| {
+            exporters
+                .get(import)
+                .and_then(|providers| providers.first())
+                .map(|provider| provider.id.clone())
+        },
+    )
+}
+
+/// The risk rule, in one place: an app is as risky as the riskiest thing it can
+/// reach, and the boot order guarantees providers are computed first.
+///
+/// Both the compose-time re-check and the approval decide with this function;
+/// only the graph they feed it differs.
+pub(crate) fn risk_over(
+    order: &[AppId],
+    imports_of: impl Fn(&AppId) -> Vec<InterfaceId>,
+    provider_of: impl Fn(&InterfaceId) -> Option<AppId>,
+) -> BTreeMap<AppId, Risk> {
     let mut risk: BTreeMap<AppId, Risk> = BTreeMap::new();
     for id in order {
-        let Some(entry) = composed.iter().find(|entry| &entry.id == id) else {
-            continue;
-        };
         let mut level = Risk::Read;
-        for import in &entry.imports {
-            let reached = match exporters.get(import).and_then(|p| p.first()) {
+        for import in imports_of(id) {
+            let reached = match provider_of(&import) {
                 Some(provider) => *risk
-                    .get(&provider.id)
-                    .expect("providers boot before consumers"),
-                None => catalog::risk_of(import).expect("an unprovided import is native"),
+                    .get(&provider)
+                    .expect("providers are ordered before their consumers"),
+                None => catalog::risk_of(&import).expect("an unprovided import is native"),
             };
             level = level.max(reached);
         }
@@ -603,7 +632,7 @@ fn effective_risk(
     risk
 }
 
-fn parse_interfaces<'a>(
+pub(crate) fn parse_interfaces<'a>(
     values: impl Iterator<Item = &'a String>,
 ) -> Result<Vec<InterfaceId>, ResolutionError> {
     values
