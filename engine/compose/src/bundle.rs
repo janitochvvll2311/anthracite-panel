@@ -1,0 +1,751 @@
+//! Reading an app bundle: zip safety, the closed layout, hashes, signature and
+//! the WIT package (§7.1–§7.3).
+//!
+//! Verification happens in a staging directory under `state/apps` and the
+//! caller decides when it becomes visible. Nothing here grants authority: a
+//! verified bundle is an installed candidate, still without a grant.
+
+use std::collections::BTreeSet;
+use std::fs::{self, DirBuilder, OpenOptions};
+use std::io::{Cursor, Read};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use anth_contract::{signature, Error, InterfaceId, Manifest};
+use sha2::{Digest, Sha256};
+use wit_parser::UnresolvedPackageGroup;
+
+use crate::keys::Keyring;
+use crate::store;
+
+/// A bundle that unpacks to more entries than this is refused before reading.
+const MAX_FILES: usize = 512;
+/// Per-file uncompressed cap, and the total is the same as the body cap.
+const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+static STAGING: AtomicU64 = AtomicU64::new(0);
+
+/// What the caller allows for this install.
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    /// `apps.max-bundle-bytes`: the compressed body and the uncompressed total.
+    pub max_bundle_bytes: u64,
+    /// `apps.require-signature`.
+    pub require_signature: bool,
+}
+
+#[derive(Debug)]
+pub struct StagedBundle {
+    root: PathBuf,
+    manifest: Manifest,
+    signer: Option<String>,
+    keep: bool,
+}
+
+impl StagedBundle {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    /// The fingerprint that signed, or `None` for an accepted unsigned bundle.
+    pub fn signer(&self) -> Option<&str> {
+        self.signer.as_deref()
+    }
+
+    /// Hands the directory to the caller; `Drop` will no longer remove it.
+    pub fn into_root(mut self) -> PathBuf {
+        self.keep = true;
+        self.root.clone()
+    }
+}
+
+impl Drop for StagedBundle {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
+/// Unpacks and verifies `bundle` into a staging directory under `staging_parent`.
+pub fn extract(
+    bundle: &[u8],
+    staging_parent: &Path,
+    options: &Options,
+    keyring: &Keyring,
+) -> Result<StagedBundle, Error> {
+    if bundle.len() as u64 > options.max_bundle_bytes {
+        return Err(Error::too_large(format!(
+            "the bundle is {} bytes; the limit is {}",
+            bundle.len(),
+            options.max_bundle_bytes
+        )));
+    }
+    store::ensure_dir(staging_parent)?;
+    let root = staging_parent.join(format!(
+        ".bundle-{}-{}",
+        std::process::id(),
+        STAGING.fetch_add(1, Ordering::Relaxed)
+    ));
+    DirBuilder::new()
+        .mode(store::DIR_MODE)
+        .create(&root)
+        .map_err(|error| Error::internal(format!("creating {}: {error}", root.display())))?;
+    match verify(&root, bundle, options, keyring) {
+        Ok(staged) => Ok(staged),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&root);
+            Err(error)
+        }
+    }
+}
+
+fn verify(
+    root: &Path,
+    bundle: &[u8],
+    options: &Options,
+    keyring: &Keyring,
+) -> Result<StagedBundle, Error> {
+    unpack(root, bundle, options.max_bundle_bytes)?;
+
+    let manifest_text = read_required(root, "manifest.toml")?;
+    let text = std::str::from_utf8(&manifest_text)
+        .map_err(|error| Error::invalid(format!("`manifest.toml` is not UTF-8: {error}")))?;
+    let manifest = Manifest::parse(text)?;
+    manifest.validate()?;
+
+    check_layout(root)?;
+    check_wit(root, &manifest)?;
+    check_hashes(root, &manifest)?;
+
+    let signer = match store::read(&root.join("manifest.sig"))? {
+        Some(text) => {
+            let message = signed_message(root)?;
+            Some(keyring.verify(&message, &text)?)
+        }
+        None if options.require_signature => {
+            return Err(Error::denied(
+                "the bundle is not signed and this engine requires a signature",
+            ));
+        }
+        None => None,
+    };
+
+    Ok(StagedBundle {
+        root: root.to_path_buf(),
+        manifest,
+        signer,
+        keep: false,
+    })
+}
+
+fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bundle))
+        .map_err(|error| Error::invalid(format!("the bundle is not a zip: {error}")))?;
+    if archive.len() > MAX_FILES {
+        return Err(Error::too_large(format!(
+            "the bundle has {} entries; the limit is {MAX_FILES}",
+            archive.len()
+        )));
+    }
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut total: u64 = 0;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| Error::invalid(format!("reading the bundle: {error}")))?;
+        let name = entry
+            .enclosed_name()
+            .ok_or_else(|| Error::invalid(format!("`{}` escapes the bundle", entry.name())))?;
+        let relative = name
+            .to_str()
+            .ok_or_else(|| Error::invalid(format!("`{}` is not UTF-8", entry.name())))?
+            .to_string();
+        if relative.contains('\\') || relative.contains('\0') {
+            return Err(Error::invalid(format!(
+                "`{relative}` is not a plain path inside the bundle"
+            )));
+        }
+        if !seen.insert(relative.clone()) {
+            return Err(Error::invalid(format!(
+                "`{relative}` appears twice in the bundle"
+            )));
+        }
+        if let Some(mode) = entry.unix_mode() {
+            if mode & 0o170000 == 0o120000 {
+                return Err(Error::invalid(format!(
+                    "`{relative}` is a symlink; bundles hold real files"
+                )));
+            }
+        }
+        let path = root.join(&name);
+        if entry.is_dir() {
+            fs::create_dir_all(&path).map_err(|error| {
+                Error::internal(format!("creating {}: {error}", path.display()))
+            })?;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(store::DIR_MODE));
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                Error::internal(format!("creating {}: {error}", parent.display()))
+            })?;
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(store::FILE_MODE)
+            .open(&path)
+            .map_err(|error| Error::internal(format!("creating {}: {error}", path.display())))?;
+        let copied = std::io::copy(&mut entry.by_ref().take(MAX_FILE_BYTES + 1), &mut file)
+            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
+        if copied > MAX_FILE_BYTES {
+            return Err(Error::too_large(format!(
+                "`{relative}` is larger than {MAX_FILE_BYTES} bytes"
+            )));
+        }
+        total += copied;
+        if total > max_total {
+            return Err(Error::too_large(format!(
+                "the bundle expands to more than {max_total} bytes"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The layout is closed: the manifest, its signature, WIT sources, the
+/// component and the UI modules. Anything else is a payload nobody declared.
+fn check_layout(root: &Path) -> Result<(), Error> {
+    for (relative, is_file) in walk(root)? {
+        if !is_file {
+            continue;
+        }
+        let ok = relative == "manifest.toml"
+            || relative == "manifest.sig"
+            || (relative.starts_with("wit/")
+                && relative.ends_with(".wit")
+                && !relative.starts_with("wit/deps/"))
+            || (relative.starts_with("wasm/")
+                && !relative["wasm/".len()..].contains('/')
+                && relative.ends_with(".wasm"))
+            || (relative.starts_with("web/")
+                && !relative["web/".len()..].contains('/')
+                && (relative.ends_with(".js")
+                    || relative.ends_with(".mjs")
+                    || relative.ends_with(".css")));
+        if !ok {
+            return Err(Error::invalid(format!(
+                "`{relative}` is not part of the bundle layout"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// One package, one world, and an identity that matches the manifest.
+fn check_wit(root: &Path, manifest: &Manifest) -> Result<(), Error> {
+    let wit = root.join("wit");
+    if !wit.is_dir() {
+        return Err(Error::invalid("the bundle has no `wit/` directory"));
+    }
+    let group = UnresolvedPackageGroup::parse_dir(&wit)
+        .map_err(|error| Error::invalid(format!("the WIT package is not valid: {error:#}")))?;
+    if !group.nested.is_empty() {
+        return Err(Error::invalid(
+            "`wit/` must hold exactly one package, not nested packages",
+        ));
+    }
+    let package = &group.main;
+    if package.worlds.len() != 1 {
+        return Err(Error::invalid(format!(
+            "`wit/` must declare exactly one world, and it declares {}",
+            package.worlds.len()
+        )));
+    }
+    let (namespace, name) = manifest
+        .app
+        .namespace
+        .split_once(':')
+        .ok_or_else(|| Error::invalid("the manifest namespace is not `namespace:package`"))?;
+    if package.name.namespace != namespace || package.name.name != name {
+        return Err(Error::invalid(format!(
+            "the WIT package is `{}`, and the manifest says `{}`",
+            package.name, manifest.app.namespace
+        )));
+    }
+    let version = anth_contract::parse_version(&manifest.app.version)?;
+    if package.name.version.as_ref() != Some(&version) {
+        return Err(Error::invalid(format!(
+            "the WIT package version is {} and the manifest says {version}",
+            package
+                .name
+                .version
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "none".to_string())
+        )));
+    }
+    for export in &manifest.export {
+        let id = InterfaceId::parse(&export.interface)?;
+        if id.namespace() != namespace || id.package() != name {
+            return Err(Error::invalid(format!(
+                "`{}` is exported from a package the bundle does not declare",
+                export.interface
+            )));
+        }
+        let declared = package
+            .interfaces
+            .iter()
+            .any(|(_, interface)| interface.name.as_deref() == Some(id.interface()));
+        if !declared {
+            return Err(Error::invalid(format!(
+                "`{}` is exported by the manifest but not declared in `wit/`",
+                export.interface
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Every hash in the manifest is checked before the bundle becomes visible, and
+/// the component and UI directories hold nothing undeclared.
+fn check_hashes(root: &Path, manifest: &Manifest) -> Result<(), Error> {
+    let mut declared: BTreeSet<String> = BTreeSet::new();
+    if let Some(wasm) = &manifest.wasm {
+        declared.insert(wasm.path.clone());
+        check_hash(root, &wasm.path, &wasm.sha256)?;
+    }
+    for slot in &manifest.slot {
+        declared.insert(slot.module.clone());
+        check_hash(root, &slot.module, &slot.sha256)?;
+    }
+    for (relative, is_file) in walk(root)? {
+        if is_file
+            && (relative.starts_with("wasm/") || relative.starts_with("web/"))
+            && !declared.contains(&relative)
+        {
+            return Err(Error::invalid(format!(
+                "`{relative}` is in the bundle but not declared in the manifest"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn check_hash(root: &Path, relative: &str, expected: &str) -> Result<(), Error> {
+    let bytes = fs::read(root.join(relative)).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Error::invalid(format!(
+                "the manifest declares `{relative}`, which the bundle does not contain"
+            ))
+        } else {
+            Error::internal(format!("reading `{relative}`: {error}"))
+        }
+    })?;
+    let actual = hex(&Sha256::digest(&bytes));
+    if actual != expected {
+        return Err(Error::invalid(format!(
+            "`{relative}` does not match its manifest hash"
+        )));
+    }
+    Ok(())
+}
+
+fn signed_message(root: &Path) -> Result<Vec<u8>, Error> {
+    let mut files = vec![(
+        "manifest.toml".to_string(),
+        read_required(root, "manifest.toml")?,
+    )];
+    for (relative, is_file) in walk(root)? {
+        if is_file && relative.starts_with("wit/") {
+            files.push((relative.clone(), read_required(root, &relative)?));
+        }
+    }
+    signature::message(&files)
+}
+
+fn read_required(root: &Path, relative: &str) -> Result<Vec<u8>, Error> {
+    fs::read(root.join(relative)).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Error::invalid(format!("the bundle has no `{relative}`"))
+        } else {
+            Error::internal(format!("reading `{relative}`: {error}"))
+        }
+    })
+}
+
+/// Every file under `root`, relative and with forward slashes, sorted.
+fn walk(root: &Path) -> Result<Vec<(String, bool)>, Error> {
+    fn visit(base: &Path, dir: &Path, out: &mut Vec<(String, bool)>) -> Result<(), Error> {
+        let entries = fs::read_dir(dir)
+            .map_err(|error| Error::internal(format!("reading {}: {error}", dir.display())))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| Error::internal(format!("reading {}: {error}", dir.display())))?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                Error::internal(format!("inspecting {}: {error}", path.display()))
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(Error::invalid(format!(
+                    "`{}` is a symlink; bundles hold real files",
+                    path.display()
+                )));
+            }
+            let relative = path
+                .strip_prefix(base)
+                .expect("the path is under the root")
+                .to_str()
+                .ok_or_else(|| Error::invalid(format!("`{}` is not UTF-8", path.display())))?
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            if metadata.is_dir() {
+                out.push((relative, false));
+                visit(base, &path, out)?;
+            } else {
+                out.push((relative, true));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    visit(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anth_contract::{KeyAlgorithm, TrustedKey, KEY_VERSION};
+    use ed25519_dalek::{Signer, SigningKey};
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    const WASM: &[u8] = b"\0asm a fake component";
+    const WIT: &str = "package example:notes@0.1.0;\n\ninterface notes {\n  all: func() -> list<string>;\n}\n\nworld app {\n  export notes;\n}\n";
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-bundle-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("chmod");
+        dir
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn manifest(wasm: &[u8]) -> String {
+        format!(
+            "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/notes.wasm\"\nsha256 = \"{}\"\n\n[[export]]\ninterface = \"example:notes/notes@1.0.0\"\n",
+            hex(&Sha256::digest(wasm))
+        )
+    }
+
+    fn entries(manifest: &str, wit: &str, wasm: &[u8]) -> Vec<(String, Vec<u8>)> {
+        vec![
+            ("manifest.toml".to_string(), manifest.as_bytes().to_vec()),
+            ("wit/notes.wit".to_string(), wit.as_bytes().to_vec()),
+            ("wasm/notes.wasm".to_string(), wasm.to_vec()),
+        ]
+    }
+
+    fn zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .expect("start");
+            writer.write_all(bytes).expect("write");
+        }
+        writer.finish().expect("finish").into_inner()
+    }
+
+    fn options(require_signature: bool) -> Options {
+        Options {
+            max_bundle_bytes: 1 << 20,
+            require_signature,
+        }
+    }
+
+    fn keyring(state: &Path) -> (Keyring, SigningKey) {
+        let keyring = Keyring::new(state);
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        keyring
+            .add(&TrustedKey {
+                version: KEY_VERSION,
+                algorithm: KeyAlgorithm::Ed25519,
+                public_key: hex(&signing.verifying_key().to_bytes()),
+                label: None,
+                added_by: "operator-test".to_string(),
+                added_at: "2026-11-03T20:00:00Z".to_string(),
+            })
+            .expect("add key");
+        (keyring, signing)
+    }
+
+    fn sign(manifest: &str, wit: &str, signing: &SigningKey) -> String {
+        let message = anth_contract::signature::message(&[
+            ("manifest.toml".to_string(), manifest.as_bytes().to_vec()),
+            ("wit/notes.wit".to_string(), wit.as_bytes().to_vec()),
+        ])
+        .expect("message");
+        let signature = signing.sign(&message);
+        crate::signature::signature_base64(&signature.to_bytes())
+    }
+
+    #[test]
+    fn an_unsigned_bundle_is_accepted_when_signatures_are_off() {
+        let state = scratch("unsigned");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let staged = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect("staged");
+        assert_eq!(staged.manifest().app.id, "org.example.notes");
+        assert!(staged.signer().is_none());
+        let root = staged.root().to_path_buf();
+        assert!(root.join("manifest.toml").is_file());
+        drop(staged);
+        assert!(!root.exists(), "the staging directory is removed");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_unsigned_bundle_is_denied_when_required() {
+        let state = scratch("required");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let error = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(true),
+            &keyring,
+        )
+        .expect_err("unsigned");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_signed_bundle_names_the_signer() {
+        let state = scratch("signed");
+        let (keyring, signing) = keyring(&state);
+        let manifest = manifest(WASM);
+        let signature = sign(&manifest, WIT, &signing);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push(("manifest.sig".to_string(), signature.into_bytes()));
+        let staged = extract(&zip(&files), &state, &options(true), &keyring).expect("staged");
+        let expected =
+            crate::signature::fingerprint(&hex(&signing.verifying_key().to_bytes())).unwrap();
+        assert_eq!(staged.signer(), Some(expected.as_str()));
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_component_that_does_not_match_its_hash_is_refused() {
+        let state = scratch("hash");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let error = extract(
+            &zip(&entries(&manifest, WIT, b"another component")),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("hash");
+        assert!(error.message().contains("manifest hash"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_undeclared_file_is_refused() {
+        let state = scratch("undeclared");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push(("bin/helper".to_string(), b"payload".to_vec()));
+        let error = extract(&zip(&files), &state, &options(false), &keyring).expect_err("layout");
+        assert!(
+            error.message().contains("not part of the bundle layout"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_undeclared_component_is_refused() {
+        let state = scratch("extra-wasm");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push(("wasm/other.wasm".to_string(), b"extra".to_vec()));
+        let error = extract(&zip(&files), &state, &options(false), &keyring).expect_err("extra");
+        assert!(error.message().contains("not declared"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_path_that_escapes_the_bundle_is_refused() {
+        let state = scratch("traversal");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push(("../evil".to_string(), b"x".to_vec()));
+        let error =
+            extract(&zip(&files), &state, &options(false), &keyring).expect_err("traversal");
+        assert!(error.message().contains("escapes the bundle"), "{error}");
+        assert!(!state.join("..").join("evil").exists());
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_symlink_entry_is_refused() {
+        let state = scratch("symlink");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in entries(&manifest, WIT, WASM) {
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .expect("start");
+            writer.write_all(&bytes).expect("write");
+        }
+        writer
+            .add_symlink("wit/link", "manifest.toml", SimpleFileOptions::default())
+            .expect("symlink");
+        let bundle = writer.finish().expect("finish").into_inner();
+        let error = extract(&bundle, &state, &options(false), &keyring).expect_err("symlink");
+        assert!(error.message().contains("symlink"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn two_worlds_are_refused() {
+        let state = scratch("worlds");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { export notes; }\nworld other { export notes; }\n";
+        let error = extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("worlds");
+        assert!(error.message().contains("exactly one world"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_package_that_does_not_match_the_manifest_is_refused() {
+        let state = scratch("package");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let wit = "package example:other@0.1.0;\ninterface notes { all: func(); }\nworld app { export notes; }\n";
+        let error = extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("package");
+        assert!(error.message().contains("WIT package"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_export_not_declared_in_wit_is_refused() {
+        let state = scratch("export");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM).replace(
+            "interface = \"example:notes/notes@1.0.0\"",
+            "interface = \"example:notes/other@1.0.0\"",
+        );
+        let error = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("export");
+        assert!(
+            error.message().contains("not declared in `wit/`"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_bundle_over_the_limit_is_refused() {
+        let state = scratch("large");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let bundle = zip(&entries(&manifest, WIT, WASM));
+        let error = extract(
+            &bundle,
+            &state,
+            &Options {
+                max_bundle_bytes: 10,
+                require_signature: false,
+            },
+            &keyring,
+        )
+        .expect_err("large");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::TooLarge);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_failed_extraction_leaves_no_staging_directory() {
+        let state = scratch("cleanup");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let error = extract(
+            &zip(&entries(&manifest, WIT, b"wrong")),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("hash");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        let leftovers: Vec<_> = fs::read_dir(&state)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with(".bundle-"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn changing_the_wit_after_signing_is_denied() {
+        let state = scratch("changed-wit");
+        let (keyring, signing) = keyring(&state);
+        let manifest = manifest(WASM);
+        let signature = sign(&manifest, WIT, &signing);
+        let changed = WIT.replace("all: func() -> list<string>;", "all: func() -> string;");
+        let mut files = entries(&manifest, &changed, WASM);
+        files.push(("manifest.sig".to_string(), signature.into_bytes()));
+        let error = extract(&zip(&files), &state, &options(true), &keyring).expect_err("tampered");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+}
