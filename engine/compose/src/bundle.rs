@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{Cursor, Read};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -27,12 +27,15 @@ const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 static STAGING: AtomicU64 = AtomicU64::new(0);
 
 /// What the caller allows for this install.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Options {
     /// `apps.max-bundle-bytes`: the compressed body and the uncompressed total.
     pub max_bundle_bytes: u64,
     /// `apps.require-signature`.
     pub require_signature: bool,
+    /// Packages the bundle may import besides the native set: the installed
+    /// providers' `namespace:package` names.
+    pub known_packages: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -87,15 +90,35 @@ pub fn extract(
         )));
     }
     store::ensure_dir(staging_parent)?;
-    let root = staging_parent.join(format!(
-        ".bundle-{}-{}",
-        std::process::id(),
-        STAGING.fetch_add(1, Ordering::Relaxed)
-    ));
-    DirBuilder::new()
-        .mode(store::DIR_MODE)
-        .create(&root)
-        .map_err(|error| Error::internal(format!("creating {}: {error}", root.display())))?;
+    // A crashed install can leave `.bundle-*` behind, and a recycled pid could
+    // collide with the next attempt: retry with a fresh name instead of failing.
+    let mut root = None;
+    for _ in 0..100 {
+        let candidate = staging_parent.join(format!(
+            ".bundle-{}-{}",
+            std::process::id(),
+            STAGING.fetch_add(1, Ordering::Relaxed)
+        ));
+        match DirBuilder::new().mode(store::DIR_MODE).create(&candidate) {
+            Ok(()) => {
+                root = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(Error::internal(format!(
+                    "creating {}: {error}",
+                    candidate.display()
+                )));
+            }
+        }
+    }
+    let root = root.ok_or_else(|| {
+        Error::internal(format!(
+            "could not create a staging directory under {}",
+            staging_parent.display()
+        ))
+    })?;
     match verify(&root, bundle, options, keyring) {
         Ok(staged) => Ok(staged),
         Err(error) => {
@@ -120,7 +143,7 @@ fn verify(
     manifest.validate()?;
 
     check_layout(root)?;
-    check_wit(root, &manifest)?;
+    check_wit(root, &manifest, &options.known_packages)?;
     check_hashes(root, &manifest)?;
 
     let signer = match store::read(&root.join("manifest.sig"))? {
@@ -171,6 +194,14 @@ fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
                 "`{relative}` is not a plain path inside the bundle"
             )));
         }
+        if relative
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            return Err(Error::invalid(format!(
+                "`{relative}` is not a plain path inside the bundle"
+            )));
+        }
         if !seen.insert(relative.clone()) {
             return Err(Error::invalid(format!(
                 "`{relative}` appears twice in the bundle"
@@ -185,16 +216,11 @@ fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
         }
         let path = root.join(&name);
         if entry.is_dir() {
-            fs::create_dir_all(&path).map_err(|error| {
-                Error::internal(format!("creating {}: {error}", path.display()))
-            })?;
-            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(store::DIR_MODE));
+            create_dir_private(&path)?;
             continue;
         }
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                Error::internal(format!("creating {}: {error}", parent.display()))
-            })?;
+            create_dir_private(parent)?;
         }
         let mut file = OpenOptions::new()
             .write(true)
@@ -209,6 +235,8 @@ fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
                 "`{relative}` is larger than {MAX_FILE_BYTES} bytes"
             )));
         }
+        file.sync_all()
+            .map_err(|error| Error::internal(format!("syncing {}: {error}", path.display())))?;
         total += copied;
         if total > max_total {
             return Err(Error::too_large(format!(
@@ -228,9 +256,9 @@ fn check_layout(root: &Path) -> Result<(), Error> {
         }
         let ok = relative == "manifest.toml"
             || relative == "manifest.sig"
-            || (relative.starts_with("wit/")
-                && relative.ends_with(".wit")
-                && !relative.starts_with("wit/deps/"))
+            || relative.strip_prefix("wit/").is_some_and(|name| {
+                !name.is_empty() && !name.contains('/') && name.ends_with(".wit")
+            })
             || (relative.starts_with("wasm/")
                 && !relative["wasm/".len()..].contains('/')
                 && relative.ends_with(".wasm"))
@@ -248,8 +276,9 @@ fn check_layout(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// One package, one world, and an identity that matches the manifest.
-fn check_wit(root: &Path, manifest: &Manifest) -> Result<(), Error> {
+/// One package, one world, an identity that matches the manifest, and only
+/// imports the engine can actually resolve.
+fn check_wit(root: &Path, manifest: &Manifest, known: &[String]) -> Result<(), Error> {
     let wit = root.join("wit");
     if !wit.is_dir() {
         return Err(Error::invalid("the bundle has no `wit/` directory"));
@@ -291,9 +320,20 @@ fn check_wit(root: &Path, manifest: &Manifest) -> Result<(), Error> {
                 .unwrap_or_else(|| "none".to_string())
         )));
     }
+    // Full `use` resolution needs the host catalog and the installed providers;
+    // what this can decide is that the imported package has a provider at all.
+    const NATIVE: &[&str] = &["anth:env", "anth:store", "anth:error"];
+    for foreign in package.foreign_deps.keys() {
+        let id = format!("{}:{}", foreign.namespace, foreign.name);
+        if !NATIVE.contains(&id.as_str()) && !known.iter().any(|known| known == &id) {
+            return Err(Error::invalid(format!(
+                "`{id}` is imported by the WIT package but is neither native nor installed"
+            )));
+        }
+    }
     for export in &manifest.export {
         let id = InterfaceId::parse(&export.interface)?;
-        if id.namespace() != namespace || id.package() != name {
+        if id.namespace() != namespace || id.package() != name || id.version() != &version {
             return Err(Error::invalid(format!(
                 "`{}` is exported from a package the bundle does not declare",
                 export.interface
@@ -423,12 +463,47 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Creates `path` and every missing parent with `0700`, never with the umask.
+fn create_dir_private(path: &Path) -> Result<(), Error> {
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => return Ok(()),
+        Ok(_) => {
+            return Err(Error::invalid(format!(
+                "{} exists and is not a directory",
+                path.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(Error::internal(format!(
+                "inspecting {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        create_dir_private(parent)?;
+    }
+    match DirBuilder::new().mode(store::DIR_MODE).create(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(Error::internal(format!(
+            "creating {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anth_contract::{KeyAlgorithm, TrustedKey, KEY_VERSION};
     use ed25519_dalek::{Signer, SigningKey};
     use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
     use zip::write::SimpleFileOptions;
 
     const WASM: &[u8] = b"\0asm a fake component";
@@ -450,7 +525,7 @@ mod tests {
 
     fn manifest(wasm: &[u8]) -> String {
         format!(
-            "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/notes.wasm\"\nsha256 = \"{}\"\n\n[[export]]\ninterface = \"example:notes/notes@1.0.0\"\n",
+            "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/notes.wasm\"\nsha256 = \"{}\"\n\n[[export]]\ninterface = \"example:notes/notes@0.1.0\"\n",
             hex(&Sha256::digest(wasm))
         )
     }
@@ -478,6 +553,7 @@ mod tests {
         Options {
             max_bundle_bytes: 1 << 20,
             require_signature,
+            known_packages: Vec::new(),
         }
     }
 
@@ -676,8 +752,8 @@ mod tests {
         let state = scratch("export");
         let keyring = Keyring::new(&state);
         let manifest = manifest(WASM).replace(
-            "interface = \"example:notes/notes@1.0.0\"",
-            "interface = \"example:notes/other@1.0.0\"",
+            "interface = \"example:notes/notes@0.1.0\"",
+            "interface = \"example:notes/other@0.1.0\"",
         );
         let error = extract(
             &zip(&entries(&manifest, WIT, WASM)),
@@ -694,6 +770,137 @@ mod tests {
     }
 
     #[test]
+    fn a_version_the_wit_does_not_implement_is_refused() {
+        let state = scratch("export-version");
+        let keyring = Keyring::new(&state);
+        let manifest =
+            manifest(WASM).replace("example:notes/notes@0.1.0", "example:notes/notes@9.9.9");
+        let error = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("version");
+        assert!(
+            error
+                .message()
+                .contains("package the bundle does not declare"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_nested_wit_directory_is_refused() {
+        // `wit/` holds the package and nothing else: a vendored copy is a
+        // second truth, not a dependency.
+        let state = scratch("nested-wit");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push((
+            "wit/vendor/other.wit".to_string(),
+            b"package other:things@1.0.0;\n".to_vec(),
+        ));
+        let error = extract(&zip(&files), &state, &options(false), &keyring).expect_err("layout");
+        assert!(
+            error.message().contains("not part of the bundle layout"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_dot_component_is_refused_before_it_reaches_the_filesystem() {
+        let state = scratch("dot");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push(("wit/./notes.wit".to_string(), WIT.as_bytes().to_vec()));
+        let error = extract(&zip(&files), &state, &options(false), &keyring).expect_err("dot");
+        assert!(error.message().contains("plain path"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_native_import_is_allowed() {
+        let state = scratch("native-import");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import anth:env/info@1.0.0; export notes; }\n";
+        extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect("the native set is always available");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_unknown_import_is_refused() {
+        let state = scratch("unknown-import");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import example:other/x@1.0.0; export notes; }\n";
+        let error = extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("unknown import");
+        assert!(
+            error.message().contains("neither native nor installed"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_installed_provider_may_be_imported() {
+        let state = scratch("known-import");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import example:other/x@1.0.0; export notes; }\n";
+        let mut options = options(false);
+        options.known_packages = vec!["example:other".to_string()];
+        extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options,
+            &keyring,
+        )
+        .expect("the provider is installed");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn the_extracted_directories_are_0700() {
+        let state = scratch("dir-modes");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let staged = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect("staged");
+        for relative in ["wit", "wasm"] {
+            let mode = fs::metadata(staged.root().join(relative))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "{relative}");
+        }
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
     fn a_bundle_over_the_limit_is_refused() {
         let state = scratch("large");
         let keyring = Keyring::new(&state);
@@ -705,6 +912,7 @@ mod tests {
             &Options {
                 max_bundle_bytes: 10,
                 require_signature: false,
+                known_packages: Vec::new(),
             },
             &keyring,
         )

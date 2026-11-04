@@ -73,7 +73,7 @@ sha256 = "…"
 
 # ---- what it offers ----
 [[export]]
-interface = "example:notes/list@1.0.0"
+interface = "example:notes/list@0.1.0"
 
 # ---- what it needs ----
 [[import]]
@@ -86,7 +86,7 @@ interface = "anth:store/kv@1.0.0"
 [[route]]
 method = "GET"
 path   = "/notes"
-call   = "example:notes/list@1.0.0#all"
+call   = "example:notes/list@0.1.0#all"
 
 # ---- UI surface ----
 [[slot]]
@@ -100,7 +100,7 @@ sha256 = "…"
 
 # ---- CLI surface ----
 [[cli]]
-call = "example:notes/list@1.0.0#all"
+call = "example:notes/list@0.1.0#all"
 verb = "list"
 
 # ---- limits ----
@@ -148,7 +148,7 @@ owned by tiers:
 | --- | --- | --- |
 | `anth` | the engine | `anth:env/info@1.0.0` |
 | `anthracite` | first-party apps | `anthracite:hello/greeting@1.0.0` |
-| anything else | third-party apps | `example:notes/list@1.0.0` |
+| anything else | third-party apps | `example:notes/list@0.1.0` |
 
 An app cannot claim `anth` or `anthracite` unless its tier matches. App ids stay
 in reverse-DNS (`org.example.notes`) because that is what DNS-shaped ids are for,
