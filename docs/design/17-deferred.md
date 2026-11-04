@@ -194,6 +194,25 @@ rest of the engine authorises with the effective uid. They are equal today becau
 the daemon is not setuid; `faccessat(AT_EACCESS)` states the right question and
 should be used if the call is revisited for any other reason.
 
+### 3.9 The distribution key and the system tier
+
+A public key compiled into the binary that signs `system` apps, with the private
+half held by the release process.
+
+**Why deferred (D-Distribution-Key).** v0.5.0 has no release process to hold a
+private key, and a compiled public key nobody can rotate is a liability, not a
+guarantee. Every signed bundle is `third-party` through the keyring; an operator
+can still trust a signer explicitly. The tier rule that matters for safety — a
+third party never gets a service — is unchanged.
+
+**Ready when** there is a signed release to ship. The mechanism is already
+specified in [§9.1](09-authority.md#91-tiers-and-signing); this entry only delays
+the first key, not the design.
+
+The signature scheme itself is **not** deferred: Ed25519 over the canonical
+message, `manifest.sig` in base64, fingerprint `sha256(public key)` in hex
+(D-Signature-Algorithm). The registry verifies against that in v0.5.0.
+
 ---
 
 ## 4. Developer experience

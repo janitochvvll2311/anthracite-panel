@@ -16,6 +16,11 @@ to a keyring through `POST /api/engine/keys` (`anth key add <fingerprint>`), and
 everything trusted that way is `third-party`: the keyring can extend trust, never
 privilege.
 
+v0.5.0 ships **without** a distribution key (D-Distribution-Key): every signed
+bundle is `third-party`, and the `system` tier waits for a release key in v0.6.0
+([§17](17-deferred.md#39-the-distribution-key-and-the-system-tier)). The
+mechanism above is unchanged; only the first key is late.
+
 An unsigned bundle is accepted only with `[apps] require_signature = false`, and
 it is `third-party` regardless of its id — a manifest that claims `org.anth.*`
 gains nothing.
