@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub mod grant;
+pub mod risk;
 
 use anth_contract::catalog;
 use anth_contract::{
@@ -110,6 +111,8 @@ pub enum ResolutionError {
     InvalidComposition(Error),
     /// An installed manifest is malformed (the registry should have refused it).
     InvalidManifest(Error),
+    /// A grant built or supplied for approval does not satisfy its own rules.
+    InvalidGrant(Error),
     /// The composition names an app that is not installed. `malformed` carries
     /// the parse error of an id in the installed set that could not be read:
     /// the composed app is still missing, but the operator should know the other
@@ -144,6 +147,7 @@ impl fmt::Display for ResolutionError {
                 write!(f, "the composition is invalid: {error}")
             }
             Self::InvalidManifest(error) => write!(f, "an installed manifest is invalid: {error}"),
+            Self::InvalidGrant(error) => write!(f, "the grant is invalid: {error}"),
             Self::NotInstalled { app, malformed } => {
                 write!(f, "`{app}` is composed but not installed")?;
                 if let Some(malformed) = malformed {
@@ -544,7 +548,7 @@ fn boot_order(
 /// naming all leftovers blames apps that would boot as soon as the cycle is
 /// gone. A node is in a cycle when it can reach itself by following consumer
 /// edges.
-fn cycle_members(
+pub(crate) fn cycle_members(
     consumers: &BTreeMap<AppId, BTreeSet<AppId>>,
     running: &BTreeSet<AppId>,
     ordered: &[AppId],
@@ -603,7 +607,7 @@ fn effective_risk(
     risk
 }
 
-fn parse_interfaces<'a>(
+pub(crate) fn parse_interfaces<'a>(
     values: impl Iterator<Item = &'a String>,
 ) -> Result<Vec<InterfaceId>, ResolutionError> {
     values
