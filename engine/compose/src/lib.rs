@@ -15,6 +15,7 @@ use std::fmt;
 
 pub mod grant;
 pub mod risk;
+pub mod signature;
 
 use anth_contract::catalog;
 use anth_contract::{
