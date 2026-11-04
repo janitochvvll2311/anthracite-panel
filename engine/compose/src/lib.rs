@@ -17,24 +17,17 @@ pub mod grant;
 
 use anth_contract::catalog;
 use anth_contract::{
-    parse_version, AppId, Composition, Error, InterfaceId, Manifest, Profile, Risk,
+    parse_version, AppId, Composition, Error, Grant, InterfaceId, Manifest, Profile, Risk,
 };
 
 /// What the registry knows about one installed app at compose time.
 #[derive(Debug, Clone)]
 pub struct InstalledApp {
     pub manifest: Manifest,
-    /// The operator approved a grant for this app.
-    pub approved: bool,
+    /// The approved grant, or `None` when the operator never approved the app.
+    pub grant: Option<Grant>,
     /// The operator enabled the app.
     pub enabled: bool,
-}
-
-impl InstalledApp {
-    /// An app that cannot run contributes no imports, no exports and no instance.
-    pub fn runs(&self) -> bool {
-        self.approved && self.enabled
-    }
 }
 
 /// The result of a successful resolution.
@@ -72,6 +65,13 @@ pub struct Degraded {
 pub enum DegradedReason {
     /// Installed, but no grant has been approved.
     Unapproved,
+    /// A grant exists, but it was approved for different content: the app was
+    /// upgraded and waits for re-approval (§9.5).
+    GrantStale,
+    /// A grant exists but does not satisfy its own rules. It is not authority,
+    /// and approving is an engine operation, so the app degrades rather than
+    /// blocking the boot that would let the operator fix it.
+    GrantInvalid,
     /// Approved, but disabled by the operator.
     Disabled,
     /// Runs, but the app that provides an interface it needs does not.
@@ -79,6 +79,9 @@ pub enum DegradedReason {
         interface: InterfaceId,
         provider: AppId,
     },
+    /// The effective risk grew past what the grant approved: the app is blocked
+    /// until it is re-approved (D-Risk-Recheck).
+    RiskGrown { approved: Risk, effective: Risk },
 }
 
 /// Who satisfies an import.
@@ -183,10 +186,23 @@ impl fmt::Display for ResolutionError {
 
 impl std::error::Error for ResolutionError {}
 
+/// What the installed set says about an app's authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Approval {
+    /// A grant that matches this manifest, with the risk it approved.
+    Granted(Risk),
+    /// No grant at all.
+    Unapproved,
+    /// A grant for different content: the app changed and needs re-approval.
+    Stale,
+    /// A grant that does not satisfy its own rules: corrupt, not authority.
+    Invalid,
+}
+
 /// One composed app, parsed into the ids resolution compares.
 struct Entry {
     id: AppId,
-    approved: bool,
+    approval: Approval,
     enabled: bool,
     exports: Vec<InterfaceId>,
     imports: Vec<InterfaceId>,
@@ -194,7 +210,24 @@ struct Entry {
 
 impl Entry {
     fn runs(&self) -> bool {
-        self.approved && self.enabled
+        self.enabled && matches!(self.approval, Approval::Granted(_))
+    }
+
+    fn approved_risk(&self) -> Option<Risk> {
+        match self.approval {
+            Approval::Granted(risk) => Some(risk),
+            Approval::Unapproved | Approval::Stale | Approval::Invalid => None,
+        }
+    }
+
+    /// Why the app does not run. Only meaningful when `runs` is false.
+    fn degraded(&self) -> DegradedReason {
+        match self.approval {
+            Approval::Unapproved => DegradedReason::Unapproved,
+            Approval::Stale => DegradedReason::GrantStale,
+            Approval::Invalid => DegradedReason::GrantInvalid,
+            Approval::Granted(_) => DegradedReason::Disabled,
+        }
     }
 }
 
@@ -257,12 +290,24 @@ pub fn resolve(
                 });
             }
         }
+        let exports = parse_interfaces(found.manifest.export.iter().map(|e| &e.interface))?;
+        let imports = parse_interfaces(found.manifest.import.iter().map(|i| &i.interface))?;
+        let approval = match &found.grant {
+            None => Approval::Unapproved,
+            Some(grant) => match grant.validate() {
+                Err(_) => Approval::Invalid,
+                Ok(()) if grant_matches(&found.manifest, grant, &exports, &imports) => {
+                    Approval::Granted(grant.risk)
+                }
+                Ok(()) => Approval::Stale,
+            },
+        };
         composed.push(Entry {
             id,
-            approved: found.approved,
+            approval,
             enabled: found.enabled,
-            exports: parse_interfaces(found.manifest.export.iter().map(|e| &e.interface))?,
-            imports: parse_interfaces(found.manifest.import.iter().map(|i| &i.interface))?,
+            exports,
+            imports,
         });
     }
 
@@ -297,12 +342,12 @@ pub fn resolve(
         .iter()
         .filter(|entry| !entry.runs())
         .map(|entry| {
-            let reason = if entry.approved {
-                DegradedReason::Disabled
-            } else {
-                DegradedReason::Unapproved
-            };
-            (entry.id.clone(), Degraded { reason })
+            (
+                entry.id.clone(),
+                Degraded {
+                    reason: entry.degraded(),
+                },
+            )
         })
         .collect();
 
@@ -324,47 +369,95 @@ pub fn resolve(
         }
     }
 
+    // Steps 6 and 7 plus D-Risk-Recheck. An app whose effective risk grew past
+    // what its grant approved is blocked, and blocking it can block its
+    // consumers, so the pass repeats until the running set stops changing.
     loop {
-        let mut blocked: Vec<(AppId, DegradedReason)> = Vec::new();
+        loop {
+            let mut blocked: Vec<(AppId, DegradedReason)> = Vec::new();
+            for entry in &composed {
+                if !running.contains(&entry.id) {
+                    continue;
+                }
+                for import in &entry.imports {
+                    let providers = exporters.get(import).map(Vec::as_slice).unwrap_or(&[]);
+                    match providers {
+                        // A native or missing provider was decided above.
+                        [] => continue,
+                        [provider] => {
+                            if !running.contains(&provider.id) {
+                                blocked.push((
+                                    entry.id.clone(),
+                                    DegradedReason::Blocked {
+                                        interface: import.clone(),
+                                        provider: provider.id.clone(),
+                                    },
+                                ));
+                                break;
+                            }
+                        }
+                        // The duplicate check above already refused more than one.
+                        _ => unreachable!("duplicate exporters are refused before resolution"),
+                    }
+                }
+            }
+            if blocked.is_empty() {
+                break;
+            }
+            for (app, reason) in blocked {
+                running.remove(&app);
+                degraded.insert(app, Degraded { reason });
+            }
+        }
+
+        let links = collect_links(&composed, &running, &exporters);
+        let order = boot_order(&composed, &running, &links)?;
+        let risk = effective_risk(&composed, &order, &exporters);
+
+        let mut grown: Vec<(AppId, Risk, Risk)> = Vec::new();
         for entry in &composed {
             if !running.contains(&entry.id) {
                 continue;
             }
-            for import in &entry.imports {
-                let providers = exporters.get(import).map(Vec::as_slice).unwrap_or(&[]);
-                match providers {
-                    // A native or missing provider was decided above.
-                    [] => continue,
-                    [provider] => {
-                        if !running.contains(&provider.id) {
-                            blocked.push((
-                                entry.id.clone(),
-                                DegradedReason::Blocked {
-                                    interface: import.clone(),
-                                    provider: provider.id.clone(),
-                                },
-                            ));
-                            break;
-                        }
-                    }
-                    // The duplicate check above already refused more than one.
-                    _ => unreachable!("duplicate exporters are refused before resolution"),
-                }
+            let Some(approved) = entry.approved_risk() else {
+                continue;
+            };
+            let effective = risk[&entry.id];
+            if effective > approved {
+                grown.push((entry.id.clone(), approved, effective));
             }
         }
-        if blocked.is_empty() {
-            break;
+        if grown.is_empty() {
+            return Ok(Resolution {
+                order,
+                degraded,
+                links,
+                risk,
+            });
         }
-        for (app, reason) in blocked {
+        for (app, approved, effective) in grown {
             running.remove(&app);
-            degraded.insert(app, Degraded { reason });
+            degraded.insert(
+                app,
+                Degraded {
+                    reason: DegradedReason::RiskGrown {
+                        approved,
+                        effective,
+                    },
+                },
+            );
         }
     }
+}
 
-    // Step 6: providers boot before consumers. Step 7's input: the links a
-    // running app actually holds.
+/// The links the running apps hold, sorted so the output is stable.
+fn collect_links(
+    composed: &[Entry],
+    running: &BTreeSet<AppId>,
+    exporters: &BTreeMap<InterfaceId, Vec<&Entry>>,
+) -> Vec<Link> {
     let mut links = Vec::new();
-    for entry in &composed {
+    for entry in composed {
         if !running.contains(&entry.id) {
             continue;
         }
@@ -383,16 +476,7 @@ pub fn resolve(
     links.sort_by(|a, b| {
         (&a.consumer, &a.interface, &a.provider).cmp(&(&b.consumer, &b.interface, &b.provider))
     });
-
-    let order = boot_order(&composed, &running, &links)?;
-    let risk = effective_risk(&composed, &order, &exporters);
-
-    Ok(Resolution {
-        order,
-        degraded,
-        links,
-        risk,
-    })
+    links
 }
 
 /// Kahn's algorithm with a `BTreeSet` frontier: independent apps keep their
@@ -527,6 +611,32 @@ fn parse_interfaces<'a>(
         .collect()
 }
 
+/// Whether the grant was approved for exactly this manifest.
+///
+/// A grant freezes the version and the interface sets. Hashes are verified by
+/// the registry, which is the layer that owns the bundle bytes; here the
+/// version and the sets are enough to tell "approved for this app" from "the
+/// app was upgraded and the operator has not looked at it yet".
+fn grant_matches(
+    manifest: &Manifest,
+    grant: &Grant,
+    exports: &[InterfaceId],
+    imports: &[InterfaceId],
+) -> bool {
+    grant.app.as_str() == manifest.app.id
+        && grant.app_version == manifest.app.version
+        && same_interfaces(&grant.export, exports)
+        && same_interfaces(&grant.import, imports)
+}
+
+fn same_interfaces(left: &[InterfaceId], right: &[InterfaceId]) -> bool {
+    let mut left: Vec<&InterfaceId> = left.iter().collect();
+    let mut right: Vec<&InterfaceId> = right.iter().collect();
+    left.sort();
+    right.sort();
+    left == right
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,10 +662,38 @@ mod tests {
         manifest
     }
 
+    fn grant_for(manifest: &Manifest, risk: Risk) -> Grant {
+        Grant {
+            version: anth_contract::GRANT_VERSION,
+            app: AppId::parse(&manifest.app.id).expect("app id"),
+            app_version: manifest.app.version.clone(),
+            manifest_sha256: "a".repeat(64),
+            wit_sha256: "b".repeat(64),
+            signature: None,
+            risk,
+            accepted: Grant::required_levels(risk).collect(),
+            approved_by: "operator-test".to_string(),
+            approved_at: "2026-11-03T20:00:00Z".to_string(),
+            export: manifest
+                .export
+                .iter()
+                .map(|export| InterfaceId::parse(&export.interface).expect("export"))
+                .collect(),
+            import: manifest
+                .import
+                .iter()
+                .map(|import| InterfaceId::parse(&import.interface).expect("import"))
+                .collect(),
+        }
+    }
+
+    /// An approved app. The grant approves the maximum risk so a test that is
+    /// not about a risk growth never trips one.
     fn installed(manifest: Manifest) -> InstalledApp {
+        let grant = grant_for(&manifest, Risk::Package);
         InstalledApp {
             manifest,
-            approved: true,
+            grant: Some(grant),
             enabled: true,
         }
     }
@@ -733,7 +871,7 @@ mod tests {
     #[test]
     fn an_unapproved_provider_degrades_its_consumer() {
         let mut provider = provider();
-        provider.approved = false;
+        provider.grant = None;
         let resolution = resolve(
             &composition(&[CONSUMER, PROVIDER]),
             &[consumer(&[GREETING]), provider],
@@ -784,7 +922,7 @@ mod tests {
         let a_interface = "example:a/x@1.0.0";
         let b_interface = "example:b/y@1.0.0";
         let mut provider_a = installed(manifest(a, "example:a", &[a_interface], &[]));
-        provider_a.approved = false;
+        provider_a.grant = None;
         let middle = installed(manifest(b, "example:b", &[b_interface], &[a_interface]));
         let last = installed(manifest(c, "example:c", &[], &[b_interface]));
         let resolution =
@@ -807,6 +945,96 @@ mod tests {
                 interface: interface(b_interface),
                 provider: app(b),
             }
+        );
+    }
+
+    #[test]
+    fn a_grown_risk_blocks_the_app_and_its_consumers() {
+        let manifest = manifest(
+            PROVIDER,
+            "example:provider",
+            &[GREETING],
+            &["anth:store/kv@1.0.0"],
+        );
+        let provider = InstalledApp {
+            grant: Some(grant_for(&manifest, Risk::Read)),
+            manifest,
+            enabled: true,
+        };
+        let resolution = resolve(
+            &composition(&[CONSUMER, PROVIDER]),
+            &[consumer(&[GREETING]), provider],
+        )
+        .expect("resolve");
+        assert!(resolution.order.is_empty());
+        assert_eq!(
+            resolution.degraded[&app(PROVIDER)].reason,
+            DegradedReason::RiskGrown {
+                approved: Risk::Read,
+                effective: Risk::Write,
+            }
+        );
+        assert_eq!(
+            resolution.degraded[&app(CONSUMER)].reason,
+            DegradedReason::Blocked {
+                interface: interface(GREETING),
+                provider: app(PROVIDER),
+            }
+        );
+    }
+
+    #[test]
+    fn a_risk_within_the_grant_runs() {
+        let manifest = manifest(
+            PROVIDER,
+            "example:provider",
+            &[GREETING],
+            &["anth:store/kv@1.0.0"],
+        );
+        let provider = InstalledApp {
+            grant: Some(grant_for(&manifest, Risk::Write)),
+            manifest,
+            enabled: true,
+        };
+        let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("resolve");
+        assert_eq!(resolution.order, [app(PROVIDER)]);
+        assert_eq!(resolution.risk[&app(PROVIDER)], Risk::Write);
+    }
+
+    #[test]
+    fn a_grant_approved_for_another_version_is_stale() {
+        let mut provider = provider();
+        provider.grant.as_mut().expect("grant").app_version = "9.9.9".to_string();
+        let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("resolve");
+        assert!(resolution.order.is_empty());
+        assert_eq!(
+            resolution.degraded[&app(PROVIDER)].reason,
+            DegradedReason::GrantStale
+        );
+    }
+
+    #[test]
+    fn a_grant_approved_for_other_interfaces_is_stale() {
+        let mut provider = provider();
+        provider.grant.as_mut().expect("grant").export =
+            vec![interface("example:provider/other@1.0.0")];
+        let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("resolve");
+        assert_eq!(
+            resolution.degraded[&app(PROVIDER)].reason,
+            DegradedReason::GrantStale
+        );
+    }
+
+    #[test]
+    fn an_invalid_grant_degrades_the_app() {
+        let mut provider = provider();
+        // A package-risk grant without the flags does not satisfy the document.
+        provider.grant.as_mut().expect("grant").accepted.clear();
+        let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("degrade");
+        assert!(resolution.order.is_empty());
+        assert_eq!(
+            resolution.degraded[&app(PROVIDER)].reason,
+            DegradedReason::GrantInvalid
         );
     }
 
@@ -857,7 +1085,7 @@ mod tests {
                 "manifest_version = 2\n\n[app]\nid = \"org.example.broken\"\nnamespace = \"example:broken\"\nname = \"Broken\"\nversion = \"not-a-version\"\n",
             )
             .expect("parse"),
-            approved: true,
+            grant: None,
             enabled: true,
         };
         let resolution = resolve(&composition(&[PROVIDER]), &[broken, provider()])
@@ -874,7 +1102,7 @@ mod tests {
                 "manifest_version = 2\n\n[app]\nid = \"not-an-id\"\nnamespace = \"example:broken\"\nname = \"Broken\"\nversion = \"0.1.0\"\n",
             )
             .expect("parse"),
-            approved: true,
+            grant: None,
             enabled: true,
         };
         let error = resolve(&composition(&[PROVIDER]), &[broken]).expect_err("missing");
@@ -898,7 +1126,7 @@ mod tests {
         // The import is unresolved, but this app cannot run, so it does not
         // matter; it degrades instead of failing the boot (§8.5).
         let mut blocked = consumer(&["example:other/x@1.0.0"]);
-        blocked.approved = false;
+        blocked.grant = None;
         let resolution = resolve(&composition(&[CONSUMER]), &[blocked]).expect("resolve");
         assert!(resolution.order.is_empty());
         assert_eq!(
@@ -928,7 +1156,7 @@ mod tests {
         // interface is still a hole in the composition: reporting only
         // "blocked" would declare bootable what is not.
         let mut provider = provider();
-        provider.approved = false;
+        provider.grant = None;
         let consumer = consumer(&["example:other/x@1.0.0", GREETING]);
         let error = resolve(&composition(&[CONSUMER, PROVIDER]), &[consumer, provider])
             .expect_err("unresolved");
