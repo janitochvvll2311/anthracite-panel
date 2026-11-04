@@ -159,6 +159,8 @@ fn verify(
         None => None,
     };
 
+    sync_tree(root)?;
+
     Ok(StagedBundle {
         root: root.to_path_buf(),
         manifest,
@@ -501,6 +503,23 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Creates `path` and every missing parent with `0700`, never with the umask.
+/// Syncs every directory of the staged tree, children first, so the entries a
+/// later rename publishes are on disk.
+fn sync_tree(root: &Path) -> Result<(), Error> {
+    for (relative, is_dir) in walk(root)?.into_iter().rev() {
+        if !is_dir {
+            continue;
+        }
+        let dir = root.join(&relative);
+        fs::File::open(&dir)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|error| Error::internal(format!("syncing {}: {error}", dir.display())))?;
+    }
+    fs::File::open(root)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|error| Error::internal(format!("syncing {}: {error}", root.display())))
+}
+
 fn create_dir_private(path: &Path) -> Result<(), Error> {
     if path.as_os_str().is_empty() {
         return Ok(());

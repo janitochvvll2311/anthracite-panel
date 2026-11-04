@@ -79,23 +79,36 @@ impl Registry {
             )));
         }
         let staged_root = staged.into_root();
-        let old = self.apps.join(format!(
-            ".old-{}-{}-{}",
-            app,
-            std::process::id(),
-            SWAP.fetch_add(1, Ordering::Relaxed)
-        ));
-        fs::rename(&target, &old)
-            .map_err(|error| Error::internal(format!("staging {}: {error}", target.display())))?;
-        if let Err(error) = fs::rename(&staged_root, &target) {
-            let _ = fs::rename(&old, &target);
-            let _ = fs::remove_dir_all(&staged_root);
-            return Err(Error::internal(format!(
-                "publishing {}: {error}",
-                target.display()
-            )));
+        // RENAME_EXCHANGE swaps the two trees in one step: the app is never
+        // missing, even if the engine dies. Filesystems without it fall back to
+        // two renames with a short window and a rollback.
+        match exchange(&staged_root, &target) {
+            Ok(()) => {
+                let _ = fs::remove_dir_all(&staged_root);
+            }
+            Err(error) if unsupported(&error) => {
+                let old = self.unique_swap_path(app)?;
+                fs::rename(&target, &old).map_err(|error| {
+                    Error::internal(format!("staging {}: {error}", target.display()))
+                })?;
+                if let Err(error) = fs::rename(&staged_root, &target) {
+                    let _ = fs::rename(&old, &target);
+                    let _ = fs::remove_dir_all(&staged_root);
+                    return Err(Error::internal(format!(
+                        "publishing {}: {error}",
+                        target.display()
+                    )));
+                }
+                let _ = fs::remove_dir_all(&old);
+            }
+            Err(error) => {
+                let _ = fs::remove_dir_all(&staged_root);
+                return Err(Error::internal(format!(
+                    "exchanging {}: {error}",
+                    target.display()
+                )));
+            }
         }
-        let _ = fs::remove_dir_all(&old);
         sync_dir(&self.apps)?;
         Ok(manifest)
     }
@@ -115,7 +128,18 @@ impl Registry {
                         target.display()
                     )));
                 }
-                read_manifest(&target).map(Some)
+                read_manifest(&target)
+                    .and_then(|manifest| {
+                        if manifest.app.id != app.as_str() {
+                            return Err(Error::invalid(format!(
+                                "{} declares `{}`, not `{app}`",
+                                target.display(),
+                                manifest.app.id
+                            )));
+                        }
+                        Ok(manifest)
+                    })
+                    .map(Some)
             }
         }
     }
@@ -178,10 +202,57 @@ impl Registry {
     /// the set the bundle is allowed to import.
     fn extract(&self, bundle: &[u8], options: &Options) -> Result<StagedBundle, Error> {
         let mut options = options.clone();
-        for manifest in self.list()? {
-            options.known_packages.push(manifest.app.namespace);
-        }
+        options.known_packages.extend(self.known_packages());
         bundle::extract(bundle, &self.apps, &options, &self.keyring)
+    }
+
+    /// Packages of the installed apps, skipping any tree that cannot be read.
+    ///
+    /// One corrupt install must not stop the operator from installing or
+    /// replacing something else; `list` is where corruption is reported.
+    fn known_packages(&self) -> Vec<String> {
+        let mut packages = Vec::new();
+        let Ok(entries) = fs::read_dir(&self.apps) else {
+            return packages;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if let Ok(manifest) = read_manifest(&entry.path()) {
+                packages.push(manifest.app.namespace);
+            }
+        }
+        packages
+    }
+
+    /// A free `.old-*` name. A crashed process can leave one behind, and a
+    /// recycled pid must not make the fallback swap fail forever.
+    fn unique_swap_path(&self, app: &AppId) -> Result<PathBuf, Error> {
+        for _ in 0..100 {
+            let candidate = self.apps.join(format!(
+                ".old-{}-{}-{}",
+                app,
+                std::process::id(),
+                SWAP.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::symlink_metadata(&candidate) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(candidate);
+                }
+                Ok(_) => continue,
+                Err(error) => {
+                    return Err(Error::internal(format!(
+                        "inspecting {}: {error}",
+                        candidate.display()
+                    )));
+                }
+            }
+        }
+        Err(Error::internal(format!(
+            "could not find a free swap name for `{app}`"
+        )))
     }
 }
 
@@ -189,12 +260,64 @@ fn publish(staged: StagedBundle, target: &Path) -> Result<(), Error> {
     let root = staged.into_root();
     if let Err(error) = fs::rename(&root, target) {
         let _ = fs::remove_dir_all(&root);
+        // Two installs can race past the existence check; the loser sees an
+        // existing directory, which is a conflict rather than an internal error.
+        if error.kind() == std::io::ErrorKind::AlreadyExists
+            || error.raw_os_error() == Some(libc::ENOTEMPTY)
+        {
+            return Err(Error::conflict(format!(
+                "{} is already installed",
+                target.display()
+            )));
+        }
         return Err(Error::internal(format!(
             "publishing {}: {error}",
             target.display()
         )));
     }
     Ok(())
+}
+
+/// Swaps two paths atomically (Linux `renameat2` with `RENAME_EXCHANGE`).
+#[cfg(target_os = "linux")]
+fn exchange(left: &Path, right: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let left = CString::new(left.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let right = CString::new(right.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // SAFETY: both pointers are valid NUL-terminated paths for the call, and
+    // `renameat2` only touches the two directories.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            left.as_ptr(),
+            libc::AT_FDCWD,
+            right.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn exchange(_: &Path, _: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+}
+
+/// The filesystem or kernel does not implement `RENAME_EXCHANGE`.
+fn unsupported(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::ENOSYS) | Some(libc::EINVAL) | Some(libc::EOPNOTSUPP)
+    )
 }
 
 fn check_installed(target: &Path) -> Result<(), Error> {
@@ -449,6 +572,66 @@ mod tests {
             )
             .expect("the installed provider is known");
         assert_eq!(registry.list().expect("list").len(), 2);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn get_refuses_a_manifest_under_the_wrong_directory() {
+        let state = scratch("wrong-dir");
+        let registry = Registry::new(&state);
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        fs::rename(
+            registry.dir().join("org.example.notes"),
+            registry.dir().join("org.example.other"),
+        )
+        .expect("rename");
+        let error = registry
+            .get(&AppId::parse("org.example.other").unwrap())
+            .expect_err("mismatch");
+        assert!(error.message().contains("declares"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_corrupt_tree_does_not_block_installing_something_else() {
+        let state = scratch("corrupt");
+        let registry = Registry::new(&state);
+        store::ensure_dir(registry.dir()).expect("apps");
+        fs::create_dir(registry.dir().join("org.example.broken")).expect("dir");
+        fs::write(
+            registry.dir().join("org.example.broken/manifest.toml"),
+            b"not a manifest",
+        )
+        .expect("write");
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install despite the corrupt tree");
+        assert!(
+            registry.list().is_err(),
+            "list still reports the corrupt tree"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn replace_leaves_no_swap_directories() {
+        let state = scratch("no-leftovers");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        registry
+            .replace(&app, &notes_bundle("0.2.0", WASM), &options())
+            .expect("replace");
+        let leftovers: Vec<_> = fs::read_dir(registry.dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
