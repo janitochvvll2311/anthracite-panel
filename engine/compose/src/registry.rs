@@ -314,10 +314,11 @@ fn exchange(_: &Path, _: &Path) -> std::io::Result<()> {
 
 /// The filesystem or kernel does not implement `RENAME_EXCHANGE`.
 fn unsupported(error: &std::io::Error) -> bool {
-    matches!(
-        error.raw_os_error(),
-        Some(libc::ENOSYS) | Some(libc::EINVAL) | Some(libc::EOPNOTSUPP)
-    )
+    error.kind() == std::io::ErrorKind::Unsupported
+        || matches!(
+            error.raw_os_error(),
+            Some(libc::ENOSYS) | Some(libc::EINVAL) | Some(libc::EOPNOTSUPP)
+        )
 }
 
 fn check_installed(target: &Path) -> Result<(), Error> {

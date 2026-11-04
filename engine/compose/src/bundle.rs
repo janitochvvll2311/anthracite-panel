@@ -502,7 +502,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Creates `path` and every missing parent with `0700`, never with the umask.
 /// Syncs every directory of the staged tree, children first, so the entries a
 /// later rename publishes are on disk.
 fn sync_tree(root: &Path) -> Result<(), Error> {
@@ -520,6 +519,7 @@ fn sync_tree(root: &Path) -> Result<(), Error> {
         .map_err(|error| Error::internal(format!("syncing {}: {error}", root.display())))
 }
 
+/// Creates `path` and every missing parent with `0700`, never with the umask.
 fn create_dir_private(path: &Path) -> Result<(), Error> {
     if path.as_os_str().is_empty() {
         return Ok(());
