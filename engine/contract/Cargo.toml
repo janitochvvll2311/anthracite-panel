@@ -9,6 +9,7 @@ description = "The shared vocabulary of the Anthracite platform: identifiers, ma
 serde = { workspace = true }
 serde_json = { workspace = true }
 semver = { workspace = true }
+humantime = "2"
 toml = { workspace = true, optional = true }
 
 [features]

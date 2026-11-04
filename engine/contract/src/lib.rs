@@ -7,6 +7,7 @@
 pub mod catalog;
 pub mod composition;
 pub mod error;
+pub mod grant;
 pub mod id;
 pub mod manifest;
 pub mod world;
@@ -14,6 +15,7 @@ pub mod world;
 pub use catalog::{is_native, risk_of, NativeInterface, Risk, NATIVE};
 pub use composition::{Composition, Profile, COMPOSITION_VERSION};
 pub use error::{Error, ErrorEnvelope, ErrorKind};
+pub use grant::{Grant, GRANT_VERSION};
 pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use manifest::{Manifest, MANIFEST_VERSION};
 pub use world::World;
