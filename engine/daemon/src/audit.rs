@@ -10,7 +10,7 @@
 //! that already ends in a partial line instead of gluing a new entry onto it.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -75,29 +75,51 @@ impl AuditLog {
     /// What could be read, plus one problem per unparseable line.
     ///
     /// An audit endpoint shows the entries it can and names the lines it cannot;
-    /// discarding the whole log because of one bad byte would hide history.
+    /// discarding the whole log because of one bad byte would hide history. The
+    /// file is read line by line, so a corrupt line is reported, not fatal.
     pub fn scan(&self) -> Result<(Vec<AuditEntry>, Vec<String>), Error> {
-        let mut file = match self.open(false) {
+        let file = match self.open(false) {
             Ok(file) => file,
             Err(error) if error.kind() == ErrorKind::NotFound => {
                 return Ok((Vec::new(), Vec::new()));
             }
             Err(error) => return Err(error),
         };
-        let mut text = String::new();
-        file.read_to_string(&mut text)
-            .map_err(|error| self.describe("reading", error))?;
+        let mut reader = std::io::BufReader::new(file);
         let mut entries = Vec::new();
         let mut problems = Vec::new();
-        for (index, line) in text.lines().enumerate() {
-            if line.trim().is_empty() {
+        let mut line = Vec::new();
+        let mut number = 0usize;
+        loop {
+            line.clear();
+            let read = reader
+                .read_until(b'\n', &mut line)
+                .map_err(|error| self.describe("reading", error))?;
+            if read == 0 {
+                break;
+            }
+            number += 1;
+            let mut bytes = line.as_slice();
+            if let Some(stripped) = bytes.strip_suffix(b"\n") {
+                bytes = stripped;
+            }
+            if let Some(stripped) = bytes.strip_suffix(b"\r") {
+                bytes = stripped;
+            }
+            if bytes.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
-            match AuditEntry::parse_line(line) {
-                Ok(entry) => entries.push(entry),
-                Err(error) => {
-                    problems.push(format!("{}:{}: {error}", self.path.display(), index + 1))
-                }
+            match std::str::from_utf8(bytes) {
+                Ok(text) => match AuditEntry::parse_line(text) {
+                    Ok(entry) => entries.push(entry),
+                    Err(error) => {
+                        problems.push(format!("{}:{number}: {error}", self.path.display()))
+                    }
+                },
+                Err(error) => problems.push(format!(
+                    "{}:{number}: not valid UTF-8: {error}",
+                    self.path.display()
+                )),
             }
         }
         Ok((entries, problems))
@@ -270,6 +292,22 @@ mod tests {
         assert_eq!(entries.len(), 1, "the readable entry survives");
         assert_eq!(problems.len(), 1);
         assert!(log.entries().is_err(), "the strict read still fails");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn scan_reports_a_line_that_is_not_utf8() {
+        let state = scratch("non-utf8");
+        let log = AuditLog::new(&state);
+        log.append(&entry(AuditAction::AppInstall, "operator-3f2a"))
+            .expect("append");
+        let mut bytes = fs::read(log.path()).expect("read");
+        bytes.extend_from_slice(&[0xff, b'\n']);
+        fs::write(log.path(), bytes).expect("write");
+        let (entries, problems) = log.scan().expect("scan");
+        assert_eq!(entries.len(), 1, "the readable entry survives");
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("UTF-8"), "{problems:?}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
