@@ -10,3 +10,5 @@ anth-contract = { path = "../contract", features = ["parse"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }
 sha2 = "0.10"
+wit-parser = "0.263"
+zip = { version = "2.6", default-features = false, features = ["deflate"] }
