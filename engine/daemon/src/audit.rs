@@ -4,13 +4,17 @@
 //! only appends: no rewrite, no rotation, no truncation. A line is written with
 //! one `write_all` and synced, because the record of an approval matters more
 //! than the cost of one `fsync` on an operation that happens by hand.
+//!
+//! Two guards keep a crash or a full disk from corrupting the log: a failed
+//! write is rolled back to the previous length, and an append refuses a file
+//! that already ends in a partial line instead of gluing a new entry onto it.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use anth_contract::{AuditEntry, Error};
+use anth_contract::{AuditEntry, Error, ErrorKind};
 
 pub const AUDIT_FILE: &str = "audit.jsonl";
 const FILE_MODE: u32 = 0o600;
@@ -35,68 +39,111 @@ impl AuditLog {
     /// a rejected action leaves no half-line behind.
     pub fn append(&self, entry: &AuditEntry) -> Result<(), Error> {
         entry.validate()?;
-        self.check_file()?;
         let mut line = entry.to_line()?;
         line.push('\n');
-        let mut file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .mode(FILE_MODE)
-            // A symlink where the log should be is refused rather than followed.
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&self.path)
-            .map_err(|error| self.describe("opening", error))?;
-        file.write_all(line.as_bytes())
-            .and_then(|()| file.sync_data())
-            .map_err(|error| self.describe("writing", error))
+        let mut file = self.open(true)?;
+        let before = file
+            .metadata()
+            .map_err(|error| self.describe("inspecting", error))?
+            .len();
+        if !ends_with_newline(&mut file, before).map_err(|error| self.describe("reading", error))? {
+            return Err(Error::invalid(format!(
+                "{} ends with a partial line; repair or remove it before appending",
+                self.path.display()
+            )));
+        }
+        if let Err(error) = file.write_all(line.as_bytes()) {
+            // The engine is the only writer, so the length before the write is
+            // the only state to restore. Better an unchanged log than a line
+            // that cannot be parsed.
+            let _ = file.set_len(before);
+            return Err(self.describe("writing", error));
+        }
+        file.sync_data()
+            .map_err(|error| self.describe("syncing", error))
     }
 
-    /// Every entry, in the order it was written. A missing file is an empty log.
+    /// Every entry, refusing the whole read when a line cannot be parsed.
     pub fn entries(&self) -> Result<Vec<AuditEntry>, Error> {
-        let text = match fs::read_to_string(&self.path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(self.describe("reading", error)),
-        };
-        let mut entries = Vec::new();
-        for (index, line) in text.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            entries.push(AuditEntry::parse_line(line).map_err(|error| {
-                Error::invalid(format!("{}:{}: {error}", self.path.display(), index + 1))
-            })?);
+        let (entries, problems) = self.scan()?;
+        if let Some(problem) = problems.into_iter().next() {
+            return Err(Error::invalid(problem));
         }
         Ok(entries)
     }
 
-    fn check_file(&self) -> Result<(), Error> {
-        match fs::symlink_metadata(&self.path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err(Error::invalid(format!(
-                        "{} is a symlink; the state tree must be real files",
-                        self.path.display()
-                    )));
-                }
-                if !metadata.is_file() {
-                    return Err(Error::invalid(format!(
-                        "{} is not a file",
-                        self.path.display()
-                    )));
-                }
-                let mode = metadata.permissions().mode() & 0o777;
-                if mode != FILE_MODE {
-                    return Err(Error::invalid(format!(
-                        "{} is {mode:04o}; it should be {FILE_MODE:04o}",
-                        self.path.display()
-                    )));
-                }
-                Ok(())
+    /// What could be read, plus one problem per unparseable line.
+    ///
+    /// An audit endpoint shows the entries it can and names the lines it cannot;
+    /// discarding the whole log because of one bad byte would hide history.
+    pub fn scan(&self) -> Result<(Vec<AuditEntry>, Vec<String>), Error> {
+        let mut file = match self.open(false) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok((Vec::new(), Vec::new()));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(self.describe("inspecting", error)),
+            Err(error) => return Err(error),
+        };
+        let mut text = String::new();
+        file.read_to_string(&mut text)
+            .map_err(|error| self.describe("reading", error))?;
+        let mut entries = Vec::new();
+        let mut problems = Vec::new();
+        for (index, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match AuditEntry::parse_line(line) {
+                Ok(entry) => entries.push(entry),
+                Err(error) => {
+                    problems.push(format!("{}:{}: {error}", self.path.display(), index + 1))
+                }
+            }
         }
+        Ok((entries, problems))
+    }
+
+    /// Opens the log and checks the **descriptor**, not the path: a file
+    /// swapped between a check and the open would otherwise be trusted.
+    fn open(&self, create: bool) -> Result<File, Error> {
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .append(true)
+            // A symlink where the log should be is refused rather than followed.
+            .custom_flags(libc::O_NOFOLLOW);
+        if create {
+            options.create(true).mode(FILE_MODE);
+        }
+        let file = options.open(&self.path).map_err(|error| {
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                Error::invalid(format!(
+                    "{} is a symlink; the state tree must be real files",
+                    self.path.display()
+                ))
+            } else if error.kind() == std::io::ErrorKind::NotFound {
+                Error::not_found(format!("{} is missing", self.path.display()))
+            } else {
+                self.describe("opening", error)
+            }
+        })?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| self.describe("inspecting", error))?;
+        if !metadata.is_file() {
+            return Err(Error::invalid(format!(
+                "{} is not a file",
+                self.path.display()
+            )));
+        }
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode != FILE_MODE {
+            return Err(Error::invalid(format!(
+                "{} is {mode:04o}; it should be {FILE_MODE:04o}",
+                self.path.display()
+            )));
+        }
+        Ok(file)
     }
 
     fn describe(&self, what: &str, error: std::io::Error) -> Error {
@@ -108,10 +155,21 @@ impl AuditLog {
     }
 }
 
+fn ends_with_newline(file: &mut File, len: u64) -> std::io::Result<bool> {
+    if len == 0 {
+        return Ok(true);
+    }
+    file.seek(SeekFrom::Start(len - 1))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use anth_contract::{AuditAction, Outcome};
+    use std::fs;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -182,6 +240,36 @@ mod tests {
         let state = scratch("missing");
         let log = AuditLog::new(&state);
         assert!(log.entries().expect("entries").is_empty());
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_partial_line_is_refused_before_appending() {
+        let state = scratch("partial");
+        let log = AuditLog::new(&state);
+        fs::write(log.path(), b"{\"at\":").expect("write");
+        fs::set_permissions(log.path(), fs::Permissions::from_mode(0o600)).expect("chmod");
+        let error = log
+            .append(&entry(AuditAction::AppInstall, "operator-3f2a"))
+            .expect_err("partial line");
+        assert!(error.message().contains("partial line"), "{error}");
+        assert_eq!(fs::read(log.path()).expect("read"), b"{\"at\":");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn scan_keeps_the_readable_entries() {
+        let state = scratch("scan");
+        let log = AuditLog::new(&state);
+        log.append(&entry(AuditAction::AppInstall, "operator-3f2a"))
+            .expect("append");
+        let mut text = fs::read_to_string(log.path()).expect("read");
+        text.push_str("{not json}\n");
+        fs::write(log.path(), text).expect("write");
+        let (entries, problems) = log.scan().expect("scan");
+        assert_eq!(entries.len(), 1, "the readable entry survives");
+        assert_eq!(problems.len(), 1);
+        assert!(log.entries().is_err(), "the strict read still fails");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
