@@ -103,8 +103,9 @@ pub enum ResolutionError {
     /// An installed manifest is malformed (the registry should have refused it).
     InvalidManifest(Error),
     /// The composition names an app that is not installed. `malformed` carries
-    /// an id in the installed set that could not be parsed: the composed app is
-    /// still missing, but the operator should know the other problem exists.
+    /// the parse error of an id in the installed set that could not be read:
+    /// the composed app is still missing, but the operator should know the other
+    /// problem exists.
     NotInstalled {
         app: String,
         malformed: Option<String>,
@@ -138,7 +139,10 @@ impl fmt::Display for ResolutionError {
             Self::NotInstalled { app, malformed } => {
                 write!(f, "`{app}` is composed but not installed")?;
                 if let Some(malformed) = malformed {
-                    write!(f, "; the installed set also has an invalid id: {malformed}")?;
+                    write!(
+                        f,
+                        "; the installed set also has a malformed id: {malformed}"
+                    )?;
                 }
                 Ok(())
             }
@@ -208,12 +212,7 @@ pub fn resolve(
         match AppId::parse(&app.manifest.app.id) {
             Ok(id) => installed_by_id.entry(id).or_default().push(app),
             Err(error) => {
-                malformed.get_or_insert_with(|| {
-                    format!(
-                        "the installed app id `{}` is invalid: {error}",
-                        app.manifest.app.id
-                    )
-                });
+                malformed.get_or_insert_with(|| error.message().to_string());
             }
         }
     }
