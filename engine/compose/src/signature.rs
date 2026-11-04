@@ -41,6 +41,14 @@ pub fn fingerprint(text: &str) -> Result<String, Error> {
     Ok(hex_encode(&Sha256::digest(public_key(text)?)))
 }
 
+/// Whether `text` has the shape of a fingerprint, before touching the disk.
+pub fn is_fingerprint(text: &str) -> bool {
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 /// Verifies `signature` over `message` with `public_key_hex`.
 ///
 /// `verify_strict` rejects small-order and non-canonical keys, which is the

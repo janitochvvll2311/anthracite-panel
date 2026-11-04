@@ -4,19 +4,11 @@
 //! approved grant is written, and a grant is read back by app id, so a grant
 //! that names a different app than its file is refused rather than trusted.
 
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anth_contract::{AppId, Error, Grant};
 
-const DIR_MODE: u32 = 0o700;
-const FILE_MODE: u32 = 0o600;
-
-/// A counter so two saves in one process never share a temporary name.
-static TEMP: AtomicU64 = AtomicU64::new(0);
+use crate::store;
 
 #[derive(Debug, Clone)]
 pub struct GrantStore {
@@ -40,20 +32,12 @@ impl GrantStore {
 
     /// Reads the grant for `app`, or `None` when the app was never approved.
     pub fn load(&self, app: &AppId) -> Result<Option<Grant>, Error> {
-        if !self.check_existing_dir()? {
+        if !store::check_dir(&self.dir)? {
             return Ok(None);
         }
         let path = self.path(app);
-        reject_symlink(&path)?;
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(Error::internal(format!(
-                    "reading {}: {error}",
-                    path.display()
-                )));
-            }
+        let Some(text) = store::read(&path)? else {
+            return Ok(None);
         };
         let grant = Grant::parse(&text)
             .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
@@ -74,179 +58,43 @@ impl GrantStore {
     /// one, never a half-written file.
     pub fn save(&self, grant: &Grant) -> Result<(), Error> {
         grant.validate()?;
-        self.check_dir()?;
-        let path = self.path(&grant.app);
-        reject_symlink(&path)?;
-        let text = grant.to_toml()?;
-        let temp = self.dir.join(format!(
-            ".{}.tmp.{}.{}",
-            grant.app,
-            std::process::id(),
-            TEMP.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_file(&temp);
-        let result = write_private(&temp, text.as_bytes())
-            .and_then(|()| fs::rename(&temp, &path).map_err(|error| (temp.clone(), error)));
-        match result {
-            Ok(()) => Ok(()),
-            Err((temp, error)) => {
-                let _ = fs::remove_file(&temp);
-                Err(Error::internal(format!(
-                    "writing {}: {error}",
-                    path.display()
-                )))
-            }
-        }
+        store::write_atomic(
+            &self.dir,
+            &format!("{}.toml", grant.app),
+            grant.to_toml()?.as_bytes(),
+        )
     }
 
     /// Removes the grant. `false` means there was nothing to remove.
     pub fn remove(&self, app: &AppId) -> Result<bool, Error> {
-        if !self.check_existing_dir()? {
+        if !store::check_dir(&self.dir)? {
             return Ok(false);
         }
-        let path = self.path(app);
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err(Error::invalid(format!(
-                        "{} is a symlink; the state tree must be real files",
-                        path.display()
-                    )));
-                }
-                fs::remove_file(&path).map_err(|error| {
-                    Error::internal(format!("removing {}: {error}", path.display()))
-                })?;
-                Ok(true)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(Error::internal(format!(
-                "inspecting {}: {error}",
-                path.display()
-            ))),
-        }
+        store::remove(&self.path(app))
     }
 
     /// Every grant, sorted by app id. A missing directory is an empty store.
     pub fn all(&self) -> Result<Vec<Grant>, Error> {
-        if !self.check_existing_dir()? {
-            return Ok(Vec::new());
-        }
-        let entries = fs::read_dir(&self.dir)
-            .map_err(|error| Error::internal(format!("reading {}: {error}", self.dir.display())))?;
-        let mut paths = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                Error::internal(format!("reading {}: {error}", self.dir.display()))
-            })?;
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|extension| extension == "toml")
-            {
-                paths.push(path);
+        let mut grants = Vec::new();
+        for path in store::toml_paths(&self.dir)? {
+            let Some(text) = store::read(&path)? else {
+                continue;
+            };
+            let grant = Grant::parse(&text)
+                .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+            grant
+                .validate()
+                .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+            if path.file_stem().and_then(|stem| stem.to_str()) != Some(grant.app.as_str()) {
+                return Err(Error::invalid(format!(
+                    "{} holds the grant for `{}`",
+                    path.display(),
+                    grant.app
+                )));
             }
+            grants.push(grant);
         }
-        paths.sort();
-        paths
-            .into_iter()
-            .map(|path| {
-                reject_symlink(&path)?;
-                let text = fs::read_to_string(&path).map_err(|error| {
-                    Error::internal(format!("reading {}: {error}", path.display()))
-                })?;
-                let grant = Grant::parse(&text)
-                    .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
-                grant
-                    .validate()
-                    .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
-                if path.file_stem().and_then(|stem| stem.to_str()) != Some(grant.app.as_str()) {
-                    return Err(Error::invalid(format!(
-                        "{} holds the grant for `{}`",
-                        path.display(),
-                        grant.app
-                    )));
-                }
-                Ok(grant)
-            })
-            .collect()
-    }
-
-    fn check_dir(&self) -> Result<(), Error> {
-        if self.check_existing_dir()? {
-            return Ok(());
-        }
-        fs::create_dir_all(&self.dir).map_err(|error| {
-            Error::internal(format!("creating {}: {error}", self.dir.display()))
-        })?;
-        fs::set_permissions(&self.dir, fs::Permissions::from_mode(DIR_MODE)).map_err(|error| {
-            Error::internal(format!(
-                "setting permissions on {}: {error}",
-                self.dir.display()
-            ))
-        })
-    }
-
-    /// Whether the directory exists and is what the state tree promises.
-    /// `false` means it does not exist yet; anything else is an error, so a
-    /// read never silently follows a symlink or trusts a world-readable tree.
-    fn check_existing_dir(&self) -> Result<bool, Error> {
-        match fs::symlink_metadata(&self.dir) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err(Error::invalid(format!(
-                        "{} is a symlink; the state tree must be real directories",
-                        self.dir.display()
-                    )));
-                }
-                if !metadata.is_dir() {
-                    return Err(Error::invalid(format!(
-                        "{} is not a directory",
-                        self.dir.display()
-                    )));
-                }
-                let mode = metadata.permissions().mode() & 0o777;
-                if mode != DIR_MODE {
-                    return Err(Error::invalid(format!(
-                        "{} is {mode:04o}; it should be {DIR_MODE:04o}",
-                        self.dir.display()
-                    )));
-                }
-                Ok(true)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(Error::internal(format!(
-                "inspecting {}: {error}",
-                self.dir.display()
-            ))),
-        }
-    }
-}
-
-/// `write` plus the temporary path, so a rename failure can clean up.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), (PathBuf, std::io::Error)> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(FILE_MODE)
-        .open(path)
-        .map_err(|error| (path.to_path_buf(), error))?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| (path.to_path_buf(), error))
-}
-
-fn reject_symlink(path: &Path) -> Result<(), Error> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::invalid(format!(
-            "{} is a symlink; the state tree must be real files",
-            path.display()
-        ))),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(Error::internal(format!(
-            "inspecting {}: {error}",
-            path.display()
-        ))),
+        Ok(grants)
     }
 }
 
@@ -254,6 +102,8 @@ fn reject_symlink(path: &Path) -> Result<(), Error> {
 mod tests {
     use super::*;
     use anth_contract::{InterfaceId, Risk};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
