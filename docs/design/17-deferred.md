@@ -172,6 +172,28 @@ rollback needs versioned content per app, which the store does not keep.
 
 **Ready when** upgrades become frequent enough that reinstalling is a burden.
 
+### 3.8 `nix` for syscalls
+
+Adopt the `nix` crate for the POSIX calls the engine makes, keeping `libc` only
+for what `nix` does not wrap (seccomp, landlock, syscalls newer than the crate).
+
+**Why deferred (D-Syscalls).** The whole surface is four `unsafe` lines:
+`geteuid` three times and one `access`. The `access` block is the only one with
+real boilerplate (`CString`, errno), and `nix` would not remove `libc` from the
+binary — it wraps it. Replacing eight auditable lines with a 0.x dependency that
+also has to be audited is not a win at this size.
+
+**Ready when** the service/PTY layer arrives and needs `prctl(PR_SET_PDEATHSIG)`,
+`setsid`, process groups or signal handling, or when a third non-trivial call
+appears. The threshold is deliberate: three or more calls, or the first one that
+forces hand-rolled flags and errno. Adopt then with `default-features = false`
+and only the features in use (`user`, `fs`, later `process`/`signal`).
+
+**Detail to fix when touching it.** `access(2)` checks the **real** uid, while the
+rest of the engine authorises with the effective uid. They are equal today because
+the daemon is not setuid; `faccessat(AT_EACCESS)` states the right question and
+should be used if the call is revisited for any other reason.
+
 ---
 
 ## 4. Developer experience
