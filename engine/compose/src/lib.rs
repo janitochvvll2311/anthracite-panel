@@ -102,8 +102,13 @@ pub enum ResolutionError {
     InvalidComposition(Error),
     /// An installed manifest is malformed (the registry should have refused it).
     InvalidManifest(Error),
-    /// The composition names an app that is not installed.
-    NotInstalled { app: String },
+    /// The composition names an app that is not installed. `malformed` carries
+    /// an id in the installed set that could not be parsed: the composed app is
+    /// still missing, but the operator should know the other problem exists.
+    NotInstalled {
+        app: String,
+        malformed: Option<String>,
+    },
     /// The composition pins a version the installed app does not have.
     VersionMismatch {
         app: String,
@@ -130,8 +135,12 @@ impl fmt::Display for ResolutionError {
                 write!(f, "the composition is invalid: {error}")
             }
             Self::InvalidManifest(error) => write!(f, "an installed manifest is invalid: {error}"),
-            Self::NotInstalled { app } => {
-                write!(f, "`{app}` is composed but not installed")
+            Self::NotInstalled { app, malformed } => {
+                write!(f, "`{app}` is composed but not installed")?;
+                if let Some(malformed) = malformed {
+                    write!(f, "; the installed set also has an invalid id: {malformed}")?;
+                }
+                Ok(())
             }
             Self::VersionMismatch {
                 app,
@@ -194,16 +203,16 @@ pub fn resolve(
     // remembered so a missing app is not diagnosed as "not installed" when the
     // installed set itself is the problem.
     let mut installed_by_id: BTreeMap<AppId, Vec<&InstalledApp>> = BTreeMap::new();
-    let mut malformed: Option<Error> = None;
+    let mut malformed: Option<String> = None;
     for app in installed {
         match AppId::parse(&app.manifest.app.id) {
             Ok(id) => installed_by_id.entry(id).or_default().push(app),
             Err(error) => {
                 malformed.get_or_insert_with(|| {
-                    Error::invalid(format!(
+                    format!(
                         "the installed app id `{}` is invalid: {error}",
                         app.manifest.app.id
-                    ))
+                    )
                 });
             }
         }
@@ -216,10 +225,10 @@ pub fn resolve(
         let id = AppId::parse(id_text).map_err(ResolutionError::InvalidComposition)?;
         let found = match installed_by_id.get(&id).map(Vec::as_slice).unwrap_or(&[]) {
             [] => {
-                if let Some(error) = malformed {
-                    return Err(ResolutionError::InvalidManifest(error));
-                }
-                return Err(ResolutionError::NotInstalled { app: entry.clone() });
+                return Err(ResolutionError::NotInstalled {
+                    app: entry.clone(),
+                    malformed,
+                });
             }
             [found] => *found,
             _ => {
@@ -690,7 +699,8 @@ mod tests {
         assert_eq!(
             error,
             ResolutionError::NotInstalled {
-                app: PROVIDER.to_string()
+                app: PROVIDER.to_string(),
+                malformed: None,
             }
         );
     }
@@ -852,9 +862,9 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_installed_id_is_invalid_not_missing() {
-        // The installed set is the problem, not the composition: saying "not
-        // installed" would send the operator to install what is already there.
+    fn a_malformed_installed_id_does_not_hide_a_missing_app() {
+        // The composed app is still missing; the malformed id is reported too
+        // instead of replacing the diagnosis.
         let broken = InstalledApp {
             manifest: Manifest::parse(
                 "manifest_version = 2\n\n[app]\nid = \"not-an-id\"\nnamespace = \"example:broken\"\nname = \"Broken\"\nversion = \"0.1.0\"\n",
@@ -863,12 +873,20 @@ mod tests {
             approved: true,
             enabled: true,
         };
-        let error = resolve(&composition(&[PROVIDER]), &[broken]).expect_err("invalid");
+        let error = resolve(&composition(&[PROVIDER]), &[broken]).expect_err("missing");
         assert!(
-            matches!(error, ResolutionError::InvalidManifest(_)),
+            matches!(
+                error,
+                ResolutionError::NotInstalled {
+                    malformed: Some(_),
+                    ..
+                }
+            ),
             "{error:?}"
         );
-        assert!(error.to_string().contains("not-an-id"), "{error}");
+        let text = error.to_string();
+        assert!(text.contains("not installed"), "{text}");
+        assert!(text.contains("not-an-id"), "{text}");
     }
 
     #[test]
