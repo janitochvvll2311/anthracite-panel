@@ -984,6 +984,34 @@ mod tests {
     }
 
     #[test]
+    fn a_consumer_whose_inherited_risk_grew_is_blocked() {
+        // The provider is within its grant; the consumer approved `read` for an
+        // import that now reaches the store. Only the consumer grows.
+        let provider = installed(manifest(
+            PROVIDER,
+            "example:provider",
+            &[GREETING],
+            &["anth:store/kv@1.0.0"],
+        ));
+        let manifest = manifest(CONSUMER, "example:consumer", &[], &[GREETING]);
+        let consumer = InstalledApp {
+            grant: Some(grant_for(&manifest, Risk::Read)),
+            manifest,
+            enabled: true,
+        };
+        let resolution =
+            resolve(&composition(&[CONSUMER, PROVIDER]), &[consumer, provider]).expect("resolve");
+        assert_eq!(resolution.order, [app(PROVIDER)]);
+        assert_eq!(
+            resolution.degraded[&app(CONSUMER)].reason,
+            DegradedReason::RiskGrown {
+                approved: Risk::Read,
+                effective: Risk::Write,
+            }
+        );
+    }
+
+    #[test]
     fn a_risk_within_the_grant_runs() {
         let manifest = manifest(
             PROVIDER,
