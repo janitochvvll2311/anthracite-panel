@@ -190,11 +190,22 @@ pub fn resolve(
         .map_err(ResolutionError::InvalidComposition)?;
 
     // Installed apps are only inspected when the composition names them: a
-    // broken app that nobody composes must not stop a boot.
+    // broken app that nobody composes must not stop a boot. A malformed id is
+    // remembered so a missing app is not diagnosed as "not installed" when the
+    // installed set itself is the problem.
     let mut installed_by_id: BTreeMap<AppId, Vec<&InstalledApp>> = BTreeMap::new();
+    let mut malformed: Option<Error> = None;
     for app in installed {
-        if let Ok(id) = AppId::parse(&app.manifest.app.id) {
-            installed_by_id.entry(id).or_default().push(app);
+        match AppId::parse(&app.manifest.app.id) {
+            Ok(id) => installed_by_id.entry(id).or_default().push(app),
+            Err(error) => {
+                malformed.get_or_insert_with(|| {
+                    Error::invalid(format!(
+                        "the installed app id `{}` is invalid: {error}",
+                        app.manifest.app.id
+                    ))
+                });
+            }
         }
     }
 
@@ -205,6 +216,9 @@ pub fn resolve(
         let id = AppId::parse(id_text).map_err(ResolutionError::InvalidComposition)?;
         let found = match installed_by_id.get(&id).map(Vec::as_slice).unwrap_or(&[]) {
             [] => {
+                if let Some(error) = malformed {
+                    return Err(ResolutionError::InvalidManifest(error));
+                }
                 return Err(ResolutionError::NotInstalled { app: entry.clone() });
             }
             [found] => *found,
@@ -835,6 +849,26 @@ mod tests {
         let resolution = resolve(&composition(&[PROVIDER]), &[broken, provider()])
             .expect("the composed app still resolves");
         assert_eq!(resolution.order, [app(PROVIDER)]);
+    }
+
+    #[test]
+    fn a_malformed_installed_id_is_invalid_not_missing() {
+        // The installed set is the problem, not the composition: saying "not
+        // installed" would send the operator to install what is already there.
+        let broken = InstalledApp {
+            manifest: Manifest::parse(
+                "manifest_version = 2\n\n[app]\nid = \"not-an-id\"\nnamespace = \"example:broken\"\nname = \"Broken\"\nversion = \"0.1.0\"\n",
+            )
+            .expect("parse"),
+            approved: true,
+            enabled: true,
+        };
+        let error = resolve(&composition(&[PROVIDER]), &[broken]).expect_err("invalid");
+        assert!(
+            matches!(error, ResolutionError::InvalidManifest(_)),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("not-an-id"), "{error}");
     }
 
     #[test]
