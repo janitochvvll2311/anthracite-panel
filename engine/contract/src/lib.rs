@@ -11,6 +11,7 @@ pub mod error;
 pub mod grant;
 pub mod id;
 pub mod manifest;
+pub mod signature;
 pub mod world;
 
 pub use audit::{AuditAction, AuditEntry, Outcome};

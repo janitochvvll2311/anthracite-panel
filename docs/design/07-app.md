@@ -197,6 +197,10 @@ The wasm and the UI modules are not in the message; they are covered by their
 hashes inside the manifest, and those hashes are covered by the signature. One
 rule, written once, checked by one test with a fixed vector.
 
+Names are plain relative paths: `[A-Za-z0-9._/-]` only. The NUL is the field
+separator, so a name containing one (or any other control byte) would let two
+different sets sign the same bytes; a bundle with such a path is refused.
+
 ### 7.4 App kinds
 
 One app may combine three implementations; the contract is the same for all of

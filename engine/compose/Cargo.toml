@@ -7,3 +7,6 @@ description = "The composer: composition plus installed manifests, resolved into
 
 [dependencies]
 anth-contract = { path = "../contract", features = ["parse"] }
+base64 = "0.22"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }
+sha2 = "0.10"
