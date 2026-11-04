@@ -298,6 +298,24 @@ mod tests {
     }
 
     #[test]
+    fn a_stored_key_that_cannot_sign_is_refused() {
+        // `add` refuses an unusable key; a file that appears in the tree some
+        // other way must be refused on read too.
+        let state = scratch("unusable-file");
+        let keyring = Keyring::new(&state);
+        let mut key = trusted_key();
+        key.public_key = "02".to_string() + &"00".repeat(31);
+        let fingerprint = signature::fingerprint(&key.public_key).expect("fingerprint");
+        store::ensure_dir(keyring.dir()).expect("dir");
+        let path = keyring.dir().join(format!("{fingerprint}.toml"));
+        fs::write(&path, key.to_toml().expect("render")).expect("write");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod");
+        let error = keyring.load(&fingerprint).expect_err("unusable key");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
     fn a_corrupt_signature_is_invalid_not_denied() {
         let state = scratch("corrupt");
         let keyring = Keyring::new(&state);
