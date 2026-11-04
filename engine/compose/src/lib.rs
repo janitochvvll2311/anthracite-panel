@@ -1,14 +1,19 @@
-//! The composer: `composition.toml` plus the installed manifests, resolved into
-//! what runs (§8.2).
+//! The composer's side of the platform: resolution (§8.2) and the grant store
+//! (§6.8, §9.3).
 //!
 //! Resolution is deterministic and pure: it reads no files, starts nothing and
 //! grants nothing. The registry supplies the manifests and their approval state;
-//! the supervisor is what instantiates the result. Keeping the decision here
-//! means the same function answers "would this boot?" offline and "what should
-//! run?" at boot.
+//! the supervisor is what instantiates the result. The grant store is the one
+//! part that touches disk: one document per app, written atomically and read by
+//! id.
+//!
+//! Keeping the decision here means the same function answers "would this boot?"
+//! offline and "what should run?" at boot.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+
+pub mod grant;
 
 use anth_contract::catalog;
 use anth_contract::{
