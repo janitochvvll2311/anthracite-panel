@@ -52,6 +52,11 @@ pub fn verify(message: &[u8], signature: &str, public_key_hex: &str) -> Result<(
             "`{public_key_hex}` is not an Ed25519 public key: {error}"
         ))
     })?;
+    if key.is_weak() {
+        return Err(Error::invalid(format!(
+            "`{public_key_hex}` is a weak (small-order) public key"
+        )));
+    }
     key.verify_strict(message, &signature)
         .map_err(|_| Error::denied("the signature does not verify for this key"))
 }
@@ -148,6 +153,22 @@ mod tests {
             "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
             "the fingerprint of the verifying key for seed [7; 32]"
         );
+    }
+
+    #[test]
+    fn a_small_order_key_is_refused() {
+        // The identity point and the order-4 point: both decompress, neither is
+        // a legitimate signer. `verify_strict` denies them; the explicit check
+        // gives the operator the reason instead of a generic failure.
+        for key in [
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            let signature = STANDARD.encode([0u8; SIGNATURE_BYTES]);
+            let error = verify(b"x", &signature, key).expect_err("weak key");
+            assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+            assert!(error.message().contains("weak"), "{error}");
+        }
     }
 
     #[test]

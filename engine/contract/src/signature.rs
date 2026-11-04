@@ -46,17 +46,26 @@ pub fn message(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Error> {
 }
 
 /// The signed set is closed: the manifest and the WIT files, nothing else.
+///
+/// Names are restricted to an unambiguous alphabet. The framing uses NUL as a
+/// separator, so a name that contains NUL (or any other control byte) would let
+/// two different sets produce the same message; refusing them keeps the
+/// encoding injective.
 fn check_name(name: &str) -> Result<(), Error> {
-    let valid = name == "manifest.toml"
+    let safe = !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'));
+    let closed = name == "manifest.toml"
         || (name.starts_with("wit/")
             && name.len() > "wit/".len()
             && !name.ends_with('/')
             && !name
                 .split('/')
                 .any(|part| part.is_empty() || part == "." || part == ".."));
-    if !valid {
+    if !safe || !closed {
         return Err(Error::invalid(format!(
-            "`{name}` is not part of the signed set; only `manifest.toml` and `wit/**` are"
+            "`{name}` is not part of the signed set; only `manifest.toml` and `wit/**` with plain names are"
         )));
     }
     Ok(())
@@ -117,6 +126,19 @@ mod tests {
             "../manifest.toml",
             "wit/../x",
         ] {
+            let files = vec![
+                ("manifest.toml".to_string(), Vec::new()),
+                (name.to_string(), Vec::new()),
+            ];
+            assert!(message(&files).is_err(), "`{name}` must not be signable");
+        }
+    }
+
+    #[test]
+    fn a_name_with_a_control_byte_is_refused() {
+        // The framing uses NUL as a separator: a name containing it (or any
+        // other control byte) would make two different sets sign the same bytes.
+        for name in ["wit/a\0b", "wit/a\n", "wit/a b", "wit/a\\b", "wit/ñ"] {
             let files = vec![
                 ("manifest.toml".to_string(), Vec::new()),
                 (name.to_string(), Vec::new()),
