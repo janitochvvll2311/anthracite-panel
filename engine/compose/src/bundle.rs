@@ -313,50 +313,52 @@ fn check_wit(root: &Path, manifest: &Manifest, known: &[String]) -> Result<(), E
             package.name, manifest.app.namespace
         )));
     }
-    let version = anth_contract::parse_version(&manifest.app.version)?;
-    if package.name.version.as_ref() != Some(&version) {
-        return Err(Error::invalid(format!(
-            "the WIT package version is {} and the manifest says {version}",
-            package
-                .name
-                .version
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "none".to_string())
-        )));
-    }
+    // WIT has no per-interface version: the package version is the version of
+    // the interface set, and every exported id carries it. The app's own
+    // version is independent (D-Interface-Versioning).
+    let package_version = package.name.version.clone().ok_or_else(|| {
+        Error::invalid("the WIT package must declare a version; interface ids carry it")
+    })?;
     // Full `use` resolution needs the host catalog and the installed providers;
-    // what this can decide is that the imported package has a provider at all.
-    for foreign in package.foreign_deps.keys() {
-        let id = format!("{}:{}", foreign.namespace, foreign.name);
+    // what this can decide is that the native interface exists at that version,
+    // and that any other package has a provider at all.
+    for (foreign, interfaces) in &package.foreign_deps {
+        let package_id = format!("{}:{}", foreign.namespace, foreign.name);
         // `anth:error` is a package of types injected when parsing, never
         // granted and never risked (§9.2); it has no version to pin.
-        if id == "anth:error" {
+        if package_id == "anth:error" {
             continue;
         }
-        let native = catalog::NATIVE.iter().find_map(|entry| {
-            let interface = InterfaceId::parse(entry.id).ok()?;
-            (interface.package_id() == id).then(|| interface.version().clone())
-        });
-        match native {
-            Some(version) => {
-                if foreign.version.as_ref() != Some(&version) {
-                    return Err(Error::invalid(format!(
-                        "`{id}` is imported at {}, and the engine provides {version}",
-                        foreign
-                            .version
-                            .as_ref()
-                            .map(ToString::to_string)
-                            .unwrap_or_else(|| "no version".to_string())
-                    )));
-                }
-            }
-            None if !known.iter().any(|known| known == &id) => {
+        let provided: Vec<(String, anth_contract::Version)> = catalog::NATIVE
+            .iter()
+            .filter_map(|entry| InterfaceId::parse(entry.id).ok())
+            .filter(|interface| interface.package_id() == package_id)
+            .map(|interface| (interface.to_string(), interface.version().clone()))
+            .collect();
+        if provided.is_empty() {
+            if !known.iter().any(|known| known == &package_id) {
                 return Err(Error::invalid(format!(
-                    "`{id}` is imported by the WIT package but is neither native nor installed"
+                    "`{package_id}` is imported by the WIT package but is neither native nor installed"
                 )));
             }
-            None => {}
+            continue;
+        }
+        let version = provided[0].1.clone();
+        if foreign.version.as_ref() != Some(&version) {
+            return Err(Error::invalid(format!(
+                "`{package_id}` is imported at {}, and the engine provides {version}",
+                foreign
+                    .version
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "no version".to_string())
+            )));
+        }
+        for interface in interfaces.keys() {
+            let id = format!("{package_id}/{interface}@{version}");
+            if !provided.iter().any(|(declared, _)| declared == &id) {
+                return Err(Error::invalid(format!("`{id}` is not in the native set")));
+            }
         }
     }
     for export in &manifest.export {
@@ -367,9 +369,9 @@ fn check_wit(root: &Path, manifest: &Manifest, known: &[String]) -> Result<(), E
                 export.interface
             )));
         }
-        if id.version() != &version {
+        if id.version() != &package_version {
             return Err(Error::invalid(format!(
-                "`{}` is exported at version {}, and the WIT package is {version}",
+                "`{}` is exported at version {}, and the WIT package is {package_version}",
                 export.interface,
                 id.version()
             )));
@@ -542,7 +544,7 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     const WASM: &[u8] = b"\0asm a fake component";
-    const WIT: &str = "package example:notes@0.1.0;\n\ninterface notes {\n  all: func() -> list<string>;\n}\n\nworld app {\n  export notes;\n}\n";
+    const WIT: &str = "package example:notes@1.0.0;\n\ninterface notes {\n  all: func() -> list<string>;\n}\n\nworld app {\n  export notes;\n}\n";
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -560,7 +562,7 @@ mod tests {
 
     fn manifest(wasm: &[u8]) -> String {
         format!(
-            "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/notes.wasm\"\nsha256 = \"{}\"\n\n[[export]]\ninterface = \"example:notes/notes@0.1.0\"\n",
+            "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/notes.wasm\"\nsha256 = \"{}\"\n\n[[export]]\ninterface = \"example:notes/notes@1.0.0\"\n",
             hex(&Sha256::digest(wasm))
         )
     }
@@ -753,7 +755,7 @@ mod tests {
         let state = scratch("worlds");
         let keyring = Keyring::new(&state);
         let manifest = manifest(WASM);
-        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { export notes; }\nworld other { export notes; }\n";
+        let wit = "package example:notes@1.0.0;\ninterface notes { all: func(); }\nworld app { export notes; }\nworld other { export notes; }\n";
         let error = extract(
             &zip(&entries(&manifest, wit, WASM)),
             &state,
@@ -787,8 +789,8 @@ mod tests {
         let state = scratch("export");
         let keyring = Keyring::new(&state);
         let manifest = manifest(WASM).replace(
-            "interface = \"example:notes/notes@0.1.0\"",
-            "interface = \"example:notes/other@0.1.0\"",
+            "interface = \"example:notes/notes@1.0.0\"",
+            "interface = \"example:notes/other@1.0.0\"",
         );
         let error = extract(
             &zip(&entries(&manifest, WIT, WASM)),
@@ -809,7 +811,7 @@ mod tests {
         let state = scratch("export-version");
         let keyring = Keyring::new(&state);
         let manifest =
-            manifest(WASM).replace("example:notes/notes@0.1.0", "example:notes/notes@9.9.9");
+            manifest(WASM).replace("example:notes/notes@1.0.0", "example:notes/notes@9.9.9");
         let error = extract(
             &zip(&entries(&manifest, WIT, WASM)),
             &state,
@@ -858,7 +860,7 @@ mod tests {
         let state = scratch("native-import");
         let keyring = Keyring::new(&state);
         let manifest = manifest(WASM);
-        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import anth:env/info@1.0.0; export notes; }\n";
+        let wit = "package example:notes@1.0.0;\ninterface notes { all: func(); }\nworld app { import anth:env/info@1.0.0; export notes; }\n";
         extract(
             &zip(&entries(&manifest, wit, WASM)),
             &state,
@@ -874,7 +876,7 @@ mod tests {
         let state = scratch("unknown-import");
         let keyring = Keyring::new(&state);
         let manifest = manifest(WASM);
-        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import example:other/x@1.0.0; export notes; }\n";
+        let wit = "package example:notes@1.0.0;\ninterface notes { all: func(); }\nworld app { import example:other/x@1.0.0; export notes; }\n";
         let error = extract(
             &zip(&entries(&manifest, wit, WASM)),
             &state,
@@ -894,7 +896,7 @@ mod tests {
         let state = scratch("known-import");
         let keyring = Keyring::new(&state);
         let manifest = manifest(WASM);
-        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import example:other/x@1.0.0; export notes; }\n";
+        let wit = "package example:notes@1.0.0;\ninterface notes { all: func(); }\nworld app { import example:other/x@1.0.0; export notes; }\n";
         let mut options = options(false);
         options.known_packages = vec!["example:other".to_string()];
         extract(
@@ -936,7 +938,7 @@ mod tests {
         let state = scratch("native-version");
         let keyring = Keyring::new(&state);
         let manifest = manifest(WASM);
-        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import anth:env/info@2.0.0; export notes; }\n";
+        let wit = "package example:notes@1.0.0;\ninterface notes { all: func(); }\nworld app { import anth:env/info@2.0.0; export notes; }\n";
         let error = extract(
             &zip(&entries(&manifest, wit, WASM)),
             &state,
@@ -945,6 +947,23 @@ mod tests {
         )
         .expect_err("version");
         assert!(error.message().contains("engine provides 1.0.0"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_native_interface_that_does_not_exist_is_refused() {
+        let state = scratch("native-interface");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let wit = "package example:notes@1.0.0;\ninterface notes { all: func(); }\nworld app { import anth:env/nonexistent@1.0.0; export notes; }\n";
+        let error = extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("interface");
+        assert!(error.message().contains("not in the native set"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 

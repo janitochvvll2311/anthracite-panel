@@ -48,9 +48,10 @@ the two, so the packaged copy cannot drift.
 
 The manifest is an **index**, not a type definition. Types live in WIT, so the
 manifest only says *which* interfaces and *how* they are reached. `[app] namespace`
-and `[app] version` are the identity of the WIT package: the validator requires the
-`package` line under `wit/` to match both, so a package name is written in exactly
-one place.
+is the WIT package's name: the validator requires the `package` line under `wit/`
+to use the same `namespace:package`. The **package version versions the interface
+set** and is not the app's version (D-Interface-Versioning); every exported
+interface id carries it, so the package name is written in exactly one place.
 
 ```toml
 manifest_version = 2
@@ -155,10 +156,12 @@ in reverse-DNS (`org.example.notes`) because that is what DNS-shaped ids are for
 while the app's WIT namespace is declared in the manifest and must be unique
 across a composition.
 
-**Two version numbers, two meanings.** The package version follows the app
-(`anthracite:hello@0.5.0`); the interface version is its own semver and changes
-only when its types change (`greeting@1.0.0`). An app may ship 0.5.1 with an
-unchanged `greeting@1.0.0`, and consumers do not notice.
+**Two version numbers, two meanings.** The package version versions the interface
+set (`anthracite:hello@1.0.0`); the app has its own version
+(`anthracite:hello@0.5.1` in the manifest). The interface id carries the package
+version, so an app may ship 0.5.1 with an unchanged `greeting@1.0.0` and consumers
+do not notice. WIT has no per-interface version: changing any interface in the
+package bumps the package, and therefore every id in it.
 
 **Versioning is exact.** The component `Linker` resolves imports by name, so
 `@1.0.0` and `@1.0.1` are different interfaces and do not link. This is not a
