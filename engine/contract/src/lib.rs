@@ -7,6 +7,7 @@
 pub mod audit;
 pub mod catalog;
 pub mod composition;
+pub mod descriptor;
 pub mod error;
 pub mod grant;
 pub mod id;
@@ -18,6 +19,7 @@ pub mod world;
 pub use audit::{AuditAction, AuditEntry, Outcome};
 pub use catalog::{is_native, risk_of, NativeInterface, Risk, NATIVE};
 pub use composition::{Composition, Profile, COMPOSITION_VERSION};
+pub use descriptor::{Descriptor, Tier, DESCRIPTOR_VERSION};
 pub use error::{Error, ErrorEnvelope, ErrorKind};
 pub use grant::{Grant, GRANT_VERSION};
 pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};

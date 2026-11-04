@@ -5,17 +5,26 @@
 //! whole or not at all. The registry never grants authority: an installed app
 //! still needs a grant to run.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
-use anth_contract::{AppId, Error, Manifest};
+use anth_contract::{AppId, Descriptor, Error, Manifest, Tier, DESCRIPTOR_VERSION};
 
 use crate::bundle::{self, Options, StagedBundle};
 use crate::keys::Keyring;
 use crate::store;
 
 static SWAP: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone)]
+pub struct Installed {
+    pub manifest: Manifest,
+    pub descriptor: Descriptor,
+}
 
 #[derive(Debug, Clone)]
 pub struct Registry {
@@ -37,7 +46,7 @@ impl Registry {
 
     /// Verifies and installs a bundle. An id that is already installed is a
     /// conflict; replacing is an explicit operation.
-    pub fn install(&self, bundle: &[u8], options: &Options) -> Result<Manifest, Error> {
+    pub fn install(&self, bundle: &[u8], options: &Options) -> Result<Installed, Error> {
         store::ensure_dir(&self.apps)?;
         let staged = self.extract(bundle, options)?;
         let manifest = staged.manifest().clone();
@@ -55,21 +64,37 @@ impl Registry {
                 )));
             }
         }
+        let descriptor = Descriptor {
+            version: DESCRIPTOR_VERSION,
+            app: id,
+            enabled: true,
+            alias: None,
+            signer: staged.signer().map(str::to_string),
+            tier: Tier::ThirdParty,
+            installed_at: now(),
+        };
+        write_staged_descriptor(staged.root(), &descriptor)?;
         publish(staged, &target)?;
         sync_dir(&self.apps)?;
-        Ok(manifest)
+        Ok(Installed {
+            manifest,
+            descriptor,
+        })
     }
 
     /// Replaces the bundle of an installed app. The id lives inside the bundle,
-    /// so a bundle declaring another one is a conflict, not a rename.
+    /// so a bundle declaring another one is a conflict, not a rename. The
+    /// operator's `enabled` and `alias` survive; authority does not.
     pub fn replace(
         &self,
         app: &AppId,
         bundle: &[u8],
         options: &Options,
-    ) -> Result<Manifest, Error> {
+    ) -> Result<Installed, Error> {
         let target = self.apps.join(app.as_str());
-        check_installed(&target)?;
+        let previous = self
+            .get(app)?
+            .ok_or_else(|| Error::not_found(format!("{} is not installed", target.display())))?;
         let staged = self.extract(bundle, options)?;
         let manifest = staged.manifest().clone();
         if manifest.app.id != app.as_str() {
@@ -78,6 +103,16 @@ impl Registry {
                 manifest.app.id
             )));
         }
+        let descriptor = Descriptor {
+            version: DESCRIPTOR_VERSION,
+            app: app.clone(),
+            enabled: previous.descriptor.enabled,
+            alias: previous.descriptor.alias.clone(),
+            signer: staged.signer().map(str::to_string),
+            tier: Tier::ThirdParty,
+            installed_at: now(),
+        };
+        write_staged_descriptor(staged.root(), &descriptor)?;
         let staged_root = staged.into_root();
         // RENAME_EXCHANGE swaps the two trees in one step: the app is never
         // missing, even if the engine dies. Filesystems without it fall back to
@@ -110,10 +145,13 @@ impl Registry {
             }
         }
         sync_dir(&self.apps)?;
-        Ok(manifest)
+        Ok(Installed {
+            manifest,
+            descriptor,
+        })
     }
 
-    pub fn get(&self, app: &AppId) -> Result<Option<Manifest>, Error> {
+    pub fn get(&self, app: &AppId) -> Result<Option<Installed>, Error> {
         let target = self.apps.join(app.as_str());
         match fs::symlink_metadata(&target) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -128,32 +166,29 @@ impl Registry {
                         target.display()
                     )));
                 }
-                read_manifest(&target)
-                    .and_then(|manifest| {
-                        if manifest.app.id != app.as_str() {
-                            return Err(Error::invalid(format!(
-                                "{} declares `{}`, not `{app}`",
-                                target.display(),
-                                manifest.app.id
-                            )));
-                        }
-                        Ok(manifest)
-                    })
-                    .map(Some)
+                let installed = read_installed(&target)?;
+                if installed.manifest.app.id != app.as_str() {
+                    return Err(Error::invalid(format!(
+                        "{} declares `{}`, not `{app}`",
+                        target.display(),
+                        installed.manifest.app.id
+                    )));
+                }
+                Ok(Some(installed))
             }
         }
     }
 
     /// Every installed app, sorted by id. Staging and swap directories are
     /// hidden by their leading dot.
-    pub fn list(&self) -> Result<Vec<Manifest>, Error> {
+    pub fn list(&self) -> Result<Vec<Installed>, Error> {
         if !store::check_dir(&self.apps)? {
             return Ok(Vec::new());
         }
         let entries = fs::read_dir(&self.apps).map_err(|error| {
             Error::internal(format!("reading {}: {error}", self.apps.display()))
         })?;
-        let mut manifests = Vec::new();
+        let mut installed = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|error| {
                 Error::internal(format!("reading {}: {error}", self.apps.display()))
@@ -164,12 +199,12 @@ impl Registry {
                 continue;
             }
             let id = AppId::parse(&name)?;
-            if let Some(manifest) = self.get(&id)? {
-                manifests.push(manifest);
+            if let Some(app) = self.get(&id)? {
+                installed.push(app);
             }
         }
-        manifests.sort_by(|a, b| a.app.id.cmp(&b.app.id));
-        Ok(manifests)
+        installed.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
+        Ok(installed)
     }
 
     /// Removes the installed bundle. The grant is a separate document and the
@@ -196,6 +231,35 @@ impl Registry {
                 target.display()
             ))),
         }
+    }
+
+    /// Enables or disables the app. This is operator state, not authority: the
+    /// grant and the manifest are untouched.
+    pub fn set_enabled(&self, app: &AppId, enabled: bool) -> Result<Installed, Error> {
+        let mut installed = self.installed(app)?;
+        installed.descriptor.enabled = enabled;
+        self.save_descriptor(app, &installed.descriptor)?;
+        Ok(installed)
+    }
+
+    /// Sets the operator's CLI alias for the app.
+    pub fn set_alias(&self, app: &AppId, alias: Option<String>) -> Result<Installed, Error> {
+        let mut installed = self.installed(app)?;
+        installed.descriptor.alias = alias;
+        self.save_descriptor(app, &installed.descriptor)?;
+        Ok(installed)
+    }
+
+    fn installed(&self, app: &AppId) -> Result<Installed, Error> {
+        self.get(app)?
+            .ok_or_else(|| Error::not_found(format!("`{app}` is not installed")))
+    }
+
+    fn save_descriptor(&self, app: &AppId, descriptor: &Descriptor) -> Result<(), Error> {
+        descriptor.validate()?;
+        let dir = self.apps.join(app.as_str());
+        store::write_atomic(&dir, "descriptor.toml", descriptor.to_toml()?.as_bytes())?;
+        sync_dir(&dir)
     }
 
     /// Extracts into `apps/` with the packages of installed providers added to
@@ -321,23 +385,6 @@ fn unsupported(error: &std::io::Error) -> bool {
         )
 }
 
-fn check_installed(target: &Path) -> Result<(), Error> {
-    match fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(()),
-        Ok(_) => Err(Error::invalid(format!(
-            "{} is not a real app directory",
-            target.display()
-        ))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Error::not_found(
-            format!("{} is not installed", target.display()),
-        )),
-        Err(error) => Err(Error::internal(format!(
-            "inspecting {}: {error}",
-            target.display()
-        ))),
-    }
-}
-
 fn read_manifest(dir: &Path) -> Result<Manifest, Error> {
     let path = dir.join("manifest.toml");
     let text = match fs::read_to_string(&path) {
@@ -364,6 +411,67 @@ fn read_manifest(dir: &Path) -> Result<Manifest, Error> {
 }
 
 /// Makes the rename durable before answering: a published app is on disk.
+/// Reads the manifest and the descriptor and refuses a pair that names two
+/// different apps: the directory is one app or it is corrupt.
+fn read_installed(dir: &Path) -> Result<Installed, Error> {
+    let manifest = read_manifest(dir)?;
+    let descriptor = read_descriptor(dir)?;
+    if descriptor.app.as_str() != manifest.app.id {
+        return Err(Error::invalid(format!(
+            "{} descriptor names `{}` but the manifest is `{}`",
+            dir.display(),
+            descriptor.app,
+            manifest.app.id
+        )));
+    }
+    Ok(Installed {
+        manifest,
+        descriptor,
+    })
+}
+
+fn read_descriptor(dir: &Path) -> Result<Descriptor, Error> {
+    let path = dir.join("descriptor.toml");
+    let text = fs::read_to_string(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Error::invalid(format!(
+                "{} has no descriptor; the installed tree is corrupt",
+                dir.display()
+            ))
+        } else {
+            Error::internal(format!("reading {}: {error}", path.display()))
+        }
+    })?;
+    let descriptor = Descriptor::parse(&text)
+        .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+    descriptor
+        .validate()
+        .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+    Ok(descriptor)
+}
+
+/// Writes the descriptor into the staging tree before it becomes visible, so an
+/// installed app always has one.
+fn write_staged_descriptor(root: &Path, descriptor: &Descriptor) -> Result<(), Error> {
+    descriptor.validate()?;
+    let path = root.join("descriptor.toml");
+    let text = descriptor.to_toml()?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(store::FILE_MODE)
+        .open(&path)
+        .map_err(|error| Error::internal(format!("creating {}: {error}", path.display())))?;
+    file.write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
+    sync_dir(root)
+}
+
+fn now() -> String {
+    humantime::format_rfc3339_seconds(SystemTime::now()).to_string()
+}
+
 fn sync_dir(dir: &Path) -> Result<(), Error> {
     fs::File::open(dir)
         .and_then(|dir| dir.sync_all())
@@ -438,21 +546,24 @@ mod tests {
     fn install_list_get_and_remove() {
         let state = scratch("lifecycle");
         let registry = Registry::new(&state);
-        let manifest = registry
+        let installed = registry
             .install(&notes_bundle("0.1.0", WASM), &options())
             .expect("install");
-        assert_eq!(manifest.app.id, "org.example.notes");
+        assert_eq!(installed.manifest.app.id, "org.example.notes");
+        assert_eq!(installed.descriptor.tier, Tier::ThirdParty);
+        assert!(installed.descriptor.enabled);
+        assert!(installed.descriptor.signer.is_none());
         assert!(registry.dir().join("org.example.notes").is_dir());
 
         let installed = registry
             .get(&AppId::parse("org.example.notes").unwrap())
             .expect("get")
             .expect("installed");
-        assert_eq!(installed.app.version, "0.1.0");
+        assert_eq!(installed.manifest.app.version, "0.1.0");
 
         let list = registry.list().expect("list");
         assert_eq!(list.len(), 1);
-        assert_eq!(list[0].app.id, "org.example.notes");
+        assert_eq!(list[0].manifest.app.id, "org.example.notes");
 
         let app = AppId::parse("org.example.notes").unwrap();
         assert!(registry.remove(&app).expect("remove"));
@@ -477,6 +588,7 @@ mod tests {
                 .get(&AppId::parse("org.example.notes").unwrap())
                 .expect("get")
                 .unwrap()
+                .manifest
                 .app
                 .version,
             "0.1.0",
@@ -498,7 +610,13 @@ mod tests {
             .replace(&app, &notes_bundle("0.2.0", newer), &options())
             .expect("replace");
         assert_eq!(
-            registry.get(&app).expect("get").unwrap().app.version,
+            registry
+                .get(&app)
+                .expect("get")
+                .unwrap()
+                .manifest
+                .app
+                .version,
             "0.2.0"
         );
         let installed =
@@ -525,7 +643,7 @@ mod tests {
         let error = registry.replace(&app, &bundle, &options()).expect_err("id");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
         assert_eq!(
-            registry.get(&app).expect("get").unwrap().app.id,
+            registry.get(&app).expect("get").unwrap().manifest.app.id,
             "org.example.notes"
         );
         fs::remove_dir_all(&state).expect("cleanup");
@@ -637,7 +755,92 @@ mod tests {
     }
 
     #[test]
-    fn a_signed_install_needs_a_trusted_key() {
+    fn the_descriptor_is_part_of_the_installed_app() {
+        let state = scratch("descriptor");
+        let registry = Registry::new(&state);
+        let installed = registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        let path = registry.dir().join("org.example.notes/descriptor.toml");
+        let text = fs::read_to_string(&path).expect("descriptor");
+        let descriptor = Descriptor::parse(&text).expect("parse");
+        assert_eq!(descriptor, installed.descriptor);
+        assert!(descriptor.enabled);
+        assert_eq!(descriptor.tier, Tier::ThirdParty);
+        assert!(descriptor.signer.is_none());
+        assert!(
+            humantime::parse_rfc3339(&descriptor.installed_at).is_ok(),
+            "installed_at is RFC 3339"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn set_enabled_and_alias_round_trip() {
+        let state = scratch("patch");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        let installed = registry.set_enabled(&app, false).expect("disable");
+        assert!(!installed.descriptor.enabled);
+        let installed = registry
+            .set_alias(&app, Some("notes".to_string()))
+            .expect("alias");
+        assert_eq!(installed.descriptor.alias.as_deref(), Some("notes"));
+        let reread = registry.get(&app).expect("get").unwrap();
+        assert!(!reread.descriptor.enabled);
+        assert_eq!(reread.descriptor.alias.as_deref(), Some("notes"));
+        let error = registry
+            .set_alias(&app, Some("list".to_string()))
+            .expect_err("reserved");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn replace_preserves_enabled_and_alias() {
+        let state = scratch("replace-descriptor");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        registry.set_enabled(&app, false).expect("disable");
+        registry
+            .set_alias(&app, Some("notes".to_string()))
+            .expect("alias");
+        let newer = b"\0asm a newer component";
+        let installed = registry
+            .replace(&app, &notes_bundle("0.2.0", newer), &options())
+            .expect("replace");
+        assert!(!installed.descriptor.enabled);
+        assert_eq!(installed.descriptor.alias.as_deref(), Some("notes"));
+        assert_eq!(installed.manifest.app.version, "0.2.0");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_descriptor_that_names_another_app_is_refused() {
+        let state = scratch("descriptor-mismatch");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        let path = registry.dir().join("org.example.notes/descriptor.toml");
+        let text = fs::read_to_string(&path)
+            .expect("read")
+            .replace("org.example.notes", "org.example.other");
+        fs::write(&path, text).expect("write");
+        let error = registry.get(&app).expect_err("mismatch");
+        assert!(error.message().contains("descriptor names"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_signed_bundle_is_installed_with_its_signer() {
         let state = scratch("signed");
         let keyring = Keyring::new(&state);
         let signing = SigningKey::from_bytes(&[7u8; 32]);
@@ -666,9 +869,15 @@ mod tests {
         ]);
         let mut options = options();
         options.require_signature = true;
-        Registry::new(&state)
+        let installed = Registry::new(&state)
             .install(&bundle, &options)
             .expect("signed install");
+        let fingerprint =
+            crate::signature::fingerprint(&hex(&signing.verifying_key().to_bytes())).unwrap();
+        assert_eq!(
+            installed.descriptor.signer.as_deref(),
+            Some(fingerprint.as_str())
+        );
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
