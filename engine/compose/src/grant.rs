@@ -40,6 +40,9 @@ impl GrantStore {
 
     /// Reads the grant for `app`, or `None` when the app was never approved.
     pub fn load(&self, app: &AppId) -> Result<Option<Grant>, Error> {
+        if !self.check_existing_dir()? {
+            return Ok(None);
+        }
         let path = self.path(app);
         reject_symlink(&path)?;
         let text = match fs::read_to_string(&path) {
@@ -53,6 +56,9 @@ impl GrantStore {
             }
         };
         let grant = Grant::parse(&text)
+            .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+        grant
+            .validate()
             .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
         if &grant.app != app {
             return Err(Error::invalid(format!(
@@ -95,6 +101,9 @@ impl GrantStore {
 
     /// Removes the grant. `false` means there was nothing to remove.
     pub fn remove(&self, app: &AppId) -> Result<bool, Error> {
+        if !self.check_existing_dir()? {
+            return Ok(false);
+        }
         let path = self.path(app);
         match fs::symlink_metadata(&path) {
             Ok(metadata) => {
@@ -119,16 +128,11 @@ impl GrantStore {
 
     /// Every grant, sorted by app id. A missing directory is an empty store.
     pub fn all(&self) -> Result<Vec<Grant>, Error> {
-        let entries = match fs::read_dir(&self.dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(Error::internal(format!(
-                    "reading {}: {error}",
-                    self.dir.display()
-                )));
-            }
-        };
+        if !self.check_existing_dir()? {
+            return Ok(Vec::new());
+        }
+        let entries = fs::read_dir(&self.dir)
+            .map_err(|error| Error::internal(format!("reading {}: {error}", self.dir.display())))?;
         let mut paths = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|error| {
@@ -152,6 +156,9 @@ impl GrantStore {
                 })?;
                 let grant = Grant::parse(&text)
                     .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
+                grant
+                    .validate()
+                    .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
                 if path.file_stem().and_then(|stem| stem.to_str()) != Some(grant.app.as_str()) {
                     return Err(Error::invalid(format!(
                         "{} holds the grant for `{}`",
@@ -165,6 +172,24 @@ impl GrantStore {
     }
 
     fn check_dir(&self) -> Result<(), Error> {
+        if self.check_existing_dir()? {
+            return Ok(());
+        }
+        fs::create_dir_all(&self.dir).map_err(|error| {
+            Error::internal(format!("creating {}: {error}", self.dir.display()))
+        })?;
+        fs::set_permissions(&self.dir, fs::Permissions::from_mode(DIR_MODE)).map_err(|error| {
+            Error::internal(format!(
+                "setting permissions on {}: {error}",
+                self.dir.display()
+            ))
+        })
+    }
+
+    /// Whether the directory exists and is what the state tree promises.
+    /// `false` means it does not exist yet; anything else is an error, so a
+    /// read never silently follows a symlink or trusts a world-readable tree.
+    fn check_existing_dir(&self) -> Result<bool, Error> {
         match fs::symlink_metadata(&self.dir) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() {
@@ -186,21 +211,9 @@ impl GrantStore {
                         self.dir.display()
                     )));
                 }
-                Ok(())
+                Ok(true)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir_all(&self.dir).map_err(|error| {
-                    Error::internal(format!("creating {}: {error}", self.dir.display()))
-                })?;
-                fs::set_permissions(&self.dir, fs::Permissions::from_mode(DIR_MODE)).map_err(
-                    |error| {
-                        Error::internal(format!(
-                            "setting permissions on {}: {error}",
-                            self.dir.display()
-                        ))
-                    },
-                )
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(Error::internal(format!(
                 "inspecting {}: {error}",
                 self.dir.display()
@@ -399,6 +412,51 @@ mod tests {
         .expect("copy");
         let error = store.all().expect_err("mismatch");
         assert!(error.message().contains("holds the grant"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_document_that_does_not_validate_is_not_loaded() {
+        let state = scratch("invalid-load");
+        let store = GrantStore::new(&state);
+        store.save(&grant("org.example.notes")).expect("save");
+        let path = store.path(&AppId::parse("org.example.notes").unwrap());
+        let mut broken = grant("org.example.notes");
+        broken.accepted.clear();
+        fs::write(&path, broken.to_toml().expect("render")).expect("write");
+        let error = store
+            .load(&broken.app)
+            .expect_err("an invalid grant is not authority");
+        assert!(error.message().contains("--accept-write"), "{error}");
+        let error = store.all().expect_err("all validates too");
+        assert!(error.message().contains("--accept-write"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_loose_grants_directory_is_refused_on_read() {
+        let state = scratch("loose");
+        let store = GrantStore::new(&state);
+        let grant = grant("org.example.notes");
+        store.save(&grant).expect("save");
+        fs::set_permissions(store.dir(), fs::Permissions::from_mode(0o755)).expect("chmod");
+        let error = store.load(&grant.app).expect_err("loose");
+        assert!(error.message().contains("0755"), "{error}");
+        fs::set_permissions(store.dir(), fs::Permissions::from_mode(0o700)).expect("chmod back");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_symlinked_grants_directory_is_refused_on_read() {
+        let state = scratch("dir-symlink");
+        let real = state.join("real");
+        fs::create_dir_all(&real).expect("mkdir");
+        std::os::unix::fs::symlink(&real, state.join("grants")).expect("symlink");
+        let store = GrantStore::new(&state);
+        let error = store
+            .load(&AppId::parse("org.example.notes").unwrap())
+            .expect_err("symlinked directory");
+        assert!(error.message().contains("symlink"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
