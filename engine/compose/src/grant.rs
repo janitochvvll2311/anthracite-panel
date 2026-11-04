@@ -369,7 +369,7 @@ mod tests {
         let error = store
             .save(&grant("org.example.other"))
             .expect_err("symlink");
-        assert!(error.message().contains("symlink"), "{error}");
+        assert!(error.message().contains("is a symlink"), "{error}");
         assert!(!outside.exists(), "the link must not be followed");
         fs::remove_dir_all(&state).expect("cleanup");
     }
@@ -387,16 +387,17 @@ mod tests {
 
     #[test]
     fn a_symlink_is_refused_on_load() {
-        let state = scratch("symlink-load");
+        let state = scratch("load-link");
         let outside = state.join("outside.toml");
         let store = GrantStore::new(&state);
         fs::create_dir_all(store.dir()).expect("grants");
+        fs::set_permissions(store.dir(), fs::Permissions::from_mode(0o700)).expect("chmod");
         let path = store.path(&AppId::parse("org.example.other").unwrap());
         std::os::unix::fs::symlink(&outside, &path).expect("symlink");
         let error = store
             .load(&AppId::parse("org.example.other").unwrap())
             .expect_err("symlink");
-        assert!(error.message().contains("symlink"), "{error}");
+        assert!(error.message().contains("is a symlink"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
@@ -456,7 +457,7 @@ mod tests {
         let error = store
             .load(&AppId::parse("org.example.notes").unwrap())
             .expect_err("symlinked directory");
-        assert!(error.message().contains("symlink"), "{error}");
+        assert!(error.message().contains("is a symlink"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
