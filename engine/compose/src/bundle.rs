@@ -12,7 +12,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anth_contract::{signature, Error, InterfaceId, Manifest};
+use anth_contract::{catalog, signature, Error, InterfaceId, Manifest};
 use sha2::{Digest, Sha256};
 use wit_parser::UnresolvedPackageGroup;
 
@@ -185,10 +185,15 @@ fn unpack(root: &Path, bundle: &[u8], max_total: u64) -> Result<(), Error> {
         let name = entry
             .enclosed_name()
             .ok_or_else(|| Error::invalid(format!("`{}` escapes the bundle", entry.name())))?;
-        let relative = name
+        let mut relative = name
             .to_str()
             .ok_or_else(|| Error::invalid(format!("`{}` is not UTF-8", entry.name())))?
             .to_string();
+        // Zip directory entries carry a trailing slash; the path is the same as
+        // the name without it, so normalize before the checks and the dedup.
+        while relative.ends_with('/') {
+            relative.pop();
+        }
         if relative.contains('\\') || relative.contains('\0') {
             return Err(Error::invalid(format!(
                 "`{relative}` is not a plain path inside the bundle"
@@ -322,21 +327,51 @@ fn check_wit(root: &Path, manifest: &Manifest, known: &[String]) -> Result<(), E
     }
     // Full `use` resolution needs the host catalog and the installed providers;
     // what this can decide is that the imported package has a provider at all.
-    const NATIVE: &[&str] = &["anth:env", "anth:store", "anth:error"];
     for foreign in package.foreign_deps.keys() {
         let id = format!("{}:{}", foreign.namespace, foreign.name);
-        if !NATIVE.contains(&id.as_str()) && !known.iter().any(|known| known == &id) {
-            return Err(Error::invalid(format!(
-                "`{id}` is imported by the WIT package but is neither native nor installed"
-            )));
+        // `anth:error` is a package of types injected when parsing, never
+        // granted and never risked (§9.2); it has no version to pin.
+        if id == "anth:error" {
+            continue;
+        }
+        let native = catalog::NATIVE.iter().find_map(|entry| {
+            let interface = InterfaceId::parse(entry.id).ok()?;
+            (interface.package_id() == id).then(|| interface.version().clone())
+        });
+        match native {
+            Some(version) => {
+                if foreign.version.as_ref() != Some(&version) {
+                    return Err(Error::invalid(format!(
+                        "`{id}` is imported at {}, and the engine provides {version}",
+                        foreign
+                            .version
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| "no version".to_string())
+                    )));
+                }
+            }
+            None if !known.iter().any(|known| known == &id) => {
+                return Err(Error::invalid(format!(
+                    "`{id}` is imported by the WIT package but is neither native nor installed"
+                )));
+            }
+            None => {}
         }
     }
     for export in &manifest.export {
         let id = InterfaceId::parse(&export.interface)?;
-        if id.namespace() != namespace || id.package() != name || id.version() != &version {
+        if id.namespace() != namespace || id.package() != name {
             return Err(Error::invalid(format!(
                 "`{}` is exported from a package the bundle does not declare",
                 export.interface
+            )));
+        }
+        if id.version() != &version {
+            return Err(Error::invalid(format!(
+                "`{}` is exported at version {}, and the WIT package is {version}",
+                export.interface,
+                id.version()
             )));
         }
         let declared = package
@@ -782,12 +817,7 @@ mod tests {
             &keyring,
         )
         .expect_err("version");
-        assert!(
-            error
-                .message()
-                .contains("package the bundle does not declare"),
-            "{error}"
-        );
+        assert!(error.message().contains("exported at version"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
@@ -874,6 +904,47 @@ mod tests {
             &keyring,
         )
         .expect("the provider is installed");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn explicit_directory_entries_are_accepted() {
+        // Zips written by common tools include `wit/` and `wasm/` entries. The
+        // trailing slash is not a path segment.
+        let state = scratch("dir-entries");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for dir in ["wit", "wasm"] {
+            writer
+                .add_directory(dir, SimpleFileOptions::default())
+                .expect("dir");
+        }
+        for (name, bytes) in entries(&manifest, WIT, WASM) {
+            writer
+                .start_file(name, SimpleFileOptions::default())
+                .expect("start");
+            writer.write_all(&bytes).expect("write");
+        }
+        let bundle = writer.finish().expect("finish").into_inner();
+        extract(&bundle, &state, &options(false), &keyring).expect("directory entries");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_native_import_with_another_version_is_refused() {
+        let state = scratch("native-version");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let wit = "package example:notes@0.1.0;\ninterface notes { all: func(); }\nworld app { import anth:env/info@2.0.0; export notes; }\n";
+        let error = extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("version");
+        assert!(error.message().contains("engine provides 1.0.0"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
