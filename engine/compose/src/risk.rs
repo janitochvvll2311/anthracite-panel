@@ -5,32 +5,85 @@
 //! authority before deciding where it runs, and the number must not depend on
 //! the current composition: swapping a provider later is exactly what the
 //! compose-time re-check exists for (§9.3).
+//!
+//! Only the approved app's closure is inspected. An unrelated installed app
+//! that happens to be broken must not stop the operator from approving
+//! something else; the registry refuses broken bundles at install time anyway.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use anth_contract::catalog;
 use anth_contract::{AppId, Grant, InterfaceId, Risk, GRANT_VERSION};
 
-use crate::{cycle_members, parse_interfaces, InstalledApp, ResolutionError};
+use crate::{cycle_members, parse_interfaces, risk_over, InstalledApp, ResolutionError};
 
-/// One installed app, reduced to the ids the risk graph compares.
-struct Entry {
-    id: AppId,
-    exports: Vec<InterfaceId>,
-    imports: Vec<InterfaceId>,
-}
+/// The effective risk of `app`, over the installed apps it can reach.
+pub fn app_risk(app: &AppId, installed: &[InstalledApp]) -> Result<Risk, ResolutionError> {
+    let mut imports: BTreeMap<AppId, Vec<InterfaceId>> = BTreeMap::new();
+    let mut exporters: BTreeMap<InterfaceId, AppId> = BTreeMap::new();
+    let mut stack = vec![app.clone()];
+    while let Some(id) = stack.pop() {
+        if imports.contains_key(&id) {
+            continue;
+        }
+        let entry = find(&id, installed)?;
+        entry
+            .manifest
+            .validate()
+            .map_err(ResolutionError::InvalidManifest)?;
+        let reachable = parse_interfaces(entry.manifest.import.iter().map(|i| &i.interface))?;
+        for import in &reachable {
+            if catalog::is_native(import) {
+                continue;
+            }
+            // The exporter is searched by the raw interface string, so an
+            // unrelated manifest is never parsed or validated to answer this.
+            let candidates: Vec<&InstalledApp> = installed
+                .iter()
+                .filter(|candidate| {
+                    candidate
+                        .manifest
+                        .export
+                        .iter()
+                        .any(|export| export.interface == import.to_string())
+                })
+                .collect();
+            match candidates.as_slice() {
+                [] => {
+                    return Err(ResolutionError::UnresolvedImport {
+                        app: id.to_string(),
+                        interface: import.to_string(),
+                    });
+                }
+                [candidate] => {
+                    let provider = AppId::parse(&candidate.manifest.app.id)
+                        .map_err(ResolutionError::InvalidManifest)?;
+                    exporters.insert(import.clone(), provider.clone());
+                    stack.push(provider);
+                }
+                _ => {
+                    return Err(ResolutionError::DuplicateExport {
+                        interface: import.to_string(),
+                        providers: candidates
+                            .iter()
+                            .map(|candidate| candidate.manifest.app.id.clone())
+                            .collect(),
+                    });
+                }
+            }
+        }
+        imports.insert(id, reachable);
+    }
 
-/// The effective risk of every installed app.
-///
-/// Approval uses this to show the operator a meaningful number; it is computed
-/// over what is installed, in dependency order, and never read from a manifest.
-pub fn installed_risk(
-    installed: &[InstalledApp],
-) -> Result<BTreeMap<AppId, Risk>, ResolutionError> {
-    let entries = index(installed)?;
-    let exporters = exporters(&entries)?;
-    let order = order(&entries, &exporters)?;
-    Ok(risk_in_order(&entries, &order, &exporters))
+    let order = order(&imports, &exporters)?;
+    let risk = risk_over(
+        &order,
+        |id| imports.get(id).cloned().unwrap_or_default(),
+        |import| exporters.get(import).cloned(),
+    );
+    Ok(*risk
+        .get(app)
+        .expect("the approved app is in its own closure"))
 }
 
 /// The grant an approval produces. Everything here is operator or registry
@@ -55,21 +108,12 @@ pub fn approve(
     installed: &[InstalledApp],
     approval: Approval,
 ) -> Result<Grant, ResolutionError> {
-    let found = installed
-        .iter()
-        .find(|installed| installed.manifest.app.id == app.as_str())
-        .ok_or_else(|| ResolutionError::NotInstalled {
-            app: app.to_string(),
-            malformed: None,
-        })?;
+    let found = find(app, installed)?;
     found
         .manifest
         .validate()
         .map_err(ResolutionError::InvalidManifest)?;
-    let risk = installed_risk(installed)?
-        .get(app)
-        .copied()
-        .expect("the approved app is installed and indexed");
+    let risk = app_risk(app, installed)?;
     let grant = Grant {
         version: GRANT_VERSION,
         app: app.clone(),
@@ -88,78 +132,44 @@ pub fn approve(
     Ok(grant)
 }
 
-fn index(installed: &[InstalledApp]) -> Result<Vec<Entry>, ResolutionError> {
-    let mut entries = Vec::with_capacity(installed.len());
-    let mut seen: BTreeSet<AppId> = BTreeSet::new();
-    for app in installed {
-        app.manifest
-            .validate()
-            .map_err(ResolutionError::InvalidManifest)?;
-        let id = AppId::parse(&app.manifest.app.id).map_err(ResolutionError::InvalidManifest)?;
-        if !seen.insert(id.clone()) {
-            return Err(ResolutionError::DuplicateInstalled {
-                app: id.to_string(),
-            });
-        }
-        entries.push(Entry {
-            id,
-            exports: parse_interfaces(app.manifest.export.iter().map(|e| &e.interface))?,
-            imports: parse_interfaces(app.manifest.import.iter().map(|i| &i.interface))?,
-        });
-    }
-    Ok(entries)
-}
-
-/// Interface id → index of its single exporter.
-fn exporters(entries: &[Entry]) -> Result<BTreeMap<InterfaceId, usize>, ResolutionError> {
-    let mut map: BTreeMap<InterfaceId, usize> = BTreeMap::new();
-    for (index, entry) in entries.iter().enumerate() {
-        for export in &entry.exports {
-            if let Some(previous) = map.insert(export.clone(), index) {
-                return Err(ResolutionError::DuplicateExport {
-                    interface: export.to_string(),
-                    providers: vec![entries[previous].id.to_string(), entry.id.to_string()],
-                });
-            }
-        }
-    }
-    for entry in entries {
-        for import in &entry.imports {
-            if !map.contains_key(import) && !catalog::is_native(import) {
-                return Err(ResolutionError::UnresolvedImport {
-                    app: entry.id.to_string(),
-                    interface: import.to_string(),
-                });
-            }
-        }
-    }
-    Ok(map)
-}
-
-fn order(
-    entries: &[Entry],
-    exporters: &BTreeMap<InterfaceId, usize>,
-) -> Result<Vec<AppId>, ResolutionError> {
-    let mut indegree: BTreeMap<AppId, usize> = entries
+fn find<'a>(
+    app: &AppId,
+    installed: &'a [InstalledApp],
+) -> Result<&'a InstalledApp, ResolutionError> {
+    let matches: Vec<&InstalledApp> = installed
         .iter()
-        .map(|entry| (entry.id.clone(), 0usize))
+        .filter(|installed| installed.manifest.app.id == app.as_str())
         .collect();
+    match matches.as_slice() {
+        [] => Err(ResolutionError::NotInstalled {
+            app: app.to_string(),
+            malformed: None,
+        }),
+        [one] => Ok(one),
+        _ => Err(ResolutionError::DuplicateInstalled {
+            app: app.to_string(),
+        }),
+    }
+}
+
+/// Topological order of the closure: providers before consumers.
+fn order(
+    imports: &BTreeMap<AppId, Vec<InterfaceId>>,
+    exporters: &BTreeMap<InterfaceId, AppId>,
+) -> Result<Vec<AppId>, ResolutionError> {
+    let mut indegree: BTreeMap<AppId, usize> =
+        imports.keys().map(|id| (id.clone(), 0usize)).collect();
     let mut consumers: BTreeMap<AppId, BTreeSet<AppId>> = BTreeMap::new();
-    for entry in entries {
+    for (id, reachable) in imports {
         let mut providers: BTreeSet<AppId> = BTreeSet::new();
-        for import in &entry.imports {
-            if let Some(&index) = exporters.get(import) {
-                providers.insert(entries[index].id.clone());
+        for import in reachable {
+            if let Some(provider) = exporters.get(import) {
+                providers.insert(provider.clone());
             }
         }
         for provider in providers {
-            consumers
-                .entry(provider)
-                .or_default()
-                .insert(entry.id.clone());
-            *indegree
-                .get_mut(&entry.id)
-                .expect("every installed app has an indegree") += 1;
+            consumers.entry(provider).or_default().insert(id.clone());
+            *indegree.get_mut(id).expect("every app has an indegree") += 1;
         }
     }
 
@@ -168,7 +178,7 @@ fn order(
         .filter(|(_, degree)| **degree == 0)
         .map(|(app, _)| app.clone())
         .collect();
-    let mut ordered = Vec::with_capacity(entries.len());
+    let mut ordered = Vec::with_capacity(imports.len());
     while let Some(app) = ready.pop_first() {
         ordered.push(app.clone());
         if let Some(next) = consumers.get(&app) {
@@ -183,8 +193,8 @@ fn order(
             }
         }
     }
-    if ordered.len() != entries.len() {
-        let all: BTreeSet<AppId> = entries.iter().map(|entry| entry.id.clone()).collect();
+    if ordered.len() != imports.len() {
+        let all: BTreeSet<AppId> = imports.keys().cloned().collect();
         return Err(ResolutionError::Cycle {
             apps: cycle_members(&consumers, &all, &ordered),
         });
@@ -192,36 +202,10 @@ fn order(
     Ok(ordered)
 }
 
-fn risk_in_order(
-    entries: &[Entry],
-    order: &[AppId],
-    exporters: &BTreeMap<InterfaceId, usize>,
-) -> BTreeMap<AppId, Risk> {
-    let mut risk: BTreeMap<AppId, Risk> = BTreeMap::new();
-    for id in order {
-        let entry = entries
-            .iter()
-            .find(|entry| &entry.id == id)
-            .expect("the order only names indexed apps");
-        let mut level = Risk::Read;
-        for import in &entry.imports {
-            let reached = match exporters.get(import) {
-                Some(&index) => *risk
-                    .get(&entries[index].id)
-                    .expect("providers are ordered before their consumers"),
-                None => catalog::risk_of(import).expect("an unprovided import is native"),
-            };
-            level = level.max(reached);
-        }
-        risk.insert(id.clone(), level);
-    }
-    risk
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anth_contract::{Manifest, GRANT_VERSION};
+    use anth_contract::Manifest;
 
     fn manifest(id: &str, namespace: &str, exports: &[&str], imports: &[&str]) -> Manifest {
         let mut text = format!(
@@ -241,6 +225,14 @@ mod tests {
         let manifest = Manifest::parse(&text).expect("manifest parses");
         manifest.validate().expect("manifest validates");
         manifest
+    }
+
+    fn broken_manifest(id: &str) -> Manifest {
+        // Parses, but does not validate: the version is not semver.
+        Manifest::parse(&format!(
+            "manifest_version = 2\n\n[app]\nid = \"{id}\"\nnamespace = \"example:broken\"\nname = \"Broken\"\nversion = \"nope\"\n"
+        ))
+        .expect("parse")
     }
 
     fn installed(manifest: Manifest) -> InstalledApp {
@@ -284,10 +276,10 @@ mod tests {
 
     #[test]
     fn risk_travels_through_installed_providers() {
-        let risk = installed_risk(&chain()).expect("risk");
-        assert_eq!(risk[&app(PROVIDER)], Risk::Write);
+        let apps = chain();
+        assert_eq!(app_risk(&app(PROVIDER), &apps).expect("risk"), Risk::Write);
         assert_eq!(
-            risk[&app(CONSUMER)],
+            app_risk(&app(CONSUMER), &apps).expect("risk"),
             Risk::Write,
             "the consumer reaches the store through the provider"
         );
@@ -298,37 +290,54 @@ mod tests {
         // Nothing is approved or enabled; the installed graph still decides.
         let mut apps = chain();
         apps[0].enabled = false;
-        let risk = installed_risk(&apps).expect("risk");
-        assert_eq!(risk[&app(CONSUMER)], Risk::Write);
+        assert_eq!(app_risk(&app(CONSUMER), &apps).expect("risk"), Risk::Write);
+    }
+
+    #[test]
+    fn an_unrelated_broken_app_is_ignored() {
+        let mut apps = chain();
+        apps.push(installed(broken_manifest("org.example.broken")));
+        assert_eq!(
+            app_risk(&app(CONSUMER), &apps).expect("risk"),
+            Risk::Write,
+            "only the approved app's closure is inspected"
+        );
     }
 
     #[test]
     fn an_unresolved_import_is_fatal() {
-        let error = installed_risk(&[installed(manifest(
-            CONSUMER,
-            "example:consumer",
-            &[],
-            &["example:other/x@1.0.0"],
-        ))])
+        let error = app_risk(
+            &app(CONSUMER),
+            &[installed(manifest(
+                CONSUMER,
+                "example:consumer",
+                &[],
+                &["example:other/x@1.0.0"],
+            ))],
+        )
         .expect_err("unresolved");
         assert!(matches!(error, ResolutionError::UnresolvedImport { .. }));
     }
 
     #[test]
     fn two_exporters_are_fatal() {
-        let first = installed(manifest(
-            "org.example.one",
-            "example:shared",
-            &["example:shared/x@1.0.0"],
-            &[],
-        ));
-        let second = installed(manifest(
-            "org.example.two",
-            "example:shared",
-            &["example:shared/x@1.0.0"],
-            &[],
-        ));
-        let error = installed_risk(&[first, second]).expect_err("duplicate");
+        let shared = "example:shared/x@1.0.0";
+        let apps = vec![
+            installed(manifest(
+                "org.example.one",
+                "example:shared",
+                &[shared],
+                &[],
+            )),
+            installed(manifest(
+                "org.example.two",
+                "example:shared",
+                &[shared],
+                &[],
+            )),
+            installed(manifest(CONSUMER, "example:consumer", &[], &[shared])),
+        ];
+        let error = app_risk(&app(CONSUMER), &apps).expect_err("duplicate");
         assert!(matches!(error, ResolutionError::DuplicateExport { .. }));
     }
 
@@ -338,9 +347,11 @@ mod tests {
         let b = "org.example.b";
         let a_interface = "example:a/x@1.0.0";
         let b_interface = "example:b/y@1.0.0";
-        let a_app = installed(manifest(a, "example:a", &[a_interface], &[b_interface]));
-        let b_app = installed(manifest(b, "example:b", &[b_interface], &[a_interface]));
-        let error = installed_risk(&[a_app, b_app]).expect_err("cycle");
+        let apps = vec![
+            installed(manifest(a, "example:a", &[a_interface], &[b_interface])),
+            installed(manifest(b, "example:b", &[b_interface], &[a_interface])),
+        ];
+        let error = app_risk(&app(a), &apps).expect_err("cycle");
         assert_eq!(
             error,
             ResolutionError::Cycle {
