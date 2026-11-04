@@ -144,8 +144,11 @@ async fn run(args: Args) -> Result<(), Error> {
 
     // SAFETY: `geteuid` has no preconditions.
     let allowed_uid = unsafe { libc::geteuid() };
-    let state =
-        std::sync::Arc::new(anth_api::EngineState::new(allowed_uid).with_composition(composition));
+    let state = std::sync::Arc::new(
+        anth_api::EngineState::new(allowed_uid)
+            .with_composition(composition)
+            .with_apps(&config.state),
+    );
     let public = anth_api::public_router();
     let (stop, stopped) = watch::channel(false);
     tokio::spawn(async move {

@@ -9,8 +9,10 @@
 
 use std::sync::Arc;
 
-use anth_contract::{Composition, Error};
-use axum::extract::{connect_info::Connected, ConnectInfo, Request, State};
+use anth_compose::grant::GrantStore;
+use anth_compose::registry::{Installed, Registry};
+use anth_contract::{AppId, AppView, Composition, Error};
+use axum::extract::{connect_info::Connected, ConnectInfo, Path, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -18,6 +20,13 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use tokio::net::UnixListener;
+
+/// The installed apps and their grants, when this router serves them.
+#[derive(Debug, Clone)]
+pub struct Apps {
+    pub registry: Registry,
+    pub grants: GrantStore,
+}
 
 /// What the router needs from the engine.
 #[derive(Debug, Clone)]
@@ -28,6 +37,8 @@ pub struct EngineState {
     pub allowed_uid: u32,
     /// What is composed. Empty until the operator adds an app.
     pub composition: Arc<Composition>,
+    /// The installed apps, when the daemon could open the state tree.
+    pub apps: Option<Arc<Apps>>,
 }
 
 impl EngineState {
@@ -37,12 +48,22 @@ impl EngineState {
             protocol: 1,
             allowed_uid,
             composition: Arc::new(Composition::empty()),
+            apps: None,
         }
     }
 
     /// What the daemon loaded from the composition file.
     pub fn with_composition(mut self, composition: Composition) -> Self {
         self.composition = Arc::new(composition);
+        self
+    }
+
+    /// The state tree the registry and the grant store read.
+    pub fn with_apps(mut self, state: &std::path::Path) -> Self {
+        self.apps = Some(Arc::new(Apps {
+            registry: Registry::new(state),
+            grants: GrantStore::new(state),
+        }));
         self
     }
 }
@@ -76,6 +97,8 @@ pub fn router(state: Arc<EngineState>) -> Router {
         .route("/health", get(readiness))
         .route("/engine/version", get(version))
         .route("/engine/composition", get(composition))
+        .route("/engine/apps", get(list_apps))
+        .route("/engine/apps/{id}", get(get_app))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
     Router::new()
@@ -117,6 +140,57 @@ async fn composition(State(state): State<Arc<EngineState>>) -> Json<Value> {
         "composition": state.composition.as_ref(),
         "surface": { "apps": [] },
     }))
+}
+
+/// The installed catalogue. The grant is only on the detail endpoint; the list
+/// stays small.
+async fn list_apps(State(state): State<Arc<EngineState>>) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let mut views = Vec::new();
+    for installed in apps.registry.list()? {
+        views.push(app_view(apps, &installed, false)?);
+    }
+    Ok(Json(json!({ "apps": views })))
+}
+
+/// One app: descriptor, effective alias and its frozen grant.
+async fn get_app(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+) -> Result<Json<AppView>, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    let installed = apps
+        .registry
+        .get(&id)?
+        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+    Ok(Json(app_view(apps, &installed, true)?))
+}
+
+fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
+    state
+        .apps
+        .as_deref()
+        .ok_or_else(|| ApiError(Error::unavailable("this router does not serve apps")))
+}
+
+fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppView, Error> {
+    let id = AppId::parse(&installed.manifest.app.id)?;
+    let grant = if with_grant {
+        apps.grants.load(&id)?
+    } else {
+        None
+    };
+    Ok(AppView {
+        id,
+        version: installed.manifest.app.version.clone(),
+        enabled: installed.descriptor.enabled,
+        alias: installed.alias().map(str::to_string),
+        signer: installed.descriptor.signer.clone(),
+        tier: installed.descriptor.tier,
+        installed_at: installed.descriptor.installed_at.clone(),
+        grant,
+    })
 }
 
 /// Every `/api` route needs a peer credential from the service user or root.
@@ -199,6 +273,97 @@ mod tests {
             .await
             .expect("response")
             .status()
+    }
+
+    fn apps_state() -> (Arc<EngineState>, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join("anthracite-panel").join(format!(
+            "anth-api-apps-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let app = dir.join("apps/org.example.notes");
+        std::fs::create_dir_all(&app).expect("mkdir");
+        for path in [&dir, &dir.join("apps"), &app] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        }
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n";
+        let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
+        for (name, text) in [("manifest.toml", manifest), ("descriptor.toml", descriptor)] {
+            let path = app.join(name);
+            std::fs::write(&path, text).expect("write");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        (Arc::new(EngineState::new(1000).with_apps(&dir)), dir)
+    }
+
+    async fn json(state: Arc<EngineState>, uri: &str) -> (StatusCode, Value) {
+        let response = router(state)
+            .oneshot(request(uri, Some(1000)))
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn the_app_catalogue_lists_installed_apps() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["apps"][0]["id"], "org.example.notes");
+        assert_eq!(value["apps"][0]["alias"], "notes");
+        assert_eq!(value["apps"][0]["tier"], "third-party");
+        assert!(
+            value["apps"][0].get("grant").is_none(),
+            "the list carries no grant"
+        );
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_app_detail_carries_its_descriptor() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["enabled"], true);
+        assert!(
+            value.get("grant").is_none(),
+            "no grant was approved for this app"
+        );
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_missing_app_is_not_found() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps/org.example.missing").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], "not-found");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_app_id_is_refused() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps/not-an-id").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], "invalid");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_router_without_apps_is_unavailable() {
+        let (status, value) = json(state(), "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(value["error"]["code"], "unavailable");
     }
 
     #[tokio::test]
