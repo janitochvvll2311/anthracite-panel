@@ -130,6 +130,16 @@ impl Registry {
             tier: Tier::ThirdParty,
             installed_at: now(),
         };
+        // The new manifest may change the fallback alias (its `[app] alias`),
+        // and the operator alias may be absent.
+        let effective = descriptor.alias.as_deref().or_else(|| manifest.cli_name());
+        let operator = descriptor.alias.is_some();
+        if let Some(other) = self.alias_conflict(app, effective, operator)? {
+            return Err(Error::conflict(format!(
+                "`{}` is already the CLI alias of `{other}`",
+                effective.unwrap_or_default()
+            )));
+        }
         write_staged_descriptor(staged.root(), &descriptor)?;
         let staged_root = staged.into_root();
         // RENAME_EXCHANGE swaps the two trees in one step: the app is never
@@ -324,12 +334,23 @@ impl Registry {
     /// Packages of the installed apps, skipping any tree that cannot be read.
     ///
     /// One corrupt install must not stop the operator from installing or
-    /// replacing something else; `list` is where corruption is reported.
+    /// replacing something else; `list` is where corruption is reported. Only
+    /// the manifest matters here, so a missing descriptor does not hide a
+    /// provider.
     fn known_packages(&self) -> Vec<String> {
-        self.readable()
-            .into_iter()
-            .map(|installed| installed.manifest.app.namespace)
-            .collect()
+        let mut packages = Vec::new();
+        let Ok(entries) = fs::read_dir(&self.apps) else {
+            return packages;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if let Ok(manifest) = read_manifest(&entry.path()) {
+                packages.push(manifest.app.namespace);
+            }
+        }
+        packages
     }
 
     /// The installed apps that can be read, skipping a corrupt tree.
@@ -1097,6 +1118,44 @@ mod tests {
             .set_alias(&notes, None)
             .expect_err("fallback shadowed");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn replace_checks_the_new_manifest_alias() {
+        let state = scratch("replace-alias");
+        let registry = Registry::new(&state);
+        let notes = AppId::parse("org.example.notes").unwrap();
+        registry
+            .install(
+                &plain_bundle("org.example.notes", "example:notesalias", None),
+                &options(),
+            )
+            .expect("install notes");
+        registry
+            .install(&other_bundle(), &options())
+            .expect("install other");
+        registry
+            .set_alias(
+                &AppId::parse("org.example.other").unwrap(),
+                Some("custom".to_string()),
+            )
+            .expect("alias");
+        // The replacement's manifest alias becomes the app's fallback, and it
+        // collides with `other`'s operator alias.
+        let error = registry
+            .replace(
+                &notes,
+                &plain_bundle("org.example.notes", "example:notesalias", Some("custom")),
+                &options(),
+            )
+            .expect_err("alias");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        assert_eq!(
+            registry.get(&notes).unwrap().unwrap().manifest.app.version,
+            "0.1.0",
+            "the original stays installed"
+        );
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
