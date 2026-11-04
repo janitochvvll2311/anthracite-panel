@@ -338,9 +338,10 @@ generic HTTP client holding an operator's credentials.
 
 **Invocation.** `anth app <alias> <verb>`:
 
-- `alias` comes from `[app] alias`, falling back to the last segment of the id. If
-  two composed apps collide on that fallback and neither declares an alias, the CLI
-  requires the full id instead of guessing.
+- `alias` comes from the descriptor's **operator alias**, then `[app] alias`,
+  falling back to the last segment of the id. An operator alias may not collide
+  with another installed app's effective alias; two fallbacks may collide, and
+  then the CLI requires the full id instead of guessing.
 - `verb` is one token, unique within the app.
 - `list`, `show`, `install`, `upgrade`, `remove`, `approve`, `revoke`, `enable` and
   `disable` are reserved: an **alias** may not use them, because `anth app list`
