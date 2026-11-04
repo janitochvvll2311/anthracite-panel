@@ -28,6 +28,7 @@ dependencies = [
  "anth-contract",
  "base64",
  "ed25519-dalek",
+ "libc",
  "sha2",
  "wit-parser",
  "zip",
