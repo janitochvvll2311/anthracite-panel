@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::id::{is_kebab, is_sha256, parse_version, AppId, InterfaceId};
+use crate::id::{is_kebab, is_sha256, parse_version, AppId, InterfaceId, Namespace};
 
 /// The manifest schema this version speaks.
 pub const MANIFEST_VERSION: u32 = 2;
@@ -187,10 +187,22 @@ impl Manifest {
                 self.app.namespace
             )));
         }
+        if Namespace::of(ns) == Namespace::Engine {
+            return Err(Error::invalid(format!(
+                "`{}` uses the engine's `anth` namespace; an app owns its own",
+                self.app.namespace
+            )));
+        }
 
         let mut exports = Vec::with_capacity(self.export.len());
         for export in &self.export {
             let id = InterfaceId::parse(&export.interface)?;
+            if id.namespace_kind() == Namespace::Engine {
+                return Err(Error::invalid(format!(
+                    "`{}` is part of the native set; an app cannot export it",
+                    export.interface
+                )));
+            }
             if id.package_id() != self.app.namespace {
                 return Err(Error::invalid(format!(
                     "`{}` is exported but does not live under `{}`",
@@ -483,6 +495,27 @@ wall-ms = 5000
         manifest.export[0].interface = "other:notes/list@1.0.0".to_string();
         let error = manifest.validate().expect_err("namespace");
         assert!(error.message().contains("does not live under"), "{error}");
+    }
+
+    #[test]
+    fn an_app_cannot_export_a_native_interface() {
+        let mut manifest = valid();
+        manifest.export[0].interface = "anth:env/info@1.0.0".to_string();
+        manifest.route.clear();
+        manifest.cli.clear();
+        let error = manifest.validate().expect_err("native export");
+        assert!(error.message().contains("native set"), "{error}");
+    }
+
+    #[test]
+    fn an_app_cannot_use_the_engine_namespace() {
+        let mut manifest = valid();
+        manifest.app.namespace = "anth:tools".to_string();
+        manifest.export[0].interface = "anth:tools/list@1.0.0".to_string();
+        manifest.route[0].call = "anth:tools/list@1.0.0#all".to_string();
+        manifest.cli[0].call = "anth:tools/list@1.0.0#all".to_string();
+        let error = manifest.validate().expect_err("namespace");
+        assert!(error.message().contains("owns its own"), "{error}");
     }
 
     #[test]

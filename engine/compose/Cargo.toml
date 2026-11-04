@@ -1,0 +1,9 @@
+[package]
+name = "anth-compose"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The composer: composition plus installed manifests, resolved into what runs"
+
+[dependencies]
+anth-contract = { path = "../contract", features = ["parse"] }

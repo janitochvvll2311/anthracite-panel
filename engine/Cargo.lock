@@ -16,6 +16,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-compose"
+version = "0.5.0"
+dependencies = [
+ "anth-contract",
+]
+
+[[package]]
 name = "anth-contract"
 version = "0.5.0"
 dependencies = [
