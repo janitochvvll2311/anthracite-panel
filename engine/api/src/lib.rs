@@ -2126,6 +2126,55 @@ mod tests {
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn two_replacements_with_one_validator_let_only_one_win() {
+        let (state, dir) = apps_state();
+        let (status, headers, _) =
+            call(state.clone(), "GET", "/api/engine/composition", Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        let etag = headers
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("etag")
+            .to_string();
+        let notes = br#"{"version":1,"profile":[{"id":"default","apps":["org.example.notes"]}]}"#;
+        let empty = br#"{"version":1,"profile":[{"id":"default","apps":[]}]}"#;
+        let send = move |etag: String, state: Arc<EngineState>, body: Vec<u8>| async move {
+            let mut request = Request::builder()
+                .method("PUT")
+                .uri("/api/engine/composition")
+                .header("content-type", "application/json")
+                .header("if-match", etag)
+                .body(Body::from(body))
+                .expect("request");
+            request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+            router(state)
+                .oneshot(request)
+                .await
+                .expect("response")
+                .status()
+        };
+        let (first, second) = tokio::join!(
+            send(etag.clone(), state.clone(), notes.to_vec()),
+            send(etag, state.clone(), empty.to_vec())
+        );
+        assert!(
+            matches!(
+                (first, second),
+                (StatusCode::OK, StatusCode::PRECONDITION_FAILED)
+                    | (StatusCode::PRECONDITION_FAILED, StatusCode::OK)
+            ),
+            "{first} and {second}"
+        );
+        let (status, value) = json(state, "/api/engine/composition").await;
+        assert_eq!(status, StatusCode::OK);
+        let apps = value["composition"]["profile"][0]["apps"]
+            .as_array()
+            .expect("apps");
+        assert!(apps.is_empty() || apps[0] == "org.example.notes");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
     #[test]
     fn the_if_match_header_is_parsed_with_strong_comparison() {
         use axum::http::header::HeaderValue;

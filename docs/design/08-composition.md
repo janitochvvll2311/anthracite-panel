@@ -106,9 +106,9 @@ boot would lock the operator out of the tool that repairs the system.
 The three fatal cases share a property: **the composition file is the error
 message**. They are fixed by editing a TOML or installing an app; a running
 engine still serves the fatal document in `surface.fatal` (§8.7) so `anth
-compose` can repair it, while a boot that would resolve it refuses. The blocked
-case is the opposite: approving an app or enabling it is an engine operation, so
-the engine has to boot to be fixable.
+compose` can repair it, while the boot refuses to start when its resolution is
+fatal. The blocked case is the opposite: approving an app or enabling it is an
+engine operation, so the engine has to boot to be fixable.
 
 "A degraded app" means it is not running: there is no instance that could answer,
 and its consumers receive `unavailable`. `anth status` names the app and the
