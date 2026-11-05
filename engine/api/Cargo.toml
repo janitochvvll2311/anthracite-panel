@@ -8,11 +8,16 @@ description = "The engine's HTTP surface"
 [dependencies]
 anth-compose = { path = "../compose" }
 anth-contract = { path = "../contract" }
+http-body = "1"
+http-body-util = "0.1"
 tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+futures-util = "0.3"
 libc = "0.2"
+sha2 = "0.10"
 tower = { workspace = true }
+zip = { version = "2.6", default-features = false, features = ["deflate"] }

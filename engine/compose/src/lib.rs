@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+pub mod audit;
 pub mod bundle;
 pub mod grant;
 pub mod keys;

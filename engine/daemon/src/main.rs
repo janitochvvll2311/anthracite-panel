@@ -147,7 +147,11 @@ async fn run(args: Args) -> Result<(), Error> {
     let state = std::sync::Arc::new(
         anth_api::EngineState::new(allowed_uid)
             .with_composition(composition)
-            .with_apps(&config.state),
+            .with_apps(
+                &config.state,
+                config.apps.max_bundle_bytes,
+                config.apps.require_signature,
+            ),
     );
     let public = anth_api::public_router();
     let (stop, stopped) = watch::channel(false);
