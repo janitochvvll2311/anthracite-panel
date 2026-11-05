@@ -68,6 +68,15 @@ pub struct ApprovalMaterial {
     pub signature: Option<String>,
 }
 
+impl ApprovalMaterial {
+    /// Whether a grant froze exactly these bytes.
+    pub fn matches(&self, grant: &Grant) -> bool {
+        grant.manifest_sha256 == self.manifest_sha256
+            && grant.wit_sha256 == self.wit_sha256
+            && grant.signature == self.signature
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Registry {
     apps: PathBuf,
@@ -340,10 +349,22 @@ impl Registry {
         wit.sort_by(|a, b| a.0.cmp(&b.0));
         let wit_sha256 =
             crate::signature::sha256_hex(&anth_contract::signature::wit_message(&wit)?);
-        let signature = fs::read_to_string(dir.join("manifest.sig"))
-            .ok()
-            .map(|text| text.trim().to_string())
-            .filter(|text| !text.is_empty());
+        let signature = match fs::read(dir.join("manifest.sig")) {
+            Ok(bytes) => Some(
+                String::from_utf8(bytes)
+                    .map_err(|error| Error::invalid(format!("manifest.sig is not UTF-8: {error}")))?
+                    .trim()
+                    .to_string(),
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(Error::internal(format!(
+                    "reading {}: {error}",
+                    dir.join("manifest.sig").display()
+                )));
+            }
+        }
+        .filter(|text| !text.is_empty());
         Ok(Some(ApprovalMaterial {
             manifest_sha256: crate::signature::sha256_hex(&manifest),
             wit_sha256,

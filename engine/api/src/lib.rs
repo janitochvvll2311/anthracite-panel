@@ -427,7 +427,7 @@ async fn approve_app(
     Path(id): Path<String>,
     Extension(actor): Extension<Actor>,
     Json(body): Json<GrantBody>,
-) -> Result<Json<AppView>, ApiError> {
+) -> Result<Response, ApiError> {
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
@@ -474,7 +474,13 @@ async fn approve_app(
         Outcome::Ok,
         Some(json!({"risk": grant.risk, "accepted": grant.accepted})),
     )?;
-    Ok(Json(app_view(apps, &installed, true)?))
+    let view = app_view(apps, &installed, true)?;
+    Ok((
+        StatusCode::CREATED,
+        [(LOCATION, format!("/api/engine/apps/{id}/grant"))],
+        Json(view),
+    )
+        .into_response())
 }
 
 /// Revokes the grant. Apps that import what this app exports need
@@ -488,6 +494,9 @@ async fn revoke_grant(
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
+    if !apps.grants.contains(&id)? {
+        return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
+    }
     require_ack(apps, &actor, &id, "app.revoke", &headers)?;
     if !apps.grants.remove(&id)? {
         return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
@@ -506,11 +515,15 @@ async fn revoke_grant(
 /// The installed set in the shape `approve` expects.
 fn installed_apps(apps: &Apps) -> Result<Vec<InstalledApp>, Error> {
     let mut installed = Vec::new();
-    for app in apps.registry.list()? {
+    // A corrupt tree or an unreadable grant elsewhere must not block approving
+    // this app: the catalogue skips what it cannot read and an invalid grant is
+    // treated as "not approved".
+    let (apps_list, _) = apps.registry.catalogue()?;
+    for app in apps_list {
         let id = AppId::parse(&app.manifest.app.id)?;
         installed.push(InstalledApp {
             manifest: app.manifest,
-            grant: apps.grants.load(&id)?,
+            grant: apps.grants.load(&id).unwrap_or(None),
             enabled: app.descriptor.enabled,
         });
     }
@@ -545,7 +558,7 @@ fn require_ack(
             Error::conflict(format!("`{id}` is required by {}", names.join(", "))).with_detail(
                 json!({
                     "dependents": names,
-                    "acknowledge": "dependents",
+                    "acknowledge": ["dependents"],
                 }),
             ),
         ));
@@ -683,7 +696,12 @@ fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppV
     let id = AppId::parse(&installed.manifest.app.id)?;
     let (grant, grant_state, grant_problem) = match apps.grants.load(&id) {
         Ok(Some(grant)) => {
-            let state = if installed.grant_matches(&grant) {
+            let material = apps.registry.approval_material(&id).ok().flatten();
+            let current = installed.grant_matches(&grant)
+                && material
+                    .as_ref()
+                    .is_some_and(|material| material.matches(&grant));
+            let state = if current {
                 GrantState::Current
             } else {
                 GrantState::Stale
@@ -845,20 +863,28 @@ mod tests {
     }
 
     fn write_grant(dir: &std::path::Path, text: &str) {
+        write_grant_for(dir, "org.example.notes", text);
+    }
+
+    fn write_grant_for(dir: &std::path::Path, app: &str, text: &str) {
         use std::os::unix::fs::PermissionsExt;
         let grants = dir.join("grants");
         std::fs::create_dir_all(&grants).expect("grants");
         std::fs::set_permissions(&grants, std::fs::Permissions::from_mode(0o700)).expect("chmod");
-        let path = grants.join("org.example.notes.toml");
+        let path = grants.join(format!("{app}.toml"));
         std::fs::write(&path, text).expect("write");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
     }
 
-    fn grant_toml(app_version: &str) -> String {
+    fn grant_toml(dir: &std::path::Path) -> String {
+        let app = AppId::parse("org.example.notes").expect("id");
+        let material = Registry::new(dir)
+            .approval_material(&app)
+            .expect("material")
+            .expect("installed");
         format!(
-            "version = 1\napp = \"org.example.notes\"\napp_version = \"{app_version}\"\nmanifest_sha256 = \"{}\"\nwit_sha256 = \"{}\"\nrisk = \"read\"\napproved_by = \"operator-3f2a\"\napproved_at = \"2026-11-03T20:00:00Z\"\nexport = [\"example:notes/thing@1.0.0\"]\n",
-            "a".repeat(64),
-            "b".repeat(64)
+            "version = 1\napp = \"org.example.notes\"\napp_version = \"0.1.0\"\nmanifest_sha256 = \"{}\"\nwit_sha256 = \"{}\"\nrisk = \"read\"\napproved_by = \"operator-3f2a\"\napproved_at = \"2026-11-03T20:00:00Z\"\nexport = [\"example:notes/thing@1.0.0\"]\n",
+            material.manifest_sha256, material.wit_sha256
         )
     }
 
@@ -987,7 +1013,7 @@ mod tests {
     #[tokio::test]
     async fn the_detail_shows_a_current_grant() {
         let (state, dir) = apps_state();
-        write_grant(&dir, &grant_toml("0.1.0"));
+        write_grant(&dir, &grant_toml(&dir));
         let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["grant_state"], "current");
@@ -999,7 +1025,8 @@ mod tests {
     #[tokio::test]
     async fn a_stale_grant_is_marked() {
         let (state, dir) = apps_state();
-        write_grant(&dir, &grant_toml("9.9.9"));
+        let text = grant_toml(&dir).replace("app_version = \"0.1.0\"", "app_version = \"9.9.9\"");
+        write_grant(&dir, &text);
         let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["grant_state"], "stale");
@@ -1027,7 +1054,7 @@ mod tests {
     #[tokio::test]
     async fn the_catalogue_states_each_grant_without_sending_it() {
         let (state, dir) = apps_state();
-        write_grant(&dir, &grant_toml("0.1.0"));
+        write_grant(&dir, &grant_toml(&dir));
         let (status, value) = json(state, "/api/engine/apps").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["apps"][0]["grant_state"], "current");
@@ -1315,7 +1342,7 @@ mod tests {
     #[tokio::test]
     async fn remove_deletes_the_app_and_the_grant() {
         let (state, dir) = apps_state();
-        write_grant(&dir, &grant_toml("0.1.0"));
+        write_grant(&dir, &grant_toml(&dir));
         let app = AppId::parse("org.example.notes").unwrap();
         let (status, _, _) = call(
             state,
@@ -1335,7 +1362,7 @@ mod tests {
     #[tokio::test]
     async fn replace_swaps_the_bundle_and_revokes_the_grant() {
         let (state, dir) = apps_state();
-        write_grant(&dir, &grant_toml("0.1.0"));
+        write_grant(&dir, &grant_toml(&dir));
         let app = AppId::parse("org.example.notes").unwrap();
         let bundle = bundle(
             "org.example.notes",
@@ -1409,7 +1436,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_replace_does_not_resurrect_the_grant() {
         let (state, dir) = apps_state();
-        write_grant(&dir, &grant_toml("0.1.0"));
+        write_grant(&dir, &grant_toml(&dir));
         let app = AppId::parse("org.example.notes").unwrap();
         let (status, _, _) = call(
             state,
@@ -1482,7 +1509,7 @@ mod tests {
             br#"{"accept":[]}"#.to_vec(),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::CREATED);
         assert_eq!(value["grant_state"], "current");
         assert_eq!(value["grant"]["risk"], "read");
         let entries = AuditLog::new(&dir).entries().expect("audit");
@@ -1500,7 +1527,7 @@ mod tests {
             br#"{"accept":[]}"#.to_vec(),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::CREATED);
         let (status, _, _) = call(
             state,
             "DELETE",
@@ -1525,7 +1552,7 @@ mod tests {
             br#"{"accept":[]}"#.to_vec(),
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::CREATED);
         let (status, _, value) = call(
             state.clone(),
             "DELETE",
@@ -1539,7 +1566,7 @@ mod tests {
             value["error"]["detail"]["dependents"][0],
             "org.example.consumer"
         );
-        assert_eq!(value["error"]["detail"]["acknowledge"], "dependents");
+        assert_eq!(value["error"]["detail"]["acknowledge"][0], "dependents");
         let (status, _, _) = call_with(
             state,
             "DELETE",
@@ -1571,7 +1598,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(value["error"]["detail"]["acknowledge"], "dependents");
+        assert_eq!(value["error"]["detail"]["acknowledge"][0], "dependents");
         let (status, _, value) = call_with(
             state,
             "PATCH",
@@ -1582,6 +1609,62 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["enabled"], false);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_grant_with_another_wit_hash_is_stale() {
+        let (state, dir) = apps_state();
+        let app = AppId::parse("org.example.notes").unwrap();
+        let material = Registry::new(&dir)
+            .approval_material(&app)
+            .expect("material")
+            .expect("installed");
+        let text = grant_toml(&dir).replace(&material.wit_sha256, &"0".repeat(64));
+        write_grant(&dir, &text);
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "stale");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_other_grant_does_not_block_approval() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = apps_state();
+        add_dependent(&dir);
+        write_grant_for(&dir, "org.example.consumer", "not a grant");
+        let broken = dir.join("apps/org.example.broken");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = broken.join("manifest.toml");
+        std::fs::write(&manifest, b"not a manifest").expect("write");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (status, _, value) = call(
+            state,
+            "PUT",
+            "/api/engine/apps/org.example.notes/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(value["grant_state"], "current");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn revoking_without_a_grant_is_not_found_even_with_dependents() {
+        let (state, dir) = apps_state();
+        add_dependent(&dir);
+        let (status, _, value) = call(
+            state,
+            "DELETE",
+            "/api/engine/apps/org.example.notes/grant",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], "not-found");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 }

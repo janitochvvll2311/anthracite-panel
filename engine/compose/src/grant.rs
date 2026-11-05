@@ -65,6 +65,15 @@ impl GrantStore {
         )
     }
 
+    /// Whether a grant document exists, without parsing it: a corrupt grant can
+    /// still be revoked.
+    pub fn contains(&self, app: &AppId) -> Result<bool, Error> {
+        if !store::check_dir(&self.dir)? {
+            return Ok(false);
+        }
+        Ok(store::read(&self.path(app))?.is_some())
+    }
+
     /// Removes the grant. `false` means there was nothing to remove.
     pub fn remove(&self, app: &AppId) -> Result<bool, Error> {
         if !store::check_dir(&self.dir)? {
