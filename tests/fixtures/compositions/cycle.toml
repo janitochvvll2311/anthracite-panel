@@ -1,0 +1,5 @@
+version = 1
+
+[[profile]]
+id = "default"
+apps = ["org.example.a", "org.example.b"]

@@ -1,0 +1,32 @@
+manifest_version = 2
+
+[app]
+id = "org.example.provider"
+alias = "provider"
+namespace = "example:provider"
+name = "Provider"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[export]]
+interface = "example:provider/greeting@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/hello"
+call = "example:provider/greeting@1.0.0#greet"
+
+[[slot]]
+id = "panel.view"
+label = "Provider"
+order = 1
+tag = "provider"
+module = "web/provider.js"
+sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+[[cli]]
+call = "example:provider/greeting@1.0.0#greet"
+verb = "greet"

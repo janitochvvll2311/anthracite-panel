@@ -1,0 +1,18 @@
+manifest_version = 2
+
+[app]
+id = "org.example.b"
+alias = "b"
+namespace = "example:b"
+name = "B"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[export]]
+interface = "example:b/two@1.0.0"
+
+[[import]]
+interface = "example:a/one@1.0.0"
