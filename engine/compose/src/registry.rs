@@ -18,6 +18,7 @@ use anth_contract::{AppId, Descriptor, Error, Grant, Manifest, Tier, DESCRIPTOR_
 use crate::bundle::{self, Options, StagedBundle};
 use crate::keys::Keyring;
 use crate::store;
+use crate::ApprovalMaterial;
 
 static SWAP: AtomicU64 = AtomicU64::new(0);
 
@@ -58,23 +59,6 @@ impl Installed {
 pub struct Problem {
     pub app: String,
     pub message: String,
-}
-
-/// What a grant freezes about the installed bytes (D-Wit-Hash).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovalMaterial {
-    pub manifest_sha256: String,
-    pub wit_sha256: String,
-    pub signature: Option<String>,
-}
-
-impl ApprovalMaterial {
-    /// Whether a grant froze exactly these bytes.
-    pub fn matches(&self, grant: &Grant) -> bool {
-        grant.manifest_sha256 == self.manifest_sha256
-            && grant.wit_sha256 == self.wit_sha256
-            && grant.signature == self.signature
-    }
 }
 
 #[derive(Debug, Clone)]

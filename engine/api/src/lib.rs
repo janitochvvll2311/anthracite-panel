@@ -25,7 +25,7 @@ use axum::http::header::LOCATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, put};
+use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -143,7 +143,7 @@ pub fn router(state: Arc<EngineState>) -> Router {
         )
         .route(
             "/engine/apps/{id}/grant",
-            put(approve_app).delete(revoke_grant),
+            get(get_grant).put(approve_app).delete(revoke_grant),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
@@ -413,6 +413,19 @@ async fn patch_app(
     Ok(Json(app_view(apps, &installed, true)?))
 }
 
+/// The frozen grant, or `404` when the app has none.
+async fn get_grant(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+) -> Result<Json<GrantView>, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    match apps.grants.load(&id)? {
+        Some(grant) => Ok(Json(GrantView::from(grant))),
+        None => Err(ApiError(Error::not_found(format!("`{id}` has no grant")))),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct GrantBody {
     /// The `--accept-*` levels the operator presented.
@@ -439,6 +452,7 @@ async fn approve_app(
         .registry
         .approval_material(&id)?
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+    let existed = apps.grants.contains(&id)?;
     let installed_apps = installed_apps(apps)?;
     let grant = approve(
         &id,
@@ -475,8 +489,13 @@ async fn approve_app(
         Some(json!({"risk": grant.risk, "accepted": grant.accepted})),
     )?;
     let view = app_view(apps, &installed, true)?;
+    let status = if existed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
     Ok((
-        StatusCode::CREATED,
+        status,
         [(LOCATION, format!("/api/engine/apps/{id}/grant"))],
         Json(view),
     )
@@ -525,6 +544,7 @@ fn installed_apps(apps: &Apps) -> Result<Vec<InstalledApp>, Error> {
             manifest: app.manifest,
             grant: apps.grants.load(&id).unwrap_or(None),
             enabled: app.descriptor.enabled,
+            material: apps.registry.approval_material(&id).ok().flatten(),
         });
     }
     Ok(installed)
@@ -1663,6 +1683,57 @@ mod tests {
             Vec::new(),
         )
         .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], "not-found");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn re_approving_a_grant_is_ok() {
+        let (state, dir) = apps_state();
+        let (status, _, _) = call(
+            state.clone(),
+            "PUT",
+            "/api/engine/apps/org.example.notes/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, _, value) = call(
+            state,
+            "PUT",
+            "/api/engine/apps/org.example.notes/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "current");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_grant_has_its_own_get() {
+        let (state, dir) = apps_state();
+        let (status, _, _) = call(
+            state.clone(),
+            "PUT",
+            "/api/engine/apps/org.example.notes/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, value) = json(state.clone(), "/api/engine/apps/org.example.notes/grant").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["risk"], "read");
+        let (status, _, _) = call(
+            state.clone(),
+            "DELETE",
+            "/api/engine/apps/org.example.notes/grant",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes/grant").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(value["error"]["code"], "not-found");
         std::fs::remove_dir_all(dir).expect("cleanup");

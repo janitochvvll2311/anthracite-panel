@@ -28,6 +28,23 @@ use anth_contract::{
     parse_version, AppId, Composition, Error, Grant, InterfaceId, Manifest, Profile, Risk,
 };
 
+/// What a grant freezes about the installed bytes (D-Wit-Hash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalMaterial {
+    pub manifest_sha256: String,
+    pub wit_sha256: String,
+    pub signature: Option<String>,
+}
+
+impl ApprovalMaterial {
+    /// Whether a grant froze exactly these bytes.
+    pub fn matches(&self, grant: &Grant) -> bool {
+        grant.manifest_sha256 == self.manifest_sha256
+            && grant.wit_sha256 == self.wit_sha256
+            && grant.signature == self.signature
+    }
+}
+
 /// What the registry knows about one installed app at compose time.
 #[derive(Debug, Clone)]
 pub struct InstalledApp {
@@ -36,6 +53,9 @@ pub struct InstalledApp {
     pub grant: Option<Grant>,
     /// The operator enabled the app.
     pub enabled: bool,
+    /// The hashes and signature of the installed bytes, when they are known. A
+    /// grant is only current if they match it.
+    pub material: Option<ApprovalMaterial>,
 }
 
 /// The result of a successful resolution.
@@ -328,7 +348,13 @@ pub fn resolve(
             None => Approval::Unapproved,
             Some(grant) => match grant.validate() {
                 Err(_) => Approval::Invalid,
-                Ok(()) if grant_matches(&found.manifest, grant, &exports, &imports) => {
+                Ok(())
+                    if grant_matches(&found.manifest, grant, &exports, &imports)
+                        && found
+                            .material
+                            .as_ref()
+                            .is_none_or(|material| material.matches(grant)) =>
+                {
                     Approval::Granted(grant.risk)
                 }
                 Ok(()) => Approval::Stale,
@@ -752,6 +778,7 @@ mod tests {
             manifest,
             grant: Some(grant),
             enabled: true,
+            material: None,
         }
     }
 
@@ -1017,6 +1044,7 @@ mod tests {
             grant: Some(grant_for(&manifest, Risk::Read)),
             manifest,
             enabled: true,
+            material: None,
         };
         let resolution = resolve(
             &composition(&[CONSUMER, PROVIDER]),
@@ -1055,6 +1083,7 @@ mod tests {
             grant: Some(grant_for(&manifest, Risk::Read)),
             manifest,
             enabled: true,
+            material: None,
         };
         let resolution =
             resolve(&composition(&[CONSUMER, PROVIDER]), &[consumer, provider]).expect("resolve");
@@ -1080,6 +1109,7 @@ mod tests {
             grant: Some(grant_for(&manifest, Risk::Write)),
             manifest,
             enabled: true,
+            material: None,
         };
         let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("resolve");
         assert_eq!(resolution.order, [app(PROVIDER)]);
@@ -1103,6 +1133,21 @@ mod tests {
         let mut provider = provider();
         provider.grant.as_mut().expect("grant").export =
             vec![interface("example:provider/other@1.0.0")];
+        let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("resolve");
+        assert_eq!(
+            resolution.degraded[&app(PROVIDER)].reason,
+            DegradedReason::GrantStale
+        );
+    }
+
+    #[test]
+    fn a_grant_that_does_not_match_the_installed_bytes_is_stale() {
+        let mut provider = installed(manifest(PROVIDER, "example:provider", &[GREETING], &[]));
+        provider.material = Some(ApprovalMaterial {
+            manifest_sha256: "c".repeat(64),
+            wit_sha256: "d".repeat(64),
+            signature: None,
+        });
         let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("resolve");
         assert_eq!(
             resolution.degraded[&app(PROVIDER)].reason,
@@ -1172,6 +1217,7 @@ mod tests {
             .expect("parse"),
             grant: None,
             enabled: true,
+            material: None,
         };
         let resolution = resolve(&composition(&[PROVIDER]), &[broken, provider()])
             .expect("the composed app still resolves");
@@ -1189,6 +1235,7 @@ mod tests {
             .expect("parse"),
             grant: None,
             enabled: true,
+            material: None,
         };
         let error = resolve(&composition(&[PROVIDER]), &[broken]).expect_err("missing");
         assert!(
