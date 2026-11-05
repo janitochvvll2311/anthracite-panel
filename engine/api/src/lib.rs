@@ -18,9 +18,7 @@ use anth_contract::{
     GrantView, Outcome,
 };
 use axum::body::Bytes;
-use axum::extract::{
-    connect_info::Connected, ConnectInfo, DefaultBodyLimit, Extension, Path, Request, State,
-};
+use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
 use axum::http::header::LOCATION;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -129,13 +127,6 @@ impl Connected<axum::serve::IncomingStream<'_, UnixListener>> for PeerUid {
 
 /// The full surface, for the Unix socket.
 pub fn router(state: Arc<EngineState>) -> Router {
-    // The install body is capped at the configured bundle size; axum's default
-    // is 2 MiB and would reject a legitimate bundle.
-    let max_body = state
-        .apps
-        .as_ref()
-        .map(|apps| apps.max_bundle_bytes as usize)
-        .unwrap_or(32 * 1024 * 1024);
     let api = Router::new()
         .route("/health", get(readiness))
         .route("/engine/version", get(version))
@@ -148,7 +139,6 @@ pub fn router(state: Arc<EngineState>) -> Router {
                 .delete(remove_app)
                 .patch(patch_app),
         )
-        .layer(DefaultBodyLimit::max(max_body))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
     Router::new()
@@ -241,15 +231,18 @@ async fn get_app(
 async fn install_app(
     State(state): State<Arc<EngineState>>,
     Extension(actor): Extension<Actor>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Response, ApiError> {
     let apps = apps(&state)?;
     let actor = actor.0;
+    let body = read_body(request, apps.max_bundle_bytes).await?;
     let installed = match apps.registry.install(&body, &apps.options()) {
         Ok(installed) => installed,
         Err(error) => {
-            audit_failure(apps, &actor, AuditAction::AppInstall, None, &error);
-            return Err(ApiError(error));
+            return Err(audit_or_error(
+                audit_failure(apps, &actor, AuditAction::AppInstall, None, &error),
+                error,
+            ));
         }
     };
     let id = AppId::parse(&installed.manifest.app.id)?;
@@ -273,37 +266,43 @@ async fn install_app(
         .into_response())
 }
 
-/// Replaces the bundle of an installed app. The grant stays and becomes stale
-/// until the operator re-approves.
+/// Replaces the bundle of an installed app. The grant is revoked: re-approval is
+/// required.
 async fn replace_app(
     State(state): State<Arc<EngineState>>,
     Path(id): Path<String>,
     Extension(actor): Extension<Actor>,
-    body: Bytes,
+    request: Request,
 ) -> Result<Json<AppView>, ApiError> {
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
+    let body = read_body(request, apps.max_bundle_bytes).await?;
     let installed = match apps.registry.replace(&id, &body, &apps.options()) {
         Ok(installed) => installed,
         Err(error) => {
-            audit_failure(
-                apps,
-                &actor,
-                AuditAction::AppUpgrade,
-                Some(id.as_str()),
-                &error,
-            );
-            return Err(ApiError(error));
+            return Err(audit_or_error(
+                audit_failure(
+                    apps,
+                    &actor,
+                    AuditAction::AppUpgrade,
+                    Some(id.as_str()),
+                    &error,
+                ),
+                error,
+            ));
         }
     };
+    // v0.5.0 cannot compare the authority delta, so every upgrade revokes the
+    // grant: re-approval is required (D-Upgrade-Approval).
+    apps.grants.remove(&id)?;
     audit(
         apps,
         &actor,
         AuditAction::AppUpgrade,
         Some(id.as_str()),
         Outcome::Ok,
-        Some(json!({"version": installed.manifest.app.version})),
+        Some(json!({"version": installed.manifest.app.version, "grant": "revoked"})),
     )?;
     Ok(Json(app_view(apps, &installed, true)?))
 }
@@ -317,6 +316,15 @@ async fn remove_app(
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
+    // Check first, revoke authority, then remove the content: if the last step
+    // fails, what remains is an app without a grant, never a grant without an
+    // app.
+    if apps.registry.get(&id)?.is_none() {
+        return Err(ApiError(Error::not_found(format!(
+            "`{id}` is not installed"
+        ))));
+    }
+    apps.grants.remove(&id)?;
     match apps.registry.remove(&id) {
         Ok(true) => {}
         Ok(false) => {
@@ -325,17 +333,18 @@ async fn remove_app(
             ))));
         }
         Err(error) => {
-            audit_failure(
-                apps,
-                &actor,
-                AuditAction::AppRemove,
-                Some(id.as_str()),
-                &error,
-            );
-            return Err(ApiError(error));
+            return Err(audit_or_error(
+                audit_failure(
+                    apps,
+                    &actor,
+                    AuditAction::AppRemove,
+                    Some(id.as_str()),
+                    &error,
+                ),
+                error,
+            ));
         }
     }
-    apps.grants.remove(&id)?;
     audit(
         apps,
         &actor,
@@ -351,8 +360,16 @@ async fn remove_app(
 struct PatchBody {
     #[serde(default)]
     enabled: Option<bool>,
-    #[serde(default)]
-    alias: Option<String>,
+    /// `Some(Some(alias))` sets, `Some(None)` clears, absent leaves it alone.
+    #[serde(default, deserialize_with = "present")]
+    alias: Option<Option<String>>,
+}
+
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Enables/disables the app or changes its CLI alias. Authority is untouched.
@@ -370,15 +387,8 @@ async fn patch_app(
             "nothing to change; send `enabled` or `alias`",
         )));
     }
-    let mut installed = apps
-        .registry
-        .get(&id)?
-        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
-    if let Some(alias) = body.alias {
-        installed = apps.registry.set_alias(&id, Some(alias))?;
-    }
+    let installed = apps.registry.configure(&id, body.enabled, body.alias)?;
     if let Some(enabled) = body.enabled {
-        installed = apps.registry.set_enabled(&id, enabled)?;
         let action = if enabled {
             AuditAction::AppEnable
         } else {
@@ -416,20 +426,63 @@ fn audit(
 }
 
 /// A failed action is still an entry; a denial must never be dropped.
-fn audit_failure(apps: &Apps, actor: &str, action: AuditAction, app: Option<&str>, error: &Error) {
+fn audit_failure(
+    apps: &Apps,
+    actor: &str,
+    action: AuditAction,
+    app: Option<&str>,
+    error: &Error,
+) -> Result<(), Error> {
     let result = if error.kind() == ErrorKind::Denied {
         Outcome::Denied
     } else {
         Outcome::Failed
     };
-    let _ = audit(
+    audit(
         apps,
         actor,
         action,
         app,
         result,
         Some(json!({"error": error.message()})),
-    );
+    )
+}
+
+/// The original failure wins, but an audit that could not be written is not
+/// silent: both are reported.
+fn audit_or_error(audit: Result<(), Error>, original: Error) -> ApiError {
+    match audit {
+        Ok(()) => ApiError(original),
+        Err(audit_error) => ApiError(Error::internal(format!(
+            "{}; the audit entry could not be written: {}",
+            original.message(),
+            audit_error.message()
+        ))),
+    }
+}
+
+/// The auth middleware records denials: an unauthenticated request is an entry.
+fn deny(state: &EngineState, actor: String, reason: &str) {
+    if let Some(apps) = state.apps.as_deref() {
+        let _ = apps.audit.append(&AuditEntry {
+            at: timestamp(),
+            actor,
+            action: AuditAction::Deny,
+            app: None,
+            result: Outcome::Denied,
+            detail: Some(json!({"reason": reason})),
+        });
+    }
+}
+
+async fn read_body(request: Request, limit: u64) -> Result<Bytes, ApiError> {
+    axum::body::to_bytes(request.into_body(), limit as usize)
+        .await
+        .map_err(|_| {
+            ApiError(Error::too_large(format!(
+                "the body is larger than {limit} bytes"
+            )))
+        })
 }
 
 fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
@@ -489,16 +542,26 @@ async fn require_peer(
         .get::<ConnectInfo<PeerUid>>()
         .map(|ConnectInfo(uid)| uid.0);
     match peer {
-        None => Err(ApiError(Error::unauthenticated(
-            "this surface needs a local peer credential",
-        ))),
+        None => {
+            deny(&state, "anonymous".to_string(), "no peer credential");
+            Err(ApiError(Error::unauthenticated(
+                "this surface needs a local peer credential",
+            )))
+        }
         Some(uid) if uid == 0 || uid == state.allowed_uid => {
             request.extensions_mut().insert(Actor(format!("uid:{uid}")));
             Ok(next.run(request).await)
         }
-        Some(_) => Err(ApiError(Error::unauthenticated(
-            "the peer is not the service user or root",
-        ))),
+        Some(uid) => {
+            deny(
+                &state,
+                format!("uid:{uid}"),
+                "the peer is not the service user",
+            );
+            Err(ApiError(Error::unauthenticated(
+                "the peer is not the service user or root",
+            )))
+        }
     }
 }
 
@@ -1050,8 +1113,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replace_swaps_the_bundle_and_audits() {
+    async fn replace_swaps_the_bundle_and_revokes_the_grant() {
         let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("0.1.0"));
+        let app = AppId::parse("org.example.notes").unwrap();
         let bundle = bundle(
             "org.example.notes",
             "example:notes",
@@ -1062,8 +1127,62 @@ mod tests {
             call(state, "PUT", "/api/engine/apps/org.example.notes", bundle).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["version"], "0.2.0");
+        assert_eq!(value["grant_state"], "none");
+        assert_eq!(GrantStore::new(&dir).load(&app).expect("load"), None);
         let entries = AuditLog::new(&dir).entries().expect("audit");
         assert_eq!(entries.last().unwrap().action, AuditAction::AppUpgrade);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn patch_can_clear_the_alias() {
+        let (state, dir) = apps_state();
+        let (status, _, value) = call(
+            state.clone(),
+            "PATCH",
+            "/api/engine/apps/org.example.notes",
+            br#"{"alias":"custom"}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["alias"], "custom");
+        let (status, _, value) = call(
+            state,
+            "PATCH",
+            "/api/engine/apps/org.example.notes",
+            br#"{"alias":null}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["alias"], "notes", "the manifest fallback");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_unauthenticated_request_is_audited() {
+        let (state, dir) = apps_state();
+        let mut request = Request::builder()
+            .uri("/api/engine/apps")
+            .body(Body::empty())
+            .expect("request");
+        request.extensions_mut().insert(ConnectInfo(PeerUid(1001)));
+        let response = router(state).oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let entries = AuditLog::new(&dir).entries().expect("audit");
+        let entry = entries.last().expect("entry");
+        assert_eq!(entry.action, AuditAction::Deny);
+        assert_eq!(entry.actor, "uid:1001");
+        assert_eq!(entry.result, Outcome::Denied);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_install_is_too_large() {
+        let (_, dir) = apps_state();
+        let state = Arc::new(EngineState::new(1000).with_apps(&dir, 10, false));
+        let (status, _, value) = call(state, "POST", "/api/engine/apps", vec![0u8; 20]).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(value["error"]["code"], "too-large");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 }

@@ -305,24 +305,42 @@ impl Registry {
     /// Enables or disables the app. This is operator state, not authority: the
     /// grant and the manifest are untouched.
     pub fn set_enabled(&self, app: &AppId, enabled: bool) -> Result<Installed, Error> {
-        let mut installed = self.installed(app)?;
-        installed.descriptor.enabled = enabled;
-        self.save_descriptor(app, &installed.descriptor)?;
-        Ok(installed)
+        self.configure(app, Some(enabled), None)
     }
 
     /// Sets the operator's CLI alias for the app. It overrides the manifest's
     /// alias and must not be ambiguous with another app's effective alias.
     pub fn set_alias(&self, app: &AppId, alias: Option<String>) -> Result<Installed, Error> {
+        self.configure(app, None, Some(alias))
+    }
+
+    /// Applies the mutable descriptor fields in **one** write, so a request that
+    /// changes both cannot leave one of them applied.
+    pub fn configure(
+        &self,
+        app: &AppId,
+        enabled: Option<bool>,
+        alias: Option<Option<String>>,
+    ) -> Result<Installed, Error> {
         let mut installed = self.installed(app)?;
-        let effective = alias.as_deref().or_else(|| installed.manifest.cli_name());
-        if let Some(other) = self.alias_conflict(app, effective, alias.is_some())? {
+        if let Some(enabled) = enabled {
+            installed.descriptor.enabled = enabled;
+        }
+        if let Some(alias) = alias {
+            installed.descriptor.alias = alias;
+        }
+        let effective = installed
+            .descriptor
+            .alias
+            .as_deref()
+            .or_else(|| installed.manifest.cli_name());
+        let operator = installed.descriptor.alias.is_some();
+        if let Some(other) = self.alias_conflict(app, effective, operator)? {
             return Err(Error::conflict(format!(
                 "`{}` is already the CLI alias of `{other}`",
                 effective.unwrap_or_default()
             )));
         }
-        installed.descriptor.alias = alias;
         self.save_descriptor(app, &installed.descriptor)?;
         Ok(installed)
     }
