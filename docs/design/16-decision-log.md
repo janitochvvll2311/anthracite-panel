@@ -73,6 +73,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Protocol | The API speaks protocol `1`; a client refuses an unknown protocol instead of guessing | v0.5.0 shares nothing with the v0.4.0 protocol `4`, and inheriting the number would imply compatibility that does not exist |
 | D-State-Layout | `state/` has one fixed tree (apps, grants, composition, credentials, keys, audit) with `0700`/`0600` and no symlinks | A directory the engine creates on first boot cannot be left to interpretation |
 | D-Audit | One JSON object per line, append-only, with `at`, `actor`, `action`, `app`, `result`, `detail`; denials are recorded even when nothing changed | The record of what an app tried is the point of having an audit |
+| D-Audit-Actor | Until sessions and named operators exist, the socket peer uid is the audit actor (`uid:<n>`); a panel's trusted request records `system` | The kernel-issued identity is what the engine actually knows; inventing a name now would be a claim without an account |
 | D-Demo | The demo is a composition profile in v0.6.0, not a build mode | Simulation is a different set of providers, not a different engine |
 
 ---

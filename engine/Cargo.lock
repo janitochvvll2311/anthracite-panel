@@ -18,8 +18,10 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tower",
+ "zip",
 ]
 
 [[package]]
@@ -31,6 +33,7 @@ dependencies = [
  "ed25519-dalek",
  "humantime",
  "libc",
+ "serde_json",
  "sha2",
  "wit-parser",
  "zip",

@@ -15,4 +15,6 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 libc = "0.2"
+sha2 = "0.10"
 tower = { workspace = true }
+zip = { version = "2.6", default-features = false, features = ["deflate"] }

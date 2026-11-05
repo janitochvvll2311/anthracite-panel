@@ -187,6 +187,11 @@ fn ends_with_newline(file: &mut File, len: u64) -> std::io::Result<bool> {
     Ok(last[0] == b'\n')
 }
 
+/// The audit timestamp: RFC 3339, UTC.
+pub fn timestamp() -> String {
+    humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
