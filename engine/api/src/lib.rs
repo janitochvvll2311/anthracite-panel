@@ -267,12 +267,14 @@ fn current_composition(state: &EngineState) -> Result<Composition, ApiError> {
 }
 
 /// `If-Match` is required and uses strong comparison: `*` matches any existing
-/// document, and a comma-separated list matches if any validator does.
+/// document, a comma-separated list matches if any validator does, and repeated
+/// header lines are the same list.
 fn if_matches(headers: &HeaderMap, etag: &str) -> bool {
     headers
-        .get(IF_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
+        .get_all(IF_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| {
             value
                 .split(',')
                 .map(str::trim)
@@ -2092,8 +2094,40 @@ mod tests {
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
+    #[tokio::test]
+    async fn a_fatal_composition_is_repaired_with_the_served_validator() {
+        let (state, dir) = apps_state_with(&["org.example.missing"]);
+        let (status, headers, value) =
+            call(state.clone(), "GET", "/api/engine/composition", Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["surface"]["fatal"]["code"], "not-found");
+        let etag = headers
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("etag")
+            .to_string();
+        let repaired = br#"{"version":1,"profile":[{"id":"default","apps":[]}]}"#;
+        let (status, _, _) = call_with(
+            state.clone(),
+            "PUT",
+            "/api/engine/composition",
+            repaired.to_vec(),
+            &[("if-match", &etag)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, value) = json(state, "/api/engine/composition").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["composition"]["profile"][0]["apps"]
+            .as_array()
+            .expect("apps")
+            .is_empty());
+        assert!(value["surface"].get("fatal").is_none());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
     #[test]
-    fn if_match_uses_a_strong_exact_validator() {
+    fn the_if_match_header_is_parsed_with_strong_comparison() {
         use axum::http::header::HeaderValue;
         let etag = "\"abc\"";
         let with = |value: &str| {
@@ -2103,10 +2137,16 @@ mod tests {
         };
         assert!(if_matches(&with("\"abc\""), etag));
         assert!(if_matches(&with("\"x\", \"abc\""), etag));
+        assert!(if_matches(&with(" \"abc\" "), etag));
         assert!(if_matches(&with("*"), etag));
         assert!(!if_matches(&HeaderMap::new(), etag));
         assert!(!if_matches(&with("W/\"abc\""), etag));
+        assert!(!if_matches(&with("\"ABC\""), etag));
         assert!(!if_matches(&with("\"nope\""), etag));
+        let mut repeated = HeaderMap::new();
+        repeated.append(IF_MATCH, HeaderValue::from_static("\"nope\""));
+        repeated.append(IF_MATCH, HeaderValue::from_static("\"abc\""));
+        assert!(if_matches(&repeated, etag));
     }
 
     #[tokio::test]
