@@ -275,6 +275,10 @@ async fn a_stale_grant_degrades_the_app() {
     grant.app_version = "9.9.9".to_string();
     GrantStore::new(&dir).save(&grant).expect("save");
     let value = composition(state).await;
+    assert!(value["surface"]["apps"]
+        .as_array()
+        .expect("apps")
+        .is_empty());
     assert_eq!(value["surface"]["degraded"][0]["reason"], "grant-stale");
     cleanup(dir);
 }
@@ -288,6 +292,10 @@ async fn a_corrupt_grant_is_invalid_not_unapproved() {
     )
     .expect("write");
     let value = composition(state).await;
+    assert!(value["surface"]["apps"]
+        .as_array()
+        .expect("apps")
+        .is_empty());
     assert_eq!(value["surface"]["degraded"][0]["reason"], "grant-invalid");
     cleanup(dir);
 }
@@ -300,6 +308,10 @@ async fn a_disabled_app_is_degraded() {
         .set_enabled(&id, false)
         .expect("disable");
     let value = composition(state).await;
+    assert!(value["surface"]["apps"]
+        .as_array()
+        .expect("apps")
+        .is_empty());
     assert_eq!(value["surface"]["degraded"][0]["reason"], "disabled");
     cleanup(dir);
 }
@@ -310,8 +322,10 @@ async fn a_risk_growth_degrades_the_consumer() {
     approve_with(&dir, "org.example.store", Risk::Write);
     approve_with(&dir, "org.example.reader", Risk::Read);
     let value = composition(state).await;
-    assert_eq!(value["surface"]["apps"][0]["id"], "org.example.store");
-    assert_eq!(value["surface"]["apps"][0]["risk"], "write");
+    let apps = value["surface"]["apps"].as_array().expect("apps");
+    assert_eq!(apps.len(), 1, "only the provider runs");
+    assert_eq!(apps[0]["id"], "org.example.store");
+    assert_eq!(apps[0]["risk"], "write");
     let reader = value["surface"]["degraded"]
         .as_array()
         .expect("degraded")
@@ -321,5 +335,17 @@ async fn a_risk_growth_degrades_the_consumer() {
     assert_eq!(reader["reason"], "risk-grown");
     assert_eq!(reader["detail"]["approved"], "read");
     assert_eq!(reader["detail"]["effective"], "write");
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn a_pinned_version_that_is_not_installed_is_fatal() {
+    let (state, dir) = fixture_state("version-mismatch.toml", &["org.example.provider"]);
+    let value = composition(state).await;
+    assert_eq!(value["surface"]["fatal"]["code"], "invalid");
+    assert!(value["surface"]["fatal"]["message"]
+        .as_str()
+        .expect("message")
+        .contains("9.9.9"));
     cleanup(dir);
 }
