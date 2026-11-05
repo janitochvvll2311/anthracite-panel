@@ -13,8 +13,13 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anth_contract::{Error, ErrorKind};
+
+/// A local engine answers in milliseconds. The bound exists so a wedged
+/// process cannot hang the terminal forever.
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct Client {
     socket: PathBuf,
@@ -52,6 +57,10 @@ impl Client {
                 self.socket.display()
             ))
         })?;
+        stream
+            .set_read_timeout(Some(TIMEOUT))
+            .and_then(|()| stream.set_write_timeout(Some(TIMEOUT)))
+            .map_err(|error| Error::internal(format!("configuring the socket: {error}")))?;
         let mut request = format!(
             "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n",
             body.len()
@@ -63,14 +72,14 @@ impl Client {
         stream
             .write_all(request.as_bytes())
             .and_then(|()| stream.write_all(body))
-            .map_err(|error| Error::internal(format!("writing to the engine: {error}")))?;
+            .map_err(|error| io("writing to the engine", error))?;
         let mut raw = Vec::new();
         stream
             .read_to_end(&mut raw)
-            .map_err(|error| Error::internal(format!("reading from the engine: {error}")))?;
+            .map_err(|error| io("reading from the engine", error))?;
         let response = parse(&raw)?;
         if response.status >= 400 {
-            return Err(envelope(&response.body));
+            return Err(envelope(response.status, &response.body));
         }
         Ok(response)
     }
@@ -148,17 +157,30 @@ fn decode_chunked(mut data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(body)
 }
 
-/// The error envelope of §7.11, or `internal` when the body is not one.
-fn envelope(body: &[u8]) -> Error {
+/// The error envelope of §7.11, or a kind derived from the status when the body
+/// is not one (readiness `503` answers `{"status":"starting"}`).
+fn envelope(status: u16, body: &[u8]) -> Error {
     let value: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
     let error = &value["error"];
     let kind = error["code"]
         .as_str()
         .and_then(ErrorKind::from_code)
-        .unwrap_or(ErrorKind::Internal);
-    let message = error["message"]
-        .as_str()
-        .unwrap_or("the engine refused the request");
+        .unwrap_or(match status {
+            400 => ErrorKind::Invalid,
+            401 => ErrorKind::Unauthenticated,
+            403 => ErrorKind::Denied,
+            404 => ErrorKind::NotFound,
+            409 => ErrorKind::Conflict,
+            413 => ErrorKind::TooLarge,
+            429 => ErrorKind::Exhausted,
+            503 => ErrorKind::Unavailable,
+            _ => ErrorKind::Internal,
+        });
+    let message = match (error["message"].as_str(), value["status"].as_str()) {
+        (Some(message), _) => message.to_string(),
+        (None, Some(state)) => format!("the engine is not ready: {state}"),
+        (None, None) => "the engine refused the request".to_string(),
+    };
     let mut failure = Error::new(kind, message);
     if let Some(app) = error["app"].as_str() {
         failure = failure.with_app(app);
@@ -167,6 +189,17 @@ fn envelope(body: &[u8]) -> Error {
         failure = failure.with_detail(detail.clone());
     }
     failure
+}
+
+/// A timed-out socket is unavailable, not an engine bug.
+fn io(action: &str, error: std::io::Error) -> Error {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ) {
+        return Error::unavailable(format!("the engine did not answer while {action}"));
+    }
+    Error::internal(format!("{action}: {error}"))
 }
 
 #[cfg(test)]
@@ -246,6 +279,21 @@ mod tests {
             .expect_err("404");
         assert_eq!(error.kind(), ErrorKind::NotFound);
         assert!(error.message().contains("not installed"), "{error}");
+        let _ = receive;
+    }
+
+    #[test]
+    fn a_readiness_503_without_an_envelope_is_unavailable() {
+        let path = scratch("readiness");
+        let receive = serve(
+            &path,
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 21\r\n\r\n{\"status\":\"starting\"}",
+        );
+        let error = Client::new(&path)
+            .request("GET", "/api/health", &[], &[])
+            .expect_err("503");
+        assert_eq!(error.kind(), ErrorKind::Unavailable);
+        assert!(error.message().contains("starting"), "{error}");
         let _ = receive;
     }
 

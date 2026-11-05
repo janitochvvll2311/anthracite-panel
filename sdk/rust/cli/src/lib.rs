@@ -156,21 +156,24 @@ fn parse_app(
     let sub = as_text(&sub)?.to_string();
     let mut acknowledge = None;
     let mut accept = Vec::new();
-    let mut positional: Vec<String> = Vec::new();
+    let mut positional: Vec<OsString> = Vec::new();
     while let Some(arg) = args.next() {
-        match as_text(&arg)? {
-            "--acknowledge" => {
+        match arg.to_str() {
+            Some("--acknowledge") => {
                 let token = args
                     .next()
                     .ok_or_else(|| usage("`--acknowledge` needs a token".to_string()))?;
                 acknowledge = Some(as_text(&token)?.to_string());
             }
-            "--accept-write" => accept.push("write".to_string()),
-            "--accept-admin" => accept.push("admin".to_string()),
-            "--accept-host" => accept.push("host".to_string()),
-            "--accept-package" => accept.push("package".to_string()),
-            "--help" | "-h" => return Ok(Invocation::Help),
-            value => positional.push(value.to_string()),
+            Some("--accept-write") => accept.push("write".to_string()),
+            Some("--accept-admin") => accept.push("admin".to_string()),
+            Some("--accept-host") => accept.push("host".to_string()),
+            Some("--accept-package") => accept.push("package".to_string()),
+            Some("--help" | "-h") => return Ok(Invocation::Help),
+            Some(value) if value.starts_with('-') => {
+                return Err(usage(format!("`{value}` is not an app option")));
+            }
+            _ => positional.push(arg),
         }
     }
     let is_approve = sub == "approve";
@@ -186,30 +189,30 @@ fn parse_app(
     }
     let command = match (sub.as_str(), positional.as_slice()) {
         ("list", []) => AppCommand::List,
-        ("show", [app]) => AppCommand::Show(app.clone()),
-        ("install", [bundle]) => AppCommand::Install(PathBuf::from(bundle)),
+        ("show", [app]) => AppCommand::Show(as_text(app)?.to_string()),
+        ("install", [bundle]) => AppCommand::Install(PathBuf::from(bundle.clone())),
         ("upgrade", [app, bundle]) => AppCommand::Upgrade {
-            app: app.clone(),
-            bundle: PathBuf::from(bundle),
+            app: as_text(app)?.to_string(),
+            bundle: PathBuf::from(bundle.clone()),
         },
         ("enable", [app]) => AppCommand::Enable {
-            app: app.clone(),
+            app: as_text(app)?.to_string(),
             acknowledge,
         },
         ("disable", [app]) => AppCommand::Disable {
-            app: app.clone(),
+            app: as_text(app)?.to_string(),
             acknowledge,
         },
         ("remove", [app]) => AppCommand::Remove {
-            app: app.clone(),
+            app: as_text(app)?.to_string(),
             acknowledge,
         },
         ("approve", [app]) => AppCommand::Approve {
-            app: app.clone(),
+            app: as_text(app)?.to_string(),
             accept,
         },
         ("revoke", [app]) => AppCommand::Revoke {
-            app: app.clone(),
+            app: as_text(app)?.to_string(),
             acknowledge,
         },
         (sub, _) => {
@@ -339,11 +342,12 @@ fn client(socket: Option<PathBuf>) -> Client {
     Client::new(socket_path(socket))
 }
 
-/// Readiness, the version and the catalogue in one answer.
+/// Readiness, the composition, the version and the catalogue in one answer.
 fn status(socket: Option<PathBuf>) -> Result<u8, Error> {
     let client = client(socket);
     let health = client.get_json("/api/health")?;
     let version = client.get_json("/api/engine/version")?;
+    let composition = client.get_json("/api/engine/composition")?;
     let apps = client.get_json("/api/engine/apps")?;
     println!(
         "engine {} (protocol {})",
@@ -351,6 +355,29 @@ fn status(socket: Option<PathBuf>) -> Result<u8, Error> {
         version["protocol"].as_u64().unwrap_or(0)
     );
     println!("health {}", health["status"].as_str().unwrap_or("?"));
+    let profiles = composition["composition"]["profile"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let composed: usize = profiles
+        .iter()
+        .map(|profile| profile["apps"].as_array().map_or(0, Vec::len))
+        .sum();
+    println!(
+        "composition {composed} app(s) in {} profile(s)",
+        profiles.len()
+    );
+    for degraded in composition["surface"]["degraded"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+    {
+        eprintln!(
+            "warning: degraded {}: {}",
+            degraded["app"].as_str().unwrap_or("?"),
+            degraded["reason"].as_str().unwrap_or("?")
+        );
+    }
     println!("apps {}", apps["apps"].as_array().map_or(0, Vec::len));
     for problem in apps["problems"]
         .as_array()
@@ -409,14 +436,24 @@ fn app(socket: Option<PathBuf>, command: AppCommand) -> Result<u8, Error> {
             let body = std::fs::read(&bundle).map_err(|error| {
                 Error::not_found(format!("reading {}: {error}", bundle.display()))
             })?;
-            let response = client.request("POST", "/api/engine/apps", &body, &[])?;
+            let response = client.request(
+                "POST",
+                "/api/engine/apps",
+                &body,
+                &[("content-type", "application/zip")],
+            )?;
             print_value(&response.body)
         }
         AppCommand::Upgrade { app, bundle } => {
             let body = std::fs::read(&bundle).map_err(|error| {
                 Error::not_found(format!("reading {}: {error}", bundle.display()))
             })?;
-            let response = client.request("PUT", &format!("/api/engine/apps/{app}"), &body, &[])?;
+            let response = client.request(
+                "PUT",
+                &format!("/api/engine/apps/{app}"),
+                &body,
+                &[("content-type", "application/zip")],
+            )?;
             print_value(&response.body)
         }
         AppCommand::Enable { app, acknowledge } => patch_enabled(&client, &app, true, acknowledge),
@@ -432,7 +469,7 @@ fn app(socket: Option<PathBuf>, command: AppCommand) -> Result<u8, Error> {
                 "PUT",
                 &format!("/api/engine/apps/{app}/grant"),
                 body.as_bytes(),
-                &[],
+                &[("content-type", "application/json")],
             )?;
             print_value(&response.body)
         }
@@ -451,10 +488,10 @@ fn patch_enabled(
     acknowledge: Option<String>,
 ) -> Result<u8, Error> {
     let body = serde_json::json!({ "enabled": enabled }).to_string();
-    let headers: Vec<(&str, &str)> = acknowledge
-        .as_deref()
-        .map(|token| vec![("x-anth-acknowledge", token)])
-        .unwrap_or_default();
+    let mut headers = vec![("content-type", "application/json")];
+    if let Some(token) = acknowledge.as_deref() {
+        headers.push(("x-anth-acknowledge", token));
+    }
     let response = client.request(
         "PATCH",
         &format!("/api/engine/apps/{app}"),
@@ -847,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn status_asks_health_version_and_apps() {
+    fn status_asks_health_version_composition_and_apps() {
         let dir = scratch("status");
         let socket = dir.join("engine.sock");
         let receive = serve(
@@ -855,11 +892,15 @@ mod tests {
             vec![
                 answer("200 OK", r#"{"status":"ok"}"#),
                 answer("200 OK", r#"{"engine":"0.5.0","protocol":1}"#),
+                answer(
+                    "200 OK",
+                    r#"{"composition":{"version":1,"profile":[]},"surface":{"apps":[]}}"#,
+                ),
                 answer("200 OK", r#"{"apps":[]}"#),
             ],
         );
         assert_eq!(status(Some(socket)).expect("status"), 0);
-        let lines: Vec<String> = (0..3)
+        let lines: Vec<String> = (0..4)
             .map(|_| {
                 let request = receive.recv().expect("request");
                 String::from_utf8_lossy(&request)
@@ -874,8 +915,84 @@ mod tests {
             [
                 "GET /api/health HTTP/1.1",
                 "GET /api/engine/version HTTP/1.1",
+                "GET /api/engine/composition HTTP/1.1",
                 "GET /api/engine/apps HTTP/1.1",
             ]
+        );
+    }
+
+    #[test]
+    fn an_approve_and_a_disable_send_json() {
+        let dir = scratch("json");
+        let socket = dir.join("engine.sock");
+        let receive = serve(
+            &socket,
+            vec![
+                answer("201 Created", "{}"),
+                answer("200 OK", r#"{"enabled":false}"#),
+            ],
+        );
+        app(
+            Some(socket.clone()),
+            AppCommand::Approve {
+                app: "org.example.notes".to_string(),
+                accept: vec!["write".to_string()],
+            },
+        )
+        .expect("approve");
+        app(
+            Some(socket),
+            AppCommand::Disable {
+                app: "org.example.notes".to_string(),
+                acknowledge: None,
+            },
+        )
+        .expect("disable");
+        for _ in 0..2 {
+            let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+            assert!(
+                request
+                    .to_lowercase()
+                    .contains("content-type: application/json"),
+                "{request}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_install_sends_the_bundle_as_a_zip() {
+        let dir = scratch("install");
+        let socket = dir.join("engine.sock");
+        let bundle = dir.join("notes.zip");
+        fs::write(&bundle, b"zip").expect("write");
+        let receive = serve(&socket, vec![answer("201 Created", "{}")]);
+        app(Some(socket), AppCommand::Install(bundle)).expect("install");
+        let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            request
+                .to_lowercase()
+                .contains("content-type: application/zip"),
+            "{request}"
+        );
+    }
+
+    #[test]
+    fn a_non_utf8_bundle_path_is_kept_as_bytes() {
+        let mut path = b"/tmp/".to_vec();
+        path.push(0xff);
+        path.extend_from_slice(b"/notes.zip");
+        let parsed = parse(vec![
+            OsString::from("app"),
+            OsString::from("install"),
+            OsString::from_vec(path.clone()),
+        ])
+        .expect("parse");
+        assert_eq!(
+            parsed,
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Install(PathBuf::from(OsString::from_vec(path))),
+            }
         );
     }
 
