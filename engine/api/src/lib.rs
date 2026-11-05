@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
-use anth_contract::{AppId, AppView, Composition, Error};
+use anth_contract::{AppId, AppProblem, AppView, Composition, Error, GrantState, GrantView};
 use axum::extract::{connect_info::Connected, ConnectInfo, Path, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -143,14 +143,22 @@ async fn composition(State(state): State<Arc<EngineState>>) -> Json<Value> {
 }
 
 /// The installed catalogue. The grant is only on the detail endpoint; the list
-/// stays small.
+/// stays small. A tree that cannot be read is named instead of hiding the rest.
 async fn list_apps(State(state): State<Arc<EngineState>>) -> Result<Json<Value>, ApiError> {
     let apps = apps(&state)?;
+    let (installed, problems) = apps.registry.catalogue()?;
     let mut views = Vec::new();
-    for installed in apps.registry.list()? {
-        views.push(app_view(apps, &installed, false)?);
+    for app in &installed {
+        views.push(app_view(apps, app, false)?);
     }
-    Ok(Json(json!({ "apps": views })))
+    let problems: Vec<AppProblem> = problems
+        .into_iter()
+        .map(|problem| AppProblem {
+            app: problem.app,
+            message: problem.message,
+        })
+        .collect();
+    Ok(Json(json!({ "apps": views, "problems": problems })))
 }
 
 /// One app: descriptor, effective alias and its frozen grant.
@@ -176,10 +184,21 @@ fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
 
 fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppView, Error> {
     let id = AppId::parse(&installed.manifest.app.id)?;
-    let grant = if with_grant {
-        apps.grants.load(&id)?
+    let (grant, grant_state) = if with_grant {
+        match apps.grants.load(&id) {
+            Ok(Some(grant)) => {
+                let state = if installed.grant_matches(&grant) {
+                    GrantState::Current
+                } else {
+                    GrantState::Stale
+                };
+                (Some(GrantView::from(grant)), state)
+            }
+            Ok(None) => (None, GrantState::None),
+            Err(_) => (None, GrantState::Invalid),
+        }
     } else {
-        None
+        (None, GrantState::None)
     };
     Ok(AppView {
         id,
@@ -190,6 +209,7 @@ fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppV
         tier: installed.descriptor.tier,
         installed_at: installed.descriptor.installed_at.clone(),
         grant,
+        grant_state,
     })
 }
 
@@ -300,6 +320,24 @@ mod tests {
         (Arc::new(EngineState::new(1000).with_apps(&dir)), dir)
     }
 
+    fn write_grant(dir: &std::path::Path, text: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let grants = dir.join("grants");
+        std::fs::create_dir_all(&grants).expect("grants");
+        std::fs::set_permissions(&grants, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let path = grants.join("org.example.notes.toml");
+        std::fs::write(&path, text).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+
+    fn grant_toml(app_version: &str) -> String {
+        format!(
+            "version = 1\napp = \"org.example.notes\"\napp_version = \"{app_version}\"\nmanifest_sha256 = \"{}\"\nwit_sha256 = \"{}\"\nrisk = \"read\"\napproved_by = \"operator-3f2a\"\napproved_at = \"2026-11-03T20:00:00Z\"\n",
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    }
+
     async fn json(state: Arc<EngineState>, uri: &str) -> (StatusCode, Value) {
         let response = router(state)
             .oneshot(request(uri, Some(1000)))
@@ -325,6 +363,8 @@ mod tests {
             value["apps"][0].get("grant").is_none(),
             "the list carries no grant"
         );
+        assert_eq!(value["apps"][0]["grant_state"], "none");
+        assert!(value["problems"].as_array().expect("problems").is_empty());
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
@@ -338,6 +378,57 @@ mod tests {
             value.get("grant").is_none(),
             "no grant was approved for this app"
         );
+        assert_eq!(value["grant_state"], "none");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_detail_shows_a_current_grant() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("0.1.0"));
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "current");
+        assert_eq!(value["grant"]["risk"], "read");
+        assert_eq!(value["grant"]["approved_by"], "operator-3f2a");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_stale_grant_is_marked() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("9.9.9"));
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "stale");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_grant_is_marked() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, "this is not a grant");
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "invalid");
+        assert!(value.get("grant").is_none());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_app_does_not_hide_the_catalogue() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = apps_state();
+        let broken = dir.join("apps/org.example.broken");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = broken.join("manifest.toml");
+        std::fs::write(&manifest, b"not a manifest").expect("write");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (status, value) = json(state, "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["apps"].as_array().expect("apps").len(), 1);
+        assert_eq!(value["problems"][0]["app"], "org.example.broken");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

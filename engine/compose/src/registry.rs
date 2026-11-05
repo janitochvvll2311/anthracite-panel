@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-use anth_contract::{AppId, Descriptor, Error, Manifest, Tier, DESCRIPTOR_VERSION};
+use anth_contract::{AppId, Descriptor, Error, Grant, Manifest, Tier, DESCRIPTOR_VERSION};
 
 use crate::bundle::{self, Options, StagedBundle};
 use crate::keys::Keyring;
@@ -34,6 +34,32 @@ impl Installed {
             .as_deref()
             .or_else(|| self.manifest.cli_name())
     }
+
+    /// Whether `grant` was approved for exactly this manifest: same app, same
+    /// version, same interface sets. The resolver uses the same rule.
+    pub fn grant_matches(&self, grant: &Grant) -> bool {
+        let Ok(exports) =
+            crate::parse_interfaces(self.manifest.export.iter().map(|e| &e.interface))
+        else {
+            return false;
+        };
+        let Ok(imports) =
+            crate::parse_interfaces(self.manifest.import.iter().map(|i| &i.interface))
+        else {
+            return false;
+        };
+        grant.app.as_str() == self.manifest.app.id
+            && grant.app_version == self.manifest.app.version
+            && crate::same_interfaces(&grant.export, &exports)
+            && crate::same_interfaces(&grant.import, &imports)
+    }
+}
+
+/// An installed app the catalogue could not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    pub app: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +259,40 @@ impl Registry {
         }
         installed.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
         Ok(installed)
+    }
+
+    /// Every app that can be read, plus one problem per tree that cannot.
+    ///
+    /// The catalogue must not disappear because one install is broken: the
+    /// operator needs the rest of it to repair the broken one.
+    pub fn catalogue(&self) -> Result<(Vec<Installed>, Vec<Problem>), Error> {
+        if !store::check_dir(&self.apps)? {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let entries = fs::read_dir(&self.apps).map_err(|error| {
+            Error::internal(format!("reading {}: {error}", self.apps.display()))
+        })?;
+        let mut apps = Vec::new();
+        let mut problems = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                Error::internal(format!("reading {}: {error}", self.apps.display()))
+            })?;
+            let app = entry.file_name().to_string_lossy().to_string();
+            if app.starts_with('.') {
+                continue;
+            }
+            match read_installed(&entry.path()) {
+                Ok(installed) => apps.push(installed),
+                Err(error) => problems.push(Problem {
+                    app,
+                    message: error.message().to_string(),
+                }),
+            }
+        }
+        apps.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
+        problems.sort_by(|a, b| a.app.cmp(&b.app));
+        Ok((apps, problems))
     }
 
     /// Removes the installed bundle. The grant is a separate document and the

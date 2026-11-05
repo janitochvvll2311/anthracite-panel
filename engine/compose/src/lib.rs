@@ -664,7 +664,7 @@ fn grant_matches(
         && same_interfaces(&grant.import, imports)
 }
 
-fn same_interfaces(left: &[InterfaceId], right: &[InterfaceId]) -> bool {
+pub(crate) fn same_interfaces(left: &[InterfaceId], right: &[InterfaceId]) -> bool {
     let mut left: Vec<&InterfaceId> = left.iter().collect();
     let mut right: Vec<&InterfaceId> = right.iter().collect();
     left.sort();
