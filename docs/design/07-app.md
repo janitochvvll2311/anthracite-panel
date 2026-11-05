@@ -129,7 +129,7 @@ Interfaces are WIT, in the canonical form:
 package anthracite:fs@1.0.0;
 
 interface list {
-  use anth:error@1.0.0.{error};
+  use anth:error/kinds@1.0.0.{error};
 
   record entry {
     name: string,
