@@ -153,9 +153,10 @@ impl World {
     /// Compares the real world with the world the installed WIT describes.
     ///
     /// The interface id carries the package version, so a drifted version is a
-    /// different id and shows up as a difference (D-Interface-Versioning). When
-    /// both sides carry a signature for the same id, a different signature is
-    /// structural drift (§7.12).
+    /// different id and shows up as a difference (D-Interface-Versioning). If the
+    /// expected world has a signature for an interface, the real one must carry
+    /// the same signature; a missing or different one is structural drift
+    /// (§7.12).
     pub fn check_expected(&self, expected: &World) -> Result<(), WorldMismatch> {
         let actual_imports: BTreeSet<InterfaceId> = self
             .imports

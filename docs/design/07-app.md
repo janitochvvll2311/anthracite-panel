@@ -528,7 +528,9 @@ Each interface has a **world signature**: lowercase hex SHA-256 of its canonical
 WIT text (`interface <name> { … }`, declarations sorted, no whitespace). The
 expected world carries one for every interface; the component must match it, and
 a missing actual signature is drift, not a pass. `anth:error` is injected when the
-WIT is parsed and is never granted or compared (§9.2).
+WIT is parsed: an **import** of it is never granted or compared (§9.2), but an
+export claiming that namespace is still a real export and is refused like any
+other unapproved one.
 4. Link only the imports the grant lists, and only to the providers the
    composition names.
 5. Only then instantiate.
