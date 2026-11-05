@@ -122,7 +122,10 @@ Why these verbs:
   `DELETE /apps/{id}/grant` revokes the authority and keeps the content.
 - **`PUT` replaces the whole composition**, not `POST /compose/add`. The
   composition is a document; adding and removing are client-side edits to it,
-  guarded by `ETag` and `If-Match` so a concurrent edit cannot be lost.
+  guarded by `ETag` and `If-Match` so a concurrent edit cannot be lost. The
+  `ETag` is the strong validator of the canonical TOML (`"<sha256 hex>"`); a
+  missing or stale `If-Match` is `412 precondition-failed`, `*` matches any
+  existing document, and the check and the write are serialized.
 - **`POST` for restart.** It is a process transition, not a resource.
 
 **Protocol.** `GET /api/engine/version` answers

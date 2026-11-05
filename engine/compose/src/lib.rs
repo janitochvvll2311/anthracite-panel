@@ -15,6 +15,7 @@ use std::fmt;
 
 pub mod audit;
 pub mod bundle;
+pub mod composition;
 pub mod grant;
 pub mod keys;
 pub mod registry;

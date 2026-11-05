@@ -57,6 +57,15 @@ impl Composition {
             .map_err(|error| Error::invalid(format!("the composition is not valid TOML: {error}")))
     }
 
+    /// The document as it is written to `composition.toml`.
+    #[cfg(feature = "parse")]
+    pub fn to_toml(&self) -> Result<String, Error> {
+        self.validate()?;
+        toml::to_string_pretty(self).map_err(|error| {
+            Error::internal(format!("the composition could not be rendered: {error}"))
+        })
+    }
+
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != COMPOSITION_VERSION {
             return Err(Error::invalid(format!(
@@ -113,6 +122,8 @@ mod tests {
         assert_eq!(Profile::app_id("org.anth.fs@0.6.0"), "org.anth.fs");
         assert_eq!(Profile::app_version("org.anth.fs@0.6.0"), Some("0.6.0"));
         assert_eq!(Profile::app_version("org.example.notes"), None);
+        let rendered = composition.to_toml().expect("render");
+        assert_eq!(Composition::parse(&rendered).expect("reparse"), composition);
     }
 
     #[test]

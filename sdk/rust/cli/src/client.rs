@@ -28,6 +28,8 @@ pub struct Client {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     pub status: u16,
+    /// Lowercase header names, as the engine sent them.
+    pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
 }
 
@@ -127,7 +129,11 @@ fn parse(raw: &[u8]) -> Result<Response, Error> {
     } else {
         body.to_vec()
     };
-    Ok(Response { status, body })
+    Ok(Response {
+        status,
+        headers,
+        body,
+    })
 }
 
 fn decode_chunked(mut data: &[u8]) -> Result<Vec<u8>, Error> {

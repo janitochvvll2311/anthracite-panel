@@ -26,6 +26,8 @@ commands:
   doctor [--config <path>] [--debug|--release]
                         validate a configuration without a daemon
   status                health, version and the installed catalogue
+  compose [--show] [--add <id>] [--remove <id>] [--now]
+                        read or edit the composition
   app list              list installed apps
   app show <id>         show one app
   app install <bundle>  install a bundle (zip)
@@ -63,6 +65,13 @@ pub enum Invocation {
     },
     Status {
         socket: Option<PathBuf>,
+    },
+    Compose {
+        socket: Option<PathBuf>,
+        show: bool,
+        add: Vec<String>,
+        remove: Vec<String>,
+        now: bool,
     },
     App {
         socket: Option<PathBuf>,
@@ -141,6 +150,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Err
             Ok(Invocation::Status { socket })
         }
         "app" => parse_app(args, socket),
+        "compose" => parse_compose(args, socket),
         other => Err(usage(format!("`{other}` is not a command"))),
     }
 }
@@ -222,6 +232,52 @@ fn parse_app(
     Ok(Invocation::App { socket, command })
 }
 
+fn parse_compose(
+    args: impl Iterator<Item = OsString>,
+    socket: Option<PathBuf>,
+) -> Result<Invocation, Error> {
+    let mut args = args.into_iter();
+    let mut show = false;
+    let mut now = false;
+    let mut add = Vec::new();
+    let mut remove = Vec::new();
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--show") => show = true,
+            Some("--now") => now = true,
+            Some("--add") => {
+                let id = args
+                    .next()
+                    .ok_or_else(|| usage("`--add` needs an app id".to_string()))?;
+                add.push(as_text(&id)?.to_string());
+            }
+            Some("--remove") => {
+                let id = args
+                    .next()
+                    .ok_or_else(|| usage("`--remove` needs an app id".to_string()))?;
+                remove.push(as_text(&id)?.to_string());
+            }
+            Some("--help" | "-h") => return Ok(Invocation::Help),
+            Some(value) => {
+                return Err(usage(format!("`{value}` is not a compose option")));
+            }
+            None => return Err(usage("a compose option is not valid UTF-8".to_string())),
+        }
+    }
+    if show && (!add.is_empty() || !remove.is_empty()) {
+        return Err(usage(
+            "`--show` cannot be combined with `--add` or `--remove`".to_string(),
+        ));
+    }
+    Ok(Invocation::Compose {
+        socket,
+        show,
+        add,
+        remove,
+        now,
+    })
+}
+
 fn as_text(arg: &OsString) -> Result<&str, Error> {
     arg.to_str()
         .ok_or_else(|| usage("an option is not valid UTF-8".to_string()))
@@ -274,6 +330,13 @@ pub fn execute(invocation: Invocation) -> Result<u8, Error> {
         }
         Invocation::Doctor { config, profile } => doctor(config, profile),
         Invocation::Status { socket } => status(socket),
+        Invocation::Compose {
+            socket,
+            show,
+            add,
+            remove,
+            now,
+        } => compose(socket, show, add, remove, now),
         Invocation::App { socket, command } => app(socket, command),
     }
 }
@@ -340,6 +403,67 @@ fn socket_path(explicit: Option<PathBuf>) -> PathBuf {
 
 fn client(socket: Option<PathBuf>) -> Client {
     Client::new(socket_path(socket))
+}
+
+/// Reads the composition, or edits and replaces it with the validator the
+/// engine served (§8.1). Recomposing is a restart in v0.5.0 (§8.6).
+fn compose(
+    socket: Option<PathBuf>,
+    show: bool,
+    add: Vec<String>,
+    remove: Vec<String>,
+    now: bool,
+) -> Result<u8, Error> {
+    let client = client(socket);
+    let response = client.request("GET", "/api/engine/composition", &[], &[])?;
+    let etag = response
+        .headers
+        .get("etag")
+        .cloned()
+        .ok_or_else(|| Error::internal("the engine answered without an ETag"))?;
+    let mut view: serde_json::Value = serde_json::from_slice(&response.body)
+        .map_err(|error| Error::internal(format!("the composition is not JSON: {error}")))?;
+    if show || (add.is_empty() && remove.is_empty()) {
+        return print_value(
+            &serde_json::to_vec(&view["composition"])
+                .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?,
+        );
+    }
+    let apps = view["composition"]["profile"][0]["apps"]
+        .as_array_mut()
+        .ok_or_else(|| Error::internal("the composition has no profile"))?;
+    for id in &add {
+        if !apps.iter().any(|app| app.as_str() == Some(id)) {
+            apps.push(serde_json::Value::String(id.clone()));
+        }
+    }
+    apps.retain(|app| !remove.iter().any(|id| app.as_str() == Some(id)));
+    let body = serde_json::to_vec(&view["composition"])
+        .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?;
+    let response = client.request(
+        "PUT",
+        "/api/engine/composition",
+        &body,
+        &[
+            ("if-match", etag.as_str()),
+            ("content-type", "application/json"),
+        ],
+    )?;
+    let updated: serde_json::Value = serde_json::from_slice(&response.body).map_err(|error| {
+        Error::internal(format!("the engine answered with invalid JSON: {error}"))
+    })?;
+    print_value(
+        &serde_json::to_vec(&updated["composition"])
+            .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?,
+    )?;
+    if now {
+        eprintln!(
+            "v0.5.0 recomposes by restarting: the document is saved; running apps change on the next restart"
+        );
+    } else {
+        eprintln!("composition written; running apps change on the next restart");
+    }
+    Ok(0)
 }
 
 /// Readiness, the composition, the version and the catalogue in one answer.
@@ -881,6 +1005,106 @@ mod tests {
     fn other_errors_keep_the_code() {
         let text = error_text(&Error::not_found("`x` is not installed"));
         assert_eq!(text, "not-found: `x` is not installed");
+    }
+
+    #[test]
+    fn compose_defaults_to_showing() {
+        assert_eq!(
+            parse(args(&["compose"])).expect("parse"),
+            Invocation::Compose {
+                socket: None,
+                show: false,
+                add: Vec::new(),
+                remove: Vec::new(),
+                now: false,
+            }
+        );
+        assert_eq!(
+            parse(args(&["compose", "--show", "--now"])).expect("parse"),
+            Invocation::Compose {
+                socket: None,
+                show: true,
+                add: Vec::new(),
+                remove: Vec::new(),
+                now: true,
+            }
+        );
+    }
+
+    #[test]
+    fn compose_takes_adds_and_removes() {
+        assert_eq!(
+            parse(args(&[
+                "compose",
+                "--add",
+                "org.example.notes",
+                "--remove",
+                "org.example.old",
+            ]))
+            .expect("parse"),
+            Invocation::Compose {
+                socket: None,
+                show: false,
+                add: vec!["org.example.notes".to_string()],
+                remove: vec!["org.example.old".to_string()],
+                now: false,
+            }
+        );
+    }
+
+    #[test]
+    fn compose_show_cannot_be_combined_with_edits() {
+        let error = parse(args(&["compose", "--show", "--add", "org.example.notes"]))
+            .expect_err("show and add");
+        assert!(error.message().contains("--show"), "{error}");
+        assert!(parse(args(&["compose", "--add"])).is_err());
+        assert!(parse(args(&["compose", "--nope"])).is_err());
+        assert!(parse(args(&["compose", "org.example.notes"])).is_err());
+    }
+
+    #[test]
+    fn a_compose_edit_sends_the_served_validator() {
+        let dir = scratch("compose");
+        let socket = dir.join("engine.sock");
+        let before = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":[]}]},"surface":{"apps":[],"degraded":[],"links":[]}}"#;
+        let after = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":["org.example.notes"]}]},"surface":{"apps":[],"degraded":[],"links":[]}}"#;
+        let receive = serve(
+            &socket,
+            vec![
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"abc\"\r\n\r\n{before}",
+                    before.len()
+                )
+                .into_bytes(),
+                answer("200 OK", after),
+            ],
+        );
+        let code = compose(
+            Some(socket),
+            false,
+            vec!["org.example.notes".to_string()],
+            Vec::new(),
+            true,
+        )
+        .expect("compose");
+        assert_eq!(code, 0);
+        let get = String::from_utf8_lossy(&receive.recv().expect("get")).to_string();
+        assert!(
+            get.starts_with("GET /api/engine/composition HTTP/1.1"),
+            "{get}"
+        );
+        let put = String::from_utf8_lossy(&receive.recv().expect("put")).to_string();
+        assert!(
+            put.starts_with("PUT /api/engine/composition HTTP/1.1"),
+            "{put}"
+        );
+        assert!(put.to_lowercase().contains("if-match: \"abc\""), "{put}");
+        assert!(
+            put.to_lowercase()
+                .contains("content-type: application/json"),
+            "{put}"
+        );
+        assert!(put.contains("org.example.notes"), "{put}");
     }
 
     #[test]

@@ -8,10 +8,11 @@
 //! arrive. `/health` is public on both; everything under `/api` needs a peer.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anth_compose::audit::{timestamp, AuditLog};
 use anth_compose::bundle::Options as BundleOptions;
+use anth_compose::composition::CompositionStore;
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::risk::{approve, Approval};
@@ -22,7 +23,7 @@ use anth_contract::{
 };
 use axum::body::Bytes;
 use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
-use axum::http::header::LOCATION;
+use axum::http::header::{ETAG, IF_MATCH, LOCATION};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -41,6 +42,8 @@ pub struct Apps {
     /// `apps.max-bundle-bytes` and `apps.require-signature`.
     pub max_bundle_bytes: u64,
     pub require_signature: bool,
+    /// The composition file under the same state root.
+    pub compositions: CompositionStore,
 }
 
 impl Apps {
@@ -60,8 +63,11 @@ pub struct EngineState {
     pub protocol: u32,
     /// The uid that owns the daemon; root is always accepted as well.
     pub allowed_uid: u32,
-    /// What is composed. Empty until the operator adds an app.
-    pub composition: Arc<Composition>,
+    /// What is composed. The same document the daemon loaded from disk.
+    pub composition: Arc<RwLock<Composition>>,
+    /// Serializes a composition replacement so the `If-Match` check and the
+    /// write cannot interleave with another replacement.
+    compose_lock: Arc<tokio::sync::Mutex<()>>,
     /// The installed apps, when the daemon could open the state tree.
     pub apps: Option<Arc<Apps>>,
 }
@@ -72,14 +78,15 @@ impl EngineState {
             version: env!("CARGO_PKG_VERSION").to_string(),
             protocol: 1,
             allowed_uid,
-            composition: Arc::new(Composition::empty()),
+            composition: Arc::new(RwLock::new(Composition::empty())),
+            compose_lock: Arc::new(tokio::sync::Mutex::new(())),
             apps: None,
         }
     }
 
     /// What the daemon loaded from the composition file.
     pub fn with_composition(mut self, composition: Composition) -> Self {
-        self.composition = Arc::new(composition);
+        self.composition = Arc::new(RwLock::new(composition));
         self
     }
 
@@ -96,6 +103,7 @@ impl EngineState {
             audit: AuditLog::new(state),
             max_bundle_bytes,
             require_signature,
+            compositions: CompositionStore::new(state),
         }));
         self
     }
@@ -133,7 +141,10 @@ pub fn router(state: Arc<EngineState>) -> Router {
     let api = Router::new()
         .route("/health", get(readiness))
         .route("/engine/version", get(version))
-        .route("/engine/composition", get(composition))
+        .route(
+            "/engine/composition",
+            get(composition).put(replace_composition),
+        )
         .route("/engine/apps", get(list_apps).post(install_app))
         .route(
             "/engine/apps/{id}",
@@ -181,18 +192,89 @@ async fn version(State(state): State<Arc<EngineState>>) -> Json<Value> {
 /// What is composed, plus the surface the composer derived from it.
 ///
 /// Resolution is the same function the boot uses, so the panel reads why an app
-/// is not running instead of guessing from logs (§8.5).
-async fn composition(
-    State(state): State<Arc<EngineState>>,
-) -> Result<Json<CompositionView>, ApiError> {
+/// is not running instead of guessing from logs (§8.5). The `ETag` is the strong
+/// validator a replacement must echo in `If-Match`.
+async fn composition(State(state): State<Arc<EngineState>>) -> Result<Response, ApiError> {
     let apps = apps(&state)?;
+    let composition = current_composition(&state)?;
     let installed = installed_apps(apps)?;
     let resolution =
-        resolve(&state.composition, &installed).map_err(|error| ApiError(error.into_error()))?;
-    Ok(Json(CompositionView {
-        composition: state.composition.as_ref().clone(),
+        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    let view = CompositionView {
+        composition: composition.clone(),
         surface: surface_view(&resolution, &installed).map_err(ApiError)?,
-    }))
+    };
+    let etag = apps.compositions.etag(&composition)?;
+    Ok(([(ETAG, etag)], Json(view)).into_response())
+}
+
+/// Replaces the whole document. The body is the composition itself, not the
+/// `CompositionView` the `GET` answers.
+async fn replace_composition(
+    State(state): State<Arc<EngineState>>,
+    Extension(actor): Extension<Actor>,
+    headers: HeaderMap,
+    Json(composition): Json<Composition>,
+) -> Result<Response, ApiError> {
+    let apps = apps(&state)?;
+    // The lock is what makes `If-Match` more than advice: two replacements that
+    // read the same validator cannot both win.
+    let _guard = state.compose_lock.lock().await;
+    let current = current_composition(&state)?;
+    let etag = apps.compositions.etag(&current)?;
+    if !if_matches(&headers, &etag) {
+        return Err(ApiError(Error::precondition_failed(
+            "If-Match does not match the current composition",
+        )));
+    }
+    composition.validate().map_err(ApiError)?;
+    let installed = installed_apps(apps)?;
+    let resolution =
+        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    apps.compositions.save(&composition)?;
+    *state
+        .composition
+        .write()
+        .map_err(|_| ApiError(Error::internal("the composition lock is poisoned")))? =
+        composition.clone();
+    audit(
+        apps,
+        &actor.0,
+        AuditAction::Compose,
+        None,
+        Outcome::Ok,
+        Some(json!({"apps": composition.profile[0].apps})),
+    )?;
+    let view = CompositionView {
+        composition: composition.clone(),
+        surface: surface_view(&resolution, &installed).map_err(ApiError)?,
+    };
+    let etag = apps.compositions.etag(&composition)?;
+    Ok((StatusCode::OK, [(ETAG, etag)], Json(view)).into_response())
+}
+
+/// The current document, or an internal error if a panicking writer poisoned the
+/// lock. Reading it is short and never awaits.
+fn current_composition(state: &EngineState) -> Result<Composition, ApiError> {
+    state
+        .composition
+        .read()
+        .map(|guard| guard.clone())
+        .map_err(|_| ApiError(Error::internal("the composition lock is poisoned")))
+}
+
+/// `If-Match` is required and uses strong comparison: `*` matches any existing
+/// document, and a comma-separated list matches if any validator does.
+fn if_matches(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|candidate| candidate == "*" || candidate == etag)
+        })
 }
 
 /// The resolution as a client reads it (§8.7).
@@ -422,14 +504,7 @@ async fn remove_app(
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
-    require_ack(
-        apps,
-        &state.composition,
-        &actor,
-        &id,
-        "app.remove",
-        &headers,
-    )?;
+    require_ack(&state, apps, &actor, &id, "app.remove", &headers)?;
     // Revoke authority before touching the content: a corrupt or half-removed
     // tree must never keep a grant. A missing app simply has no grant to remove.
     apps.grants.remove(&id)?;
@@ -497,14 +572,7 @@ async fn patch_app(
         )));
     }
     if body.enabled == Some(false) {
-        require_ack(
-            apps,
-            &state.composition,
-            &actor,
-            &id,
-            "app.disable",
-            &headers,
-        )?;
+        require_ack(&state, apps, &actor, &id, "app.disable", &headers)?;
     }
     let installed = apps.registry.configure(&id, body.enabled, body.alias)?;
     if let Some(enabled) = body.enabled {
@@ -628,14 +696,7 @@ async fn revoke_grant(
     if !apps.grants.contains(&id)? {
         return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
     }
-    require_ack(
-        apps,
-        &state.composition,
-        &actor,
-        &id,
-        "app.revoke",
-        &headers,
-    )?;
+    require_ack(&state, apps, &actor, &id, "app.revoke", &headers)?;
     if !apps.grants.remove(&id)? {
         return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
     }
@@ -681,15 +742,16 @@ fn acknowledged(headers: &HeaderMap, token: &str) -> bool {
 /// Refuses a breaking action when other composed apps depend on this one,
 /// unless the operator acknowledged the token. The acknowledgment is audited.
 fn require_ack(
+    state: &EngineState,
     apps: &Apps,
-    composition: &Composition,
     actor: &str,
     id: &AppId,
     action: &str,
     headers: &HeaderMap,
 ) -> Result<(), ApiError> {
+    let composition = current_composition(state)?;
     let installed = installed_apps(apps).map_err(ApiError)?;
-    let dependents = composed_dependents(composition, &installed, id)?;
+    let dependents = composed_dependents(&composition, &installed, id)?;
     if dependents.is_empty() {
         return Ok(());
     }
@@ -1874,6 +1936,120 @@ mod tests {
             .as_array()
             .expect("degraded")
             .is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_composition_is_replaced_with_its_validator() {
+        let (state, dir) = apps_state();
+        let (status, headers, _) =
+            call(state.clone(), "GET", "/api/engine/composition", Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        let etag = headers
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("etag")
+            .to_string();
+        assert!(etag.starts_with('"') && etag.ends_with('"'), "{etag}");
+        let body = br#"{"version":1,"profile":[{"id":"default","apps":["org.example.notes"]}]}"#;
+        let (status, headers, value) = call_with(
+            state.clone(),
+            "PUT",
+            "/api/engine/composition",
+            body.to_vec(),
+            &[("if-match", &etag)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            value["composition"]["profile"][0]["apps"][0],
+            "org.example.notes"
+        );
+        assert_ne!(
+            headers.get("etag").and_then(|value| value.to_str().ok()),
+            Some(etag.as_str())
+        );
+        let (status, value) = json(state, "/api/engine/composition").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            value["composition"]["profile"][0]["apps"][0],
+            "org.example.notes"
+        );
+        let entries = AuditLog::new(&dir).entries().expect("audit");
+        assert_eq!(entries.last().unwrap().action, AuditAction::Compose);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_stale_or_missing_validator_is_refused() {
+        let (state, dir) = apps_state();
+        let body = br#"{"version":1,"profile":[{"id":"default","apps":[]}]}"#;
+        let (status, _, value) = call(
+            state.clone(),
+            "PUT",
+            "/api/engine/composition",
+            body.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(value["error"]["code"], "precondition-failed");
+        let (status, _, value) = call_with(
+            state.clone(),
+            "PUT",
+            "/api/engine/composition",
+            body.to_vec(),
+            &[("if-match", "\"not-the-current-document\"")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(value["error"]["code"], "precondition-failed");
+        assert!(!dir.join("composition.toml").exists());
+        // `*` matches any existing document.
+        let (status, _, _) = call_with(
+            state,
+            "PUT",
+            "/api/engine/composition",
+            body.to_vec(),
+            &[("if-match", "*")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_composition_is_refused_and_not_written() {
+        let (state, dir) = apps_state();
+        let body = br#"{"version":1,"profile":[{"id":"default"},{"id":"other","apps":[]}]}"#;
+        let (status, _, value) = call_with(
+            state,
+            "PUT",
+            "/api/engine/composition",
+            body.to_vec(),
+            &[("if-match", "*")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], "invalid");
+        assert!(!dir.join("composition.toml").exists());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_composition_naming_an_uninstalled_app_is_refused() {
+        let (state, dir) = apps_state();
+        let body = br#"{"version":1,"profile":[{"id":"default","apps":["org.example.missing"]}]}"#;
+        let (status, _, value) = call_with(
+            state,
+            "PUT",
+            "/api/engine/composition",
+            body.to_vec(),
+            &[("if-match", "*")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], "not-found");
+        assert!(!dir.join("composition.toml").exists());
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

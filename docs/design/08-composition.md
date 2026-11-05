@@ -128,7 +128,8 @@ A degraded consumer answers with the error envelope of [§7.11](07-app.md#711-er
 
 v0.5.0 recomposes by restarting the engine process. `anth compose` says so and
 accepts `--now`. It is boring, it is predictable, and it keeps state assumptions
-honest.
+honest. The document and the composition view update as soon as the `PUT`
+succeeds; app instances, once they exist, change on restart.
 
 It is **not** justified yet by "the store is externalized": apps may hold state in
 a long-lived instance ([§7.10](07-app.md#710-state)). Per-app restart becomes safe when apps treat the
