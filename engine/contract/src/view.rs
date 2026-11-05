@@ -31,6 +31,9 @@ pub struct AppView {
     pub grant: Option<GrantView>,
     /// Whether that grant is absent, current, stale or unreadable.
     pub grant_state: GrantState,
+    /// Why the grant is unreadable, when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_problem: Option<String>,
 }
 
 /// The grant as a client sees it, without the strict-document rules.
@@ -127,6 +130,7 @@ mod tests {
             installed_at: "2026-11-03T20:00:00Z".to_string(),
             grant: Some(GrantView::from(grant())),
             grant_state: GrantState::Current,
+            grant_problem: None,
         }
     }
 

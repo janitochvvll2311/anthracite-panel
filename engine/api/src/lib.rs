@@ -198,7 +198,7 @@ fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
 
 fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppView, Error> {
     let id = AppId::parse(&installed.manifest.app.id)?;
-    let (grant, grant_state) = match apps.grants.load(&id) {
+    let (grant, grant_state, grant_problem) = match apps.grants.load(&id) {
         Ok(Some(grant)) => {
             let state = if installed.grant_matches(&grant) {
                 GrantState::Current
@@ -210,10 +210,10 @@ fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppV
             } else {
                 None
             };
-            (view, state)
+            (view, state, None)
         }
-        Ok(None) => (None, GrantState::None),
-        Err(_) => (None, GrantState::Invalid),
+        Ok(None) => (None, GrantState::None, None),
+        Err(error) => (None, GrantState::Invalid, Some(error.message().to_string())),
     };
     Ok(AppView {
         id,
@@ -225,6 +225,7 @@ fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppV
         installed_at: installed.descriptor.installed_at.clone(),
         grant,
         grant_state,
+        grant_problem,
     })
 }
 
@@ -427,6 +428,13 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["grant_state"], "invalid");
         assert!(value.get("grant").is_none());
+        assert!(
+            value["grant_problem"]
+                .as_str()
+                .expect("problem")
+                .contains("not valid"),
+            "{value}"
+        );
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
