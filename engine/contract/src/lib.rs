@@ -30,4 +30,4 @@ pub use view::{
     AppProblem, AppView, CompositionView, DegradedApp, FatalView, GrantState, GrantView, KeyView,
     SurfaceApp, SurfaceCli, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,
 };
-pub use world::World;
+pub use world::{World, WorldMismatch};
