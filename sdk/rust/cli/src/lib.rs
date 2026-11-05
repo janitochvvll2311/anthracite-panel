@@ -13,16 +13,31 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anth_contract::Error;
+use anth_contract::{Error, ErrorKind};
+
+pub mod client;
+
+pub use client::Client;
 
 pub const USAGE: &str = "\
-usage: anth <command> [options]
+usage: anth [--socket <path>] <command> [options]
 
 commands:
   doctor [--config <path>] [--debug|--release]
                         validate a configuration without a daemon
+  status                health, version and the installed catalogue
+  app list              list installed apps
+  app show <id>         show one app
+  app install <bundle>  install a bundle (zip)
+  app upgrade <id> <bundle>
+                        replace an installed bundle
+  app enable|disable <id> [--acknowledge <token>]
+  app remove <id> [--acknowledge <token>]
+  app approve <id> [--accept-write|--accept-admin|--accept-host|--accept-package]
+  app revoke <id> [--acknowledge <token>]
 
 options:
+  --socket <path>       engine socket; then ANTH_SOCKET, then /run/anth/engine.sock
   -h, --help            show this message
   -V, --version         show the version";
 
@@ -46,8 +61,47 @@ pub enum Invocation {
         config: Option<PathBuf>,
         profile: Option<Profile>,
     },
+    Status {
+        socket: Option<PathBuf>,
+    },
+    App {
+        socket: Option<PathBuf>,
+        command: AppCommand,
+    },
     Help,
     Version,
+}
+
+/// The `anth app` subcommands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppCommand {
+    List,
+    Show(String),
+    Install(PathBuf),
+    Upgrade {
+        app: String,
+        bundle: PathBuf,
+    },
+    Enable {
+        app: String,
+        acknowledge: Option<String>,
+    },
+    Disable {
+        app: String,
+        acknowledge: Option<String>,
+    },
+    Remove {
+        app: String,
+        acknowledge: Option<String>,
+    },
+    Approve {
+        app: String,
+        accept: Vec<String>,
+    },
+    Revoke {
+        app: String,
+        acknowledge: Option<String>,
+    },
 }
 
 /// Parses arguments without touching the filesystem.
@@ -55,16 +109,114 @@ pub enum Invocation {
 /// Flags are compared as text, but a path is kept as [`OsString`]: a state
 /// directory with non-UTF-8 bytes is unusual, not invalid.
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Error> {
-    let mut args = args.into_iter();
-    let Some(command) = args.next() else {
-        return Ok(Invocation::Help);
+    let mut args = args.into_iter().peekable();
+    let mut socket = None;
+    let command = loop {
+        let Some(arg) = args.next() else {
+            return Ok(Invocation::Help);
+        };
+        match as_text(&arg)? {
+            "--socket" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| usage("`--socket` needs a path".to_string()))?;
+                socket = Some(PathBuf::from(path));
+            }
+            "--help" | "-h" => return Ok(Invocation::Help),
+            "--version" | "-V" => return Ok(Invocation::Version),
+            other => break other.to_string(),
+        }
     };
-    match as_text(&command)? {
+    match command.as_str() {
         "doctor" => parse_doctor(args),
-        "help" | "--help" | "-h" => Ok(Invocation::Help),
-        "--version" | "-V" | "version" => Ok(Invocation::Version),
+        "help" => Ok(Invocation::Help),
+        "version" => Ok(Invocation::Version),
+        "status" => {
+            if let Some(extra) = args.next() {
+                return Err(usage(format!(
+                    "`{}` is not a status option",
+                    as_text(&extra)?
+                )));
+            }
+            Ok(Invocation::Status { socket })
+        }
+        "app" => parse_app(args, socket),
         other => Err(usage(format!("`{other}` is not a command"))),
     }
+}
+
+fn parse_app(
+    args: impl Iterator<Item = OsString>,
+    socket: Option<PathBuf>,
+) -> Result<Invocation, Error> {
+    let mut args = args.into_iter().peekable();
+    let sub = args
+        .next()
+        .ok_or_else(|| usage("`app` needs a subcommand".to_string()))?;
+    let sub = as_text(&sub)?.to_string();
+    let mut acknowledge = None;
+    let mut accept = Vec::new();
+    let mut positional: Vec<String> = Vec::new();
+    while let Some(arg) = args.next() {
+        match as_text(&arg)? {
+            "--acknowledge" => {
+                let token = args
+                    .next()
+                    .ok_or_else(|| usage("`--acknowledge` needs a token".to_string()))?;
+                acknowledge = Some(as_text(&token)?.to_string());
+            }
+            "--accept-write" => accept.push("write".to_string()),
+            "--accept-admin" => accept.push("admin".to_string()),
+            "--accept-host" => accept.push("host".to_string()),
+            "--accept-package" => accept.push("package".to_string()),
+            "--help" | "-h" => return Ok(Invocation::Help),
+            value => positional.push(value.to_string()),
+        }
+    }
+    let is_approve = sub == "approve";
+    if is_approve && acknowledge.is_some() {
+        return Err(usage(
+            "`app approve` does not take `--acknowledge`".to_string(),
+        ));
+    }
+    if !is_approve && !accept.is_empty() {
+        return Err(usage(
+            "--accept-* only applies to `app approve`".to_string(),
+        ));
+    }
+    let command = match (sub.as_str(), positional.as_slice()) {
+        ("list", []) => AppCommand::List,
+        ("show", [app]) => AppCommand::Show(app.clone()),
+        ("install", [bundle]) => AppCommand::Install(PathBuf::from(bundle)),
+        ("upgrade", [app, bundle]) => AppCommand::Upgrade {
+            app: app.clone(),
+            bundle: PathBuf::from(bundle),
+        },
+        ("enable", [app]) => AppCommand::Enable {
+            app: app.clone(),
+            acknowledge,
+        },
+        ("disable", [app]) => AppCommand::Disable {
+            app: app.clone(),
+            acknowledge,
+        },
+        ("remove", [app]) => AppCommand::Remove {
+            app: app.clone(),
+            acknowledge,
+        },
+        ("approve", [app]) => AppCommand::Approve {
+            app: app.clone(),
+            accept,
+        },
+        ("revoke", [app]) => AppCommand::Revoke {
+            app: app.clone(),
+            acknowledge,
+        },
+        (sub, _) => {
+            return Err(usage(format!("`app {sub}` does not take those arguments")));
+        }
+    };
+    Ok(Invocation::App { socket, command })
 }
 
 fn as_text(arg: &OsString) -> Result<&str, Error> {
@@ -118,6 +270,8 @@ pub fn execute(invocation: Invocation) -> Result<u8, Error> {
             Ok(0)
         }
         Invocation::Doctor { config, profile } => doctor(config, profile),
+        Invocation::Status { socket } => status(socket),
+        Invocation::App { socket, command } => app(socket, command),
     }
 }
 
@@ -147,6 +301,191 @@ fn doctor(config: Option<PathBuf>, profile: Option<Profile>) -> Result<u8, Error
         .status()
         .map_err(|error| Error::invalid(format!("cannot run {}: {error}", engine.display())))?;
     Ok(status.code().unwrap_or(1) as u8)
+}
+
+/// How the terminal shows a refused request: a `409` that names an
+/// acknowledgment token becomes an instruction (§7.9); everything else keeps
+/// the code and the message.
+pub fn error_text(error: &Error) -> String {
+    if error.kind() == ErrorKind::Conflict {
+        if let Some(tokens) = error
+            .envelope()
+            .error
+            .detail
+            .as_ref()
+            .and_then(|detail| detail["acknowledge"].as_array())
+        {
+            let tokens: Vec<&str> = tokens.iter().filter_map(|token| token.as_str()).collect();
+            if !tokens.is_empty() {
+                return format!(
+                    "warning: {}\nrerun with --acknowledge {} to proceed",
+                    error.message(),
+                    tokens.join(" ")
+                );
+            }
+        }
+    }
+    format!("{}: {}", error.kind().code(), error.message())
+}
+
+/// The socket the engine listens on: explicit, env, then the release default.
+fn socket_path(explicit: Option<PathBuf>) -> PathBuf {
+    explicit
+        .or_else(|| env::var_os("ANTH_SOCKET").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("/run/anth/engine.sock"))
+}
+
+fn client(socket: Option<PathBuf>) -> Client {
+    Client::new(socket_path(socket))
+}
+
+/// Readiness, the version and the catalogue in one answer.
+fn status(socket: Option<PathBuf>) -> Result<u8, Error> {
+    let client = client(socket);
+    let health = client.get_json("/api/health")?;
+    let version = client.get_json("/api/engine/version")?;
+    let apps = client.get_json("/api/engine/apps")?;
+    println!(
+        "engine {} (protocol {})",
+        version["engine"].as_str().unwrap_or("?"),
+        version["protocol"].as_u64().unwrap_or(0)
+    );
+    println!("health {}", health["status"].as_str().unwrap_or("?"));
+    println!("apps {}", apps["apps"].as_array().map_or(0, Vec::len));
+    for problem in apps["problems"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+    {
+        eprintln!(
+            "warning: {}: {}",
+            problem["app"].as_str().unwrap_or("?"),
+            problem["message"].as_str().unwrap_or("?")
+        );
+    }
+    Ok(0)
+}
+
+fn app(socket: Option<PathBuf>, command: AppCommand) -> Result<u8, Error> {
+    let client = client(socket);
+    match command {
+        AppCommand::List => {
+            let value = client.get_json("/api/engine/apps")?;
+            for app in value["apps"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    app["id"].as_str().unwrap_or("?"),
+                    app["version"].as_str().unwrap_or("?"),
+                    if app["enabled"].as_bool().unwrap_or(false) {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
+                    app["alias"].as_str().unwrap_or("-"),
+                    app["grant_state"].as_str().unwrap_or("none")
+                );
+            }
+            for problem in value["problems"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+            {
+                eprintln!(
+                    "warning: {}: {}",
+                    problem["app"].as_str().unwrap_or("?"),
+                    problem["message"].as_str().unwrap_or("?")
+                );
+            }
+            Ok(0)
+        }
+        AppCommand::Show(app) => {
+            let value = client.get_json(&format!("/api/engine/apps/{app}"))?;
+            print_value(
+                &serde_json::to_vec(&value)
+                    .map_err(|error| Error::internal(format!("rendering the app: {error}")))?,
+            )
+        }
+        AppCommand::Install(bundle) => {
+            let body = std::fs::read(&bundle).map_err(|error| {
+                Error::not_found(format!("reading {}: {error}", bundle.display()))
+            })?;
+            let response = client.request("POST", "/api/engine/apps", &body, &[])?;
+            print_value(&response.body)
+        }
+        AppCommand::Upgrade { app, bundle } => {
+            let body = std::fs::read(&bundle).map_err(|error| {
+                Error::not_found(format!("reading {}: {error}", bundle.display()))
+            })?;
+            let response = client.request("PUT", &format!("/api/engine/apps/{app}"), &body, &[])?;
+            print_value(&response.body)
+        }
+        AppCommand::Enable { app, acknowledge } => patch_enabled(&client, &app, true, acknowledge),
+        AppCommand::Disable { app, acknowledge } => {
+            patch_enabled(&client, &app, false, acknowledge)
+        }
+        AppCommand::Remove { app, acknowledge } => {
+            delete(&client, &format!("/api/engine/apps/{app}"), acknowledge)
+        }
+        AppCommand::Approve { app, accept } => {
+            let body = serde_json::json!({ "accept": accept }).to_string();
+            let response = client.request(
+                "PUT",
+                &format!("/api/engine/apps/{app}/grant"),
+                body.as_bytes(),
+                &[],
+            )?;
+            print_value(&response.body)
+        }
+        AppCommand::Revoke { app, acknowledge } => delete(
+            &client,
+            &format!("/api/engine/apps/{app}/grant"),
+            acknowledge,
+        ),
+    }
+}
+
+fn patch_enabled(
+    client: &Client,
+    app: &str,
+    enabled: bool,
+    acknowledge: Option<String>,
+) -> Result<u8, Error> {
+    let body = serde_json::json!({ "enabled": enabled }).to_string();
+    let headers: Vec<(&str, &str)> = acknowledge
+        .as_deref()
+        .map(|token| vec![("x-anth-acknowledge", token)])
+        .unwrap_or_default();
+    let response = client.request(
+        "PATCH",
+        &format!("/api/engine/apps/{app}"),
+        body.as_bytes(),
+        &headers,
+    )?;
+    print_value(&response.body)
+}
+
+fn delete(client: &Client, path: &str, acknowledge: Option<String>) -> Result<u8, Error> {
+    let headers: Vec<(&str, &str)> = acknowledge
+        .as_deref()
+        .map(|token| vec![("x-anth-acknowledge", token)])
+        .unwrap_or_default();
+    client.request("DELETE", path, &[], &headers)?;
+    Ok(0)
+}
+
+fn print_value(body: &[u8]) -> Result<u8, Error> {
+    if body.is_empty() {
+        return Ok(0);
+    }
+    let value: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+        Error::internal(format!("the engine answered with invalid JSON: {error}"))
+    })?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value)
+            .map_err(|error| Error::internal(format!("rendering the answer: {error}")))?
+    );
+    Ok(0)
 }
 
 fn locate_engine() -> Result<PathBuf, Error> {
@@ -214,11 +553,59 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::{Read, Write};
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+    use std::sync::mpsc;
+    use std::thread;
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    /// A listener that answers `responses` in order, one per connection, and
+    /// sends back every request it received.
+    fn serve(path: &Path, responses: Vec<Vec<u8>>) -> mpsc::Receiver<Vec<u8>> {
+        let listener = UnixListener::bind(path).expect("bind");
+        let (send, receive) = mpsc::channel();
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let read = stream.read(&mut buffer).expect("read");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if let Some(split) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                    {
+                        let head = String::from_utf8_lossy(&request[..split]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if request.len() >= split + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let _ = send.send(request);
+                stream.write_all(&response).expect("write");
+            }
+        });
+        receive
+    }
+
+    fn answer(status: &str, body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -291,6 +678,232 @@ mod tests {
     #[test]
     fn doctor_refuses_an_unknown_option() {
         assert!(parse(args(&["doctor", "--all"])).is_err());
+    }
+
+    #[test]
+    fn status_takes_the_socket() {
+        assert_eq!(
+            parse(args(&["--socket", "/tmp/engine.sock", "status"])).expect("parse"),
+            Invocation::Status {
+                socket: Some(PathBuf::from("/tmp/engine.sock")),
+            }
+        );
+        assert_eq!(
+            parse(args(&["status"])).expect("parse"),
+            Invocation::Status { socket: None }
+        );
+    }
+
+    #[test]
+    fn status_refuses_positional_arguments() {
+        assert!(parse(args(&["status", "now"])).is_err());
+    }
+
+    #[test]
+    fn app_list_and_show_parse() {
+        assert_eq!(
+            parse(args(&["app", "list"])).expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::List,
+            }
+        );
+        assert_eq!(
+            parse(args(&["app", "show", "org.example.notes"])).expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Show("org.example.notes".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn install_and_upgrade_take_a_bundle() {
+        assert_eq!(
+            parse(args(&["app", "install", "/tmp/notes.zip"])).expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Install(PathBuf::from("/tmp/notes.zip")),
+            }
+        );
+        assert_eq!(
+            parse(args(&[
+                "app",
+                "upgrade",
+                "org.example.notes",
+                "/tmp/notes.zip"
+            ]))
+            .expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Upgrade {
+                    app: "org.example.notes".to_string(),
+                    bundle: PathBuf::from("/tmp/notes.zip"),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn approve_takes_the_accept_flags() {
+        let parsed = parse(args(&[
+            "app",
+            "approve",
+            "org.example.notes",
+            "--accept-write",
+            "--accept-host",
+        ]))
+        .expect("parse");
+        assert_eq!(
+            parsed,
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Approve {
+                    app: "org.example.notes".to_string(),
+                    accept: vec!["write".to_string(), "host".to_string()],
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn approve_refuses_acknowledge() {
+        let error = parse(args(&[
+            "app",
+            "approve",
+            "org.example.notes",
+            "--acknowledge",
+            "dependents",
+        ]))
+        .expect_err("acknowledge");
+        assert!(error.message().contains("--acknowledge"), "{error}");
+    }
+
+    #[test]
+    fn accept_flags_only_apply_to_approve() {
+        let error = parse(args(&[
+            "app",
+            "disable",
+            "org.example.notes",
+            "--accept-write",
+        ]))
+        .expect_err("accept");
+        assert!(error.message().contains("--accept-*"), "{error}");
+    }
+
+    #[test]
+    fn enable_takes_an_acknowledgment() {
+        assert_eq!(
+            parse(args(&[
+                "app",
+                "enable",
+                "org.example.notes",
+                "--acknowledge",
+                "dependents",
+            ]))
+            .expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Enable {
+                    app: "org.example.notes".to_string(),
+                    acknowledge: Some("dependents".to_string()),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn app_needs_a_known_subcommand_and_its_arguments() {
+        assert!(parse(args(&["app"])).is_err());
+        assert!(parse(args(&["app", "nope"])).is_err());
+        assert!(parse(args(&["app", "show"])).is_err());
+        assert!(parse(args(&["app", "list", "extra"])).is_err());
+        assert!(parse(args(&["app", "approve"])).is_err());
+    }
+
+    #[test]
+    fn a_conflict_becomes_an_acknowledgment_instruction() {
+        let error = Error::conflict("`org.anth.fs` is required by org.example.notes").with_detail(
+            serde_json::json!({
+                "dependents": ["org.example.notes"],
+                "acknowledge": ["dependents"],
+            }),
+        );
+        let text = error_text(&error);
+        assert!(
+            text.starts_with("warning: `org.anth.fs` is required by"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("rerun with --acknowledge dependents to proceed"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn other_errors_keep_the_code() {
+        let text = error_text(&Error::not_found("`x` is not installed"));
+        assert_eq!(text, "not-found: `x` is not installed");
+    }
+
+    #[test]
+    fn status_asks_health_version_and_apps() {
+        let dir = scratch("status");
+        let socket = dir.join("engine.sock");
+        let receive = serve(
+            &socket,
+            vec![
+                answer("200 OK", r#"{"status":"ok"}"#),
+                answer("200 OK", r#"{"engine":"0.5.0","protocol":1}"#),
+                answer("200 OK", r#"{"apps":[]}"#),
+            ],
+        );
+        assert_eq!(status(Some(socket)).expect("status"), 0);
+        let lines: Vec<String> = (0..3)
+            .map(|_| {
+                let request = receive.recv().expect("request");
+                String::from_utf8_lossy(&request)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "GET /api/health HTTP/1.1",
+                "GET /api/engine/version HTTP/1.1",
+                "GET /api/engine/apps HTTP/1.1",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_revoke_sends_the_acknowledgment_header() {
+        let dir = scratch("revoke");
+        let socket = dir.join("engine.sock");
+        let receive = serve(&socket, vec![answer("204 No Content", "")]);
+        let code = app(
+            Some(socket),
+            AppCommand::Revoke {
+                app: "org.example.notes".to_string(),
+                acknowledge: Some("dependents".to_string()),
+            },
+        )
+        .expect("revoke");
+        assert_eq!(code, 0);
+        let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            request.starts_with("DELETE /api/engine/apps/org.example.notes/grant HTTP/1.1"),
+            "{request}"
+        );
+        assert!(
+            request
+                .to_lowercase()
+                .contains("x-anth-acknowledge: dependents"),
+            "{request}"
+        );
     }
 
     #[test]
