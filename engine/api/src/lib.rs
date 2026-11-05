@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
-use anth_contract::{AppId, AppProblem, AppView, Composition, Error, GrantState, GrantView};
+use anth_contract::{
+    AppId, AppProblem, AppView, Composition, Error, ErrorKind, GrantState, GrantView,
+};
 use axum::extract::{connect_info::Connected, ConnectInfo, Path, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -170,7 +172,19 @@ async fn get_app(
     let id = AppId::parse(&id)?;
     let installed = apps
         .registry
-        .get(&id)?
+        .get(&id)
+        .map_err(|error| {
+            // A corrupt installed tree is state the operator must repair, not a
+            // bad request.
+            if error.kind() == ErrorKind::Invalid {
+                ApiError(Error::internal(format!(
+                    "the installed tree for `{id}` is corrupt: {}",
+                    error.message()
+                )))
+            } else {
+                ApiError(error)
+            }
+        })?
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
     Ok(Json(app_view(apps, &installed, true)?))
 }
@@ -184,21 +198,22 @@ fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
 
 fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppView, Error> {
     let id = AppId::parse(&installed.manifest.app.id)?;
-    let (grant, grant_state) = if with_grant {
-        match apps.grants.load(&id) {
-            Ok(Some(grant)) => {
-                let state = if installed.grant_matches(&grant) {
-                    GrantState::Current
-                } else {
-                    GrantState::Stale
-                };
-                (Some(GrantView::from(grant)), state)
-            }
-            Ok(None) => (None, GrantState::None),
-            Err(_) => (None, GrantState::Invalid),
+    let (grant, grant_state) = match apps.grants.load(&id) {
+        Ok(Some(grant)) => {
+            let state = if installed.grant_matches(&grant) {
+                GrantState::Current
+            } else {
+                GrantState::Stale
+            };
+            let view = if with_grant {
+                Some(GrantView::from(grant))
+            } else {
+                None
+            };
+            (view, state)
         }
-    } else {
-        (None, GrantState::None)
+        Ok(None) => (None, GrantState::None),
+        Err(_) => (None, GrantState::Invalid),
     };
     Ok(AppView {
         id,
@@ -412,6 +427,33 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["grant_state"], "invalid");
         assert!(value.get("grant").is_none());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_catalogue_states_each_grant_without_sending_it() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("0.1.0"));
+        let (status, value) = json(state, "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["apps"][0]["grant_state"], "current");
+        assert!(value["apps"][0].get("grant").is_none());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_detail_of_a_corrupt_tree_is_internal() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = apps_state();
+        let broken = dir.join("apps/org.example.broken");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = broken.join("manifest.toml");
+        std::fs::write(&manifest, b"not a manifest").expect("write");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (status, value) = json(state, "/api/engine/apps/org.example.broken").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(value["error"]["code"], "internal");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
