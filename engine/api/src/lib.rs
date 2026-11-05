@@ -19,7 +19,8 @@ use anth_compose::risk::{approve, Approval};
 use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
-    Error, ErrorKind, GrantState, GrantView, Outcome, Risk, SurfaceApp, SurfaceLink, SurfaceView,
+    Error, ErrorKind, FatalView, GrantState, GrantView, Outcome, Risk, SurfaceApp, SurfaceLink,
+    SurfaceView,
 };
 use axum::body::Bytes;
 use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
@@ -198,11 +199,13 @@ async fn composition(State(state): State<Arc<EngineState>>) -> Result<Response, 
     let apps = apps(&state)?;
     let composition = current_composition(&state)?;
     let installed = installed_apps(apps)?;
-    let resolution =
-        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    let surface = match resolve(&composition, &installed) {
+        Ok(resolution) => surface_view(&resolution, &installed).map_err(ApiError)?,
+        Err(error) => fatal_surface(error),
+    };
     let view = CompositionView {
         composition: composition.clone(),
-        surface: surface_view(&resolution, &installed).map_err(ApiError)?,
+        surface,
     };
     let etag = apps.compositions.etag(&composition)?;
     Ok(([(ETAG, etag)], Json(view)).into_response())
@@ -334,7 +337,24 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
         apps,
         degraded,
         links,
+        fatal: None,
     })
+}
+
+/// A fatal resolution is part of the view, not an HTTP failure: the operator
+/// needs the document back to remove the app that cannot resolve.
+fn fatal_surface(error: anth_compose::ResolutionError) -> SurfaceView {
+    let envelope = error.into_error().envelope();
+    SurfaceView {
+        apps: Vec::new(),
+        degraded: Vec::new(),
+        links: Vec::new(),
+        fatal: Some(FatalView {
+            code: envelope.error.code,
+            message: envelope.error.message,
+            detail: envelope.error.detail,
+        }),
+    }
 }
 
 /// The kebab-case reason of §8.5.
@@ -2051,6 +2071,42 @@ mod tests {
         assert_eq!(value["error"]["code"], "not-found");
         assert!(!dir.join("composition.toml").exists());
         std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_fatal_composition_is_still_readable_for_repair() {
+        let (state, dir) = apps_state_with(&["org.example.missing"]);
+        let (status, headers, value) =
+            call(state, "GET", "/api/engine/composition", Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.get("etag").is_some());
+        assert_eq!(
+            value["composition"]["profile"][0]["apps"][0],
+            "org.example.missing"
+        );
+        assert_eq!(value["surface"]["fatal"]["code"], "not-found");
+        assert!(value["surface"]["apps"]
+            .as_array()
+            .expect("apps")
+            .is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn if_match_uses_a_strong_exact_validator() {
+        use axum::http::header::HeaderValue;
+        let etag = "\"abc\"";
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(IF_MATCH, HeaderValue::from_str(value).expect("header"));
+            headers
+        };
+        assert!(if_matches(&with("\"abc\""), etag));
+        assert!(if_matches(&with("\"x\", \"abc\""), etag));
+        assert!(if_matches(&with("*"), etag));
+        assert!(!if_matches(&HeaderMap::new(), etag));
+        assert!(!if_matches(&with("W/\"abc\""), etag));
+        assert!(!if_matches(&with("\"nope\""), etag));
     }
 
     #[tokio::test]

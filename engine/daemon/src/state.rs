@@ -52,8 +52,7 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     for name in DIRS {
         create_dir(&root.join(name))?;
     }
-    let composition = toml::to_string_pretty(&Composition::empty())
-        .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?;
+    let composition = Composition::empty().to_toml()?;
     write_missing(&root.join(COMPOSITION), composition.as_bytes())?;
     write_missing(&root.join(AUDIT), b"")?;
     Ok(())

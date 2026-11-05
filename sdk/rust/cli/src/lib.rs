@@ -423,6 +423,7 @@ fn compose(
         .ok_or_else(|| Error::internal("the engine answered without an ETag"))?;
     let mut view: serde_json::Value = serde_json::from_slice(&response.body)
         .map_err(|error| Error::internal(format!("the composition is not JSON: {error}")))?;
+    warn_fatal(&view["surface"]);
     if show || (add.is_empty() && remove.is_empty()) {
         return print_value(
             &serde_json::to_vec(&view["composition"])
@@ -432,12 +433,7 @@ fn compose(
     let apps = view["composition"]["profile"][0]["apps"]
         .as_array_mut()
         .ok_or_else(|| Error::internal("the composition has no profile"))?;
-    for id in &add {
-        if !apps.iter().any(|app| app.as_str() == Some(id)) {
-            apps.push(serde_json::Value::String(id.clone()));
-        }
-    }
-    apps.retain(|app| !remove.iter().any(|id| app.as_str() == Some(id)));
+    edit_apps(apps, &add, &remove);
     let body = serde_json::to_vec(&view["composition"])
         .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?;
     let response = client.request(
@@ -466,6 +462,45 @@ fn compose(
     Ok(0)
 }
 
+/// Edits the profile by app id, not by raw string: `notes` replaces or removes
+/// `notes@0.2.0` too, and a pin change replaces the existing entry instead of
+/// composing the app twice (§8.1).
+fn edit_apps(apps: &mut Vec<serde_json::Value>, add: &[String], remove: &[String]) {
+    for id in add {
+        let wanted = anth_contract::Profile::app_id(id);
+        let found = apps.iter_mut().find(|app| {
+            app.as_str()
+                .is_some_and(|existing| anth_contract::Profile::app_id(existing) == wanted)
+        });
+        match found {
+            Some(existing) => *existing = serde_json::Value::String(id.clone()),
+            None => apps.push(serde_json::Value::String(id.clone())),
+        }
+    }
+    if !remove.is_empty() {
+        apps.retain(|app| {
+            app.as_str()
+                .map(anth_contract::Profile::app_id)
+                .is_none_or(|base| {
+                    !remove
+                        .iter()
+                        .any(|id| anth_contract::Profile::app_id(id) == base)
+                })
+        });
+    }
+}
+
+/// A composition that cannot boot is still readable; name the reason once.
+fn warn_fatal(surface: &serde_json::Value) {
+    if let Some(fatal) = surface["fatal"].as_object() {
+        eprintln!(
+            "warning: composition {}: {}",
+            fatal["code"].as_str().unwrap_or("invalid"),
+            fatal["message"].as_str().unwrap_or("it cannot be resolved")
+        );
+    }
+}
+
 /// Readiness, the composition, the version and the catalogue in one answer.
 fn status(socket: Option<PathBuf>) -> Result<u8, Error> {
     let client = client(socket);
@@ -491,6 +526,7 @@ fn status(socket: Option<PathBuf>) -> Result<u8, Error> {
         "composition {composed} app(s) in {} profile(s)",
         profiles.len()
     );
+    warn_fatal(&composition["surface"]);
     for degraded in composition["surface"]["degraded"]
         .as_array()
         .map(Vec::as_slice)
@@ -1105,6 +1141,19 @@ mod tests {
             "{put}"
         );
         assert!(put.contains("org.example.notes"), "{put}");
+    }
+
+    #[test]
+    fn compose_edits_by_app_id_not_by_pinned_text() {
+        let mut apps = vec![serde_json::json!("org.example.notes@0.1.0")];
+        edit_apps(&mut apps, &["org.example.notes@0.2.0".to_string()], &[]);
+        assert_eq!(apps, [serde_json::json!("org.example.notes@0.2.0")]);
+        edit_apps(&mut apps, &["org.example.consumer".to_string()], &[]);
+        assert_eq!(apps.len(), 2);
+        edit_apps(&mut apps, &[], &["org.example.notes".to_string()]);
+        assert_eq!(apps, [serde_json::json!("org.example.consumer")]);
+        edit_apps(&mut apps, &[], &["org.example.consumer@9.9.9".to_string()]);
+        assert!(apps.is_empty());
     }
 
     #[test]

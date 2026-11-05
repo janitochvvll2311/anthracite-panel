@@ -173,8 +173,11 @@ kebab-case reason of §8.5 — `unapproved`, `grant-stale`, `grant-invalid`,
 enough. A `blocked` app names the `interface` and `provider` it cannot reach and
 has no links, because it does not run; `risk-grown` names the `approved` and
 `effective` risk. `links[*].provider` is `engine` for the native set and the
-provider's id otherwise. A fatal resolution answers with the envelope of
-[§7.11](07-app.md#711-errors), so the endpoint and the boot agree on the three
-cases that cannot be degraded.
+provider's id otherwise.
+
+A fatal resolution does not hide the document: the endpoint stays `200` and puts
+the error in `surface.fatal` (`code`, `message`, optional `detail`), so a client
+can remove the offending app. The boot itself refuses, and `PUT` refuses a
+document that does not resolve.
 
 ---
