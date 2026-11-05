@@ -17,10 +17,12 @@ use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::risk::{approve, Approval};
 use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
+use anth_contract::manifest::parse_call;
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
-    Error, ErrorKind, FatalView, GrantState, GrantView, KeyAlgorithm, KeyView, Outcome, Risk,
-    SurfaceApp, SurfaceLink, SurfaceView, TrustedKey, KEY_VERSION,
+    Error, ErrorKind, FatalView, GrantState, GrantView, InterfaceId, KeyAlgorithm, KeyView,
+    Outcome, Risk, SurfaceApp, SurfaceCli, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,
+    TrustedKey, KEY_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
@@ -290,29 +292,69 @@ fn if_matches(headers: &HeaderMap, etag: &str) -> bool {
 /// invariant breaks, the answer is an internal error rather than a surface that
 /// invents `read` or an empty version.
 fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<SurfaceView, Error> {
-    let versions: BTreeMap<AppId, String> = installed
+    let installed_by_id: BTreeMap<AppId, &InstalledApp> = installed
         .iter()
-        .filter_map(|app| {
-            AppId::parse(&app.manifest.app.id)
-                .ok()
-                .map(|id| (id, app.manifest.app.version.clone()))
-        })
+        .filter_map(|app| AppId::parse(&app.manifest.app.id).ok().map(|id| (id, app)))
         .collect();
     let mut apps = Vec::with_capacity(resolution.order.len());
     for id in &resolution.order {
-        let version = versions
+        let found = installed_by_id
             .get(id)
-            .cloned()
+            .copied()
             .ok_or_else(|| Error::internal(format!("`{id}` runs but has no installed manifest")))?;
         let risk = resolution
             .risk
             .get(id)
             .copied()
             .ok_or_else(|| Error::internal(format!("`{id}` runs but has no effective risk")))?;
+        let routes = found
+            .manifest
+            .route
+            .iter()
+            .map(|route| {
+                let (interface, function) = parse_call(&route.call)?;
+                Ok(SurfaceRoute {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    interface: InterfaceId::parse(&interface)?,
+                    function,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let slots = found
+            .manifest
+            .slot
+            .iter()
+            .map(|slot| SurfaceSlot {
+                id: slot.id.clone(),
+                label: slot.label.clone(),
+                icon: slot.icon.clone(),
+                order: slot.order,
+                tag: slot.tag.clone(),
+                module: slot.module.clone(),
+                sha256: slot.sha256.clone(),
+            })
+            .collect();
+        let cli = found
+            .manifest
+            .cli
+            .iter()
+            .map(|verb| {
+                let (interface, function) = parse_call(&verb.call)?;
+                Ok(SurfaceCli {
+                    verb: verb.verb.clone(),
+                    interface: InterfaceId::parse(&interface)?,
+                    function,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
         apps.push(SurfaceApp {
             id: id.clone(),
-            version,
+            version: found.manifest.app.version.clone(),
             risk,
+            routes,
+            slots,
+            cli,
         });
     }
     let degraded = resolution
@@ -320,7 +362,9 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
         .iter()
         .map(|(id, degraded)| DegradedApp {
             app: id.clone(),
-            version: versions.get(id).cloned(),
+            version: installed_by_id
+                .get(id)
+                .map(|app| app.manifest.app.version.clone()),
             reason: reason_code(&degraded.reason).to_string(),
             detail: reason_detail(&degraded.reason),
         })
@@ -1165,7 +1209,7 @@ mod tests {
         for path in [&dir, &dir.join("apps"), &app, &wit] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         }
-        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n";
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
         let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
         let wit_source =
             "package example:notes@1.0.0;\ninterface thing { ping: func(); }\nworld app { export thing; }\n";
@@ -1626,6 +1670,21 @@ mod tests {
         assert_eq!(value["surface"]["apps"][0]["id"], "org.example.notes");
         assert_eq!(value["surface"]["apps"][0]["version"], "0.1.0");
         assert_eq!(value["surface"]["apps"][0]["risk"], "read");
+        assert_eq!(value["surface"]["apps"][0]["routes"][0]["method"], "GET");
+        assert_eq!(value["surface"]["apps"][0]["routes"][0]["path"], "/notes");
+        assert_eq!(
+            value["surface"]["apps"][0]["routes"][0]["interface"],
+            "example:notes/thing@1.0.0"
+        );
+        assert_eq!(value["surface"]["apps"][0]["routes"][0]["function"], "ping");
+        assert_eq!(value["surface"]["apps"][0]["slots"][0]["id"], "panel.view");
+        assert_eq!(
+            value["surface"]["apps"][0]["slots"][0]["module"],
+            "web/notes.js"
+        );
+        assert_eq!(value["surface"]["apps"][0]["slots"][0]["order"], 1);
+        assert_eq!(value["surface"]["apps"][0]["cli"][0]["verb"], "list");
+        assert_eq!(value["surface"]["apps"][0]["cli"][0]["function"], "ping");
         assert!(value["surface"]["degraded"]
             .as_array()
             .expect("degraded")

@@ -114,6 +114,45 @@ pub struct SurfaceApp {
     pub version: String,
     /// The effective risk: the maximum over its resolved imports (§9.3).
     pub risk: Risk,
+    /// HTTP routes the app declares (§7.6).
+    #[serde(default)]
+    pub routes: Vec<SurfaceRoute>,
+    /// UI slot contributions (§7.7).
+    #[serde(default)]
+    pub slots: Vec<SurfaceSlot>,
+    /// CLI verbs (§7.9).
+    #[serde(default)]
+    pub cli: Vec<SurfaceCli>,
+}
+
+/// One HTTP route of a running app.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceRoute {
+    pub method: String,
+    pub path: String,
+    pub interface: InterfaceId,
+    pub function: String,
+}
+
+/// One UI slot contribution of a running app.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceSlot {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub order: i64,
+    pub tag: String,
+    pub module: String,
+    pub sha256: String,
+}
+
+/// One CLI verb of a running app.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceCli {
+    pub verb: String,
+    pub interface: InterfaceId,
+    pub function: String,
 }
 
 /// One composed app that does not run, and why.
@@ -289,6 +328,28 @@ mod tests {
                     id: app.clone(),
                     version: "0.1.0".to_string(),
                     risk: Risk::Read,
+                    routes: vec![SurfaceRoute {
+                        method: "GET".to_string(),
+                        path: "/notes".to_string(),
+                        interface: InterfaceId::parse("example:notes/notes@1.0.0")
+                            .expect("interface"),
+                        function: "list".to_string(),
+                    }],
+                    slots: vec![SurfaceSlot {
+                        id: "panel.view".to_string(),
+                        label: "Notes".to_string(),
+                        icon: None,
+                        order: 1,
+                        tag: "notes".to_string(),
+                        module: "web/notes.js".to_string(),
+                        sha256: "c".repeat(64),
+                    }],
+                    cli: vec![SurfaceCli {
+                        verb: "list".to_string(),
+                        interface: InterfaceId::parse("example:notes/notes@1.0.0")
+                            .expect("interface"),
+                        function: "list".to_string(),
+                    }],
                 }],
                 degraded: vec![DegradedApp {
                     app: AppId::parse("org.example.consumer").expect("id"),

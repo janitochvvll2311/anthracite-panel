@@ -28,6 +28,6 @@ pub use key::{KeyAlgorithm, TrustedKey, KEY_VERSION};
 pub use manifest::{Manifest, MANIFEST_VERSION};
 pub use view::{
     AppProblem, AppView, CompositionView, DegradedApp, FatalView, GrantState, GrantView, KeyView,
-    SurfaceApp, SurfaceLink, SurfaceView,
+    SurfaceApp, SurfaceCli, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,
 };
 pub use world::World;
