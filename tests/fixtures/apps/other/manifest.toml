@@ -1,0 +1,15 @@
+manifest_version = 2
+
+[app]
+id = "org.example.other"
+alias = "other"
+namespace = "example:provider"
+name = "Other"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[export]]
+interface = "example:provider/greeting@1.0.0"

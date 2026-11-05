@@ -877,9 +877,16 @@ fn installed_apps(apps: &Apps) -> Result<Vec<InstalledApp>, Error> {
     let (apps_list, _) = apps.registry.catalogue()?;
     for app in apps_list {
         let id = AppId::parse(&app.manifest.app.id)?;
+        let (grant, grant_invalid) = match apps.grants.load(&id) {
+            Ok(grant) => (grant, false),
+            // A corrupt grant is not authority, but it is not "never approved"
+            // either: the surface must say the document exists and is broken.
+            Err(_) => (None, true),
+        };
         installed.push(InstalledApp {
             manifest: app.manifest,
-            grant: apps.grants.load(&id).unwrap_or(None),
+            grant,
+            grant_invalid,
             enabled: app.descriptor.enabled,
             material: apps.registry.approval_material(&id).ok().flatten(),
         });

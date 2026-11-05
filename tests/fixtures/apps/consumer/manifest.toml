@@ -1,0 +1,18 @@
+manifest_version = 2
+
+[app]
+id = "org.example.consumer"
+alias = "consumer"
+namespace = "example:consumer"
+name = "Consumer"
+version = "0.2.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[import]]
+interface = "example:provider/greeting@1.0.0"
+
+[[export]]
+interface = "example:consumer/note@1.0.0"

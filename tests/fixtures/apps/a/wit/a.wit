@@ -1,0 +1,10 @@
+package example:a@1.0.0;
+
+interface one {
+    one: func();
+}
+
+world app {
+    export one;
+    import example:b/two@1.0.0;
+}

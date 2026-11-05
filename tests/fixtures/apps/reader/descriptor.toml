@@ -1,0 +1,5 @@
+version = 1
+app = "org.example.reader"
+enabled = true
+tier = "third-party"
+installed_at = "2026-11-05T20:00:00Z"

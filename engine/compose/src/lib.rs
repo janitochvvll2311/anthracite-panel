@@ -52,6 +52,9 @@ pub struct InstalledApp {
     pub manifest: Manifest,
     /// The approved grant, or `None` when the operator never approved the app.
     pub grant: Option<Grant>,
+    /// A grant document exists but cannot be authority: corrupt, malformed or
+    /// unreadable. It degrades the app rather than masquerading as "unapproved".
+    pub grant_invalid: bool,
     /// The operator enabled the app.
     pub enabled: bool,
     /// The hashes and signature of the installed bytes, when they are known. A
@@ -393,21 +396,25 @@ pub fn resolve(
         }
         let exports = parse_interfaces(found.manifest.export.iter().map(|e| &e.interface))?;
         let imports = parse_interfaces(found.manifest.import.iter().map(|i| &i.interface))?;
-        let approval = match &found.grant {
-            None => Approval::Unapproved,
-            Some(grant) => match grant.validate() {
-                Err(_) => Approval::Invalid,
-                Ok(())
-                    if grant_matches(&found.manifest, grant, &exports, &imports)
-                        && found
-                            .material
-                            .as_ref()
-                            .is_none_or(|material| material.matches(grant)) =>
-                {
-                    Approval::Granted(grant.risk)
-                }
-                Ok(()) => Approval::Stale,
-            },
+        let approval = if found.grant_invalid {
+            Approval::Invalid
+        } else {
+            match &found.grant {
+                None => Approval::Unapproved,
+                Some(grant) => match grant.validate() {
+                    Err(_) => Approval::Invalid,
+                    Ok(())
+                        if grant_matches(&found.manifest, grant, &exports, &imports)
+                            && found
+                                .material
+                                .as_ref()
+                                .is_none_or(|material| material.matches(grant)) =>
+                    {
+                        Approval::Granted(grant.risk)
+                    }
+                    Ok(()) => Approval::Stale,
+                },
+            }
         };
         composed.push(Entry {
             id,
@@ -827,6 +834,7 @@ mod tests {
             manifest,
             grant: Some(grant),
             enabled: true,
+            grant_invalid: false,
             material: None,
         }
     }
@@ -1093,6 +1101,7 @@ mod tests {
             grant: Some(grant_for(&manifest, Risk::Read)),
             manifest,
             enabled: true,
+            grant_invalid: false,
             material: None,
         };
         let resolution = resolve(
@@ -1132,6 +1141,7 @@ mod tests {
             grant: Some(grant_for(&manifest, Risk::Read)),
             manifest,
             enabled: true,
+            grant_invalid: false,
             material: None,
         };
         let resolution =
@@ -1158,6 +1168,7 @@ mod tests {
             grant: Some(grant_for(&manifest, Risk::Write)),
             manifest,
             enabled: true,
+            grant_invalid: false,
             material: None,
         };
         let resolution = resolve(&composition(&[PROVIDER]), &[provider]).expect("resolve");
@@ -1282,6 +1293,7 @@ mod tests {
             .expect("parse"),
             grant: None,
             enabled: true,
+            grant_invalid: false,
             material: None,
         };
         let resolution = resolve(&composition(&[PROVIDER]), &[broken, provider()])
@@ -1300,6 +1312,7 @@ mod tests {
             .expect("parse"),
             grant: None,
             enabled: true,
+            grant_invalid: false,
             material: None,
         };
         let error = resolve(&composition(&[PROVIDER]), &[broken]).expect_err("missing");

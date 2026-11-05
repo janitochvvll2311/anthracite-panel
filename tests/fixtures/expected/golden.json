@@ -1,0 +1,64 @@
+{
+  "composition": {
+    "profile": [
+      {
+        "apps": [
+          "org.example.consumer",
+          "org.example.provider"
+        ],
+        "id": "default"
+      }
+    ],
+    "version": 1
+  },
+  "surface": {
+    "apps": [
+      {
+        "cli": [
+          {
+            "function": "greet",
+            "interface": "example:provider/greeting@1.0.0",
+            "verb": "greet"
+          }
+        ],
+        "id": "org.example.provider",
+        "risk": "read",
+        "routes": [
+          {
+            "function": "greet",
+            "interface": "example:provider/greeting@1.0.0",
+            "method": "GET",
+            "path": "/hello"
+          }
+        ],
+        "slots": [
+          {
+            "id": "panel.view",
+            "label": "Provider",
+            "module": "web/provider.js",
+            "order": 1,
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "tag": "provider"
+          }
+        ],
+        "version": "0.1.0"
+      },
+      {
+        "cli": [],
+        "id": "org.example.consumer",
+        "risk": "read",
+        "routes": [],
+        "slots": [],
+        "version": "0.2.0"
+      }
+    ],
+    "degraded": [],
+    "links": [
+      {
+        "consumer": "org.example.consumer",
+        "interface": "example:provider/greeting@1.0.0",
+        "provider": "org.example.provider"
+      }
+    ]
+  }
+}
