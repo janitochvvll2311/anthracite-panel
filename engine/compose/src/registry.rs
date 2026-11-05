@@ -74,6 +74,11 @@ impl Registry {
         }
     }
 
+    /// The trusted signers. The keyring is part of install, not composition.
+    pub fn keyring(&self) -> &Keyring {
+        &self.keyring
+    }
+
     pub fn dir(&self) -> &Path {
         &self.apps
     }
