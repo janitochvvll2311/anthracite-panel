@@ -136,4 +136,44 @@ store as their only durable state, and that is a property of the apps, not of th
 engine. Until then, a restart loses in-memory app state, and that is the accepted
 cost.
 
+### 8.7 The surface view
+
+`GET /api/engine/composition` returns the document and the resolution the same
+resolver would produce from the current state, so a client does not infer state
+from logs:
+
+```json
+{
+  "composition": {
+    "version": 1,
+    "profile": [{"id": "default",
+                 "apps": ["org.example.notes", "org.example.report", "org.example.consumer"]}]
+  },
+  "surface": {
+    "apps": [
+      {"id": "org.example.notes", "version": "0.1.0", "risk": "read"},
+      {"id": "org.example.consumer", "version": "0.2.0", "risk": "read"}
+    ],
+    "degraded": [
+      {"app": "org.example.report", "version": "0.3.0", "reason": "unapproved"}
+    ],
+    "links": [
+      {"consumer": "org.example.consumer",
+       "interface": "example:notes/notes@1.0.0",
+       "provider": "org.example.notes"}
+    ]
+  }
+}
+```
+
+`apps` is the boot order: providers before consumers. `degraded` carries the
+kebab-case reason of §8.5 — `unapproved`, `grant-stale`, `grant-invalid`,
+`disabled`, `blocked` or `risk-grown` — plus `detail` when the code alone is not
+enough. A `blocked` app names the `interface` and `provider` it cannot reach and
+has no links, because it does not run; `risk-grown` names the `approved` and
+`effective` risk. `links[*].provider` is `engine` for the native set and the
+provider's id otherwise. A fatal resolution answers with the envelope of
+[§7.11](07-app.md#711-errors), so the endpoint and the boot agree on the three
+cases that cannot be degraded.
+
 ---

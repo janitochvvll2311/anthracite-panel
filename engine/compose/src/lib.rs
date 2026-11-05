@@ -238,6 +238,54 @@ impl ResolutionError {
     }
 }
 
+/// The composed apps that import an interface `app` exports.
+///
+/// Only apps the composition names count: an installed app that nobody composes
+/// cannot break when this one is disabled, removed or revoked (§7.9).
+pub fn composed_dependents(
+    composition: &Composition,
+    installed: &[InstalledApp],
+    app: &AppId,
+) -> Result<Vec<AppId>, Error> {
+    let find = |id: &AppId| {
+        installed
+            .iter()
+            .find(|candidate| candidate.manifest.app.id == id.as_str())
+    };
+    let Some(target) = find(app) else {
+        return Ok(Vec::new());
+    };
+    let exports: BTreeSet<InterfaceId> =
+        parse_interfaces(target.manifest.export.iter().map(|e| &e.interface))
+            .map_err(ResolutionError::into_error)?
+            .into_iter()
+            .collect();
+    let composed = composition
+        .profile
+        .first()
+        .map(|profile| profile.apps.as_slice())
+        .unwrap_or(&[]);
+    let mut dependents = Vec::new();
+    for entry in composed {
+        let id = AppId::parse(Profile::app_id(entry))?;
+        if &id == app {
+            continue;
+        }
+        let Some(other) = find(&id) else {
+            continue;
+        };
+        let imports: BTreeSet<InterfaceId> =
+            parse_interfaces(other.manifest.import.iter().map(|i| &i.interface))
+                .map_err(ResolutionError::into_error)?
+                .into_iter()
+                .collect();
+        if !exports.is_disjoint(&imports) {
+            dependents.push(id);
+        }
+    }
+    Ok(dependents)
+}
+
 /// What the installed set says about an app's authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Approval {
@@ -1138,6 +1186,22 @@ mod tests {
             resolution.degraded[&app(PROVIDER)].reason,
             DegradedReason::GrantStale
         );
+    }
+
+    #[test]
+    fn only_composed_apps_count_as_dependents() {
+        let installed = vec![provider(), consumer(&[GREETING])];
+        let both = composed_dependents(
+            &composition(&[CONSUMER, PROVIDER]),
+            &installed,
+            &app(PROVIDER),
+        )
+        .expect("dependents");
+        assert_eq!(both, vec![app(CONSUMER)]);
+        let provider_only =
+            composed_dependents(&composition(&[PROVIDER]), &installed, &app(PROVIDER))
+                .expect("dependents");
+        assert!(provider_only.is_empty());
     }
 
     #[test]

@@ -5,7 +5,6 @@
 //! whole or not at all. The registry never grants authority: an installed app
 //! still needs a grant to run.
 
-use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -358,36 +357,6 @@ impl Registry {
 
     /// Apps that import an interface this app exports. Uninstall, disable and
     /// revoke need an acknowledgment when this is not empty (§6.4).
-    pub fn dependents(&self, app: &AppId) -> Result<Vec<AppId>, Error> {
-        let (apps, _) = self.catalogue()?;
-        let Some(target) = apps
-            .iter()
-            .find(|installed| installed.manifest.app.id == app.as_str())
-        else {
-            return Ok(Vec::new());
-        };
-        let exports: BTreeSet<anth_contract::InterfaceId> =
-            crate::parse_interfaces(target.manifest.export.iter().map(|e| &e.interface))
-                .map_err(|error| error.into_error())?
-                .into_iter()
-                .collect();
-        let mut dependents = Vec::new();
-        for other in &apps {
-            if other.manifest.app.id == target.manifest.app.id {
-                continue;
-            }
-            let imports: BTreeSet<anth_contract::InterfaceId> =
-                crate::parse_interfaces(other.manifest.import.iter().map(|i| &i.interface))
-                    .map_err(|error| error.into_error())?
-                    .into_iter()
-                    .collect();
-            if !exports.is_disjoint(&imports) {
-                dependents.push(AppId::parse(&other.manifest.app.id)?);
-            }
-        }
-        Ok(dependents)
-    }
-
     /// Removes the installed bundle. The grant is a separate document and the
     /// caller decides whether it goes too.
     pub fn remove(&self, app: &AppId) -> Result<bool, Error> {
