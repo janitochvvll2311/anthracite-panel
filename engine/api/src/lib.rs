@@ -2127,18 +2127,26 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_replacement_waits_for_the_composition_lock() {
+    async fn the_composition_lock_covers_the_validator_check() {
         use std::time::Duration;
         let (state, dir) = apps_state();
+        let (status, headers, _) =
+            call(state.clone(), "GET", "/api/engine/composition", Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        let stale = headers
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("etag")
+            .to_string();
         let guard = state.compose_lock.lock().await;
         let body = br#"{"version":1,"profile":[{"id":"default","apps":[]}]}"#;
         let task_state = state.clone();
-        let mut task = tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut request = Request::builder()
                 .method("PUT")
                 .uri("/api/engine/composition")
                 .header("content-type", "application/json")
-                .header("if-match", "*")
+                .header("if-match", stale)
                 .body(Body::from(body.to_vec()))
                 .expect("request");
             request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
@@ -2148,16 +2156,21 @@ mod tests {
                 .expect("response")
                 .status()
         });
-        // The handler must not complete while the lock is held: completing would
-        // mean the check and the write ran outside it.
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), &mut task)
-                .await
-                .is_err(),
-            "the replacement did not wait for the lock"
-        );
+        // Let the replacement reach the lock, then change the served document
+        // while it waits. A check made before the lock would still see the old
+        // validator and win; a check inside the lock sees the new one and must
+        // refuse.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        {
+            let mut composition = state.composition.write().expect("composition lock");
+            composition.profile[0].apps = vec!["org.example.notes".to_string()];
+        }
         drop(guard);
-        assert_eq!(task.await.expect("join"), StatusCode::OK);
+        assert_eq!(task.await.expect("join"), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(
+            state.composition.read().expect("composition").profile[0].apps,
+            vec!["org.example.notes".to_string()]
+        );
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
