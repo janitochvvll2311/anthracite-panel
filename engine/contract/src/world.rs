@@ -20,9 +20,10 @@ pub struct World {
     pub imports: BTreeSet<InterfaceId>,
     #[serde(default)]
     pub exports: BTreeSet<InterfaceId>,
-    /// A canonical signature per interface (a hash of its structural type),
-    /// when the layer that read the types knows it. Empty means the comparison
-    /// is names and versions only, which is all a grant can express.
+    /// A canonical signature per interface, when the layer that read the types
+    /// knows it. The form is lowercase hex SHA-256 of the interface's canonical
+    /// WIT type text (D-World-Signature); empty means the comparison is names and
+    /// versions only, which is all a grant can express.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub signatures: BTreeMap<InterfaceId, String>,
 }
@@ -162,32 +163,20 @@ impl World {
             .filter(|id| !is_injected(id))
             .cloned()
             .collect();
-        let actual_exports: BTreeSet<InterfaceId> = self
-            .exports
-            .iter()
-            .filter(|id| !is_injected(id))
-            .cloned()
-            .collect();
+        let actual_exports: BTreeSet<InterfaceId> = self.exports.iter().cloned().collect();
         let expected_imports: BTreeSet<InterfaceId> = expected
             .imports
             .iter()
             .filter(|id| !is_injected(id))
             .cloned()
             .collect();
-        let expected_exports: BTreeSet<InterfaceId> = expected
-            .exports
-            .iter()
-            .filter(|id| !is_injected(id))
-            .cloned()
-            .collect();
+        let expected_exports: BTreeSet<InterfaceId> = expected.exports.iter().cloned().collect();
         let type_drift: BTreeSet<InterfaceId> = actual_imports
             .iter()
             .chain(actual_exports.iter())
-            .filter(|id| {
-                matches!(
-                    (self.signatures.get(*id), expected.signatures.get(*id)),
-                    (Some(actual), Some(wanted)) if actual != wanted
-                )
+            .filter(|id| match expected.signatures.get(*id) {
+                Some(wanted) => self.signatures.get(*id) != Some(wanted),
+                None => false,
             })
             .cloned()
             .collect();
@@ -342,21 +331,40 @@ mod tests {
     fn a_structural_drift_is_detected_when_both_sides_carry_a_signature() {
         let export = id("example:notes/list@1.0.0");
         let world = World::new(BTreeSet::new(), [export.clone()].into())
-            .with_signature(export.clone(), "actual");
+            .with_signature(export.clone(), "a".repeat(64));
         let expected = World::new(BTreeSet::new(), [export.clone()].into())
-            .with_signature(export.clone(), "wanted");
+            .with_signature(export.clone(), "b".repeat(64));
         let error = world.check_expected(&expected).expect_err("type drift");
         assert_eq!(error.type_drift, [export]);
         assert!(error.to_string().contains("type drift"), "{error}");
     }
 
     #[test]
+    fn a_missing_signature_is_drift_when_the_expected_world_has_one() {
+        let export = id("example:notes/list@1.0.0");
+        let world = World::new(BTreeSet::new(), [export.clone()].into());
+        let expected = World::new(BTreeSet::new(), [export.clone()].into())
+            .with_signature(export.clone(), "b".repeat(64));
+        let error = world.check_expected(&expected).expect_err("unknown type");
+        assert_eq!(error.type_drift, [export]);
+    }
+
+    #[test]
+    fn an_anth_error_export_is_still_a_real_export() {
+        let sneaked = id("anth:error/kinds@1.0.0");
+        let world = World::new(BTreeSet::new(), [sneaked.clone()].into());
+        let error = world.check(&grant(&[], &[])).expect_err("extra export");
+        assert_eq!(error.extra_exports, [sneaked]);
+    }
+
+    #[test]
     fn matching_signatures_pass() {
         let export = id("example:notes/list@1.0.0");
+        let signature = "a".repeat(64);
         let world = World::new(BTreeSet::new(), [export.clone()].into())
-            .with_signature(export.clone(), "same");
+            .with_signature(export.clone(), signature.clone());
         let expected =
-            World::new(BTreeSet::new(), [export.clone()].into()).with_signature(export, "same");
+            World::new(BTreeSet::new(), [export.clone()].into()).with_signature(export, signature);
         world.check_expected(&expected).expect("match");
     }
 

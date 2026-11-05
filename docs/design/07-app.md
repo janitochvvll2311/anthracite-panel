@@ -523,6 +523,12 @@ This is the security core, and it happens before a single instruction runs:
 2. Read the component's real type with `Component::component_type()`.
 3. Compare imports and exports: names, versions and structural types. Any
    difference, including an extra import, is a refusal.
+
+Each interface has a **world signature**: lowercase hex SHA-256 of its canonical
+WIT text (`interface <name> { … }`, declarations sorted, no whitespace). The
+expected world carries one for every interface; the component must match it, and
+a missing actual signature is drift, not a pass. `anth:error` is injected when the
+WIT is parsed and is never granted or compared (§9.2).
 4. Link only the imports the grant lists, and only to the providers the
    composition names.
 5. Only then instantiate.
