@@ -191,12 +191,16 @@ async fn composition(
         resolve(&state.composition, &installed).map_err(|error| ApiError(error.into_error()))?;
     Ok(Json(CompositionView {
         composition: state.composition.as_ref().clone(),
-        surface: surface_view(&resolution, &installed),
+        surface: surface_view(&resolution, &installed).map_err(ApiError)?,
     }))
 }
 
 /// The resolution as a client reads it (§8.7).
-fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> SurfaceView {
+///
+/// A running app always has an installed manifest and an effective risk; if that
+/// invariant breaks, the answer is an internal error rather than a surface that
+/// invents `read` or an empty version.
+fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<SurfaceView, Error> {
     let versions: BTreeMap<AppId, String> = installed
         .iter()
         .filter_map(|app| {
@@ -205,15 +209,23 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> SurfaceV
                 .map(|id| (id, app.manifest.app.version.clone()))
         })
         .collect();
-    let apps = resolution
-        .order
-        .iter()
-        .map(|id| SurfaceApp {
+    let mut apps = Vec::with_capacity(resolution.order.len());
+    for id in &resolution.order {
+        let version = versions
+            .get(id)
+            .cloned()
+            .ok_or_else(|| Error::internal(format!("`{id}` runs but has no installed manifest")))?;
+        let risk = resolution
+            .risk
+            .get(id)
+            .copied()
+            .ok_or_else(|| Error::internal(format!("`{id}` runs but has no effective risk")))?;
+        apps.push(SurfaceApp {
             id: id.clone(),
-            version: versions.get(id).cloned().unwrap_or_default(),
-            risk: resolution.risk.get(id).copied().unwrap_or(Risk::Read),
-        })
-        .collect();
+            version,
+            risk,
+        });
+    }
     let degraded = resolution
         .degraded
         .iter()
@@ -236,11 +248,11 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> SurfaceV
             },
         })
         .collect();
-    SurfaceView {
+    Ok(SurfaceView {
         apps,
         degraded,
         links,
-    }
+    })
 }
 
 /// The kebab-case reason of §8.5.
@@ -1036,12 +1048,19 @@ mod tests {
     fn add_dependent(dir: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
         let app = dir.join("apps/org.example.consumer");
-        std::fs::create_dir_all(&app).expect("mkdir");
-        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let wit = app.join("wit");
+        std::fs::create_dir_all(&wit).expect("mkdir");
+        for path in [&app, &wit] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        }
         let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.consumer\"\nnamespace = \"example:consumer\"\nname = \"Consumer\"\nversion = \"0.1.0\"\n\n[[import]]\ninterface = \"example:notes/thing@1.0.0\"\n";
         let descriptor = "version = 1\napp = \"org.example.consumer\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
-        for (name, text) in [("manifest.toml", manifest), ("descriptor.toml", descriptor)] {
-            let path = app.join(name);
+        let wit_source = "package example:consumer@1.0.0;\ninterface thing { ping: func(); }\nworld app { import example:notes/thing@1.0.0; }\n";
+        for (path, text) in [
+            (app.join("manifest.toml"), manifest),
+            (app.join("descriptor.toml"), descriptor),
+            (wit.join("consumer.wit"), wit_source),
+        ] {
             std::fs::write(&path, text).expect("write");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         }
@@ -1784,6 +1803,77 @@ mod tests {
         let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["grant_state"], "stale");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_blocked_consumer_carries_the_missing_link() {
+        let (state, dir) = apps_state_with(&["org.example.notes", "org.example.consumer"]);
+        add_dependent(&dir);
+        // The consumer is approved; the provider is not, so the consumer is
+        // blocked rather than merely unapproved.
+        let (status, _, _) = call(
+            state.clone(),
+            "PUT",
+            "/api/engine/apps/org.example.consumer/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, value) = json(state, "/api/engine/composition").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["surface"]["apps"]
+            .as_array()
+            .expect("apps")
+            .is_empty());
+        let degraded = value["surface"]["degraded"].as_array().expect("degraded");
+        let consumer = degraded
+            .iter()
+            .find(|app| app["app"] == "org.example.consumer")
+            .expect("consumer");
+        assert_eq!(consumer["reason"], "blocked");
+        assert_eq!(consumer["detail"]["interface"], "example:notes/thing@1.0.0");
+        assert_eq!(consumer["detail"]["provider"], "org.example.notes");
+        assert!(value["surface"]["links"]
+            .as_array()
+            .expect("links")
+            .is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_running_pair_exposes_its_link() {
+        let (state, dir) = apps_state_with(&["org.example.notes", "org.example.consumer"]);
+        add_dependent(&dir);
+        write_grant(&dir, &grant_toml(&dir));
+        let (status, _, _) = call(
+            state.clone(),
+            "PUT",
+            "/api/engine/apps/org.example.consumer/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, value) = json(state, "/api/engine/composition").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["surface"]["apps"][0]["id"], "org.example.notes");
+        assert_eq!(value["surface"]["apps"][1]["id"], "org.example.consumer");
+        assert_eq!(
+            value["surface"]["links"][0]["consumer"],
+            "org.example.consumer"
+        );
+        assert_eq!(
+            value["surface"]["links"][0]["interface"],
+            "example:notes/thing@1.0.0"
+        );
+        assert_eq!(
+            value["surface"]["links"][0]["provider"],
+            "org.example.notes"
+        );
+        assert!(value["surface"]["degraded"]
+            .as_array()
+            .expect("degraded")
+            .is_empty());
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
