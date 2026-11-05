@@ -441,7 +441,19 @@ async fn add_key(
         added_at: timestamp(),
     };
     let fingerprint = anth_compose::signature::fingerprint(&key.public_key)?;
-    let existed = apps.registry.keyring().load(&fingerprint)?.is_some();
+    if let Some(existing) = apps.registry.keyring().load(&fingerprint)? {
+        // A retried add changes nothing: the first document (label, operator and
+        // timestamp) is the trusted one.
+        return Ok((
+            StatusCode::OK,
+            [(LOCATION, format!("/api/engine/keys/{fingerprint}"))],
+            Json(KeyView {
+                fingerprint,
+                key: existing,
+            }),
+        )
+            .into_response());
+    }
     let fingerprint = apps.registry.keyring().add(&key)?;
     audit(
         apps,
@@ -451,13 +463,8 @@ async fn add_key(
         Outcome::Ok,
         Some(json!({"fingerprint": fingerprint})),
     )?;
-    let status = if existed {
-        StatusCode::OK
-    } else {
-        StatusCode::CREATED
-    };
     Ok((
-        status,
+        StatusCode::CREATED,
         [(LOCATION, format!("/api/engine/keys/{fingerprint}"))],
         Json(KeyView { fingerprint, key }),
     )
@@ -1364,10 +1371,18 @@ mod tests {
         let (status, value) = json(state.clone(), "/api/engine/keys").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["keys"][0]["fingerprint"], fingerprint);
-        // The same key is idempotent and is not written twice.
-        let (status, _, _) =
-            call(state.clone(), "POST", "/api/engine/keys", body.into_bytes()).await;
+        // The same key is idempotent: it keeps the first label and adds no
+        // second audit entry.
+        let retry = format!(r#"{{"public_key":"{}"}}"#, public_key_hex());
+        let (status, _, value) = call(
+            state.clone(),
+            "POST",
+            "/api/engine/keys",
+            retry.into_bytes(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["label"], "example signer");
         let (status, _, _) = call(
             state.clone(),
             "DELETE",
@@ -1389,6 +1404,7 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(value["error"]["code"], "not-found");
         let entries = AuditLog::new(&dir).entries().expect("audit");
+        assert_eq!(entries.len(), 2, "a retried add is not a second action");
         assert_eq!(entries[0].action, AuditAction::KeyAdd);
         assert_eq!(entries.last().unwrap().action, AuditAction::KeyRemove);
         std::fs::remove_dir_all(dir).expect("cleanup");

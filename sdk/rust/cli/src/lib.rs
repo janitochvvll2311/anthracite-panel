@@ -588,7 +588,15 @@ fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
                 body.as_bytes(),
                 &[("content-type", "application/json")],
             )?;
-            print_value(&response.body)
+            let value: serde_json::Value =
+                serde_json::from_slice(&response.body).map_err(|error| {
+                    Error::internal(format!("the engine answered with invalid JSON: {error}"))
+                })?;
+            let fingerprint = value["fingerprint"]
+                .as_str()
+                .ok_or_else(|| Error::internal("the engine answered without a fingerprint"))?;
+            println!("{fingerprint}");
+            Ok(0)
         }
         KeyCommand::Remove(fingerprint) => {
             client.request(
