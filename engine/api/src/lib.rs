@@ -2174,6 +2174,54 @@ mod tests {
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_composition_lock_covers_the_write() {
+        use std::time::Duration;
+        let (state, dir) = apps_state();
+        let (status, headers, _) =
+            call(state.clone(), "GET", "/api/engine/composition", Vec::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        let etag = headers
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("etag")
+            .to_string();
+        let guard = state.compose_lock.lock().await;
+        let body = br#"{"version":1,"profile":[{"id":"default","apps":["org.example.notes"]}]}"#;
+        let task_state = state.clone();
+        let task = tokio::spawn(async move {
+            let mut request = Request::builder()
+                .method("PUT")
+                .uri("/api/engine/composition")
+                .header("content-type", "application/json")
+                .header("if-match", etag)
+                .body(Body::from(body.to_vec()))
+                .expect("request");
+            request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+            router(task_state)
+                .oneshot(request)
+                .await
+                .expect("response")
+                .status()
+        });
+        // While the lock is held, neither the served document nor the file may
+        // move: the write happens after the check, inside the same lock.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(state.composition.read().expect("composition").profile[0]
+            .apps
+            .is_empty());
+        assert!(!dir.join("composition.toml").exists());
+        drop(guard);
+        assert_eq!(task.await.expect("join"), StatusCode::OK);
+        assert_eq!(
+            state.composition.read().expect("composition").profile[0].apps,
+            vec!["org.example.notes".to_string()]
+        );
+        let text = std::fs::read_to_string(dir.join("composition.toml")).expect("composition");
+        assert!(text.contains("org.example.notes"), "{text}");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
     #[test]
     fn the_if_match_header_is_parsed_with_strong_comparison() {
         use axum::http::header::HeaderValue;
