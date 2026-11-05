@@ -104,8 +104,10 @@ boot would lock the operator out of the tool that repairs the system.
 | Run | a call traps, times out or exhausts its budget | degraded |
 
 The three fatal cases share a property: **the composition file is the error
-message**. They are fixed by editing a TOML or installing an app, without a
-daemon. The blocked case is the opposite: approving an app or enabling it is an
+message**. They are fixed by editing a TOML or installing an app; a running
+engine still serves the fatal document in `surface.fatal` (§8.7) so `anth
+compose` can repair it, while the boot refuses to start when its resolution is
+fatal. The blocked case is the opposite: approving an app or enabling it is an
 engine operation, so the engine has to boot to be fixable.
 
 "A degraded app" means it is not running: there is no instance that could answer,
@@ -128,7 +130,8 @@ A degraded consumer answers with the error envelope of [§7.11](07-app.md#711-er
 
 v0.5.0 recomposes by restarting the engine process. `anth compose` says so and
 accepts `--now`. It is boring, it is predictable, and it keeps state assumptions
-honest.
+honest. The document and the composition view update as soon as the `PUT`
+succeeds; app instances, once they exist, change on restart.
 
 It is **not** justified yet by "the store is externalized": apps may hold state in
 a long-lived instance ([§7.10](07-app.md#710-state)). Per-app restart becomes safe when apps treat the
@@ -172,8 +175,11 @@ kebab-case reason of §8.5 — `unapproved`, `grant-stale`, `grant-invalid`,
 enough. A `blocked` app names the `interface` and `provider` it cannot reach and
 has no links, because it does not run; `risk-grown` names the `approved` and
 `effective` risk. `links[*].provider` is `engine` for the native set and the
-provider's id otherwise. A fatal resolution answers with the envelope of
-[§7.11](07-app.md#711-errors), so the endpoint and the boot agree on the three
-cases that cannot be degraded.
+provider's id otherwise.
+
+A fatal resolution does not hide the document: the endpoint stays `200` and puts
+the error in `surface.fatal` (`code`, `message`, optional `detail`), so a client
+can remove the offending app. The boot itself refuses, and `PUT` refuses a
+document that does not resolve.
 
 ---

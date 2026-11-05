@@ -130,13 +130,27 @@ pub struct SurfaceLink {
     pub provider: String,
 }
 
+/// A resolution that would refuse a boot, carried in the view so the document
+/// is still readable and repairable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FatalView {
+    /// The wire code of §7.11.
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
+}
+
 /// What the composer resolved: what runs, what does not and why, and the links
-/// that were built.
+/// that were built. `fatal` is set instead of failing the request when the
+/// composition cannot boot: the operator needs the document to repair it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurfaceView {
     pub apps: Vec<SurfaceApp>,
     pub degraded: Vec<DegradedApp>,
     pub links: Vec<SurfaceLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fatal: Option<FatalView>,
 }
 
 /// The composition document plus its resolution, as `GET
@@ -259,6 +273,7 @@ mod tests {
                     interface: InterfaceId::parse("example:notes/notes@1.0.0").expect("interface"),
                     provider: app.to_string(),
                 }],
+                fatal: None,
             },
         };
         let text = serde_json::to_string(&view).expect("render");

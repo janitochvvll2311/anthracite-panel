@@ -148,6 +148,10 @@ impl Error {
         Self::new(ErrorKind::Conflict, message)
     }
 
+    pub fn precondition_failed(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::PreconditionFailed, message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Internal, message)
     }
