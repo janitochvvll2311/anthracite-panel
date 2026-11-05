@@ -2127,51 +2127,37 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn two_replacements_with_one_validator_let_only_one_win() {
+    async fn a_replacement_waits_for_the_composition_lock() {
+        use std::time::Duration;
         let (state, dir) = apps_state();
-        let (status, headers, _) =
-            call(state.clone(), "GET", "/api/engine/composition", Vec::new()).await;
-        assert_eq!(status, StatusCode::OK);
-        let etag = headers
-            .get("etag")
-            .and_then(|value| value.to_str().ok())
-            .expect("etag")
-            .to_string();
-        let notes = br#"{"version":1,"profile":[{"id":"default","apps":["org.example.notes"]}]}"#;
-        let empty = br#"{"version":1,"profile":[{"id":"default","apps":[]}]}"#;
-        let send = move |etag: String, state: Arc<EngineState>, body: Vec<u8>| async move {
+        let guard = state.compose_lock.lock().await;
+        let body = br#"{"version":1,"profile":[{"id":"default","apps":[]}]}"#;
+        let task_state = state.clone();
+        let mut task = tokio::spawn(async move {
             let mut request = Request::builder()
                 .method("PUT")
                 .uri("/api/engine/composition")
                 .header("content-type", "application/json")
-                .header("if-match", etag)
-                .body(Body::from(body))
+                .header("if-match", "*")
+                .body(Body::from(body.to_vec()))
                 .expect("request");
             request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
-            router(state)
+            router(task_state)
                 .oneshot(request)
                 .await
                 .expect("response")
                 .status()
-        };
-        let (first, second) = tokio::join!(
-            send(etag.clone(), state.clone(), notes.to_vec()),
-            send(etag, state.clone(), empty.to_vec())
-        );
+        });
+        // The handler must not complete while the lock is held: completing would
+        // mean the check and the write ran outside it.
         assert!(
-            matches!(
-                (first, second),
-                (StatusCode::OK, StatusCode::PRECONDITION_FAILED)
-                    | (StatusCode::PRECONDITION_FAILED, StatusCode::OK)
-            ),
-            "{first} and {second}"
+            tokio::time::timeout(Duration::from_millis(100), &mut task)
+                .await
+                .is_err(),
+            "the replacement did not wait for the lock"
         );
-        let (status, value) = json(state, "/api/engine/composition").await;
-        assert_eq!(status, StatusCode::OK);
-        let apps = value["composition"]["profile"][0]["apps"]
-            .as_array()
-            .expect("apps");
-        assert!(apps.is_empty() || apps[0] == "org.example.notes");
+        drop(guard);
+        assert_eq!(task.await.expect("join"), StatusCode::OK);
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
