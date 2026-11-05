@@ -60,9 +60,15 @@ const APPS: &[(&str, &str)] = &[
     ("other", "org.example.other"),
     ("a", "org.example.a"),
     ("b", "org.example.b"),
+    ("store", "org.example.store"),
+    ("reader", "org.example.reader"),
 ];
 
 fn approve(state: &Path, id_text: &str) {
+    approve_with(state, id_text, Risk::Read);
+}
+
+fn approve_with(state: &Path, id_text: &str, risk: Risk) {
     let id = AppId::parse(id_text).expect("id");
     let registry = Registry::new(state);
     let material = registry
@@ -78,8 +84,8 @@ fn approve(state: &Path, id_text: &str) {
         manifest_sha256: material.manifest_sha256,
         wit_sha256: material.wit_sha256,
         signature: material.signature,
-        risk: Risk::Read,
-        accepted: Vec::new(),
+        risk,
+        accepted: Grant::required_levels(risk).collect(),
         approved_by: "uid:1000".to_string(),
         approved_at: "2026-11-05T20:00:00Z".to_string(),
         export: manifest
@@ -216,10 +222,15 @@ async fn an_unresolved_import_is_fatal_and_named() {
     let (state, dir) = fixture_state("unresolved-import.toml", &["org.example.consumer"]);
     let value = composition(state).await;
     assert_eq!(value["surface"]["fatal"]["code"], "invalid");
-    assert!(value["surface"]["fatal"]["message"]
+    let message = value["surface"]["fatal"]["message"]
         .as_str()
-        .expect("message")
-        .contains("nothing composed provides"));
+        .expect("message");
+    assert!(message.contains("org.example.consumer"), "{message}");
+    assert!(
+        message.contains("example:provider/greeting@1.0.0"),
+        "{message}"
+    );
+    assert!(message.contains("nothing composed provides"), "{message}");
     cleanup(dir);
 }
 
@@ -244,21 +255,71 @@ async fn a_cycle_is_fatal_and_names_the_apps() {
     let (state, dir) = fixture_state("cycle.toml", &["org.example.a", "org.example.b"]);
     let value = composition(state).await;
     assert_eq!(value["surface"]["fatal"]["code"], "invalid");
-    assert!(value["surface"]["fatal"]["message"]
+    let message = value["surface"]["fatal"]["message"]
         .as_str()
-        .expect("message")
-        .contains("cyclic"));
+        .expect("message");
+    assert!(message.contains("cyclic"), "{message}");
+    assert!(message.contains("org.example.a"), "{message}");
+    assert!(message.contains("org.example.b"), "{message}");
     cleanup(dir);
 }
 
 #[tokio::test]
-async fn a_pinned_version_that_is_not_installed_is_fatal() {
-    let (state, dir) = fixture_state("version-mismatch.toml", &["org.example.provider"]);
+async fn a_stale_grant_degrades_the_app() {
+    let (state, dir) = fixture_state("unapproved.toml", &["org.example.provider"]);
+    let id = AppId::parse("org.example.provider").expect("id");
+    let mut grant = GrantStore::new(&dir)
+        .load(&id)
+        .expect("load")
+        .expect("grant");
+    grant.app_version = "9.9.9".to_string();
+    GrantStore::new(&dir).save(&grant).expect("save");
     let value = composition(state).await;
-    assert_eq!(value["surface"]["fatal"]["code"], "invalid");
-    assert!(value["surface"]["fatal"]["message"]
-        .as_str()
-        .expect("message")
-        .contains("9.9.9"));
+    assert_eq!(value["surface"]["degraded"][0]["reason"], "grant-stale");
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn a_corrupt_grant_is_invalid_not_unapproved() {
+    let (state, dir) = fixture_state("unapproved.toml", &["org.example.provider"]);
+    fs::write(
+        dir.join("grants/org.example.provider.toml"),
+        "this is not a grant",
+    )
+    .expect("write");
+    let value = composition(state).await;
+    assert_eq!(value["surface"]["degraded"][0]["reason"], "grant-invalid");
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn a_disabled_app_is_degraded() {
+    let (state, dir) = fixture_state("unapproved.toml", &["org.example.provider"]);
+    let id = AppId::parse("org.example.provider").expect("id");
+    Registry::new(&dir)
+        .set_enabled(&id, false)
+        .expect("disable");
+    let value = composition(state).await;
+    assert_eq!(value["surface"]["degraded"][0]["reason"], "disabled");
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn a_risk_growth_degrades_the_consumer() {
+    let (state, dir) = fixture_state("risk-grown.toml", &[]);
+    approve_with(&dir, "org.example.store", Risk::Write);
+    approve_with(&dir, "org.example.reader", Risk::Read);
+    let value = composition(state).await;
+    assert_eq!(value["surface"]["apps"][0]["id"], "org.example.store");
+    assert_eq!(value["surface"]["apps"][0]["risk"], "write");
+    let reader = value["surface"]["degraded"]
+        .as_array()
+        .expect("degraded")
+        .iter()
+        .find(|app| app["app"] == "org.example.reader")
+        .expect("reader");
+    assert_eq!(reader["reason"], "risk-grown");
+    assert_eq!(reader["detail"]["approved"], "read");
+    assert_eq!(reader["detail"]["effective"], "write");
     cleanup(dir);
 }

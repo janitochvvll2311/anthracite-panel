@@ -239,6 +239,7 @@ mod tests {
         InstalledApp {
             manifest,
             grant: None,
+            grant_invalid: false,
             enabled: true,
             material: None,
         }

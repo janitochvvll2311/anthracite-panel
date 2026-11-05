@@ -1,0 +1,10 @@
+package example:store@1.0.0;
+
+interface greeting {
+    greet: func() -> string;
+}
+
+world app {
+    export greeting;
+    import anth:store/kv@1.0.0;
+}

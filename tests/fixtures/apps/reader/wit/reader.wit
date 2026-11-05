@@ -1,0 +1,10 @@
+package example:reader@1.0.0;
+
+interface note {
+    read: func() -> string;
+}
+
+world app {
+    export note;
+    import example:store/greeting@1.0.0;
+}

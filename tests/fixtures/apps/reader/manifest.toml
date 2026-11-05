@@ -1,0 +1,18 @@
+manifest_version = 2
+
+[app]
+id = "org.example.reader"
+alias = "reader"
+namespace = "example:reader"
+name = "Reader"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[export]]
+interface = "example:reader/note@1.0.0"
+
+[[import]]
+interface = "example:store/greeting@1.0.0"

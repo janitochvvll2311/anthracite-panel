@@ -1,0 +1,18 @@
+manifest_version = 2
+
+[app]
+id = "org.example.store"
+alias = "store"
+namespace = "example:store"
+name = "Store"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[export]]
+interface = "example:store/greeting@1.0.0"
+
+[[import]]
+interface = "anth:store/kv@1.0.0"
