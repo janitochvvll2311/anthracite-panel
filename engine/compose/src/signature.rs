@@ -41,6 +41,11 @@ pub fn fingerprint(text: &str) -> Result<String, Error> {
     Ok(hex_encode(&Sha256::digest(public_key(text)?)))
 }
 
+/// `sha256`, lowercase hex: the same shape as a fingerprint.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    hex_encode(&Sha256::digest(bytes))
+}
+
 /// Verifies `signature` over `message` with `public_key_hex`.
 ///
 /// `verify_strict` rejects small-order and non-canonical keys, which is the

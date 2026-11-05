@@ -240,6 +240,7 @@ mod tests {
             manifest,
             grant: None,
             enabled: true,
+            material: None,
         }
     }
 
