@@ -45,6 +45,38 @@ pub fn message(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Error> {
     Ok(message)
 }
 
+/// The prefix of the WIT-set hash (D-Wit-Hash).
+pub const WIT_PREFIX: &[u8] = b"anth-wit-set-v1\0";
+
+/// The WIT set hash covers exactly the files under `wit/`, sorted, with the same
+/// `name \0 u64le(length) bytes` framing as the signed message, under its own
+/// prefix. A grant stores this as `wit_sha256`.
+pub fn wit_message(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Error> {
+    let mut files: Vec<&(String, Vec<u8>)> = files.iter().collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut message = WIT_PREFIX.to_vec();
+    let mut previous: Option<&str> = None;
+    for (name, bytes) in files {
+        let valid = name
+            .strip_prefix("wit/")
+            .is_some_and(|rest| !rest.is_empty() && !rest.contains('/') && rest.ends_with(".wit"));
+        if !valid {
+            return Err(Error::invalid(format!(
+                "`{name}` is not a WIT file; the set is `wit/*.wit`"
+            )));
+        }
+        if previous == Some(name.as_str()) {
+            return Err(Error::invalid(format!("`{name}` is in the WIT set twice")));
+        }
+        previous = Some(name.as_str());
+        message.extend_from_slice(name.as_bytes());
+        message.push(0);
+        message.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        message.extend_from_slice(bytes);
+    }
+    Ok(message)
+}
+
 /// The signed set is closed: the manifest and the WIT files, nothing else.
 ///
 /// Names are restricted to an unambiguous alphabet. The framing uses NUL as a
@@ -158,20 +190,30 @@ mod tests {
     }
 
     #[test]
-    fn the_length_is_little_endian() {
-        let message = message(&[
-            ("manifest.toml".to_string(), b"abc".to_vec()),
-            ("wit/a.wit".to_string(), Vec::new()),
-        ])
-        .expect("message");
-        let prefix = MESSAGE_PREFIX.len();
-        // name is 13 bytes, then the NUL, then the u64 length.
-        assert_eq!(&message[prefix..prefix + 13], b"manifest.toml");
-        assert_eq!(message[prefix + 13], 0);
+    fn the_wit_message_is_pinned_by_a_vector() {
+        let files = vec![("wit/a.wit".to_string(), b"package x:y@1.0.0;\n".to_vec())];
         assert_eq!(
-            &message[prefix + 14..prefix + 22],
-            &[3, 0, 0, 0, 0, 0, 0, 0]
+            hex(&wit_message(&files).expect("wit message")),
+            "616e74682d7769742d7365742d7631007769742f612e7769740013000000000000007061636b61676520783a7940312e302e303b0a"
         );
-        assert_eq!(&message[prefix + 22..prefix + 25], b"abc");
+    }
+
+    #[test]
+    fn the_wit_set_order_does_not_matter() {
+        let mut files = vec![
+            ("wit/a.wit".to_string(), b"a".to_vec()),
+            ("wit/b.wit".to_string(), b"b".to_vec()),
+        ];
+        let first = wit_message(&files).expect("wit message");
+        files.reverse();
+        assert_eq!(wit_message(&files).expect("wit message"), first);
+    }
+
+    #[test]
+    fn the_wit_set_is_only_wit_files() {
+        for name in ["wit/deps/a.wit", "wit/a/b.wit", "wasm/a.wasm", "wit/a.wasm"] {
+            let files = vec![(name.to_string(), Vec::new())];
+            assert!(wit_message(&files).is_err(), "`{name}` must be refused");
+        }
     }
 }

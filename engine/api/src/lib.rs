@@ -13,17 +13,19 @@ use anth_compose::audit::{timestamp, AuditLog};
 use anth_compose::bundle::Options as BundleOptions;
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
+use anth_compose::risk::{approve, Approval};
+use anth_compose::InstalledApp;
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, Error, ErrorKind, GrantState,
-    GrantView, Outcome,
+    GrantView, Outcome, Risk,
 };
 use axum::body::Bytes;
 use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
 use axum::http::header::LOCATION;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -138,6 +140,10 @@ pub fn router(state: Arc<EngineState>) -> Router {
                 .put(replace_app)
                 .delete(remove_app)
                 .patch(patch_app),
+        )
+        .route(
+            "/engine/apps/{id}/grant",
+            put(approve_app).delete(revoke_grant),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
@@ -313,10 +319,12 @@ async fn remove_app(
     State(state): State<Arc<EngineState>>,
     Path(id): Path<String>,
     Extension(actor): Extension<Actor>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
+    require_ack(apps, &actor, &id, "app.remove", &headers)?;
     // Revoke authority before touching the content: a corrupt or half-removed
     // tree must never keep a grant. A missing app simply has no grant to remove.
     apps.grants.remove(&id)?;
@@ -372,6 +380,7 @@ async fn patch_app(
     State(state): State<Arc<EngineState>>,
     Path(id): Path<String>,
     Extension(actor): Extension<Actor>,
+    headers: HeaderMap,
     Json(body): Json<PatchBody>,
 ) -> Result<Json<AppView>, ApiError> {
     let apps = apps(&state)?;
@@ -381,6 +390,9 @@ async fn patch_app(
         return Err(ApiError(Error::invalid(
             "nothing to change; send `enabled` or `alias`",
         )));
+    }
+    if body.enabled == Some(false) {
+        require_ack(apps, &actor, &id, "app.disable", &headers)?;
     }
     let installed = apps.registry.configure(&id, body.enabled, body.alias)?;
     if let Some(enabled) = body.enabled {
@@ -399,6 +411,154 @@ async fn patch_app(
         )?;
     }
     Ok(Json(app_view(apps, &installed, true)?))
+}
+
+#[derive(Debug, Deserialize)]
+struct GrantBody {
+    /// The `--accept-*` levels the operator presented.
+    #[serde(default)]
+    accept: Vec<Risk>,
+}
+
+/// Approves the app: computes its risk over the installed graph, freezes the
+/// grant and audits it.
+async fn approve_app(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+    Extension(actor): Extension<Actor>,
+    Json(body): Json<GrantBody>,
+) -> Result<Json<AppView>, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    let actor = actor.0;
+    let installed = apps
+        .registry
+        .get(&id)?
+        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+    let material = apps
+        .registry
+        .approval_material(&id)?
+        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+    let installed_apps = installed_apps(apps)?;
+    let grant = approve(
+        &id,
+        &installed_apps,
+        Approval {
+            accepted: body.accept,
+            approved_by: actor.clone(),
+            approved_at: timestamp(),
+            manifest_sha256: material.manifest_sha256,
+            wit_sha256: material.wit_sha256,
+            signature: material.signature,
+        },
+    )
+    .map_err(|error| {
+        let error = error.into_error();
+        audit_or_error(
+            audit_failure(
+                apps,
+                &actor,
+                AuditAction::AppApprove,
+                Some(id.as_str()),
+                &error,
+            ),
+            error,
+        )
+    })?;
+    apps.grants.save(&grant)?;
+    audit(
+        apps,
+        &actor,
+        AuditAction::AppApprove,
+        Some(id.as_str()),
+        Outcome::Ok,
+        Some(json!({"risk": grant.risk, "accepted": grant.accepted})),
+    )?;
+    Ok(Json(app_view(apps, &installed, true)?))
+}
+
+/// Revokes the grant. Apps that import what this app exports need
+/// `X-Anth-Acknowledge: dependents`.
+async fn revoke_grant(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+    Extension(actor): Extension<Actor>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    let actor = actor.0;
+    require_ack(apps, &actor, &id, "app.revoke", &headers)?;
+    if !apps.grants.remove(&id)? {
+        return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
+    }
+    audit(
+        apps,
+        &actor,
+        AuditAction::AppRevoke,
+        Some(id.as_str()),
+        Outcome::Ok,
+        None,
+    )?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The installed set in the shape `approve` expects.
+fn installed_apps(apps: &Apps) -> Result<Vec<InstalledApp>, Error> {
+    let mut installed = Vec::new();
+    for app in apps.registry.list()? {
+        let id = AppId::parse(&app.manifest.app.id)?;
+        installed.push(InstalledApp {
+            manifest: app.manifest,
+            grant: apps.grants.load(&id)?,
+            enabled: app.descriptor.enabled,
+        });
+    }
+    Ok(installed)
+}
+
+const ACKNOWLEDGE: &str = "x-anth-acknowledge";
+
+fn acknowledged(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get(ACKNOWLEDGE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == token))
+}
+
+/// Refuses a breaking action when other installed apps depend on this one,
+/// unless the operator acknowledged the token. The acknowledgment is audited.
+fn require_ack(
+    apps: &Apps,
+    actor: &str,
+    id: &AppId,
+    action: &str,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
+    let dependents = apps.registry.dependents(id)?;
+    if dependents.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<String> = dependents.iter().map(ToString::to_string).collect();
+    if !acknowledged(headers, "dependents") {
+        return Err(ApiError(
+            Error::conflict(format!("`{id}` is required by {}", names.join(", "))).with_detail(
+                json!({
+                    "dependents": names,
+                    "acknowledge": "dependents",
+                }),
+            ),
+        ));
+    }
+    audit(
+        apps,
+        actor,
+        AuditAction::Acknowledge,
+        Some(id.as_str()),
+        Outcome::Ok,
+        Some(json!({"dependents": names, "action": action})),
+    )?;
+    Ok(())
 }
 
 /// The audit actor is inserted by the auth middleware.
@@ -661,14 +821,20 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let app = dir.join("apps/org.example.notes");
-        std::fs::create_dir_all(&app).expect("mkdir");
-        for path in [&dir, &dir.join("apps"), &app] {
+        let wit = app.join("wit");
+        std::fs::create_dir_all(&wit).expect("mkdir");
+        for path in [&dir, &dir.join("apps"), &app, &wit] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         }
-        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n";
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n";
         let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
-        for (name, text) in [("manifest.toml", manifest), ("descriptor.toml", descriptor)] {
-            let path = app.join(name);
+        let wit_source =
+            "package example:notes@1.0.0;\ninterface thing { ping: func(); }\nworld app { export thing; }\n";
+        for (path, text) in [
+            (app.join("manifest.toml"), manifest),
+            (app.join("descriptor.toml"), descriptor),
+            (wit.join("notes.wit"), wit_source),
+        ] {
             std::fs::write(&path, text).expect("write");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         }
@@ -690,10 +856,25 @@ mod tests {
 
     fn grant_toml(app_version: &str) -> String {
         format!(
-            "version = 1\napp = \"org.example.notes\"\napp_version = \"{app_version}\"\nmanifest_sha256 = \"{}\"\nwit_sha256 = \"{}\"\nrisk = \"read\"\napproved_by = \"operator-3f2a\"\napproved_at = \"2026-11-03T20:00:00Z\"\n",
+            "version = 1\napp = \"org.example.notes\"\napp_version = \"{app_version}\"\nmanifest_sha256 = \"{}\"\nwit_sha256 = \"{}\"\nrisk = \"read\"\napproved_by = \"operator-3f2a\"\napproved_at = \"2026-11-03T20:00:00Z\"\nexport = [\"example:notes/thing@1.0.0\"]\n",
             "a".repeat(64),
             "b".repeat(64)
         )
+    }
+
+    /// A second installed app that imports what `notes` exports.
+    fn add_dependent(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let app = dir.join("apps/org.example.consumer");
+        std::fs::create_dir_all(&app).expect("mkdir");
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.consumer\"\nnamespace = \"example:consumer\"\nname = \"Consumer\"\nversion = \"0.1.0\"\n\n[[import]]\ninterface = \"example:notes/thing@1.0.0\"\n";
+        let descriptor = "version = 1\napp = \"org.example.consumer\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
+        for (name, text) in [("manifest.toml", manifest), ("descriptor.toml", descriptor)] {
+            let path = app.join(name);
+            std::fs::write(&path, text).expect("write");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
     }
 
     /// A minimal valid bundle: one export, one world, one component.
@@ -730,12 +911,24 @@ mod tests {
         uri: &str,
         body: Vec<u8>,
     ) -> (StatusCode, axum::http::HeaderMap, Value) {
-        let mut request = Request::builder()
+        call_with(state, method, uri, body, &[]).await
+    }
+
+    async fn call_with(
+        state: Arc<EngineState>,
+        method: &str,
+        uri: &str,
+        body: Vec<u8>,
+        extra: &[(&str, &str)],
+    ) -> (StatusCode, axum::http::HeaderMap, Value) {
+        let mut builder = Request::builder()
             .method(method)
             .uri(uri)
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .expect("request");
+            .header("content-type", "application/json");
+        for (name, value) in extra {
+            builder = builder.header(*name, *value);
+        }
+        let mut request = builder.body(Body::from(body)).expect("request");
         request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
         let response = router(state).oneshot(request).await.expect("response");
         let status = response.status();
@@ -1276,6 +1469,119 @@ mod tests {
         assert!(!broken.exists());
         let entries = AuditLog::new(&dir).entries().expect("audit");
         assert_eq!(entries.last().unwrap().action, AuditAction::AppRemove);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn approving_freezes_a_grant() {
+        let (state, dir) = apps_state();
+        let (status, _, value) = call(
+            state,
+            "PUT",
+            "/api/engine/apps/org.example.notes/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "current");
+        assert_eq!(value["grant"]["risk"], "read");
+        let entries = AuditLog::new(&dir).entries().expect("audit");
+        assert_eq!(entries.last().unwrap().action, AuditAction::AppApprove);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn revoking_removes_the_grant() {
+        let (state, dir) = apps_state();
+        let (status, _, _) = call(
+            state.clone(),
+            "PUT",
+            "/api/engine/apps/org.example.notes/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, _) = call(
+            state,
+            "DELETE",
+            "/api/engine/apps/org.example.notes/grant",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let entries = AuditLog::new(&dir).entries().expect("audit");
+        assert_eq!(entries.last().unwrap().action, AuditAction::AppRevoke);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn revoking_a_needed_grant_needs_acknowledgment() {
+        let (state, dir) = apps_state();
+        add_dependent(&dir);
+        let (status, _, _) = call(
+            state.clone(),
+            "PUT",
+            "/api/engine/apps/org.example.notes/grant",
+            br#"{"accept":[]}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _, value) = call(
+            state.clone(),
+            "DELETE",
+            "/api/engine/apps/org.example.notes/grant",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(value["error"]["code"], "conflict");
+        assert_eq!(
+            value["error"]["detail"]["dependents"][0],
+            "org.example.consumer"
+        );
+        assert_eq!(value["error"]["detail"]["acknowledge"], "dependents");
+        let (status, _, _) = call_with(
+            state,
+            "DELETE",
+            "/api/engine/apps/org.example.notes/grant",
+            Vec::new(),
+            &[("x-anth-acknowledge", "dependents")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let entries = AuditLog::new(&dir).entries().expect("audit");
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.action == AuditAction::Acknowledge),
+            "{entries:?}"
+        );
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn disabling_a_needed_app_needs_acknowledgment() {
+        let (state, dir) = apps_state();
+        add_dependent(&dir);
+        let (status, _, value) = call(
+            state.clone(),
+            "PATCH",
+            "/api/engine/apps/org.example.notes",
+            br#"{"enabled":false}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(value["error"]["detail"]["acknowledge"], "dependents");
+        let (status, _, value) = call_with(
+            state,
+            "PATCH",
+            "/api/engine/apps/org.example.notes",
+            br#"{"enabled":false}"#.to_vec(),
+            &[("x-anth-acknowledge", "dependents")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["enabled"], false);
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 }

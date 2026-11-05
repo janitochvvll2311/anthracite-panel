@@ -197,6 +197,27 @@ impl fmt::Display for ResolutionError {
 
 impl std::error::Error for ResolutionError {}
 
+impl ResolutionError {
+    /// The contract error at the API boundary: the code and the message a client
+    /// sees.
+    pub fn into_error(self) -> Error {
+        let message = self.to_string();
+        match self {
+            Self::InvalidComposition(error)
+            | Self::InvalidManifest(error)
+            | Self::InvalidGrant(error) => error,
+            Self::NotInstalled { app, .. } => Error::not_found(format!("`{app}` is not installed")),
+            Self::DuplicateInstalled { app } => {
+                Error::conflict(format!("`{app}` is installed twice"))
+            }
+            Self::VersionMismatch { .. }
+            | Self::DuplicateExport { .. }
+            | Self::UnresolvedImport { .. }
+            | Self::Cycle { .. } => Error::invalid(message),
+        }
+    }
+}
+
 /// What the installed set says about an app's authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Approval {

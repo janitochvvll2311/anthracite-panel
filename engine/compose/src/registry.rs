@@ -5,6 +5,7 @@
 //! whole or not at all. The registry never grants authority: an installed app
 //! still needs a grant to run.
 
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -57,6 +58,14 @@ impl Installed {
 pub struct Problem {
     pub app: String,
     pub message: String,
+}
+
+/// What a grant freezes about the installed bytes (D-Wit-Hash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalMaterial {
+    pub manifest_sha256: String,
+    pub wit_sha256: String,
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +283,104 @@ impl Registry {
         apps.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
         problems.sort_by(|a, b| a.app.cmp(&b.app));
         Ok((apps, problems))
+    }
+
+    /// A fingerprint of the WIT set, the manifest and the signature, ready for a
+    /// grant (D-Wit-Hash).
+    pub fn approval_material(&self, app: &AppId) -> Result<Option<ApprovalMaterial>, Error> {
+        let dir = self.apps.join(app.as_str());
+        match fs::symlink_metadata(&dir) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(Error::internal(format!(
+                    "inspecting {}: {error}",
+                    dir.display()
+                )));
+            }
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(Error::invalid(format!(
+                    "{} is not a real app directory",
+                    dir.display()
+                )));
+            }
+            Ok(_) => {}
+        }
+        let manifest_path = dir.join("manifest.toml");
+        let manifest = fs::read(&manifest_path).map_err(|error| {
+            Error::internal(format!("reading {}: {error}", manifest_path.display()))
+        })?;
+        let wit_dir = dir.join("wit");
+        let entries = fs::read_dir(&wit_dir).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::invalid(format!("{} has no WIT files", dir.display()))
+            } else {
+                Error::internal(format!("reading {}: {error}", wit_dir.display()))
+            }
+        })?;
+        let mut wit = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                Error::internal(format!("reading {}: {error}", wit_dir.display()))
+            })?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".wit") {
+                continue;
+            }
+            let path = entry.path();
+            let bytes = fs::read(&path)
+                .map_err(|error| Error::internal(format!("reading {}: {error}", path.display())))?;
+            wit.push((format!("wit/{name}"), bytes));
+        }
+        if wit.is_empty() {
+            return Err(Error::invalid(format!(
+                "{} has no WIT files",
+                dir.display()
+            )));
+        }
+        wit.sort_by(|a, b| a.0.cmp(&b.0));
+        let wit_sha256 =
+            crate::signature::sha256_hex(&anth_contract::signature::wit_message(&wit)?);
+        let signature = fs::read_to_string(dir.join("manifest.sig"))
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty());
+        Ok(Some(ApprovalMaterial {
+            manifest_sha256: crate::signature::sha256_hex(&manifest),
+            wit_sha256,
+            signature,
+        }))
+    }
+
+    /// Apps that import an interface this app exports. Uninstall, disable and
+    /// revoke need an acknowledgment when this is not empty (§6.4).
+    pub fn dependents(&self, app: &AppId) -> Result<Vec<AppId>, Error> {
+        let (apps, _) = self.catalogue()?;
+        let Some(target) = apps
+            .iter()
+            .find(|installed| installed.manifest.app.id == app.as_str())
+        else {
+            return Ok(Vec::new());
+        };
+        let exports: BTreeSet<anth_contract::InterfaceId> =
+            crate::parse_interfaces(target.manifest.export.iter().map(|e| &e.interface))
+                .map_err(|error| error.into_error())?
+                .into_iter()
+                .collect();
+        let mut dependents = Vec::new();
+        for other in &apps {
+            if other.manifest.app.id == target.manifest.app.id {
+                continue;
+            }
+            let imports: BTreeSet<anth_contract::InterfaceId> =
+                crate::parse_interfaces(other.manifest.import.iter().map(|i| &i.interface))
+                    .map_err(|error| error.into_error())?
+                    .into_iter()
+                    .collect();
+            if !exports.is_disjoint(&imports) {
+                dependents.push(AppId::parse(&other.manifest.app.id)?);
+            }
+        }
+        Ok(dependents)
     }
 
     /// Removes the installed bundle. The grant is a separate document and the
