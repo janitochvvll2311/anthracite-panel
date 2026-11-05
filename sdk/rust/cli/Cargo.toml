@@ -11,3 +11,4 @@ path = "src/main.rs"
 
 [dependencies]
 anth-contract = { path = "../../../engine/contract" }
+serde_json = "1"
