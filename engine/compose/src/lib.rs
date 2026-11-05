@@ -652,7 +652,7 @@ pub(crate) fn parse_interfaces<'a>(
 /// the registry, which is the layer that owns the bundle bytes; here the
 /// version and the sets are enough to tell "approved for this app" from "the
 /// app was upgraded and the operator has not looked at it yet".
-fn grant_matches(
+pub(crate) fn grant_matches(
     manifest: &Manifest,
     grant: &Grant,
     exports: &[InterfaceId],
@@ -664,7 +664,7 @@ fn grant_matches(
         && same_interfaces(&grant.import, imports)
 }
 
-fn same_interfaces(left: &[InterfaceId], right: &[InterfaceId]) -> bool {
+pub(crate) fn same_interfaces(left: &[InterfaceId], right: &[InterfaceId]) -> bool {
     let mut left: Vec<&InterfaceId> = left.iter().collect();
     let mut right: Vec<&InterfaceId> = right.iter().collect();
     left.sort();

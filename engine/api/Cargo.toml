@@ -6,6 +6,7 @@ license.workspace = true
 description = "The engine's HTTP surface"
 
 [dependencies]
+anth-compose = { path = "../compose" }
 anth-contract = { path = "../contract" }
 tokio = { workspace = true }
 axum = { workspace = true }

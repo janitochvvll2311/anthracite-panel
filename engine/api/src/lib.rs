@@ -9,8 +9,12 @@
 
 use std::sync::Arc;
 
-use anth_contract::{Composition, Error};
-use axum::extract::{connect_info::Connected, ConnectInfo, Request, State};
+use anth_compose::grant::GrantStore;
+use anth_compose::registry::{Installed, Registry};
+use anth_contract::{
+    AppId, AppProblem, AppView, Composition, Error, ErrorKind, GrantState, GrantView,
+};
+use axum::extract::{connect_info::Connected, ConnectInfo, Path, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -18,6 +22,13 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use tokio::net::UnixListener;
+
+/// The installed apps and their grants, when this router serves them.
+#[derive(Debug, Clone)]
+pub struct Apps {
+    pub registry: Registry,
+    pub grants: GrantStore,
+}
 
 /// What the router needs from the engine.
 #[derive(Debug, Clone)]
@@ -28,6 +39,8 @@ pub struct EngineState {
     pub allowed_uid: u32,
     /// What is composed. Empty until the operator adds an app.
     pub composition: Arc<Composition>,
+    /// The installed apps, when the daemon could open the state tree.
+    pub apps: Option<Arc<Apps>>,
 }
 
 impl EngineState {
@@ -37,12 +50,22 @@ impl EngineState {
             protocol: 1,
             allowed_uid,
             composition: Arc::new(Composition::empty()),
+            apps: None,
         }
     }
 
     /// What the daemon loaded from the composition file.
     pub fn with_composition(mut self, composition: Composition) -> Self {
         self.composition = Arc::new(composition);
+        self
+    }
+
+    /// The state tree the registry and the grant store read.
+    pub fn with_apps(mut self, state: &std::path::Path) -> Self {
+        self.apps = Some(Arc::new(Apps {
+            registry: Registry::new(state),
+            grants: GrantStore::new(state),
+        }));
         self
     }
 }
@@ -76,6 +99,8 @@ pub fn router(state: Arc<EngineState>) -> Router {
         .route("/health", get(readiness))
         .route("/engine/version", get(version))
         .route("/engine/composition", get(composition))
+        .route("/engine/apps", get(list_apps))
+        .route("/engine/apps/{id}", get(get_app))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
     Router::new()
@@ -117,6 +142,91 @@ async fn composition(State(state): State<Arc<EngineState>>) -> Json<Value> {
         "composition": state.composition.as_ref(),
         "surface": { "apps": [] },
     }))
+}
+
+/// The installed catalogue. The grant is only on the detail endpoint; the list
+/// stays small. A tree that cannot be read is named instead of hiding the rest.
+async fn list_apps(State(state): State<Arc<EngineState>>) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let (installed, problems) = apps.registry.catalogue()?;
+    let mut views = Vec::new();
+    for app in &installed {
+        views.push(app_view(apps, app, false)?);
+    }
+    let problems: Vec<AppProblem> = problems
+        .into_iter()
+        .map(|problem| AppProblem {
+            app: problem.app,
+            message: problem.message,
+        })
+        .collect();
+    Ok(Json(json!({ "apps": views, "problems": problems })))
+}
+
+/// One app: descriptor, effective alias and its frozen grant.
+async fn get_app(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+) -> Result<Json<AppView>, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    let installed = apps
+        .registry
+        .get(&id)
+        .map_err(|error| {
+            // A corrupt installed tree is state the operator must repair, not a
+            // bad request.
+            if error.kind() == ErrorKind::Invalid {
+                ApiError(Error::internal(format!(
+                    "the installed tree for `{id}` is corrupt: {}",
+                    error.message()
+                )))
+            } else {
+                ApiError(error)
+            }
+        })?
+        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+    Ok(Json(app_view(apps, &installed, true)?))
+}
+
+fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
+    state
+        .apps
+        .as_deref()
+        .ok_or_else(|| ApiError(Error::unavailable("this router does not serve apps")))
+}
+
+fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppView, Error> {
+    let id = AppId::parse(&installed.manifest.app.id)?;
+    let (grant, grant_state, grant_problem) = match apps.grants.load(&id) {
+        Ok(Some(grant)) => {
+            let state = if installed.grant_matches(&grant) {
+                GrantState::Current
+            } else {
+                GrantState::Stale
+            };
+            let view = if with_grant {
+                Some(GrantView::from(grant))
+            } else {
+                None
+            };
+            (view, state, None)
+        }
+        Ok(None) => (None, GrantState::None, None),
+        Err(error) => (None, GrantState::Invalid, Some(error.message().to_string())),
+    };
+    Ok(AppView {
+        id,
+        version: installed.manifest.app.version.clone(),
+        enabled: installed.descriptor.enabled,
+        alias: installed.alias().map(str::to_string),
+        signer: installed.descriptor.signer.clone(),
+        tier: installed.descriptor.tier,
+        installed_at: installed.descriptor.installed_at.clone(),
+        grant,
+        grant_state,
+        grant_problem,
+    })
 }
 
 /// Every `/api` route needs a peer credential from the service user or root.
@@ -199,6 +309,202 @@ mod tests {
             .await
             .expect("response")
             .status()
+    }
+
+    fn apps_state() -> (Arc<EngineState>, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join("anthracite-panel").join(format!(
+            "anth-api-apps-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let app = dir.join("apps/org.example.notes");
+        std::fs::create_dir_all(&app).expect("mkdir");
+        for path in [&dir, &dir.join("apps"), &app] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        }
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n";
+        let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
+        for (name, text) in [("manifest.toml", manifest), ("descriptor.toml", descriptor)] {
+            let path = app.join(name);
+            std::fs::write(&path, text).expect("write");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        (Arc::new(EngineState::new(1000).with_apps(&dir)), dir)
+    }
+
+    fn write_grant(dir: &std::path::Path, text: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let grants = dir.join("grants");
+        std::fs::create_dir_all(&grants).expect("grants");
+        std::fs::set_permissions(&grants, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let path = grants.join("org.example.notes.toml");
+        std::fs::write(&path, text).expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+
+    fn grant_toml(app_version: &str) -> String {
+        format!(
+            "version = 1\napp = \"org.example.notes\"\napp_version = \"{app_version}\"\nmanifest_sha256 = \"{}\"\nwit_sha256 = \"{}\"\nrisk = \"read\"\napproved_by = \"operator-3f2a\"\napproved_at = \"2026-11-03T20:00:00Z\"\n",
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    }
+
+    async fn json(state: Arc<EngineState>, uri: &str) -> (StatusCode, Value) {
+        let response = router(state)
+            .oneshot(request(uri, Some(1000)))
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn the_app_catalogue_lists_installed_apps() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["apps"][0]["id"], "org.example.notes");
+        assert_eq!(value["apps"][0]["alias"], "notes");
+        assert_eq!(value["apps"][0]["tier"], "third-party");
+        assert!(
+            value["apps"][0].get("grant").is_none(),
+            "the list carries no grant"
+        );
+        assert_eq!(value["apps"][0]["grant_state"], "none");
+        assert!(value["problems"].as_array().expect("problems").is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_app_detail_carries_its_descriptor() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["enabled"], true);
+        assert!(
+            value.get("grant").is_none(),
+            "no grant was approved for this app"
+        );
+        assert_eq!(value["grant_state"], "none");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_detail_shows_a_current_grant() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("0.1.0"));
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "current");
+        assert_eq!(value["grant"]["risk"], "read");
+        assert_eq!(value["grant"]["approved_by"], "operator-3f2a");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_stale_grant_is_marked() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("9.9.9"));
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "stale");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_grant_is_marked() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, "this is not a grant");
+        let (status, value) = json(state, "/api/engine/apps/org.example.notes").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["grant_state"], "invalid");
+        assert!(value.get("grant").is_none());
+        assert!(
+            value["grant_problem"]
+                .as_str()
+                .expect("problem")
+                .contains("not valid"),
+            "{value}"
+        );
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_catalogue_states_each_grant_without_sending_it() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("0.1.0"));
+        let (status, value) = json(state, "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["apps"][0]["grant_state"], "current");
+        assert!(value["apps"][0].get("grant").is_none());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn the_detail_of_a_corrupt_tree_is_internal() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = apps_state();
+        let broken = dir.join("apps/org.example.broken");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = broken.join("manifest.toml");
+        std::fs::write(&manifest, b"not a manifest").expect("write");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (status, value) = json(state, "/api/engine/apps/org.example.broken").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(value["error"]["code"], "internal");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_app_does_not_hide_the_catalogue() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = apps_state();
+        let broken = dir.join("apps/org.example.broken");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = broken.join("manifest.toml");
+        std::fs::write(&manifest, b"not a manifest").expect("write");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (status, value) = json(state, "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["apps"].as_array().expect("apps").len(), 1);
+        assert_eq!(value["problems"][0]["app"], "org.example.broken");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_missing_app_is_not_found() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps/org.example.missing").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], "not-found");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_app_id_is_refused() {
+        let (state, dir) = apps_state();
+        let (status, value) = json(state, "/api/engine/apps/not-an-id").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], "invalid");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_router_without_apps_is_unavailable() {
+        let (status, value) = json(state(), "/api/engine/apps").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(value["error"]["code"], "unavailable");
     }
 
     #[tokio::test]

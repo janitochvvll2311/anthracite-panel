@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-use anth_contract::{AppId, Descriptor, Error, Manifest, Tier, DESCRIPTOR_VERSION};
+use anth_contract::{AppId, Descriptor, Error, Grant, Manifest, Tier, DESCRIPTOR_VERSION};
 
 use crate::bundle::{self, Options, StagedBundle};
 use crate::keys::Keyring;
@@ -34,6 +34,29 @@ impl Installed {
             .as_deref()
             .or_else(|| self.manifest.cli_name())
     }
+
+    /// Whether `grant` was approved for exactly this manifest: same app, same
+    /// version, same interface sets. The resolver uses the same rule.
+    pub fn grant_matches(&self, grant: &Grant) -> bool {
+        let Ok(exports) =
+            crate::parse_interfaces(self.manifest.export.iter().map(|e| &e.interface))
+        else {
+            return false;
+        };
+        let Ok(imports) =
+            crate::parse_interfaces(self.manifest.import.iter().map(|i| &i.interface))
+        else {
+            return false;
+        };
+        crate::grant_matches(&self.manifest, grant, &exports, &imports)
+    }
+}
+
+/// An installed app the catalogue could not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Problem {
+    pub app: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone)]
@@ -187,23 +210,7 @@ impl Registry {
                 "inspecting {}: {error}",
                 target.display()
             ))),
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                    return Err(Error::invalid(format!(
-                        "{} is not a real app directory",
-                        target.display()
-                    )));
-                }
-                let installed = read_installed(&target)?;
-                if installed.manifest.app.id != app.as_str() {
-                    return Err(Error::invalid(format!(
-                        "{} declares `{}`, not `{app}`",
-                        target.display(),
-                        installed.manifest.app.id
-                    )));
-                }
-                Ok(Some(installed))
-            }
+            Ok(_) => Ok(Some(read_app(&target)?)),
         }
     }
 
@@ -233,6 +240,40 @@ impl Registry {
         }
         installed.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
         Ok(installed)
+    }
+
+    /// Every app that can be read, plus one problem per tree that cannot.
+    ///
+    /// The catalogue must not disappear because one install is broken: the
+    /// operator needs the rest of it to repair the broken one.
+    pub fn catalogue(&self) -> Result<(Vec<Installed>, Vec<Problem>), Error> {
+        if !store::check_dir(&self.apps)? {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let entries = fs::read_dir(&self.apps).map_err(|error| {
+            Error::internal(format!("reading {}: {error}", self.apps.display()))
+        })?;
+        let mut apps = Vec::new();
+        let mut problems = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                Error::internal(format!("reading {}: {error}", self.apps.display()))
+            })?;
+            let app = entry.file_name().to_string_lossy().to_string();
+            if app.starts_with('.') {
+                continue;
+            }
+            match read_app(&entry.path()) {
+                Ok(installed) => apps.push(installed),
+                Err(error) => problems.push(Problem {
+                    app,
+                    message: error.message().to_string(),
+                }),
+            }
+        }
+        apps.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
+        problems.sort_by(|a, b| a.app.cmp(&b.app));
+        Ok((apps, problems))
     }
 
     /// Removes the installed bundle. The grant is a separate document and the
@@ -363,7 +404,7 @@ impl Registry {
             if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
-            if let Ok(installed) = read_installed(&entry.path()) {
+            if let Ok(installed) = read_app(&entry.path()) {
                 apps.push(installed);
             }
         }
@@ -489,6 +530,20 @@ fn read_manifest(dir: &Path) -> Result<Manifest, Error> {
     Ok(manifest)
 }
 
+/// Reads a real app directory: no symlink, a directory, and a manifest that
+/// names the directory it lives in.
+fn read_app(dir: &Path) -> Result<Installed, Error> {
+    let metadata = fs::symlink_metadata(dir)
+        .map_err(|error| Error::internal(format!("inspecting {}: {error}", dir.display())))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(Error::invalid(format!(
+            "{} is not a real app directory",
+            dir.display()
+        )));
+    }
+    read_installed(dir)
+}
+
 /// Reads the manifest and the descriptor and refuses a pair that names two
 /// different apps: the directory is one app or it is corrupt.
 fn read_installed(dir: &Path) -> Result<Installed, Error> {
@@ -499,6 +554,22 @@ fn read_installed(dir: &Path) -> Result<Installed, Error> {
             "{} descriptor names `{}` but the manifest is `{}`",
             dir.display(),
             descriptor.app,
+            manifest.app.id
+        )));
+    }
+    let expected = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            Error::invalid(format!(
+                "{} is not a valid app directory name",
+                dir.display()
+            ))
+        })?;
+    if manifest.app.id != expected {
+        return Err(Error::invalid(format!(
+            "{} declares `{}`, not `{expected}`",
+            dir.display(),
             manifest.app.id
         )));
     }
@@ -597,7 +668,8 @@ fn sync_dir(dir: &Path) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anth_contract::{KeyAlgorithm, TrustedKey, KEY_VERSION};
+    use crate::grant::GrantStore;
+    use anth_contract::{Grant, KeyAlgorithm, Risk, TrustedKey, GRANT_VERSION, KEY_VERSION};
     use ed25519_dalek::{Signer, SigningKey};
     use sha2::{Digest, Sha256};
     use std::io::{Cursor, Write};
@@ -1157,6 +1229,103 @@ mod tests {
             "the original stays installed"
         );
         fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn the_catalogue_does_not_follow_a_symlink() {
+        let state = scratch("catalogue-symlink");
+        let registry = Registry::new(&state);
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        std::os::unix::fs::symlink(
+            registry.dir().join("org.example.notes"),
+            registry.dir().join("org.example.alias"),
+        )
+        .expect("symlink");
+        let (apps, problems) = registry.catalogue().expect("catalogue");
+        assert_eq!(apps.len(), 1, "the link is not a second app");
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.app == "org.example.alias"),
+            "{problems:?}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn the_catalogue_reports_a_directory_that_declares_another_app() {
+        let state = scratch("catalogue-mismatch");
+        let registry = Registry::new(&state);
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        let copy = registry.dir().join("org.example.other");
+        fs::create_dir(&copy).expect("mkdir");
+        for name in ["manifest.toml", "descriptor.toml"] {
+            fs::copy(
+                registry.dir().join("org.example.notes").join(name),
+                copy.join(name),
+            )
+            .expect("copy");
+        }
+        let wasm = copy.join("wasm");
+        fs::create_dir(&wasm).expect("mkdir");
+        fs::copy(
+            registry.dir().join("org.example.notes/wasm/notes.wasm"),
+            wasm.join("notes.wasm"),
+        )
+        .expect("copy");
+        let (apps, problems) = registry.catalogue().expect("catalogue");
+        assert_eq!(apps.len(), 1);
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.app == "org.example.other"),
+            "{problems:?}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn grant_matches_requires_the_same_version() {
+        let state = scratch("grant-matches");
+        let registry = Registry::new(&state);
+        let app = AppId::parse("org.example.notes").unwrap();
+        let installed = registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        grant_for(&state, &app, "0.1.0");
+        let stored = GrantStore::new(&state)
+            .load(&app)
+            .expect("load")
+            .expect("grant");
+        assert!(installed.grant_matches(&stored));
+        let mut other = stored.clone();
+        other.app_version = "9.9.9".to_string();
+        assert!(!installed.grant_matches(&other));
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    fn grant_for(state: &std::path::Path, app: &AppId, version: &str) {
+        let grant = Grant {
+            version: GRANT_VERSION,
+            app: app.clone(),
+            app_version: version.to_string(),
+            manifest_sha256: "a".repeat(64),
+            wit_sha256: "b".repeat(64),
+            signature: None,
+            risk: Risk::Read,
+            accepted: Vec::new(),
+            approved_by: "operator-test".to_string(),
+            approved_at: "2026-11-03T20:00:00Z".to_string(),
+            export: vec![
+                anth_contract::InterfaceId::parse("example:notes/notes@1.0.0").expect("interface"),
+            ],
+            import: Vec::new(),
+        };
+        GrantStore::new(state).save(&grant).expect("save grant");
     }
 
     #[test]
