@@ -278,9 +278,16 @@ async fn replace_app(
     let id = AppId::parse(&id)?;
     let actor = actor.0;
     let body = read_body(request, apps.max_bundle_bytes).await?;
+    // Revoke before the swap so a successful replace can never leave the old
+    // grant behind; if the replace fails, the grant is restored.
+    let previous_grant = apps.grants.load(&id).ok().flatten();
+    apps.grants.remove(&id)?;
     let installed = match apps.registry.replace(&id, &body, &apps.options()) {
         Ok(installed) => installed,
         Err(error) => {
+            if let Some(grant) = previous_grant {
+                let _ = apps.grants.save(&grant);
+            }
             return Err(audit_or_error(
                 audit_failure(
                     apps,
@@ -293,9 +300,6 @@ async fn replace_app(
             ));
         }
     };
-    // v0.5.0 cannot compare the authority delta, so every upgrade revokes the
-    // grant: re-approval is required (D-Upgrade-Approval).
-    apps.grants.remove(&id)?;
     audit(
         apps,
         &actor,
@@ -316,14 +320,8 @@ async fn remove_app(
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
-    // Check first, revoke authority, then remove the content: if the last step
-    // fails, what remains is an app without a grant, never a grant without an
-    // app.
-    if apps.registry.get(&id)?.is_none() {
-        return Err(ApiError(Error::not_found(format!(
-            "`{id}` is not installed"
-        ))));
-    }
+    // Revoke authority before touching the content: a corrupt or half-removed
+    // tree must never keep a grant. A missing app simply has no grant to remove.
     apps.grants.remove(&id)?;
     match apps.registry.remove(&id) {
         Ok(true) => {}
@@ -476,13 +474,22 @@ fn deny(state: &EngineState, actor: String, reason: &str) {
 }
 
 async fn read_body(request: Request, limit: u64) -> Result<Bytes, ApiError> {
+    use http_body::Body as _;
+    // A body that announces more than the cap is refused before reading it; a
+    // chunked body hits `to_bytes`'s limit, which is the only size error there.
+    if request
+        .body()
+        .size_hint()
+        .upper()
+        .is_some_and(|size| size > limit)
+    {
+        return Err(ApiError(Error::too_large(format!(
+            "the body is larger than {limit} bytes"
+        ))));
+    }
     axum::body::to_bytes(request.into_body(), limit as usize)
         .await
-        .map_err(|_| {
-            ApiError(Error::too_large(format!(
-                "the body is larger than {limit} bytes"
-            )))
-        })
+        .map_err(|_| ApiError(Error::invalid("the request body could not be read")))
 }
 
 fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
@@ -1183,6 +1190,30 @@ mod tests {
         let (status, _, value) = call(state, "POST", "/api/engine/apps", vec![0u8; 20]).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(value["error"]["code"], "too-large");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_corrupt_tree_can_still_be_uninstalled() {
+        use std::os::unix::fs::PermissionsExt;
+        let (state, dir) = apps_state();
+        let broken = dir.join("apps/org.example.broken");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = broken.join("manifest.toml");
+        std::fs::write(&manifest, b"not a manifest").expect("write");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let (status, _, _) = call(
+            state,
+            "DELETE",
+            "/api/engine/apps/org.example.broken",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(!broken.exists());
+        let entries = AuditLog::new(&dir).entries().expect("audit");
+        assert_eq!(entries.last().unwrap().action, AuditAction::AppRemove);
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 }

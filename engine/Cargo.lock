@@ -15,6 +15,7 @@ dependencies = [
  "anth-compose",
  "anth-contract",
  "axum",
+ "http-body",
  "libc",
  "serde",
  "serde_json",
