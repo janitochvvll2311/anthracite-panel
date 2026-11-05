@@ -5,11 +5,12 @@
 //! it (§7.12). Living here keeps the rule testable with values, without a
 //! component in sight.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::Error;
 use crate::grant::Grant;
 use crate::id::InterfaceId;
 
@@ -19,9 +20,15 @@ pub struct World {
     pub imports: BTreeSet<InterfaceId>,
     #[serde(default)]
     pub exports: BTreeSet<InterfaceId>,
+    /// A canonical signature per interface (a hash of its structural type),
+    /// when the layer that read the types knows it. Empty means the comparison
+    /// is names and versions only, which is all a grant can express.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub signatures: BTreeMap<InterfaceId, String>,
 }
 
-/// Every difference between what a component declares and what its grant froze.
+/// Every difference between what a component declares and what the granted world
+/// expects.
 ///
 /// A non-empty result is a refusal before instantiation (§7.12): an extra import
 /// is authority the operator did not approve, and a missing export is an app that
@@ -36,6 +43,9 @@ pub struct WorldMismatch {
     pub extra_exports: Vec<InterfaceId>,
     #[serde(default)]
     pub missing_exports: Vec<InterfaceId>,
+    /// Interfaces whose structural signature differs from the expected one.
+    #[serde(default)]
+    pub type_drift: Vec<InterfaceId>,
 }
 
 impl WorldMismatch {
@@ -44,6 +54,7 @@ impl WorldMismatch {
             && self.missing_imports.is_empty()
             && self.extra_exports.is_empty()
             && self.missing_exports.is_empty()
+            && self.type_drift.is_empty()
     }
 }
 
@@ -72,13 +83,40 @@ impl fmt::Display for WorldMismatch {
         part("missing imports", &self.missing_imports, f)?;
         part("extra exports", &self.extra_exports, f)?;
         part("missing exports", &self.missing_exports, f)?;
+        part("type drift", &self.type_drift, f)?;
         Ok(())
     }
 }
 
+impl From<WorldMismatch> for Error {
+    fn from(mismatch: WorldMismatch) -> Self {
+        let detail = serde_json::to_value(&mismatch).unwrap_or(serde_json::Value::Null);
+        Error::denied(format!(
+            "the component world does not match its grant: {mismatch}"
+        ))
+        .with_detail(detail)
+    }
+}
+
+/// `anth:error` is a package of types, injected when the WIT is parsed: it is
+/// never granted and never risked (§9.2), so it is not a difference.
+fn is_injected(id: &InterfaceId) -> bool {
+    id.namespace() == "anth" && id.package() == "error"
+}
+
 impl World {
     pub fn new(imports: BTreeSet<InterfaceId>, exports: BTreeSet<InterfaceId>) -> Self {
-        Self { imports, exports }
+        Self {
+            imports,
+            exports,
+            signatures: BTreeMap::new(),
+        }
+    }
+
+    /// Attaches the structural signature the runtime or WIT parser computed.
+    pub fn with_signature(mut self, id: InterfaceId, signature: impl Into<String>) -> Self {
+        self.signatures.insert(id, signature.into());
+        self
     }
 
     /// The imports the grant does not list, which is what a lying manifest looks
@@ -98,20 +136,79 @@ impl World {
         promised.iter().filter(|id| !self.exports.contains(*id))
     }
 
-    /// Compares the real world with the frozen grant in both directions.
+    /// Compares the real world with the grant.
+    ///
+    /// The grant names interfaces, not their structure, so this is the
+    /// name-and-version half. The runtime uses [`World::check_expected`] with the
+    /// world built from the installed WIT, which carries signatures.
+    pub fn check(&self, granted: &Grant) -> Result<(), WorldMismatch> {
+        let expected = World::new(
+            granted.import.iter().cloned().collect(),
+            granted.export.iter().cloned().collect(),
+        );
+        self.check_expected(&expected)
+    }
+
+    /// Compares the real world with the world the installed WIT describes.
     ///
     /// The interface id carries the package version, so a drifted version is a
-    /// different id and shows up as a difference (§7.12, D-Interface-Versioning).
-    /// Structural type drift stays with the runtime, which has the component
-    /// types; this check is the name-and-version half.
-    pub fn check(&self, granted: &Grant) -> Result<(), WorldMismatch> {
-        let granted_imports: BTreeSet<InterfaceId> = granted.import.iter().cloned().collect();
-        let granted_exports: BTreeSet<InterfaceId> = granted.export.iter().cloned().collect();
+    /// different id and shows up as a difference (D-Interface-Versioning). When
+    /// both sides carry a signature for the same id, a different signature is
+    /// structural drift (§7.12).
+    pub fn check_expected(&self, expected: &World) -> Result<(), WorldMismatch> {
+        let actual_imports: BTreeSet<InterfaceId> = self
+            .imports
+            .iter()
+            .filter(|id| !is_injected(id))
+            .cloned()
+            .collect();
+        let actual_exports: BTreeSet<InterfaceId> = self
+            .exports
+            .iter()
+            .filter(|id| !is_injected(id))
+            .cloned()
+            .collect();
+        let expected_imports: BTreeSet<InterfaceId> = expected
+            .imports
+            .iter()
+            .filter(|id| !is_injected(id))
+            .cloned()
+            .collect();
+        let expected_exports: BTreeSet<InterfaceId> = expected
+            .exports
+            .iter()
+            .filter(|id| !is_injected(id))
+            .cloned()
+            .collect();
+        let type_drift: BTreeSet<InterfaceId> = actual_imports
+            .iter()
+            .chain(actual_exports.iter())
+            .filter(|id| {
+                matches!(
+                    (self.signatures.get(*id), expected.signatures.get(*id)),
+                    (Some(actual), Some(wanted)) if actual != wanted
+                )
+            })
+            .cloned()
+            .collect();
         let mismatch = WorldMismatch {
-            extra_imports: self.imports.difference(&granted_imports).cloned().collect(),
-            missing_imports: granted_imports.difference(&self.imports).cloned().collect(),
-            extra_exports: self.exports.difference(&granted_exports).cloned().collect(),
-            missing_exports: granted_exports.difference(&self.exports).cloned().collect(),
+            extra_imports: actual_imports
+                .difference(&expected_imports)
+                .cloned()
+                .collect(),
+            missing_imports: expected_imports
+                .difference(&actual_imports)
+                .cloned()
+                .collect(),
+            extra_exports: actual_exports
+                .difference(&expected_exports)
+                .cloned()
+                .collect(),
+            missing_exports: expected_exports
+                .difference(&actual_exports)
+                .cloned()
+                .collect(),
+            type_drift: type_drift.into_iter().collect(),
         };
         if mismatch.is_empty() {
             Ok(())
@@ -229,5 +326,49 @@ mod tests {
             .expect_err("drift");
         assert_eq!(error.extra_exports, [drifted]);
         assert_eq!(error.missing_exports, [granted]);
+    }
+
+    #[test]
+    fn the_injected_error_package_is_never_a_difference() {
+        let injected = id("anth:error/kinds@1.0.0");
+        let export = id("example:notes/list@1.0.0");
+        let world = World::new([injected].into(), [export.clone()].into());
+        world
+            .check(&grant(&[], std::slice::from_ref(&export)))
+            .expect("anth:error is injected, not granted");
+    }
+
+    #[test]
+    fn a_structural_drift_is_detected_when_both_sides_carry_a_signature() {
+        let export = id("example:notes/list@1.0.0");
+        let world = World::new(BTreeSet::new(), [export.clone()].into())
+            .with_signature(export.clone(), "actual");
+        let expected = World::new(BTreeSet::new(), [export.clone()].into())
+            .with_signature(export.clone(), "wanted");
+        let error = world.check_expected(&expected).expect_err("type drift");
+        assert_eq!(error.type_drift, [export]);
+        assert!(error.to_string().contains("type drift"), "{error}");
+    }
+
+    #[test]
+    fn matching_signatures_pass() {
+        let export = id("example:notes/list@1.0.0");
+        let world = World::new(BTreeSet::new(), [export.clone()].into())
+            .with_signature(export.clone(), "same");
+        let expected =
+            World::new(BTreeSet::new(), [export.clone()].into()).with_signature(export, "same");
+        world.check_expected(&expected).expect("match");
+    }
+
+    #[test]
+    fn a_world_mismatch_becomes_a_denied_error_with_structured_detail() {
+        let sneaked = id("anth:env/random@1.0.0");
+        let world = World::new([sneaked.clone()].into(), BTreeSet::new());
+        let mismatch = world.check(&grant(&[], &[])).expect_err("extra import");
+        let error: Error = mismatch.into();
+        assert_eq!(error.kind(), crate::error::ErrorKind::Denied);
+        assert!(error.message().contains("extra imports"), "{error}");
+        let detail = error.envelope().error.detail.expect("detail");
+        assert_eq!(detail["extra_imports"][0], sneaked.to_string());
     }
 }
