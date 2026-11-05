@@ -350,7 +350,9 @@ impl Manifest {
 }
 
 /// `interface#function`, both validated.
-fn parse_call(input: &str) -> Result<(String, String), Error> {
+/// Splits `interface#function`, validating both halves. Public because the API
+/// surface must expose the same split the manifest validated.
+pub fn parse_call(input: &str) -> Result<(String, String), Error> {
     let (interface, function) = input.split_once('#').ok_or_else(|| {
         Error::invalid(format!("`{input}` is not of the form interface#function"))
     })?;
