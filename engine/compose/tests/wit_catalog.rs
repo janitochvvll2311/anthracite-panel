@@ -44,6 +44,72 @@ fn every_native_id_resolves_to_an_interface() {
 }
 
 #[test]
+fn an_app_package_resolves_against_the_catalog() {
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit");
+    let dir = std::env::temp_dir().join("anthracite-panel").join(format!(
+        "anth-wit-app-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    for package in ["error", "env", "store"] {
+        let from = root.join("deps").join(package);
+        let to = dir.join("deps").join(package);
+        fs::create_dir_all(&to).expect("mkdir");
+        for entry in fs::read_dir(&from).expect("read_dir") {
+            let entry = entry.expect("entry");
+            fs::copy(entry.path(), to.join(entry.file_name())).expect("copy");
+        }
+    }
+    fs::write(
+        dir.join("app.wit"),
+        "package example:notes@1.0.0;\n\n\
+         interface notes {\n\
+         \x20   use anth:error/kinds@1.0.0.{error};\n\
+         \x20   all: func() -> result<list<string>, error>;\n\
+         }\n\n\
+         world app {\n\
+         \x20   import anth:store/kv@1.0.0;\n\
+         \x20   export notes;\n\
+         }\n",
+    )
+    .expect("app.wit");
+    let mut resolve = wit_parser::Resolve::default();
+    let (package, _) = resolve
+        .push_dir(&dir)
+        .unwrap_or_else(|error| panic!("resolving {}: {error:#}", dir.display()));
+    let package = &resolve.packages[package];
+    assert_eq!(
+        package.name.interface_id("notes"),
+        "example:notes/notes@1.0.0"
+    );
+    assert!(package.interfaces.contains_key("notes"));
+    let world = *package.worlds.get("app").expect("the app world");
+    let imports: Vec<String> = resolve.worlds[world]
+        .imports
+        .keys()
+        .filter_map(|key| match key {
+            wit_parser::WorldKey::Interface(id) => {
+                let interface = &resolve.interfaces[*id];
+                let name = interface.name.as_deref().expect("named");
+                let owner = interface.package.expect("owned");
+                Some(resolve.packages[owner].name.interface_id(name))
+            }
+            wit_parser::WorldKey::Name(_) => None,
+        })
+        .collect();
+    assert!(
+        imports.iter().any(|id| id == "anth:store/kv@1.0.0"),
+        "{imports:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn the_host_world_imports_the_native_set() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit");
     let mut resolve = wit_parser::Resolve::default();
