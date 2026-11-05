@@ -28,6 +28,11 @@ commands:
   status                health, version and the installed catalogue
   compose [--show] [--add <id>] [--remove <id>] [--now]
                         read or edit the composition
+  key list              trusted signers
+  key add <public-key> [--label <label>]
+                        trust a third-party signer
+  key remove <fingerprint>
+                        stop trusting a signer
   app list              list installed apps
   app show <id>         show one app
   app install <bundle>  install a bundle (zip)
@@ -73,6 +78,10 @@ pub enum Invocation {
         remove: Vec<String>,
         now: bool,
     },
+    Key {
+        socket: Option<PathBuf>,
+        command: KeyCommand,
+    },
     App {
         socket: Option<PathBuf>,
         command: AppCommand,
@@ -113,6 +122,17 @@ pub enum AppCommand {
     },
 }
 
+/// The `anth key` subcommands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyCommand {
+    List,
+    Add {
+        public_key: String,
+        label: Option<String>,
+    },
+    Remove(String),
+}
+
 /// Parses arguments without touching the filesystem.
 ///
 /// Flags are compared as text, but a path is kept as [`OsString`]: a state
@@ -151,6 +171,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Err
         }
         "app" => parse_app(args, socket),
         "compose" => parse_compose(args, socket),
+        "key" => parse_key(args, socket),
         other => Err(usage(format!("`{other}` is not a command"))),
     }
 }
@@ -278,6 +299,48 @@ fn parse_compose(
     })
 }
 
+fn parse_key(
+    args: impl Iterator<Item = OsString>,
+    socket: Option<PathBuf>,
+) -> Result<Invocation, Error> {
+    let mut args = args.into_iter();
+    let sub = args
+        .next()
+        .ok_or_else(|| usage("`key` needs a subcommand".to_string()))?;
+    let sub = as_text(&sub)?.to_string();
+    let mut label = None;
+    let mut positional = Vec::new();
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--label") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| usage("`--label` needs a value".to_string()))?;
+                label = Some(as_text(&value)?.to_string());
+            }
+            Some("--help" | "-h") => return Ok(Invocation::Help),
+            Some(value) if value.starts_with('-') => {
+                return Err(usage(format!("`{value}` is not a key option")));
+            }
+            _ => positional.push(arg),
+        }
+    }
+    let command = match (sub.as_str(), positional.as_slice()) {
+        ("list", []) if label.is_none() => KeyCommand::List,
+        ("add", [public_key]) => KeyCommand::Add {
+            public_key: as_text(public_key)?.to_string(),
+            label,
+        },
+        ("remove", [fingerprint]) if label.is_none() => {
+            KeyCommand::Remove(as_text(fingerprint)?.to_string())
+        }
+        (sub, _) => {
+            return Err(usage(format!("`key {sub}` does not take those arguments")));
+        }
+    };
+    Ok(Invocation::Key { socket, command })
+}
+
 fn as_text(arg: &OsString) -> Result<&str, Error> {
     arg.to_str()
         .ok_or_else(|| usage("an option is not valid UTF-8".to_string()))
@@ -337,6 +400,7 @@ pub fn execute(invocation: Invocation) -> Result<u8, Error> {
             remove,
             now,
         } => compose(socket, show, add, remove, now),
+        Invocation::Key { socket, command } => key(socket, command),
         Invocation::App { socket, command } => app(socket, command),
     }
 }
@@ -498,6 +562,51 @@ fn warn_fatal(surface: &serde_json::Value) {
             fatal["code"].as_str().unwrap_or("invalid"),
             fatal["message"].as_str().unwrap_or("it cannot be resolved")
         );
+    }
+}
+
+fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
+    let client = client(socket);
+    match command {
+        KeyCommand::List => {
+            let value = client.get_json("/api/engine/keys")?;
+            for key in value["keys"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+                println!(
+                    "{}\t{}\t{}",
+                    key["fingerprint"].as_str().unwrap_or("?"),
+                    key["label"].as_str().unwrap_or("-"),
+                    key["added_at"].as_str().unwrap_or("?")
+                );
+            }
+            Ok(0)
+        }
+        KeyCommand::Add { public_key, label } => {
+            let body = serde_json::json!({"public_key": public_key, "label": label}).to_string();
+            let response = client.request(
+                "POST",
+                "/api/engine/keys",
+                body.as_bytes(),
+                &[("content-type", "application/json")],
+            )?;
+            let value: serde_json::Value =
+                serde_json::from_slice(&response.body).map_err(|error| {
+                    Error::internal(format!("the engine answered with invalid JSON: {error}"))
+                })?;
+            let fingerprint = value["fingerprint"]
+                .as_str()
+                .ok_or_else(|| Error::internal("the engine answered without a fingerprint"))?;
+            println!("{fingerprint}");
+            Ok(0)
+        }
+        KeyCommand::Remove(fingerprint) => {
+            client.request(
+                "DELETE",
+                &format!("/api/engine/keys/{fingerprint}"),
+                &[],
+                &[],
+            )?;
+            Ok(0)
+        }
     }
 }
 
@@ -1154,6 +1263,78 @@ mod tests {
         assert_eq!(apps, [serde_json::json!("org.example.consumer")]);
         edit_apps(&mut apps, &[], &["org.example.consumer@9.9.9".to_string()]);
         assert!(apps.is_empty());
+    }
+
+    #[test]
+    fn key_commands_parse() {
+        assert_eq!(
+            parse(args(&["key", "list"])).expect("parse"),
+            Invocation::Key {
+                socket: None,
+                command: KeyCommand::List,
+            }
+        );
+        assert_eq!(
+            parse(args(&["key", "remove", "abc"])).expect("parse"),
+            Invocation::Key {
+                socket: None,
+                command: KeyCommand::Remove("abc".to_string()),
+            }
+        );
+        assert_eq!(
+            parse(args(&["key", "add", "ea4a", "--label", "laptop"])).expect("parse"),
+            Invocation::Key {
+                socket: None,
+                command: KeyCommand::Add {
+                    public_key: "ea4a".to_string(),
+                    label: Some("laptop".to_string()),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn key_refuses_options_that_do_not_apply() {
+        assert!(parse(args(&["key", "list", "--label", "x"])).is_err());
+        assert!(parse(args(&["key", "remove", "abc", "--label", "x"])).is_err());
+        assert!(parse(args(&["key", "add"])).is_err());
+        assert!(parse(args(&["key", "add", "ea4a", "extra"])).is_err());
+        assert!(parse(args(&["key", "nope"])).is_err());
+        assert!(parse(args(&["key"])).is_err());
+    }
+
+    #[test]
+    fn a_key_add_sends_json_and_a_remove_uses_the_path() {
+        let dir = scratch("key");
+        let socket = dir.join("engine.sock");
+        let body = r#"{"fingerprint":"abc","public_key":"ea4a","label":"laptop"}"#;
+        let receive = serve(
+            &socket,
+            vec![answer("201 Created", body), answer("204 No Content", "")],
+        );
+        key(
+            Some(socket.clone()),
+            KeyCommand::Add {
+                public_key: "ea4a".to_string(),
+                label: Some("laptop".to_string()),
+            },
+        )
+        .expect("add");
+        key(Some(socket), KeyCommand::Remove("abc".to_string())).expect("remove");
+        let add = String::from_utf8_lossy(&receive.recv().expect("add")).to_string();
+        assert!(add.starts_with("POST /api/engine/keys HTTP/1.1"), "{add}");
+        assert!(
+            add.to_lowercase()
+                .contains("content-type: application/json"),
+            "{add}"
+        );
+        assert!(add.contains("\"public_key\":\"ea4a\""), "{add}");
+        assert!(add.contains("\"label\":\"laptop\""), "{add}");
+        let remove = String::from_utf8_lossy(&receive.recv().expect("remove")).to_string();
+        assert!(
+            remove.starts_with("DELETE /api/engine/keys/abc HTTP/1.1"),
+            "{remove}"
+        );
     }
 
     #[test]

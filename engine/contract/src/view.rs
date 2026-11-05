@@ -12,6 +12,7 @@ use crate::composition::Composition;
 use crate::descriptor::Tier;
 use crate::grant::Grant;
 use crate::id::{AppId, InterfaceId};
+use crate::key::TrustedKey;
 
 /// One installed app as the API presents it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +96,15 @@ pub enum GrantState {
 pub struct AppProblem {
     pub app: String,
     pub message: String,
+}
+
+/// A trusted signer as the API presents it: the document plus its derived
+/// fingerprint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeyView {
+    pub fingerprint: String,
+    #[serde(flatten)]
+    pub key: TrustedKey,
 }
 
 /// One app that runs, in boot order.
@@ -246,6 +256,27 @@ mod tests {
                 format!("\"{name}\"")
             );
         }
+    }
+
+    #[test]
+    fn a_key_view_round_trips_and_flattens_the_document() {
+        use crate::key::{KeyAlgorithm, KEY_VERSION};
+        let view = KeyView {
+            fingerprint: "b".repeat(64),
+            key: TrustedKey {
+                version: KEY_VERSION,
+                algorithm: KeyAlgorithm::Ed25519,
+                public_key: "a".repeat(64),
+                label: Some("laptop".to_string()),
+                added_by: "uid:1000".to_string(),
+                added_at: "2026-11-05T20:00:00Z".to_string(),
+            },
+        };
+        let text = serde_json::to_string(&view).expect("render");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("value");
+        assert_eq!(value["fingerprint"], "b".repeat(64));
+        assert_eq!(value["public_key"], "a".repeat(64));
+        assert_eq!(serde_json::from_str::<KeyView>(&text).expect("parse"), view);
     }
 
     #[test]

@@ -19,8 +19,8 @@ use anth_compose::risk::{approve, Approval};
 use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
-    Error, ErrorKind, FatalView, GrantState, GrantView, Outcome, Risk, SurfaceApp, SurfaceLink,
-    SurfaceView,
+    Error, ErrorKind, FatalView, GrantState, GrantView, KeyAlgorithm, KeyView, Outcome, Risk,
+    SurfaceApp, SurfaceLink, SurfaceView, TrustedKey, KEY_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
@@ -28,7 +28,7 @@ use axum::http::header::{ETAG, IF_MATCH, LOCATION};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -146,6 +146,8 @@ pub fn router(state: Arc<EngineState>) -> Router {
             "/engine/composition",
             get(composition).put(replace_composition),
         )
+        .route("/engine/keys", get(list_keys).post(add_key))
+        .route("/engine/keys/{fingerprint}", delete(remove_key))
         .route("/engine/apps", get(list_apps).post(install_app))
         .route(
             "/engine/apps/{id}",
@@ -407,6 +409,95 @@ async fn list_apps(State(state): State<Arc<EngineState>>) -> Result<Json<Value>,
         })
         .collect();
     Ok(Json(json!({ "apps": views, "problems": problems })))
+}
+
+/// The trusted signers. The keyring can extend trust, never privilege (§9.1).
+async fn list_keys(State(state): State<Arc<EngineState>>) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let keys: Vec<KeyView> = apps
+        .registry
+        .keyring()
+        .all()?
+        .into_iter()
+        .map(|(fingerprint, key)| KeyView { fingerprint, key })
+        .collect();
+    Ok(Json(json!({ "keys": keys })))
+}
+
+/// The public key is the request; the engine fills the operator and the time.
+/// Re-adding the same key is idempotent and answers `200` instead of `201`.
+async fn add_key(
+    State(state): State<Arc<EngineState>>,
+    Extension(actor): Extension<Actor>,
+    Json(body): Json<KeyBody>,
+) -> Result<Response, ApiError> {
+    let apps = apps(&state)?;
+    let key = TrustedKey {
+        version: KEY_VERSION,
+        algorithm: KeyAlgorithm::Ed25519,
+        public_key: body.public_key,
+        label: body.label,
+        added_by: actor.0.clone(),
+        added_at: timestamp(),
+    };
+    let fingerprint = anth_compose::signature::fingerprint(&key.public_key)?;
+    if let Some(existing) = apps.registry.keyring().load(&fingerprint)? {
+        // A retried add changes nothing: the first document (label, operator and
+        // timestamp) is the trusted one.
+        return Ok((
+            StatusCode::OK,
+            [(LOCATION, format!("/api/engine/keys/{fingerprint}"))],
+            Json(KeyView {
+                fingerprint,
+                key: existing,
+            }),
+        )
+            .into_response());
+    }
+    let fingerprint = apps.registry.keyring().add(&key)?;
+    audit(
+        apps,
+        &actor.0,
+        AuditAction::KeyAdd,
+        None,
+        Outcome::Ok,
+        Some(json!({"fingerprint": fingerprint})),
+    )?;
+    Ok((
+        StatusCode::CREATED,
+        [(LOCATION, format!("/api/engine/keys/{fingerprint}"))],
+        Json(KeyView { fingerprint, key }),
+    )
+        .into_response())
+}
+
+async fn remove_key(
+    State(state): State<Arc<EngineState>>,
+    Path(fingerprint): Path<String>,
+    Extension(actor): Extension<Actor>,
+) -> Result<StatusCode, ApiError> {
+    let apps = apps(&state)?;
+    if !apps.registry.keyring().remove(&fingerprint)? {
+        return Err(ApiError(Error::not_found(format!(
+            "`{fingerprint}` is not a trusted key"
+        ))));
+    }
+    audit(
+        apps,
+        &actor.0,
+        AuditAction::KeyRemove,
+        None,
+        Outcome::Ok,
+        Some(json!({"fingerprint": fingerprint})),
+    )?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyBody {
+    public_key: String,
+    #[serde(default)]
+    label: Option<String>,
 }
 
 /// One app: descriptor, effective alias and its frozen grant.
@@ -1102,6 +1193,11 @@ mod tests {
         )
     }
 
+    /// The public half of the test signer: the verifying key for seed `[7; 32]`.
+    fn public_key_hex() -> String {
+        "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c".to_string()
+    }
+
     fn write_grant(dir: &std::path::Path, text: &str) {
         write_grant_for(dir, "org.example.notes", text);
     }
@@ -1240,6 +1336,95 @@ mod tests {
         );
         assert_eq!(value["apps"][0]["grant_state"], "none");
         assert!(value["problems"].as_array().expect("problems").is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_key_is_added_listed_and_removed() {
+        let (state, dir) = apps_state();
+        let body = format!(
+            r#"{{"public_key":"{}","label":"example signer"}}"#,
+            public_key_hex()
+        );
+        let (status, headers, value) = call(
+            state.clone(),
+            "POST",
+            "/api/engine/keys",
+            body.clone().into_bytes(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{value}");
+        let fingerprint = value["fingerprint"]
+            .as_str()
+            .expect("fingerprint")
+            .to_string();
+        assert_eq!(fingerprint.len(), 64);
+        assert_eq!(value["label"], "example signer");
+        assert_eq!(value["added_by"], "uid:1000");
+        assert_eq!(value["algorithm"], "ed25519");
+        assert_eq!(
+            headers
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("/api/engine/keys/{fingerprint}").as_str())
+        );
+        let (status, value) = json(state.clone(), "/api/engine/keys").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["keys"][0]["fingerprint"], fingerprint);
+        // The same key is idempotent: it keeps the first label and adds no
+        // second audit entry.
+        let retry = format!(r#"{{"public_key":"{}"}}"#, public_key_hex());
+        let (status, _, value) = call(
+            state.clone(),
+            "POST",
+            "/api/engine/keys",
+            retry.into_bytes(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["label"], "example signer");
+        let (status, _, _) = call(
+            state.clone(),
+            "DELETE",
+            &format!("/api/engine/keys/{fingerprint}"),
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, value) = json(state.clone(), "/api/engine/keys").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["keys"].as_array().expect("keys").is_empty());
+        let (status, _, value) = call(
+            state,
+            "DELETE",
+            &format!("/api/engine/keys/{fingerprint}"),
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], "not-found");
+        let entries = AuditLog::new(&dir).entries().expect("audit");
+        assert_eq!(entries.len(), 2, "a retried add is not a second action");
+        assert_eq!(entries[0].action, AuditAction::KeyAdd);
+        assert_eq!(entries.last().unwrap().action, AuditAction::KeyRemove);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_key_that_is_not_32_bytes_is_refused() {
+        let (state, dir) = apps_state();
+        let (status, _, value) = call(
+            state.clone(),
+            "POST",
+            "/api/engine/keys",
+            br#"{"public_key":"nope"}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], "invalid");
+        let (status, value) = json(state, "/api/engine/keys").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(value["keys"].as_array().expect("keys").is_empty());
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

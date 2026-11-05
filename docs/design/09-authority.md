@@ -12,7 +12,8 @@
 
 The **distribution key is compiled into the binary**. Rotating it requires a
 release; no configuration file can mint a `system` app. An operator may add keys
-to a keyring through `POST /api/engine/keys` (`anth key add <fingerprint>`), and
+to a keyring through `POST /api/engine/keys` (`anth key add <public-key>`,
+optional `--label`); the engine derives the fingerprint and prints it, and
 everything trusted that way is `third-party`: the keyring can extend trust, never
 privilege.
 
