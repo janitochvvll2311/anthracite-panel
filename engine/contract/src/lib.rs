@@ -26,5 +26,8 @@ pub use grant::{Grant, GRANT_VERSION};
 pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use key::{KeyAlgorithm, TrustedKey, KEY_VERSION};
 pub use manifest::{Manifest, MANIFEST_VERSION};
-pub use view::{AppProblem, AppView, GrantState, GrantView};
+pub use view::{
+    AppProblem, AppView, CompositionView, DegradedApp, GrantState, GrantView, SurfaceApp,
+    SurfaceLink, SurfaceView,
+};
 pub use world::World;

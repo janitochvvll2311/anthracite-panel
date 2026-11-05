@@ -7,6 +7,7 @@
 //! exists, and the public one, which is all a TCP listener serves until sessions
 //! arrive. `/health` is public on both; everything under `/api` needs a peer.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anth_compose::audit::{timestamp, AuditLog};
@@ -14,10 +15,10 @@ use anth_compose::bundle::Options as BundleOptions;
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::risk::{approve, Approval};
-use anth_compose::InstalledApp;
+use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
 use anth_contract::{
-    AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, Error, ErrorKind, GrantState,
-    GrantView, Outcome, Risk,
+    AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
+    Error, ErrorKind, GrantState, GrantView, Outcome, Risk, SurfaceApp, SurfaceLink, SurfaceView,
 };
 use axum::body::Bytes;
 use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
@@ -179,13 +180,98 @@ async fn version(State(state): State<Arc<EngineState>>) -> Json<Value> {
 
 /// What is composed, plus the surface the composer derived from it.
 ///
-/// With no apps the surface is empty; the projection arrives with the resolver
-/// (M1), and this endpoint is what the panel reads either way.
-async fn composition(State(state): State<Arc<EngineState>>) -> Json<Value> {
-    Json(json!({
-        "composition": state.composition.as_ref(),
-        "surface": { "apps": [] },
+/// Resolution is the same function the boot uses, so the panel reads why an app
+/// is not running instead of guessing from logs (§8.5).
+async fn composition(
+    State(state): State<Arc<EngineState>>,
+) -> Result<Json<CompositionView>, ApiError> {
+    let apps = apps(&state)?;
+    let installed = installed_apps(apps)?;
+    let resolution =
+        resolve(&state.composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    Ok(Json(CompositionView {
+        composition: state.composition.as_ref().clone(),
+        surface: surface_view(&resolution, &installed),
     }))
+}
+
+/// The resolution as a client reads it (§8.7).
+fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> SurfaceView {
+    let versions: BTreeMap<AppId, String> = installed
+        .iter()
+        .filter_map(|app| {
+            AppId::parse(&app.manifest.app.id)
+                .ok()
+                .map(|id| (id, app.manifest.app.version.clone()))
+        })
+        .collect();
+    let apps = resolution
+        .order
+        .iter()
+        .map(|id| SurfaceApp {
+            id: id.clone(),
+            version: versions.get(id).cloned().unwrap_or_default(),
+            risk: resolution.risk.get(id).copied().unwrap_or(Risk::Read),
+        })
+        .collect();
+    let degraded = resolution
+        .degraded
+        .iter()
+        .map(|(id, degraded)| DegradedApp {
+            app: id.clone(),
+            version: versions.get(id).cloned(),
+            reason: reason_code(&degraded.reason).to_string(),
+            detail: reason_detail(&degraded.reason),
+        })
+        .collect();
+    let links = resolution
+        .links
+        .iter()
+        .map(|link| SurfaceLink {
+            consumer: link.consumer.clone(),
+            interface: link.interface.clone(),
+            provider: match &link.provider {
+                anth_compose::Provider::Engine => "engine".to_string(),
+                anth_compose::Provider::App(app) => app.to_string(),
+            },
+        })
+        .collect();
+    SurfaceView {
+        apps,
+        degraded,
+        links,
+    }
+}
+
+/// The kebab-case reason of §8.5.
+fn reason_code(reason: &DegradedReason) -> &'static str {
+    match reason {
+        DegradedReason::Unapproved => "unapproved",
+        DegradedReason::GrantStale => "grant-stale",
+        DegradedReason::GrantInvalid => "grant-invalid",
+        DegradedReason::Disabled => "disabled",
+        DegradedReason::Blocked { .. } => "blocked",
+        DegradedReason::RiskGrown { .. } => "risk-grown",
+    }
+}
+
+/// What the code alone does not say: which link is blocked or how far the risk
+/// grew.
+fn reason_detail(reason: &DegradedReason) -> Option<Value> {
+    match reason {
+        DegradedReason::Blocked {
+            interface,
+            provider,
+        } => Some(json!({"interface": interface, "provider": provider})),
+        DegradedReason::RiskGrown {
+            approved,
+            effective,
+        } => Some(json!({"approved": approved, "effective": effective})),
+        DegradedReason::Unapproved
+        | DegradedReason::GrantStale
+        | DegradedReason::GrantInvalid
+        | DegradedReason::Disabled => None,
+    }
 }
 
 /// The installed catalogue. The grant is only on the detail endpoint; the list
@@ -324,7 +410,14 @@ async fn remove_app(
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
     let actor = actor.0;
-    require_ack(apps, &actor, &id, "app.remove", &headers)?;
+    require_ack(
+        apps,
+        &state.composition,
+        &actor,
+        &id,
+        "app.remove",
+        &headers,
+    )?;
     // Revoke authority before touching the content: a corrupt or half-removed
     // tree must never keep a grant. A missing app simply has no grant to remove.
     apps.grants.remove(&id)?;
@@ -392,7 +485,14 @@ async fn patch_app(
         )));
     }
     if body.enabled == Some(false) {
-        require_ack(apps, &actor, &id, "app.disable", &headers)?;
+        require_ack(
+            apps,
+            &state.composition,
+            &actor,
+            &id,
+            "app.disable",
+            &headers,
+        )?;
     }
     let installed = apps.registry.configure(&id, body.enabled, body.alias)?;
     if let Some(enabled) = body.enabled {
@@ -516,7 +616,14 @@ async fn revoke_grant(
     if !apps.grants.contains(&id)? {
         return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
     }
-    require_ack(apps, &actor, &id, "app.revoke", &headers)?;
+    require_ack(
+        apps,
+        &state.composition,
+        &actor,
+        &id,
+        "app.revoke",
+        &headers,
+    )?;
     if !apps.grants.remove(&id)? {
         return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
     }
@@ -559,16 +666,18 @@ fn acknowledged(headers: &HeaderMap, token: &str) -> bool {
         .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == token))
 }
 
-/// Refuses a breaking action when other installed apps depend on this one,
+/// Refuses a breaking action when other composed apps depend on this one,
 /// unless the operator acknowledged the token. The acknowledgment is audited.
 fn require_ack(
     apps: &Apps,
+    composition: &Composition,
     actor: &str,
     id: &AppId,
     action: &str,
     headers: &HeaderMap,
 ) -> Result<(), ApiError> {
-    let dependents = apps.registry.dependents(id)?;
+    let installed = installed_apps(apps).map_err(ApiError)?;
+    let dependents = composed_dependents(composition, &installed, id)?;
     if dependents.is_empty() {
         return Ok(());
     }
@@ -849,6 +958,11 @@ mod tests {
     }
 
     fn apps_state() -> (Arc<EngineState>, std::path::PathBuf) {
+        apps_state_with(&[])
+    }
+
+    /// A state tree with `notes` installed and a composition naming `composed`.
+    fn apps_state_with(composed: &[&str]) -> (Arc<EngineState>, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -877,7 +991,17 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
         }
         (
-            Arc::new(EngineState::new(1000).with_apps(&dir, 1 << 20, false)),
+            Arc::new(
+                EngineState::new(1000)
+                    .with_composition(Composition {
+                        version: 1,
+                        profile: vec![anth_contract::Profile {
+                            id: "default".to_string(),
+                            apps: composed.iter().map(|app| app.to_string()).collect(),
+                        }],
+                    })
+                    .with_apps(&dir, 1 << 20, false),
+            ),
             dir,
         )
     }
@@ -1158,7 +1282,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_composition_is_served_with_an_empty_surface() {
-        let response = router(state())
+        let (state, dir) = apps_state();
+        let response = router(state)
             .oneshot(request("/api/engine/composition", Some(1000)))
             .await
             .expect("response");
@@ -1173,19 +1298,16 @@ mod tests {
             .as_array()
             .expect("apps")
             .is_empty());
+        assert!(value["surface"]["degraded"]
+            .as_array()
+            .expect("degraded")
+            .is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
     #[tokio::test]
-    async fn a_composed_app_is_echoed() {
-        use anth_contract::Profile;
-        let composition = Composition {
-            version: 1,
-            profile: vec![Profile {
-                id: "default".to_string(),
-                apps: vec!["org.example.notes".to_string()],
-            }],
-        };
-        let state = Arc::new(EngineState::new(1000).with_composition(composition));
+    async fn a_composed_unapproved_app_is_degraded() {
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
         let response = router(state)
             .oneshot(request("/api/engine/composition", Some(1000)))
             .await
@@ -1198,12 +1320,29 @@ mod tests {
             value["composition"]["profile"][0]["apps"][0],
             "org.example.notes"
         );
-        // The surface stays empty until the resolver projects it (M1); this test
-        // pins that the document reaches the endpoint unchanged.
         assert!(value["surface"]["apps"]
             .as_array()
             .expect("apps")
             .is_empty());
+        assert_eq!(value["surface"]["degraded"][0]["app"], "org.example.notes");
+        assert_eq!(value["surface"]["degraded"][0]["reason"], "unapproved");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_approved_composed_app_is_in_the_boot_order() {
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        let (status, value) = json(state, "/api/engine/composition").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["surface"]["apps"][0]["id"], "org.example.notes");
+        assert_eq!(value["surface"]["apps"][0]["version"], "0.1.0");
+        assert_eq!(value["surface"]["apps"][0]["risk"], "read");
+        assert!(value["surface"]["degraded"]
+            .as_array()
+            .expect("degraded")
+            .is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
     #[tokio::test]
@@ -1563,7 +1702,7 @@ mod tests {
 
     #[tokio::test]
     async fn revoking_a_needed_grant_needs_acknowledgment() {
-        let (state, dir) = apps_state();
+        let (state, dir) = apps_state_with(&["org.example.notes", "org.example.consumer"]);
         add_dependent(&dir);
         let (status, _, _) = call(
             state.clone(),
@@ -1608,7 +1747,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabling_a_needed_app_needs_acknowledgment() {
-        let (state, dir) = apps_state();
+        let (state, dir) = apps_state_with(&["org.example.notes", "org.example.consumer"]);
         add_dependent(&dir);
         let (status, _, value) = call(
             state.clone(),
@@ -1649,6 +1788,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_uncomposed_dependent_does_not_block_disabling() {
+        let (state, dir) = apps_state();
+        add_dependent(&dir);
+        let (status, _, value) = call(
+            state,
+            "PATCH",
+            "/api/engine/apps/org.example.notes",
+            br#"{"enabled":false}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["enabled"], false);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
     async fn an_unreadable_other_grant_does_not_block_approval() {
         use std::os::unix::fs::PermissionsExt;
         let (state, dir) = apps_state();
@@ -1674,7 +1829,7 @@ mod tests {
 
     #[tokio::test]
     async fn revoking_without_a_grant_is_not_found_even_with_dependents() {
-        let (state, dir) = apps_state();
+        let (state, dir) = apps_state_with(&["org.example.notes", "org.example.consumer"]);
         add_dependent(&dir);
         let (status, _, value) = call(
             state,

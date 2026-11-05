@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::Risk;
+use crate::composition::Composition;
 use crate::descriptor::Tier;
 use crate::grant::Grant;
 use crate::id::{AppId, InterfaceId};
@@ -96,6 +97,56 @@ pub struct AppProblem {
     pub message: String,
 }
 
+/// One app that runs, in boot order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceApp {
+    pub id: AppId,
+    pub version: String,
+    /// The effective risk: the maximum over its resolved imports (§9.3).
+    pub risk: Risk,
+}
+
+/// One composed app that does not run, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DegradedApp {
+    pub app: AppId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// `unapproved`, `grant-stale`, `grant-invalid`, `disabled`, `blocked` or
+    /// `risk-grown` (§8.5).
+    pub reason: String,
+    /// The interface and provider of a block, or the approved and effective
+    /// risk that grew.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
+}
+
+/// One resolved import of a running app.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceLink {
+    pub consumer: AppId,
+    pub interface: InterfaceId,
+    /// `engine`, or the id of the app that exports the interface.
+    pub provider: String,
+}
+
+/// What the composer resolved: what runs, what does not and why, and the links
+/// that were built.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceView {
+    pub apps: Vec<SurfaceApp>,
+    pub degraded: Vec<DegradedApp>,
+    pub links: Vec<SurfaceLink>,
+}
+
+/// The composition document plus its resolution, as `GET
+/// /api/engine/composition` serves it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompositionView {
+    pub composition: Composition,
+    pub surface: SurfaceView,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,5 +232,39 @@ mod tests {
                 format!("\"{name}\"")
             );
         }
+    }
+
+    #[test]
+    fn a_composition_view_round_trips_through_json() {
+        let app = AppId::parse("org.example.notes").expect("id");
+        let view = CompositionView {
+            composition: Composition::empty(),
+            surface: SurfaceView {
+                apps: vec![SurfaceApp {
+                    id: app.clone(),
+                    version: "0.1.0".to_string(),
+                    risk: Risk::Read,
+                }],
+                degraded: vec![DegradedApp {
+                    app: AppId::parse("org.example.consumer").expect("id"),
+                    version: None,
+                    reason: "blocked".to_string(),
+                    detail: Some(json!({
+                        "interface": "example:notes/notes@1.0.0",
+                        "provider": "org.example.notes",
+                    })),
+                }],
+                links: vec![SurfaceLink {
+                    consumer: AppId::parse("org.example.consumer").expect("id"),
+                    interface: InterfaceId::parse("example:notes/notes@1.0.0").expect("interface"),
+                    provider: app.to_string(),
+                }],
+            },
+        };
+        let text = serde_json::to_string(&view).expect("render");
+        assert_eq!(
+            serde_json::from_str::<CompositionView>(&text).expect("parse"),
+            view
+        );
     }
 }
