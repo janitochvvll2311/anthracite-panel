@@ -278,16 +278,13 @@ async fn replace_app(
     let id = AppId::parse(&id)?;
     let actor = actor.0;
     let body = read_body(request, apps.max_bundle_bytes).await?;
-    // Revoke before the swap so a successful replace can never leave the old
-    // grant behind; if the replace fails, the grant is restored.
-    let previous_grant = apps.grants.load(&id).ok().flatten();
+    // Revoke before the swap and never restore: a failed or partial replace
+    // leaves the app installed but unapproved. Resurrection would be worse than
+    // a re-approval the operator can give in one command.
     apps.grants.remove(&id)?;
     let installed = match apps.registry.replace(&id, &body, &apps.options()) {
         Ok(installed) => installed,
         Err(error) => {
-            if let Some(grant) = previous_grant {
-                let _ = apps.grants.save(&grant);
-            }
             return Err(audit_or_error(
                 audit_failure(
                     apps,
@@ -475,8 +472,8 @@ fn deny(state: &EngineState, actor: String, reason: &str) {
 
 async fn read_body(request: Request, limit: u64) -> Result<Bytes, ApiError> {
     use http_body::Body as _;
-    // A body that announces more than the cap is refused before reading it; a
-    // chunked body hits `to_bytes`'s limit, which is the only size error there.
+    // A body that announces more than the cap is refused before reading it;
+    // a chunked body hits `to_bytes`'s limit, which is the only size error.
     if request
         .body()
         .size_hint()
@@ -489,7 +486,30 @@ async fn read_body(request: Request, limit: u64) -> Result<Bytes, ApiError> {
     }
     axum::body::to_bytes(request.into_body(), limit as usize)
         .await
-        .map_err(|_| ApiError(Error::invalid("the request body could not be read")))
+        .map_err(|error| {
+            if is_length_limit(&error) {
+                ApiError(Error::too_large(format!(
+                    "the body is larger than {limit} bytes"
+                )))
+            } else {
+                ApiError(Error::invalid("the request body could not be read"))
+            }
+        })
+}
+
+fn is_length_limit(error: &axum::Error) -> bool {
+    use std::error::Error as StdError;
+    let mut source: Option<&(dyn StdError + 'static)> = Some(error);
+    while let Some(error) = source {
+        if error
+            .downcast_ref::<http_body_util::LengthLimitError>()
+            .is_some()
+        {
+            return true;
+        }
+        source = error.source();
+    }
+    false
 }
 
 fn apps(state: &EngineState) -> Result<&Apps, ApiError> {
@@ -1190,6 +1210,48 @@ mod tests {
         let (status, _, value) = call(state, "POST", "/api/engine/apps", vec![0u8; 20]).await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(value["error"]["code"], "too-large");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_failed_replace_does_not_resurrect_the_grant() {
+        let (state, dir) = apps_state();
+        write_grant(&dir, &grant_toml("0.1.0"));
+        let app = AppId::parse("org.example.notes").unwrap();
+        let (status, _, _) = call(
+            state,
+            "PUT",
+            "/api/engine/apps/org.example.notes",
+            b"not a zip".to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            GrantStore::new(&dir).load(&app).expect("load"),
+            None,
+            "the grant is not restored"
+        );
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_chunked_body_over_the_limit_is_too_large() {
+        use axum::body::Bytes;
+        use futures_util::stream;
+        let (_, dir) = apps_state();
+        let state = Arc::new(EngineState::new(1000).with_apps(&dir, 10, false));
+        let body = axum::body::Body::from_stream(stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(b"0123456789")),
+            Ok(Bytes::from_static(b"more")),
+        ]));
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/engine/apps")
+            .body(body)
+            .expect("request");
+        request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+        let response = router(state).oneshot(request).await.expect("response");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
