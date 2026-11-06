@@ -31,7 +31,7 @@ use axum::body::Bytes;
 use axum::extract::{
     connect_info::Connected, ConnectInfo, Extension, Path, RawQuery, Request, State,
 };
-use axum::http::header::{ETAG, IF_MATCH, LOCATION};
+use axum::http::header::{ALLOW, ETAG, IF_MATCH, LOCATION};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -594,7 +594,7 @@ async fn app_route(
     method: Method,
     RawQuery(query): RawQuery,
     request: Request,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let apps = apps(&state)?;
     let installed = installed_apps(apps)?;
     let composition = current_composition(&state)?;
@@ -622,14 +622,27 @@ async fn app_route(
             "`{id}` has no route {wanted}"
         ))));
     }
-    let route = routes
-        .iter()
-        .find(|route| route.method == method.as_str())
-        .ok_or_else(|| {
-            ApiError(Error::method_not_allowed(format!(
-                "`{id}` does not allow {method} {wanted}"
-            )))
-        })?;
+    let mut methods: Vec<&str> = routes.iter().map(|route| route.method.as_str()).collect();
+    methods.sort_unstable();
+    methods.dedup();
+    methods.push("OPTIONS");
+    let allow = methods.join(", ");
+    if method == Method::OPTIONS {
+        return Ok((StatusCode::NO_CONTENT, [(ALLOW, allow)]).into_response());
+    }
+    let route = match routes.iter().find(|route| route.method == method.as_str()) {
+        Some(route) => route,
+        None => {
+            let error =
+                Error::method_not_allowed(format!("`{id}` does not allow {method} {wanted}"));
+            return Ok((
+                StatusCode::METHOD_NOT_ALLOWED,
+                [(ALLOW, allow)],
+                Json(error.envelope()),
+            )
+                .into_response());
+        }
+    };
     let (interface, function) = parse_call(&route.call)?;
     let no_body = matches!(method, Method::GET | Method::HEAD | Method::DELETE);
     let body = read_body(request, 1 << 20).await?;
@@ -659,7 +672,7 @@ async fn app_route(
     let output = caller
         .call(app.as_str(), &interface, &function, input)
         .await?;
-    Ok(Json(output))
+    Ok(Json(output).into_response())
 }
 
 /// Query keys repeat for `list<T>` and stay strings; the runtime coerces each
@@ -667,7 +680,7 @@ async fn app_route(
 fn query_input(query: Option<&str>) -> Value {
     let mut collected: BTreeMap<String, Vec<String>> = BTreeMap::new();
     if let Some(query) = query {
-        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        for (key, value) in form_urlencoded::parse(query.as_bytes()) {
             collected
                 .entry(key.into_owned())
                 .or_default()
@@ -676,7 +689,9 @@ fn query_input(query: Option<&str>) -> Value {
     }
     let mut object = serde_json::Map::new();
     for (key, mut values) in collected {
-        let value = if values.len() == 1 {
+        let forced_list = key.ends_with("[]");
+        let key = key.trim_end_matches("[]").to_string();
+        let value = if values.len() == 1 && !forced_list {
             Value::String(values.remove(0))
         } else {
             Value::Array(values.into_iter().map(Value::String).collect())
@@ -1641,10 +1656,10 @@ mod tests {
                 .expect("unique state")
                 .with_caller(Arc::new(Echo)),
         );
-        let (status, _, value) = call(
-            state,
+        let (status, headers, value) = call(
+            state.clone(),
             "GET",
-            "/api/apps/org.example.notes/notes?q=a&q=b&single=1",
+            "/api/apps/org.example.notes/notes?q=a&q=b&single=1&list[]=only",
             Vec::new(),
         )
         .await;
@@ -1654,6 +1669,30 @@ mod tests {
         assert_eq!(value["function"], "ping");
         assert_eq!(value["input"]["q"], json!(["a", "b"]));
         assert_eq!(value["input"]["single"], "1");
+        assert_eq!(value["input"]["list"], json!(["only"]));
+        let _ = headers;
+        let (status, headers, _) = call(
+            state.clone(),
+            "OPTIONS",
+            "/api/apps/org.example.notes/notes",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let allow = headers
+            .get("allow")
+            .and_then(|value| value.to_str().ok())
+            .expect("allow");
+        assert!(allow.contains("GET"), "{allow}");
+        assert!(allow.contains("OPTIONS"), "{allow}");
+        let (status, _, _) = call(
+            state.clone(),
+            "POST",
+            "/api/apps/org.example.notes/notes",
+            b"{}".to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

@@ -252,6 +252,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_caller_dispatches_through_the_supervisor() {
+        let fake = Arc::new(FakeRuntime::new().answer(
+            NOTES,
+            InterfaceId::parse("example:notes/list@1.0.0").expect("interface"),
+            "all",
+            serde_json::json!({"entries": []}),
+            1,
+        ));
+        let supervisor = Arc::new(Supervisor::new(fake));
+        supervisor
+            .start(test_spec(NOTES, Vec::new(), budget()))
+            .await
+            .expect("start");
+        let caller = SupervisorCaller::new(supervisor);
+        let output = anth_api::AppCaller::call(
+            &caller,
+            NOTES,
+            "example:notes/list@1.0.0",
+            "all",
+            serde_json::json!({}),
+        )
+        .await
+        .expect("call");
+        assert_eq!(output, serde_json::json!({"entries": []}));
+    }
+
+    #[tokio::test]
     async fn starting_an_app_reports_its_handle_and_world() {
         let supervisor = supervisor(runtime());
         let started = supervisor
