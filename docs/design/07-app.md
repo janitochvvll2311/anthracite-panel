@@ -354,6 +354,12 @@ generic HTTP client holding an operator's credentials.
 A consequence worth stating: **only composed apps have verbs**. An installed but
 uncomposed app can be managed, not invoked — it has no instance to answer.
 
+**Invocation path.** v0.5.0 invokes a verb through the `[[route]]` bound to the
+same `interface#function`: `anth app <alias> <verb> --param value` resolves the
+alias in the catalogue, the verb in the surface, and then calls
+`/api/apps/{id}/{route.path}`. A verb without a route is `unavailable`; there is
+no second, generic call endpoint into an app.
+
 **Flags** are the inverse of [§7.13](07-app.md#713-http-and-wit-one-mapping): one flag per parameter, named after it,
 optional for `option<T>`, repeated for `list<T>`, and `--flag` / `--no-flag` for
 `bool`.
