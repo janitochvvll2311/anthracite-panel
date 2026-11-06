@@ -20,6 +20,11 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 
 use crate::{BoxFuture, Budget, Call, Instance, InstanceId, InstanceSpec, Reply, Runtime};
 
+wasmtime::component::bindgen!({
+    path: "../wit",
+    world: "host-env",
+});
+
 pub struct WasmtimeRuntime {
     instances: Mutex<BTreeMap<u64, Arc<Mutex<Running>>>>,
     next: Mutex<u64>,
@@ -28,6 +33,8 @@ pub struct WasmtimeRuntime {
 #[derive(Debug)]
 struct StoreData {
     limits: StoreLimits,
+    app: String,
+    started: std::time::Instant,
 }
 
 struct Running {
@@ -97,19 +104,34 @@ impl Runtime for WasmtimeRuntime {
             let component = Component::from_binary(&engine, &spec.wasm)
                 .map_err(|error| Error::invalid(format!("the component is not valid: {error}")))?;
             let world = Self::world(&component, &engine);
-            let linker = Linker::<StoreData>::new(&engine);
             let limits = StoreLimitsBuilder::new()
                 .memory_size(spec.budget.memory_pages as usize * 0x10000)
                 .build();
-            let mut store = Store::new(&engine, StoreData { limits });
+            let mut store = Store::new(
+                &engine,
+                StoreData {
+                    limits,
+                    app: spec.app.clone(),
+                    started: std::time::Instant::now(),
+                },
+            );
             store.limiter(|data| &mut data.limits);
             store
                 .set_fuel(spec.budget.fuel)
                 .map_err(|error| Error::internal(format!("setting fuel: {error}")))?;
             store.set_epoch_deadline(1);
-            let instance = linker
-                .instantiate(&mut store, &component)
-                .map_err(|error| Error::unavailable(format!("the app did not start: {error}")))?;
+            let instance = {
+                let mut linker = Linker::<StoreData>::new(&engine);
+                HostEnv::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |data| {
+                    data
+                })
+                .map_err(|error| Error::internal(format!("linking the host: {error}")))?;
+                linker
+                    .instantiate(&mut store, &component)
+                    .map_err(|error| {
+                        Error::unavailable(format!("the app did not start: {error}"))
+                    })?
+            };
             let id = self.next_id();
             self.instances.lock().expect("wasmtime instances").insert(
                 id.0,
@@ -205,6 +227,95 @@ impl Runtime for WasmtimeRuntime {
                 .remove(&instance.0);
         })
     }
+}
+
+impl anth::env::info::Host for StoreData {
+    fn get(&mut self) -> anth::env::info::Facts {
+        anth::env::info::Facts {
+            hostname: hostname(),
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            uptime_seconds: uptime_seconds(),
+            cpu_count: std::thread::available_parallelism()
+                .map(|count| count.get() as u32)
+                .unwrap_or(1),
+            memory_bytes: memory_bytes(),
+        }
+    }
+}
+
+impl anth::env::time::Host for StoreData {
+    fn now_ms(&mut self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn monotonic_ms(&mut self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+}
+
+impl anth::env::log::Host for StoreData {
+    fn write(&mut self, level: anth::env::log::Level, message: String) {
+        eprintln!("app {} {level:?}: {message}", self.app);
+    }
+}
+
+impl anth::env::random::Host for StoreData {
+    fn bytes(&mut self, count: u32) -> Result<Vec<u8>, anth::error::kinds::Error> {
+        const MAX: u32 = 4096;
+        if count > MAX {
+            return Err(anth::error::kinds::Error::TooLarge(u64::from(count)));
+        }
+        let mut bytes = vec![0u8; count as usize];
+        use std::io::Read;
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut bytes))
+            .map_err(|error| {
+                anth::error::kinds::Error::Internal(format!("reading random bytes: {error}"))
+            })?;
+        Ok(bytes)
+    }
+}
+
+impl anth::error::kinds::Host for StoreData {}
+
+fn hostname() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer and its length are valid for the call.
+    let result =
+        unsafe { libc::gethostname(buffer.as_mut_ptr().cast::<libc::c_char>(), buffer.len()) };
+    if result != 0 {
+        return "unknown".to_string();
+    }
+    let len = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..len]).into_owned()
+}
+
+fn uptime_seconds() -> u64 {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|text| text.split_whitespace().next()?.parse::<f64>().ok())
+        .map(|seconds| seconds as u64)
+        .unwrap_or(0)
+}
+
+fn memory_bytes() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))
+                .and_then(|value| value.split_whitespace().next())
+                .and_then(|kilobytes| kilobytes.parse::<u64>().ok())
+        })
+        .map(|kilobytes| kilobytes * 1024)
+        .unwrap_or(0)
 }
 
 fn trap_error(error: wasmtime::Error) -> Error {

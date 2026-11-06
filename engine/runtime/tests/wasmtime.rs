@@ -25,6 +25,10 @@ fn slow() -> Vec<u8> {
     include_bytes!("../../../tests/fixtures/components/slow.wasm").to_vec()
 }
 
+fn clock() -> Vec<u8> {
+    include_bytes!("../../../tests/fixtures/components/clock.wasm").to_vec()
+}
+
 fn id(text: &str) -> InterfaceId {
     InterfaceId::parse(text).expect("interface")
 }
@@ -195,6 +199,31 @@ async fn a_u64_above_i64_max_round_trips() {
         .await
         .expect("call with a u64 parameter");
     assert_eq!(reply.output, json!(u64::MAX));
+}
+
+#[tokio::test]
+async fn a_component_can_call_the_host_clock() {
+    let runtime = WasmtimeRuntime::new().expect("runtime");
+    let instance = runtime
+        .instantiate(InstanceSpec {
+            app: "org.example.clock".to_string(),
+            wasm: clock(),
+            budget: Budget::new(1_000_000, 16, 5_000),
+        })
+        .await
+        .expect("instantiate");
+    assert_eq!(instance.world.imports, [id("anth:env/time@1.0.0")].into());
+    let reply = runtime
+        .call(Call {
+            instance: instance.id,
+            interface: id("example:test/clock@1.0.0"),
+            function: "run".to_string(),
+            input: json!({}),
+        })
+        .await
+        .expect("call");
+    let millis = reply.output.as_u64().expect("u64");
+    assert!(millis > 1_600_000_000_000, "{millis}");
 }
 
 #[tokio::test]

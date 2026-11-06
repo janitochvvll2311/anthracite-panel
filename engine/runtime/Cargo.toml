@@ -7,6 +7,7 @@ description = "The execution seam: the one contract the wasm backend and the fak
 
 [dependencies]
 anth-contract = { path = "../contract" }
+libc = "0.2"
 serde_json = { workspace = true }
 wasmtime = { version = "42", features = ["component-model"] }
 

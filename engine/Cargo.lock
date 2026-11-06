@@ -89,6 +89,7 @@ name = "anth-runtime"
 version = "0.5.0"
 dependencies = [
  "anth-contract",
+ "libc",
  "serde_json",
  "tokio",
  "wasmtime",
