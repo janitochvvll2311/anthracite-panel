@@ -21,6 +21,10 @@ fn wide() -> Vec<u8> {
     include_bytes!("../../../tests/fixtures/components/wide.wasm").to_vec()
 }
 
+fn slow() -> Vec<u8> {
+    include_bytes!("../../../tests/fixtures/components/slow.wasm").to_vec()
+}
+
 fn id(text: &str) -> InterfaceId {
     InterfaceId::parse(text).expect("interface")
 }
@@ -120,14 +124,14 @@ async fn one_apps_wall_deadline_does_not_kill_another() {
         })
         .await
         .expect("forever");
-    let greeting = runtime
+    let slow = runtime
         .instantiate(InstanceSpec {
-            app: "org.example.greeting".to_string(),
-            wasm: greeting(),
-            budget: Budget::new(1_000_000, 16, 5_000),
+            app: "org.example.slow".to_string(),
+            wasm: slow(),
+            budget: Budget::new(5_000_000_000, 16, 5_000),
         })
         .await
-        .expect("greeting");
+        .expect("slow");
     let blocked = runtime.clone();
     let task = tokio::spawn(async move {
         blocked
@@ -140,16 +144,22 @@ async fn one_apps_wall_deadline_does_not_kill_another() {
             .await
     });
     std::thread::sleep(Duration::from_millis(50));
-    let reply = runtime
-        .call(Call {
-            instance: greeting.id,
-            interface: id("example:test/greeting@1.0.0"),
-            function: "greet".to_string(),
-            input: json!({}),
-        })
+    let long_running = runtime.clone();
+    let slow_task = tokio::spawn(async move {
+        long_running
+            .call(Call {
+                instance: slow.id,
+                interface: id("example:test/slow@1.0.0"),
+                function: "run".to_string(),
+                input: json!({}),
+            })
+            .await
+    });
+    let reply = slow_task
         .await
-        .expect("the other app still answers");
-    assert_eq!(reply.output, json!(7));
+        .expect("task")
+        .expect("the slow app still answers");
+    assert_eq!(reply.output, json!(300_000_000));
     let error = task.await.expect("task").expect_err("wall");
     assert_eq!(error.kind(), ErrorKind::Exhausted, "{error}");
 }
@@ -174,6 +184,16 @@ async fn a_u64_above_i64_max_round_trips() {
         })
         .await
         .expect("call");
+    assert_eq!(reply.output, json!(u64::MAX));
+    let reply = runtime
+        .call(Call {
+            instance: instance.id,
+            interface: id("example:test/wide@1.0.0"),
+            function: "echo".to_string(),
+            input: json!({"value": u64::MAX}),
+        })
+        .await
+        .expect("call with a u64 parameter");
     assert_eq!(reply.output, json!(u64::MAX));
 }
 
