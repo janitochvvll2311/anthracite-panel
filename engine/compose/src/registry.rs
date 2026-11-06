@@ -15,9 +15,10 @@ use std::time::SystemTime;
 use anth_contract::{AppId, Descriptor, Error, Grant, Manifest, Tier, DESCRIPTOR_VERSION};
 
 use crate::bundle::{self, Options, StagedBundle};
+use crate::grant::GrantStore;
 use crate::keys::Keyring;
 use crate::store;
-use crate::ApprovalMaterial;
+use crate::{ApprovalMaterial, InstalledApp};
 
 static SWAP: AtomicU64 = AtomicU64::new(0);
 
@@ -65,6 +66,9 @@ pub struct Registry {
     apps: PathBuf,
     keyring: Keyring,
 }
+
+/// The catalogue and the compose-side projection of each app.
+pub type InstalledSet = (Vec<Installed>, Vec<InstalledApp>, Vec<Problem>);
 
 impl Registry {
     pub fn new(state: &Path) -> Self {
@@ -280,6 +284,29 @@ impl Registry {
         apps.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
         problems.sort_by(|a, b| a.app.cmp(&b.app));
         Ok((apps, problems))
+    }
+
+    /// The installed catalogue plus the compose-side view of each app: its
+    /// grant (or the fact that it is unreadable), enabled flag and approval
+    /// material. Boot and the API use the same projection (§7.12).
+    pub fn installed_apps(&self, grants: &GrantStore) -> Result<InstalledSet, Error> {
+        let (apps, problems) = self.catalogue()?;
+        let mut installed = Vec::with_capacity(apps.len());
+        for app in &apps {
+            let id = AppId::parse(&app.manifest.app.id)?;
+            let (grant, grant_invalid) = match grants.load(&id) {
+                Ok(grant) => (grant, false),
+                Err(_) => (None, true),
+            };
+            installed.push(InstalledApp {
+                manifest: app.manifest.clone(),
+                grant,
+                grant_invalid,
+                enabled: app.descriptor.enabled,
+                material: self.approval_material(&id).ok().flatten(),
+            });
+        }
+        Ok((apps, installed, problems))
     }
 
     /// A fingerprint of the WIT set, the manifest and the signature, ready for a

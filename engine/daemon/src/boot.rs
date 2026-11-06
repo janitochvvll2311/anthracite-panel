@@ -9,7 +9,7 @@ use std::path::{Component, Path};
 
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
-use anth_compose::{resolve, InstalledApp};
+use anth_compose::resolve;
 use anth_contract::{AppId, Composition, Error, Grant};
 use anth_runtime::{Budget, InstanceSpec, LogSettings};
 use sha2::{Digest, Sha256};
@@ -43,8 +43,7 @@ pub async fn start_composed(
 ) -> Result<BootReport, Error> {
     let registry = Registry::new(state);
     let grants = GrantStore::new(state);
-    let (apps, _problems) = registry.catalogue()?;
-    let installed = installed_apps(&registry, &grants, &apps)?;
+    let (apps, installed, problems) = registry.installed_apps(&grants)?;
     let resolution = match resolve(composition, &installed) {
         Ok(resolution) => resolution,
         Err(error) => {
@@ -71,6 +70,15 @@ pub async fn start_composed(
             .degraded
             .insert(id.clone(), degraded.reason.code().to_string());
     }
+    for problem in &problems {
+        if let Ok(id) = AppId::parse(&problem.app) {
+            failed.insert(id.clone());
+            report
+                .degraded
+                .entry(id)
+                .or_insert_with(|| problem.message.clone());
+        }
+    }
     for id in &resolution.order {
         if let Some(provider) = dependencies
             .get(id)
@@ -89,21 +97,41 @@ pub async fn start_composed(
                 .insert(id.clone(), "not-installed".to_string());
             continue;
         };
-        let Some(grant) = grants.load(id)? else {
-            failed.insert(id.clone());
-            report.degraded.insert(id.clone(), "unapproved".to_string());
-            continue;
+        let grant = match grants.load(id) {
+            Ok(Some(grant)) => grant,
+            Ok(None) => {
+                failed.insert(id.clone());
+                report.degraded.insert(id.clone(), "unapproved".to_string());
+                continue;
+            }
+            Err(error) => {
+                failed.insert(id.clone());
+                report.degraded.insert(
+                    id.clone(),
+                    format!("the grant is unreadable: {}", error.message()),
+                );
+                continue;
+            }
         };
         match spec_for(state, id, app, &grant, limits, log) {
-            Ok(spec) => match supervisor.start(spec).await {
-                Ok(_) => report.started.push(id.clone()),
-                Err(error) => {
-                    failed.insert(id.clone());
-                    report
-                        .degraded
-                        .insert(id.clone(), error.message().to_string());
+            Ok(spec) => {
+                let wall = std::time::Duration::from_millis(spec.budget.wall_ms);
+                match tokio::time::timeout(wall, supervisor.start(spec)).await {
+                    Ok(Ok(_)) => report.started.push(id.clone()),
+                    Ok(Err(error)) => {
+                        failed.insert(id.clone());
+                        report
+                            .degraded
+                            .insert(id.clone(), error.message().to_string());
+                    }
+                    Err(_) => {
+                        failed.insert(id.clone());
+                        report
+                            .degraded
+                            .insert(id.clone(), "start timed out".to_string());
+                    }
                 }
-            },
+            }
             Err(error) => {
                 failed.insert(id.clone());
                 report
@@ -113,29 +141,6 @@ pub async fn start_composed(
         }
     }
     Ok(report)
-}
-
-fn installed_apps(
-    registry: &Registry,
-    grants: &GrantStore,
-    apps: &[Installed],
-) -> Result<Vec<InstalledApp>, Error> {
-    let mut installed = Vec::with_capacity(apps.len());
-    for app in apps {
-        let id = AppId::parse(&app.manifest.app.id)?;
-        let (grant, grant_invalid) = match grants.load(&id) {
-            Ok(grant) => (grant, false),
-            Err(_) => (None, true),
-        };
-        installed.push(InstalledApp {
-            manifest: app.manifest.clone(),
-            grant,
-            grant_invalid,
-            enabled: app.descriptor.enabled,
-            material: registry.approval_material(&id).ok().flatten(),
-        });
-    }
-    Ok(installed)
 }
 
 fn spec_for(
@@ -187,4 +192,132 @@ fn spec_for(
         .promising(grant.export.clone())
         .data_dir(data)
         .logging(log))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anth_contract::{Descriptor, Manifest, Tier, DESCRIPTOR_VERSION, GRANT_VERSION};
+    use std::path::PathBuf;
+
+    fn app(id: &str, wasm: Option<(&str, String)>) -> Installed {
+        let wasm = match wasm {
+            Some((path, sha)) => format!("\n[wasm]\npath = \"{path}\"\nsha256 = \"{sha}\"\n"),
+            None => String::new(),
+        };
+        let text = format!(
+            "manifest_version = 2\n\n[app]\nid = \"{id}\"\nnamespace = \"example:test\"\nname = \"Test\"\nversion = \"0.1.0\"\n{wasm}"
+        );
+        Installed {
+            manifest: Manifest::parse(&text).expect("manifest"),
+            descriptor: Descriptor {
+                version: DESCRIPTOR_VERSION,
+                app: AppId::parse(id).expect("id"),
+                enabled: true,
+                alias: None,
+                signer: None,
+                tier: Tier::ThirdParty,
+                installed_at: "2026-11-06T12:00:00Z".to_string(),
+            },
+        }
+    }
+
+    fn grant(id: &str) -> Grant {
+        Grant {
+            version: GRANT_VERSION,
+            app: AppId::parse(id).expect("id"),
+            app_version: "0.1.0".to_string(),
+            manifest_sha256: "a".repeat(64),
+            wit_sha256: "b".repeat(64),
+            signature: None,
+            risk: anth_contract::Risk::Read,
+            accepted: Vec::new(),
+            approved_by: "uid:1000".to_string(),
+            approved_at: "2026-11-06T12:00:00Z".to_string(),
+            export: Vec::new(),
+            import: Vec::new(),
+        }
+    }
+
+    fn scratch() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join("anthracite-panel").join(format!(
+            "anth-spec-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("apps/org.example.test/wasm")).expect("mkdir");
+        dir
+    }
+
+    #[test]
+    fn a_manifest_without_wasm_is_refused() {
+        let dir = scratch();
+        let id = AppId::parse("org.example.test").unwrap();
+        let error = spec_for(
+            &dir,
+            &id,
+            &app("org.example.test", None),
+            &grant("org.example.test"),
+            &LimitsSection::default(),
+            LogSettings::default(),
+        )
+        .expect_err("no wasm");
+        assert!(error.message().contains("no wasm"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_unsafe_wasm_path_is_refused() {
+        let dir = scratch();
+        let id = AppId::parse("org.example.test").unwrap();
+        let error = spec_for(
+            &dir,
+            &id,
+            &app("org.example.test", Some(("../escape.wasm", "a".repeat(64)))),
+            &grant("org.example.test"),
+            &LimitsSection::default(),
+            LogSettings::default(),
+        )
+        .expect_err("unsafe path");
+        assert!(error.message().contains("unsafe wasm path"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_hash_mismatch_is_refused() {
+        let dir = scratch();
+        std::fs::write(dir.join("apps/org.example.test/wasm/app.wasm"), b"bytes").expect("write");
+        let id = AppId::parse("org.example.test").unwrap();
+        let error = spec_for(
+            &dir,
+            &id,
+            &app("org.example.test", Some(("wasm/app.wasm", "a".repeat(64)))),
+            &grant("org.example.test"),
+            &LimitsSection::default(),
+            LogSettings::default(),
+        )
+        .expect_err("hash");
+        assert!(error.message().contains("hash"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_missing_wasm_file_is_refused() {
+        let dir = scratch();
+        let id = AppId::parse("org.example.test").unwrap();
+        let error = spec_for(
+            &dir,
+            &id,
+            &app("org.example.test", Some(("wasm/app.wasm", "a".repeat(64)))),
+            &grant("org.example.test"),
+            &LimitsSection::default(),
+            LogSettings::default(),
+        )
+        .expect_err("missing file");
+        assert!(error.message().contains("reading"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

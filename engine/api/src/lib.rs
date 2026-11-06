@@ -8,6 +8,7 @@
 //! arrive. `/health` is public on both; everything under `/api` needs a peer.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anth_compose::audit::{timestamp, AuditLog};
@@ -73,6 +74,8 @@ pub struct EngineState {
     compose_lock: Arc<tokio::sync::Mutex<()>>,
     /// The installed apps, when the daemon could open the state tree.
     pub apps: Option<Arc<Apps>>,
+    /// `false` while the daemon boots apps; readiness answers `503 starting`.
+    ready: Arc<AtomicBool>,
 }
 
 impl EngineState {
@@ -84,7 +87,23 @@ impl EngineState {
             composition: Arc::new(RwLock::new(Composition::empty())),
             compose_lock: Arc::new(tokio::sync::Mutex::new(())),
             apps: None,
+            ready: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// The daemon is still starting apps; readiness answers `503` until
+    /// [`EngineState::mark_ready`].
+    pub fn booting(mut self) -> Self {
+        self.ready = Arc::new(AtomicBool::new(false));
+        self
+    }
+
+    pub fn mark_ready(&self) {
+        self.ready.store(true, Ordering::Release);
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Acquire)
     }
 
     /// What the daemon loaded from the composition file.
@@ -182,8 +201,16 @@ async fn health() -> Json<Value> {
 
 /// Readiness: 200 once the surface can serve. There is nothing to start yet, so
 /// bound means ready; the moment apps load this answers `503 starting` first.
-async fn readiness() -> Json<Value> {
-    Json(json!({ "status": "ready" }))
+async fn readiness(State(state): State<Arc<EngineState>>) -> Response {
+    if state.is_ready() {
+        (StatusCode::OK, Json(json!({ "status": "ready" }))).into_response()
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "status": "starting" })),
+        )
+            .into_response()
+    }
 }
 
 /// Readiness and the protocol version.
@@ -863,28 +890,10 @@ async fn revoke_grant(
 
 /// The installed set in the shape `approve` expects.
 fn installed_apps(apps: &Apps) -> Result<Vec<InstalledApp>, Error> {
-    let mut installed = Vec::new();
     // A corrupt tree or an unreadable grant elsewhere must not block approving
     // this app: the catalogue skips what it cannot read and an invalid grant is
     // treated as "not approved".
-    let (apps_list, _) = apps.registry.catalogue()?;
-    for app in apps_list {
-        let id = AppId::parse(&app.manifest.app.id)?;
-        let (grant, grant_invalid) = match apps.grants.load(&id) {
-            Ok(grant) => (grant, false),
-            // A corrupt grant is not authority, but it is not "never approved"
-            // either: the surface must say the document exists and is broken.
-            Err(_) => (None, true),
-        };
-        installed.push(InstalledApp {
-            manifest: app.manifest,
-            grant,
-            grant_invalid,
-            enabled: app.descriptor.enabled,
-            material: apps.registry.approval_material(&id).ok().flatten(),
-        });
-    }
-    Ok(installed)
+    Ok(apps.registry.installed_apps(&apps.grants)?.1)
 }
 
 const ACKNOWLEDGE: &str = "x-anth-acknowledge";
@@ -1703,6 +1712,27 @@ mod tests {
             .expect("body");
         let value: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(value["status"], "ready");
+    }
+
+    #[tokio::test]
+    async fn a_booting_engine_is_not_ready() {
+        let state = Arc::new(EngineState::new(1000).booting());
+        let response = router(state.clone())
+            .oneshot(request("/api/health", Some(1000)))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(value["status"], "starting");
+        state.mark_ready();
+        let response = router(state)
+            .oneshot(request("/api/health", Some(1000)))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
