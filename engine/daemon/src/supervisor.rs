@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anth_contract::{AppId, Error, InterfaceId, World};
-use anth_runtime::{Budget, InstanceId, Reply, Runtime};
+use anth_runtime::{InstanceId, Reply, Runtime};
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 
@@ -61,8 +61,9 @@ impl Supervisor {
     /// The entry is removed *before* the runtime is asked, so a failed
     /// instantiation leaves the app stopped rather than pointing at an instance
     /// that no longer exists.
-    pub async fn start(&self, app: &str, wasm: Vec<u8>, budget: Budget) -> Result<Started, Error> {
-        let app_id = AppId::parse(app)?;
+    pub async fn start(&self, spec: anth_runtime::InstanceSpec) -> Result<Started, Error> {
+        let app_id = AppId::parse(&spec.app)?;
+        let app = spec.app.clone();
         let _barrier = self.barrier.read().await;
         let app_lock = self.app_lock(&app_id).await;
         let _app = app_lock.lock_owned().await;
@@ -72,18 +73,11 @@ impl Supervisor {
             self.runtime.release(id).await;
         }
 
-        let instance = self
-            .runtime
-            .instantiate(anth_runtime::InstanceSpec {
-                app: app.to_string(),
-                wasm,
-                budget,
-            })
-            .await?;
+        let instance = self.runtime.instantiate(spec).await?;
 
         self.instances.lock().await.insert(app_id, instance.id);
         Ok(Started {
-            app: app.to_string(),
+            app,
             id: instance.id,
             world: instance.world,
         })
@@ -182,7 +176,7 @@ impl Supervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anth_runtime::{FakeRuntime, Instance, InstanceSpec};
+    use anth_runtime::{Budget, FakeRuntime, Instance, InstanceSpec};
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -192,6 +186,10 @@ mod tests {
 
     fn budget() -> Budget {
         Budget::new(10_000, 256, 5_000)
+    }
+
+    fn test_spec(app: &str, wasm: Vec<u8>, budget: Budget) -> InstanceSpec {
+        InstanceSpec::new(app, wasm, budget)
     }
 
     fn interface() -> InterfaceId {
@@ -220,7 +218,7 @@ mod tests {
     async fn starting_an_app_reports_its_handle_and_world() {
         let supervisor = supervisor(runtime());
         let started = supervisor
-            .start(NOTES, vec![0, 97, 115, 109], budget())
+            .start(test_spec(NOTES, vec![0, 97, 115, 109], budget()))
             .await
             .expect("start");
         assert_eq!(started.app, NOTES);
@@ -233,7 +231,7 @@ mod tests {
     async fn a_running_app_answers_a_call() {
         let supervisor = supervisor(runtime());
         supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect("start");
         let reply = supervisor
@@ -268,7 +266,7 @@ mod tests {
     async fn a_malformed_interface_is_refused_before_dispatch() {
         let supervisor = supervisor(runtime());
         supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect("start");
         let error = supervisor
@@ -282,7 +280,7 @@ mod tests {
     async fn a_malformed_app_id_is_refused() {
         let supervisor = supervisor(runtime());
         let error = supervisor
-            .start("notes", Vec::new(), budget())
+            .start(test_spec("notes", Vec::new(), budget()))
             .await
             .expect_err("bad app id");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
@@ -294,11 +292,11 @@ mod tests {
         let runtime = runtime();
         let supervisor = supervisor(Arc::clone(&runtime));
         let first = supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect("first");
         let second = supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect("second");
         assert_ne!(first.id, second.id);
@@ -310,7 +308,10 @@ mod tests {
     async fn a_failed_start_leaves_the_app_stopped() {
         let runtime = Arc::new(FailingRuntime);
         let supervisor = Supervisor::new(runtime);
-        assert!(supervisor.start(NOTES, Vec::new(), budget()).await.is_err());
+        assert!(supervisor
+            .start(test_spec(NOTES, Vec::new(), budget()))
+            .await
+            .is_err());
         assert!(!supervisor.is_running(NOTES).await);
         let error = supervisor
             .call(
@@ -328,12 +329,12 @@ mod tests {
     async fn a_failed_restart_leaves_the_app_stopped() {
         let supervisor = Supervisor::new(Arc::new(OnceRuntime::default()));
         supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect("first start");
 
         let error = supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect_err("the second start fails");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Internal);
@@ -358,8 +359,8 @@ mod tests {
         let fake = Arc::new(FakeRuntime::new());
         let supervisor = Supervisor::new(Arc::new(SlowRuntime(Arc::clone(&fake))));
         let (a, b) = tokio::join!(
-            supervisor.start(NOTES, Vec::new(), budget()),
-            supervisor.start(NOTES, Vec::new(), budget())
+            supervisor.start(test_spec(NOTES, Vec::new(), budget())),
+            supervisor.start(test_spec(NOTES, Vec::new(), budget()))
         );
         a.expect("first");
         b.expect("second");
@@ -388,8 +389,8 @@ mod tests {
 
         let both = async {
             tokio::join!(
-                supervisor.start(NOTES, Vec::new(), budget()),
-                supervisor.start(OTHER, Vec::new(), budget())
+                supervisor.start(test_spec(NOTES, Vec::new(), budget())),
+                supervisor.start(test_spec(OTHER, Vec::new(), budget()))
             )
         };
         let (a, b) = timeout(Duration::from_secs(5), both)
@@ -406,7 +407,7 @@ mod tests {
         let runtime = runtime();
         let supervisor = supervisor(Arc::clone(&runtime));
         supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect("start");
         assert!(supervisor.stop(NOTES).await);
@@ -420,11 +421,11 @@ mod tests {
         let runtime = runtime();
         let supervisor = supervisor(Arc::clone(&runtime));
         supervisor
-            .start(NOTES, Vec::new(), budget())
+            .start(test_spec(NOTES, Vec::new(), budget()))
             .await
             .expect("start notes");
         supervisor
-            .start(OTHER, Vec::new(), budget())
+            .start(test_spec(OTHER, Vec::new(), budget()))
             .await
             .expect("start other");
         assert_eq!(supervisor.running().await.len(), 2);

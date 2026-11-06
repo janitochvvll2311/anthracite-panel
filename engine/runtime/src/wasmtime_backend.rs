@@ -34,7 +34,7 @@ pub struct WasmtimeRuntime {
 struct StoreData {
     limits: StoreLimits,
     app: String,
-    started: std::time::Instant,
+    log: crate::LogSettings,
 }
 
 struct Running {
@@ -104,6 +104,10 @@ impl Runtime for WasmtimeRuntime {
             let component = Component::from_binary(&engine, &spec.wasm)
                 .map_err(|error| Error::invalid(format!("the component is not valid: {error}")))?;
             let world = Self::world(&component, &engine);
+            let expected = World::new(spec.granted.clone(), spec.promised.clone());
+            if let Err(mismatch) = world.check_expected(&expected) {
+                return Err(mismatch.into());
+            }
             let limits = StoreLimitsBuilder::new()
                 .memory_size(spec.budget.memory_pages as usize * 0x10000)
                 .build();
@@ -112,7 +116,7 @@ impl Runtime for WasmtimeRuntime {
                 StoreData {
                     limits,
                     app: spec.app.clone(),
-                    started: std::time::Instant::now(),
+                    log: spec.log,
                 },
             );
             store.limiter(|data| &mut data.limits);
@@ -122,10 +126,9 @@ impl Runtime for WasmtimeRuntime {
             store.set_epoch_deadline(1);
             let instance = {
                 let mut linker = Linker::<StoreData>::new(&engine);
-                HostEnv::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |data| {
-                    data
-                })
-                .map_err(|error| Error::internal(format!("linking the host: {error}")))?;
+                for id in &spec.granted {
+                    link_host(&mut linker, id)?;
+                }
                 linker
                     .instantiate(&mut store, &component)
                     .map_err(|error| {
@@ -229,18 +232,33 @@ impl Runtime for WasmtimeRuntime {
     }
 }
 
+fn link_host(linker: &mut Linker<StoreData>, id: &InterfaceId) -> Result<(), Error> {
+    use wasmtime::component::HasSelf;
+    let name = id.to_string();
+    let result = match name.as_str() {
+        "anth:env/info@1.0.0" => {
+            anth::env::info::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
+        }
+        "anth:env/time@1.0.0" => {
+            anth::env::time::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
+        }
+        "anth:env/log@1.0.0" => anth::env::log::add_to_linker::<_, HasSelf<_>>(linker, |data| data),
+        "anth:env/random@1.0.0" => {
+            anth::env::random::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
+        }
+        other => {
+            return Err(Error::unavailable(format!(
+                "`{other}` is in the grant but the host does not link it yet"
+            )));
+        }
+    };
+    result.map_err(|error| Error::internal(format!("linking {name}: {error}")))
+}
+
 impl anth::env::info::Host for StoreData {
     fn get(&mut self) -> anth::env::info::Facts {
-        anth::env::info::Facts {
-            hostname: hostname(),
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-            uptime_seconds: uptime_seconds(),
-            cpu_count: std::thread::available_parallelism()
-                .map(|count| count.get() as u32)
-                .unwrap_or(1),
-            memory_bytes: memory_bytes(),
-        }
+        static FACTS: std::sync::OnceLock<anth::env::info::Facts> = std::sync::OnceLock::new();
+        FACTS.get_or_init(host_facts).clone()
     }
 }
 
@@ -253,13 +271,21 @@ impl anth::env::time::Host for StoreData {
     }
 
     fn monotonic_ms(&mut self) -> u64 {
-        self.started.elapsed().as_millis() as u64
+        process_start().elapsed().as_millis() as u64
     }
 }
 
 impl anth::env::log::Host for StoreData {
     fn write(&mut self, level: anth::env::log::Level, message: String) {
-        eprintln!("app {} {level:?}: {message}", self.app);
+        let level = match level {
+            anth::env::log::Level::Error => crate::LogLevel::Error,
+            anth::env::log::Level::Warn => crate::LogLevel::Warn,
+            anth::env::log::Level::Info => crate::LogLevel::Info,
+            anth::env::log::Level::Debug => crate::LogLevel::Debug,
+        };
+        if self.log.level.allows(level) {
+            emit_log(&self.app, self.log.format, level, &message);
+        }
     }
 }
 
@@ -281,6 +307,46 @@ impl anth::env::random::Host for StoreData {
 }
 
 impl anth::error::kinds::Host for StoreData {}
+
+fn process_start() -> std::time::Instant {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(std::time::Instant::now)
+}
+
+fn emit_log(app: &str, format: crate::LogFormat, level: crate::LogLevel, message: &str) {
+    match format {
+        crate::LogFormat::Text => eprintln!("{app} {level:?}: {message}"),
+        crate::LogFormat::Json => {
+            let value = serde_json::json!({
+                "app": app,
+                "level": format!("{level:?}").to_ascii_lowercase(),
+                "message": message,
+            });
+            eprintln!("{value}");
+        }
+    }
+}
+
+fn host_facts() -> anth::env::info::Facts {
+    anth::env::info::Facts {
+        hostname: hostname(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        uptime_seconds: uptime_seconds(),
+        cpu_count: cpu_count(),
+        memory_bytes: memory_bytes(),
+    }
+}
+
+fn cpu_count() -> u32 {
+    // SAFETY: `sysconf` has no preconditions.
+    let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    if count > 0 {
+        count as u32
+    } else {
+        1
+    }
+}
 
 fn hostname() -> String {
     let mut buffer = [0u8; 256];
@@ -498,4 +564,45 @@ fn app_error(value: &Val) -> Error {
         error = error.with_detail(serde_json::json!({"limit": limit}));
     }
     error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data() -> StoreData {
+        StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            log: crate::LogSettings::default(),
+        }
+    }
+
+    #[test]
+    fn the_host_reports_non_empty_facts() {
+        let mut data = data();
+        let facts = anth::env::info::Host::get(&mut data);
+        assert!(!facts.hostname.is_empty());
+        assert!(!facts.os.is_empty());
+        assert!(!facts.arch.is_empty());
+        assert!(facts.cpu_count >= 1);
+        assert!(facts.memory_bytes > 0);
+    }
+
+    #[test]
+    fn the_host_random_is_bounded() {
+        let mut data = data();
+        let bytes = anth::env::random::Host::bytes(&mut data, 8).expect("random");
+        assert_eq!(bytes.len(), 8);
+        let error = anth::env::random::Host::bytes(&mut data, 5000).expect_err("too large");
+        assert!(matches!(error, anth::error::kinds::Error::TooLarge(5000)));
+    }
+
+    #[test]
+    fn monotonic_time_never_goes_backwards() {
+        let mut data = data();
+        let first = anth::env::time::Host::monotonic_ms(&mut data);
+        let second = anth::env::time::Host::monotonic_ms(&mut data);
+        assert!(second >= first);
+    }
 }

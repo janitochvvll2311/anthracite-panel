@@ -121,6 +121,26 @@ fn an_app_package_resolves_against_the_catalog() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+fn world_imports(
+    resolve: &wit_parser::Resolve,
+    package: wit_parser::PackageId,
+    name: &str,
+) -> BTreeSet<String> {
+    let package = &resolve.packages[package];
+    let world = *package.worlds.get(name).expect("the world");
+    let world = &resolve.worlds[world];
+    let mut imports = BTreeSet::new();
+    for key in world.imports.keys() {
+        if let wit_parser::WorldKey::Interface(id) = key {
+            let interface = &resolve.interfaces[*id];
+            let name = interface.name.as_deref().expect("a named interface");
+            let owner = interface.package.expect("a named interface has a package");
+            imports.insert(resolve.packages[owner].name.interface_id(name));
+        }
+    }
+    imports
+}
+
 #[test]
 fn the_host_world_imports_the_native_set() {
     let root = repo_root().join("engine/wit");
@@ -128,23 +148,35 @@ fn the_host_world_imports_the_native_set() {
     let (package, _) = resolve
         .push_dir(&root)
         .unwrap_or_else(|error| panic!("parsing {}: {error:#}", root.display()));
-    let package = &resolve.packages[package];
-    let world_id = *package.worlds.get("host").expect("the host world");
-    let world = &resolve.worlds[world_id];
-    let mut imports = BTreeSet::new();
-    for key in world.imports.keys() {
-        if let wit_parser::WorldKey::Interface(id) = key {
-            let interface = &resolve.interfaces[*id];
-            let name = interface.name.as_deref().expect("a named interface");
-            let owner = interface.package.expect("a named interface has a package");
-            let owner = &resolve.packages[owner].name;
-            imports.insert(owner.interface_id(name));
-        }
-    }
+    let imports = world_imports(&resolve, package, "host");
     let native: BTreeSet<String> = anth_contract::catalog::NATIVE
         .iter()
         .map(|entry| entry.id.to_string())
         .chain(["anth:error/kinds@1.0.0".to_string()])
         .collect();
     assert_eq!(imports, native);
+}
+
+#[test]
+fn host_env_is_the_environment_subset_of_host() {
+    let root = repo_root().join("engine/wit");
+    let mut resolve = wit_parser::Resolve::default();
+    let (package, _) = resolve
+        .push_dir(&root)
+        .unwrap_or_else(|error| panic!("parsing {}: {error:#}", root.display()));
+    let host = world_imports(&resolve, package, "host");
+    let env = world_imports(&resolve, package, "host-env");
+    let host_env: BTreeSet<String> = host
+        .iter()
+        .filter(|id| id.starts_with("anth:env/"))
+        .cloned()
+        .collect();
+    let own_env: BTreeSet<String> = env
+        .iter()
+        .filter(|id| id.starts_with("anth:env/"))
+        .cloned()
+        .collect();
+    assert_eq!(host_env, own_env);
+    assert!(host.contains("anth:store/kv@1.0.0"));
+    assert!(!env.contains("anth:store/kv@1.0.0"));
 }
