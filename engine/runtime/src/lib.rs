@@ -17,6 +17,10 @@ use std::sync::Mutex;
 use anth_contract::{id::is_kebab, Error, InterfaceId, World};
 use serde_json::Value;
 
+pub mod wasmtime_backend;
+
+pub use wasmtime_backend::WasmtimeRuntime;
+
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// What one instance may spend.

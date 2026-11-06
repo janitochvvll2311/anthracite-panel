@@ -3,10 +3,22 @@
 //! drifting apart.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::PathBuf;
+
+fn repo_root() -> PathBuf {
+    let mut dir = std::env::current_dir().expect("current directory");
+    loop {
+        if dir.join("tests/fixtures").is_dir() {
+            return dir;
+        }
+        if !dir.pop() {
+            panic!("no tests/fixtures above the current directory");
+        }
+    }
+}
 
 fn interface_ids() -> BTreeSet<String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit");
+    let root = repo_root().join("engine/wit");
     let mut resolve = wit_parser::Resolve::default();
     resolve
         .push_dir(&root)
@@ -49,7 +61,7 @@ fn an_app_package_resolves_against_the_catalog() {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit");
+    let root = repo_root().join("engine/wit");
     let dir = std::env::temp_dir().join("anthracite-panel").join(format!(
         "anth-wit-app-{}-{}",
         std::process::id(),
@@ -111,7 +123,7 @@ fn an_app_package_resolves_against_the_catalog() {
 
 #[test]
 fn the_host_world_imports_the_native_set() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wit");
+    let root = repo_root().join("engine/wit");
     let mut resolve = wit_parser::Resolve::default();
     let (package, _) = resolve
         .push_dir(&root)
