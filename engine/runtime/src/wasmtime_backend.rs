@@ -54,6 +54,8 @@ impl std::fmt::Debug for Running {
 
 impl WasmtimeRuntime {
     pub fn new() -> Result<Self, Error> {
+        // The monotonic clock is the process's, not the first call's.
+        process_start();
         Ok(Self {
             instances: Mutex::new(BTreeMap::new()),
             next: Mutex::new(0),
