@@ -74,6 +74,36 @@ fn the_hello_app_resolves_against_its_packaged_catalog() {
 }
 
 #[test]
+fn the_hello_manifest_matches_its_component_and_ui() {
+    use anth_contract::Manifest;
+    use sha2::{Digest, Sha256};
+    let app = repo_root().join("apps/hello");
+    let manifest =
+        Manifest::parse(&std::fs::read_to_string(app.join("manifest.toml")).expect("manifest"))
+            .expect("parse");
+    manifest.validate().expect("validate");
+    assert_eq!(manifest.app.id, "org.anthracite.hello");
+
+    let wasm = manifest.wasm.as_ref().expect("wasm");
+    let bytes = std::fs::read(app.join(&wasm.path)).expect("component");
+    let hash: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(hash, wasm.sha256, "the manifest hash is stale");
+
+    let slot = &manifest.slot[0];
+    let module = std::fs::read(app.join(&slot.module)).expect("ui module");
+    let hash: String = Sha256::digest(&module)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(hash, slot.sha256, "the slot hash is stale");
+    assert_eq!(manifest.route[0].path, "/hello");
+    assert_eq!(manifest.cli[0].verb, "greet");
+}
+
+#[test]
 fn the_hello_catalog_matches_the_engine_catalog() {
     use std::fs;
     let engine = repo_root().join("engine/wit/deps");
