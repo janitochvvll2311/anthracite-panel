@@ -239,6 +239,16 @@ async fn a_u64_above_i64_max_round_trips() {
         .await
         .expect("call with a u64 parameter");
     assert_eq!(reply.output, json!(u64::MAX));
+    let reply = runtime
+        .call(Call {
+            instance: instance.id,
+            interface: id("example:test/wide@1.0.0"),
+            function: "echo".to_string(),
+            input: json!({"value": "42"}),
+        })
+        .await
+        .expect("a query string coerces to u64");
+    assert_eq!(reply.output, json!(42));
 }
 
 #[tokio::test]

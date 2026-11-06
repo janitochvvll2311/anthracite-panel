@@ -563,6 +563,9 @@ Rules that remove ambiguity:
 
 - A missing required parameter is `invalid` (400); a missing optional one is
   `none`.
+- A repeated query key is a list; `key[]=value` expresses a single-item list.
+- `OPTIONS` on an app route is answered by the engine with `204` and `Allow`;
+  a method the manifest does not declare is `405` with the same `Allow` list.
 - Multiple parameters in a body become an object keyed by parameter name. There is
   no positional form.
 - `result<T, error>` maps to `200` with `T`, or to the codes of [§7.11](07-app.md#711-errors).

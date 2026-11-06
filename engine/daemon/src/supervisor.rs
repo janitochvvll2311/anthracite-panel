@@ -16,6 +16,8 @@
 //!   never across an await, so a call is not blocked by a slow instantiation.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anth_contract::{AppId, Error, InterfaceId, World};
@@ -99,7 +101,7 @@ impl Supervisor {
             .await
             .get(&app_id)
             .copied()
-            .ok_or_else(|| Error::not_found(format!("app `{app}` is not running")))?;
+            .ok_or_else(|| Error::unavailable(format!("app `{app}` is not running")))?;
         self.runtime
             .call(anth_runtime::Call {
                 instance: id,
@@ -173,6 +175,41 @@ impl Supervisor {
     }
 }
 
+/// The API's route dispatcher, backed by this supervisor (§7.13).
+pub struct SupervisorCaller {
+    supervisor: Arc<Supervisor>,
+}
+
+impl SupervisorCaller {
+    pub fn new(supervisor: Arc<Supervisor>) -> Self {
+        Self { supervisor }
+    }
+}
+
+impl anth_api::AppCaller for SupervisorCaller {
+    fn call<'a>(
+        &'a self,
+        app: &'a str,
+        interface: &'a str,
+        function: &'a str,
+        input: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>> {
+        let supervisor = Arc::clone(&self.supervisor);
+        let app = app.to_string();
+        let interface = interface.to_string();
+        let function = function.to_string();
+        Box::pin(async move {
+            let handle = tokio::runtime::Handle::current();
+            tokio::task::spawn_blocking(move || {
+                handle.block_on(supervisor.call(&app, &interface, &function, input))
+            })
+            .await
+            .map_err(|error| Error::internal(format!("the app call was cancelled: {error}")))?
+            .map(|reply| reply.output)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +249,33 @@ mod tests {
 
     fn supervisor(runtime: Arc<FakeRuntime>) -> Supervisor {
         Supervisor::new(runtime)
+    }
+
+    #[tokio::test]
+    async fn the_caller_dispatches_through_the_supervisor() {
+        let fake = Arc::new(FakeRuntime::new().answer(
+            NOTES,
+            InterfaceId::parse("example:notes/list@1.0.0").expect("interface"),
+            "all",
+            serde_json::json!({"entries": []}),
+            1,
+        ));
+        let supervisor = Arc::new(Supervisor::new(fake));
+        supervisor
+            .start(test_spec(NOTES, Vec::new(), budget()))
+            .await
+            .expect("start");
+        let caller = SupervisorCaller::new(supervisor);
+        let output = anth_api::AppCaller::call(
+            &caller,
+            NOTES,
+            "example:notes/list@1.0.0",
+            "all",
+            serde_json::json!({}),
+        )
+        .await
+        .expect("call");
+        assert_eq!(output, serde_json::json!({"entries": []}));
     }
 
     #[tokio::test]
@@ -258,7 +322,7 @@ mod tests {
             )
             .await
             .expect_err("not running");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
         assert!(error.message().contains("not running"), "{error}");
     }
 
@@ -322,7 +386,7 @@ mod tests {
             )
             .await
             .expect_err("not running");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
     }
 
     #[tokio::test]
@@ -351,7 +415,7 @@ mod tests {
             )
             .await
             .expect_err("nothing is running");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
     }
 
     #[tokio::test]

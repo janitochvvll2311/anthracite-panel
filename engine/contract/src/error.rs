@@ -152,6 +152,10 @@ impl Error {
         Self::new(ErrorKind::PreconditionFailed, message)
     }
 
+    pub fn method_not_allowed(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::MethodNotAllowed, message)
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Internal, message)
     }

@@ -143,6 +143,8 @@ async fn run(args: Args) -> Result<(), Error> {
 
     // SAFETY: `geteuid` has no preconditions.
     let allowed_uid = unsafe { libc::geteuid() };
+    let runtime = Arc::new(WasmtimeRuntime::new()?);
+    let supervisor = Arc::new(Supervisor::new(runtime));
     let state = Arc::new(
         anth_api::EngineState::new(allowed_uid)
             .with_composition(composition)
@@ -151,6 +153,9 @@ async fn run(args: Args) -> Result<(), Error> {
                 config.apps.max_bundle_bytes,
                 config.apps.require_signature,
             )
+            .with_caller(Arc::new(anth_engine::supervisor::SupervisorCaller::new(
+                supervisor.clone(),
+            )))
             .booting(),
     );
     let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
@@ -197,8 +202,6 @@ async fn run(args: Args) -> Result<(), Error> {
         None => None,
     };
 
-    let runtime = Arc::new(WasmtimeRuntime::new()?);
-    let supervisor = Supervisor::new(runtime);
     let composition = state.composition.read().expect("composition").clone();
     let report = anth_engine::boot::start_composed(
         &supervisor,
@@ -227,8 +230,6 @@ async fn run(args: Args) -> Result<(), Error> {
         report.degraded.len()
     ));
     state.mark_ready();
-    // The supervisor owns the running instances; it must outlive the boot call.
-    let supervisor = supervisor;
 
     uds.await
         .map_err(|error| Error::internal(format!("serving the API: {error}")))?
