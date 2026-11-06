@@ -925,14 +925,12 @@ fn invoke(
     print_value(&response.body)
 }
 
-/// A flag has no type information in the surface; a JSON scalar is passed as
-/// that scalar, and everything else stays a string (§7.9).
+/// A flag has no type information in the surface, so its value stays a string;
+/// the runtime coerces it to the WIT parameter type. A bare flag is `true`.
 fn flag_value(value: &Option<String>) -> serde_json::Value {
     match value {
         None => serde_json::Value::Bool(true),
-        Some(text) => {
-            serde_json::from_str(text).unwrap_or_else(|_| serde_json::Value::String(text.clone()))
-        }
+        Some(text) => serde_json::Value::String(text.clone()),
     }
 }
 
@@ -1617,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn a_verb_with_a_body_sends_typed_scalars() {
+    fn a_verb_with_a_body_sends_flag_values() {
         let dir = scratch("invoke-body");
         let socket = dir.join("engine.sock");
         let apps = r#"{"apps":[{"id":"org.anthracite.hello","alias":"hello"}],"problems":[]}"#;
@@ -1639,6 +1637,7 @@ mod tests {
                     ("count".to_string(), Some("3".to_string())),
                     ("ok".to_string(), None),
                     ("label".to_string(), Some("Ada".to_string())),
+                    ("literal".to_string(), Some("true".to_string())),
                 ],
             },
         )
@@ -1650,9 +1649,10 @@ mod tests {
             call.starts_with("POST /api/apps/org.anthracite.hello/echo HTTP/1.1"),
             "{call}"
         );
-        assert!(call.contains("\"count\":3"), "{call}");
+        assert!(call.contains("\"count\":\"3\""), "{call}");
         assert!(call.contains("\"ok\":true"), "{call}");
         assert!(call.contains("\"label\":\"Ada\""), "{call}");
+        assert!(call.contains("\"literal\":\"true\""), "{call}");
     }
 
     #[test]
