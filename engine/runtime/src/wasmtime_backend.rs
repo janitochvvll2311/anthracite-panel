@@ -11,17 +11,18 @@
 //! to the component.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use anth_contract::{Error, InterfaceId, World};
+use anth_contract::{Error, ErrorKind, InterfaceId, World};
 use wasmtime::component::{Component, Linker, Val};
-use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 
 use crate::{BoxFuture, Budget, Call, Instance, InstanceId, InstanceSpec, Reply, Runtime};
 
 pub struct WasmtimeRuntime {
     engine: Engine,
-    instances: Mutex<BTreeMap<u64, Running>>,
+    instances: Mutex<BTreeMap<u64, Arc<Mutex<Running>>>>,
     next: Mutex<u64>,
 }
 
@@ -48,6 +49,7 @@ impl WasmtimeRuntime {
     pub fn new() -> Result<Self, Error> {
         let mut config = Config::new();
         config.consume_fuel(true);
+        config.epoch_interruption(true);
         config.wasm_component_model(true);
         let engine = Engine::new(&config)
             .map_err(|error| Error::internal(format!("configuring wasmtime: {error}")))?;
@@ -99,17 +101,18 @@ impl Runtime for WasmtimeRuntime {
             store
                 .set_fuel(spec.budget.fuel)
                 .map_err(|error| Error::internal(format!("setting fuel: {error}")))?;
+            store.set_epoch_deadline(1);
             let instance = linker
                 .instantiate(&mut store, &component)
                 .map_err(|error| Error::unavailable(format!("the app did not start: {error}")))?;
             let id = self.next_id();
             self.instances.lock().expect("wasmtime instances").insert(
                 id.0,
-                Running {
+                Arc::new(Mutex::new(Running {
                     store,
                     instance,
                     budget: spec.budget,
-                },
+                })),
             );
             Ok(Instance { id, world })
         })
@@ -117,11 +120,22 @@ impl Runtime for WasmtimeRuntime {
 
     fn call(&self, call: Call) -> BoxFuture<'_, Result<Reply, Error>> {
         Box::pin(async move {
-            let mut instances = self.instances.lock().expect("wasmtime instances");
-            let running = instances
-                .get_mut(&call.instance.0)
+            let running = self
+                .instances
+                .lock()
+                .expect("wasmtime instances")
+                .get(&call.instance.0)
+                .cloned()
                 .ok_or_else(|| Error::not_found("no such instance"))?;
+            // One lock per instance, not one for the whole runtime: two apps do
+            // not serialize each other (§6.1).
+            let mut running = running.lock().expect("wasmtime instance");
+            let running = &mut *running;
             let mut store = &mut running.store;
+            store
+                .set_fuel(running.budget.fuel)
+                .map_err(|error| Error::internal(format!("setting fuel: {error}")))?;
+            store.set_epoch_deadline(1);
             let instance = &running.instance;
             let (_, interface_index) = instance
                 .get_export(&mut store, None, &call.interface.to_string())
@@ -148,8 +162,21 @@ impl Runtime for WasmtimeRuntime {
                 .map(|(name, ty)| json_to_val(call.input.get(name), ty))
                 .collect::<Result<_, _>>()?;
             let mut results = vec![Val::Bool(false); ty.results().len()];
-            func.call(&mut store, &params, &mut results)
-                .map_err(trap_error)?;
+            // The wall backstop advances the engine epoch; the channel cancels
+            // the timer when the call finishes first, so it does not leak into
+            // the next call.
+            let (cancel, cancelled) = std::sync::mpsc::channel();
+            let engine = self.engine.clone();
+            let wall = running.budget.wall_ms;
+            let timer = std::thread::spawn(move || {
+                if cancelled.recv_timeout(Duration::from_millis(wall)).is_err() {
+                    engine.increment_epoch();
+                }
+            });
+            let result = func.call(&mut store, &params, &mut results);
+            let _ = cancel.send(());
+            let _ = timer.join();
+            result.map_err(trap_error)?;
             let output = match results.as_slice() {
                 [] => serde_json::Value::Null,
                 [value] => val_to_json(value)?,
@@ -175,14 +202,16 @@ impl Runtime for WasmtimeRuntime {
 }
 
 fn trap_error(error: wasmtime::Error) -> Error {
-    let out_of_fuel = error
+    let trap = error
         .chain()
-        .any(|cause| cause.downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::OutOfFuel));
-    if out_of_fuel {
-        return Error::exhausted("the app ran out of fuel")
-            .with_detail(serde_json::json!({"budget": "fuel"}));
+        .find_map(|cause| cause.downcast_ref::<Trap>().copied());
+    match trap {
+        Some(Trap::OutOfFuel) => Error::exhausted("the app ran out of fuel")
+            .with_detail(serde_json::json!({"budget": "fuel"})),
+        Some(Trap::Interrupt) => Error::exhausted("the app exceeded its wall budget")
+            .with_detail(serde_json::json!({"budget": "wall"})),
+        _ => Error::internal(format!("the call trapped: {error}")),
     }
-    Error::internal(format!("the call trapped: {error}"))
 }
 
 fn json_to_val(
@@ -193,10 +222,10 @@ fn json_to_val(
     let value = value.unwrap_or(&serde_json::Value::Null);
     Ok(match ty {
         Type::Bool => Val::Bool(value.as_bool().ok_or_else(|| bad("bool", value))?),
-        Type::U8 => Val::U8(number(value, u8::try_from)?),
-        Type::U16 => Val::U16(number(value, u16::try_from)?),
-        Type::U32 => Val::U32(number(value, u32::try_from)?),
-        Type::U64 => Val::U64(number(value, u64::try_from)?),
+        Type::U8 => Val::U8(number_unsigned(value, u8::try_from)?),
+        Type::U16 => Val::U16(number_unsigned(value, u16::try_from)?),
+        Type::U32 => Val::U32(number_unsigned(value, u32::try_from)?),
+        Type::U64 => Val::U64(value.as_u64().ok_or_else(|| bad("integer", value))?),
         Type::S8 => Val::S8(number(value, i8::try_from)?),
         Type::S16 => Val::S16(number(value, i16::try_from)?),
         Type::S32 => Val::S32(number(value, i32::try_from)?),
@@ -232,6 +261,33 @@ fn json_to_val(
                     .collect::<Result<_, _>>()?,
             )
         }
+        Type::Record(record) => {
+            let object = value.as_object().ok_or_else(|| bad("record", value))?;
+            let mut fields = Vec::new();
+            for field in record.fields() {
+                fields.push((
+                    field.name.to_string(),
+                    json_to_val(object.get(field.name), field.ty)?,
+                ));
+            }
+            Val::Record(fields)
+        }
+        Type::Option(option) => {
+            if value.is_null() {
+                Val::Option(None)
+            } else {
+                Val::Option(Some(Box::new(json_to_val(Some(value), option.ty())?)))
+            }
+        }
+        Type::Enum(enumeration) => {
+            let name = value.as_str().ok_or_else(|| bad("enum", value))?;
+            if !enumeration.names().any(|case| case == name) {
+                return Err(Error::invalid(format!(
+                    "`{name}` is not a case of this enum"
+                )));
+            }
+            Val::Enum(name.to_string())
+        }
         other => {
             return Err(Error::invalid(format!(
                 "parameter type {other:?} is not supported yet"
@@ -245,6 +301,14 @@ fn number<T>(
     convert: impl Fn(i64) -> Result<T, std::num::TryFromIntError>,
 ) -> Result<T, Error> {
     let value = value.as_i64().ok_or_else(|| bad("integer", value))?;
+    convert(value).map_err(|_| Error::invalid(format!("{value} does not fit the parameter type")))
+}
+
+fn number_unsigned<T>(
+    value: &serde_json::Value,
+    convert: impl Fn(u64) -> Result<T, std::num::TryFromIntError>,
+) -> Result<T, Error> {
+    let value = value.as_u64().ok_or_else(|| bad("integer", value))?;
     convert(value).map_err(|_| Error::invalid(format!("{value} does not fit the parameter type")))
 }
 
@@ -287,8 +351,11 @@ fn val_to_json(value: &Val) -> Result<serde_json::Value, Error> {
             None => Json::Null,
             Some(value) => val_to_json(value)?,
         },
-        Val::Result(Err(_)) => {
-            return Err(Error::internal("the component returned an error value"));
+        Val::Result(Err(value)) => {
+            return Err(match value {
+                Some(value) => app_error(value),
+                None => Error::internal("the component returned an error without a value"),
+            });
         }
         other => {
             return Err(Error::internal(format!(
@@ -296,4 +363,22 @@ fn val_to_json(value: &Val) -> Result<serde_json::Value, Error> {
             )));
         }
     })
+}
+
+/// Maps the app-facing `anth:error/kinds` variant to the contract error (§7.11).
+fn app_error(value: &Val) -> Error {
+    let Val::Variant(case, payload) = value else {
+        return Error::internal("the component returned a malformed error");
+    };
+    let kind = ErrorKind::from_code(case).unwrap_or(ErrorKind::Internal);
+    let payload = payload.as_deref();
+    let message = match payload {
+        Some(Val::String(message)) => message.clone(),
+        _ => case.clone(),
+    };
+    let mut error = Error::new(kind, message);
+    if let Some(Val::U64(limit)) = payload {
+        error = error.with_detail(serde_json::json!({"limit": limit}));
+    }
+    error
 }

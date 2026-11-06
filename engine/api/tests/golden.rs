@@ -22,7 +22,16 @@ use tower::ServiceExt;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
+    let mut dir = std::env::current_dir().expect("current directory");
+    loop {
+        let candidate = dir.join("tests/fixtures");
+        if candidate.is_dir() {
+            return candidate;
+        }
+        if !dir.pop() {
+            panic!("no tests/fixtures above the current directory");
+        }
+    }
 }
 
 fn scratch() -> PathBuf {
@@ -40,7 +49,9 @@ fn scratch() -> PathBuf {
 fn copy_tree(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).expect("mkdir");
     fs::set_permissions(dst, fs::Permissions::from_mode(0o700)).expect("chmod");
-    for entry in fs::read_dir(src).expect("read_dir") {
+    for entry in
+        fs::read_dir(src).unwrap_or_else(|error| panic!("reading {}: {error}", src.display()))
+    {
         let entry = entry.expect("entry");
         let path = entry.path();
         let target = dst.join(entry.file_name());
