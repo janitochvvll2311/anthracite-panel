@@ -120,6 +120,11 @@ pub enum AppCommand {
         app: String,
         acknowledge: Option<String>,
     },
+    Invoke {
+        app: String,
+        verb: String,
+        flags: Vec<(String, Option<String>)>,
+    },
 }
 
 /// The `anth key` subcommands.
@@ -185,6 +190,20 @@ fn parse_app(
         .next()
         .ok_or_else(|| usage("`app` needs a subcommand".to_string()))?;
     let sub = as_text(&sub)?.to_string();
+    if !matches!(
+        sub.as_str(),
+        "list"
+            | "show"
+            | "install"
+            | "upgrade"
+            | "enable"
+            | "disable"
+            | "remove"
+            | "approve"
+            | "revoke"
+    ) {
+        return parse_invoke(sub, args, socket);
+    }
     let mut acknowledge = None;
     let mut accept = Vec::new();
     let mut positional: Vec<OsString> = Vec::new();
@@ -251,6 +270,46 @@ fn parse_app(
         }
     };
     Ok(Invocation::App { socket, command })
+}
+
+fn parse_invoke(
+    app: String,
+    args: impl Iterator<Item = OsString>,
+    socket: Option<PathBuf>,
+) -> Result<Invocation, Error> {
+    let mut tokens = Vec::new();
+    for arg in args {
+        if matches!(arg.to_str(), Some("--help" | "-h")) {
+            return Ok(Invocation::Help);
+        }
+        tokens.push(as_text(&arg)?.to_string());
+    }
+    let mut tokens = tokens.into_iter().peekable();
+    let verb = tokens
+        .next()
+        .ok_or_else(|| usage(format!("`app {app}` needs a verb")))?;
+    let mut flags = Vec::new();
+    while let Some(token) = tokens.next() {
+        let Some(rest) = token.strip_prefix("--") else {
+            return Err(usage(format!("`{token}` is not a flag")));
+        };
+        if rest.is_empty() {
+            return Err(usage("`--` needs a flag name".to_string()));
+        }
+        if let Some((key, value)) = rest.split_once('=') {
+            flags.push((key.to_string(), Some(value.to_string())));
+        } else if let Some(key) = rest.strip_prefix("no-") {
+            flags.push((key.to_string(), Some("false".to_string())));
+        } else if let Some(value) = tokens.next_if(|value| !value.starts_with("--")) {
+            flags.push((rest.to_string(), Some(value)));
+        } else {
+            flags.push((rest.to_string(), None));
+        }
+    }
+    Ok(Invocation::App {
+        socket,
+        command: AppCommand::Invoke { app, verb, flags },
+    })
 }
 
 fn parse_compose(
@@ -747,7 +806,102 @@ fn app(socket: Option<PathBuf>, command: AppCommand) -> Result<u8, Error> {
             &format!("/api/engine/apps/{app}/grant"),
             acknowledge,
         ),
+        AppCommand::Invoke { app, verb, flags } => invoke(&client, &app, &verb, &flags),
     }
+}
+
+/// A generated CLI verb: resolve alias → id and verb → route in the surface,
+/// then call the app route (`§7.9`, `§7.13`). Only composed apps have verbs.
+fn invoke(
+    client: &Client,
+    app: &str,
+    verb: &str,
+    flags: &[(String, Option<String>)],
+) -> Result<u8, Error> {
+    let apps = client.get_json("/api/engine/apps")?;
+    let id = apps["apps"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .find(|candidate| {
+            candidate["id"].as_str() == Some(app) || candidate["alias"].as_str() == Some(app)
+        })
+        .and_then(|candidate| candidate["id"].as_str())
+        .ok_or_else(|| Error::not_found(format!("`{app}` is not installed")))?
+        .to_string();
+    let composition = client.get_json("/api/engine/composition")?;
+    let composed = composition["surface"]["apps"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .find(|candidate| candidate["id"].as_str() == Some(id.as_str()))
+        .ok_or_else(|| Error::unavailable(format!("`{id}` is not running")))?;
+    let call = composed["cli"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .find(|entry| entry["verb"].as_str() == Some(verb))
+        .ok_or_else(|| Error::not_found(format!("`{id}` has no CLI verb `{verb}`")))?;
+    let interface = call["interface"].as_str().unwrap_or_default();
+    let function = call["function"].as_str().unwrap_or_default();
+    let route = composed["routes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+        .iter()
+        .find(|route| {
+            route["interface"].as_str() == Some(interface)
+                && route["function"].as_str() == Some(function)
+        })
+        .ok_or_else(|| {
+            Error::unavailable(format!(
+                "`{id}` verb `{verb}` has no route; v0.5.0 invokes through routes"
+            ))
+        })?;
+    let method = route["method"].as_str().unwrap_or("GET");
+    let path = route["path"].as_str().unwrap_or("/");
+    let no_body = matches!(method, "GET" | "HEAD" | "DELETE");
+    let mut body = Vec::new();
+    let mut url = format!("/api/apps/{id}{path}");
+    let mut headers = Vec::new();
+    if no_body {
+        let mut query = form_urlencoded::Serializer::new(String::new());
+        for (key, value) in flags {
+            query.append_pair(key, value.as_deref().unwrap_or("true"));
+        }
+        let query = query.finish();
+        if !query.is_empty() {
+            url.push('?');
+            url.push_str(&query);
+        }
+    } else {
+        let mut object = serde_json::Map::new();
+        for (key, value) in flags {
+            let value =
+                serde_json::Value::String(value.clone().unwrap_or_else(|| "true".to_string()));
+            match object.get_mut(key) {
+                Some(existing) => {
+                    if let Some(values) = existing.as_array_mut() {
+                        values.push(value);
+                    } else {
+                        let first = existing.take();
+                        *existing = serde_json::Value::Array(vec![first, value]);
+                    }
+                }
+                None => {
+                    object.insert(key.clone(), value);
+                }
+            }
+        }
+        body = serde_json::to_vec(&serde_json::Value::Object(object))
+            .map_err(|error| Error::internal(format!("rendering the input: {error}")))?;
+        headers.push(("content-type", "application/json"));
+    }
+    let response = client.request(method, &url, &body, &headers)?;
+    print_value(&response.body)
 }
 
 fn patch_enabled(
@@ -1334,6 +1488,79 @@ mod tests {
         assert!(
             remove.starts_with("DELETE /api/engine/keys/abc HTTP/1.1"),
             "{remove}"
+        );
+    }
+
+    #[test]
+    fn a_generated_verb_parses_flags() {
+        assert_eq!(
+            parse(args(&["app", "hello", "greet", "--name", "Ada", "--loud"])).expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Invoke {
+                    app: "hello".to_string(),
+                    verb: "greet".to_string(),
+                    flags: vec![
+                        ("name".to_string(), Some("Ada".to_string())),
+                        ("loud".to_string(), None),
+                    ],
+                },
+            }
+        );
+        assert_eq!(
+            parse(args(&["app", "hello", "greet", "--no-loud", "--label=hi"])).expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::Invoke {
+                    app: "hello".to_string(),
+                    verb: "greet".to_string(),
+                    flags: vec![
+                        ("loud".to_string(), Some("false".to_string())),
+                        ("label".to_string(), Some("hi".to_string())),
+                    ],
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn an_app_can_be_invoked_by_alias_or_id() {
+        let dir = scratch("invoke");
+        let socket = dir.join("engine.sock");
+        let apps = r#"{"apps":[{"id":"org.anthracite.hello","alias":"hello"}],"problems":[]}"#;
+        let composition = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":["org.anthracite.hello"]}]},"surface":{"apps":[{"id":"org.anthracite.hello","version":"0.1.0","risk":"read","routes":[{"method":"GET","path":"/hello","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}],"slots":[],"cli":[{"verb":"greet","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}]}],"degraded":[],"links":[]}}"#;
+        let receive = serve(
+            &socket,
+            vec![
+                answer("200 OK", apps),
+                answer("200 OK", composition),
+                answer("200 OK", r#""hello, Ada""#),
+            ],
+        );
+        app(
+            Some(socket),
+            AppCommand::Invoke {
+                app: "hello".to_string(),
+                verb: "greet".to_string(),
+                flags: vec![("name".to_string(), Some("Ada".to_string()))],
+            },
+        )
+        .expect("invoke");
+        let get_apps = String::from_utf8_lossy(&receive.recv().expect("apps")).to_string();
+        assert!(
+            get_apps.starts_with("GET /api/engine/apps HTTP/1.1"),
+            "{get_apps}"
+        );
+        let get_composition =
+            String::from_utf8_lossy(&receive.recv().expect("composition")).to_string();
+        assert!(
+            get_composition.starts_with("GET /api/engine/composition HTTP/1.1"),
+            "{get_composition}"
+        );
+        let call = String::from_utf8_lossy(&receive.recv().expect("call")).to_string();
+        assert!(
+            call.starts_with("GET /api/apps/org.anthracite.hello/hello?name=Ada HTTP/1.1"),
+            "{call}"
         );
     }
 
