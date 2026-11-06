@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anth_contract::{Composition, Error};
 
 /// The directories the tree owns, relative to its root.
-pub const DIRS: &[&str] = &["apps", "grants", "keys"];
+pub const DIRS: &[&str] = &["apps", "grants", "keys", "data"];
 /// The files the tree owns, relative to its root.
 pub const FILES: &[&str] = &[COMPOSITION, AUDIT];
 

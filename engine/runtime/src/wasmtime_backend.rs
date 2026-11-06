@@ -22,7 +22,7 @@ use crate::{BoxFuture, Budget, Call, Instance, InstanceId, InstanceSpec, Reply, 
 
 wasmtime::component::bindgen!({
     path: "../wit",
-    world: "host-env",
+    world: "host-runtime",
 });
 
 pub struct WasmtimeRuntime {
@@ -34,6 +34,7 @@ pub struct WasmtimeRuntime {
 struct StoreData {
     limits: StoreLimits,
     app: String,
+    data: Option<std::path::PathBuf>,
     log: crate::LogSettings,
 }
 
@@ -118,6 +119,7 @@ impl Runtime for WasmtimeRuntime {
                 StoreData {
                     limits,
                     app: spec.app.clone(),
+                    data: spec.data.clone(),
                     log: spec.log,
                 },
             );
@@ -248,6 +250,9 @@ fn link_host(linker: &mut Linker<StoreData>, id: &InterfaceId) -> Result<(), Err
         "anth:env/random@1.0.0" => {
             anth::env::random::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
         }
+        "anth:store/kv@1.0.0" => {
+            anth::store::kv::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
+        }
         other => {
             return Err(Error::unavailable(format!(
                 "`{other}` is in the grant but the host does not link it yet"
@@ -312,6 +317,163 @@ impl anth::env::random::Host for StoreData {
 }
 
 impl anth::error::kinds::Host for StoreData {}
+
+impl anth::store::kv::Host for StoreData {
+    fn get(&mut self, key: String) -> Result<Option<String>, anth::error::kinds::Error> {
+        check_key(&key)?;
+        Ok(self.load_kv()?.get(&key).cloned())
+    }
+
+    fn set(&mut self, key: String, value: String) -> Result<(), anth::error::kinds::Error> {
+        check_key(&key)?;
+        if value.len() > MAX_VALUE {
+            return Err(anth::error::kinds::Error::TooLarge(MAX_VALUE as u64));
+        }
+        let mut map = self.load_kv()?;
+        map.insert(key, value);
+        self.save_kv(&map)
+    }
+
+    fn delete(&mut self, key: String) -> Result<bool, anth::error::kinds::Error> {
+        check_key(&key)?;
+        let mut map = self.load_kv()?;
+        let removed = map.remove(&key).is_some();
+        if removed {
+            self.save_kv(&map)?;
+        }
+        Ok(removed)
+    }
+
+    fn list_keys(&mut self, prefix: String) -> Result<Vec<String>, anth::error::kinds::Error> {
+        Ok(self
+            .load_kv()?
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect())
+    }
+}
+
+const MAX_KEY: usize = 1024;
+const MAX_VALUE: usize = 1024 * 1024;
+
+fn check_key(key: &str) -> Result<(), anth::error::kinds::Error> {
+    if key.is_empty() {
+        return Err(anth::error::kinds::Error::Invalid(
+            "a store key cannot be empty".to_string(),
+        ));
+    }
+    if key.len() > MAX_KEY {
+        return Err(anth::error::kinds::Error::TooLarge(MAX_KEY as u64));
+    }
+    Ok(())
+}
+
+impl StoreData {
+    fn kv_dir(&self) -> Result<&std::path::Path, anth::error::kinds::Error> {
+        self.data.as_deref().ok_or_else(|| {
+            anth::error::kinds::Error::Unavailable("this app has no store".to_string())
+        })
+    }
+
+    fn load_kv(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, anth::error::kinds::Error> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = self.kv_dir()?;
+        std::fs::create_dir_all(dir).map_err(|error| {
+            anth::error::kinds::Error::Internal(format!("creating the app store: {error}"))
+        })?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|error| {
+            anth::error::kinds::Error::Internal(format!(
+                "setting the app store permissions: {error}"
+            ))
+        })?;
+        let path = dir.join("kv.json");
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(anth::error::kinds::Error::Internal(
+                    "the app store is a symlink".to_string(),
+                ));
+            }
+            Ok(metadata) if metadata.len() > 4 * 1024 * 1024 => {
+                return Err(anth::error::kinds::Error::TooLarge(4 * 1024 * 1024));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(std::collections::BTreeMap::new());
+            }
+            Err(error) => {
+                return Err(anth::error::kinds::Error::Internal(format!(
+                    "inspecting the app store: {error}"
+                )));
+            }
+        }
+        let text = std::fs::read_to_string(&path).map_err(|error| {
+            anth::error::kinds::Error::Internal(format!("reading the app store: {error}"))
+        })?;
+        serde_json::from_str(&text).map_err(|error| {
+            anth::error::kinds::Error::Internal(format!("the app store is corrupt: {error}"))
+        })
+    }
+
+    fn save_kv(
+        &self,
+        map: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), anth::error::kinds::Error> {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = self.kv_dir()?;
+        std::fs::create_dir_all(dir).map_err(|error| {
+            anth::error::kinds::Error::Internal(format!("creating the app store: {error}"))
+        })?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|error| {
+            anth::error::kinds::Error::Internal(format!(
+                "setting the app store permissions: {error}"
+            ))
+        })?;
+        let path = dir.join("kv.json");
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(anth::error::kinds::Error::Internal(
+                    "the app store is a symlink".to_string(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anth::error::kinds::Error::Internal(format!(
+                    "inspecting the app store: {error}"
+                )));
+            }
+        }
+        let bytes = serde_json::to_vec(map).map_err(|error| {
+            anth::error::kinds::Error::Internal(format!("rendering the app store: {error}"))
+        })?;
+        let temp = dir.join(format!(
+            ".kv.json.tmp.{}.{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&temp);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp)
+            .map_err(|error| {
+                anth::error::kinds::Error::Internal(format!("writing the app store: {error}"))
+            })?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .and_then(|()| std::fs::rename(&temp, &path))
+            .map_err(|error| {
+                let _ = std::fs::remove_file(&temp);
+                anth::error::kinds::Error::Internal(format!("writing the app store: {error}"))
+            })
+    }
+}
 
 fn process_start() -> std::time::Instant {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -595,6 +757,7 @@ mod tests {
         StoreData {
             limits: StoreLimitsBuilder::new().build(),
             app: "org.example.test".to_string(),
+            data: None,
             log: crate::LogSettings::default(),
         }
     }
@@ -617,6 +780,64 @@ mod tests {
         assert_eq!(bytes.len(), 8);
         let error = anth::env::random::Host::bytes(&mut data, 5000).expect_err("too large");
         assert!(matches!(error, anth::error::kinds::Error::TooLarge(5000)));
+    }
+
+    #[test]
+    fn the_app_store_round_trips_and_persists() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-kv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut data = StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            data: Some(dir.clone()),
+            log: crate::LogSettings::default(),
+        };
+        anth::store::kv::Host::set(&mut data, "notes/1".to_string(), "hello".to_string())
+            .expect("set");
+        anth::store::kv::Host::set(&mut data, "other".to_string(), "x".to_string()).expect("set");
+        assert_eq!(
+            anth::store::kv::Host::get(&mut data, "notes/1".to_string()).expect("get"),
+            Some("hello".to_string())
+        );
+        assert_eq!(
+            anth::store::kv::Host::list_keys(&mut data, "notes/".to_string()).expect("list"),
+            ["notes/1".to_string()]
+        );
+        assert!(anth::store::kv::Host::delete(&mut data, "notes/1".to_string()).expect("delete"));
+        assert!(!anth::store::kv::Host::delete(&mut data, "notes/1".to_string()).expect("delete"));
+        // A new instance over the same directory reads the same store.
+        let mut again = StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            data: Some(dir.clone()),
+            log: crate::LogSettings::default(),
+        };
+        assert_eq!(
+            anth::store::kv::Host::get(&mut again, "other".to_string()).expect("get"),
+            Some("x".to_string())
+        );
+        let mode = std::fs::metadata(dir.join("kv.json"))
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_app_without_a_store_is_unavailable() {
+        let mut data = StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            data: None,
+            log: crate::LogSettings::default(),
+        };
+        let error = anth::store::kv::Host::get(&mut data, "x".to_string()).expect_err("no store");
+        assert!(matches!(error, anth::error::kinds::Error::Unavailable(_)));
     }
 
     #[test]
