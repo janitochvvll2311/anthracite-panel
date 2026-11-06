@@ -303,6 +303,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[tokio::test]
+    async fn a_corrupt_catalogue_entry_is_reported_with_the_fatal() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch();
+        std::fs::set_permissions(dir.join("apps"), std::fs::Permissions::from_mode(0o700))
+            .expect("chmod");
+        let broken = dir.join("apps/org.example.broken");
+        std::fs::create_dir_all(&broken).expect("mkdir");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let manifest = broken.join("manifest.toml");
+        std::fs::write(&manifest, b"not a manifest").expect("write");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let composition = Composition::parse(
+            "version = 1\n\n[[profile]]\nid = \"default\"\napps = [\"org.example.broken\"]\n",
+        )
+        .expect("parse");
+        let supervisor = Supervisor::new(std::sync::Arc::new(anth_runtime::FakeRuntime::new()));
+        let report = start_composed(
+            &supervisor,
+            &dir,
+            &composition,
+            &LimitsSection::default(),
+            LogSettings::default(),
+        )
+        .await
+        .expect("boot");
+        assert_eq!(
+            report.fatal.as_ref().map(|error| error.kind().code()),
+            Some("not-found")
+        );
+        let id = AppId::parse("org.example.broken").expect("id");
+        assert!(
+            report.degraded.contains_key(&id),
+            "the catalogue problem is kept: {:?}",
+            report.degraded
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn a_missing_wasm_file_is_refused() {
         let dir = scratch();

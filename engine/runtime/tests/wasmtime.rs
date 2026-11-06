@@ -313,7 +313,7 @@ async fn a_start_that_never_returns_hits_the_wall_budget() {
         ))
         .await
         .expect_err("stuck start");
-    assert_eq!(error.kind(), ErrorKind::Unavailable, "{error}");
+    assert_eq!(error.kind(), ErrorKind::Exhausted, "{error}");
     assert_eq!(
         error.envelope().error.detail.expect("detail")["budget"],
         "wall"

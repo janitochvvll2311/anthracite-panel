@@ -614,7 +614,7 @@ fn start_error(error: wasmtime::Error) -> Error {
     match trap_of(&error) {
         Some(Trap::OutOfFuel) => Error::exhausted("the app ran out of fuel before starting")
             .with_detail(serde_json::json!({"budget": "fuel"})),
-        Some(Trap::Interrupt) => Error::unavailable("the app did not start within its wall budget")
+        Some(Trap::Interrupt) => Error::exhausted("the app did not start within its wall budget")
             .with_detail(serde_json::json!({"budget": "wall"})),
         _ => Error::unavailable(format!("the app did not start: {error}")),
     }

@@ -228,7 +228,7 @@ async fn run(args: Args) -> Result<(), Error> {
     ));
     state.mark_ready();
     // The supervisor owns the running instances; it must outlive the boot call.
-    let _supervisor = supervisor;
+    let supervisor = supervisor;
 
     uds.await
         .map_err(|error| Error::internal(format!("serving the API: {error}")))?
@@ -238,6 +238,7 @@ async fn run(args: Args) -> Result<(), Error> {
             .map_err(|error| Error::internal(format!("serving the API: {error}")))?
             .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
     }
+    supervisor.stop_all().await;
     logger.info("stopped");
     Ok(())
 }
