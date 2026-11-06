@@ -9,7 +9,7 @@ version = "0.2.0"
 
 [wasm]
 path = "wasm/app.wasm"
-sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+sha256 = "f0bf6bb13e20f58e12423d849b35fdebb04c4576482aba0468cafb7835fc87d4"
 
 [[import]]
 interface = "example:provider/greeting@1.0.0"

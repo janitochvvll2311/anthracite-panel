@@ -116,6 +116,20 @@ pub enum DegradedReason {
     RiskGrown { approved: Risk, effective: Risk },
 }
 
+impl DegradedReason {
+    /// The kebab-case reason of §8.5, shared by the API view and the boot log.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Unapproved => "unapproved",
+            Self::GrantStale => "grant-stale",
+            Self::GrantInvalid => "grant-invalid",
+            Self::Disabled => "disabled",
+            Self::Blocked { .. } => "blocked",
+            Self::RiskGrown { .. } => "risk-grown",
+        }
+    }
+}
+
 /// Who satisfies an import.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Provider {

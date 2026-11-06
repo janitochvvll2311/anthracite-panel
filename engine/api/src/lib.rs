@@ -407,14 +407,7 @@ fn fatal_surface(error: anth_compose::ResolutionError) -> SurfaceView {
 
 /// The kebab-case reason of §8.5.
 fn reason_code(reason: &DegradedReason) -> &'static str {
-    match reason {
-        DegradedReason::Unapproved => "unapproved",
-        DegradedReason::GrantStale => "grant-stale",
-        DegradedReason::GrantInvalid => "grant-invalid",
-        DegradedReason::Disabled => "disabled",
-        DegradedReason::Blocked { .. } => "blocked",
-        DegradedReason::RiskGrown { .. } => "risk-grown",
-    }
+    reason.code()
 }
 
 /// What the code alone does not say: which link is blocked or how far the risk

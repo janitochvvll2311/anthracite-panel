@@ -5,6 +5,7 @@
 //! daemon a library with a thin binary is what lets a test drive the supervisor
 //! without spawning a process.
 
+pub mod boot;
 pub mod config;
 pub mod log;
 pub mod socket;

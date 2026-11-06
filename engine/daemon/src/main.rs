@@ -6,10 +6,13 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anth_contract::Error;
 use anth_engine::config::{Config, Profile};
 use anth_engine::log::Logger;
+use anth_engine::supervisor::Supervisor;
+use anth_runtime::{LogSettings, WasmtimeRuntime};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -141,6 +144,37 @@ async fn run(args: Args) -> Result<(), Error> {
     let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
     anth_engine::socket::restrict(&config.socket)?;
     logger.info(&format!("listening on {}", config.socket.display()));
+
+    let runtime = Arc::new(WasmtimeRuntime::new()?);
+    let supervisor = Supervisor::new(runtime);
+    let report = anth_engine::boot::start_composed(
+        &supervisor,
+        &config.state,
+        &composition,
+        &config.limits,
+        LogSettings {
+            level: config.log.level,
+            format: config.log.format,
+        },
+    )
+    .await?;
+    if let Some(error) = &report.fatal {
+        logger.warn(&format!(
+            "the composition cannot boot: {}: {}; serving so it can be repaired",
+            error.kind().code(),
+            error.message()
+        ));
+    }
+    for (app, reason) in &report.degraded {
+        logger.warn(&format!("degraded {app}: {reason}"));
+    }
+    logger.info(&format!(
+        "started {} app(s), {} degraded",
+        report.started.len(),
+        report.degraded.len()
+    ));
+    // The supervisor owns the running instances; it must outlive the boot call.
+    let _supervisor = supervisor;
 
     // SAFETY: `geteuid` has no preconditions.
     let allowed_uid = unsafe { libc::geteuid() };
