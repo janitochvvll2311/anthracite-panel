@@ -14,11 +14,11 @@ tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 form_urlencoded = "1"
 
 [dev-dependencies]
 futures-util = "0.3"
 libc = "0.2"
-sha2 = "0.10"
 tower = { workspace = true }
 zip = { version = "2.6", default-features = false, features = ["deflate"] }
