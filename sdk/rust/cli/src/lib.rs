@@ -42,6 +42,8 @@ commands:
   app remove <id> [--acknowledge <token>]
   app approve <id> [--accept-write|--accept-admin|--accept-host|--accept-package]
   app revoke <id> [--acknowledge <token>]
+  app <alias|id> <verb> [--flag <value>] [--flag] [--no-flag]
+                        invoke a generated app verb
 
 options:
   --socket <path>       engine socket; then ANTH_SOCKET, then /run/anth/engine.sock
@@ -819,16 +821,36 @@ fn invoke(
     flags: &[(String, Option<String>)],
 ) -> Result<u8, Error> {
     let apps = client.get_json("/api/engine/apps")?;
-    let id = apps["apps"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
+    let installed = apps["apps"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let chosen = if let Some(exact) = installed
         .iter()
-        .find(|candidate| {
-            candidate["id"].as_str() == Some(app) || candidate["alias"].as_str() == Some(app)
-        })
-        .and_then(|candidate| candidate["id"].as_str())
-        .ok_or_else(|| Error::not_found(format!("`{app}` is not installed")))?
+        .find(|candidate| candidate["id"].as_str() == Some(app))
+    {
+        exact
+    } else {
+        let matches: Vec<&serde_json::Value> = installed
+            .iter()
+            .filter(|candidate| candidate["alias"].as_str() == Some(app))
+            .collect();
+        match matches.as_slice() {
+            [] => return Err(Error::not_found(format!("`{app}` is not installed"))),
+            [only] => *only,
+            many => {
+                let ids: Vec<&str> = many
+                    .iter()
+                    .filter_map(|candidate| candidate["id"].as_str())
+                    .collect();
+                return Err(Error::conflict(format!(
+                    "`{app}` names more than one app ({}); use the full id",
+                    ids.join(", ")
+                ))
+                .with_detail(serde_json::json!({"apps": ids})));
+            }
+        }
+    };
+    let id = chosen["id"]
+        .as_str()
+        .ok_or_else(|| Error::internal("the catalogue entry has no id"))?
         .to_string();
     let composition = client.get_json("/api/engine/composition")?;
     let composed = composition["surface"]["apps"]
@@ -880,8 +902,7 @@ fn invoke(
     } else {
         let mut object = serde_json::Map::new();
         for (key, value) in flags {
-            let value =
-                serde_json::Value::String(value.clone().unwrap_or_else(|| "true".to_string()));
+            let value = flag_value(value);
             match object.get_mut(key) {
                 Some(existing) => {
                     if let Some(values) = existing.as_array_mut() {
@@ -902,6 +923,17 @@ fn invoke(
     }
     let response = client.request(method, &url, &body, &headers)?;
     print_value(&response.body)
+}
+
+/// A flag has no type information in the surface; a JSON scalar is passed as
+/// that scalar, and everything else stays a string (§7.9).
+fn flag_value(value: &Option<String>) -> serde_json::Value {
+    match value {
+        None => serde_json::Value::Bool(true),
+        Some(text) => {
+            serde_json::from_str(text).unwrap_or_else(|_| serde_json::Value::String(text.clone()))
+        }
+    }
 }
 
 fn patch_enabled(
@@ -1562,6 +1594,65 @@ mod tests {
             call.starts_with("GET /api/apps/org.anthracite.hello/hello?name=Ada HTTP/1.1"),
             "{call}"
         );
+    }
+
+    #[test]
+    fn an_ambiguous_alias_requires_the_full_id() {
+        let dir = scratch("ambiguous");
+        let socket = dir.join("engine.sock");
+        let apps = r#"{"apps":[{"id":"org.example.one","alias":"notes"},{"id":"org.example.two","alias":"notes"}],"problems":[]}"#;
+        let _receive = serve(&socket, vec![answer("200 OK", apps)]);
+        let error = app(
+            Some(socket),
+            AppCommand::Invoke {
+                app: "notes".to_string(),
+                verb: "list".to_string(),
+                flags: Vec::new(),
+            },
+        )
+        .expect_err("ambiguous");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        assert!(error.message().contains("org.example.one"), "{error}");
+        assert!(error.message().contains("org.example.two"), "{error}");
+    }
+
+    #[test]
+    fn a_verb_with_a_body_sends_typed_scalars() {
+        let dir = scratch("invoke-body");
+        let socket = dir.join("engine.sock");
+        let apps = r#"{"apps":[{"id":"org.anthracite.hello","alias":"hello"}],"problems":[]}"#;
+        let composition = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":["org.anthracite.hello"]}]},"surface":{"apps":[{"id":"org.anthracite.hello","version":"0.1.0","risk":"read","routes":[{"method":"POST","path":"/echo","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}],"slots":[],"cli":[{"verb":"greet","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}]}],"degraded":[],"links":[]}}"#;
+        let receive = serve(
+            &socket,
+            vec![
+                answer("200 OK", apps),
+                answer("200 OK", composition),
+                answer("200 OK", r#""ok""#),
+            ],
+        );
+        app(
+            Some(socket),
+            AppCommand::Invoke {
+                app: "hello".to_string(),
+                verb: "greet".to_string(),
+                flags: vec![
+                    ("count".to_string(), Some("3".to_string())),
+                    ("ok".to_string(), None),
+                    ("label".to_string(), Some("Ada".to_string())),
+                ],
+            },
+        )
+        .expect("invoke");
+        let _ = receive.recv().expect("apps");
+        let _ = receive.recv().expect("composition");
+        let call = String::from_utf8_lossy(&receive.recv().expect("call")).to_string();
+        assert!(
+            call.starts_with("POST /api/apps/org.anthracite.hello/echo HTTP/1.1"),
+            "{call}"
+        );
+        assert!(call.contains("\"count\":3"), "{call}");
+        assert!(call.contains("\"ok\":true"), "{call}");
+        assert!(call.contains("\"label\":\"Ada\""), "{call}");
     }
 
     #[test]
