@@ -65,7 +65,10 @@ fn the_hello_app_resolves_against_its_packaged_catalog() {
     let name = &resolve.packages[package].name;
     assert_eq!(name.namespace, "anthracite");
     assert_eq!(name.name, "hello");
-    assert_eq!(name.interface_id("greeting"), "anthracite:hello/greeting@1.0.0");
+    assert_eq!(
+        name.interface_id("greeting"),
+        "anthracite:hello/greeting@1.0.0"
+    );
     let imports = world_imports(&resolve, package, "app");
     assert!(imports.contains("anth:env/time@1.0.0"), "{imports:?}");
 }
