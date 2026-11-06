@@ -44,16 +44,19 @@ pub async fn start_composed(
     let registry = Registry::new(state);
     let grants = GrantStore::new(state);
     let (apps, installed, problems) = registry.installed_apps(&grants)?;
+    let mut report = BootReport::default();
+    for problem in &problems {
+        if let Ok(id) = AppId::parse(&problem.app) {
+            report.degraded.insert(id, problem.message.clone());
+        }
+    }
     let resolution = match resolve(composition, &installed) {
         Ok(resolution) => resolution,
         Err(error) => {
-            return Ok(BootReport {
-                fatal: Some(error.into_error()),
-                ..BootReport::default()
-            });
+            report.fatal = Some(error.into_error());
+            return Ok(report);
         }
     };
-    let mut report = BootReport::default();
     let mut dependencies: BTreeMap<AppId, Vec<AppId>> = BTreeMap::new();
     for link in &resolution.links {
         if let anth_compose::Provider::App(provider) = &link.provider {
@@ -72,11 +75,7 @@ pub async fn start_composed(
     }
     for problem in &problems {
         if let Ok(id) = AppId::parse(&problem.app) {
-            failed.insert(id.clone());
-            report
-                .degraded
-                .entry(id)
-                .or_insert_with(|| problem.message.clone());
+            failed.insert(id);
         }
     }
     for id in &resolution.order {

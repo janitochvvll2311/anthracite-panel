@@ -234,7 +234,9 @@ async fn run(args: Args) -> Result<(), Error> {
         .map_err(|error| Error::internal(format!("serving the API: {error}")))?
         .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
     if let Some(task) = tcp {
-        let _ = task.await;
+        task.await
+            .map_err(|error| Error::internal(format!("serving the API: {error}")))?
+            .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
     }
     logger.info("stopped");
     Ok(())
