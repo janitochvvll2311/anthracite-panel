@@ -106,6 +106,9 @@ pub struct InstanceSpec {
     pub granted: BTreeSet<InterfaceId>,
     /// The exports the manifest promised: the component must provide them.
     pub promised: BTreeSet<InterfaceId>,
+    /// The per-app directory `anth:store/kv` owns. `None` means the host has no
+    /// store to link; a component that imports it fails before instantiation.
+    pub data: Option<std::path::PathBuf>,
     pub log: LogSettings,
 }
 
@@ -117,6 +120,7 @@ impl InstanceSpec {
             budget,
             granted: BTreeSet::new(),
             promised: BTreeSet::new(),
+            data: None,
             log: LogSettings::default(),
         }
     }
@@ -135,6 +139,11 @@ impl InstanceSpec {
         self.log = log;
         self
     }
+
+    pub fn data_dir(mut self, data: impl Into<std::path::PathBuf>) -> Self {
+        self.data = Some(data.into());
+        self
+    }
 }
 
 impl fmt::Debug for InstanceSpec {
@@ -147,6 +156,7 @@ impl fmt::Debug for InstanceSpec {
             .field("budget", &self.budget)
             .field("granted", &self.granted)
             .field("promised", &self.promised)
+            .field("data", &self.data)
             .field("log", &self.log)
             .finish()
     }

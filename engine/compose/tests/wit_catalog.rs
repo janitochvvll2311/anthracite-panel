@@ -158,25 +158,14 @@ fn the_host_world_imports_the_native_set() {
 }
 
 #[test]
-fn host_env_is_the_environment_subset_of_host() {
+fn host_runtime_is_the_same_catalog_as_host() {
     let root = repo_root().join("engine/wit");
     let mut resolve = wit_parser::Resolve::default();
     let (package, _) = resolve
         .push_dir(&root)
         .unwrap_or_else(|error| panic!("parsing {}: {error:#}", root.display()));
     let host = world_imports(&resolve, package, "host");
-    let env = world_imports(&resolve, package, "host-env");
-    let host_env: BTreeSet<String> = host
-        .iter()
-        .filter(|id| id.starts_with("anth:env/"))
-        .cloned()
-        .collect();
-    let own_env: BTreeSet<String> = env
-        .iter()
-        .filter(|id| id.starts_with("anth:env/"))
-        .cloned()
-        .collect();
-    assert_eq!(host_env, own_env);
-    assert!(host.contains("anth:store/kv@1.0.0"));
-    assert!(!env.contains("anth:store/kv@1.0.0"));
+    let runtime = world_imports(&resolve, package, "host-runtime");
+    assert_eq!(host, runtime);
+    assert!(runtime.contains("anth:store/kv@1.0.0"));
 }

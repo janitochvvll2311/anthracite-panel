@@ -352,6 +352,7 @@ state/
   composition.toml          the composition document (§8.1)
   credentials.txt           operator name and password, written once (§6.5)
   keys/<fingerprint>.toml   trusted third-party keys (§9.1)
+  data/<app-id>/kv.json     the app's `anth:store/kv` namespace (host-written)
   audit.jsonl               append-only audit
 ```
 

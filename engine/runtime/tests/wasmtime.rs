@@ -29,6 +29,10 @@ fn clock() -> Vec<u8> {
     include_bytes!("../../../tests/fixtures/components/clock.wasm").to_vec()
 }
 
+fn store() -> Vec<u8> {
+    include_bytes!("../../../tests/fixtures/components/store.wasm").to_vec()
+}
+
 fn spec(
     app: &str,
     wasm: Vec<u8>,
@@ -271,6 +275,23 @@ async fn a_missing_promised_export_is_refused() {
         error.envelope().error.detail.expect("detail")["missing_exports"][0],
         "example:test/other@1.0.0"
     );
+}
+
+#[tokio::test]
+async fn a_granted_store_without_a_data_directory_fails() {
+    let runtime = WasmtimeRuntime::new().expect("runtime");
+    let error = runtime
+        .instantiate(spec(
+            "org.example.store",
+            store(),
+            Budget::new(1_000_000, 16, 5_000),
+            &["anth:store/kv@1.0.0"],
+            &[],
+        ))
+        .await
+        .expect_err("no data directory");
+    assert_eq!(error.kind(), ErrorKind::Unavailable, "{error}");
+    assert!(error.message().contains("no data directory"), "{error}");
 }
 
 #[tokio::test]
