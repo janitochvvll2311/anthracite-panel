@@ -1,0 +1,36 @@
+manifest_version = 2
+
+[app]
+id = "org.anthracite.hello"
+alias = "hello"
+namespace = "anthracite:hello"
+name = "Hello"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "dea0206e4f454737e4be182b8f2d544f22aa84cab2229e5e8aa9da6d35851493"
+
+[[export]]
+interface = "anthracite:hello/greeting@1.0.0"
+
+[[import]]
+interface = "anth:env/time@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/hello"
+call = "anthracite:hello/greeting@1.0.0#greet"
+
+[[slot]]
+id = "panel.view"
+label = "Hello"
+icon = "hello"
+order = 1
+tag = "hello"
+module = "web/hello.js"
+sha256 = "3a97e325e2ea4fbd3c32ef13de30dd8c69fadfb060b5d76b92f2b05ce16de6b7"
+
+[[cli]]
+call = "anthracite:hello/greeting@1.0.0#greet"
+verb = "greet"

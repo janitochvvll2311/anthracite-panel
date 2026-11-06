@@ -56,6 +56,84 @@ fn every_native_id_resolves_to_an_interface() {
 }
 
 #[test]
+fn the_hello_app_resolves_against_its_packaged_catalog() {
+    let root = repo_root().join("apps/hello/wit");
+    let mut resolve = wit_parser::Resolve::default();
+    let (package, _) = resolve
+        .push_dir(&root)
+        .unwrap_or_else(|error| panic!("parsing {}: {error:#}", root.display()));
+    let name = &resolve.packages[package].name;
+    assert_eq!(name.namespace, "anthracite");
+    assert_eq!(name.name, "hello");
+    assert_eq!(
+        name.interface_id("greeting"),
+        "anthracite:hello/greeting@1.0.0"
+    );
+    let imports = world_imports(&resolve, package, "app");
+    assert!(imports.contains("anth:env/time@1.0.0"), "{imports:?}");
+}
+
+#[test]
+fn the_hello_manifest_matches_its_component_and_ui() {
+    use anth_contract::Manifest;
+    use sha2::{Digest, Sha256};
+    let app = repo_root().join("apps/hello");
+    let manifest =
+        Manifest::parse(&std::fs::read_to_string(app.join("manifest.toml")).expect("manifest"))
+            .expect("parse");
+    manifest.validate().expect("validate");
+    assert_eq!(manifest.app.id, "org.anthracite.hello");
+
+    let wasm = manifest.wasm.as_ref().expect("wasm");
+    let bytes = std::fs::read(app.join(&wasm.path)).expect("component");
+    let hash: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(hash, wasm.sha256, "the manifest hash is stale");
+
+    let slot = &manifest.slot[0];
+    let module = std::fs::read(app.join(&slot.module)).expect("ui module");
+    let hash: String = Sha256::digest(&module)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(hash, slot.sha256, "the slot hash is stale");
+    assert_eq!(manifest.route[0].path, "/hello");
+    assert_eq!(manifest.cli[0].verb, "greet");
+}
+
+#[test]
+fn the_hello_catalog_matches_the_engine_catalog() {
+    use std::fs;
+    let engine = repo_root().join("engine/wit/deps");
+    let hello = repo_root().join("apps/hello/wit/deps");
+    for package in ["error", "env", "store"] {
+        let from = engine.join(package);
+        let to = hello.join(package);
+        let mut expected = fs::read_dir(&from)
+            .expect("engine deps")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        let mut actual = fs::read_dir(&to)
+            .expect("hello deps")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        expected.sort();
+        actual.sort();
+        assert_eq!(expected, actual, "package {package}");
+        for file in expected {
+            assert_eq!(
+                fs::read(from.join(&file)).expect("engine file"),
+                fs::read(to.join(&file)).expect("hello file"),
+                "{} drifted",
+                file.to_string_lossy()
+            );
+        }
+    }
+}
+
+#[test]
 fn an_app_package_resolves_against_the_catalog() {
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
