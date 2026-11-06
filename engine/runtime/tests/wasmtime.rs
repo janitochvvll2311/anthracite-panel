@@ -25,6 +25,30 @@ fn slow() -> Vec<u8> {
     include_bytes!("../../../tests/fixtures/components/slow.wasm").to_vec()
 }
 
+fn clock() -> Vec<u8> {
+    include_bytes!("../../../tests/fixtures/components/clock.wasm").to_vec()
+}
+
+fn spec(
+    app: &str,
+    wasm: Vec<u8>,
+    budget: Budget,
+    granted: &[&str],
+    promised: &[&str],
+) -> InstanceSpec {
+    InstanceSpec::new(app, wasm, budget)
+        .granting(
+            granted
+                .iter()
+                .map(|id| InterfaceId::parse(id).expect("granted")),
+        )
+        .promising(
+            promised
+                .iter()
+                .map(|id| InterfaceId::parse(id).expect("promised")),
+        )
+}
+
 fn id(text: &str) -> InterfaceId {
     InterfaceId::parse(text).expect("interface")
 }
@@ -33,11 +57,13 @@ fn id(text: &str) -> InterfaceId {
 async fn a_component_reports_its_world_and_answers() {
     let runtime = WasmtimeRuntime::new().expect("runtime");
     let instance = runtime
-        .instantiate(InstanceSpec {
-            app: "org.example.greeting".to_string(),
-            wasm: greeting(),
-            budget: Budget::new(1_000_000, 16, 5_000),
-        })
+        .instantiate(spec(
+            "org.example.greeting",
+            greeting(),
+            Budget::new(1_000_000, 16, 5_000),
+            &[],
+            &["example:test/greeting@1.0.0"],
+        ))
         .await
         .expect("instantiate");
     assert_eq!(
@@ -62,11 +88,13 @@ async fn a_component_reports_its_world_and_answers() {
 async fn fuel_exhaustion_is_exhausted_not_internal() {
     let runtime = WasmtimeRuntime::new().expect("runtime");
     let instance = runtime
-        .instantiate(InstanceSpec {
-            app: "org.example.spin".to_string(),
-            wasm: spin(),
-            budget: Budget::new(1_000, 16, 5_000),
-        })
+        .instantiate(spec(
+            "org.example.spin",
+            spin(),
+            Budget::new(1_000, 16, 5_000),
+            &[],
+            &["example:test/spin@1.0.0"],
+        ))
         .await
         .expect("instantiate");
     let error = runtime
@@ -89,11 +117,13 @@ async fn fuel_exhaustion_is_exhausted_not_internal() {
 async fn the_fuel_budget_is_per_call_not_per_instance() {
     let runtime = WasmtimeRuntime::new().expect("runtime");
     let instance = runtime
-        .instantiate(InstanceSpec {
-            app: "org.example.spin".to_string(),
-            wasm: spin(),
-            budget: Budget::new(8_000_000, 16, 5_000),
-        })
+        .instantiate(spec(
+            "org.example.spin",
+            spin(),
+            Budget::new(8_000_000, 16, 5_000),
+            &[],
+            &["example:test/spin@1.0.0"],
+        ))
         .await
         .expect("instantiate");
     for _ in 0..2 {
@@ -117,19 +147,23 @@ async fn one_apps_wall_deadline_does_not_kill_another() {
 
     let runtime = Arc::new(WasmtimeRuntime::new().expect("runtime"));
     let forever = runtime
-        .instantiate(InstanceSpec {
-            app: "org.example.forever".to_string(),
-            wasm: forever(),
-            budget: Budget::new(1_000_000_000, 16, 200),
-        })
+        .instantiate(spec(
+            "org.example.forever",
+            forever(),
+            Budget::new(1_000_000_000, 16, 200),
+            &[],
+            &["example:test/forever@1.0.0"],
+        ))
         .await
         .expect("forever");
     let slow = runtime
-        .instantiate(InstanceSpec {
-            app: "org.example.slow".to_string(),
-            wasm: slow(),
-            budget: Budget::new(5_000_000_000, 16, 5_000),
-        })
+        .instantiate(spec(
+            "org.example.slow",
+            slow(),
+            Budget::new(5_000_000_000, 16, 5_000),
+            &[],
+            &["example:test/slow@1.0.0"],
+        ))
         .await
         .expect("slow");
     let blocked = runtime.clone();
@@ -168,11 +202,13 @@ async fn one_apps_wall_deadline_does_not_kill_another() {
 async fn a_u64_above_i64_max_round_trips() {
     let runtime = WasmtimeRuntime::new().expect("runtime");
     let instance = runtime
-        .instantiate(InstanceSpec {
-            app: "org.example.wide".to_string(),
-            wasm: wide(),
-            budget: Budget::new(100_000, 16, 5_000),
-        })
+        .instantiate(spec(
+            "org.example.wide",
+            wide(),
+            Budget::new(100_000, 16, 5_000),
+            &[],
+            &["example:test/wide@1.0.0"],
+        ))
         .await
         .expect("instantiate");
     let reply = runtime
@@ -198,14 +234,83 @@ async fn a_u64_above_i64_max_round_trips() {
 }
 
 #[tokio::test]
+async fn an_import_the_grant_does_not_list_is_refused() {
+    let runtime = WasmtimeRuntime::new().expect("runtime");
+    let error = runtime
+        .instantiate(spec(
+            "org.example.clock",
+            clock(),
+            Budget::new(1_000_000, 16, 5_000),
+            &[],
+            &["example:test/clock@1.0.0"],
+        ))
+        .await
+        .expect_err("ungranted import");
+    assert_eq!(error.kind(), ErrorKind::Denied, "{error}");
+    assert_eq!(
+        error.envelope().error.detail.expect("detail")["extra_imports"][0],
+        "anth:env/time@1.0.0"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_promised_export_is_refused() {
+    let runtime = WasmtimeRuntime::new().expect("runtime");
+    let error = runtime
+        .instantiate(spec(
+            "org.example.greeting",
+            greeting(),
+            Budget::new(1_000_000, 16, 5_000),
+            &[],
+            &["example:test/other@1.0.0"],
+        ))
+        .await
+        .expect_err("missing export");
+    assert_eq!(error.kind(), ErrorKind::Denied, "{error}");
+    assert_eq!(
+        error.envelope().error.detail.expect("detail")["missing_exports"][0],
+        "example:test/other@1.0.0"
+    );
+}
+
+#[tokio::test]
+async fn a_component_can_call_the_host_clock() {
+    let runtime = WasmtimeRuntime::new().expect("runtime");
+    let instance = runtime
+        .instantiate(spec(
+            "org.example.clock",
+            clock(),
+            Budget::new(1_000_000, 16, 5_000),
+            &["anth:env/time@1.0.0"],
+            &["example:test/clock@1.0.0"],
+        ))
+        .await
+        .expect("instantiate");
+    assert_eq!(instance.world.imports, [id("anth:env/time@1.0.0")].into());
+    let reply = runtime
+        .call(Call {
+            instance: instance.id,
+            interface: id("example:test/clock@1.0.0"),
+            function: "run".to_string(),
+            input: json!({}),
+        })
+        .await
+        .expect("call");
+    let millis = reply.output.as_u64().expect("u64");
+    assert!(millis > 1_600_000_000_000, "{millis}");
+}
+
+#[tokio::test]
 async fn a_wall_overrun_is_exhausted_with_the_wall_budget() {
     let runtime = WasmtimeRuntime::new().expect("runtime");
     let instance = runtime
-        .instantiate(InstanceSpec {
-            app: "org.example.forever".to_string(),
-            wasm: forever(),
-            budget: Budget::new(1_000_000_000, 16, 50),
-        })
+        .instantiate(spec(
+            "org.example.forever",
+            forever(),
+            Budget::new(1_000_000_000, 16, 50),
+            &[],
+            &["example:test/forever@1.0.0"],
+        ))
         .await
         .expect("instantiate");
     let error = runtime

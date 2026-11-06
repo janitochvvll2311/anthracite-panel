@@ -8,13 +8,14 @@
 //! Keeping the seam now is what makes streams a later change inside this crate
 //! rather than a platform redesign (§6.3).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 
 use anth_contract::{id::is_kebab, Error, InterfaceId, World};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod wasmtime_backend;
@@ -22,6 +23,57 @@ pub mod wasmtime_backend;
 pub use wasmtime_backend::WasmtimeRuntime;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// The level and format a host `log.write` obeys (§6.7). They live here so the
+/// daemon's configuration and the runtime use one enum, not two copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+}
+
+impl LogLevel {
+    pub fn allows(self, level: LogLevel) -> bool {
+        level <= self
+    }
+
+    /// The uppercase name the text logger prints.
+    pub fn name(self) -> &'static str {
+        match self {
+            LogLevel::Error => "ERROR",
+            LogLevel::Warn => "WARN",
+            LogLevel::Info => "INFO",
+            LogLevel::Debug => "DEBUG",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogSettings {
+    pub level: LogLevel,
+    pub format: LogFormat,
+}
+
+impl Default for LogSettings {
+    fn default() -> Self {
+        Self {
+            level: LogLevel::Info,
+            format: LogFormat::Text,
+        }
+    }
+}
 
 /// What one instance may spend.
 ///
@@ -44,12 +96,45 @@ impl Budget {
     }
 }
 
-/// The content and the budget one instance is created from.
+/// The content, the budget and the authority one instance is created from.
 #[derive(Clone)]
 pub struct InstanceSpec {
     pub app: String,
     pub wasm: Vec<u8>,
     pub budget: Budget,
+    /// The imports the grant lists: the component may not use more.
+    pub granted: BTreeSet<InterfaceId>,
+    /// The exports the manifest promised: the component must provide them.
+    pub promised: BTreeSet<InterfaceId>,
+    pub log: LogSettings,
+}
+
+impl InstanceSpec {
+    pub fn new(app: impl Into<String>, wasm: Vec<u8>, budget: Budget) -> Self {
+        Self {
+            app: app.into(),
+            wasm,
+            budget,
+            granted: BTreeSet::new(),
+            promised: BTreeSet::new(),
+            log: LogSettings::default(),
+        }
+    }
+
+    pub fn granting(mut self, ids: impl IntoIterator<Item = InterfaceId>) -> Self {
+        self.granted = ids.into_iter().collect();
+        self
+    }
+
+    pub fn promising(mut self, ids: impl IntoIterator<Item = InterfaceId>) -> Self {
+        self.promised = ids.into_iter().collect();
+        self
+    }
+
+    pub fn logging(mut self, log: LogSettings) -> Self {
+        self.log = log;
+        self
+    }
 }
 
 impl fmt::Debug for InstanceSpec {
@@ -60,6 +145,9 @@ impl fmt::Debug for InstanceSpec {
             .field("app", &self.app)
             .field("wasm_bytes", &self.wasm.len())
             .field("budget", &self.budget)
+            .field("granted", &self.granted)
+            .field("promised", &self.promised)
+            .field("log", &self.log)
             .finish()
     }
 }
@@ -269,16 +357,20 @@ mod tests {
     const NOTES: &str = "org.example.notes";
     const OTHER: &str = "org.example.other";
 
+    #[test]
+    fn a_log_level_admits_itself_and_lower_levels() {
+        assert!(LogLevel::Info.allows(LogLevel::Error));
+        assert!(LogLevel::Info.allows(LogLevel::Info));
+        assert!(!LogLevel::Info.allows(LogLevel::Debug));
+        assert!(!LogLevel::Error.allows(LogLevel::Warn));
+    }
+
     fn id(text: &str) -> InterfaceId {
         InterfaceId::parse(text).expect("id")
     }
 
     fn spec(app: &str, fuel: u64) -> InstanceSpec {
-        InstanceSpec {
-            app: app.to_string(),
-            wasm: vec![0, 97, 115, 109],
-            budget: Budget::new(fuel, 256, 5_000),
-        }
+        InstanceSpec::new(app, vec![0, 97, 115, 109], Budget::new(fuel, 256, 5_000))
     }
 
     fn world() -> World {

@@ -20,6 +20,11 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 
 use crate::{BoxFuture, Budget, Call, Instance, InstanceId, InstanceSpec, Reply, Runtime};
 
+wasmtime::component::bindgen!({
+    path: "../wit",
+    world: "host-env",
+});
+
 pub struct WasmtimeRuntime {
     instances: Mutex<BTreeMap<u64, Arc<Mutex<Running>>>>,
     next: Mutex<u64>,
@@ -28,6 +33,8 @@ pub struct WasmtimeRuntime {
 #[derive(Debug)]
 struct StoreData {
     limits: StoreLimits,
+    app: String,
+    log: crate::LogSettings,
 }
 
 struct Running {
@@ -47,6 +54,8 @@ impl std::fmt::Debug for Running {
 
 impl WasmtimeRuntime {
     pub fn new() -> Result<Self, Error> {
+        // The monotonic clock is the process's, not the first call's.
+        process_start();
         Ok(Self {
             instances: Mutex::new(BTreeMap::new()),
             next: Mutex::new(0),
@@ -97,19 +106,37 @@ impl Runtime for WasmtimeRuntime {
             let component = Component::from_binary(&engine, &spec.wasm)
                 .map_err(|error| Error::invalid(format!("the component is not valid: {error}")))?;
             let world = Self::world(&component, &engine);
-            let linker = Linker::<StoreData>::new(&engine);
+            let expected = World::new(spec.granted.clone(), spec.promised.clone());
+            if let Err(mismatch) = world.check_expected(&expected) {
+                return Err(mismatch.into());
+            }
             let limits = StoreLimitsBuilder::new()
                 .memory_size(spec.budget.memory_pages as usize * 0x10000)
                 .build();
-            let mut store = Store::new(&engine, StoreData { limits });
+            let mut store = Store::new(
+                &engine,
+                StoreData {
+                    limits,
+                    app: spec.app.clone(),
+                    log: spec.log,
+                },
+            );
             store.limiter(|data| &mut data.limits);
             store
                 .set_fuel(spec.budget.fuel)
                 .map_err(|error| Error::internal(format!("setting fuel: {error}")))?;
             store.set_epoch_deadline(1);
-            let instance = linker
-                .instantiate(&mut store, &component)
-                .map_err(|error| Error::unavailable(format!("the app did not start: {error}")))?;
+            let instance = {
+                let mut linker = Linker::<StoreData>::new(&engine);
+                for id in &spec.granted {
+                    link_host(&mut linker, id)?;
+                }
+                linker
+                    .instantiate(&mut store, &component)
+                    .map_err(|error| {
+                        Error::unavailable(format!("the app did not start: {error}"))
+                    })?
+            };
             let id = self.next_id();
             self.instances.lock().expect("wasmtime instances").insert(
                 id.0,
@@ -205,6 +232,177 @@ impl Runtime for WasmtimeRuntime {
                 .remove(&instance.0);
         })
     }
+}
+
+fn link_host(linker: &mut Linker<StoreData>, id: &InterfaceId) -> Result<(), Error> {
+    use wasmtime::component::HasSelf;
+    let name = id.to_string();
+    let result = match name.as_str() {
+        "anth:env/info@1.0.0" => {
+            anth::env::info::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
+        }
+        "anth:env/time@1.0.0" => {
+            anth::env::time::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
+        }
+        "anth:env/log@1.0.0" => anth::env::log::add_to_linker::<_, HasSelf<_>>(linker, |data| data),
+        "anth:env/random@1.0.0" => {
+            anth::env::random::add_to_linker::<_, HasSelf<_>>(linker, |data| data)
+        }
+        other => {
+            return Err(Error::unavailable(format!(
+                "`{other}` is in the grant but the host does not link it yet"
+            )));
+        }
+    };
+    result.map_err(|error| Error::internal(format!("linking {name}: {error}")))
+}
+
+impl anth::env::info::Host for StoreData {
+    fn get(&mut self) -> anth::env::info::Facts {
+        static FACTS: std::sync::OnceLock<anth::env::info::Facts> = std::sync::OnceLock::new();
+        let mut facts = FACTS.get_or_init(host_facts).clone();
+        // Uptime is the one fact that must move; the rest are host constants.
+        facts.uptime_seconds = uptime_seconds();
+        facts
+    }
+}
+
+impl anth::env::time::Host for StoreData {
+    fn now_ms(&mut self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn monotonic_ms(&mut self) -> u64 {
+        process_start().elapsed().as_millis() as u64
+    }
+}
+
+impl anth::env::log::Host for StoreData {
+    fn write(&mut self, level: anth::env::log::Level, message: String) {
+        let level = match level {
+            anth::env::log::Level::Error => crate::LogLevel::Error,
+            anth::env::log::Level::Warn => crate::LogLevel::Warn,
+            anth::env::log::Level::Info => crate::LogLevel::Info,
+            anth::env::log::Level::Debug => crate::LogLevel::Debug,
+        };
+        if self.log.level.allows(level) {
+            emit_log(&self.app, self.log.format, level, &message);
+        }
+    }
+}
+
+impl anth::env::random::Host for StoreData {
+    fn bytes(&mut self, count: u32) -> Result<Vec<u8>, anth::error::kinds::Error> {
+        const MAX: u32 = 4096;
+        if count > MAX {
+            return Err(anth::error::kinds::Error::TooLarge(u64::from(count)));
+        }
+        let mut bytes = vec![0u8; count as usize];
+        use std::io::Read;
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| file.read_exact(&mut bytes))
+            .map_err(|error| {
+                anth::error::kinds::Error::Internal(format!("reading random bytes: {error}"))
+            })?;
+        Ok(bytes)
+    }
+}
+
+impl anth::error::kinds::Host for StoreData {}
+
+fn process_start() -> std::time::Instant {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(std::time::Instant::now)
+}
+
+fn emit_log(app: &str, format: crate::LogFormat, level: crate::LogLevel, message: &str) {
+    let at = humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string();
+    let message = format!("{app}: {}", sanitize(message));
+    match format {
+        crate::LogFormat::Text => eprintln!("{at} {:<5} {message}", level.name()),
+        crate::LogFormat::Json => eprintln!(
+            "{{\"at\":\"{at}\",\"level\":\"{}\",\"message\":{}}}",
+            level.name().to_ascii_lowercase(),
+            serde_json::to_string(&message).unwrap_or_else(|_| "\"\"".to_string())
+        ),
+    }
+}
+
+/// A host log line is untrusted input: control bytes would forge log entries and
+/// an unbounded message would flood the collector.
+fn sanitize(message: &str) -> String {
+    const MAX: usize = 4096;
+    message
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(MAX)
+        .collect()
+}
+
+fn host_facts() -> anth::env::info::Facts {
+    anth::env::info::Facts {
+        hostname: hostname(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        uptime_seconds: uptime_seconds(),
+        cpu_count: cpu_count(),
+        memory_bytes: memory_bytes(),
+    }
+}
+
+fn cpu_count() -> u32 {
+    // SAFETY: `sysconf` has no preconditions.
+    let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    if count > 0 {
+        count as u32
+    } else {
+        1
+    }
+}
+
+fn hostname() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer and its length are valid for the call.
+    let result =
+        unsafe { libc::gethostname(buffer.as_mut_ptr().cast::<libc::c_char>(), buffer.len()) };
+    if result != 0 {
+        return "unknown".to_string();
+    }
+    let len = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..len]).into_owned()
+}
+
+fn uptime_seconds() -> u64 {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|text| text.split_whitespace().next()?.parse::<f64>().ok())
+        .map(|seconds| seconds as u64)
+        .unwrap_or(0)
+}
+
+fn memory_bytes() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))
+                .and_then(|value| value.split_whitespace().next())
+                .and_then(|kilobytes| kilobytes.parse::<u64>().ok())
+        })
+        .map(|kilobytes| kilobytes * 1024)
+        .unwrap_or(0)
 }
 
 fn trap_error(error: wasmtime::Error) -> Error {
@@ -387,4 +585,54 @@ fn app_error(value: &Val) -> Error {
         error = error.with_detail(serde_json::json!({"limit": limit}));
     }
     error
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data() -> StoreData {
+        StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            log: crate::LogSettings::default(),
+        }
+    }
+
+    #[test]
+    fn the_host_reports_non_empty_facts() {
+        let mut data = data();
+        let facts = anth::env::info::Host::get(&mut data);
+        assert!(!facts.hostname.is_empty());
+        assert!(!facts.os.is_empty());
+        assert!(!facts.arch.is_empty());
+        assert!(facts.cpu_count >= 1);
+        assert!(facts.memory_bytes > 0);
+    }
+
+    #[test]
+    fn the_host_random_is_bounded() {
+        let mut data = data();
+        let bytes = anth::env::random::Host::bytes(&mut data, 8).expect("random");
+        assert_eq!(bytes.len(), 8);
+        let error = anth::env::random::Host::bytes(&mut data, 5000).expect_err("too large");
+        assert!(matches!(error, anth::error::kinds::Error::TooLarge(5000)));
+    }
+
+    #[test]
+    fn a_log_line_is_sanitized_and_bounded() {
+        let dirty = format!("a\nb\u{0007}{}", "x".repeat(5000));
+        let clean = sanitize(&dirty);
+        assert!(!clean.contains('\n'));
+        assert!(!clean.contains('\u{0007}'));
+        assert_eq!(clean.chars().count(), 4096);
+    }
+
+    #[test]
+    fn monotonic_time_never_goes_backwards() {
+        let mut data = data();
+        let first = anth::env::time::Host::monotonic_ms(&mut data);
+        let second = anth::env::time::Host::monotonic_ms(&mut data);
+        assert!(second >= first);
+    }
 }

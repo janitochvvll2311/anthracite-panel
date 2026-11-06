@@ -10,3 +10,11 @@ world host {
     import anth:env/random@1.0.0;
     import anth:store/kv@1.0.0;
 }
+
+/// The subset the runtime links first: every environment interface, no store.
+world host-env {
+    import anth:env/info@1.0.0;
+    import anth:env/time@1.0.0;
+    import anth:env/log@1.0.0;
+    import anth:env/random@1.0.0;
+}
