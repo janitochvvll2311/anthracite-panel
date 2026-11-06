@@ -101,7 +101,7 @@ impl Supervisor {
             .await
             .get(&app_id)
             .copied()
-            .ok_or_else(|| Error::not_found(format!("app `{app}` is not running")))?;
+            .ok_or_else(|| Error::unavailable(format!("app `{app}` is not running")))?;
         self.runtime
             .call(anth_runtime::Call {
                 instance: id,
@@ -194,11 +194,18 @@ impl anth_api::AppCaller for SupervisorCaller {
         function: &'a str,
         input: Value,
     ) -> Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>> {
+        let supervisor = Arc::clone(&self.supervisor);
+        let app = app.to_string();
+        let interface = interface.to_string();
+        let function = function.to_string();
         Box::pin(async move {
-            self.supervisor
-                .call(app, interface, function, input)
-                .await
-                .map(|reply| reply.output)
+            let handle = tokio::runtime::Handle::current();
+            tokio::task::spawn_blocking(move || {
+                handle.block_on(supervisor.call(&app, &interface, &function, input))
+            })
+            .await
+            .map_err(|error| Error::internal(format!("the app call was cancelled: {error}")))?
+            .map(|reply| reply.output)
         })
     }
 }
@@ -288,7 +295,7 @@ mod tests {
             )
             .await
             .expect_err("not running");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
         assert!(error.message().contains("not running"), "{error}");
     }
 
@@ -352,7 +359,7 @@ mod tests {
             )
             .await
             .expect_err("not running");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
     }
 
     #[tokio::test]
@@ -381,7 +388,7 @@ mod tests {
             )
             .await
             .expect_err("nothing is running");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
     }
 
     #[tokio::test]

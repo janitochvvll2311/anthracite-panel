@@ -28,14 +28,15 @@ use anth_contract::{
     TrustedKey, KEY_VERSION,
 };
 use axum::body::Bytes;
-use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Query, Request, State};
+use axum::extract::{
+    connect_info::Connected, ConnectInfo, Extension, Path, RawQuery, Request, State,
+};
 use axum::http::header::{ETAG, IF_MATCH, LOCATION};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get};
 use axum::{Json, Router};
-use http_body::Body as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::UnixListener;
@@ -591,7 +592,7 @@ async fn app_route(
     State(state): State<Arc<EngineState>>,
     Path((id, path)): Path<(String, String)>,
     method: Method,
-    Query(query): Query<BTreeMap<String, String>>,
+    RawQuery(query): RawQuery,
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
     let apps = apps(&state)?;
@@ -610,51 +611,46 @@ async fn app_route(
         .find(|installed| installed.manifest.app.id == id)
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
     let wanted = format!("/{path}");
-    let route = found
+    let routes: Vec<&anth_contract::manifest::RouteSection> = found
         .manifest
         .route
         .iter()
-        .find(|route| route.method == method.as_str() && route.path == wanted)
+        .filter(|route| route.path == wanted)
+        .collect();
+    if routes.is_empty() {
+        return Err(ApiError(Error::not_found(format!(
+            "`{id}` has no route {wanted}"
+        ))));
+    }
+    let route = routes
+        .iter()
+        .find(|route| route.method == method.as_str())
         .ok_or_else(|| {
-            ApiError(Error::not_found(format!(
-                "`{id}` has no route {method} {wanted}"
+            ApiError(Error::method_not_allowed(format!(
+                "`{id}` does not allow {method} {wanted}"
             )))
         })?;
     let (interface, function) = parse_call(&route.call)?;
     let no_body = matches!(method, Method::GET | Method::HEAD | Method::DELETE);
-    let body_length = request
-        .headers()
-        .get(axum::http::header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
-    let has_body = body_length.is_some_and(|length| length > 0)
-        || request
-            .body()
-            .size_hint()
-            .upper()
-            .is_some_and(|size| size > 0);
-    if no_body && has_body {
+    let body = read_body(request, 1 << 20).await?;
+    if no_body && !body.is_empty() {
         return Err(ApiError(Error::invalid(
             "a GET, HEAD or DELETE route takes no body",
         )));
     }
     let input = if no_body {
-        serde_json::to_value(query)
-            .map_err(|error| Error::internal(format!("rendering the query: {error}")))?
+        query_input(query.as_deref())
+    } else if body.is_empty() {
+        Value::Object(serde_json::Map::new())
     } else {
-        let body = read_body(request, 1 << 20).await?;
-        if body.is_empty() {
-            Value::Object(serde_json::Map::new())
-        } else {
-            let value: Value = serde_json::from_slice(&body)
-                .map_err(|error| Error::invalid(format!("the body is not JSON: {error}")))?;
-            if !value.is_object() {
-                return Err(ApiError(Error::invalid(
-                    "a route body is a JSON object keyed by parameter",
-                )));
-            }
-            value
+        let value: Value = serde_json::from_slice(&body)
+            .map_err(|error| Error::invalid(format!("the body is not JSON: {error}")))?;
+        if !value.is_object() {
+            return Err(ApiError(Error::invalid(
+                "a route body is a JSON object keyed by parameter",
+            )));
         }
+        value
     };
     let caller = state
         .caller
@@ -664,6 +660,30 @@ async fn app_route(
         .call(app.as_str(), &interface, &function, input)
         .await?;
     Ok(Json(output))
+}
+
+/// Query keys repeat for `list<T>` and stay strings; the runtime coerces each
+/// one to the WIT parameter type (§7.13).
+fn query_input(query: Option<&str>) -> Value {
+    let mut collected: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if let Some(query) = query {
+        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+            collected
+                .entry(key.into_owned())
+                .or_default()
+                .push(value.into_owned());
+        }
+    }
+    let mut object = serde_json::Map::new();
+    for (key, mut values) in collected {
+        let value = if values.len() == 1 {
+            Value::String(values.remove(0))
+        } else {
+            Value::Array(values.into_iter().map(Value::String).collect())
+        };
+        object.insert(key, value);
+    }
+    Value::Object(object)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1624,7 +1644,7 @@ mod tests {
         let (status, _, value) = call(
             state,
             "GET",
-            "/api/apps/org.example.notes/notes",
+            "/api/apps/org.example.notes/notes?q=a&q=b&single=1",
             Vec::new(),
         )
         .await;
@@ -1632,7 +1652,8 @@ mod tests {
         assert_eq!(value["app"], "org.example.notes");
         assert_eq!(value["interface"], "example:notes/thing@1.0.0");
         assert_eq!(value["function"], "ping");
-        assert_eq!(value["input"], json!({}));
+        assert_eq!(value["input"]["q"], json!(["a", "b"]));
+        assert_eq!(value["input"]["single"], "1");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
@@ -1701,6 +1722,41 @@ mod tests {
             call(state, "GET", "/api/apps/org.example.notes/nope", Vec::new()).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(value["error"]["code"], "not-found");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_undeclared_method_is_method_not_allowed() {
+        struct Never;
+        impl AppCaller for Never {
+            fn call<'a>(
+                &'a self,
+                _app: &'a str,
+                _interface: &'a str,
+                _function: &'a str,
+                _input: Value,
+            ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>>
+            {
+                Box::pin(async move { Err(Error::internal("should not be called")) })
+            }
+        }
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        let state = Arc::new(
+            Arc::try_unwrap(state)
+                .ok()
+                .expect("unique state")
+                .with_caller(Arc::new(Never)),
+        );
+        let (status, _, value) = call(
+            state,
+            "POST",
+            "/api/apps/org.example.notes/notes",
+            b"{}".to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(value["error"]["code"], "method-not-allowed");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

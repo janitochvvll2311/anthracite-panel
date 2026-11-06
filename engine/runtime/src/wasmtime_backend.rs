@@ -637,22 +637,43 @@ fn json_to_val(
     use wasmtime::component::Type;
     let value = value.unwrap_or(&serde_json::Value::Null);
     Ok(match ty {
-        Type::Bool => Val::Bool(value.as_bool().ok_or_else(|| bad("bool", value))?),
+        Type::Bool => Val::Bool(
+            value
+                .as_bool()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                .ok_or_else(|| bad("bool", value))?,
+        ),
         Type::U8 => Val::U8(number_unsigned(value, u8::try_from)?),
         Type::U16 => Val::U16(number_unsigned(value, u16::try_from)?),
         Type::U32 => Val::U32(number_unsigned(value, u32::try_from)?),
-        Type::U64 => Val::U64(value.as_u64().ok_or_else(|| bad("integer", value))?),
+        Type::U64 => Val::U64(
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                .ok_or_else(|| bad("integer", value))?,
+        ),
         Type::S8 => Val::S8(number(value, i8::try_from)?),
         Type::S16 => Val::S16(number(value, i16::try_from)?),
         Type::S32 => Val::S32(number(value, i32::try_from)?),
-        Type::S64 => Val::S64(value.as_i64().ok_or_else(|| bad("integer", value))?),
+        Type::S64 => Val::S64(
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                .ok_or_else(|| bad("integer", value))?,
+        ),
         Type::Float32 => Val::Float32(
             value
                 .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
                 .map(|value| value as f32)
                 .ok_or_else(|| bad("float32", value))?,
         ),
-        Type::Float64 => Val::Float64(value.as_f64().ok_or_else(|| bad("float64", value))?),
+        Type::Float64 => Val::Float64(
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                .ok_or_else(|| bad("float64", value))?,
+        ),
         Type::Char => {
             let text = value.as_str().ok_or_else(|| bad("char", value))?;
             let mut chars = text.chars();
@@ -716,7 +737,10 @@ fn number<T>(
     value: &serde_json::Value,
     convert: impl Fn(i64) -> Result<T, std::num::TryFromIntError>,
 ) -> Result<T, Error> {
-    let value = value.as_i64().ok_or_else(|| bad("integer", value))?;
+    let value = value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        .ok_or_else(|| bad("integer", value))?;
     convert(value).map_err(|_| Error::invalid(format!("{value} does not fit the parameter type")))
 }
 
@@ -724,7 +748,10 @@ fn number_unsigned<T>(
     value: &serde_json::Value,
     convert: impl Fn(u64) -> Result<T, std::num::TryFromIntError>,
 ) -> Result<T, Error> {
-    let value = value.as_u64().ok_or_else(|| bad("integer", value))?;
+    let value = value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        .ok_or_else(|| bad("integer", value))?;
     convert(value).map_err(|_| Error::invalid(format!("{value} does not fit the parameter type")))
 }
 
