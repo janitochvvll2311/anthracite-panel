@@ -17,9 +17,9 @@ cargo_toml="$app/Cargo.toml"
 [ -f "$cargo_toml" ] || { echo "no $cargo_toml" >&2; exit 2; }
 [ -f "$manifest" ] || { echo "no $manifest" >&2; exit 2; }
 
-name=$(awk -F'"' '/^name[[:space:]]*=/ {print $2; exit}' "$cargo_toml")
+name=$(awk -F'"' '/^\[package\]/{section=1;next} /^\[/{section=0} section && /^name[[:space:]]*=/ {print $2; exit}' "$cargo_toml")
 [ -n "$name" ] || { echo "no package name in $cargo_toml" >&2; exit 2; }
-wasm_path=$(awk -F'"' '/^path[[:space:]]*=/ {print $2; exit}' "$manifest")
+wasm_path=$(awk -F'"' '/^\[wasm\]/{section=1;next} /^\[/{section=0} section && /^path[[:space:]]*=/ {print $2; exit}' "$manifest")
 [ -n "$wasm_path" ] || wasm_path=wasm/app.wasm
 
 cargo_bin=${CARGO:-cargo}
@@ -45,7 +45,8 @@ for candidate in "${WASM_TOOLS:-}" wasm-tools "${CARGO_HOME:-}/bin/wasm-tools" "
 done
 [ -n "$wasm_tools" ] || { echo "wasm-tools not found; set WASM_TOOLS" >&2; exit 2; }
 
-tmp=$(mktemp -d /tmp/anthracite-panel/app-build.XXXXXX 2>/dev/null || mktemp -d)
+mkdir -p /tmp/anthracite-panel
+tmp=$(mktemp -d /tmp/anthracite-panel/app-build.XXXXXX)
 trap 'rm -rf "$tmp"' EXIT
 "$wasm_tools" component embed --world app "$app/wit" "$module" -o "$tmp/embedded.wasm"
 mkdir -p "$(dirname "$app/$wasm_path")"

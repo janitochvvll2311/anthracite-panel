@@ -11,12 +11,13 @@ case "$app" in
     *) app=$root/$app ;;
 esac
 case "${2:-}" in
-    "") out=$root/$(basename "$app").zip ;;
+    "") out=$(pwd)/$(basename "$app").zip ;;
     /*) out=$2 ;;
     *) out=$(pwd)/$2 ;;
 esac
 mkdir -p "$(dirname "$out")"
-tmp=$(mktemp -d /tmp/anthracite-panel/app-pack.XXXXXX 2>/dev/null || mktemp -d)
+mkdir -p /tmp/anthracite-panel
+tmp=$(mktemp -d /tmp/anthracite-panel/app-pack.XXXXXX)
 trap 'rm -rf "$tmp"' EXIT
 
 cp "$app/manifest.toml" "$tmp/"
@@ -25,7 +26,7 @@ for file in "$app"/wit/*.wit; do
     [ -e "$file" ] || continue
     cp "$file" "$tmp/wit/"
 done
-wasm_path=$(awk -F'"' '/^path[[:space:]]*=/ {print $2; exit}' "$app/manifest.toml")
+wasm_path=$(awk -F'"' '/^\[wasm\]/{section=1;next} /^\[/{section=0} section && /^path[[:space:]]*=/ {print $2; exit}' "$app/manifest.toml")
 [ -n "$wasm_path" ] || wasm_path=wasm/app.wasm
 [ -f "$app/$wasm_path" ] || { echo "build the component first: scripts/build-app.sh $app" >&2; exit 2; }
 mkdir -p "$tmp/$(dirname "$wasm_path")"
