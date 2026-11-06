@@ -597,15 +597,7 @@ async fn app_route(
 ) -> Result<Response, ApiError> {
     let apps = apps(&state)?;
     let installed = installed_apps(apps)?;
-    let composition = current_composition(&state)?;
-    let resolution =
-        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
     let app = AppId::parse(&id)?;
-    if !resolution.runs(&app) {
-        return Err(ApiError(Error::unavailable(format!(
-            "`{id}` is not running"
-        ))));
-    }
     let found = installed
         .iter()
         .find(|installed| installed.manifest.app.id == id)
@@ -643,6 +635,14 @@ async fn app_route(
                 .into_response());
         }
     };
+    let composition = current_composition(&state)?;
+    let resolution =
+        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    if !resolution.runs(&app) {
+        return Err(ApiError(Error::unavailable(format!(
+            "`{id}` is not running"
+        ))));
+    }
     let (interface, function) = parse_call(&route.call)?;
     let no_body = matches!(method, Method::GET | Method::HEAD | Method::DELETE);
     let body = read_body(request, 1 << 20).await?;
@@ -1719,7 +1719,7 @@ mod tests {
                 .with_caller(Arc::new(Never)),
         );
         let (status, _, value) = call(
-            state,
+            state.clone(),
             "GET",
             "/api/apps/org.example.notes/notes",
             Vec::new(),
@@ -1731,6 +1731,19 @@ mod tests {
             .as_str()
             .expect("message")
             .contains("not running"));
+        // OPTIONS belongs to the engine and does not need a running instance.
+        let (status, headers, _) = call(
+            state,
+            "OPTIONS",
+            "/api/apps/org.example.notes/notes",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(headers
+            .get("allow")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|allow| allow.contains("GET")));
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
@@ -1787,7 +1800,7 @@ mod tests {
                 .expect("unique state")
                 .with_caller(Arc::new(Never)),
         );
-        let (status, _, value) = call(
+        let (status, headers, value) = call(
             state,
             "POST",
             "/api/apps/org.example.notes/notes",
@@ -1796,6 +1809,12 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(value["error"]["code"], "method-not-allowed");
+        let allow = headers
+            .get("allow")
+            .and_then(|value| value.to_str().ok())
+            .expect("allow");
+        assert!(allow.contains("GET"), "{allow}");
+        assert!(allow.contains("OPTIONS"), "{allow}");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
