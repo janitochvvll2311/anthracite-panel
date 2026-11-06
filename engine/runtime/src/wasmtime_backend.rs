@@ -21,7 +21,6 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use crate::{BoxFuture, Budget, Call, Instance, InstanceId, InstanceSpec, Reply, Runtime};
 
 pub struct WasmtimeRuntime {
-    engine: Engine,
     instances: Mutex<BTreeMap<u64, Arc<Mutex<Running>>>>,
     next: Mutex<u64>,
 }
@@ -32,6 +31,7 @@ struct StoreData {
 }
 
 struct Running {
+    engine: Engine,
     store: Store<StoreData>,
     instance: wasmtime::component::Instance,
     budget: Budget,
@@ -47,17 +47,21 @@ impl std::fmt::Debug for Running {
 
 impl WasmtimeRuntime {
     pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            instances: Mutex::new(BTreeMap::new()),
+            next: Mutex::new(0),
+        })
+    }
+
+    /// One engine per instance: wasmtime's epoch is global to an `Engine`, so a
+    /// wall deadline that advances it must not reach another app (§6.1).
+    fn engine() -> Result<Engine, Error> {
         let mut config = Config::new();
         config.consume_fuel(true);
         config.epoch_interruption(true);
         config.wasm_component_model(true);
-        let engine = Engine::new(&config)
-            .map_err(|error| Error::internal(format!("configuring wasmtime: {error}")))?;
-        Ok(Self {
-            engine,
-            instances: Mutex::new(BTreeMap::new()),
-            next: Mutex::new(0),
-        })
+        Engine::new(&config)
+            .map_err(|error| Error::internal(format!("configuring wasmtime: {error}")))
     }
 
     fn next_id(&self) -> InstanceId {
@@ -89,14 +93,15 @@ impl WasmtimeRuntime {
 impl Runtime for WasmtimeRuntime {
     fn instantiate(&self, spec: InstanceSpec) -> BoxFuture<'_, Result<Instance, Error>> {
         Box::pin(async move {
-            let component = Component::from_binary(&self.engine, &spec.wasm)
+            let engine = Self::engine()?;
+            let component = Component::from_binary(&engine, &spec.wasm)
                 .map_err(|error| Error::invalid(format!("the component is not valid: {error}")))?;
-            let world = Self::world(&component, &self.engine);
-            let linker = Linker::<StoreData>::new(&self.engine);
+            let world = Self::world(&component, &engine);
+            let linker = Linker::<StoreData>::new(&engine);
             let limits = StoreLimitsBuilder::new()
                 .memory_size(spec.budget.memory_pages as usize * 0x10000)
                 .build();
-            let mut store = Store::new(&self.engine, StoreData { limits });
+            let mut store = Store::new(&engine, StoreData { limits });
             store.limiter(|data| &mut data.limits);
             store
                 .set_fuel(spec.budget.fuel)
@@ -109,6 +114,7 @@ impl Runtime for WasmtimeRuntime {
             self.instances.lock().expect("wasmtime instances").insert(
                 id.0,
                 Arc::new(Mutex::new(Running {
+                    engine,
                     store,
                     instance,
                     budget: spec.budget,
@@ -166,7 +172,7 @@ impl Runtime for WasmtimeRuntime {
             // the timer when the call finishes first, so it does not leak into
             // the next call.
             let (cancel, cancelled) = std::sync::mpsc::channel();
-            let engine = self.engine.clone();
+            let engine = running.engine.clone();
             let wall = running.budget.wall_ms;
             let timer = std::thread::spawn(move || {
                 if cancelled.recv_timeout(Duration::from_millis(wall)).is_err() {
