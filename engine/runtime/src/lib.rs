@@ -15,6 +15,7 @@ use std::pin::Pin;
 use std::sync::Mutex;
 
 use anth_contract::{id::is_kebab, Error, InterfaceId, World};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod wasmtime_backend;
@@ -23,11 +24,14 @@ pub use wasmtime_backend::WasmtimeRuntime;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// The level and format a host `log.write` obeys (§6.7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// The level and format a host `log.write` obeys (§6.7). They live here so the
+/// daemon's configuration and the runtime use one enum, not two copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Error,
     Warn,
+    #[default]
     Info,
     Debug,
 }
@@ -36,9 +40,20 @@ impl LogLevel {
     pub fn allows(self, level: LogLevel) -> bool {
         level <= self
     }
+
+    /// The uppercase name the text logger prints.
+    pub fn name(self) -> &'static str {
+        match self {
+            LogLevel::Error => "ERROR",
+            LogLevel::Warn => "WARN",
+            LogLevel::Info => "INFO",
+            LogLevel::Debug => "DEBUG",
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LogFormat {
     #[default]
     Text,

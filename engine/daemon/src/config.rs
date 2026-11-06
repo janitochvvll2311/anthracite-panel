@@ -81,23 +81,7 @@ impl Default for LogSection {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Error,
-    Warn,
-    #[default]
-    Info,
-    Debug,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogFormat {
-    #[default]
-    Text,
-    Json,
-}
+pub use anth_runtime::{LogFormat, LogLevel};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -258,7 +258,10 @@ fn link_host(linker: &mut Linker<StoreData>, id: &InterfaceId) -> Result<(), Err
 impl anth::env::info::Host for StoreData {
     fn get(&mut self) -> anth::env::info::Facts {
         static FACTS: std::sync::OnceLock<anth::env::info::Facts> = std::sync::OnceLock::new();
-        FACTS.get_or_init(host_facts).clone()
+        let mut facts = FACTS.get_or_init(host_facts).clone();
+        // Uptime is the one fact that must move; the rest are host constants.
+        facts.uptime_seconds = uptime_seconds();
+        facts
     }
 }
 
@@ -314,17 +317,33 @@ fn process_start() -> std::time::Instant {
 }
 
 fn emit_log(app: &str, format: crate::LogFormat, level: crate::LogLevel, message: &str) {
+    let at = humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string();
+    let message = format!("{app}: {}", sanitize(message));
     match format {
-        crate::LogFormat::Text => eprintln!("{app} {level:?}: {message}"),
-        crate::LogFormat::Json => {
-            let value = serde_json::json!({
-                "app": app,
-                "level": format!("{level:?}").to_ascii_lowercase(),
-                "message": message,
-            });
-            eprintln!("{value}");
-        }
+        crate::LogFormat::Text => eprintln!("{at} {:<5} {message}", level.name()),
+        crate::LogFormat::Json => eprintln!(
+            "{{\"at\":\"{at}\",\"level\":\"{}\",\"message\":{}}}",
+            level.name().to_ascii_lowercase(),
+            serde_json::to_string(&message).unwrap_or_else(|_| "\"\"".to_string())
+        ),
     }
+}
+
+/// A host log line is untrusted input: control bytes would forge log entries and
+/// an unbounded message would flood the collector.
+fn sanitize(message: &str) -> String {
+    const MAX: usize = 4096;
+    message
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(MAX)
+        .collect()
 }
 
 fn host_facts() -> anth::env::info::Facts {
@@ -596,6 +615,15 @@ mod tests {
         assert_eq!(bytes.len(), 8);
         let error = anth::env::random::Host::bytes(&mut data, 5000).expect_err("too large");
         assert!(matches!(error, anth::error::kinds::Error::TooLarge(5000)));
+    }
+
+    #[test]
+    fn a_log_line_is_sanitized_and_bounded() {
+        let dirty = format!("a\nb\u{0007}{}", "x".repeat(5000));
+        let clean = sanitize(&dirty);
+        assert!(!clean.contains('\n'));
+        assert!(!clean.contains('\u{0007}'));
+        assert_eq!(clean.chars().count(), 4096);
     }
 
     #[test]
