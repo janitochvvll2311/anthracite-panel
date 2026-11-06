@@ -111,6 +111,16 @@ impl Runtime for WasmtimeRuntime {
             if let Err(mismatch) = world.check_expected(&expected) {
                 return Err(mismatch.into());
             }
+            if spec
+                .granted
+                .iter()
+                .any(|id| id.to_string() == "anth:store/kv@1.0.0")
+                && spec.data.is_none()
+            {
+                return Err(Error::unavailable(
+                    "the grant includes `anth:store/kv` but the app has no data directory",
+                ));
+            }
             let limits = StoreLimitsBuilder::new()
                 .memory_size(spec.budget.memory_pages as usize * 0x10000)
                 .build();
@@ -356,6 +366,7 @@ impl anth::store::kv::Host for StoreData {
 
 const MAX_KEY: usize = 1024;
 const MAX_VALUE: usize = 1024 * 1024;
+const MAX_STORE: usize = 4 * 1024 * 1024;
 
 fn check_key(key: &str) -> Result<(), anth::error::kinds::Error> {
     if key.is_empty() {
@@ -370,25 +381,48 @@ fn check_key(key: &str) -> Result<(), anth::error::kinds::Error> {
 }
 
 impl StoreData {
-    fn kv_dir(&self) -> Result<&std::path::Path, anth::error::kinds::Error> {
-        self.data.as_deref().ok_or_else(|| {
+    fn kv_dir(&self) -> Result<std::path::PathBuf, anth::error::kinds::Error> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = self.data.clone().ok_or_else(|| {
             anth::error::kinds::Error::Unavailable("this app has no store".to_string())
-        })
+        })?;
+        match std::fs::symlink_metadata(&dir) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(anth::error::kinds::Error::Internal(
+                    "the app store directory is a symlink".to_string(),
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(anth::error::kinds::Error::Internal(
+                    "the app store is not a directory".to_string(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir_all(&dir).map_err(|error| {
+                    anth::error::kinds::Error::Internal(format!("creating the app store: {error}"))
+                })?;
+            }
+            Err(error) => {
+                return Err(anth::error::kinds::Error::Internal(format!(
+                    "inspecting the app store: {error}"
+                )));
+            }
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
+                anth::error::kinds::Error::Internal(format!(
+                    "setting the app store permissions: {error}"
+                ))
+            },
+        )?;
+        Ok(dir)
     }
 
     fn load_kv(
         &self,
     ) -> Result<std::collections::BTreeMap<String, String>, anth::error::kinds::Error> {
-        use std::os::unix::fs::PermissionsExt;
         let dir = self.kv_dir()?;
-        std::fs::create_dir_all(dir).map_err(|error| {
-            anth::error::kinds::Error::Internal(format!("creating the app store: {error}"))
-        })?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|error| {
-            anth::error::kinds::Error::Internal(format!(
-                "setting the app store permissions: {error}"
-            ))
-        })?;
         let path = dir.join("kv.json");
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -396,8 +430,8 @@ impl StoreData {
                     "the app store is a symlink".to_string(),
                 ));
             }
-            Ok(metadata) if metadata.len() > 4 * 1024 * 1024 => {
-                return Err(anth::error::kinds::Error::TooLarge(4 * 1024 * 1024));
+            Ok(metadata) if metadata.len() > MAX_STORE as u64 => {
+                return Err(anth::error::kinds::Error::TooLarge(MAX_STORE as u64));
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -422,17 +456,9 @@ impl StoreData {
         map: &std::collections::BTreeMap<String, String>,
     ) -> Result<(), anth::error::kinds::Error> {
         use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        use std::os::unix::fs::OpenOptionsExt;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = self.kv_dir()?;
-        std::fs::create_dir_all(dir).map_err(|error| {
-            anth::error::kinds::Error::Internal(format!("creating the app store: {error}"))
-        })?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|error| {
-            anth::error::kinds::Error::Internal(format!(
-                "setting the app store permissions: {error}"
-            ))
-        })?;
         let path = dir.join("kv.json");
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -451,6 +477,9 @@ impl StoreData {
         let bytes = serde_json::to_vec(map).map_err(|error| {
             anth::error::kinds::Error::Internal(format!("rendering the app store: {error}"))
         })?;
+        if bytes.len() > MAX_STORE {
+            return Err(anth::error::kinds::Error::TooLarge(MAX_STORE as u64));
+        }
         let temp = dir.join(format!(
             ".kv.json.tmp.{}.{}",
             std::process::id(),
@@ -468,6 +497,7 @@ impl StoreData {
         file.write_all(&bytes)
             .and_then(|()| file.sync_all())
             .and_then(|()| std::fs::rename(&temp, &path))
+            .and_then(|()| std::fs::File::open(&dir).and_then(|dir| dir.sync_all()))
             .map_err(|error| {
                 let _ = std::fs::remove_file(&temp);
                 anth::error::kinds::Error::Internal(format!("writing the app store: {error}"))
@@ -838,6 +868,91 @@ mod tests {
         };
         let error = anth::store::kv::Host::get(&mut data, "x".to_string()).expect_err("no store");
         assert!(matches!(error, anth::error::kinds::Error::Unavailable(_)));
+    }
+
+    #[test]
+    fn the_store_refuses_oversize_values_and_total() {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-kv-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut data = StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            data: Some(dir.clone()),
+            log: crate::LogSettings::default(),
+        };
+        let error =
+            anth::store::kv::Host::set(&mut data, "big".to_string(), "x".repeat(MAX_VALUE + 1))
+                .expect_err("value too large");
+        assert!(matches!(error, anth::error::kinds::Error::TooLarge(_)));
+
+        for index in 0..4 {
+            let result =
+                anth::store::kv::Host::set(&mut data, format!("k{index}"), "x".repeat(MAX_VALUE));
+            if index == 3 {
+                let error = result.expect_err("store too large");
+                assert!(matches!(error, anth::error::kinds::Error::TooLarge(_)));
+            } else {
+                result.expect("fits");
+            }
+        }
+        assert_eq!(
+            anth::store::kv::Host::get(&mut data, "k0".to_string()).expect("get"),
+            Some("x".repeat(MAX_VALUE))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_symlinked_store_is_refused() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-kv-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("mkdir");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&outside).expect("mkdir");
+        let linked = base.join("linked");
+        symlink(&outside, &linked).expect("symlink");
+        let mut data = StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            data: Some(linked),
+            log: crate::LogSettings::default(),
+        };
+        let error = anth::store::kv::Host::get(&mut data, "x".to_string())
+            .expect_err("symlinked directory");
+        assert!(matches!(error, anth::error::kinds::Error::Internal(_)));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_corrupt_or_symlinked_store_file_is_refused() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-kv-corrupt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("kv.json"), "not json").expect("write");
+        let mut data = StoreData {
+            limits: StoreLimitsBuilder::new().build(),
+            app: "org.example.test".to_string(),
+            data: Some(dir.clone()),
+            log: crate::LogSettings::default(),
+        };
+        let error = anth::store::kv::Host::get(&mut data, "x".to_string()).expect_err("corrupt");
+        assert!(matches!(error, anth::error::kinds::Error::Internal(_)));
+
+        std::fs::remove_file(dir.join("kv.json")).expect("remove");
+        let outside = dir.join("outside.json");
+        std::fs::write(&outside, "{}").expect("write");
+        symlink(&outside, dir.join("kv.json")).expect("symlink");
+        let error = anth::store::kv::Host::get(&mut data, "x".to_string()).expect_err("symlink");
+        assert!(matches!(error, anth::error::kinds::Error::Internal(_)));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
