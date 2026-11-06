@@ -33,6 +33,10 @@ fn store() -> Vec<u8> {
     include_bytes!("../../../tests/fixtures/components/store.wasm").to_vec()
 }
 
+fn stuck() -> Vec<u8> {
+    include_bytes!("../../../tests/fixtures/components/stuck.wasm").to_vec()
+}
+
 fn spec(
     app: &str,
     wasm: Vec<u8>,
@@ -292,6 +296,29 @@ async fn a_granted_store_without_a_data_directory_fails() {
         .expect_err("no data directory");
     assert_eq!(error.kind(), ErrorKind::Unavailable, "{error}");
     assert!(error.message().contains("no data directory"), "{error}");
+}
+
+#[tokio::test]
+async fn a_start_that_never_returns_hits_the_wall_budget() {
+    use std::time::{Duration, Instant};
+    let runtime = WasmtimeRuntime::new().expect("runtime");
+    let started = Instant::now();
+    let error = runtime
+        .instantiate(spec(
+            "org.example.stuck",
+            stuck(),
+            Budget::new(1_000_000_000, 16, 100),
+            &[],
+            &[],
+        ))
+        .await
+        .expect_err("stuck start");
+    assert_eq!(error.kind(), ErrorKind::Exhausted, "{error}");
+    assert_eq!(
+        error.envelope().error.detail.expect("detail")["budget"],
+        "wall"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[tokio::test]

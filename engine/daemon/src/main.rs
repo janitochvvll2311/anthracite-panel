@@ -6,10 +6,13 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use anth_contract::Error;
 use anth_engine::config::{Config, Profile};
 use anth_engine::log::Logger;
+use anth_engine::supervisor::Supervisor;
+use anth_runtime::{LogSettings, WasmtimeRuntime};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -138,28 +141,43 @@ async fn run(args: Args) -> Result<(), Error> {
         config.state.display()
     ));
 
-    let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
-    anth_engine::socket::restrict(&config.socket)?;
-    logger.info(&format!("listening on {}", config.socket.display()));
-
     // SAFETY: `geteuid` has no preconditions.
     let allowed_uid = unsafe { libc::geteuid() };
-    let state = std::sync::Arc::new(
+    let state = Arc::new(
         anth_api::EngineState::new(allowed_uid)
             .with_composition(composition)
             .with_apps(
                 &config.state,
                 config.apps.max_bundle_bytes,
                 config.apps.require_signature,
-            ),
+            )
+            .booting(),
     );
-    let public = anth_api::public_router();
+    let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
+    anth_engine::socket::restrict(&config.socket)?;
+    logger.info(&format!("listening on {}", config.socket.display()));
+
     let (stop, stopped) = watch::channel(false);
     tokio::spawn(async move {
         shutdown_signal().await;
         let _ = stop.send(true);
     });
 
+    // Serve before starting apps: a slow app must be diagnosable, and readiness
+    // answers `503 starting` until the boot finishes.
+    let router_state = Arc::clone(&state);
+    let uds_stopped = stopped.clone();
+    let uds = tokio::spawn(async move {
+        axum::serve(
+            socket,
+            anth_api::router(router_state)
+                .into_make_service_with_connect_info::<anth_api::PeerUid>(),
+        )
+        .with_graceful_shutdown(wait(uds_stopped))
+        .await
+    });
+
+    let public = anth_api::public_router();
     let tcp = match &config.listen {
         Some(address) => {
             let address: SocketAddr = address
@@ -179,17 +197,48 @@ async fn run(args: Args) -> Result<(), Error> {
         None => None,
     };
 
-    axum::serve(
-        socket,
-        anth_api::router(state).into_make_service_with_connect_info::<anth_api::PeerUid>(),
+    let runtime = Arc::new(WasmtimeRuntime::new()?);
+    let supervisor = Supervisor::new(runtime);
+    let composition = state.composition.read().expect("composition").clone();
+    let report = anth_engine::boot::start_composed(
+        &supervisor,
+        &config.state,
+        &composition,
+        &config.limits,
+        LogSettings {
+            level: config.log.level,
+            format: config.log.format,
+        },
     )
-    .with_graceful_shutdown(wait(stopped))
-    .await
-    .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
-
-    if let Some(task) = tcp {
-        let _ = task.await;
+    .await?;
+    if let Some(error) = &report.fatal {
+        logger.warn(&format!(
+            "the composition cannot boot: {}: {}; serving so it can be repaired",
+            error.kind().code(),
+            error.message()
+        ));
     }
+    for (app, reason) in &report.degraded {
+        logger.warn(&format!("degraded {app}: {reason}"));
+    }
+    logger.info(&format!(
+        "started {} app(s), {} degraded",
+        report.started.len(),
+        report.degraded.len()
+    ));
+    state.mark_ready();
+    // The supervisor owns the running instances; it must outlive the boot call.
+    let supervisor = supervisor;
+
+    uds.await
+        .map_err(|error| Error::internal(format!("serving the API: {error}")))?
+        .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
+    if let Some(task) = tcp {
+        task.await
+            .map_err(|error| Error::internal(format!("serving the API: {error}")))?
+            .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
+    }
+    supervisor.stop_all().await;
     logger.info("stopped");
     Ok(())
 }

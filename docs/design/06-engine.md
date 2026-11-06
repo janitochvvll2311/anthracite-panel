@@ -211,10 +211,13 @@ Boot order, and the reason for it:
 1. Config and logging.
 2. Store, audit, and first-boot credentials.
 3. Registry, grants and `composition.toml`.
-4. Resolve the composition into a surface. A static miss is fatal ([§8.5](08-composition.md#85-missing-and-failed)), and
-   `anth doctor` explains it without a daemon.
+4. Resolve the composition into a surface. A static miss is fatal for the apps'
+   boot: the daemon reports it and keeps serving so the operator can repair the
+   document ([§8.5](08-composition.md#85-missing-and-failed), [§8.7](08-composition.md#87-the-surface-view)); `anth doctor` explains it
+   without a daemon.
 5. Bind the socket. `/health` answers `200` from here on.
-6. Supervisor: instantiate apps in dependency order with a per-app timeout.
+6. Supervisor: instantiate apps in dependency order with a per-app timeout. A
+   failed instantiation degrades that app and its dependents.
 7. `/api/health` flips to `200 ready`.
 
 Binding before starting apps is deliberate: a slow app must be diagnosable, not

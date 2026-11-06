@@ -143,11 +143,18 @@ impl Runtime for WasmtimeRuntime {
                 for id in &spec.granted {
                     link_host(&mut linker, id)?;
                 }
-                linker
-                    .instantiate(&mut store, &component)
-                    .map_err(|error| {
-                        Error::unavailable(format!("the app did not start: {error}"))
-                    })?
+                let (cancel, cancelled) = std::sync::mpsc::channel();
+                let timer_engine = engine.clone();
+                let wall = spec.budget.wall_ms;
+                let timer = std::thread::spawn(move || {
+                    if cancelled.recv_timeout(Duration::from_millis(wall)).is_err() {
+                        timer_engine.increment_epoch();
+                    }
+                });
+                let result = linker.instantiate(&mut store, &component);
+                let _ = cancel.send(());
+                let _ = timer.join();
+                result.map_err(start_error)?
             };
             let id = self.next_id();
             self.instances.lock().expect("wasmtime instances").insert(
@@ -597,11 +604,24 @@ fn memory_bytes() -> u64 {
         .unwrap_or(0)
 }
 
-fn trap_error(error: wasmtime::Error) -> Error {
-    let trap = error
+fn trap_of(error: &wasmtime::Error) -> Option<Trap> {
+    error
         .chain()
-        .find_map(|cause| cause.downcast_ref::<Trap>().copied());
-    match trap {
+        .find_map(|cause| cause.downcast_ref::<Trap>().copied())
+}
+
+fn start_error(error: wasmtime::Error) -> Error {
+    match trap_of(&error) {
+        Some(Trap::OutOfFuel) => Error::exhausted("the app ran out of fuel before starting")
+            .with_detail(serde_json::json!({"budget": "fuel"})),
+        Some(Trap::Interrupt) => Error::exhausted("the app did not start within its wall budget")
+            .with_detail(serde_json::json!({"budget": "wall"})),
+        _ => Error::unavailable(format!("the app did not start: {error}")),
+    }
+}
+
+fn trap_error(error: wasmtime::Error) -> Error {
+    match trap_of(&error) {
         Some(Trap::OutOfFuel) => Error::exhausted("the app ran out of fuel")
             .with_detail(serde_json::json!({"budget": "fuel"})),
         Some(Trap::Interrupt) => Error::exhausted("the app exceeded its wall budget")
