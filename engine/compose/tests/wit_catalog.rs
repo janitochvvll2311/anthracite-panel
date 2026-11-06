@@ -56,6 +56,51 @@ fn every_native_id_resolves_to_an_interface() {
 }
 
 #[test]
+fn the_hello_app_resolves_against_its_packaged_catalog() {
+    let root = repo_root().join("apps/hello/wit");
+    let mut resolve = wit_parser::Resolve::default();
+    let (package, _) = resolve
+        .push_dir(&root)
+        .unwrap_or_else(|error| panic!("parsing {}: {error:#}", root.display()));
+    let name = &resolve.packages[package].name;
+    assert_eq!(name.namespace, "anthracite");
+    assert_eq!(name.name, "hello");
+    assert_eq!(name.interface_id("greeting"), "anthracite:hello/greeting@1.0.0");
+    let imports = world_imports(&resolve, package, "app");
+    assert!(imports.contains("anth:env/time@1.0.0"), "{imports:?}");
+}
+
+#[test]
+fn the_hello_catalog_matches_the_engine_catalog() {
+    use std::fs;
+    let engine = repo_root().join("engine/wit/deps");
+    let hello = repo_root().join("apps/hello/wit/deps");
+    for package in ["error", "env", "store"] {
+        let from = engine.join(package);
+        let to = hello.join(package);
+        let mut expected = fs::read_dir(&from)
+            .expect("engine deps")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        let mut actual = fs::read_dir(&to)
+            .expect("hello deps")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        expected.sort();
+        actual.sort();
+        assert_eq!(expected, actual, "package {package}");
+        for file in expected {
+            assert_eq!(
+                fs::read(from.join(&file)).expect("engine file"),
+                fs::read(to.join(&file)).expect("hello file"),
+                "{} drifted",
+                file.to_string_lossy()
+            );
+        }
+    }
+}
+
+#[test]
 fn an_app_package_resolves_against_the_catalog() {
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};

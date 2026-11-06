@@ -1,0 +1,10 @@
+package anthracite:hello@1.0.0;
+
+interface greeting {
+    greet: func(name: string) -> string;
+}
+
+world app {
+    import anth:env/time@1.0.0;
+    export greeting;
+}
