@@ -8,6 +8,8 @@
 //! arrive. `/health` is public on both; everything under `/api` needs a peer.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -26,13 +28,14 @@ use anth_contract::{
     TrustedKey, KEY_VERSION,
 };
 use axum::body::Bytes;
-use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Request, State};
+use axum::extract::{connect_info::Connected, ConnectInfo, Extension, Path, Query, Request, State};
 use axum::http::header::{ETAG, IF_MATCH, LOCATION};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get};
+use axum::routing::{any, delete, get};
 use axum::{Json, Router};
+use http_body::Body as _;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::UnixListener;
@@ -61,7 +64,7 @@ impl Apps {
 }
 
 /// What the router needs from the engine.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EngineState {
     pub version: String,
     pub protocol: u32,
@@ -76,6 +79,8 @@ pub struct EngineState {
     pub apps: Option<Arc<Apps>>,
     /// `false` while the daemon boots apps; readiness answers `503 starting`.
     ready: Arc<AtomicBool>,
+    /// The route dispatcher, when this host runs apps.
+    caller: Option<Arc<dyn AppCaller>>,
 }
 
 impl EngineState {
@@ -88,7 +93,13 @@ impl EngineState {
             compose_lock: Arc::new(tokio::sync::Mutex::new(())),
             apps: None,
             ready: Arc::new(AtomicBool::new(true)),
+            caller: None,
         }
+    }
+
+    pub fn with_caller(mut self, caller: Arc<dyn AppCaller>) -> Self {
+        self.caller = Some(caller);
+        self
     }
 
     /// The daemon is still starting apps; readiness answers `503` until
@@ -147,6 +158,21 @@ pub struct PeerUid(pub u32);
 #[derive(Debug, Clone)]
 pub struct Actor(pub String);
 
+type CallFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>>;
+
+/// The engine's route dispatcher: the API resolves a route to `interface#function`
+/// and this calls the running app. The daemon implements it over the supervisor;
+/// a host that mounts the router without running apps simply omits it.
+pub trait AppCaller: Send + Sync {
+    fn call<'a>(
+        &'a self,
+        app: &'a str,
+        interface: &'a str,
+        function: &'a str,
+        input: Value,
+    ) -> CallFuture<'a>;
+}
+
 impl Connected<axum::serve::IncomingStream<'_, UnixListener>> for PeerUid {
     fn connect_info(stream: axum::serve::IncomingStream<'_, UnixListener>) -> Self {
         let uid = stream
@@ -181,6 +207,7 @@ pub fn router(state: Arc<EngineState>) -> Router {
             "/engine/apps/{id}/grant",
             get(get_grant).put(approve_app).delete(revoke_grant),
         )
+        .route("/apps/{id}/{*path}", any(app_route))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
     Router::new()
@@ -555,6 +582,88 @@ async fn remove_key(
         Some(json!({"fingerprint": fingerprint})),
     )?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A manifest route: `/api/apps/{id}/{path}` mapped to `interface#function`
+/// (§7.13). Query parameters are the input on `GET`/`HEAD`/`DELETE`; a JSON
+/// object body is the input otherwise.
+async fn app_route(
+    State(state): State<Arc<EngineState>>,
+    Path((id, path)): Path<(String, String)>,
+    method: Method,
+    Query(query): Query<BTreeMap<String, String>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let installed = installed_apps(apps)?;
+    let composition = current_composition(&state)?;
+    let resolution =
+        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    let app = AppId::parse(&id)?;
+    if !resolution.runs(&app) {
+        return Err(ApiError(Error::unavailable(format!(
+            "`{id}` is not running"
+        ))));
+    }
+    let found = installed
+        .iter()
+        .find(|installed| installed.manifest.app.id == id)
+        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+    let wanted = format!("/{path}");
+    let route = found
+        .manifest
+        .route
+        .iter()
+        .find(|route| route.method == method.as_str() && route.path == wanted)
+        .ok_or_else(|| {
+            ApiError(Error::not_found(format!(
+                "`{id}` has no route {method} {wanted}"
+            )))
+        })?;
+    let (interface, function) = parse_call(&route.call)?;
+    let no_body = matches!(method, Method::GET | Method::HEAD | Method::DELETE);
+    let body_length = request
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let has_body = body_length.is_some_and(|length| length > 0)
+        || request
+            .body()
+            .size_hint()
+            .upper()
+            .is_some_and(|size| size > 0);
+    if no_body && has_body {
+        return Err(ApiError(Error::invalid(
+            "a GET, HEAD or DELETE route takes no body",
+        )));
+    }
+    let input = if no_body {
+        serde_json::to_value(query)
+            .map_err(|error| Error::internal(format!("rendering the query: {error}")))?
+    } else {
+        let body = read_body(request, 1 << 20).await?;
+        if body.is_empty() {
+            Value::Object(serde_json::Map::new())
+        } else {
+            let value: Value = serde_json::from_slice(&body)
+                .map_err(|error| Error::invalid(format!("the body is not JSON: {error}")))?;
+            if !value.is_object() {
+                return Err(ApiError(Error::invalid(
+                    "a route body is a JSON object keyed by parameter",
+                )));
+            }
+            value
+        }
+    };
+    let caller = state
+        .caller
+        .as_ref()
+        .ok_or_else(|| ApiError(Error::unavailable("this router does not run apps")))?;
+    let output = caller
+        .call(app.as_str(), &interface, &function, input)
+        .await?;
+    Ok(Json(output))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1478,6 +1587,155 @@ mod tests {
         let (status, value) = json(state, "/api/engine/keys").await;
         assert_eq!(status, StatusCode::OK);
         assert!(value["keys"].as_array().expect("keys").is_empty());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_manifest_route_calls_the_app() {
+        struct Echo;
+        impl AppCaller for Echo {
+            fn call<'a>(
+                &'a self,
+                app: &'a str,
+                interface: &'a str,
+                function: &'a str,
+                input: Value,
+            ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    Ok(json!({
+                        "app": app,
+                        "interface": interface,
+                        "function": function,
+                        "input": input,
+                    }))
+                })
+            }
+        }
+
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        let state = Arc::new(
+            Arc::try_unwrap(state)
+                .ok()
+                .expect("unique state")
+                .with_caller(Arc::new(Echo)),
+        );
+        let (status, _, value) = call(
+            state,
+            "GET",
+            "/api/apps/org.example.notes/notes",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["app"], "org.example.notes");
+        assert_eq!(value["interface"], "example:notes/thing@1.0.0");
+        assert_eq!(value["function"], "ping");
+        assert_eq!(value["input"], json!({}));
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_route_for_a_degraded_app_is_unavailable() {
+        struct Never;
+        impl AppCaller for Never {
+            fn call<'a>(
+                &'a self,
+                _app: &'a str,
+                _interface: &'a str,
+                _function: &'a str,
+                _input: Value,
+            ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>>
+            {
+                Box::pin(async move { Err(Error::internal("should not be called")) })
+            }
+        }
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        let state = Arc::new(
+            Arc::try_unwrap(state)
+                .ok()
+                .expect("unique state")
+                .with_caller(Arc::new(Never)),
+        );
+        let (status, _, value) = call(
+            state,
+            "GET",
+            "/api/apps/org.example.notes/notes",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(value["error"]["code"], "unavailable");
+        assert!(value["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("not running"));
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_route_that_is_not_declared_is_not_found() {
+        struct Never;
+        impl AppCaller for Never {
+            fn call<'a>(
+                &'a self,
+                _app: &'a str,
+                _interface: &'a str,
+                _function: &'a str,
+                _input: Value,
+            ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>>
+            {
+                Box::pin(async move { Err(Error::internal("should not be called")) })
+            }
+        }
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        let state = Arc::new(
+            Arc::try_unwrap(state)
+                .ok()
+                .expect("unique state")
+                .with_caller(Arc::new(Never)),
+        );
+        let (status, _, value) =
+            call(state, "GET", "/api/apps/org.example.notes/nope", Vec::new()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(value["error"]["code"], "not-found");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_body_on_a_get_route_is_refused() {
+        struct Never;
+        impl AppCaller for Never {
+            fn call<'a>(
+                &'a self,
+                _app: &'a str,
+                _interface: &'a str,
+                _function: &'a str,
+                _input: Value,
+            ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>>
+            {
+                Box::pin(async move { Err(Error::internal("should not be called")) })
+            }
+        }
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        let state = Arc::new(
+            Arc::try_unwrap(state)
+                .ok()
+                .expect("unique state")
+                .with_caller(Arc::new(Never)),
+        );
+        let (status, _, value) = call(
+            state,
+            "GET",
+            "/api/apps/org.example.notes/notes",
+            br#"{}"#.to_vec(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"]["code"], "invalid");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

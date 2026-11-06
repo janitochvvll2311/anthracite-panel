@@ -16,6 +16,8 @@
 //!   never across an await, so a call is not blocked by a slow instantiation.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anth_contract::{AppId, Error, InterfaceId, World};
@@ -170,6 +172,34 @@ impl Supervisor {
             return false;
         };
         self.instances.lock().await.contains_key(&app_id)
+    }
+}
+
+/// The API's route dispatcher, backed by this supervisor (§7.13).
+pub struct SupervisorCaller {
+    supervisor: Arc<Supervisor>,
+}
+
+impl SupervisorCaller {
+    pub fn new(supervisor: Arc<Supervisor>) -> Self {
+        Self { supervisor }
+    }
+}
+
+impl anth_api::AppCaller for SupervisorCaller {
+    fn call<'a>(
+        &'a self,
+        app: &'a str,
+        interface: &'a str,
+        function: &'a str,
+        input: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>> {
+        Box::pin(async move {
+            self.supervisor
+                .call(app, interface, function, input)
+                .await
+                .map(|reply| reply.output)
+        })
     }
 }
 

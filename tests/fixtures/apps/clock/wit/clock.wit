@@ -1,0 +1,9 @@
+package example:test@1.0.0;
+
+interface clock {
+    run: func() -> u64;
+}
+
+world app {
+    export clock;
+}

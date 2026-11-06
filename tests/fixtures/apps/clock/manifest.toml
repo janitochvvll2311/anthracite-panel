@@ -1,0 +1,27 @@
+manifest_version = 2
+
+[app]
+id = "org.example.clock"
+alias = "clock"
+namespace = "example:test"
+name = "Clock"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "3c7526e923a7f274eed339ac5f876cb033009152dbbbb4737934d885a2391b05"
+
+[[export]]
+interface = "example:test/clock@1.0.0"
+
+[[import]]
+interface = "anth:env/time@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/now"
+call = "example:test/clock@1.0.0#run"
+
+[[cli]]
+call = "example:test/clock@1.0.0#run"
+verb = "now"
