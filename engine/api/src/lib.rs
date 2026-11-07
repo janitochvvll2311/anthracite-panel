@@ -749,8 +749,18 @@ async fn app_asset(
         ))));
     }
     let path = apps.registry.app_dir(&app).join(relative);
-    let bytes = std::fs::read(&path)
-        .map_err(|error| Error::internal(format!("reading {}: {error}", path.display())))?;
+    let etag = format!("\"{}\"", slot.sha256);
+    let cache = "immutable";
+    // The manifest hash is the validator: a conditional hit does not read or
+    // hash the file (§6.4).
+    if if_none_match(&headers, &slot.sha256) {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [(ETAG, etag), (CACHE_CONTROL, cache.to_string())],
+        )
+            .into_response());
+    }
+    let bytes = std::fs::read(&path).map_err(|_| Error::internal("the asset could not be read"))?;
     let hash: String = Sha256::digest(&bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -760,17 +770,8 @@ async fn app_asset(
             "`{module}` does not match its manifest hash"
         ))));
     }
-    let etag = format!("\"{}\"", slot.sha256);
-    let cache = "immutable";
-    if if_none_match(&headers, &slot.sha256) {
-        return Ok((
-            StatusCode::NOT_MODIFIED,
-            [(ETAG, etag), (CACHE_CONTROL, cache.to_string())],
-        )
-            .into_response());
-    }
     let content_type = match relative.extension().and_then(|value| value.to_str()) {
-        Some("js") => "text/javascript; charset=utf-8",
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         Some("wasm") => "application/wasm",
         Some("json") => "application/json",
@@ -2014,6 +2015,25 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_tampered_asset_is_refused_without_the_host_path() {
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        std::fs::write(dir.join("apps/org.example.notes/web/notes.js"), b"tampered")
+            .expect("write");
+        let (status, _, value) = call(
+            state,
+            "GET",
+            "/api/apps/org.example.notes/assets/web/notes.js",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let message = value["error"]["message"].as_str().expect("message");
+        assert!(!message.contains(&dir.display().to_string()), "{message}");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
