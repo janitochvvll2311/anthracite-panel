@@ -37,5 +37,20 @@ the empty sandboxed frame document are public. Without `--token`, a
 non-loopback bind refuses to start: there is no silent unauthenticated mode.
 Sessions replace this shared secret later.
 
+## Viewport modes
+
+The shell has four discrete modes: `auto`, `desktop`, `tablet` and `mobile`.
+`auto` follows the window (mobile under 700 px, desktop from 1100 px). The
+selector sits in the sidebar; the choice is stored in `localStorage`, and
+`?viewport=mobile` sets it for one load. On mobile the sidebar is a drawer with
+a backdrop, a close button and `Escape` to dismiss.
+
+## Isolation
+
+App modules do not run in the panel origin. The panel fetches the module,
+hands the source to a sandboxed frame (`/app-frame.html`, opaque origin), and
+proxies only that app's own `/api/apps/{id}/` requests. The frame cannot read
+the panel DOM, its cookies or its storage.
+
 The panel and the engine share a process and the Unix socket for `anth`; no
 second engine may own the same state tree.

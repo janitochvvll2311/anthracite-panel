@@ -63,6 +63,8 @@ button {
 /* Top bar ---------------------------------------------------------------- */
 
 .topbar {
+  position: relative;
+  z-index: 90;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -70,6 +72,24 @@ button {
   border-bottom: 1px solid var(--line-soft);
   background: linear-gradient(180deg, #171b24ee, #12151ce8);
   backdrop-filter: blur(10px);
+}
+
+.icon {
+  padding: 6px 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+button.nav-toggle {
+  display: none;
+}
+
+.drawer-backdrop {
+  display: none;
+}
+
+.drawer-backdrop[hidden] {
+  display: none;
 }
 
 .brand {
@@ -214,6 +234,51 @@ button {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   margin: 2px 8px 10px;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 4px 10px;
+}
+
+.sidebar-head .sidebar-title {
+  margin: 0;
+}
+
+button.drawer-close {
+  display: none;
+}
+
+.viewport-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 9px 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.viewport-row label {
+  color: var(--muted-2);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.viewport-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
 }
 
 #views {
@@ -459,14 +524,6 @@ button {
 .pane-body {
   overflow: auto;
   padding: 22px;
-}
-
-.app-frame {
-  width: 100%;
-  border: 0;
-  display: block;
-  background: transparent;
-  color-scheme: dark;
 }
 
 .app-frame {
@@ -729,14 +786,141 @@ button {
   overflow-wrap: anywhere;
 }
 
-/* Small screens ---------------------------------------------------------- */
+/* Viewport modes -------------------------------------------------------- */
 
-@media (max-width: 760px) {
-  .layout {
-    grid-template-columns: 190px minmax(0, 1fr);
-  }
+html[data-viewport="tablet"] .layout {
+  grid-template-columns: 208px minmax(0, 1fr);
+}
 
-  .health {
-    display: none;
+html[data-viewport="tablet"] .topbar {
+  gap: 10px;
+  padding: 0 12px;
+}
+
+html[data-viewport="tablet"] .health {
+  max-width: 30ch;
+}
+
+html[data-viewport="mobile"] .layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-viewport="mobile"] .sidebar {
+  position: fixed;
+  top: 54px;
+  left: 0;
+  bottom: 0;
+  width: min(86vw, 320px);
+  z-index: 80;
+  transform: translateX(-102%);
+  transition: transform 0.2s ease;
+  box-shadow: 18px 0 50px #00000066;
+}
+
+html[data-viewport="mobile"] body[data-drawer="open"] .sidebar {
+  transform: translateX(0);
+}
+
+html[data-viewport="mobile"] .drawer-backdrop {
+  display: block;
+  position: fixed;
+  inset: 54px 0 0;
+  z-index: 75;
+  background: #000000a8;
+  backdrop-filter: blur(2px);
+}
+
+html[data-viewport="mobile"] .drawer-backdrop[hidden] {
+  display: none;
+}
+
+html[data-viewport="mobile"] button.nav-toggle,
+html[data-viewport="mobile"] button.drawer-close {
+  display: inline-flex;
+}
+
+html[data-viewport="mobile"] .topbar {
+  gap: 8px;
+  padding: 0 10px;
+}
+
+html[data-viewport="mobile"] .brand strong {
+  display: none;
+}
+
+html[data-viewport="mobile"] .health {
+  display: none;
+}
+
+html[data-viewport="mobile"] #actions {
+  max-width: 38vw;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+html[data-viewport="mobile"] .action-button {
+  white-space: nowrap;
+}
+
+html[data-viewport="mobile"] #settings-button .label {
+  display: none;
+}
+
+html[data-viewport="mobile"] .workspace {
+  grid-template-rows: 40px minmax(0, 1fr);
+}
+
+html[data-viewport="mobile"] .tabs {
+  padding: 5px 8px;
+}
+
+html[data-viewport="mobile"] .pane-head {
+  gap: 8px;
+  padding: 0 12px;
+}
+
+html[data-viewport="mobile"] .pane-app {
+  display: none;
+}
+
+html[data-viewport="mobile"] .pane-body {
+  padding: 14px;
+}
+
+html[data-viewport="mobile"] .window {
+  left: 8px !important;
+  right: 8px;
+  top: 8px !important;
+  width: auto;
+  height: calc(100vh - 70px);
+  max-width: none;
+  max-height: none;
+  resize: none;
+}
+
+html[data-viewport="mobile"] .settings-card {
+  width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+}
+
+html[data-viewport="mobile"] .settings-card > header {
+  padding: 10px 12px;
+}
+
+html[data-viewport="mobile"] .settings-card > header .muted {
+  display: none;
+}
+
+html[data-viewport="mobile"] #settings-body {
+  padding: 10px;
+}
+
+html[data-viewport="mobile"] .settings-section-body {
+  padding: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
   }
 }
