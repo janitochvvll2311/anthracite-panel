@@ -7,6 +7,21 @@
 use std::collections::BTreeSet;
 
 use anth_contract::{AppId, SurfaceSlot};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+
+/// A path segment keeps `/` as a separator but encodes anything a URL would
+/// otherwise reinterpret (`?`, `#`, `%`, spaces, controls).
+const SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
 
 /// The three portable slots in v0.5.0.
 pub const VIEW: &str = "panel.view";
@@ -43,7 +58,13 @@ impl Contribution {
     /// Where the panel fetches the module. The engine serves only modules the
     /// manifest declares, and the hash is the cache key (§6.4).
     pub fn asset_url(&self) -> String {
-        format!("/api/apps/{}/assets/{}", self.app, self.module)
+        let module = self
+            .module
+            .split('/')
+            .map(|segment| utf8_percent_encode(segment, SEGMENT).to_string())
+            .collect::<Vec<_>>()
+            .join("/");
+        format!("/api/apps/{}/assets/{module}", self.app)
     }
 }
 
@@ -73,6 +94,12 @@ impl Slots {
                 .iter()
                 .map(|slot| Contribution::from_surface(app, slot)),
         );
+    }
+
+    /// Drops every contribution, so a panel can rebuild after a composition
+    /// refresh without stale entries.
+    pub fn clear(&mut self) {
+        self.contributions.clear();
     }
 
     /// Contributions for a slot this panel implements, in deterministic order:
@@ -147,6 +174,25 @@ mod tests {
             contribution.asset_url(),
             "/api/apps/org.example.notes/assets/web/notes.js"
         );
+        let mut spaced = slot(VIEW, "notes", 1);
+        spaced.module = "web/a b.js".to_string();
+        let contribution = Contribution::from_surface(&app("org.example.notes"), &spaced);
+        assert_eq!(
+            contribution.asset_url(),
+            "/api/apps/org.example.notes/assets/web/a%20b.js"
+        );
+    }
+
+    #[test]
+    fn contributions_tie_break_by_app_id() {
+        let mut slots = Slots::new([VIEW]);
+        slots.add(&app("org.example.b"), &[slot(VIEW, "same", 1)]);
+        slots.add(&app("org.example.a"), &[slot(VIEW, "same", 1)]);
+        let mounted = slots.mounted(VIEW);
+        assert_eq!(mounted[0].app.as_str(), "org.example.a");
+        assert_eq!(mounted[1].app.as_str(), "org.example.b");
+        slots.clear();
+        assert!(slots.mounted(VIEW).is_empty());
     }
 
     #[test]

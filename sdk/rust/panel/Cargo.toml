@@ -7,3 +7,4 @@ description = "The panel contract: slot vocabulary, contributions and asset URLs
 
 [dependencies]
 anth-contract = { path = "../../../engine/contract" }
+percent-encoding = "2"
