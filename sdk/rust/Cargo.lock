@@ -29,6 +29,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-panel"
+version = "0.5.0"
+dependencies = [
+ "anth-contract",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
