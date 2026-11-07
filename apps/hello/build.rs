@@ -9,6 +9,7 @@ fn main() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| manifest.join("../../sdk/rust/guest/wit/deps"));
     let to = manifest.join("wit/deps");
+    println!("cargo:rerun-if-env-changed=ANTH_GUEST_WIT");
     println!("cargo:rerun-if-changed={}", from.display());
     if same(&from, &to) {
         return;
@@ -18,29 +19,48 @@ fn main() {
 }
 
 /// The catalog is small; mirror only when the bytes differ, so a normal build
-/// does not touch the source tree.
+/// does not touch the source tree. Both sides are compared, so a package the
+/// catalog no longer has is removed too.
 fn same(from: &Path, to: &Path) -> bool {
-    let Ok(entries) = fs::read_dir(from) else {
+    let (Ok(from_entries), Ok(to_entries)) = (fs::read_dir(from), fs::read_dir(to)) else {
         return false;
     };
     let mut expected = Vec::new();
-    for entry in entries {
+    let mut actual = Vec::new();
+    for entry in from_entries {
         let Ok(entry) = entry else {
             return false;
         };
-        let path = entry.path();
+        expected.push(entry);
+    }
+    for entry in to_entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        actual.push(entry);
+    }
+    expected.sort_by_key(|entry| entry.file_name());
+    actual.sort_by_key(|entry| entry.file_name());
+    if expected.len() != actual.len()
+        || expected
+            .iter()
+            .zip(&actual)
+            .any(|(left, right)| left.file_name() != right.file_name())
+    {
+        return false;
+    }
+    for entry in expected {
+        let source = entry.path();
         let target = to.join(entry.file_name());
-        if path.is_dir() {
-            if !same(&path, &target) {
+        if source.is_dir() {
+            if !same(&source, &target) {
                 return false;
             }
-        } else {
-            expected.push((path, target));
+        } else if fs::read(&source).ok() != fs::read(&target).ok() || !target.exists() {
+            return false;
         }
     }
-    expected
-        .into_iter()
-        .all(|(source, target)| fs::read(&source).ok() == fs::read(&target).ok() && target.exists())
+    true
 }
 
 fn copy(from: &Path, to: &Path) {
