@@ -88,7 +88,6 @@ const navToggle = byId<HTMLButtonElement>("nav-toggle");
 const drawerClose = byId<HTMLButtonElement>("drawer-close");
 const drawerBackdrop = byId<HTMLElement>("drawer-backdrop");
 const sidebar = byId<HTMLElement>("sidebar");
-const topbar = byId<HTMLElement>("topbar");
 const workspace = byId<HTMLElement>("workspace");
 
 let surface: Surface | null = null;
@@ -138,7 +137,10 @@ function setDrawer(open: boolean): void {
   navToggle.setAttribute("aria-expanded", String(open));
   drawerBackdrop.hidden = !open;
   sidebar.inert = effectiveViewport === "mobile" && !open;
-  topbar.inert = open;
+  // Keep the menu button usable; inert only the rest of the topbar and the
+  // workspace behind the drawer.
+  actions.inert = open;
+  settingsButton.inert = open;
   workspace.inert = open;
   windowsElement.inert = open;
   if (open) drawerClose.focus();
@@ -256,7 +258,10 @@ function renderActions(): void {
     );
     const badge = element("span", "action-icon", "⚡");
     node.prepend(badge);
-    node.addEventListener("click", () => openWindow(contribution, "action"));
+    node.addEventListener("click", () => {
+      closeDrawer();
+      openWindow(contribution, "action");
+    });
     actions.append(node);
   }
 }
@@ -502,6 +507,7 @@ function closeTab(key: string): void {
 function detachTab(key: string): void {
   const tab = tabs.get(key);
   if (!tab) return;
+  closeDrawer();
   openWindow(tab.contribution, "view");
   closeTab(key);
 }
@@ -514,7 +520,6 @@ function openWindow(
   contribution: Contribution,
   kind: FrameContext["kind"],
 ): void {
-  closeDrawer();
   const key = `window:${kind}:${contributionKey(contribution)}`;
   const existing = floating.get(key);
   if (existing) {
