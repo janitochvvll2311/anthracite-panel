@@ -1,0 +1,9 @@
+[package]
+name = "anth-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The guest SDK: host WIT and the wit-bindgen surface wasm apps use"
+
+[dependencies]
+wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc", "std"] }

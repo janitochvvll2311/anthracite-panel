@@ -107,28 +107,30 @@ fn the_hello_manifest_matches_its_component_and_ui() {
 fn the_hello_catalog_matches_the_engine_catalog() {
     use std::fs;
     let engine = repo_root().join("engine/wit/deps");
-    let hello = repo_root().join("apps/hello/wit/deps");
-    for package in ["error", "env", "store"] {
-        let from = engine.join(package);
-        let to = hello.join(package);
-        let mut expected = fs::read_dir(&from)
-            .expect("engine deps")
-            .map(|entry| entry.expect("entry").file_name())
-            .collect::<Vec<_>>();
-        let mut actual = fs::read_dir(&to)
-            .expect("hello deps")
-            .map(|entry| entry.expect("entry").file_name())
-            .collect::<Vec<_>>();
-        expected.sort();
-        actual.sort();
-        assert_eq!(expected, actual, "package {package}");
-        for file in expected {
-            assert_eq!(
-                fs::read(from.join(&file)).expect("engine file"),
-                fs::read(to.join(&file)).expect("hello file"),
-                "{} drifted",
-                file.to_string_lossy()
-            );
+    for catalog in ["apps/hello/wit/deps", "sdk/rust/guest/wit/deps"] {
+        let copy = repo_root().join(catalog);
+        for package in ["error", "env", "store"] {
+            let from = engine.join(package);
+            let to = copy.join(package);
+            let mut expected = fs::read_dir(&from)
+                .expect("engine deps")
+                .map(|entry| entry.expect("entry").file_name())
+                .collect::<Vec<_>>();
+            let mut actual = fs::read_dir(&to)
+                .expect("packaged deps")
+                .map(|entry| entry.expect("entry").file_name())
+                .collect::<Vec<_>>();
+            expected.sort();
+            actual.sort();
+            assert_eq!(expected, actual, "{catalog} package {package}");
+            for file in expected {
+                assert_eq!(
+                    fs::read(from.join(&file)).expect("engine file"),
+                    fs::read(to.join(&file)).expect("packaged file"),
+                    "{catalog}: {} drifted",
+                    file.to_string_lossy()
+                );
+            }
         }
     }
 }
