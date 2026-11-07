@@ -20,6 +20,14 @@ import {
   type FrameContext,
 } from "@anthracite/panel";
 
+import {
+  VIEWPORT_KEY,
+  isViewportMode,
+  resolveViewport,
+  type ResolvedViewport,
+  type ViewportMode,
+} from "./viewport";
+
 type DegradedApp = {
   app: string;
   version?: string;
@@ -73,6 +81,12 @@ const settings = byId<HTMLElement>("settings");
 const settingsBody = byId<HTMLElement>("settings-body");
 const settingsButton = byId<HTMLButtonElement>("settings-button");
 const settingsClose = byId<HTMLButtonElement>("settings-close");
+const viewportSelect = byId<HTMLSelectElement>("viewport-select");
+const viewportEffective = byId<HTMLElement>("viewport-effective");
+const navToggle = byId<HTMLButtonElement>("nav-toggle");
+const drawerClose = byId<HTMLButtonElement>("drawer-close");
+const drawerBackdrop = byId<HTMLElement>("drawer-backdrop");
+const sidebar = byId<HTMLElement>("sidebar");
 
 let surface: Surface | null = null;
 let implemented: string[] = [...PORTABLE];
@@ -90,6 +104,63 @@ const tabs = new Map<string, Tab>();
 const mounted = new Map<string, Mounted>();
 const floating = new Map<string, Floating>();
 let settingsMounted: Mounted[] = [];
+
+const requestedViewport = new URLSearchParams(location.search).get("viewport");
+const storedViewport = (() => {
+  try {
+    return localStorage.getItem(VIEWPORT_KEY);
+  } catch {
+    return null;
+  }
+})();
+let viewportMode: ViewportMode = isViewportMode(requestedViewport)
+  ? requestedViewport
+  : isViewportMode(storedViewport)
+    ? storedViewport
+    : "auto";
+let effectiveViewport: ResolvedViewport = "desktop";
+let drawerOpen = false;
+
+function storeViewport(mode: ViewportMode): void {
+  try {
+    localStorage.setItem(VIEWPORT_KEY, mode);
+  } catch {
+    // Storage can be disabled; the mode still applies for this session.
+  }
+}
+
+function setDrawer(open: boolean): void {
+  if (open && effectiveViewport !== "mobile") return;
+  drawerOpen = open;
+  document.body.dataset.drawer = open ? "open" : "closed";
+  navToggle.setAttribute("aria-expanded", String(open));
+  drawerBackdrop.hidden = !open;
+  sidebar.inert = effectiveViewport === "mobile" && !open;
+  if (open) drawerClose.focus();
+  else if (effectiveViewport === "mobile") navToggle.focus();
+}
+
+function closeDrawer(): void {
+  if (drawerOpen) setDrawer(false);
+  else if (effectiveViewport === "mobile") sidebar.inert = true;
+}
+
+function applyViewport(): void {
+  const effective = resolveViewport(viewportMode, window.innerWidth);
+  effectiveViewport = effective;
+  document.documentElement.dataset.viewport = effective;
+  document.documentElement.dataset.viewportMode = viewportMode;
+  viewportSelect.value = viewportMode;
+  viewportEffective.textContent =
+    viewportMode === "auto" ? `auto · ${effective}` : effective;
+  viewportSelect.title = `Viewport: ${viewportMode} (${effective})`;
+  if (effective !== "mobile") {
+    closeDrawer();
+    sidebar.inert = false;
+  } else {
+    sidebar.inert = !drawerOpen;
+  }
+}
 
 const ordered = (slot: string): Contribution[] =>
   surface ? orderContributions(surface.apps, slot) : [];
@@ -396,6 +467,7 @@ function openTab(contribution: Contribution, activateTab = true): void {
   renderTabs();
   renderPanes();
   renderSidebar();
+  closeDrawer();
 }
 
 function activate(key: string): void {
@@ -745,6 +817,22 @@ function scheduleRetry(): void {
   retryTimer = window.setTimeout(() => void refresh(), delay);
 }
 
+navToggle.addEventListener("click", () => {
+  if (drawerOpen) closeDrawer();
+  else setDrawer(true);
+});
+drawerClose.addEventListener("click", closeDrawer);
+drawerBackdrop.addEventListener("click", closeDrawer);
+viewportSelect.addEventListener("change", () => {
+  if (!isViewportMode(viewportSelect.value)) return;
+  viewportMode = viewportSelect.value;
+  storeViewport(viewportMode);
+  applyViewport();
+});
+window.addEventListener("resize", () => {
+  if (viewportMode === "auto") applyViewport();
+});
+
 settingsButton.addEventListener("click", () => {
   if (settings.classList.contains("hidden")) openSettings();
   else closeSettings();
@@ -755,6 +843,10 @@ settings.addEventListener("pointerdown", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (drawerOpen) {
+    closeDrawer();
+    return;
+  }
   if (!settings.classList.contains("hidden")) {
     closeSettings();
     return;
@@ -775,6 +867,7 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("focus", () => void refresh());
 
+applyViewport();
 void loadPanelConfig().then(() => refresh());
 window.setInterval(() => {
   if (!document.hidden) void refresh();
