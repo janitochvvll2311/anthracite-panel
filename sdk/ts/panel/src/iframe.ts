@@ -43,6 +43,19 @@ type RpcResult = {
 
 let sequence = 0;
 
+const FRAME_STYLE_ID = "anth-frame-defaults";
+
+/// Defaults live in a zero-specificity rule, so a panel's own `.app-frame`
+/// rules win instead of fighting inline styles.
+function ensureFrameStyles(): void {
+  if (document.getElementById(FRAME_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = FRAME_STYLE_ID;
+  style.textContent =
+    ":where(.app-frame){display:block;width:100%;height:160px;border:0;background:transparent;color-scheme:dark;}";
+  document.head.append(style);
+}
+
 /// `crypto.randomUUID` is only available in a secure context; a panel served
 /// over plain HTTP still needs an instance id.
 function instanceId(): string {
@@ -72,6 +85,7 @@ export async function mountFrame(
   host: HTMLElement,
   options: FrameOptions,
 ): Promise<() => void> {
+  ensureFrameStyles();
   const token = instanceId();
   const allow = `/api/apps/${encodeURIComponent(options.context.app.id)}/`;
   const iframe = document.createElement("iframe");
@@ -82,13 +96,6 @@ export async function mountFrame(
     `${options.context.contribution.label} — ${options.context.app.id}`,
   );
   iframe.src = options.frameUrl ?? "/app-frame.html";
-  // Defaults every host gets for free; a panel may override them in CSS.
-  iframe.style.border = "0";
-  iframe.style.display = "block";
-  iframe.style.width = "100%";
-  iframe.style.height = "160px";
-  iframe.style.background = "transparent";
-  iframe.style.colorScheme = "dark";
 
   let settled = false;
   let ready = false;

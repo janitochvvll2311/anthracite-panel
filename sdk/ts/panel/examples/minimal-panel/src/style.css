@@ -158,6 +158,9 @@ button { font: inherit; color: inherit; }
 }
 .ghost:hover { color: var(--text); }
 .ghost.small { font-size: 11px; }
+.dock-button { display: none; }
+.pane.floating .dock-button { display: inline-flex; }
+.pane.floating .detach-button { display: none; }
 .pane-body { overflow: auto; padding: 16px; }
 
 .app-frame {

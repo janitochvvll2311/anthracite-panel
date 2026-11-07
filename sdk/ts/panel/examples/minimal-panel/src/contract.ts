@@ -8,7 +8,7 @@ import {
   ordered,
   type App,
   type Contribution,
-} from "../../../src/index";
+} from "@anthracite/panel";
 
 export function visibleViews(apps: App[]): Contribution[] {
   return ordered(apps, VIEW);

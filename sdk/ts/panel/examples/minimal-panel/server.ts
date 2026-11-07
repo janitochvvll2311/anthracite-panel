@@ -6,9 +6,20 @@
 // the contract, ordering, asset URLs and the sandboxed iframe come from
 // @anthracite/panel.
 
+import { loopbackTarget } from "./src/target";
+
 const root = import.meta.dir;
 const port = Number(process.env.PORT ?? 8091);
-const target = process.env.ANTH_PANEL ?? "http://127.0.0.1:8090";
+let target: URL;
+try {
+  target = loopbackTarget(
+    process.env.ANTH_PANEL ?? "http://127.0.0.1:8090",
+    process.env.ANTH_PANEL_ALLOW_REMOTE === "1",
+  );
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+}
 const credentials = process.env.ANTH_PANEL_AUTH ?? "operator:anthracite-dev";
 const authorization = `Basic ${btoa(credentials)}`;
 
@@ -61,6 +72,7 @@ async function proxy(request: Request): Promise<Response> {
     response = await fetch(upstream, {
       method: request.method,
       headers,
+      redirect: "manual",
       body:
         request.method === "GET" || request.method === "HEAD"
           ? undefined
@@ -109,5 +121,5 @@ const server = Bun.serve({
 });
 
 console.log(
-  `minimal panel listening on http://${server.hostname}:${server.port} (api ${target})`,
+  `minimal panel listening on http://${server.hostname}:${server.port} (api ${target.href})`,
 );

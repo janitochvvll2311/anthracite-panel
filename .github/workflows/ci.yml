@@ -91,7 +91,9 @@ jobs:
       # acid test's other side compiling.
       - name: Test the second panel
         working-directory: sdk/ts/panel/examples/minimal-panel
-        run: bun test
+        run: |
+          bun install
+          bun test
 
       - name: Build the second panel
         working-directory: sdk/ts/panel/examples/minimal-panel

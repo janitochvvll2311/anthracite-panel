@@ -11,13 +11,14 @@ import {
   type App,
   type Contribution,
   type FrameContext,
-} from "../../../src/index";
+} from "@anthracite/panel";
 
 import { ignoredViews, visibleViews } from "./contract";
 
 type Surface = {
   apps: App[];
   degraded: { app: string; reason: string }[];
+  fatal?: { kind?: string; message?: string };
 };
 
 type CompositionView = {
@@ -188,8 +189,10 @@ function open(contribution: Contribution): void {
   const owner = element("span", "owner", contribution.app.id);
   const tools = element("div", "tools");
   const detachButton = button("ghost small", "Detach", "Move to a floating pane");
+  detachButton.classList.add("detach-button");
   detachButton.addEventListener("click", () => detach(key));
   const dockButton = button("ghost small", "Dock", "Return to the tab strip");
+  dockButton.classList.add("dock-button");
   dockButton.addEventListener("click", () => dock(key));
   const closeButton = button("ghost small", "×", "Close");
   closeButton.addEventListener("click", () => close(key));
@@ -223,7 +226,8 @@ function renderSidebar(): void {
   }
   for (const contribution of contributions) {
     const key = contributionKey(contribution);
-    const node = button("view", "", `${contribution.slot.label} — ${contribution.app.id}`);
+    const node = button("view", "");
+    node.title = contribution.app.id;
     if (key === active) node.classList.add("active");
     node.append(
       element("span", "view-label", contribution.slot.label),
@@ -275,9 +279,18 @@ function renderTabs(): void {
 }
 
 function renderPanes(): void {
+  const detached = [...tabs.values()].filter((tab) => tab.detached);
   for (const tab of tabs.values()) {
     tab.element.classList.toggle("floating", tab.detached);
     tab.element.classList.toggle("active", tab.detached || tab.key === active);
+    if (tab.detached) {
+      const index = detached.indexOf(tab);
+      tab.element.style.top = `${62 + index * 18}px`;
+      tab.element.style.right = `${24 + index * 18}px`;
+    } else {
+      tab.element.style.removeProperty("top");
+      tab.element.style.removeProperty("right");
+    }
   }
   empty.classList.toggle("hidden", tabs.size > 0);
 }
@@ -322,12 +335,20 @@ async function refresh(): Promise<void> {
     apps = value.surface.apps;
     degraded = value.surface.degraded;
     retry = 0;
-    setStatus(
-      degraded.length > 0 ? "bad" : "ok",
-      `${apps.length} app${apps.length === 1 ? "" : "s"} · ${viewsFor().length} view${
-        viewsFor().length === 1 ? "" : "s"
-      }`,
-    );
+    if (value.surface.fatal) {
+      const fatal = value.surface.fatal;
+      setStatus(
+        "bad",
+        `composition fatal: ${fatal.message ?? fatal.kind ?? "cannot boot"}`,
+      );
+    } else {
+      setStatus(
+        degraded.length > 0 ? "bad" : "ok",
+        `${apps.length} app${apps.length === 1 ? "" : "s"} · ${viewsFor().length} view${
+          viewsFor().length === 1 ? "" : "s"
+        }`,
+      );
+    }
     reconcile();
   } catch (error) {
     setStatus("bad", `disconnected — retrying (${error instanceof Error ? error.message : error})`);

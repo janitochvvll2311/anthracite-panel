@@ -8,6 +8,7 @@ panel or any app.
 ## Run
 
 ```sh
+bun install
 bun run start
 ```
 
@@ -18,7 +19,10 @@ development token.
 Environment:
 
 - `PORT` — default `8091`
-- `ANTH_PANEL` — API transport, default `http://127.0.0.1:8090`
+- `ANTH_PANEL` — API transport, default `http://127.0.0.1:8090`; it must be
+  loopback or the process refuses to start, because the proxy attaches the
+  panel's Basic token.
+- `ANTH_PANEL_ALLOW_REMOTE=1` — explicit opt-in for a non-loopback transport.
 - `ANTH_PANEL_AUTH` — `operator:token`, default `operator:anthracite-dev`
 
 Open `http://127.0.0.1:8091/` or the host's VPN address; use `operator` and the
