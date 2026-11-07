@@ -114,21 +114,16 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let token = match args.token.clone() {
-        Some(token) => Some(token),
-        None if args.listen.ip().is_loopback() => None,
-        // A non-loopback bind is a network service. Do not expose the
-        // privileged API without a credential; generate one and show it once.
-        None => {
-            let token = random_hex(24);
-            eprintln!("anth-panel token: {token}");
-            Some(token)
-        }
-    };
-    if token.is_some() {
+    if args.token.is_none() && !args.listen.ip().is_loopback() {
         eprintln!(
-            "anth-panel requires Basic auth on /api (username `operator`, password from --token or the generated token)"
+            "refusing to listen on {} without --token: the engine API is privileged; \
+             pass a secret or bind 127.0.0.1",
+            args.listen
         );
+        return ExitCode::from(2);
+    }
+    if args.token.is_some() {
+        eprintln!("anth-panel requires Basic auth on /api (username `operator`)");
     }
 
     let listener = match TcpListener::bind(args.listen).await {
@@ -149,7 +144,7 @@ async fn main() -> ExitCode {
 
     let state = Arc::new(Panel {
         slots: &SLOTS,
-        authorization: token.as_deref().map(basic_authorization),
+        authorization: args.token.as_deref().map(basic_authorization),
         #[cfg(debug_assertions)]
         web: Some(args.web.clone()),
         #[cfg(not(debug_assertions))]
@@ -301,19 +296,6 @@ async fn require_auth(State(state): State<Arc<Panel>>, request: Request, next: N
 fn basic_authorization(token: &str) -> HeaderValue {
     let encoded = base64::engine::general_purpose::STANDARD.encode(format!("operator:{token}"));
     HeaderValue::from_str(&format!("Basic {encoded}")).expect("a Basic header is valid")
-}
-
-fn random_hex(bytes: usize) -> String {
-    let mut data = vec![0u8; bytes];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        use std::io::Read;
-        let _ = file.read_exact(&mut data);
-    } else {
-        for (index, byte) in data.iter_mut().enumerate() {
-            *byte = (std::process::id() as usize).wrapping_add(index) as u8;
-        }
-    }
-    data.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(debug_assertions)]

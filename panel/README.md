@@ -31,9 +31,9 @@ credential, because the linked engine API is privileged:
 cargo run -- --listen 0.0.0.0:8090 --config /run/anth/config.toml --token "$SECRET"
 ```
 
-Open the printed URL in a browser and use username `operator` with the token as
-the password. If `--token` is omitted on a non-loopback bind, the panel
-generates one and prints it once. Sessions replace this shared secret later.
+Open the URL in a browser and use username `operator` with the token as the
+password. Without `--token`, a non-loopback bind refuses to start: there is no
+silent unauthenticated mode. Sessions replace this shared secret later.
 
 The panel and the engine share a process and the Unix socket for `anth`; no
 second engine may own the same state tree.
