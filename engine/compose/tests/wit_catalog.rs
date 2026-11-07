@@ -55,13 +55,37 @@ fn every_native_id_resolves_to_an_interface() {
     }
 }
 
+fn copy_catalog(dst: &std::path::Path) {
+    use std::fs;
+    for package in ["error", "env", "store"] {
+        let from = repo_root().join("sdk/rust/guest/wit/deps").join(package);
+        let to = dst.join("deps").join(package);
+        fs::create_dir_all(&to).expect("mkdir");
+        for entry in fs::read_dir(&from).expect("read_dir") {
+            let entry = entry.expect("entry");
+            fs::copy(entry.path(), to.join(entry.file_name())).expect("copy");
+        }
+    }
+}
+
 #[test]
 fn the_hello_app_resolves_against_its_packaged_catalog() {
-    let root = repo_root().join("apps/hello/wit");
+    use std::fs;
+    let dir = std::env::temp_dir()
+        .join("anthracite-panel")
+        .join(format!("anth-hello-wit-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    fs::copy(
+        repo_root().join("apps/hello/wit/hello.wit"),
+        dir.join("hello.wit"),
+    )
+    .expect("hello.wit");
+    copy_catalog(&dir);
     let mut resolve = wit_parser::Resolve::default();
     let (package, _) = resolve
-        .push_dir(&root)
-        .unwrap_or_else(|error| panic!("parsing {}: {error:#}", root.display()));
+        .push_dir(&dir)
+        .unwrap_or_else(|error| panic!("parsing {}: {error:#}", dir.display()));
     let name = &resolve.packages[package].name;
     assert_eq!(name.namespace, "anthracite");
     assert_eq!(name.name, "hello");
@@ -71,6 +95,7 @@ fn the_hello_app_resolves_against_its_packaged_catalog() {
     );
     let imports = world_imports(&resolve, package, "app");
     assert!(imports.contains("anth:env/time@1.0.0"), "{imports:?}");
+    let _ = fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -107,28 +132,30 @@ fn the_hello_manifest_matches_its_component_and_ui() {
 fn the_hello_catalog_matches_the_engine_catalog() {
     use std::fs;
     let engine = repo_root().join("engine/wit/deps");
-    let hello = repo_root().join("apps/hello/wit/deps");
-    for package in ["error", "env", "store"] {
-        let from = engine.join(package);
-        let to = hello.join(package);
-        let mut expected = fs::read_dir(&from)
-            .expect("engine deps")
-            .map(|entry| entry.expect("entry").file_name())
-            .collect::<Vec<_>>();
-        let mut actual = fs::read_dir(&to)
-            .expect("hello deps")
-            .map(|entry| entry.expect("entry").file_name())
-            .collect::<Vec<_>>();
-        expected.sort();
-        actual.sort();
-        assert_eq!(expected, actual, "package {package}");
-        for file in expected {
-            assert_eq!(
-                fs::read(from.join(&file)).expect("engine file"),
-                fs::read(to.join(&file)).expect("hello file"),
-                "{} drifted",
-                file.to_string_lossy()
-            );
+    for catalog in ["sdk/rust/guest/wit/deps"] {
+        let copy = repo_root().join(catalog);
+        for package in ["error", "env", "store"] {
+            let from = engine.join(package);
+            let to = copy.join(package);
+            let mut expected = fs::read_dir(&from)
+                .expect("engine deps")
+                .map(|entry| entry.expect("entry").file_name())
+                .collect::<Vec<_>>();
+            let mut actual = fs::read_dir(&to)
+                .expect("packaged deps")
+                .map(|entry| entry.expect("entry").file_name())
+                .collect::<Vec<_>>();
+            expected.sort();
+            actual.sort();
+            assert_eq!(expected, actual, "{catalog} package {package}");
+            for file in expected {
+                assert_eq!(
+                    fs::read(from.join(&file)).expect("engine file"),
+                    fs::read(to.join(&file)).expect("packaged file"),
+                    "{catalog}: {} drifted",
+                    file.to_string_lossy()
+                );
+            }
         }
     }
 }

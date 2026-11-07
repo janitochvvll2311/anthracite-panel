@@ -10,3 +10,5 @@ frontend/dist
 panel/web/dist
 *.log
 .DS_Store
+
+apps/*/wit/deps/

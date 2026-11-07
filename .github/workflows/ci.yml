@@ -30,6 +30,34 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  apps:
+    name: apps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.263.0
+
+      - name: Format
+        run: cargo fmt --manifest-path apps/Cargo.toml --all --check
+
+      # No `wit/deps` is committed: hello's build script mirrors the SDK
+      # catalog, which is what proves the guest facade injects it.
+      - name: Build and verify the committed component
+        run: |
+          set -eu
+          scripts/build-app.sh apps/hello
+          sha=$(sha256sum apps/hello/wasm/app.wasm | cut -d' ' -f1)
+          grep -q "sha256 = \"$sha\"" apps/hello/manifest.toml
+
   engine:
     name: engine
     runs-on: ubuntu-latest
