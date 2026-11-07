@@ -843,12 +843,12 @@ settings.addEventListener("pointerdown", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
-  if (drawerOpen) {
-    closeDrawer();
-    return;
-  }
   if (!settings.classList.contains("hidden")) {
     closeSettings();
+    return;
+  }
+  if (drawerOpen) {
+    closeDrawer();
     return;
   }
   const top = [...floating.values()].sort(
