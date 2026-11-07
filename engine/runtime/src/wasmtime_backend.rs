@@ -1003,6 +1003,47 @@ mod tests {
     }
 
     #[test]
+    fn a_denied_app_error_maps_to_denied() {
+        let value = Val::Result(Err(Some(Box::new(Val::Variant(
+            "denied".to_string(),
+            Some(Box::new(Val::String("no access".to_string()))),
+        )))));
+        let error = val_to_json(&value).expect_err("denied");
+        assert_eq!(error.kind(), ErrorKind::Denied);
+        assert_eq!(error.message(), "no access");
+    }
+
+    #[test]
+    fn a_too_large_app_error_carries_the_limit() {
+        let value = Val::Result(Err(Some(Box::new(Val::Variant(
+            "too-large".to_string(),
+            Some(Box::new(Val::U64(4096))),
+        )))));
+        let error = val_to_json(&value).expect_err("too large");
+        assert_eq!(error.kind(), ErrorKind::TooLarge);
+        assert_eq!(
+            error.envelope().error.detail.expect("detail")["limit"],
+            4096
+        );
+    }
+
+    #[test]
+    fn an_unknown_app_error_is_internal() {
+        let value = Val::Result(Err(Some(Box::new(Val::Variant(
+            "surprise".to_string(),
+            None,
+        )))));
+        let error = val_to_json(&value).expect_err("unknown");
+        assert_eq!(error.kind(), ErrorKind::Internal);
+        assert_eq!(error.message(), "surprise");
+        let malformed = Val::Result(Err(None));
+        assert_eq!(
+            val_to_json(&malformed).expect_err("malformed").kind(),
+            ErrorKind::Internal
+        );
+    }
+
+    #[test]
     fn a_log_line_is_sanitized_and_bounded() {
         let dirty = format!("a\nb\u{0007}{}", "x".repeat(5000));
         let clean = sanitize(&dirty);
