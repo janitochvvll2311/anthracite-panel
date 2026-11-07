@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "anth-minimal-panel",
+      "dependencies": {
+        "@anthracite/panel": "file:../..",
+      },
+    },
+  },
+  "packages": {
+    "@anthracite/panel": ["@anthracite/panel@file:../..", {}],
+  }
+}

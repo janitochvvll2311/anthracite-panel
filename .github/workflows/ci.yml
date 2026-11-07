@@ -75,7 +75,7 @@ jobs:
 
       - name: Test the panel contract
         working-directory: sdk/ts/panel
-        run: bun test
+        run: bun run test
 
       - name: Test the shell
         working-directory: panel/frontend
@@ -85,6 +85,18 @@ jobs:
 
       - name: Build the frontend
         working-directory: panel/frontend
+        run: bun run build
+
+      # The second panel uses only sdk/ts/panel; building it here keeps the
+      # acid test's other side compiling.
+      - name: Test the second panel
+        working-directory: sdk/ts/panel/examples/minimal-panel
+        run: |
+          bun install
+          bun test
+
+      - name: Build the second panel
+        working-directory: sdk/ts/panel/examples/minimal-panel
         run: bun run build
 
       - name: Format

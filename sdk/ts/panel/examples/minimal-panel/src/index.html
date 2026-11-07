@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Anthracite — second panel</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <strong>Second panel</strong>
+      <span class="badge">panel.view only</span>
+      <div class="grow"></div>
+      <span id="status" class="status">connecting…</span>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="title">Views</div>
+        <nav id="views"></nav>
+        <div id="ignored" class="ignored"></div>
+      </aside>
+
+      <main class="workspace">
+        <div id="tabs" class="tabs"></div>
+        <div id="panes" class="panes">
+          <div id="empty" class="empty">
+            <strong>Nothing open</strong>
+            <span>Pick a view from the SDK contract.</span>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

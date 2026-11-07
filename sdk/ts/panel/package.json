@@ -5,9 +5,10 @@
   "type": "module",
   "description": "The panel contract: slots, contribution order and asset URLs",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./app-frame.html": "./src/app-frame.html"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "bun test src"
   }
 }
