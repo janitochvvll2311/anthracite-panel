@@ -117,13 +117,14 @@ fn the_hello_manifest_matches_its_component_and_ui() {
         .collect();
     assert_eq!(hash, wasm.sha256, "the manifest hash is stale");
 
-    let slot = &manifest.slot[0];
-    let module = std::fs::read(app.join(&slot.module)).expect("ui module");
-    let hash: String = Sha256::digest(&module)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    assert_eq!(hash, slot.sha256, "the slot hash is stale");
+    for slot in &manifest.slot {
+        let module = std::fs::read(app.join(&slot.module)).expect("ui module");
+        let hash: String = Sha256::digest(&module)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(hash, slot.sha256, "the hash of `{}` is stale", slot.tag);
+    }
     assert_eq!(manifest.route[0].path, "/hello");
     assert_eq!(manifest.cli[0].verb, "greet");
 }

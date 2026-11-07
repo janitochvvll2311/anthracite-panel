@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Anthracite</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <strong>Anthracite</strong>
+      </div>
+      <span id="health" class="health" data-state="offline">connecting…</span>
+      <div class="grow"></div>
+      <div id="actions" class="actions" aria-label="Actions"></div>
+      <button id="settings-button" class="ghost" type="button">
+        <span aria-hidden="true">⚙</span> Settings
+      </button>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-title">Workspace</div>
+        <nav id="views" aria-label="Views"></nav>
+        <div id="warnings" class="warnings" aria-live="polite"></div>
+        <footer class="sidebar-foot">
+          <span>Anthracite</span>
+          <span id="panel-version" class="muted">v0.5.0</span>
+        </footer>
+      </aside>
+
+      <main class="workspace">
+        <div id="tabs" class="tabs" role="tablist" aria-label="Open views"></div>
+        <div id="panes" class="panes">
+          <div id="empty" class="empty">
+            <div class="empty-mark" aria-hidden="true"></div>
+            <h2>Nothing open yet</h2>
+            <p>Pick a view from the sidebar. Apps contribute the views; the panel owns the frame.</p>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <div id="windows" class="windows"></div>
+
+    <div id="settings" class="settings hidden" role="dialog" aria-modal="true" aria-label="Settings">
+      <div class="settings-card">
+        <header>
+          <div>
+            <strong>Settings</strong>
+            <span class="muted">contributed by running apps</span>
+          </div>
+          <button id="settings-close" class="ghost" type="button">Close</button>
+        </header>
+        <div id="settings-body"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>

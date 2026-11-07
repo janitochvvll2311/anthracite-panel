@@ -1,0 +1,12 @@
+{
+  "name": "anth-panel-web",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@anthracite/panel": "file:../../sdk/ts/panel"
+  },
+  "scripts": {
+    "build": "bun build src/main.ts --outdir dist --target browser && cp src/index.html src/style.css src/favicon.svg ../../sdk/ts/panel/src/app-frame.html dist/",
+    "dev": "bun build src/main.ts --outdir dist --target browser --watch"
+  }
+}

@@ -1,0 +1,79 @@
+import { expect, test } from "bun:test";
+
+import {
+  ACTION,
+  VIEW,
+  assetUrl,
+  contributionKey,
+  ignored,
+  ordered,
+  type App,
+  type Slot,
+} from "./index";
+
+function slot(id: string, tag: string, order: number): Slot {
+  return {
+    id,
+    label: tag,
+    order,
+    tag,
+    module: `web/${tag}.js`,
+    sha256: "a".repeat(64),
+  };
+}
+
+function app(id: string, slots: Slot[]): App {
+  return { id, version: "0.1.0", risk: "read", slots };
+}
+
+test("only the requested slot is mounted, in deterministic order", () => {
+  const notes = app("org.example.notes", [
+    slot(VIEW, "beta", 2),
+    slot(ACTION, "run", 1),
+    slot(VIEW, "alpha", 1),
+  ]);
+  const mounted = ordered([notes], VIEW);
+  expect(mounted.map((contribution) => contribution.slot.tag)).toEqual([
+    "alpha",
+    "beta",
+  ]);
+  expect(ordered([notes], ACTION)).toHaveLength(1);
+});
+
+test("order is code-unit, not locale-collated", () => {
+  const mounted = ordered(
+    [app("org.example.a", [slot(VIEW, "same", 1)]), app("org.example.Z", [slot(VIEW, "same", 1)])],
+    VIEW,
+  );
+  expect(mounted.map((contribution) => contribution.app.id)).toEqual([
+    "org.example.Z",
+    "org.example.a",
+  ]);
+});
+
+test("the same order and tag tie-break by app id", () => {
+  const mounted = ordered(
+    [app("org.example.b", [slot(VIEW, "same", 1)]), app("org.example.a", [slot(VIEW, "same", 1)])],
+    VIEW,
+  );
+  expect(mounted.map((contribution) => contribution.app.id)).toEqual([
+    "org.example.a",
+    "org.example.b",
+  ]);
+});
+
+test("an asset URL encodes every segment and carries the hash", () => {
+  const contribution = { app: app("org.example.notes", []), slot: slot(VIEW, "notes", 1) };
+  contribution.slot.module = "web/a b#c?.js";
+  expect(assetUrl(contribution)).toBe(
+    "/api/apps/org.example.notes/assets/web/a%20b%23c%3F.js?v=aaaaaaaaaaaaaaaa",
+  );
+  expect(contributionKey(contribution)).toBe("org.example.notes#panel.view#notes");
+});
+
+test("ignored contributions target slots the panel does not implement", () => {
+  const notes = app("org.example.notes", [slot(VIEW, "view", 1), slot(ACTION, "run", 1)]);
+  expect(ignored([notes], [VIEW]).map((contribution) => contribution.slot.id)).toEqual([
+    ACTION,
+  ]);
+});

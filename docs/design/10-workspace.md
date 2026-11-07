@@ -28,8 +28,8 @@ sdk/                       the compatibility boundary
     client/                generated TypeScript client
 
 panel/                     the official implementation
-  backend/                 Rust workspace: bin `anth-panel`, embeds web/dist
-  web/                     Bun workspace: the web app source
+  backend/                 Rust workspace: bin `anth-panel`, embeds frontend/dist
+  frontend/                Bun workspace: the web app source
 
 apps/                      backend-frontend app catalogue
   hello/                   the smallest component: one export, one import, one route
@@ -61,7 +61,7 @@ truth.
 engine/*        <-  sdk/rust/panel  <-  panel/backend
 engine/*        <-  sdk/rust/guest  <-  apps/*
 engine/*        <-  sdk/rust/cli
-sdk/ts/panel    <-  panel/web,  apps/*/web
+sdk/ts/panel    <-  panel/frontend,  apps/*/web
 
 forbidden:  panel/backend -> engine/*        (only through the SDK)
 forbidden:  engine/*      -> sdk, panel, apps
