@@ -175,11 +175,11 @@ mod tests {
             "/api/apps/org.example.notes/assets/web/notes.js"
         );
         let mut spaced = slot(VIEW, "notes", 1);
-        spaced.module = "web/a b.js".to_string();
+        spaced.module = "web/a b#c?.js".to_string();
         let contribution = Contribution::from_surface(&app("org.example.notes"), &spaced);
         assert_eq!(
             contribution.asset_url(),
-            "/api/apps/org.example.notes/assets/web/a%20b.js"
+            "/api/apps/org.example.notes/assets/web/a%20b%23c%3F.js"
         );
     }
 
