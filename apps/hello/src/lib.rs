@@ -2,13 +2,13 @@
 //! route. It is built for `wasm32-unknown-unknown` and wrapped by
 //! `scripts/build-app.sh`.
 
-// The guest SDK re-exports the generator; the alias is what the generated code
-// expects to find under the `wit_bindgen` name.
-extern crate anth_guest as wit_bindgen;
+// The guest SDK re-exports the generator; `runtime_path` points the generated
+// code at it instead of requiring a direct `wit-bindgen` dependency.
 
-wit_bindgen::generate!({
+anth_guest::wit_bindgen::generate!({
     path: "wit",
     world: "app",
+    runtime_path: "anth_guest::wit_bindgen::rt",
     with: {
         "anth:env/time@1.0.0": generate,
     },

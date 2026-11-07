@@ -30,6 +30,26 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  apps:
+    name: apps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          targets: wasm32-unknown-unknown
+          components: rustfmt
+
+      - name: Format
+        run: cargo fmt --manifest-path apps/Cargo.toml --all --check
+
+      # No `wit/deps` is committed: hello's build script mirrors the SDK
+      # catalog, which is what proves the guest facade injects it.
+      - name: Build hello for wasm
+        run: cargo build --manifest-path apps/Cargo.toml --release --target wasm32-unknown-unknown -p hello
+
   engine:
     name: engine
     runs-on: ubuntu-latest
