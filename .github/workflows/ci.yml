@@ -75,7 +75,7 @@ jobs:
 
       - name: Test the panel contract
         working-directory: sdk/ts/panel
-        run: bun test
+        run: bun run test
 
       - name: Test the shell
         working-directory: panel/frontend

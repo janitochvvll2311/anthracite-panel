@@ -1,0 +1,4 @@
+[test]
+# The example panels are separate consumers with their own install; keep the
+# contract suite scoped to the SDK sources.
+root = "src"
