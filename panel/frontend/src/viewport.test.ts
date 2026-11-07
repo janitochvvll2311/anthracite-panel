@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   DESKTOP_MIN,
   TABLET_MIN,
+  initialViewportMode,
   isViewportMode,
   resolveViewport,
 } from "./viewport";
@@ -27,4 +28,11 @@ test("only the four names are accepted", () => {
   for (const value of [null, "", "phone", "Desktop"]) {
     expect(isViewportMode(value)).toBe(false);
   }
+});
+
+test("the URL wins over storage, and bad values fall back", () => {
+  expect(initialViewportMode("mobile", "desktop")).toBe("mobile");
+  expect(initialViewportMode(null, "tablet")).toBe("tablet");
+  expect(initialViewportMode("phone", "tablet")).toBe("tablet");
+  expect(initialViewportMode("phone", "phone")).toBe("auto");
 });

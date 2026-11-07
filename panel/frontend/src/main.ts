@@ -22,6 +22,7 @@ import {
 
 import {
   VIEWPORT_KEY,
+  initialViewportMode,
   isViewportMode,
   resolveViewport,
   type ResolvedViewport,
@@ -87,6 +88,8 @@ const navToggle = byId<HTMLButtonElement>("nav-toggle");
 const drawerClose = byId<HTMLButtonElement>("drawer-close");
 const drawerBackdrop = byId<HTMLElement>("drawer-backdrop");
 const sidebar = byId<HTMLElement>("sidebar");
+const topbar = byId<HTMLElement>("topbar");
+const workspace = byId<HTMLElement>("workspace");
 
 let surface: Surface | null = null;
 let implemented: string[] = [...PORTABLE];
@@ -113,11 +116,10 @@ const storedViewport = (() => {
     return null;
   }
 })();
-let viewportMode: ViewportMode = isViewportMode(requestedViewport)
-  ? requestedViewport
-  : isViewportMode(storedViewport)
-    ? storedViewport
-    : "auto";
+let viewportMode: ViewportMode = initialViewportMode(
+  requestedViewport,
+  storedViewport,
+);
 let effectiveViewport: ResolvedViewport = "desktop";
 let drawerOpen = false;
 
@@ -136,6 +138,9 @@ function setDrawer(open: boolean): void {
   navToggle.setAttribute("aria-expanded", String(open));
   drawerBackdrop.hidden = !open;
   sidebar.inert = effectiveViewport === "mobile" && !open;
+  topbar.inert = open;
+  workspace.inert = open;
+  windowsElement.inert = open;
   if (open) drawerClose.focus();
   else if (effectiveViewport === "mobile") navToggle.focus();
 }
@@ -509,6 +514,7 @@ function openWindow(
   contribution: Contribution,
   kind: FrameContext["kind"],
 ): void {
+  closeDrawer();
   const key = `window:${kind}:${contributionKey(contribution)}`;
   const existing = floating.get(key);
   if (existing) {
@@ -667,6 +673,7 @@ function renderSettings(): void {
 }
 
 function openSettings(): void {
+  closeDrawer();
   settings.classList.remove("hidden");
   renderSettings();
 }

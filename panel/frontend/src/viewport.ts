@@ -28,3 +28,13 @@ export function resolveViewport(
   if (width < DESKTOP_MIN) return "tablet";
   return "desktop";
 }
+
+/// The URL is an explicit one-load override; a saved choice comes next.
+export function initialViewportMode(
+  requested: string | null,
+  stored: string | null,
+): ViewportMode {
+  if (isViewportMode(requested)) return requested;
+  if (isViewportMode(stored)) return stored;
+  return "auto";
+}

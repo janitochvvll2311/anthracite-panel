@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body data-drawer="closed">
-    <header class="topbar">
+    <header id="topbar" class="topbar">
       <button
         id="nav-toggle"
         class="ghost icon nav-toggle"
@@ -27,7 +27,13 @@
       <span id="health" class="health" data-state="offline">connecting…</span>
       <div class="grow"></div>
       <div id="actions" class="actions" aria-label="Actions"></div>
-      <button id="settings-button" class="ghost" type="button">
+      <button
+        id="settings-button"
+        class="ghost"
+        type="button"
+        aria-label="Settings"
+        title="Settings"
+      >
         <span aria-hidden="true">⚙</span> <span class="label">Settings</span>
       </button>
     </header>
@@ -60,7 +66,7 @@
         </footer>
       </aside>
 
-      <main class="workspace">
+      <main id="workspace" class="workspace">
         <div id="tabs" class="tabs" role="tablist" aria-label="Open views"></div>
         <div id="panes" class="panes">
           <div id="empty" class="empty">
