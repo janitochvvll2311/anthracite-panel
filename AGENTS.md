@@ -37,9 +37,9 @@ dependency that should not exist becomes unrepresentable instead of discouraged.
 - `sdk/rust/` — `guest` (wasm apps), `panel` (panels), `cli` (the `anth`
   commands).
 - `panel/backend/` — the official panel binary; links the SDK, mounts the engine
-  router, wires the CLI and embeds `panel/web/dist`.
+  router, wires the CLI and embeds `panel/frontend/dist`.
 - `apps/` — app bundles. Its own workspace; never built for the host.
-- Bun: `sdk/ts/`, `panel/web/`, `apps/*/web/`.
+- Bun: `sdk/ts/`, `panel/frontend/`, `apps/*/web/`.
 
 The forbidden edges are listed in `docs/design/10-workspace.md` and checked in CI with
 `cargo metadata`. `panel/backend` must not depend on `engine/*` directly, and apps
@@ -63,7 +63,7 @@ wasm-tools component embed --world app apps/<app>/wit <module>.wasm -o embedded.
 wasm-tools component new embedded.wasm -o wasm/<name>.wasm
 ```
 
-A release build of the panel fails without `panel/web/dist`, by design.
+A release build of the panel fails without `panel/frontend/dist`, by design.
 
 ## Rules
 

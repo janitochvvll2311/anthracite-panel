@@ -69,8 +69,8 @@ typed error instead of a crash.
 - `sdk/rust/panel` and `sdk/ts/panel`: the panel contract, slot registry, iframe
   bridge and scoped `postMessage` RPC.
 - `panel/backend`: links the SDK, mounts the engine router, wires the CLI, embeds
-  `panel/web/dist` and fails the release build without it.
-- `panel/web`: a Bun project and a real shell — sidebar, tabbed views, an action
+  `panel/frontend/dist` and fails the release build without it.
+- `panel/frontend`: a Bun project and a real shell — sidebar, tabbed views, an action
   button and detachable floating windows — rendering the three standard slots.
 - Asset serving from bundles, hash-pinned, CSP-clean.
 - A **second, minimal panel** written against the SDK only. It implements

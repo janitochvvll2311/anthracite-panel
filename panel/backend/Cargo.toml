@@ -1,0 +1,27 @@
+[package]
+name = "anth-panel-backend"
+version = "0.5.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "The official panel: static frontend plus a transparent engine client"
+
+[[bin]]
+name = "anth-panel"
+path = "src/main.rs"
+
+[dependencies]
+anth-panel = { path = "../../sdk/rust/panel" }
+axum = { version = "0.8", features = ["http1", "tokio"] }
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+mime_guess = "2"
+percent-encoding = "2"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "signal",
+    "fs",
+] }
+rust-embed = "8"

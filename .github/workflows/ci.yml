@@ -58,6 +58,44 @@ jobs:
           sha=$(sha256sum apps/hello/wasm/app.wasm | cut -d' ' -f1)
           grep -q "sha256 = \"$sha\"" apps/hello/manifest.toml
 
+  panel:
+    name: panel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt, clippy
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: Test the panel contract
+        working-directory: sdk/ts/panel
+        run: bun test
+
+      - name: Build the frontend
+        working-directory: panel/frontend
+        run: |
+          bun install
+          bun run build
+
+      - name: Format
+        run: cargo fmt --manifest-path panel/backend/Cargo.toml --all --check
+
+      - name: Lint
+        run: cargo clippy --manifest-path panel/backend/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path panel/backend/Cargo.toml
+
+      # The release binary embeds dist; without it the build fails, by design.
+      - name: Release build
+        run: cargo build --release --manifest-path panel/backend/Cargo.toml
+
   engine:
     name: engine
     runs-on: ubuntu-latest
