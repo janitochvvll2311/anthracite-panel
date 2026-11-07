@@ -13,9 +13,11 @@ import {
   assetUrl,
   contributionKey,
   ignored as sdkIgnored,
+  mountFrame,
   ordered as orderContributions,
   type App,
   type Contribution,
+  type FrameContext,
 } from "@anthracite/panel";
 
 type DegradedApp = {
@@ -34,21 +36,6 @@ type CompositionView = {
   surface: Surface;
 };
 
-type SlotModule = {
-  mount?: (
-    root: HTMLElement,
-    context: PanelContext,
-  ) => void | (() => void) | Promise<void | (() => void)>;
-};
-
-type PanelContext = {
-  app: { id: string; version: string; risk: string };
-  contribution: Contribution["slot"] & { app: string };
-  panel: { slots: string[]; version: string };
-  kind: "view" | "action" | "settings";
-  close: () => void;
-};
-
 type Tab = {
   key: string;
   contribution: Contribution;
@@ -58,6 +45,9 @@ type Mounted = {
   root: HTMLElement;
   contribution: Contribution;
   dispose: () => void;
+  /// Set when the host closes or replaces the mount; a late module must not
+  /// attach to a detached root.
+  cancelled: boolean;
 };
 
 type Floating = Mounted & {
@@ -258,9 +248,8 @@ function renderTabs(): void {
 
 function contextFor(
   contribution: Contribution,
-  kind: PanelContext["kind"],
-  close: () => void,
-): PanelContext {
+  kind: FrameContext["kind"],
+): FrameContext {
   return {
     app: {
       id: contribution.app.id,
@@ -268,11 +257,9 @@ function contextFor(
       risk: contribution.app.risk,
     },
     contribution: { ...contribution.slot, app: contribution.app.id },
-    panel: { slots: implemented, version: panelVersion },
+    panel: { slots: [...implemented], version: panelVersion },
     kind,
-    close,
-    // A module can call its own app route through the same origin.
-  } as PanelContext;
+  };
 }
 
 function errorCard(error: unknown): HTMLElement {
@@ -284,23 +271,42 @@ function errorCard(error: unknown): HTMLElement {
   return card;
 }
 
+function safeDispose(dispose: () => void): void {
+  try {
+    dispose();
+  } catch (error) {
+    console.error("disposing a module failed", error);
+  }
+}
+
 async function mountInto(
   root: HTMLElement,
   contribution: Contribution,
-  kind: PanelContext["kind"],
+  kind: FrameContext["kind"],
   close: () => void,
+  cancelled: () => boolean,
 ): Promise<() => void> {
   root.replaceChildren(element("div", "loading", "Loading module…"));
   try {
-    const module = (await import(assetUrl(contribution))) as SlotModule;
-    if (typeof module.mount !== "function") {
-      throw new Error("the module does not export mount(root, context)");
+    const response = await fetch(assetUrl(contribution), {
+      headers: { accept: "text/javascript" },
+    });
+    if (!response.ok) throw new Error(await errorMessage(response));
+    const source = await response.text();
+    if (cancelled()) return () => root.replaceChildren();
+    const dispose = await mountFrame(root, {
+      source,
+      context: contextFor(contribution, kind),
+      close,
+      request: (input, init) => fetch(input, init),
+    });
+    if (cancelled()) {
+      dispose();
+      return () => root.replaceChildren();
     }
-    root.replaceChildren();
-    const dispose = await module.mount(root, contextFor(contribution, kind, close));
-    return typeof dispose === "function" ? dispose : () => root.replaceChildren();
+    return dispose;
   } catch (error) {
-    root.replaceChildren(errorCard(error));
+    if (!cancelled()) root.replaceChildren(errorCard(error));
     return () => root.replaceChildren();
   }
 }
@@ -310,7 +316,8 @@ function ensurePane(contribution: Contribution): void {
   const existing = mounted.get(key);
   if (existing) {
     if (existing.contribution.slot.sha256 !== contribution.slot.sha256) {
-      existing.dispose();
+      existing.cancelled = true;
+      safeDispose(existing.dispose);
       existing.root.parentElement?.remove();
       mounted.delete(key);
     } else {
@@ -344,19 +351,29 @@ function ensurePane(contribution: Contribution): void {
     root: body,
     contribution,
     dispose: () => body.replaceChildren(),
+    cancelled: false,
   };
   mounted.set(key, state);
-  void mountInto(body, contribution, "view", () => closeTab(key)).then(
-    (dispose) => {
-      state.dispose = dispose;
-    },
-  );
+  void mountInto(
+    body,
+    contribution,
+    "view",
+    () => closeTab(key),
+    () => state.cancelled,
+  ).then((dispose) => {
+    if (state.cancelled || mounted.get(key) !== state) {
+      safeDispose(dispose);
+      return;
+    }
+    state.dispose = dispose;
+  });
 }
 
 function renderPanes(): void {
   for (const [key, state] of mounted) {
     if (!tabs.has(key)) {
-      state.dispose();
+      state.cancelled = true;
+      safeDispose(state.dispose);
       state.root.parentElement?.remove();
       mounted.delete(key);
     }
@@ -372,7 +389,9 @@ function renderPanes(): void {
 
 function openTab(contribution: Contribution, activateTab = true): void {
   const key = contributionKey(contribution);
-  if (!tabs.has(key)) tabs.set(key, { key, contribution });
+  const existing = tabs.get(key);
+  if (existing) existing.contribution = contribution;
+  else tabs.set(key, { key, contribution });
   if (activateTab) activate(key);
   renderTabs();
   renderPanes();
@@ -389,7 +408,8 @@ function activate(key: string): void {
 function closeTab(key: string): void {
   const state = mounted.get(key);
   if (state) {
-    state.dispose();
+    state.cancelled = true;
+    safeDispose(state.dispose);
     state.root.parentElement?.remove();
     mounted.delete(key);
   }
@@ -415,7 +435,7 @@ function focusWindow(state: Floating): void {
 
 function openWindow(
   contribution: Contribution,
-  kind: PanelContext["kind"],
+  kind: FrameContext["kind"],
 ): void {
   const key = `window:${kind}:${contributionKey(contribution)}`;
   const existing = floating.get(key);
@@ -424,7 +444,8 @@ function openWindow(
       focusWindow(existing);
       return;
     }
-    existing.dispose();
+    existing.cancelled = true;
+    safeDispose(existing.dispose);
     existing.element.remove();
     floating.delete(key);
   }
@@ -453,24 +474,29 @@ function openWindow(
     root: body,
     contribution,
     dispose: () => body.replaceChildren(),
+    cancelled: false,
   };
   floating.set(key, state);
   focusWindow(state);
 
-  close.addEventListener("click", () => {
-    state.dispose();
+  const closeWindow = (): void => {
+    state.cancelled = true;
+    safeDispose(state.dispose);
     windowElement.remove();
     floating.delete(key);
-  });
+  };
+  close.addEventListener("click", closeWindow);
   windowElement.addEventListener("pointerdown", () => focusWindow(state));
   makeDraggable(windowElement, header);
-  void mountInto(body, contribution, kind, () => {
-    state.dispose();
-    windowElement.remove();
-    floating.delete(key);
-  }).then((dispose) => {
-    state.dispose = dispose;
-  });
+  void mountInto(body, contribution, kind, closeWindow, () => state.cancelled).then(
+    (dispose) => {
+      if (state.cancelled || floating.get(key) !== state) {
+        safeDispose(dispose);
+        return;
+      }
+      state.dispose = dispose;
+    },
+  );
 }
 
 function makeDraggable(elementNode: HTMLElement, handle: HTMLElement): void {
@@ -511,7 +537,10 @@ function makeDraggable(elementNode: HTMLElement, handle: HTMLElement): void {
 }
 
 function disposeSettings(): void {
-  for (const state of settingsMounted) state.dispose();
+  for (const state of settingsMounted) {
+    state.cancelled = true;
+    safeDispose(state.dispose);
+  }
   settingsMounted = [];
 }
 
@@ -546,13 +575,22 @@ function renderSettings(): void {
       root: body,
       contribution,
       dispose: () => body.replaceChildren(),
+      cancelled: false,
     };
     settingsMounted.push(state);
-    void mountInto(body, contribution, "settings", closeSettings).then(
-      (dispose) => {
-        state.dispose = dispose;
-      },
-    );
+    void mountInto(
+      body,
+      contribution,
+      "settings",
+      closeSettings,
+      () => state.cancelled,
+    ).then((dispose) => {
+      if (state.cancelled) {
+        safeDispose(dispose);
+        return;
+      }
+      state.dispose = dispose;
+    });
   }
 }
 
@@ -578,13 +616,15 @@ function reconcileWindows(): void {
   for (const [key, state] of floating) {
     const contribution = known.get(contributionKey(state.contribution));
     if (!contribution) {
-      state.dispose();
+      state.cancelled = true;
+      safeDispose(state.dispose);
       state.element.remove();
       floating.delete(key);
       continue;
     }
     if (state.contribution.slot.sha256 !== contribution.slot.sha256) {
-      state.dispose();
+      state.cancelled = true;
+      safeDispose(state.dispose);
       state.element.remove();
       floating.delete(key);
       openWindow(contribution, key.includes(":action:") ? "action" : "view");
@@ -593,9 +633,15 @@ function reconcileWindows(): void {
 }
 
 function reconcile(): void {
-  const known = new Set(ordered(VIEW).map(contributionKey));
+  const views = ordered(VIEW);
+  const fresh = new Map(views.map((contribution) => [contributionKey(contribution), contribution]));
   for (const key of [...tabs.keys()]) {
-    if (!known.has(key)) closeTab(key);
+    const updated = fresh.get(key);
+    if (!updated) {
+      closeTab(key);
+      continue;
+    }
+    tabs.get(key)!.contribution = updated;
   }
   if (activeKey && !tabs.has(activeKey)) {
     activeKey = tabs.size > 0 ? [...tabs.keys()][tabs.size - 1] : null;

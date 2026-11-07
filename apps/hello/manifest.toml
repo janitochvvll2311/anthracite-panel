@@ -29,7 +29,7 @@ icon = "hello"
 order = 1
 tag = "hello"
 module = "web/hello.js"
-sha256 = "f6239d30bd1a00feb7f86ccd3375fb6b3b91080605f2c9849ca734b57b7732a3"
+sha256 = "ba76e55f82be581f2f70fd96fc51f3ef1306ca0b0f1d5b00c490c7d0dd28f9ca"
 
 [[slot]]
 id = "panel.action"
@@ -38,7 +38,7 @@ icon = "bolt"
 order = 2
 tag = "hello-greet"
 module = "web/hello.js"
-sha256 = "f6239d30bd1a00feb7f86ccd3375fb6b3b91080605f2c9849ca734b57b7732a3"
+sha256 = "ba76e55f82be581f2f70fd96fc51f3ef1306ca0b0f1d5b00c490c7d0dd28f9ca"
 
 [[slot]]
 id = "panel.settings"
@@ -47,7 +47,7 @@ icon = "gear"
 order = 3
 tag = "hello-settings"
 module = "web/hello.js"
-sha256 = "f6239d30bd1a00feb7f86ccd3375fb6b3b91080605f2c9849ca734b57b7732a3"
+sha256 = "ba76e55f82be581f2f70fd96fc51f3ef1306ca0b0f1d5b00c490c7d0dd28f9ca"
 
 [[cli]]
 call = "anthracite:hello/greeting@1.0.0#greet"

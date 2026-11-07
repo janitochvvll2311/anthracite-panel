@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Anthracite app</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: #141821;
+        --line: #2a3142;
+        --text: #e8ebf2;
+        --muted: #8f98ab;
+        --accent: #7aa2ff;
+      }
+      * { box-sizing: border-box; }
+      html { background: transparent; }
+      html, body { margin: 0; padding: 0; background: transparent; }
+      html { background: transparent; }
+      body {
+        background: transparent;
+        color: var(--text);
+        font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // The sandboxed side of the panel contract. This classic script runs in an
+      // opaque origin, receives the app module source from the panel, imports it
+      // from a blob, and forwards every request through a scoped RPC.
+      (() => {
+        const pending = new Map();
+        let token = "";
+        let dispose = null;
+
+        const send = (type, payload = {}) => {
+          parent.postMessage({ type, token, ...payload }, "*");
+        };
+
+        const request = (input, init = {}) => {
+          const url = typeof input === "string" ? input : input.url;
+          const headers = init.headers
+            ? Object.fromEntries(new Headers(init.headers))
+            : {};
+          const body =
+            init.body == null
+              ? undefined
+              : typeof init.body === "string"
+                ? init.body
+                : String(init.body);
+          const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+          return new Promise((resolve, reject) => {
+            pending.set(id, {
+              resolve: (result) =>
+                resolve({
+                  ok: result.ok,
+                  status: result.status,
+                  statusText: result.statusText,
+                  headers: {
+                    get: (name) =>
+                      result.headers[String(name).toLowerCase()] ?? null,
+                  },
+                  text: async () => result.body,
+                  json: async () => JSON.parse(result.body),
+                }),
+              reject,
+            });
+            send("anth:fetch", {
+              id,
+              url,
+              init: { method: init.method ?? "GET", headers, body },
+            });
+          });
+        };
+
+        const report = () => {
+          const height = Math.ceil(document.documentElement.scrollHeight);
+          if (height > 0) send("anth:resize", { height });
+        };
+
+        window.addEventListener("message", async (event) => {
+          if (event.source !== parent) return;
+          const message = event.data;
+          if (!message || typeof message !== "object") return;
+
+          if (message.type === "anth:mount") {
+            token = message.token;
+            try {
+              const blob = new Blob([message.source], {
+                type: "text/javascript",
+              });
+              const url = URL.createObjectURL(blob);
+              const module = await import(url);
+              URL.revokeObjectURL(url);
+              if (typeof module.mount !== "function") {
+                throw new Error(
+                  "the module does not export mount(root, context)",
+                );
+              }
+              const context = {
+                ...message.context,
+                fetch: request,
+                close: () => send("anth:close"),
+              };
+              dispose = await module.mount(document.body, context);
+              send("anth:mounted");
+              report();
+            } catch (error) {
+              send("anth:error", {
+                message:
+                  error instanceof Error ? error.message : String(error),
+              });
+            }
+          } else if (message.type === "anth:fetch-result") {
+            const call = pending.get(message.id);
+            if (!call) return;
+            pending.delete(message.id);
+            if (message.result?.error) call.reject(new Error(message.result.error));
+            else call.resolve(message.result);
+          } else if (message.type === "anth:unmount") {
+            try {
+              if (typeof dispose === "function") await dispose();
+            } finally {
+              dispose = null;
+              document.body.replaceChildren();
+            }
+          }
+        });
+
+        if (typeof ResizeObserver === "function") {
+          new ResizeObserver(report).observe(document.body);
+        }
+        send("anth:frame-ready");
+      })();
+    </script>
+  </body>
+</html>

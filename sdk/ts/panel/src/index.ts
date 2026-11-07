@@ -3,6 +3,8 @@
 // This package owns the vocabulary and the deterministic order, so a panel does
 // not reimplement either.
 
+export * from "./iframe";
+
 export const VIEW = "panel.view";
 export const ACTION = "panel.action";
 export const SETTINGS = "panel.settings";
@@ -51,6 +53,12 @@ export function assetUrl(contribution: Contribution): string {
   return `/api/apps/${app}/assets/${module}?v=${contribution.slot.sha256.slice(0, 16)}`;
 }
 
+/// Code-unit order, not `localeCompare`: the layout must not depend on the
+/// browser's locale, and the Rust SDK uses the same ordering.
+function compare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 /// Every contribution to a slot, ordered by `order`, app id and tag. This is the
 /// same tie-break as the Rust SDK, so two panels lay out the same surface the
 /// same way.
@@ -64,8 +72,8 @@ export function ordered(apps: App[], slot: string): Contribution[] {
     .sort(
       (left, right) =>
         left.slot.order - right.slot.order ||
-        left.app.id.localeCompare(right.app.id) ||
-        left.slot.tag.localeCompare(right.slot.tag),
+        compare(left.app.id, right.app.id) ||
+        compare(left.slot.tag, right.slot.tag),
     );
 }
 

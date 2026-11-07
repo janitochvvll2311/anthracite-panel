@@ -2,9 +2,10 @@
 
 Two projects, one application:
 
-- `backend/` — the `anth-panel` binary. Serves the built shell and forwards
-  `/api/*` to the engine over its Unix socket, unchanged.
-- `frontend/` — the Bun project that builds the shell.
+- `backend/` — the `anth-panel` binary. Links the SDK, boots the engine, mounts
+  its `/api` router in-process and serves the built shell.
+- `frontend/` — the Bun project that builds the shell. App modules run in
+  sandboxed iframes, never in the panel origin.
 
 ## Run it
 
@@ -14,12 +15,25 @@ bun install
 bun run build
 
 cd ../backend
-cargo run -- --listen 0.0.0.0:8090 --engine /run/anth/engine.sock
+cargo run -- --listen 127.0.0.1:8090 --config /run/anth/config.toml
 ```
 
-Open `http://<host>:8090/`. The debug binary reads `panel/frontend/dist` from
-disk, so rebuilding the frontend is enough to refresh the shell. A release
+Open `http://127.0.0.1:8090/`. The debug binary reads `panel/frontend/dist`
+from disk, so rebuilding the frontend is enough to refresh the shell. A release
 build embeds `dist` and fails without it.
 
-The panel must run as the same user as the engine: the engine authorizes a
-Unix-socket peer by uid. Sessions will replace that constraint.
+## Exposing it
+
+A loopback panel relies on the OS user for access. Any other bind needs a Basic
+credential, because the linked engine API is privileged:
+
+```sh
+cargo run -- --listen 0.0.0.0:8090 --config /run/anth/config.toml --token "$SECRET"
+```
+
+Open the printed URL in a browser and use username `operator` with the token as
+the password. If `--token` is omitted on a non-loopback bind, the panel
+generates one and prints it once. Sessions replace this shared secret later.
+
+The panel and the engine share a process and the Unix socket for `anth`; no
+second engine may own the same state tree.

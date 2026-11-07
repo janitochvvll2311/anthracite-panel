@@ -79,7 +79,7 @@ function shell(context, compact) {
     output.className = "hello-output";
     output.textContent = "Calling the app route…";
     try {
-      const response = await fetch(
+      const response = await context.fetch(
         `/api/apps/${encodeURIComponent(context.app.id)}/hello?name=${encodeURIComponent(name)}`,
         { headers: { accept: "application/json" } },
       );

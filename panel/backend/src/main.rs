@@ -16,23 +16,34 @@ use std::sync::Arc;
 use anth_panel::{Host, ACTION, SETTINGS, VIEW};
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::Router;
+use base64::Engine as _;
 use percent_encoding::percent_decode_str;
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 
 /// The slots this panel implements, from the SDK rather than a local copy.
 const SLOTS: [&str; 3] = [VIEW, ACTION, SETTINGS];
 
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-                   connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; \
-                   base-uri 'none'; frame-ancestors 'none'";
+const PANEL_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+     connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-src 'self'; \
+     object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+
+/// The sandboxed frame document. Its origin is opaque (no `allow-same-origin`),
+/// so inline bootstrap and blob imports are contained; network is off.
+const FRAME_CSP: &str = "default-src 'none'; script-src 'unsafe-inline' blob:; \
+                         style-src 'unsafe-inline'; img-src data:; connect-src 'none'; \
+                         base-uri 'none'; frame-ancestors 'self'";
 
 #[derive(Clone)]
 struct Panel {
     slots: &'static [&'static str],
+    /// The Basic credential expected on `/api/*`, when the panel is exposed.
+    authorization: Option<HeaderValue>,
     /// Only the debug build reads from disk; the release build embeds the dist.
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     web: Option<PathBuf>,
@@ -41,14 +52,16 @@ struct Panel {
 struct Args {
     listen: SocketAddr,
     config: PathBuf,
+    token: Option<String>,
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     web: PathBuf,
 }
 
 impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
-        let mut listen = "0.0.0.0:8090".to_string();
+        let mut listen = "127.0.0.1:8090".to_string();
         let mut config = "config.toml".to_string();
+        let mut token = std::env::var("ANTH_PANEL_TOKEN").ok();
         let mut web = std::env::var("ANTH_PANEL_WEB").unwrap_or_else(|_| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../frontend/dist")
@@ -59,10 +72,12 @@ impl Args {
             match arg.as_str() {
                 "--listen" => listen = args.next().ok_or("`--listen` needs an address")?,
                 "--config" => config = args.next().ok_or("`--config` needs a path")?,
+                "--token" => token = Some(args.next().ok_or("`--token` needs a secret")?),
                 "--web" => web = args.next().ok_or("`--web` needs a directory")?,
                 "--help" | "-h" => {
                     return Err(
-                        "usage: anth-panel [--listen 0.0.0.0:8090] [--config <path>] [--web <dir>]"
+                        "usage: anth-panel [--listen 127.0.0.1:8090] [--config <path>] \
+                         [--token <secret>] [--web <dir>]"
                             .to_string(),
                     );
                 }
@@ -74,6 +89,7 @@ impl Args {
                 .parse()
                 .map_err(|_| format!("`{listen}` is not a socket address"))?,
             config: PathBuf::from(config),
+            token,
             web: PathBuf::from(web),
         })
     }
@@ -98,6 +114,23 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
+    let token = match args.token.clone() {
+        Some(token) => Some(token),
+        None if args.listen.ip().is_loopback() => None,
+        // A non-loopback bind is a network service. Do not expose the
+        // privileged API without a credential; generate one and show it once.
+        None => {
+            let token = random_hex(24);
+            eprintln!("anth-panel token: {token}");
+            Some(token)
+        }
+    };
+    if token.is_some() {
+        eprintln!(
+            "anth-panel requires Basic auth on /api (username `operator`, password from --token or the generated token)"
+        );
+    }
+
     let listener = match TcpListener::bind(args.listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -116,6 +149,7 @@ async fn main() -> ExitCode {
 
     let state = Arc::new(Panel {
         slots: &SLOTS,
+        authorization: token.as_deref().map(basic_authorization),
         #[cfg(debug_assertions)]
         web: Some(args.web.clone()),
         #[cfg(not(debug_assertions))]
@@ -126,8 +160,11 @@ async fn main() -> ExitCode {
         .route("/health", get(health))
         .route("/panel/config.json", get(panel_config))
         .fallback(any(asset))
-        .with_state(state);
-    let app = shell.nest("/api", host.api());
+        .with_state(state.clone());
+    let api = host
+        .api()
+        .layer(middleware::from_fn_with_state(state, require_auth));
+    let app = shell.nest("/api", api);
 
     println!(
         "anth-panel listening on http://{} (config {})",
@@ -210,6 +247,11 @@ async fn asset(State(state): State<Arc<Panel>>, request: Request) -> Response {
     let Some((mime, bytes)) = loaded else {
         return not_found();
     };
+    let csp = if relative == "app-frame.html" {
+        FRAME_CSP
+    } else {
+        PANEL_CSP
+    };
     let head = request.method() == Method::HEAD;
     let length = bytes.len();
     let body = if head {
@@ -223,13 +265,55 @@ async fn asset(State(state): State<Arc<Panel>>, request: Request) -> Response {
             (header::CONTENT_TYPE, mime.as_str()),
             (header::CACHE_CONTROL, "no-cache"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::CONTENT_SECURITY_POLICY, CSP),
+            (header::CONTENT_SECURITY_POLICY, csp),
             (header::REFERRER_POLICY, "no-referrer"),
         ],
         [(header::CONTENT_LENGTH, length.to_string())],
         body,
     )
         .into_response()
+}
+
+/// The engine API is privileged. A loopback panel relies on the OS user; any
+/// other bind needs Basic credentials, and a generated token is printed once so
+/// the operator can reach it. Sessions replace this shared secret later.
+async fn require_auth(State(state): State<Arc<Panel>>, request: Request, next: Next) -> Response {
+    if let Some(expected) = &state.authorization {
+        let provided = request.headers().get(header::AUTHORIZATION);
+        let matches = provided
+            .map(|value| bool::from(value.as_bytes().ct_eq(expected.as_bytes())))
+            .unwrap_or(false);
+        if !matches {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(
+                    header::WWW_AUTHENTICATE,
+                    "Basic realm=\"Anthracite\", charset=\"UTF-8\"",
+                )],
+                "authentication required",
+            )
+                .into_response();
+        }
+    }
+    next.run(request).await
+}
+
+fn basic_authorization(token: &str) -> HeaderValue {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(format!("operator:{token}"));
+    HeaderValue::from_str(&format!("Basic {encoded}")).expect("a Basic header is valid")
+}
+
+fn random_hex(bytes: usize) -> String {
+    let mut data = vec![0u8; bytes];
+    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        let _ = file.read_exact(&mut data);
+    } else {
+        for (index, byte) in data.iter_mut().enumerate() {
+            *byte = (std::process::id() as usize).wrapping_add(index) as u8;
+        }
+    }
+    data.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(debug_assertions)]
@@ -301,13 +385,25 @@ mod tests {
     }
 
     fn panel(web: Option<PathBuf>) -> Arc<Panel> {
-        Arc::new(Panel { slots: &SLOTS, web })
+        Arc::new(Panel {
+            slots: &SLOTS,
+            authorization: None,
+            web,
+        })
     }
 
     #[test]
-    fn the_default_listen_is_all_interfaces() {
+    fn the_default_listen_is_loopback() {
         let args = Args::parse(std::iter::empty()).expect("args");
-        assert_eq!(args.listen, "0.0.0.0:8090".parse().expect("address"));
+        assert_eq!(args.listen, "127.0.0.1:8090".parse().expect("address"));
+    }
+
+    #[test]
+    fn basic_auth_uses_the_operator_name_and_token() {
+        assert_eq!(
+            basic_authorization("secret").to_str().expect("header"),
+            "Basic b3BlcmF0b3I6c2VjcmV0"
+        );
     }
 
     #[test]

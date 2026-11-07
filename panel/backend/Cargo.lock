@@ -103,9 +103,11 @@ version = "0.5.0"
 dependencies = [
  "anth-panel",
  "axum",
+ "base64",
  "mime_guess",
  "percent-encoding",
  "rust-embed",
+ "subtle",
  "tokio",
 ]
 

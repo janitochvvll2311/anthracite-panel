@@ -40,6 +40,17 @@ test("only the requested slot is mounted, in deterministic order", () => {
   expect(ordered([notes], ACTION)).toHaveLength(1);
 });
 
+test("order is code-unit, not locale-collated", () => {
+  const mounted = ordered(
+    [app("org.example.a", [slot(VIEW, "same", 1)]), app("org.example.Z", [slot(VIEW, "same", 1)])],
+    VIEW,
+  );
+  expect(mounted.map((contribution) => contribution.app.id)).toEqual([
+    "org.example.Z",
+    "org.example.a",
+  ]);
+});
+
 test("the same order and tag tie-break by app id", () => {
   const mounted = ordered(
     [app("org.example.b", [slot(VIEW, "same", 1)]), app("org.example.a", [slot(VIEW, "same", 1)])],
