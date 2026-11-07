@@ -83,6 +83,12 @@ impl Registry {
         &self.keyring
     }
 
+    /// The installed tree of one app. Asset serving joins a manifest-declared
+    /// relative module under it; callers must not invent a path.
+    pub fn app_dir(&self, app: &AppId) -> std::path::PathBuf {
+        self.apps.join(app.as_str())
+    }
+
     pub fn dir(&self) -> &Path {
         &self.apps
     }

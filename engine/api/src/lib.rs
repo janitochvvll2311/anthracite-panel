@@ -31,7 +31,9 @@ use axum::body::Bytes;
 use axum::extract::{
     connect_info::Connected, ConnectInfo, Extension, Path, RawQuery, Request, State,
 };
-use axum::http::header::{ALLOW, ETAG, IF_MATCH, LOCATION};
+use axum::http::header::{
+    ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION,
+};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -208,6 +210,7 @@ pub fn router(state: Arc<EngineState>) -> Router {
             "/engine/apps/{id}/grant",
             get(get_grant).put(approve_app).delete(revoke_grant),
         )
+        .route("/apps/{id}/assets/{*module}", get(app_asset))
         .route("/apps/{id}/{*path}", any(app_route))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
 
@@ -699,6 +702,106 @@ fn query_input(query: Option<&str>) -> Value {
         object.insert(key, value);
     }
     Value::Object(object)
+}
+
+/// A slot's UI module, hash-pinned and immutable (§6.4, §7.7). Only a module
+/// the running app's manifest declares can be requested; the bytes are checked
+/// against the manifest hash before they are served.
+async fn app_asset(
+    State(state): State<Arc<EngineState>>,
+    Path((id, module)): Path<(String, String)>,
+    method: Method,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    use sha2::{Digest, Sha256};
+    let apps = apps(&state)?;
+    let installed = installed_apps(apps)?;
+    let composition = current_composition(&state)?;
+    let resolution =
+        resolve(&composition, &installed).map_err(|error| ApiError(error.into_error()))?;
+    let app = AppId::parse(&id)?;
+    if !resolution.runs(&app) {
+        return Err(ApiError(Error::unavailable(format!(
+            "`{id}` is not running"
+        ))));
+    }
+    let found = installed
+        .iter()
+        .find(|installed| installed.manifest.app.id == id)
+        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+    let slot = found
+        .manifest
+        .slot
+        .iter()
+        .find(|slot| slot.module == module)
+        .ok_or_else(|| {
+            ApiError(Error::not_found(format!(
+                "`{id}` declares no asset `{module}`"
+            )))
+        })?;
+    let relative = std::path::Path::new(&slot.module);
+    if relative
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(ApiError(Error::internal(format!(
+            "`{id}` declares an unsafe asset path `{module}`"
+        ))));
+    }
+    let path = apps.registry.app_dir(&app).join(relative);
+    let etag = format!("\"{}\"", slot.sha256);
+    let cache = "immutable";
+    // The manifest hash is the validator: a conditional hit does not read or
+    // hash the file (§6.4).
+    if if_none_match(&headers, &slot.sha256) {
+        return Ok((
+            StatusCode::NOT_MODIFIED,
+            [(ETAG, etag), (CACHE_CONTROL, cache.to_string())],
+        )
+            .into_response());
+    }
+    let bytes = std::fs::read(&path).map_err(|_| Error::internal("the asset could not be read"))?;
+    let hash: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if hash != slot.sha256 {
+        return Err(ApiError(Error::internal(format!(
+            "`{module}` does not match its manifest hash"
+        ))));
+    }
+    let content_type = match relative.extension().and_then(|value| value.to_str()) {
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        _ => "application/octet-stream",
+    };
+    let body = if method == Method::HEAD {
+        Vec::new()
+    } else {
+        bytes
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(ETAG, etag)
+        .header(CACHE_CONTROL, cache)
+        .header(CONTENT_TYPE, content_type)
+        .body(axum::body::Body::from(body))
+        .map_err(|error| ApiError(Error::internal(format!("building the response: {error}"))))
+}
+
+fn if_none_match(headers: &HeaderMap, hash: &str) -> bool {
+    headers
+        .get(IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').map(str::trim).any(|candidate| {
+                candidate == "*" || candidate == hash || candidate.trim_matches('"') == hash
+            })
+        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1358,18 +1461,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let app = dir.join("apps/org.example.notes");
         let wit = app.join("wit");
+        let web = app.join("web");
         std::fs::create_dir_all(&wit).expect("mkdir");
-        for path in [&dir, &dir.join("apps"), &app, &wit] {
+        std::fs::create_dir_all(&web).expect("mkdir");
+        for path in [&dir, &dir.join("apps"), &app, &wit, &web] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         }
-        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
         let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
         let wit_source =
             "package example:notes@1.0.0;\ninterface thing { ping: func(); }\nworld app { export thing; }\n";
+        let ui_source =
+            "export function mount(root) { root.textContent = \"notes\"; return () => {}; }\n";
         for (path, text) in [
             (app.join("manifest.toml"), manifest),
             (app.join("descriptor.toml"), descriptor),
             (wit.join("notes.wit"), wit_source),
+            (web.join("notes.js"), ui_source),
         ] {
             std::fs::write(&path, text).expect("write");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
@@ -1850,6 +1958,97 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(value["error"]["code"], "invalid");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_slot_module_is_hash_pinned_and_immutable() {
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        let (status, headers, value) = call(
+            state.clone(),
+            "GET",
+            "/api/apps/org.example.notes/assets/web/notes.js",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value, Value::Null);
+        assert!(headers
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/javascript")));
+        assert_eq!(
+            headers
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok()),
+            Some("immutable")
+        );
+        let etag = headers
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .expect("etag")
+            .to_string();
+        let (status, _, _) = call_with(
+            state.clone(),
+            "GET",
+            "/api/apps/org.example.notes/assets/web/notes.js",
+            Vec::new(),
+            &[("if-none-match", &etag)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_MODIFIED);
+        let (status, headers, _) = call(
+            state.clone(),
+            "HEAD",
+            "/api/apps/org.example.notes/assets/web/notes.js",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.get("etag").is_some());
+        let (status, _, _) = call(
+            state,
+            "GET",
+            "/api/apps/org.example.notes/assets/web/nope.js",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_tampered_asset_is_refused_without_the_host_path() {
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        write_grant(&dir, &grant_toml(&dir));
+        std::fs::write(dir.join("apps/org.example.notes/web/notes.js"), b"tampered")
+            .expect("write");
+        let (status, _, value) = call(
+            state,
+            "GET",
+            "/api/apps/org.example.notes/assets/web/notes.js",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let message = value["error"]["message"].as_str().expect("message");
+        assert!(!message.contains(&dir.display().to_string()), "{message}");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn an_asset_of_a_degraded_app_is_unavailable() {
+        let (state, dir) = apps_state_with(&["org.example.notes"]);
+        let (status, _, value) = call(
+            state,
+            "GET",
+            "/api/apps/org.example.notes/assets/web/notes.js",
+            Vec::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(value["error"]["code"], "unavailable");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
