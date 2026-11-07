@@ -32,8 +32,10 @@ cargo run -- --listen 0.0.0.0:8090 --config /run/anth/config.toml --token "$SECR
 ```
 
 Open the URL in a browser and use username `operator` with the token as the
-password. Without `--token`, a non-loopback bind refuses to start: there is no
-silent unauthenticated mode. Sessions replace this shared secret later.
+password. The shell, API and module assets all sit behind it; only `/health` and
+the empty sandboxed frame document are public. Without `--token`, a
+non-loopback bind refuses to start: there is no silent unauthenticated mode.
+Sessions replace this shared secret later.
 
 The panel and the engine share a process and the Unix socket for `anth`; no
 second engine may own the same state tree.

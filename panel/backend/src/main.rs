@@ -156,10 +156,11 @@ async fn main() -> ExitCode {
         .route("/panel/config.json", get(panel_config))
         .fallback(any(asset))
         .with_state(state.clone());
-    let api = host
-        .api()
+    // The shell asks for the credential on the first navigation; the sandboxed
+    // frame document stays public because it carries no data, only the bridge.
+    let app = shell
+        .nest("/api", host.api())
         .layer(middleware::from_fn_with_state(state, require_auth));
-    let app = shell.nest("/api", api);
 
     println!(
         "anth-panel listening on http://{} (config {})",
@@ -270,9 +271,12 @@ async fn asset(State(state): State<Arc<Panel>>, request: Request) -> Response {
 }
 
 /// The engine API is privileged. A loopback panel relies on the OS user; any
-/// other bind needs Basic credentials, and a generated token is printed once so
-/// the operator can reach it. Sessions replace this shared secret later.
+/// other bind needs Basic credentials. Sessions replace this shared secret later.
 async fn require_auth(State(state): State<Arc<Panel>>, request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    if path == "/health" || path == "/app-frame.html" {
+        return next.run(request).await;
+    }
     if let Some(expected) = &state.authorization {
         let provided = request.headers().get(header::AUTHORIZATION);
         let matches = provided
