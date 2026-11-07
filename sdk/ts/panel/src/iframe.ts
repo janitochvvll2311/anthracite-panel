@@ -82,6 +82,13 @@ export async function mountFrame(
     `${options.context.contribution.label} — ${options.context.app.id}`,
   );
   iframe.src = options.frameUrl ?? "/app-frame.html";
+  // Defaults every host gets for free; a panel may override them in CSS.
+  iframe.style.border = "0";
+  iframe.style.display = "block";
+  iframe.style.width = "100%";
+  iframe.style.height = "160px";
+  iframe.style.background = "transparent";
+  iframe.style.colorScheme = "dark";
 
   let settled = false;
   let ready = false;

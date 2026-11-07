@@ -87,6 +87,16 @@ jobs:
         working-directory: panel/frontend
         run: bun run build
 
+      # The second panel uses only sdk/ts/panel; building it here keeps the
+      # acid test's other side compiling.
+      - name: Test the second panel
+        working-directory: sdk/ts/panel/examples/minimal-panel
+        run: bun test
+
+      - name: Build the second panel
+        working-directory: sdk/ts/panel/examples/minimal-panel
+        run: bun run build
+
       - name: Format
         run: cargo fmt --manifest-path panel/backend/Cargo.toml --all --check
 
