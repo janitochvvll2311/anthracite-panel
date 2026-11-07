@@ -6,5 +6,11 @@ license.workspace = true
 description = "The panel contract: slot vocabulary, contributions and asset URLs"
 
 [dependencies]
+anth-api = { path = "../../../engine/api" }
 anth-contract = { path = "../../../engine/contract" }
+anth-engine = { path = "../../../engine/daemon" }
+anth-runtime = { path = "../../../engine/runtime" }
+axum = "0.8"
+libc = "0.2"
 percent-encoding = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }

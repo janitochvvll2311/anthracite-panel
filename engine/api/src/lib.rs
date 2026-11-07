@@ -187,9 +187,13 @@ impl Connected<axum::serve::IncomingStream<'_, UnixListener>> for PeerUid {
     }
 }
 
-/// The full surface, for the Unix socket.
-pub fn router(state: Arc<EngineState>) -> Router {
-    let api = Router::new()
+/// The `/api` surface, state applied.
+///
+/// A host that mounts the router in-process (the linked panel) nests this under
+/// `/api` and marks its browser requests `Trusted`; the daemon wraps it with
+/// liveness in [`router`].
+pub fn api_router(state: Arc<EngineState>) -> Router {
+    Router::new()
         .route("/health", get(readiness))
         .route("/engine/version", get(version))
         .route(
@@ -212,12 +216,15 @@ pub fn router(state: Arc<EngineState>) -> Router {
         )
         .route("/apps/{id}/assets/{*module}", get(app_asset))
         .route("/apps/{id}/{*path}", any(app_route))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_peer));
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_peer))
+        .with_state(state)
+}
 
+/// The full surface, for the Unix socket.
+pub fn router(state: Arc<EngineState>) -> Router {
     Router::new()
         .route("/health", get(health))
-        .nest("/api", api)
-        .with_state(state)
+        .nest("/api", api_router(state))
 }
 
 /// Only what a TCP listener may serve before sessions exist.

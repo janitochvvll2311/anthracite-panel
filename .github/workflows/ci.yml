@@ -93,8 +93,9 @@ jobs:
         run: cargo test --manifest-path panel/backend/Cargo.toml
 
       # The release binary embeds dist; without it the build fails, by design.
-      - name: Release build
-        run: cargo build --release --manifest-path panel/backend/Cargo.toml
+      # `check` still runs the embed macro, without the cost of linking wasmtime.
+      - name: Release check
+        run: cargo check --release --manifest-path panel/backend/Cargo.toml
 
   engine:
     name: engine
