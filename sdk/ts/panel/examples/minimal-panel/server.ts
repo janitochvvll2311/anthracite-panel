@@ -22,6 +22,9 @@ try {
 }
 const credentials = process.env.ANTH_PANEL_AUTH ?? "operator:anthracite-dev";
 const authorization = `Basic ${btoa(credentials)}`;
+const appFrameUrl = new URL(
+  import.meta.resolve("@anthracite/panel/app-frame.html"),
+);
 
 const SHELL_CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
@@ -45,7 +48,7 @@ function json(body: unknown): Response {
 }
 
 async function file(
-  path: string,
+  path: string | URL,
   contentType: string,
   csp?: string,
 ): Promise<Response> {
@@ -63,6 +66,9 @@ async function file(
 async function proxy(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const upstream = new URL(url.pathname + url.search, target);
+  if (upstream.origin !== target.origin) {
+    return text("the request escaped the configured transport", 400);
+  }
   const headers = new Headers(request.headers);
   headers.set("authorization", authorization);
   headers.delete("host");
@@ -96,7 +102,7 @@ const server = Bun.serve({
 
     if (url.pathname === "/health") return json({ status: "ok" });
     if (url.pathname === "/app-frame.html") {
-      return file(`${root}/../../src/app-frame.html`, "text/html", FRAME_CSP);
+      return file(appFrameUrl, "text/html", FRAME_CSP);
     }
 
     if (request.headers.get("authorization") !== authorization) {
