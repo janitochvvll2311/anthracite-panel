@@ -29,6 +29,9 @@ const MIN_PASSWORD: usize = 12;
 const LOGIN_LIMIT: usize = 5;
 const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const LOGIN_BLOCK: Duration = Duration::from_secs(60);
+/// The limiter is an attacker-controlled map; bound it so a scan cannot grow it
+/// without limit while still keeping the recent window for every source.
+const MAX_SOURCES: usize = 4096;
 
 /// The on-disk document. It is the operator's recovery copy, so the password is
 /// stored in clear text on purpose (§6.5); the file mode is the boundary.
@@ -227,12 +230,30 @@ impl Auth {
 }
 
 impl Inner {
+    /// Drops expired sources and evicts one arbitrary entry when the map is at
+    /// its cap. The cap is a memory bound, not a security boundary: the window
+    /// still refuses repeated failures from any source that stays in the map.
+    fn touch(&mut self, source: &str) -> &mut Attempts {
+        let now = Instant::now();
+        self.attempts.retain(|_, attempts| {
+            let recent = attempts
+                .failures
+                .iter()
+                .any(|at| now.duration_since(*at) < LOGIN_WINDOW);
+            let blocked = attempts.blocked_until.is_some_and(|until| until > now);
+            recent || blocked
+        });
+        if self.attempts.len() >= MAX_SOURCES && !self.attempts.contains_key(source) {
+            if let Some(key) = self.attempts.keys().next().cloned() {
+                self.attempts.remove(&key);
+            }
+        }
+        self.attempts.entry(source.to_string()).or_default()
+    }
+
     fn blocked(&mut self, source: &str) -> Option<u64> {
         let now = Instant::now();
-        let attempts = self.attempts.entry(source.to_string()).or_default();
-        attempts
-            .failures
-            .retain(|at| now.duration_since(*at) < LOGIN_WINDOW);
+        let attempts = self.touch(source);
         if let Some(until) = attempts.blocked_until {
             if until > now {
                 return Some((until - now).as_secs().max(1));
@@ -244,7 +265,7 @@ impl Inner {
 
     fn failed(&mut self, source: &str) {
         let now = Instant::now();
-        let attempts = self.attempts.entry(source.to_string()).or_default();
+        let attempts = self.touch(source);
         attempts.failures.push_back(now);
         if attempts.failures.len() >= LOGIN_LIMIT {
             attempts.failures.clear();
@@ -547,6 +568,19 @@ mod tests {
         let auth = Auth::load_or_create(&root, Duration::from_secs(60)).expect("auth");
         auth.change_password(None, "a-new-password", true)
             .expect("change");
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn the_limiter_map_is_bounded() {
+        let root = scratch("bounded");
+        let auth = Auth::load_or_create(&root, Duration::from_secs(60)).expect("auth");
+        for index in 0..(MAX_SOURCES + 10) {
+            let _ = auth.login(&format!("source-{index}"), OPERATOR, "wrong");
+        }
+        let inner = auth.inner.lock().expect("credentials");
+        assert!(inner.attempts.len() <= MAX_SOURCES);
+        drop(inner);
         fs::remove_dir_all(&root).expect("cleanup");
     }
 

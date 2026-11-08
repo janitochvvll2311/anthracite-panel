@@ -197,6 +197,21 @@ pub struct AuthContext {
     pub token: Option<String>,
 }
 
+/// The source a login attempt came from. The TCP listener supplies the peer
+/// address; the socket and the in-process panel have none.
+#[derive(Debug, Clone)]
+pub struct SourceAddress(pub String);
+
+async fn remember_source(mut request: Request, next: Next) -> Response {
+    let source = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(address)| address.ip().to_string())
+        .unwrap_or_else(|| "in-process".to_string());
+    request.extensions_mut().insert(SourceAddress(source));
+    next.run(request).await
+}
+
 impl AuthContext {
     fn peer(actor: String, kind: AuthKind) -> Self {
         Self {
@@ -286,6 +301,7 @@ pub fn api_router(state: Arc<EngineState>) -> Router {
     api_routes(Arc::clone(&state))
         .route_layer(middleware::from_fn(password_change_gate))
         .route_layer(middleware::from_fn_with_state(state, require_peer))
+        .layer(middleware::from_fn(remember_source))
 }
 
 /// The `/api` surface over sessions, for a TCP listener.
@@ -293,6 +309,7 @@ pub fn session_router(state: Arc<EngineState>) -> Router {
     api_routes(Arc::clone(&state))
         .route_layer(middleware::from_fn(password_change_gate))
         .route_layer(middleware::from_fn_with_state(state, require_session))
+        .layer(middleware::from_fn(remember_source))
 }
 
 /// The full surface, for the Unix socket.
@@ -404,12 +421,12 @@ fn now_seconds() -> u64 {
 /// `POST /api/engine/session`: check the operator and mint a bearer token.
 async fn login_session(
     State(state): State<Arc<EngineState>>,
-    ConnectInfo(source): ConnectInfo<SocketAddr>,
+    Extension(source): Extension<SourceAddress>,
     headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
     let auth = auth(&state)?;
-    let source = source.ip().to_string();
+    let source = source.0;
     let login = match auth.login(&source, &request.operator, &request.password) {
         Ok(login) => login,
         Err(error) => {
@@ -1728,7 +1745,10 @@ async fn password_change_gate(request: Request, next: Next) -> Result<Response, 
         let path = request.uri().path();
         let allowed = (request.method() == Method::PATCH && path == "/engine/operator")
             || (path == "/engine/session"
-                && matches!(*request.method(), Method::GET | Method::DELETE));
+                && matches!(
+                    *request.method(),
+                    Method::GET | Method::POST | Method::DELETE
+                ));
         if !allowed {
             return Err(ApiError(Error::password_change_required(
                 "change the first-boot password before using the engine",
@@ -2852,6 +2872,21 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(value["error"]["code"], "unauthenticated");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn login_works_on_a_mounted_router_without_connect_info() {
+        let (state, dir) = session_state();
+        let (operator, password) = credentials(&dir);
+        let (status, value) = trusted_call(
+            state,
+            "POST",
+            "/engine/session",
+            json!({"operator": operator, "password": password}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

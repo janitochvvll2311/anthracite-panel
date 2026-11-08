@@ -39,6 +39,12 @@ const FRAME_CSP: &str = "default-src 'none'; script-src 'unsafe-inline' blob:; \
                          style-src 'unsafe-inline'; img-src data:; connect-src 'none'; \
                          base-uri 'none'; frame-ancestors 'self'";
 
+/// The one page that needs an inline script. It carries no user content: a form
+/// and a fetch to the operator resource.
+const SETUP_CSP: &str = "default-src 'self'; script-src 'unsafe-inline'; \
+                         style-src 'unsafe-inline'; connect-src 'self'; object-src 'none'; \
+                         base-uri 'none'; frame-ancestors 'none'";
+
 #[derive(Clone)]
 struct Panel {
     slots: &'static [&'static str],
@@ -154,6 +160,7 @@ async fn main() -> ExitCode {
     let shell = Router::new()
         .route("/health", get(health))
         .route("/panel/config.json", get(panel_config))
+        .route("/setup", get(setup))
         .fallback(any(asset))
         .with_state(state.clone());
     // The shell asks for the credential on the first navigation; the sandboxed
@@ -187,6 +194,58 @@ async fn health() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "application/json")],
         r#"{"status":"ok"}"#,
     )
+}
+
+/// The first-boot escape hatch: the panel's Basic credential and the generated
+/// operator password are different secrets, so the operator can read the latter
+/// from `state/credentials.txt` and change it here. Until then the engine gate
+/// refuses every other resource.
+async fn setup() -> Response {
+    let body = r#"<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anthracite setup</title>
+<style>
+  body { font: 16px system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; }
+  label { display: block; margin: 1rem 0; }
+  input { display: block; width: 100%; padding: .5rem; margin-top: .25rem; }
+  button { padding: .6rem 1rem; }
+  code { background: #eee; padding: .1rem .25rem; }
+</style>
+<h1>Change the first-boot password</h1>
+<p>Read the current password from <code>state/credentials.txt</code>. The engine
+refuses every other resource until it changes.</p>
+<form id="setup">
+  <label>Current password <input id="current" type="password" autocomplete="current-password" required></label>
+  <label>New password <input id="new" type="password" autocomplete="new-password" minlength="12" required></label>
+  <button type="submit">Change password</button>
+</form>
+<p id="status" role="status"></p>
+<script>
+document.getElementById('setup').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const current = document.getElementById('current').value;
+  const next = document.getElementById('new').value;
+  const response = await fetch('/api/engine/operator', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ current_password: current, new_password: next }),
+  });
+  const status = document.getElementById('status');
+  status.textContent = response.ok ? 'Password changed. Open /.' : await response.text();
+});
+</script>
+</html>"#;
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CONTENT_SECURITY_POLICY, SETUP_CSP),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// The slots this panel implements, so the browser does not hardcode what the
@@ -398,6 +457,26 @@ mod tests {
             SLOTS,
             [anth_panel::VIEW, anth_panel::ACTION, anth_panel::SETTINGS]
         );
+    }
+
+    #[tokio::test]
+    async fn the_setup_page_carries_the_password_form_and_a_narrow_csp() {
+        let response = setup().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/html; charset=utf-8"
+        );
+        let csp = response.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .expect("csp");
+        assert!(csp.contains("script-src 'unsafe-inline'"), "{csp}");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let text = String::from_utf8(body.to_vec()).expect("utf8");
+        assert!(text.contains("current_password"), "{text}");
+        assert!(text.contains("/api/engine/operator"), "{text}");
     }
 
     #[cfg(debug_assertions)]
