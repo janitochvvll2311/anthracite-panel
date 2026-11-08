@@ -70,6 +70,20 @@ const byId = <T extends HTMLElement>(id: string): T => {
   return element as T;
 };
 
+/// Every panel request goes through here: an expired session sends the browser
+/// to the login page instead of letting the retry loop spin.
+async function request(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(input, init);
+  if (response.status === 401) {
+    location.assign("/login");
+    throw new Error("the session expired");
+  }
+  return response;
+}
+
 const health = byId<HTMLSpanElement>("health");
 const views = byId<HTMLElement>("views");
 const actions = byId<HTMLElement>("actions");
@@ -369,7 +383,7 @@ async function mountInto(
 ): Promise<() => void> {
   root.replaceChildren(element("div", "loading", "Loading module…"));
   try {
-    const response = await fetch(assetUrl(contribution), {
+    const response = await request(assetUrl(contribution), {
       headers: { accept: "text/javascript" },
     });
     if (!response.ok) throw new Error(await errorMessage(response));
@@ -379,7 +393,7 @@ async function mountInto(
       source,
       context: contextFor(contribution, kind),
       close,
-      request: (input, init) => fetch(input, init),
+      request: (input, init) => request(input, init),
     });
     if (cancelled()) {
       dispose();
@@ -752,7 +766,7 @@ function renderStatus(): void {
 
 async function loadPanelConfig(): Promise<void> {
   try {
-    const response = await fetch("/panel/config.json", {
+    const response = await request("/panel/config.json", {
       headers: { accept: "application/json" },
     });
     if (!response.ok) return;
@@ -772,7 +786,7 @@ async function loadPanelConfig(): Promise<void> {
 
 async function loadEngineVersion(): Promise<void> {
   try {
-    const response = await fetch("/api/engine/version", {
+    const response = await request("/api/engine/version", {
       headers: { accept: "application/json" },
     });
     if (!response.ok) return;
@@ -785,7 +799,7 @@ async function loadEngineVersion(): Promise<void> {
 
 async function refresh(): Promise<void> {
   try {
-    const response = await fetch("/api/engine/composition", {
+    const response = await request("/api/engine/composition", {
       headers: { accept: "application/json" },
     });
     if (!response.ok) {

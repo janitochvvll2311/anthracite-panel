@@ -31,7 +31,9 @@ boot the engine generates the operator password in `state/credentials.txt`
 
 The shell, API and module assets all require a session; only `/health`, `/login`,
 `/setup` and the empty sandboxed frame document are public. There is no shared
-Basic secret and no silent unauthenticated mode.
+Basic secret and no silent unauthenticated mode. A non-loopback bind is refused
+unless `--allow-remote` is explicit; put TLS in front and preserve
+`X-Forwarded-Proto`/`X-Forwarded-Host`.
 
 ## Viewport modes
 

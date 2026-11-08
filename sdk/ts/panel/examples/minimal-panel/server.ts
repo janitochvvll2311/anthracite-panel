@@ -49,7 +49,7 @@ async function login(): Promise<string> {
   return header.split(";")[0]!;
 }
 
-const sessionCookie = await login();
+let sessionCookie = await login();
 const appFrameUrl = new URL(
   import.meta.resolve("@anthracite/panel/app-frame.html"),
 );
@@ -102,17 +102,25 @@ async function proxy(request: Request): Promise<Response> {
   headers.delete("host");
   headers.delete("origin");
   headers.delete("content-length");
-  let response: Response;
-  try {
-    response = await fetch(upstream, {
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer();
+  const send = () =>
+    fetch(upstream, {
       method: request.method,
       headers,
       redirect: "manual",
-      body:
-        request.method === "GET" || request.method === "HEAD"
-          ? undefined
-          : await request.arrayBuffer(),
+      body,
     });
+  let response: Response;
+  try {
+    response = await send();
+    if (response.status === 401) {
+      sessionCookie = await login();
+      headers.set("cookie", sessionCookie);
+      response = await send();
+    }
   } catch (error) {
     return text(`the panel transport is unavailable: ${error}`, 502);
   }

@@ -1769,13 +1769,19 @@ async fn require_origin(
                 .to_str()
                 .map_err(|_| ApiError(Error::denied("the Origin header is not text")))?;
             let authority = origin.split_once("://").map(|(_, rest)| rest).unwrap_or("");
-            let host = request
-                .headers()
-                .get("x-forwarded-host")
-                .or_else(|| request.headers().get(HOST))
-                .and_then(|host| host.to_str().ok())
-                .map(|host| host.split(',').next().unwrap_or("").trim())
-                .unwrap_or("");
+            let forwarded = request
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .is_some_and(|ConnectInfo(address)| address.ip().is_loopback());
+            let host = (if forwarded {
+                request.headers().get("x-forwarded-host")
+            } else {
+                None
+            })
+            .or_else(|| request.headers().get(HOST))
+            .and_then(|host| host.to_str().ok())
+            .map(|host| host.split(',').next().unwrap_or("").trim())
+            .unwrap_or("");
             if authority != host {
                 deny(&state, "anonymous".to_string(), "cross-origin request");
                 return Err(ApiError(Error::denied(

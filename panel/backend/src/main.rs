@@ -56,6 +56,7 @@ struct Panel {
 struct Args {
     listen: SocketAddr,
     config: PathBuf,
+    allow_remote: bool,
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     web: PathBuf,
 }
@@ -64,6 +65,7 @@ impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut listen = "127.0.0.1:8090".to_string();
         let mut config = "config.toml".to_string();
+        let mut allow_remote = false;
         let mut web = std::env::var("ANTH_PANEL_WEB").unwrap_or_else(|_| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../frontend/dist")
@@ -74,11 +76,12 @@ impl Args {
             match arg.as_str() {
                 "--listen" => listen = args.next().ok_or("`--listen` needs an address")?,
                 "--config" => config = args.next().ok_or("`--config` needs a path")?,
+                "--allow-remote" => allow_remote = true,
                 "--web" => web = args.next().ok_or("`--web` needs a directory")?,
                 "--help" | "-h" => {
                     return Err(
                         "usage: anth-panel [--listen 127.0.0.1:8090] [--config <path>] \
-                         [--web <dir>]"
+                         [--allow-remote] [--web <dir>]"
                             .to_string(),
                     );
                 }
@@ -90,6 +93,7 @@ impl Args {
                 .parse()
                 .map_err(|_| format!("`{listen}` is not a socket address"))?,
             config: PathBuf::from(config),
+            allow_remote,
             web: PathBuf::from(web),
         })
     }
@@ -112,6 +116,22 @@ async fn main() -> ExitCode {
             args.web.display()
         );
         return ExitCode::from(2);
+    }
+
+    if !args.listen.ip().is_loopback() && !args.allow_remote {
+        eprintln!(
+            "refusing to listen on {} without --allow-remote: sessions protect the \
+             API, but exposing the panel is an explicit decision",
+            args.listen
+        );
+        return ExitCode::from(2);
+    }
+    if !args.listen.ip().is_loopback() {
+        eprintln!(
+            "warning: listening on {}; put TLS in front of the panel and set \
+             X-Forwarded-Proto/Host",
+            args.listen
+        );
     }
 
     let listener = match TcpListener::bind(args.listen).await {
@@ -277,6 +297,9 @@ fn page(title: &str, body: &str) -> Response {
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CONTENT_SECURITY_POLICY, SETUP_CSP),
             (header::CACHE_CONTROL, "no-cache"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+            (header::X_FRAME_OPTIONS, "DENY"),
         ],
         html,
     )
@@ -357,6 +380,7 @@ async fn asset(State(state): State<Arc<Panel>>, request: Request) -> Response {
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::CONTENT_SECURITY_POLICY, csp),
             (header::REFERRER_POLICY, "no-referrer"),
+            (header::X_FRAME_OPTIONS, "DENY"),
         ],
         [(header::CONTENT_LENGTH, length.to_string())],
         body,
@@ -487,6 +511,14 @@ mod tests {
     fn the_default_listen_is_loopback() {
         let args = Args::parse(std::iter::empty()).expect("args");
         assert_eq!(args.listen, "127.0.0.1:8090".parse().expect("address"));
+        assert!(!args.allow_remote);
+        let args = Args::parse(
+            ["--listen", "0.0.0.0:8090", "--allow-remote"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .expect("args");
+        assert!(args.allow_remote);
     }
 
     #[test]
@@ -541,6 +573,12 @@ mod tests {
             .to_str()
             .expect("csp");
         assert!(csp.contains("script-src 'unsafe-inline'"), "{csp}");
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
+        assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body");
