@@ -42,9 +42,9 @@ pub fn query_value<T: serde::Serialize>(value: &T) -> Result<String, ClientError
     )
 }
 
+pub mod anthracite_hello_greeting_routes;
 pub mod cli;
 pub mod commands;
-pub mod greeting_routes;
 pub mod http;
 pub mod types;
 pub use cli::run;

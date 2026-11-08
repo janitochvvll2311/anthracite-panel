@@ -87,6 +87,15 @@ function snake(name: string): string {
   return name.replace(/-/g, "_");
 }
 
+/// A package name contains `:` and `@`; generated modules and type keys must be
+/// valid identifiers and unique across packages.
+function token(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 function camel(name: string): string {
   const value = pascal(name);
   return value[0]?.toLowerCase() + value.slice(1);
@@ -235,7 +244,10 @@ function generate(): Generation {
     const owner = type.owner?.interface;
     const iface =
       typeof owner === "number" ? doc.interfaces[owner] : undefined;
-    return `${iface?.name ? pascal(iface.name) : ""}${pascal(type.name)}`;
+    const pkg = iface
+      ? splitPackage(packageName(doc, iface.package))
+      : undefined;
+    return `${pascal(token(pkg?.base ?? ""))}${iface?.name ? pascal(iface.name) : ""}${pascal(type.name)}`;
   }
 
   function ensureNamed(type: WitType): void {
@@ -327,7 +339,7 @@ function generate(): Generation {
     if (ref === null) return "unit";
     if (typeof ref === "string") return ref;
     const type = witType(doc, ref);
-    if (type.name) return type.name;
+    if (type.name) return typeKey(type);
     const kind = type.kind;
     if (kind.list) return `list<${typeLabel(kind.list)}>`;
     if (kind.option) return `option<${typeLabel(kind.option)}>`;
@@ -558,6 +570,11 @@ function generate(): Generation {
   const classByInterface = new Map<string, { className: string; module: string }>();
 
   const generatedInterfaces: string[] = [];
+  const shortNameCounts = new Map<string, number>();
+  for (const { iface } of exported) {
+    const short = pascal(iface.name ?? "client");
+    shortNameCounts.set(short, (shortNameCounts.get(short) ?? 0) + 1);
+  }
   for (const { iface } of exported) {
     const methods: { fn: WitFunction; route: any }[] = [];
     for (const fn of Object.values(iface.functions)) {
@@ -566,8 +583,12 @@ function generate(): Generation {
       if (route) methods.push({ fn, route });
     }
     if (methods.length === 0) continue;
-    const module = `${snake(iface.name ?? "client")}_routes`;
-    const classname = `${pascal(iface.name ?? "client")}HttpClient`;
+    const ifaceName = iface.name ?? "client";
+    const short = pascal(ifaceName);
+    const pkg = splitPackage(packageName(doc, iface.package));
+    const packageToken = pascal(token(pkg.base));
+    const module = `${token(pkg.base)}_${token(ifaceName)}_routes`;
+    const classname = `${(shortNameCounts.get(short) ?? 0) > 1 ? packageToken : ""}${short}HttpClient`;
     const tsLines = [
       header,
       `import type { Transport } from "./transport";`,
