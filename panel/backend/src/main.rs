@@ -179,9 +179,12 @@ async fn main() -> ExitCode {
         args.listen,
         args.config.display()
     );
-    let served = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
-        .await;
+    let served = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await;
     host.stop().await;
     match served {
         Ok(()) => ExitCode::SUCCESS,

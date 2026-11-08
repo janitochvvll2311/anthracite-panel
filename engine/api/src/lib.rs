@@ -3015,6 +3015,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_a_loopback_peer_may_supply_the_forwarded_host() {
+        let (state, dir) = session_state();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/engine/session")
+            .header("host", "internal:8090")
+            .header("x-forwarded-host", "panel.test")
+            .header("origin", "http://panel.test")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"operator":"operator","password":"x"}"#))
+            .expect("request");
+        let mut request = request;
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4000))));
+        let response = public_router(Arc::clone(&state))
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/engine/session")
+            .header("host", "internal:8090")
+            .header("x-forwarded-host", "panel.test")
+            .header("origin", "http://panel.test")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"operator":"operator","password":"x"}"#))
+            .expect("request");
+        let mut request = request;
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 4000))));
+        let response = public_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
     async fn api_responses_carry_the_security_headers() {
         let (state, dir) = session_state();
         let response = public_router(state)
