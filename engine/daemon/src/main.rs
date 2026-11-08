@@ -21,6 +21,8 @@ struct Args {
     profile: Profile,
     /// Validate and exit: what the doctor command runs.
     check: bool,
+    /// Delete the recovery file so the next `load_or_create` mints a new password.
+    reset_credentials: bool,
 }
 
 fn main() -> ExitCode {
@@ -56,6 +58,7 @@ impl Args {
         let mut debug = false;
         let mut release = false;
         let mut check = false;
+        let mut reset_credentials = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--config" => {
@@ -64,9 +67,11 @@ impl Args {
                 "--debug" => debug = true,
                 "--release" => release = true,
                 "--check" => check = true,
+                "--reset-credentials" => reset_credentials = true,
                 "--help" | "-h" => {
                     return Err(
-                        "usage: anth-engine [--config <path>] [--debug|--release] [--check]"
+                        "usage: anth-engine [--config <path>] [--debug|--release] [--check] \
+                         [--reset-credentials]"
                             .to_string(),
                     );
                 }
@@ -77,6 +82,7 @@ impl Args {
             config: PathBuf::from(config.unwrap_or_else(|| "config.toml".to_string())),
             profile: choose_profile(debug, release, cfg!(debug_assertions))?,
             check,
+            reset_credentials,
         })
     }
 }
@@ -133,6 +139,17 @@ async fn run(args: Args) -> Result<(), Error> {
     config.validate(args.profile)?;
     let logger = Logger::new(config.log.clone());
 
+    if args.reset_credentials {
+        match std::fs::remove_file(config.state.join(anth_auth::CREDENTIALS)) {
+            Ok(()) => logger.warn("operator credentials reset; a new password will be generated"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(Error::internal(format!(
+                    "removing the operator credentials: {error}"
+                )));
+            }
+        }
+    }
     anth_engine::state::ensure(&config.state)?;
     let composition = anth_engine::state::load_composition(&config.state)?;
     composition.validate()?;
@@ -286,7 +303,7 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::choose_profile;
+    use super::{choose_profile, Args};
     use anth_engine::config::Profile;
 
     #[test]
@@ -306,5 +323,14 @@ mod tests {
         assert_eq!(choose_profile(false, true, true), Ok(Profile::Release));
         assert_eq!(choose_profile(true, false, true), Ok(Profile::Debug));
         assert!(choose_profile(true, true, true).is_err());
+    }
+
+    #[test]
+    fn resetting_the_credentials_is_explicit() {
+        let args = Args::parse(std::iter::empty()).expect("args");
+        assert!(!args.reset_credentials);
+        let args =
+            Args::parse(["--reset-credentials"].into_iter().map(str::to_string)).expect("args");
+        assert!(args.reset_credentials);
     }
 }
