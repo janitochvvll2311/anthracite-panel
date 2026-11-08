@@ -20,8 +20,8 @@ use serde_json::json;
 /// The file the state tree owns, relative to its root.
 pub const CREDENTIALS: &str = "credentials.txt";
 
-/// The name the first-boot operator gets. A stable name keeps the panel's Basic
-/// stopgap, the audit actor and the CLI aligned.
+/// The name the first-boot operator gets. A stable name keeps the panel's login
+/// page, the audit actor and the CLI aligned.
 pub const OPERATOR: &str = "operator";
 
 const FILE_MODE: u32 = 0o600;

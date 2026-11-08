@@ -24,18 +24,19 @@ build embeds `dist` and fails without it.
 
 ## Exposing it
 
-A loopback panel relies on the OS user for access. Any other bind needs a Basic
-credential, because the linked engine API is privileged:
+The panel authenticates the browser with the engine's session cookie. On first
+boot the engine generates the operator password in `state/credentials.txt`
+(`0600`); open `/setup`, read that file and change it. Later visits go through
+`/login`.
 
-```sh
-cargo run -- --listen 0.0.0.0:8090 --config /run/anth/config.toml --token "$SECRET"
-```
-
-Open the URL in a browser and use username `operator` with the token as the
-password. The shell, API and module assets all sit behind it; only `/health` and
-the empty sandboxed frame document are public. Without `--token`, a
-non-loopback bind refuses to start: there is no silent unauthenticated mode.
-Sessions replace this shared secret later.
+The shell, API and module assets all require a session; only `/health`, `/login`,
+`/setup` and the empty sandboxed frame document are public. There is no shared
+Basic secret and no silent unauthenticated mode. A non-loopback bind is refused
+unless `--allow-remote` is explicit; put TLS in front and preserve
+`X-Forwarded-Proto`/`X-Forwarded-Host`. The engine only trusts
+`X-Forwarded-Host` when the TCP peer is loopback, so the TLS terminator must
+connect to the panel over loopback; a remote proxy must forward the original
+`Host` instead.
 
 ## Viewport modes
 

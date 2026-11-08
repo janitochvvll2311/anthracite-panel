@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anth_auth::{Auth, SessionInfo};
+pub use anth_auth::{Auth, SessionInfo};
 use anth_compose::audit::{timestamp, AuditLog};
 use anth_compose::bundle::Options as BundleOptions;
 use anth_compose::composition::CompositionStore;
@@ -36,9 +36,10 @@ use axum::extract::{
     State,
 };
 use axum::http::header::{
-    ALLOW, CACHE_CONTROL, CONTENT_TYPE, COOKIE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION, SET_COOKIE,
+    ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, ETAG, HOST, IF_MATCH,
+    IF_NONE_MATCH, LOCATION, ORIGIN, SET_COOKIE,
 };
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get};
@@ -300,7 +301,15 @@ fn api_routes(state: Arc<EngineState>) -> Router {
 pub fn api_router(state: Arc<EngineState>) -> Router {
     api_routes(Arc::clone(&state))
         .route_layer(middleware::from_fn(password_change_gate))
-        .route_layer(middleware::from_fn_with_state(state, require_peer))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_peer,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_origin,
+        ))
+        .layer(middleware::from_fn(security_headers))
         .layer(middleware::from_fn(remember_source))
 }
 
@@ -308,7 +317,15 @@ pub fn api_router(state: Arc<EngineState>) -> Router {
 pub fn session_router(state: Arc<EngineState>) -> Router {
     api_routes(Arc::clone(&state))
         .route_layer(middleware::from_fn(password_change_gate))
-        .route_layer(middleware::from_fn_with_state(state, require_session))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_session,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_origin,
+        ))
+        .layer(middleware::from_fn(security_headers))
         .layer(middleware::from_fn(remember_source))
 }
 
@@ -1734,6 +1751,70 @@ async fn require_session(
     }
 }
 
+/// Cookies are `SameSite=Strict`, but a browser can still be tricked by a
+/// same-site form post; the Origin header is the second lock. A request with no
+/// Origin (the CLI, curl) is not a browser and is allowed to authenticate itself.
+async fn require_origin(
+    State(state): State<Arc<EngineState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let unsafe_method = matches!(
+        *request.method(),
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    );
+    if unsafe_method {
+        if let Some(origin) = request.headers().get(ORIGIN) {
+            let origin = origin
+                .to_str()
+                .map_err(|_| ApiError(Error::denied("the Origin header is not text")))?;
+            let authority = origin.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+            let forwarded = request
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .is_some_and(|ConnectInfo(address)| address.ip().is_loopback());
+            let host = (if forwarded {
+                request.headers().get("x-forwarded-host")
+            } else {
+                None
+            })
+            .or_else(|| request.headers().get(HOST))
+            .and_then(|host| host.to_str().ok())
+            .map(|host| host.split(',').next().unwrap_or("").trim())
+            .unwrap_or("");
+            if authority != host {
+                deny(&state, "anonymous".to_string(), "cross-origin request");
+                return Err(ApiError(Error::denied(
+                    "cross-origin requests are not allowed",
+                )));
+            }
+        }
+    }
+    Ok(next.run(request).await)
+}
+
+/// The engine answers JSON and app modules, never a document, so the policy can
+/// be the strictest one. It is applied before any route-specific header.
+async fn security_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers
+        .entry(CONTENT_SECURITY_POLICY)
+        .or_insert(HeaderValue::from_static(
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        ));
+    headers
+        .entry(HeaderName::from_static("x-content-type-options"))
+        .or_insert(HeaderValue::from_static("nosniff"));
+    headers
+        .entry(HeaderName::from_static("referrer-policy"))
+        .or_insert(HeaderValue::from_static("no-referrer"));
+    headers
+        .entry(HeaderName::from_static("x-frame-options"))
+        .or_insert(HeaderValue::from_static("DENY"));
+    response
+}
+
 /// The first-boot password is a gate, not a warning: until it changes, only the
 /// operator resource and the session itself are reachable.
 async fn password_change_gate(request: Request, next: Next) -> Result<Response, ApiError> {
@@ -2887,6 +2968,110 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{value}");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_cross_origin_post_is_refused() {
+        let (state, dir) = session_state();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/engine/session")
+            .header("host", "panel.test")
+            .header("origin", "https://evil.test")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"operator":"operator","password":"x"}"#))
+            .expect("request");
+        let response = public_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(value["error"]["code"], "denied");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_same_origin_post_reaches_the_handler() {
+        let (state, dir) = session_state();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/engine/session")
+            .header("host", "panel.test")
+            .header("origin", "http://panel.test")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"operator":"operator","password":"x"}"#))
+            .expect("request");
+        let response = public_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn only_a_loopback_peer_may_supply_the_forwarded_host() {
+        let (state, dir) = session_state();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/engine/session")
+            .header("host", "internal:8090")
+            .header("x-forwarded-host", "panel.test")
+            .header("origin", "http://panel.test")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"operator":"operator","password":"x"}"#))
+            .expect("request");
+        let mut request = request;
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4000))));
+        let response = public_router(Arc::clone(&state))
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/engine/session")
+            .header("host", "internal:8090")
+            .header("x-forwarded-host", "panel.test")
+            .header("origin", "http://panel.test")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"operator":"operator","password":"x"}"#))
+            .expect("request");
+        let mut request = request;
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 4000))));
+        let response = public_router(state)
+            .oneshot(request)
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn api_responses_carry_the_security_headers() {
+        let (state, dir) = session_state();
+        let response = public_router(state)
+            .oneshot(request("/api/health", None))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        assert_eq!(response.headers()["x-frame-options"], "DENY");
+        assert!(response.headers()["content-security-policy"]
+            .to_str()
+            .expect("csp")
+            .contains("frame-ancestors 'none'"));
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
 

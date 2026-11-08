@@ -1,11 +1,12 @@
 // Remote acid test for the generated TypeScript clients.
 //
 // `GreetingHttpClient` and `run` share the same injected transport; this one
-// speaks HTTP over fetch with Basic auth, so the client is remote from the
-// official panel.
+// speaks HTTP over fetch with the session cookie minted by the panel, so the
+// client is remote from the official panel.
 //
 // ANTH_PANEL_URL=http://127.0.0.1:8090 \
-// ANTH_PANEL_AUTH=operator:anthracite-dev \
+// ANTH_PANEL_OPERATOR=operator \
+// ANTH_PANEL_PASSWORD="$(sed -n 's/.*"password":"\([^"]*\)".*/\1/p' state/credentials.txt)" \
 // bun sdk/ts/client/examples/remote.ts
 
 import { run } from "../src/cli";
@@ -16,15 +17,35 @@ const base = (process.env.ANTH_PANEL_URL ?? "http://127.0.0.1:8090").replace(
   /\/$/,
   "",
 );
-const credentials =
-  process.env.ANTH_PANEL_AUTH ?? "operator:anthracite-dev";
-const authorization = `Basic ${btoa(credentials)}`;
+const operator = process.env.ANTH_PANEL_OPERATOR ?? "operator";
+const password = process.env.ANTH_PANEL_PASSWORD;
+if (!password) {
+  throw new Error(
+    "ANTH_PANEL_PASSWORD is required (read it from state/credentials.txt)",
+  );
+}
 
+async function login(): Promise<string> {
+  const response = await fetch(`${base}/api/engine/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ operator, password }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`login answered ${response.status}: ${text}`);
+  }
+  const header = response.headers.get("set-cookie");
+  if (!header) throw new Error("the panel did not set a session cookie");
+  return header.split(";")[0]!;
+}
+
+const cookie = await login();
 const request: Transport = async (method, path, body) => {
   const response = await fetch(`${base}${path}`, {
     method,
     headers: {
-      authorization,
+      cookie,
       ...(body ? { "content-type": "application/json" } : {}),
     },
     body,

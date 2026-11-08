@@ -2,21 +2,34 @@
 //!
 //! This is the v0.5.0 panel (`D-Remote-Impl`): the panel links the SDK, the SDK
 //! links the engine, and the browser speaks to one process. The Unix socket is
-//! still bound for the CLI, with peer credentials, while the panel marks its
-//! own browser requests `Trusted` (sessions will replace that blanket trust).
+//! still bound for the CLI, with peer credentials, while the browser uses the
+//! engine's session cookie.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use anth_api::{EngineState, PeerUid, Trusted};
+use anth_api::{EngineState, PeerUid, SessionInfo};
 use anth_contract::Error;
 use anth_engine::config::{Config, Profile};
 use anth_engine::log::Logger;
 use anth_engine::supervisor::{Supervisor, SupervisorCaller};
 use anth_runtime::{LogSettings, WasmtimeRuntime};
-use axum::{Extension, Router};
+use axum::Router;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+
+/// A cloneable handle to the engine's session store, for the panel's own shell
+/// authentication. It does not expose the credentials.
+#[derive(Clone)]
+pub struct Sessions {
+    auth: Arc<anth_api::Auth>,
+}
+
+impl Sessions {
+    pub fn authenticate(&self, token: &str) -> Option<SessionInfo> {
+        self.auth.authenticate(token)
+    }
+}
 
 /// A booted engine owned by the panel.
 pub struct Host {
@@ -135,11 +148,17 @@ impl Host {
         })
     }
 
-    /// The `/api` surface, ready to nest. Browser requests reach the router
-    /// without a peer credential, so the host marks them trusted; the router
-    /// still owns what a trusted request may reach.
-    pub fn api(&self) -> Router {
-        anth_api::api_router(Arc::clone(&self.state)).layer(Extension(Trusted))
+    /// The `/api` surface over engine sessions. Browser requests carry the
+    /// session cookie; the panel does not inject a trusted marker.
+    pub fn session_api(&self) -> Router {
+        anth_api::session_router(Arc::clone(&self.state))
+    }
+
+    /// The session store the panel's shell middleware reads.
+    pub fn sessions(&self) -> Option<Sessions> {
+        self.state.auth.as_ref().map(|auth| Sessions {
+            auth: Arc::clone(auth),
+        })
     }
 
     /// Stops the socket and every running app.

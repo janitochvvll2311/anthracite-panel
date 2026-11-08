@@ -62,7 +62,6 @@ dependencies = [
 name = "anth-client"
 version = "0.5.0"
 dependencies = [
- "base64",
  "percent-encoding",
  "serde",
  "serde_json",
