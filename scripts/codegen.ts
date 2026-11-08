@@ -109,6 +109,13 @@ function rustField(name: string): string {
   return RUST_KEYWORDS.has(value) ? `r#${value}` : value;
 }
 
+/// Enum variants are type-level names, so `Self` is reserved. The `serde`
+/// attribute carries the wire name, so the variant itself can be renamed.
+function rustVariant(name: string): string {
+  const value = pascal(name);
+  return value === "Self" ? "SelfValue" : value;
+}
+
 function witType(doc: WitDoc, ref: TypeRef): WitType {
   if (typeof ref !== "number") fail(`expected a type id, got \`${ref}\``);
   const type = doc.types[ref];
@@ -514,7 +521,7 @@ function generate(): Generation {
     const lines: string[] = [];
     const result = returnType === null ? "()" : rustType(returnType);
     lines.push(
-      `    pub fn ${snake(fn.name)}(&self${params ? `, ${params}` : ""}) -> Result<${result}, crate::ClientError> {`,
+      `    pub fn ${rustField(fn.name)}(&self${params ? `, ${params}` : ""}) -> Result<${result}, crate::ClientError> {`,
     );
     if (query.appends.length > 0) lines.push(...query.declarations, ...query.appends);
     if (query.appends.length > 0) {
@@ -559,7 +566,7 @@ function generate(): Generation {
       if (route) methods.push({ fn, route });
     }
     if (methods.length === 0) continue;
-    const module = snake(iface.name ?? "client");
+    const module = `${snake(iface.name ?? "client")}_routes`;
     const classname = `${pascal(iface.name ?? "client")}HttpClient`;
     const tsLines = [
       header,
@@ -633,15 +640,18 @@ function generate(): Generation {
         `export type ${name} = ${cases.map((c) => JSON.stringify(c.name)).join(" | ")};\n`,
       );
       rustTypes.push(
-        `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]\n#[serde(rename_all = "kebab-case")]\npub enum ${name} {\n${cases
-          .map((c) => `    ${pascal(c.name)},`)
+        `#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]\npub enum ${name} {\n${cases
+          .map(
+            (c) =>
+              `    #[serde(rename = ${JSON.stringify(c.name)})]\n    ${rustVariant(c.name)},`,
+          )
           .join("\n")}\n}\n`,
       );
       rustTypes.push(
         `impl ${name} {\n    pub fn parse(value: &str) -> Option<Self> {\n        match value {\n${cases
           .map(
             (c) =>
-              `            ${JSON.stringify(c.name)} => Some(Self::${pascal(c.name)}),`,
+              `            ${JSON.stringify(c.name)} => Some(Self::${rustVariant(c.name)}),`,
           )
           .join("\n")}\n            _ => None,\n        }\n    }\n}\n`,
       );
@@ -987,7 +997,7 @@ function generate(): Generation {
       `            let __gen_client = ${entry.client.className}::new(transport);`,
     );
     const rustResult = returnRef(entry.fn);
-    const rustCall = `__gen_client.${snake(entry.fn.name)}(${rustArgs.join(", ")})`;
+    const rustCall = `__gen_client.${rustField(entry.fn.name)}(${rustArgs.join(", ")})`;
     if (rustResult === null) {
       cliRust.push(
         `            ${rustCall}?;`,
