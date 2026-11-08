@@ -133,13 +133,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         env::var("ANTH_PANEL_AUTH").unwrap_or_else(|_| "operator:anthracite-dev".to_string());
 
     let http = GreetingHttpClient::new(Remote::new(base.clone(), &credentials));
-    println!("http: {}", http.greet("Ada".to_string())?);
+    let greeting = http.greet("Ada".to_string())?;
+    check("http", &greeting)?;
+    println!("http: {greeting}");
 
     let cli = anth_client::cli::run(
         Remote::new(base, &credentials),
         "greet",
         &["--name".to_string(), "Ada".to_string()],
     )?;
+    check("cli", &cli)?;
     println!("cli: {cli}");
+    Ok(())
+}
+
+/// The acid test is only meaningful if the panel actually answered with the
+/// app's greeting, not with an empty body or an error envelope.
+fn check(layer: &str, body: &str) -> Result<(), Box<dyn Error>> {
+    let expected = "hello, Ada";
+    if !body.contains(expected) {
+        return Err(format!("{layer}: expected `{expected}` in `{body}`").into());
+    }
     Ok(())
 }

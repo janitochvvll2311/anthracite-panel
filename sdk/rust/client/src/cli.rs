@@ -9,24 +9,27 @@ pub fn run<T: Transport>(transport: T, verb: &str, args: &[String]) -> Result<St
     let _ = &transport;
     match verb {
         "greet" => {
-            let mut name: Option<String> = None;
-            let mut index = 0;
-            while index < args.len() {
-                let argument = &args[index];
-                let (flag, inline) = match argument.split_once('=') {
-                    Some((flag, value)) => (flag, Some(value)),
-                    None => (argument.as_str(), None),
+            let mut __arg_name: Option<String> = None;
+            let mut __gen_index = 0;
+            while __gen_index < args.len() {
+                let __gen_argument = &args[__gen_index];
+                let (__gen_flag, __gen_inline) = match __gen_argument.split_once('=') {
+                    Some((__gen_flag, __gen_value)) => (__gen_flag, Some(__gen_value)),
+                    None => (__gen_argument.as_str(), None),
                 };
-                match flag {
-                    "--name" => name = Some(next_value(args, &mut index, inline, "--name")?),
-                    _ => return Err(ClientError::new(format!("unknown flag `{argument}`"))),
+                match __gen_flag {
+                    "--name" => {
+                        __arg_name =
+                            Some(next_value(args, &mut __gen_index, __gen_inline, "--name")?)
+                    }
+                    _ => return Err(ClientError::new(format!("unknown flag `{__gen_argument}`"))),
                 }
-                index += 1;
+                __gen_index += 1;
             }
-            let name = name.ok_or_else(|| ClientError::new("missing --name"))?;
-            let client = GreetingHttpClient::new(transport);
-            let result = client.greet(name)?;
-            serde_json::to_string(&result)
+            let __arg_name = __arg_name.ok_or_else(|| ClientError::new("missing --name"))?;
+            let __gen_client = GreetingHttpClient::new(transport);
+            let __gen_result = __gen_client.greet(__arg_name)?;
+            serde_json::to_string(&__gen_result)
                 .map_err(|error| ClientError::new(format!("cannot encode the result: {error}")))
         }
         _ => Err(ClientError::new(format!("unknown verb `{verb}`"))),

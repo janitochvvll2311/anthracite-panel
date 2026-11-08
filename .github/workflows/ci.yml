@@ -89,6 +89,12 @@ jobs:
         working-directory: sdk/ts/client
         run: bun test
 
+      - name: Typecheck the generated TypeScript client
+        working-directory: sdk/ts/client
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+
       - name: Test the shell
         working-directory: panel/frontend
         run: |
@@ -120,8 +126,6 @@ jobs:
       - name: Test
         run: cargo test --manifest-path panel/backend/Cargo.toml
 
-      # The release binary embeds dist; without it the build fails, by design.
-      # `check` still runs the embed macro, without the cost of linking wasmtime.
       # The remote side of the acid test: a real panel process, the hello
       # bundle, and the generated Rust/TS clients speaking HTTP from outside.
       - name: Build the e2e panel and clients
@@ -174,6 +178,8 @@ jobs:
           ANTH_PANEL_URL=http://127.0.0.1:8099 ANTH_PANEL_AUTH=operator:test \
             tests/e2e/remote-client.sh
 
+      # The release binary embeds dist; without it the build fails, by design.
+      # `check` still runs the embed macro, without the cost of linking wasmtime.
       - name: Release check
         run: cargo check --release --manifest-path panel/backend/Cargo.toml
 

@@ -21,15 +21,15 @@ impl<T: crate::Transport> GreetingHttpClient<T> {
         }
     }
     pub fn greet(&self, name: String) -> Result<String, crate::ClientError> {
-        let mut query = Vec::new();
-        query.push(format!("{}={}", "name", crate::query_value(&name)?));
-        let mut path = format!("{}{}", self.base, "/hello");
-        if !query.is_empty() {
-            path.push('?');
-            path.push_str(&query.join("&"));
+        let mut __gen_query = Vec::new();
+        __gen_query.push(format!("{}={}", "name", crate::query_value(&name)?));
+        let mut __gen_path = format!("{}{}", self.base, "/hello");
+        if !__gen_query.is_empty() {
+            __gen_path.push('?');
+            __gen_path.push_str(&__gen_query.join("&"));
         }
-        let text = self.transport.request("GET", &path, None)?;
-        serde_json::from_str::<String>(&text)
+        let __gen_text = self.transport.request("GET", &__gen_path, None)?;
+        serde_json::from_str::<String>(&__gen_text)
             .map_err(|error| crate::ClientError::new(format!("invalid JSON: {error}")))
     }
 }

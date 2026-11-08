@@ -37,7 +37,19 @@ const request: Transport = async (method, path, body) => {
 };
 
 const http = new GreetingHttpClient(request);
-console.log("http:", await http.greet("Ada"));
+const greeting = await http.greet("Ada");
+check("http", greeting);
+console.log("http:", greeting);
 
 const cli = await run(request, "greet", ["--name", "Ada"]);
+check("cli", cli);
 console.log("cli:", cli);
+
+// The acid test is only meaningful if the panel actually answered with the
+// app's greeting, not with an empty body or an error envelope.
+function check(layer: string, body: string): void {
+  const expected = "hello, Ada";
+  if (!body.includes(expected)) {
+    throw new Error(`${layer}: expected \`${expected}\` in \`${body}\``);
+  }
+}
