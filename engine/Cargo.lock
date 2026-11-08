@@ -27,6 +27,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "anth-api"
 version = "0.5.0"
 dependencies = [
+ "anth-auth",
  "anth-compose",
  "anth-contract",
  "axum",
@@ -41,6 +42,15 @@ dependencies = [
  "tokio",
  "tower",
  "zip",
+]
+
+[[package]]
+name = "anth-auth"
+version = "0.5.0"
+dependencies = [
+ "anth-contract",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -74,6 +84,7 @@ name = "anth-engine"
 version = "0.5.0"
 dependencies = [
  "anth-api",
+ "anth-auth",
  "anth-compose",
  "anth-contract",
  "anth-runtime",

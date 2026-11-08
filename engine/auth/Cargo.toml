@@ -1,0 +1,11 @@
+[package]
+name = "anth-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operator credentials and sessions for the Anthracite engine"
+
+[dependencies]
+anth-contract = { path = "../contract" }
+serde = { workspace = true }
+serde_json = { workspace = true }

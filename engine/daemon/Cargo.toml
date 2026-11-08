@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 anth-api = { path = "../api" }
+anth-auth = { path = "../auth" }
 anth-compose = { path = "../compose" }
 anth-runtime = { path = "../runtime" }
 libc = "0.2"

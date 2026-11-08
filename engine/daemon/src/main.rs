@@ -136,6 +136,14 @@ async fn run(args: Args) -> Result<(), Error> {
     anth_engine::state::ensure(&config.state)?;
     let composition = anth_engine::state::load_composition(&config.state)?;
     composition.validate()?;
+    let auth = Arc::new(anth_auth::Auth::load_or_create(
+        &config.state,
+        config.auth.session_ttl.0,
+    )?);
+    logger.info(&format!(
+        "operator credentials at {}",
+        auth.credentials_path().display()
+    ));
     logger.info(&format!(
         "state ready at {} (apps, grants, keys, composition, audit)",
         config.state.display()
@@ -156,6 +164,7 @@ async fn run(args: Args) -> Result<(), Error> {
             .with_caller(Arc::new(anth_engine::supervisor::SupervisorCaller::new(
                 supervisor.clone(),
             )))
+            .with_auth(auth)
             .booting(),
     );
     let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
@@ -182,7 +191,7 @@ async fn run(args: Args) -> Result<(), Error> {
         .await
     });
 
-    let public = anth_api::public_router();
+    let public = anth_api::public_router(Arc::clone(&state));
     let tcp = match &config.listen {
         Some(address) => {
             let address: SocketAddr = address

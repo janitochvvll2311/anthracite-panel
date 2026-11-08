@@ -14,6 +14,7 @@ engine/                    Rust workspace: the platform
   runtime/                 the only crate that names wasmtime; world checks
   broker/                  host interface dispatch, quotas, denials
   compose/                 registry, grant store, resolver, surface projection
+  auth/                    operator credentials, sessions, password gates
   api/                     router, sessions, origin, assets, UDS + TCP
   daemon/                  lib + bin `anth-engine` (headless)
 

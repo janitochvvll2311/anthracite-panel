@@ -7,6 +7,7 @@ description = "The panel contract: slot vocabulary, contributions and asset URLs
 
 [dependencies]
 anth-api = { path = "../../../engine/api" }
+anth-auth = { path = "../../../engine/auth" }
 anth-contract = { path = "../../../engine/contract" }
 anth-engine = { path = "../../../engine/daemon" }
 anth-runtime = { path = "../../../engine/runtime" }

@@ -237,9 +237,9 @@ operators, and what each may do, is an open decision ([§15](15-open-decisions.m
 
 **The socket authenticates who connects.** The kernel reports the peer's uid and
 the engine accepts the service user and root; a TCP connection has no peer
-credential, so it serves only `/health` until sessions exist. An administration
-group arrives with multi-operator, because it asks the same question — who is
-allowed to act.
+credential, so it authenticates with a session (`POST /api/engine/session`). An
+administration group arrives with multi-operator, because it asks the same
+question — who is allowed to act.
 
 **Login attempts are limited.** Five failures per minute per source, then
 backoff, and every failure is audited. A panel exposed without a rate limit turns

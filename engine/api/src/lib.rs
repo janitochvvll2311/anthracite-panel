@@ -4,15 +4,17 @@
 //! own process (§6.5), and a headless deployment serves it directly.
 //!
 //! Two routers: the full one, meant for the Unix socket where a peer credential
-//! exists, and the public one, which is all a TCP listener serves until sessions
-//! arrive. `/health` is public on both; everything under `/api` needs a peer.
+//! exists, and the session-authenticated one a TCP listener serves. `/health` is
+//! public on both; everything under `/api` needs a peer or a session.
 
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use anth_auth::{Auth, SessionInfo};
 use anth_compose::audit::{timestamp, AuditLog};
 use anth_compose::bundle::Options as BundleOptions;
 use anth_compose::composition::CompositionStore;
@@ -29,12 +31,13 @@ use anth_contract::{
 };
 use axum::body::Bytes;
 use axum::extract::{
-    connect_info::Connected, ConnectInfo, Extension, Path, RawQuery, Request, State,
+    connect_info::Connected, ConnectInfo, DefaultBodyLimit, Extension, Path, RawQuery, Request,
+    State,
 };
 use axum::http::header::{
-    ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION,
+    ALLOW, CACHE_CONTROL, CONTENT_TYPE, COOKIE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION, SET_COOKIE,
 };
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get};
@@ -80,6 +83,9 @@ pub struct EngineState {
     compose_lock: Arc<tokio::sync::Mutex<()>>,
     /// The installed apps, when the daemon could open the state tree.
     pub apps: Option<Arc<Apps>>,
+    /// The operator credentials and the live TCP sessions, once the host has
+    /// opened the state tree.
+    pub auth: Option<Arc<Auth>>,
     /// `false` while the daemon boots apps; readiness answers `503 starting`.
     ready: Arc<AtomicBool>,
     /// The route dispatcher, when this host runs apps.
@@ -95,6 +101,7 @@ impl EngineState {
             composition: Arc::new(RwLock::new(Composition::empty())),
             compose_lock: Arc::new(tokio::sync::Mutex::new(())),
             apps: None,
+            auth: None,
             ready: Arc::new(AtomicBool::new(true)),
             caller: None,
         }
@@ -102,6 +109,13 @@ impl EngineState {
 
     pub fn with_caller(mut self, caller: Arc<dyn AppCaller>) -> Self {
         self.caller = Some(caller);
+        self
+    }
+
+    /// Opens the operator credentials and the session store. A host that mounts
+    /// the router without a state tree omits this; login then answers `503`.
+    pub fn with_auth(mut self, auth: Arc<Auth>) -> Self {
+        self.auth = Some(auth);
         self
     }
 
@@ -161,6 +175,39 @@ pub struct PeerUid(pub u32);
 #[derive(Debug, Clone)]
 pub struct Actor(pub String);
 
+/// How a request proved who it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthKind {
+    /// The kernel reported the service user or root.
+    Peer,
+    /// The embedding panel authenticated the browser and marked the request.
+    Trusted,
+    /// A bearer token minted by `POST /api/engine/session`.
+    Session,
+}
+
+/// What the auth middleware learned about this request.
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    pub actor: String,
+    pub kind: AuthKind,
+    pub must_change_password: bool,
+    pub session: Option<SessionInfo>,
+    pub token: Option<String>,
+}
+
+impl AuthContext {
+    fn peer(actor: String, kind: AuthKind) -> Self {
+        Self {
+            actor,
+            kind,
+            must_change_password: false,
+            session: None,
+            token: None,
+        }
+    }
+}
+
 type CallFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>>;
 
 /// The engine's route dispatcher: the API resolves a route to `interface#function`
@@ -187,15 +234,28 @@ impl Connected<axum::serve::IncomingStream<'_, UnixListener>> for PeerUid {
     }
 }
 
-/// The `/api` surface, state applied.
+/// The `/api` surface without an authentication layer.
 ///
-/// A host that mounts the router in-process (the linked panel) nests this under
-/// `/api` and marks its browser requests `Trusted`; the daemon wraps it with
-/// liveness in [`router`].
-pub fn api_router(state: Arc<EngineState>) -> Router {
+/// The daemon and the linked panel mount it over a Unix socket (peer
+/// credentials) or in-process (`Trusted`); a TCP listener mounts
+/// [`session_router`], which authenticates with a bearer session instead.
+fn api_routes(state: Arc<EngineState>) -> Router {
     Router::new()
         .route("/health", get(readiness))
         .route("/engine/version", get(version))
+        .route(
+            "/engine/session",
+            get(read_session)
+                .post(login_session)
+                .delete(logout_session)
+                .layer(DefaultBodyLimit::max(SESSION_BODY_LIMIT as usize)),
+        )
+        .route(
+            "/engine/operator",
+            get(read_operator)
+                .patch(change_operator_password)
+                .layer(DefaultBodyLimit::max(SESSION_BODY_LIMIT as usize)),
+        )
         .route(
             "/engine/composition",
             get(composition).put(replace_composition),
@@ -216,8 +276,22 @@ pub fn api_router(state: Arc<EngineState>) -> Router {
         )
         .route("/apps/{id}/assets/{*module}", get(app_asset))
         .route("/apps/{id}/{*path}", any(app_route))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_peer))
         .with_state(state)
+}
+
+/// The `/api` surface over peer credentials, used by the Unix socket and by an
+/// embedding panel that marks its already-authenticated requests `Trusted`.
+pub fn api_router(state: Arc<EngineState>) -> Router {
+    api_routes(Arc::clone(&state))
+        .route_layer(middleware::from_fn(password_change_gate))
+        .route_layer(middleware::from_fn_with_state(state, require_peer))
+}
+
+/// The `/api` surface over sessions, for a TCP listener.
+pub fn session_router(state: Arc<EngineState>) -> Router {
+    api_routes(Arc::clone(&state))
+        .route_layer(middleware::from_fn(password_change_gate))
+        .route_layer(middleware::from_fn_with_state(state, require_session))
 }
 
 /// The full surface, for the Unix socket.
@@ -227,9 +301,11 @@ pub fn router(state: Arc<EngineState>) -> Router {
         .nest("/api", api_router(state))
 }
 
-/// Only what a TCP listener may serve before sessions exist.
-pub fn public_router() -> Router {
-    Router::new().route("/health", get(health))
+/// What a TCP listener serves: liveness plus the session-authenticated API.
+pub fn public_router(state: Arc<EngineState>) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .nest("/api", session_router(state))
 }
 
 /// Liveness: 200 once the socket is bound, nothing else.
@@ -249,6 +325,165 @@ async fn readiness(State(state): State<Arc<EngineState>>) -> Response {
         )
             .into_response()
     }
+}
+
+/// The cookie name. It is deliberately not `__Host-`: v0.5.0 serves plain HTTP
+/// and the prefix would make browsers reject the cookie.
+const SESSION_COOKIE: &str = "anth_session";
+const SESSION_BODY_LIMIT: u64 = 16 * 1024;
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    operator: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct PasswordRequest {
+    #[serde(default)]
+    current_password: Option<String>,
+    new_password: String,
+}
+
+fn auth(state: &EngineState) -> Result<&Arc<Auth>, ApiError> {
+    state.auth.as_ref().ok_or_else(|| {
+        ApiError(Error::unavailable(
+            "this router has no credentials; start the engine with a state tree",
+        ))
+    })
+}
+
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    let header = headers.get(COOKIE)?.to_str().ok()?;
+    header.split(';').find_map(|part| {
+        let (name, value) = part.trim().split_once('=')?;
+        (name == SESSION_COOKIE).then(|| value.to_string())
+    })
+}
+
+fn set_session_cookie(response: &mut Response, token: &str, max_age: u64) {
+    let value =
+        format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}");
+    response.headers_mut().insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&value).expect("a session cookie is a valid header"),
+    );
+}
+
+fn clear_session_cookie(response: &mut Response) {
+    response.headers_mut().insert(
+        SET_COOKIE,
+        HeaderValue::from_static("anth_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
+    );
+}
+
+fn now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+/// `POST /api/engine/session`: check the operator and mint a bearer token.
+async fn login_session(
+    State(state): State<Arc<EngineState>>,
+    Json(request): Json<LoginRequest>,
+) -> Result<Response, ApiError> {
+    let auth = auth(&state)?;
+    let login = match auth.login(&request.operator, &request.password) {
+        Ok(login) => login,
+        Err(error) => {
+            deny(&state, request.operator, "invalid credentials");
+            return Err(ApiError(error));
+        }
+    };
+    if let Some(apps) = state.apps.as_deref() {
+        let _ = apps.audit.append(&AuditEntry {
+            at: timestamp(),
+            actor: login.session.operator.clone(),
+            action: AuditAction::SessionLogin,
+            app: None,
+            result: Outcome::Ok,
+            detail: None,
+        });
+    }
+    let mut response = Json(json!({
+        "operator": login.session.operator,
+        "must_change_password": login.session.must_change_password,
+        "expires_at": login.session.expires_at,
+    }))
+    .into_response();
+    set_session_cookie(
+        &mut response,
+        &login.token,
+        auth.ttl_seconds()
+            .max(login.session.expires_at.saturating_sub(now_seconds())),
+    );
+    Ok(response)
+}
+
+/// `GET /api/engine/session`: who this request is, without touching the token.
+async fn read_session(Extension(context): Extension<AuthContext>) -> Json<Value> {
+    Json(match context.session {
+        Some(session) => json!({
+            "operator": session.operator,
+            "transport": "session",
+            "must_change_password": session.must_change_password,
+            "expires_at": session.expires_at,
+        }),
+        None => json!({
+            "operator": context.actor,
+            "transport": match context.kind {
+                AuthKind::Peer => "socket",
+                AuthKind::Trusted => "panel",
+                AuthKind::Session => "session",
+            },
+            "must_change_password": context.must_change_password,
+            "expires_at": Value::Null,
+        }),
+    })
+}
+
+/// `DELETE /api/engine/session`: drop the token and clear the cookie.
+async fn logout_session(
+    State(state): State<Arc<EngineState>>,
+    Extension(context): Extension<AuthContext>,
+) -> Response {
+    if let (Some(token), Some(auth)) = (context.token.as_deref(), state.auth.as_deref()) {
+        auth.logout(token);
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    clear_session_cookie(&mut response);
+    response
+}
+
+/// `GET /api/engine/operator`: the one identity v0.5.0 has.
+async fn read_operator(Extension(context): Extension<AuthContext>) -> Json<Value> {
+    Json(json!({ "name": context.actor }))
+}
+
+/// `PATCH /api/engine/operator`: change the password. A session proves the old
+/// one; the socket's peer credential is proof enough.
+async fn change_operator_password(
+    State(state): State<Arc<EngineState>>,
+    Extension(context): Extension<AuthContext>,
+    Json(request): Json<PasswordRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let auth = auth(&state)?;
+    let trusted = matches!(context.kind, AuthKind::Peer | AuthKind::Trusted);
+    auth.change_password(
+        request.current_password.as_deref(),
+        &request.new_password,
+        trusted,
+    )
+    .map_err(|error| {
+        deny(&state, context.actor.clone(), "password change refused");
+        ApiError(error)
+    })?;
+    Ok(Json(json!({
+        "name": context.actor,
+        "must_change_password": false,
+    })))
 }
 
 /// Readiness and the protocol version.
@@ -1363,6 +1598,9 @@ async fn require_peer(
         // A panel authenticates its browser requests and marks them; the
         // operator identity is the host's to add later.
         request.extensions_mut().insert(Actor("system".to_string()));
+        request
+            .extensions_mut()
+            .insert(AuthContext::peer("system".to_string(), AuthKind::Trusted));
         return Ok(next.run(request).await);
     }
     let peer = request
@@ -1378,6 +1616,9 @@ async fn require_peer(
         }
         Some(uid) if uid == 0 || uid == state.allowed_uid => {
             request.extensions_mut().insert(Actor(format!("uid:{uid}")));
+            request
+                .extensions_mut()
+                .insert(AuthContext::peer(format!("uid:{uid}"), AuthKind::Peer));
             Ok(next.run(request).await)
         }
         Some(uid) => {
@@ -1391,6 +1632,68 @@ async fn require_peer(
             )))
         }
     }
+}
+
+/// Every `/api` route on a TCP listener needs a session, except the login that
+/// mints one.
+async fn require_session(
+    State(state): State<Arc<EngineState>>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let path = request.uri().path().to_string();
+    if request.method() == Method::POST && path == "/engine/session" {
+        return Ok(next.run(request).await);
+    }
+    let token = session_token(request.headers());
+    let session = token.as_deref().and_then(|token| {
+        state
+            .auth
+            .as_deref()
+            .and_then(|auth| auth.authenticate(token))
+    });
+    match session {
+        Some(session) => {
+            request
+                .extensions_mut()
+                .insert(Actor(session.operator.clone()));
+            request.extensions_mut().insert(AuthContext {
+                actor: session.operator.clone(),
+                kind: AuthKind::Session,
+                must_change_password: session.must_change_password,
+                session: Some(session),
+                token,
+            });
+            Ok(next.run(request).await)
+        }
+        None => {
+            deny(&state, "anonymous".to_string(), "no session");
+            Err(ApiError(Error::unauthenticated(
+                "this surface needs a session; log in first",
+            )))
+        }
+    }
+}
+
+/// The first-boot password is a gate, not a warning: until it changes, only the
+/// operator resource and the session itself are reachable.
+async fn password_change_gate(request: Request, next: Next) -> Result<Response, ApiError> {
+    let gated = request
+        .extensions()
+        .get::<AuthContext>()
+        .is_some_and(|context| context.must_change_password);
+    if gated {
+        let path = request.uri().path();
+        let allowed = (request.method() == Method::PATCH && path == "/engine/operator")
+            || (path == "/engine/session"
+                && matches!(*request.method(), Method::GET | Method::DELETE));
+        if !allowed {
+            return Err(ApiError(Error::password_change_required(
+                "change the first-boot password before using the engine",
+            )));
+        }
+    }
+    Ok(next.run(request).await)
 }
 
 /// An error rendered with the one envelope of §7.11.
@@ -1423,6 +1726,75 @@ mod tests {
 
     fn state() -> Arc<EngineState> {
         state_with(1000)
+    }
+
+    fn session_state() -> (Arc<EngineState>, std::path::PathBuf) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join("anthracite-panel").join(format!(
+            "anth-api-session-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let auth =
+            Auth::load_or_create(&dir, std::time::Duration::from_secs(60)).expect("credentials");
+        (
+            Arc::new(EngineState::new(1000).with_auth(Arc::new(auth))),
+            dir,
+        )
+    }
+
+    fn credentials(dir: &std::path::Path) -> (String, String) {
+        let bytes = std::fs::read(dir.join(anth_auth::CREDENTIALS)).expect("read");
+        let value: Value = serde_json::from_slice(&bytes).expect("json");
+        (
+            value["operator"].as_str().expect("operator").to_string(),
+            value["password"].as_str().expect("password").to_string(),
+        )
+    }
+
+    async fn session_call(
+        state: Arc<EngineState>,
+        method: &str,
+        uri: &str,
+        body: Value,
+        cookie: Option<&str>,
+    ) -> (StatusCode, axum::http::HeaderMap, Value) {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(cookie) = cookie {
+            builder = builder.header("cookie", cookie);
+        }
+        let body = if body.is_null() {
+            Body::empty()
+        } else {
+            Body::from(serde_json::to_vec(&body).expect("json"))
+        };
+        let response = public_router(state)
+            .oneshot(builder.body(body).expect("request"))
+            .await
+            .expect("response");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        (status, headers, value)
+    }
+
+    fn cookie(headers: &axum::http::HeaderMap) -> String {
+        headers["set-cookie"]
+            .to_str()
+            .expect("cookie")
+            .split(';')
+            .next()
+            .expect("cookie pair")
+            .to_string()
     }
 
     /// The uid this test process runs as. CI does not run as root, so a fixed
@@ -2376,18 +2748,165 @@ mod tests {
 
     #[tokio::test]
     async fn the_public_router_serves_only_health() {
-        let public = public_router();
+        let (state, dir) = session_state();
+        let public = public_router(state);
         let ok = public
             .clone()
             .oneshot(request("/health", None))
             .await
             .expect("response");
         assert_eq!(ok.status(), StatusCode::OK);
-        let missing = public
+        let denied = public
             .oneshot(request("/api/health", None))
             .await
             .expect("response");
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn only_the_login_path_is_public() {
+        let (state, dir) = session_state();
+        let (status, _, value) = session_call(
+            state,
+            "POST",
+            "/api/apps/org.example.notes/engine/session",
+            json!({"operator": "operator", "password": "x"}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(value["error"]["code"], "unauthenticated");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn login_opens_a_session_and_the_cookie_reaches_the_api() {
+        let (state, dir) = session_state();
+        let (operator, password) = credentials(&dir);
+        let (status, headers, value) = session_call(
+            Arc::clone(&state),
+            "POST",
+            "/api/engine/session",
+            json!({"operator": operator, "password": password}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["operator"], "operator");
+        assert_eq!(value["must_change_password"], true);
+        let cookie = cookie(&headers);
+
+        let (status, _, value) = session_call(
+            Arc::clone(&state),
+            "GET",
+            "/api/engine/session",
+            Value::Null,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["transport"], "session");
+
+        let (status, _, value) = session_call(
+            Arc::clone(&state),
+            "GET",
+            "/api/health",
+            Value::Null,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(value["error"]["code"], "password-change-required");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn changing_the_first_boot_password_lifts_the_gate() {
+        let (state, dir) = session_state();
+        let (operator, password) = credentials(&dir);
+        let (_, headers, _) = session_call(
+            Arc::clone(&state),
+            "POST",
+            "/api/engine/session",
+            json!({"operator": operator, "password": password}),
+            None,
+        )
+        .await;
+        let cookie = cookie(&headers);
+
+        let (status, _, value) = session_call(
+            Arc::clone(&state),
+            "PATCH",
+            "/api/engine/operator",
+            json!({"current_password": password, "new_password": "a-new-password"}),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+
+        let (status, _, _) = session_call(
+            Arc::clone(&state),
+            "GET",
+            "/api/health",
+            Value::Null,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn logout_revokes_the_token() {
+        let (state, dir) = session_state();
+        let (operator, password) = credentials(&dir);
+        let (_, headers, _) = session_call(
+            Arc::clone(&state),
+            "POST",
+            "/api/engine/session",
+            json!({"operator": operator, "password": password}),
+            None,
+        )
+        .await;
+        let cookie = cookie(&headers);
+        let (status, _, _) = session_call(
+            Arc::clone(&state),
+            "DELETE",
+            "/api/engine/session",
+            Value::Null,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _, _) = session_call(
+            Arc::clone(&state),
+            "GET",
+            "/api/engine/session",
+            Value::Null,
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_password_never_mints_a_session() {
+        let (state, dir) = session_state();
+        let (operator, _) = credentials(&dir);
+        let (status, headers, value) = session_call(
+            state,
+            "POST",
+            "/api/engine/session",
+            json!({"operator": operator, "password": "not-the-password"}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(value["error"]["code"], "unauthenticated");
+        assert!(headers.get("set-cookie").is_none());
+        std::fs::remove_dir_all(dir).expect("cleanup");
     }
 
     #[tokio::test]
