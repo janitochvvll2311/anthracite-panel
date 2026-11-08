@@ -33,7 +33,10 @@ The shell, API and module assets all require a session; only `/health`, `/login`
 `/setup` and the empty sandboxed frame document are public. There is no shared
 Basic secret and no silent unauthenticated mode. A non-loopback bind is refused
 unless `--allow-remote` is explicit; put TLS in front and preserve
-`X-Forwarded-Proto`/`X-Forwarded-Host`.
+`X-Forwarded-Proto`/`X-Forwarded-Host`. The engine only trusts
+`X-Forwarded-Host` when the TCP peer is loopback, so the TLS terminator must
+connect to the panel over loopback; a remote proxy must forward the original
+`Host` instead.
 
 ## Viewport modes
 
