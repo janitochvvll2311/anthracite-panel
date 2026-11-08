@@ -34,8 +34,8 @@ code, its crates or its structure.
 Four Rust workspaces and three Bun ones. They are separate on purpose: a
 dependency that should not exist becomes unrepresentable instead of discouraged.
 
-- `engine/` — the platform: `contract`, `runtime`, `broker`, `compose`,
-  `auth`, `api`, `daemon`. Builds `anth-engine`, the headless daemon.
+- `engine/` — the platform: `contract`, `runtime`, `compose`, `auth`, `api`,
+  `daemon`. Builds `anth-engine`, the headless daemon.
 - `sdk/rust/` — `guest` (wasm apps), `panel` (panels), `client` (generated
   HTTP/CLI clients), `cli` (the `anth` commands).
 - `panel/backend/` — the official panel binary; links the SDK, mounts the engine

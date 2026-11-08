@@ -43,11 +43,30 @@ impl Host {
     /// Reads the configuration, creates state on first boot, starts the
     /// composition and binds both the Unix socket and the API state.
     pub async fn start(config_path: &Path) -> Result<Self, Error> {
+        Self::start_with_reset(config_path, false).await
+    }
+
+    /// Same boot, optionally deleting the recovery file first. The panel exposes
+    /// this as `--reset-credentials`, matching the daemon.
+    pub async fn start_with_reset(config_path: &Path, reset: bool) -> Result<Self, Error> {
         let profile = Profile::default();
         let config = Config::load_or_create(config_path, profile)?;
         config.validate(profile)?;
         let logger = Logger::new(config.log.clone());
 
+        if reset {
+            match std::fs::remove_file(config.state.join(anth_auth::CREDENTIALS)) {
+                Ok(()) => {
+                    logger.warn("operator credentials reset; a new password will be generated")
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(Error::internal(format!(
+                        "removing the operator credentials: {error}"
+                    )));
+                }
+            }
+        }
         anth_engine::state::ensure(&config.state)?;
         let composition = anth_engine::state::load_composition(&config.state)?;
         composition.validate()?;

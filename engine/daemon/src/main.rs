@@ -78,12 +78,30 @@ impl Args {
                 other => return Err(format!("unknown argument `{other}`")),
             }
         }
+        if check && reset_credentials {
+            return Err(
+                "`--check` is read-only and `--reset-credentials` mutates state; choose one"
+                    .to_string(),
+            );
+        }
         Ok(Self {
             config: PathBuf::from(config.unwrap_or_else(|| "config.toml".to_string())),
             profile: choose_profile(debug, release, cfg!(debug_assertions))?,
             check,
             reset_credentials,
         })
+    }
+}
+
+/// Deletes the recovery file so the next state check mints a new password.
+/// Missing is success: a reset on a tree that never had credentials is a reset.
+fn reset_credentials(state: &std::path::Path) -> Result<bool, Error> {
+    match std::fs::remove_file(state.join(anth_auth::CREDENTIALS)) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(Error::internal(format!(
+            "removing the operator credentials: {error}"
+        ))),
     }
 }
 
@@ -139,16 +157,8 @@ async fn run(args: Args) -> Result<(), Error> {
     config.validate(args.profile)?;
     let logger = Logger::new(config.log.clone());
 
-    if args.reset_credentials {
-        match std::fs::remove_file(config.state.join(anth_auth::CREDENTIALS)) {
-            Ok(()) => logger.warn("operator credentials reset; a new password will be generated"),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(Error::internal(format!(
-                    "removing the operator credentials: {error}"
-                )));
-            }
-        }
+    if args.reset_credentials && reset_credentials(&config.state)? {
+        logger.warn("operator credentials reset; a new password will be generated");
     }
     anth_engine::state::ensure(&config.state)?;
     let composition = anth_engine::state::load_composition(&config.state)?;
@@ -303,7 +313,7 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_profile, Args};
+    use super::{choose_profile, reset_credentials, Args};
     use anth_engine::config::Profile;
 
     #[test]
@@ -332,5 +342,30 @@ mod tests {
         let args =
             Args::parse(["--reset-credentials"].into_iter().map(str::to_string)).expect("args");
         assert!(args.reset_credentials);
+        assert!(Args::parse(
+            ["--check", "--reset-credentials"]
+                .into_iter()
+                .map(str::to_string)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn reset_removes_the_file_and_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!(
+            "anth-engine-reset-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join(anth_auth::CREDENTIALS);
+        std::fs::write(&path, b"credentials").expect("write");
+        assert!(reset_credentials(&dir).expect("reset"));
+        assert!(!path.exists());
+        assert!(!reset_credentials(&dir).expect("idempotent"));
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }
