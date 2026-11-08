@@ -171,6 +171,12 @@ jobs:
           wait "$panel" 2>/dev/null || true
 
           start_panel
+          # The panel's Basic token is independent of the generated operator
+          # password; clear the first-boot gate over the trusted socket.
+          curl -sf --unix-socket "$dir/engine.sock" -X PATCH \
+            -H 'content-type: application/json' \
+            -d '{"new_password":"changed-password-123"}' \
+            http://localhost/api/engine/operator >/dev/null
           for _ in $(seq 1 100); do
             curl -sf -u operator:test http://127.0.0.1:8099/api/health >/dev/null && break
             sleep 0.1
