@@ -13,17 +13,15 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anth_panel::{Host, ACTION, SETTINGS, VIEW};
+use anth_panel::{Host, Sessions, ACTION, SETTINGS, VIEW};
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::http::{header, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::Router;
-use base64::Engine as _;
 use percent_encoding::percent_decode_str;
-use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 
 /// The slots this panel implements, from the SDK rather than a local copy.
@@ -48,8 +46,8 @@ const SETUP_CSP: &str = "default-src 'self'; script-src 'unsafe-inline'; \
 #[derive(Clone)]
 struct Panel {
     slots: &'static [&'static str],
-    /// The Basic credential expected on `/api/*`, when the panel is exposed.
-    authorization: Option<HeaderValue>,
+    /// The engine's session store, shared with the mounted API router.
+    sessions: Option<Sessions>,
     /// Only the debug build reads from disk; the release build embeds the dist.
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     web: Option<PathBuf>,
@@ -58,7 +56,6 @@ struct Panel {
 struct Args {
     listen: SocketAddr,
     config: PathBuf,
-    token: Option<String>,
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     web: PathBuf,
 }
@@ -67,7 +64,6 @@ impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut listen = "127.0.0.1:8090".to_string();
         let mut config = "config.toml".to_string();
-        let mut token = std::env::var("ANTH_PANEL_TOKEN").ok();
         let mut web = std::env::var("ANTH_PANEL_WEB").unwrap_or_else(|_| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../frontend/dist")
@@ -78,12 +74,11 @@ impl Args {
             match arg.as_str() {
                 "--listen" => listen = args.next().ok_or("`--listen` needs an address")?,
                 "--config" => config = args.next().ok_or("`--config` needs a path")?,
-                "--token" => token = Some(args.next().ok_or("`--token` needs a secret")?),
                 "--web" => web = args.next().ok_or("`--web` needs a directory")?,
                 "--help" | "-h" => {
                     return Err(
                         "usage: anth-panel [--listen 127.0.0.1:8090] [--config <path>] \
-                         [--token <secret>] [--web <dir>]"
+                         [--web <dir>]"
                             .to_string(),
                     );
                 }
@@ -95,7 +90,6 @@ impl Args {
                 .parse()
                 .map_err(|_| format!("`{listen}` is not a socket address"))?,
             config: PathBuf::from(config),
-            token,
             web: PathBuf::from(web),
         })
     }
@@ -120,18 +114,6 @@ async fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
-    if args.token.is_none() && !args.listen.ip().is_loopback() {
-        eprintln!(
-            "refusing to listen on {} without --token: the engine API is privileged; \
-             pass a secret or bind 127.0.0.1",
-            args.listen
-        );
-        return ExitCode::from(2);
-    }
-    if args.token.is_some() {
-        eprintln!("anth-panel requires Basic auth on /api (username `operator`)");
-    }
-
     let listener = match TcpListener::bind(args.listen).await {
         Ok(listener) => listener,
         Err(error) => {
@@ -150,7 +132,7 @@ async fn main() -> ExitCode {
 
     let state = Arc::new(Panel {
         slots: &SLOTS,
-        authorization: args.token.as_deref().map(basic_authorization),
+        sessions: host.sessions(),
         #[cfg(debug_assertions)]
         web: Some(args.web.clone()),
         #[cfg(not(debug_assertions))]
@@ -160,14 +142,17 @@ async fn main() -> ExitCode {
     let shell = Router::new()
         .route("/health", get(health))
         .route("/panel/config.json", get(panel_config))
+        .route("/login", get(login_page))
         .route("/setup", get(setup))
         .fallback(any(asset))
-        .with_state(state.clone());
-    // The shell asks for the credential on the first navigation; the sandboxed
-    // frame document stays public because it carries no data, only the bridge.
-    let app = shell
-        .nest("/api", host.api())
-        .layer(middleware::from_fn_with_state(state, require_auth));
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_shell_session,
+        ));
+    // `/api` authenticates itself with the engine's session cookie; the shell
+    // gate above only applies to the panel's own documents and assets.
+    let app = shell.nest("/api", host.session_api());
 
     println!(
         "anth-panel listening on http://{} (config {})",
@@ -196,24 +181,44 @@ async fn health() -> impl IntoResponse {
     )
 }
 
-/// The first-boot escape hatch: the panel's Basic credential and the generated
-/// operator password are different secrets, so the operator can read the latter
-/// from `state/credentials.txt` and change it here. Until then the engine gate
-/// refuses every other resource.
+/// The login page. It is public; the engine mints the session cookie and the
+/// shell gate reads it on the next navigation.
+async fn login_page() -> Response {
+    page(
+        "Sign in",
+        r#"<h1>Sign in</h1>
+<p>The operator name is <code>operator</code>. If this is the first boot, read
+the password from <code>state/credentials.txt</code>.</p>
+<form id="login">
+  <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit">Sign in</button>
+</form>
+<p id="status" role="status"></p>
+<script>
+document.getElementById('login').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const response = await fetch('/api/engine/session', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ operator: 'operator', password: document.getElementById('password').value }),
+  });
+  if (!response.ok) {
+    document.getElementById('status').textContent = await response.text();
+    return;
+  }
+  const session = await response.json();
+  location.href = session.must_change_password ? '/setup' : '/';
+});
+</script>"#,
+    )
+}
+
+/// The first-boot escape hatch. It logs in with the generated password, then
+/// changes it; the engine gate refuses every other resource until then.
 async fn setup() -> Response {
-    let body = r#"<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Anthracite setup</title>
-<style>
-  body { font: 16px system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; }
-  label { display: block; margin: 1rem 0; }
-  input { display: block; width: 100%; padding: .5rem; margin-top: .25rem; }
-  button { padding: .6rem 1rem; }
-  code { background: #eee; padding: .1rem .25rem; }
-</style>
-<h1>Change the first-boot password</h1>
+    page(
+        "Change the first-boot password",
+        r#"<h1>Change the first-boot password</h1>
 <p>Read the current password from <code>state/credentials.txt</code>. The engine
 refuses every other resource until it changes.</p>
 <form id="setup">
@@ -227,23 +232,53 @@ document.getElementById('setup').addEventListener('submit', async (event) => {
   event.preventDefault();
   const current = document.getElementById('current').value;
   const next = document.getElementById('new').value;
+  const login = await fetch('/api/engine/session', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ operator: 'operator', password: current }),
+  });
+  if (!login.ok) {
+    document.getElementById('status').textContent = await login.text();
+    return;
+  }
   const response = await fetch('/api/engine/operator', {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ current_password: current, new_password: next }),
   });
-  const status = document.getElementById('status');
-  status.textContent = response.ok ? 'Password changed. Open /.' : await response.text();
+  document.getElementById('status').textContent = response.ok
+    ? 'Password changed. Open /.'
+    : await response.text();
+  if (response.ok) location.href = '/';
 });
-</script>
-</html>"#;
+</script>"#,
+    )
+}
+
+fn page(title: &str, body: &str) -> Response {
+    let html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+  body {{ font: 16px system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; }}
+  label {{ display: block; margin: 1rem 0; }}
+  input {{ display: block; width: 100%; padding: .5rem; margin-top: .25rem; }}
+  button {{ padding: .6rem 1rem; }}
+  code {{ background: #eee; padding: .1rem .25rem; }}
+</style>
+{body}
+</html>"#
+    );
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CONTENT_SECURITY_POLICY, SETUP_CSP),
             (header::CACHE_CONTROL, "no-cache"),
         ],
-        body,
+        html,
     )
         .into_response()
 }
@@ -329,36 +364,46 @@ async fn asset(State(state): State<Arc<Panel>>, request: Request) -> Response {
         .into_response()
 }
 
-/// The engine API is privileged. A loopback panel relies on the OS user; any
-/// other bind needs Basic credentials. Sessions replace this shared secret later.
-async fn require_auth(State(state): State<Arc<Panel>>, request: Request, next: Next) -> Response {
+/// The shell is static, but it is not public: an unauthenticated browser goes to
+/// `/login`, and a first-boot session goes to `/setup`. The sandboxed frame
+/// document and the login pages are the only exceptions.
+async fn require_shell_session(
+    State(state): State<Arc<Panel>>,
+    request: Request,
+    next: Next,
+) -> Response {
     let path = request.uri().path();
-    if path == "/health" || path == "/app-frame.html" {
+    if matches!(
+        path,
+        "/health" | "/login" | "/setup" | "/app-frame.html" | "/favicon.ico" | "/panel/config.json"
+    ) {
         return next.run(request).await;
     }
-    if let Some(expected) = &state.authorization {
-        let provided = request.headers().get(header::AUTHORIZATION);
-        let matches = provided
-            .map(|value| bool::from(value.as_bytes().ct_eq(expected.as_bytes())))
-            .unwrap_or(false);
-        if !matches {
-            return (
-                StatusCode::UNAUTHORIZED,
-                [(
-                    header::WWW_AUTHENTICATE,
-                    "Basic realm=\"Anthracite\", charset=\"UTF-8\"",
-                )],
-                "authentication required",
-            )
-                .into_response();
-        }
+    let session = state.sessions.as_ref().and_then(|sessions| {
+        session_token(request.headers()).and_then(|token| sessions.authenticate(&token))
+    });
+    match session {
+        Some(session) if session.must_change_password => redirect("/setup"),
+        Some(_) => next.run(request).await,
+        None => redirect("/login"),
     }
-    next.run(request).await
 }
 
-fn basic_authorization(token: &str) -> HeaderValue {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(format!("operator:{token}"));
-    HeaderValue::from_str(&format!("Basic {encoded}")).expect("a Basic header is valid")
+fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    let header = headers.get(header::COOKIE)?.to_str().ok()?;
+    header.split(';').find_map(|part| {
+        let (name, value) = part.trim().split_once('=')?;
+        (name == "anth_session").then(|| value.to_string())
+    })
+}
+
+fn redirect(location: &str) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, location)],
+        "redirecting",
+    )
+        .into_response()
 }
 
 #[cfg(debug_assertions)]
@@ -416,6 +461,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use axum::body::to_bytes;
+    use tower::ServiceExt;
 
     use super::*;
 
@@ -432,7 +478,7 @@ mod tests {
     fn panel(web: Option<PathBuf>) -> Arc<Panel> {
         Arc::new(Panel {
             slots: &SLOTS,
-            authorization: None,
+            sessions: None,
             web,
         })
     }
@@ -444,19 +490,43 @@ mod tests {
     }
 
     #[test]
-    fn basic_auth_uses_the_operator_name_and_token() {
-        assert_eq!(
-            basic_authorization("secret").to_str().expect("header"),
-            "Basic b3BlcmF0b3I6c2VjcmV0"
-        );
-    }
-
-    #[test]
     fn the_slots_come_from_the_sdk() {
         assert_eq!(
             SLOTS,
             [anth_panel::VIEW, anth_panel::ACTION, anth_panel::SETTINGS]
         );
+    }
+
+    #[tokio::test]
+    async fn the_login_page_posts_to_the_session_endpoint() {
+        let response = login_page().await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let text = String::from_utf8(body.to_vec()).expect("utf8");
+        assert!(text.contains("/api/engine/session"), "{text}");
+        assert!(text.contains("must_change_password"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn the_shell_redirects_an_anonymous_request_to_login() {
+        let state = panel(None);
+        let app = Router::new()
+            .route("/", get(|| async { "shell" }))
+            .with_state(state.clone())
+            .layer(middleware::from_fn_with_state(state, require_shell_session));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()[header::LOCATION], "/login");
     }
 
     #[tokio::test]

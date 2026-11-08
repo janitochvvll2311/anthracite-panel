@@ -153,7 +153,7 @@ jobs:
 
           start_panel() {
             ./target/debug/anth-panel --listen 127.0.0.1:8099 \
-              --config "$dir/config.toml" --token test > "$dir/panel.log" 2>&1 &
+              --config "$dir/config.toml" > "$dir/panel.log" 2>&1 &
             panel=$!
             for _ in $(seq 1 100); do
               curl -sf http://127.0.0.1:8099/health >/dev/null && return 0
@@ -171,18 +171,23 @@ jobs:
           wait "$panel" 2>/dev/null || true
 
           start_panel
-          # Walk the panel's own way out of the first-boot gate: read the
-          # generated password and PATCH it through the panel, not the socket.
+          # Walk the panel's own way out of the first-boot gate: log in with the
+          # generated password and change it through the panel session.
           password=$(sed -n 's/.*"password":"\([^"]*\)".*/\1/p' "$dir/state/credentials.txt")
-          curl -sf -u operator:test -X PATCH \
+          curl -sf -c "$dir/cookies" \
+            -H 'content-type: application/json' \
+            -d "{\"operator\":\"operator\",\"password\":\"$password\"}" \
+            http://127.0.0.1:8099/api/engine/session >/dev/null
+          curl -sf -b "$dir/cookies" -c "$dir/cookies" -X PATCH \
             -H 'content-type: application/json' \
             -d "{\"current_password\":\"$password\",\"new_password\":\"changed-password-123\"}" \
             http://127.0.0.1:8099/api/engine/operator >/dev/null
           for _ in $(seq 1 100); do
-            curl -sf -u operator:test http://127.0.0.1:8099/api/health >/dev/null && break
+            curl -sf -b "$dir/cookies" http://127.0.0.1:8099/api/health >/dev/null && break
             sleep 0.1
           done
-          ANTH_PANEL_URL=http://127.0.0.1:8099 ANTH_PANEL_AUTH=operator:test \
+          ANTH_PANEL_URL=http://127.0.0.1:8099 ANTH_PANEL_OPERATOR=operator \
+            ANTH_PANEL_PASSWORD=changed-password-123 \
             tests/e2e/remote-client.sh
 
       # The release binary embeds dist; without it the build fails, by design.

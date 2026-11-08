@@ -232,10 +232,9 @@ Losing the file means `anth-engine --reset-credentials`, which requires
 filesystem access to the state directory.
 
 The official panel exposes `/setup` for this first step: the operator reads the
-generated password from `state/credentials.txt`, enters it with a new password,
-and the panel's trusted request calls `PATCH /api/engine/operator`. The panel's
-Basic token and the generated operator password are separate secrets, so this
-page is the one place where the two meet.
+generated password from `state/credentials.txt`, logs in through the panel and
+enters a new password. The panel has no shared Basic secret; every browser
+resource is gated by the engine session.
 
 **One operator, for now.** v0.5.0 has a single operator, created on first boot.
 `approved_by` in a grant and `actor` in the audit record its name. Multiple
@@ -261,9 +260,9 @@ never wins. The panel reads the composition through the API and never touches th
 registry or the grants.
 
 A request that reaches the router in-process has no peer credential, so the
-embedding host marks it `Trusted` once it has authenticated the browser; a socket
-request carries its credential instead. Sessions (M1) move that decision into the
-router and make the marker unnecessary.
+embedding panel mounts the session router and forwards the browser's cookie; a
+socket request carries its peer credential instead. The router owns both
+decisions, and the panel also checks the session before serving its shell.
 
 **Failure behaviour.**
 

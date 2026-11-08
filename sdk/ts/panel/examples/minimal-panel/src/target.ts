@@ -1,6 +1,6 @@
-// The second panel's transport is a local panel/engine. The Basic token is for
-// that service, so the default target must be loopback; a remote target needs an
-// explicit opt-in and is the operator's responsibility.
+// The second panel's transport is a local panel/engine. It logs in with the
+// operator credentials, so the default target must be loopback; a remote target
+// needs an explicit opt-in and is the operator's responsibility.
 
 export function isLoopback(hostname: string): boolean {
   return (

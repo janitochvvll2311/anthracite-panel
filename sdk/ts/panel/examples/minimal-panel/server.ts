@@ -22,6 +22,34 @@ try {
 }
 const credentials = process.env.ANTH_PANEL_AUTH ?? "operator:anthracite-dev";
 const authorization = `Basic ${btoa(credentials)}`;
+const upstreamOperator = process.env.ANTH_PANEL_OPERATOR ?? "operator";
+const upstreamPassword = process.env.ANTH_PANEL_PASSWORD;
+if (!upstreamPassword) {
+  console.error(
+    "ANTH_PANEL_PASSWORD is required (read it from the target's state/credentials.txt)",
+  );
+  process.exit(1);
+}
+
+async function login(): Promise<string> {
+  const response = await fetch(new URL("/api/engine/session", target), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      operator: upstreamOperator,
+      password: upstreamPassword,
+    }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`login answered ${response.status}: ${text}`);
+  }
+  const header = response.headers.get("set-cookie");
+  if (!header) throw new Error("the target did not set a session cookie");
+  return header.split(";")[0]!;
+}
+
+const sessionCookie = await login();
 const appFrameUrl = new URL(
   import.meta.resolve("@anthracite/panel/app-frame.html"),
 );
@@ -70,8 +98,9 @@ async function proxy(request: Request): Promise<Response> {
     return text("the request escaped the configured transport", 400);
   }
   const headers = new Headers(request.headers);
-  headers.set("authorization", authorization);
+  headers.set("cookie", sessionCookie);
   headers.delete("host");
+  headers.delete("origin");
   headers.delete("content-length");
   let response: Response;
   try {

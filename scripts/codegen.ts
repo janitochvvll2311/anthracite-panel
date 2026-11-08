@@ -1221,9 +1221,6 @@ description = "Generated clients for Anthracite apps"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 percent-encoding = "2"
-
-[dev-dependencies]
-base64 = "0.22"
 `;
 
   const files: Record<string, string> = {
