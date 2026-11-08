@@ -203,9 +203,12 @@ async fn run(args: Args) -> Result<(), Error> {
             logger.info(&format!("listening on http://{address}"));
             let stopped = stopped.clone();
             Some(tokio::spawn(async move {
-                axum::serve(listener, public)
-                    .with_graceful_shutdown(wait(stopped))
-                    .await
+                axum::serve(
+                    listener,
+                    public.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(wait(stopped))
+                .await
             }))
         }
         None => None,

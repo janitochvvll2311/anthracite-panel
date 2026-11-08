@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -361,9 +362,11 @@ fn session_token(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-fn set_session_cookie(response: &mut Response, token: &str, max_age: u64) {
-    let value =
-        format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}");
+fn set_session_cookie(response: &mut Response, token: &str, max_age: u64, secure: bool) {
+    let secure = if secure { "; Secure" } else { "" };
+    let value = format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}"
+    );
     response.headers_mut().insert(
         SET_COOKIE,
         HeaderValue::from_str(&value).expect("a session cookie is a valid header"),
@@ -377,6 +380,20 @@ fn clear_session_cookie(response: &mut Response) {
     );
 }
 
+/// The engine speaks plain HTTP; a TLS terminator in front of it can mark the
+/// request with `X-Forwarded-Proto: https`, which is the only time `Secure` is
+/// safe to add. Without TLS the flag would make the browser drop the cookie.
+fn cookie_secure(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("https"))
+        })
+}
+
 fn now_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -387,10 +404,13 @@ fn now_seconds() -> u64 {
 /// `POST /api/engine/session`: check the operator and mint a bearer token.
 async fn login_session(
     State(state): State<Arc<EngineState>>,
+    ConnectInfo(source): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response, ApiError> {
     let auth = auth(&state)?;
-    let login = match auth.login(&request.operator, &request.password) {
+    let source = source.ip().to_string();
+    let login = match auth.login(&source, &request.operator, &request.password) {
         Ok(login) => login,
         Err(error) => {
             deny(&state, request.operator, "invalid credentials");
@@ -418,6 +438,7 @@ async fn login_session(
         &login.token,
         auth.ttl_seconds()
             .max(login.session.expires_at.saturating_sub(now_seconds())),
+        cookie_secure(&headers),
     );
     Ok(response)
 }
@@ -463,27 +484,39 @@ async fn read_operator(Extension(context): Extension<AuthContext>) -> Json<Value
 }
 
 /// `PATCH /api/engine/operator`: change the password. A session proves the old
-/// one; the socket's peer credential is proof enough.
+/// one; the socket's peer credential is proof enough. A password change revokes
+/// every token, so a session client gets a fresh cookie in the same response.
 async fn change_operator_password(
     State(state): State<Arc<EngineState>>,
+    headers: HeaderMap,
     Extension(context): Extension<AuthContext>,
     Json(request): Json<PasswordRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let auth = auth(&state)?;
-    let trusted = matches!(context.kind, AuthKind::Peer | AuthKind::Trusted);
     auth.change_password(
         request.current_password.as_deref(),
         &request.new_password,
-        trusted,
+        context.kind == AuthKind::Peer,
     )
     .map_err(|error| {
         deny(&state, context.actor.clone(), "password change refused");
         ApiError(error)
     })?;
-    Ok(Json(json!({
+    let mut response = Json(json!({
         "name": context.actor,
         "must_change_password": false,
-    })))
+    }))
+    .into_response();
+    if context.kind == AuthKind::Session {
+        let login = auth.issue().map_err(ApiError)?;
+        set_session_cookie(
+            &mut response,
+            &login.token,
+            auth.ttl_seconds(),
+            cookie_secure(&headers),
+        );
+    }
+    Ok(response)
 }
 
 /// Readiness and the protocol version.
@@ -1595,12 +1628,21 @@ async fn require_peer(
     next: Next,
 ) -> Result<Response, ApiError> {
     if request.extensions().get::<Trusted>().is_some() {
-        // A panel authenticates its browser requests and marks them; the
-        // operator identity is the host's to add later.
+        // A panel authenticates its browser requests and marks them. It is not
+        // the socket: the first-boot gate still applies and a password change
+        // must prove the old password.
+        let gated = state
+            .auth
+            .as_deref()
+            .is_some_and(Auth::must_change_password);
         request.extensions_mut().insert(Actor("system".to_string()));
-        request
-            .extensions_mut()
-            .insert(AuthContext::peer("system".to_string(), AuthKind::Trusted));
+        request.extensions_mut().insert(AuthContext {
+            actor: "system".to_string(),
+            kind: AuthKind::Trusted,
+            must_change_password: gated,
+            session: None,
+            token: None,
+        });
         return Ok(next.run(request).await);
     }
     let peer = request
@@ -1774,8 +1816,12 @@ mod tests {
         } else {
             Body::from(serde_json::to_vec(&body).expect("json"))
         };
+        let mut request = builder.body(body).expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4000))));
         let response = public_router(state)
-            .oneshot(builder.body(body).expect("request"))
+            .oneshot(request)
             .await
             .expect("response");
         let status = response.status();
@@ -1795,6 +1841,35 @@ mod tests {
             .next()
             .expect("cookie pair")
             .to_string()
+    }
+
+    async fn trusted_call(
+        state: Arc<EngineState>,
+        method: &str,
+        uri: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let body = if body.is_null() {
+            Body::empty()
+        } else {
+            Body::from(serde_json::to_vec(&body).expect("json"))
+        };
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(body)
+            .expect("request");
+        let response = api_router(state)
+            .layer(Extension(Trusted))
+            .oneshot(request)
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
     }
 
     /// The uid this test process runs as. CI does not run as root, so a fixed
@@ -2833,24 +2908,25 @@ mod tests {
             None,
         )
         .await;
-        let cookie = cookie(&headers);
+        let first_cookie = cookie(&headers);
 
-        let (status, _, value) = session_call(
+        let (status, headers, value) = session_call(
             Arc::clone(&state),
             "PATCH",
             "/api/engine/operator",
             json!({"current_password": password, "new_password": "a-new-password"}),
-            Some(&cookie),
+            Some(&first_cookie),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{value}");
+        let renewed = cookie(&headers);
 
         let (status, _, _) = session_call(
             Arc::clone(&state),
             "GET",
             "/api/health",
             Value::Null,
-            Some(&cookie),
+            Some(&renewed),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -2907,6 +2983,65 @@ mod tests {
         assert_eq!(value["error"]["code"], "unauthenticated");
         assert!(headers.get("set-cookie").is_none());
         std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn five_failures_block_the_source() {
+        let (state, dir) = session_state();
+        let (operator, password) = credentials(&dir);
+        for _ in 0..5 {
+            let (status, _, _) = session_call(
+                Arc::clone(&state),
+                "POST",
+                "/api/engine/session",
+                json!({"operator": operator, "password": "wrong"}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+        let (status, headers, value) = session_call(
+            state,
+            "POST",
+            "/api/engine/session",
+            json!({"operator": operator, "password": password}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(value["error"]["code"], "rate-limited");
+        assert!(value["error"]["detail"]["retry_after"].as_u64().is_some());
+        assert!(headers.get("set-cookie").is_none());
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn a_trusted_panel_still_faces_the_gate_and_the_current_password() {
+        let (state, dir) = session_state();
+        let (status, value) = trusted_call(Arc::clone(&state), "GET", "/health", Value::Null).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(value["error"]["code"], "password-change-required");
+
+        let (status, value) = trusted_call(
+            Arc::clone(&state),
+            "PATCH",
+            "/engine/operator",
+            json!({"new_password": "a-new-password"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(value["error"]["code"], "unauthenticated");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn a_forwarded_https_request_marks_the_cookie_secure() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-proto", "https".parse().expect("value"));
+        assert!(cookie_secure(&headers));
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-proto", "http".parse().expect("value"));
+        assert!(!cookie_secure(&headers));
     }
 
     #[tokio::test]

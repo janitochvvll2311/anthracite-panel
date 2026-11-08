@@ -17,6 +17,8 @@ pub enum ErrorKind {
     Unauthenticated,
     /// The operator must change the first-boot password before doing anything else.
     PasswordChangeRequired,
+    /// Too many failed logins from one source; wait and retry.
+    RateLimited,
     /// The arguments were refused.
     Invalid,
     /// The resource does not exist.
@@ -44,6 +46,7 @@ impl ErrorKind {
             Self::Denied => "denied",
             Self::Unauthenticated => "unauthenticated",
             Self::PasswordChangeRequired => "password-change-required",
+            Self::RateLimited => "rate-limited",
             Self::Invalid => "invalid",
             Self::NotFound => "not-found",
             Self::TooLarge => "too-large",
@@ -62,6 +65,7 @@ impl ErrorKind {
             Self::Denied => 403,
             Self::Unauthenticated => 401,
             Self::PasswordChangeRequired => 403,
+            Self::RateLimited => 429,
             Self::Invalid => 400,
             Self::NotFound => 404,
             Self::TooLarge => 413,
@@ -80,6 +84,7 @@ impl ErrorKind {
             "denied" => Self::Denied,
             "unauthenticated" => Self::Unauthenticated,
             "password-change-required" => Self::PasswordChangeRequired,
+            "rate-limited" => Self::RateLimited,
             "invalid" => Self::Invalid,
             "not-found" => Self::NotFound,
             "too-large" => Self::TooLarge,
@@ -98,7 +103,10 @@ impl ErrorKind {
         match self {
             Self::Internal => 1,
             Self::Invalid | Self::Conflict | Self::PreconditionFailed | Self::MethodNotAllowed => 2,
-            Self::Denied | Self::Unauthenticated | Self::PasswordChangeRequired => 3,
+            Self::Denied
+            | Self::Unauthenticated
+            | Self::PasswordChangeRequired
+            | Self::RateLimited => 3,
             Self::NotFound => 4,
             Self::Unavailable | Self::Exhausted => 5,
             Self::TooLarge => 6,
@@ -135,6 +143,10 @@ impl Error {
 
     pub fn password_change_required(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::PasswordChangeRequired, message)
+    }
+
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::RateLimited, message)
     }
 
     pub fn invalid(message: impl Into<String>) -> Self {
@@ -246,6 +258,13 @@ mod tests {
         let cases = [
             (ErrorKind::Denied, "denied", 403, 3),
             (ErrorKind::Unauthenticated, "unauthenticated", 401, 3),
+            (
+                ErrorKind::PasswordChangeRequired,
+                "password-change-required",
+                403,
+                3,
+            ),
+            (ErrorKind::RateLimited, "rate-limited", 429, 3),
             (ErrorKind::Invalid, "invalid", 400, 2),
             (ErrorKind::NotFound, "not-found", 404, 4),
             (ErrorKind::TooLarge, "too-large", 413, 6),
