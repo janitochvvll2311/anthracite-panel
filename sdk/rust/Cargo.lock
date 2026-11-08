@@ -49,6 +49,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-client"
+version = "0.5.0"
+dependencies = [
+ "base64",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "anth-compose"
 version = "0.5.0"
 dependencies = [

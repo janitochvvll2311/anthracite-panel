@@ -21,6 +21,7 @@ sdk/                       the compatibility boundary
   rust/
     guest/                 bindings for wasm apps; packages the host WIT
     panel/                 panel contract: slots, descriptors, asset URLs
+    client/                generated Rust HTTP and CLI clients
     cli/                   the commands; builds the `anth` binary
     conformance/           bin `anth-conformance`; the kit third parties run
   ts/
