@@ -248,7 +248,13 @@ impl Inner {
                 self.attempts.remove(&key);
             }
         }
-        self.attempts.entry(source.to_string()).or_default()
+        let attempts = self.attempts.entry(source.to_string()).or_default();
+        // The window is sliding: keep only failures inside the last minute, not
+        // every failure this source ever made.
+        attempts
+            .failures
+            .retain(|at| now.duration_since(*at) < LOGIN_WINDOW);
+        attempts
     }
 
     fn blocked(&mut self, source: &str) -> Option<u64> {
