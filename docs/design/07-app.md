@@ -494,13 +494,15 @@ The mapping from the variant is total: every case produces a code, and
 | `too-large` | 413 | 6 | payload over the limit; `detail.limit` |
 | `internal` | 500 | 1 | app bug or trap; sanitized |
 | `unauthenticated` | 401 | 3 | no session, or an expired one |
+| `password-change-required` | 403 | 3 | the first-boot password has not changed |
+| `rate-limited` | 429 | 3 | too many failed logins from this source; `detail.retry_after` |
 | `conflict` | 409 | 2 | id exists, duplicate provider, broken dependents |
 | `precondition-failed` | 412 | 2 | `If-Match` does not match |
 | `method-not-allowed` | 405 | 2 | the verb is not declared |
 | `exhausted` | 503 | 5 | the call exceeded its fuel, memory or wall budget; `detail.budget` |
 
 The first six are the ones an app can produce, because they are the variant. The
-last five belong to the engine's own API.
+last seven belong to the engine's own API.
 
 A budget trap is `exhausted`, not `internal`: the app did not crash, it ran out of
 the time or memory the operator granted it. The distinction matters to whoever

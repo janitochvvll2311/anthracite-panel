@@ -231,15 +231,21 @@ password_change_required` until the password changes — one gate, not a warning
 Losing the file means `anth-engine --reset-credentials`, which requires
 filesystem access to the state directory.
 
+The official panel exposes `/setup` for this first step: the operator reads the
+generated password from `state/credentials.txt`, enters it with a new password,
+and the panel's trusted request calls `PATCH /api/engine/operator`. The panel's
+Basic token and the generated operator password are separate secrets, so this
+page is the one place where the two meet.
+
 **One operator, for now.** v0.5.0 has a single operator, created on first boot.
 `approved_by` in a grant and `actor` in the audit record its name. Multiple
 operators, and what each may do, is an open decision ([§15](15-open-decisions.md)).
 
 **The socket authenticates who connects.** The kernel reports the peer's uid and
 the engine accepts the service user and root; a TCP connection has no peer
-credential, so it serves only `/health` until sessions exist. An administration
-group arrives with multi-operator, because it asks the same question — who is
-allowed to act.
+credential, so it authenticates with a session (`POST /api/engine/session`). An
+administration group arrives with multi-operator, because it asks the same
+question — who is allowed to act.
 
 **Login attempts are limited.** Five failures per minute per source, then
 backoff, and every failure is audited. A panel exposed without a rate limit turns

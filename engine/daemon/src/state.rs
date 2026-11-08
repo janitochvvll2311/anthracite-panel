@@ -13,7 +13,7 @@ use anth_contract::{Composition, Error};
 /// The directories the tree owns, relative to its root.
 pub const DIRS: &[&str] = &["apps", "grants", "keys", "data"];
 /// The files the tree owns, relative to its root.
-pub const FILES: &[&str] = &[COMPOSITION, AUDIT];
+pub const FILES: &[&str] = &[COMPOSITION, AUDIT, anth_auth::CREDENTIALS];
 
 const COMPOSITION: &str = "composition.toml";
 const AUDIT: &str = "audit.jsonl";
@@ -55,6 +55,9 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     let composition = Composition::empty().to_toml()?;
     write_missing(&root.join(COMPOSITION), composition.as_bytes())?;
     write_missing(&root.join(AUDIT), b"")?;
+    // First boot mints the operator's recovery file. `load_or_create` is
+    // idempotent, so every later boot reads the same document.
+    anth_auth::Auth::load_or_create(root, std::time::Duration::from_secs(1))?;
     Ok(())
 }
 

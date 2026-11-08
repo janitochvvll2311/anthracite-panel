@@ -38,6 +38,14 @@ impl Host {
         anth_engine::state::ensure(&config.state)?;
         let composition = anth_engine::state::load_composition(&config.state)?;
         composition.validate()?;
+        let auth = Arc::new(anth_auth::Auth::load_or_create(
+            &config.state,
+            config.auth.session_ttl.0,
+        )?);
+        logger.info(&format!(
+            "operator credentials at {}",
+            auth.credentials_path().display()
+        ));
         logger.info(&format!(
             "state ready at {} (apps, grants, keys, composition, audit)",
             config.state.display()
@@ -56,6 +64,7 @@ impl Host {
                     config.apps.require_signature,
                 )
                 .with_caller(Arc::new(SupervisorCaller::new(supervisor.clone())))
+                .with_auth(auth)
                 .booting(),
         );
 
