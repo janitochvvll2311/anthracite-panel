@@ -67,15 +67,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.99.1"
+          targets: wasm32-unknown-unknown
           components: rustfmt, clippy
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.4"
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.263.0
+
+      - name: Codegen is current
+        run: bun scripts/codegen.ts apps/hello --check
+
       - name: Test the panel contract
         working-directory: sdk/ts/panel
         run: bun run test
+
+      - name: Test the generated TypeScript client
+        working-directory: sdk/ts/client
+        run: bun test
 
       - name: Test the shell
         working-directory: panel/frontend
@@ -110,6 +122,58 @@ jobs:
 
       # The release binary embeds dist; without it the build fails, by design.
       # `check` still runs the embed macro, without the cost of linking wasmtime.
+      # The remote side of the acid test: a real panel process, the hello
+      # bundle, and the generated Rust/TS clients speaking HTTP from outside.
+      - name: Build the e2e panel and clients
+        run: |
+          scripts/build-app.sh apps/hello
+          scripts/package-app.sh apps/hello /tmp/anthracite-panel/hello-e2e.zip
+          cargo build --manifest-path sdk/rust/Cargo.toml -p anth-cli
+          cargo build --manifest-path panel/backend/Cargo.toml
+
+      - name: Remote client acid test
+        run: |
+          set -eu
+          mkdir -p /tmp/anthracite-panel
+          dir=$(mktemp -d /tmp/anthracite-panel/remote-e2e.XXXXXX)
+          panel=
+          trap 'kill "$panel" 2>/dev/null || true; rm -rf "$dir"' EXIT
+          cat > "$dir/config.toml" <<EOF
+          version = 1
+          socket = "$dir/engine.sock"
+          state = "$dir/state"
+
+          [apps]
+          require-signature = false
+          EOF
+
+          start_panel() {
+            ./target/debug/anth-panel --listen 127.0.0.1:8099 \
+              --config "$dir/config.toml" --token test > "$dir/panel.log" 2>&1 &
+            panel=$!
+            for _ in $(seq 1 100); do
+              curl -sf http://127.0.0.1:8099/health >/dev/null && return 0
+              sleep 0.1
+            done
+            cat "$dir/panel.log"
+            return 1
+          }
+
+          start_panel
+          ./target/debug/anth --socket "$dir/engine.sock" app install /tmp/anthracite-panel/hello-e2e.zip
+          ./target/debug/anth --socket "$dir/engine.sock" app approve org.anthracite.hello
+          ./target/debug/anth --socket "$dir/engine.sock" compose --add org.anthracite.hello
+          kill "$panel"
+          wait "$panel" 2>/dev/null || true
+
+          start_panel
+          for _ in $(seq 1 100); do
+            curl -sf -u operator:test http://127.0.0.1:8099/api/health >/dev/null && break
+            sleep 0.1
+          done
+          ANTH_PANEL_URL=http://127.0.0.1:8099 ANTH_PANEL_AUTH=operator:test \
+            tests/e2e/remote-client.sh
+
       - name: Release check
         run: cargo check --release --manifest-path panel/backend/Cargo.toml
 
