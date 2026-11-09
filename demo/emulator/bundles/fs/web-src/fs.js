@@ -149,29 +149,6 @@ const styles = `
   .fs-editor-app { min-height: 100%; }
   .fs-editor-app .fs-editor-full { flex: 1; min-height: 260px; }
   .fs-editor-app .fs-editor-full .ProseMirror { min-height: 240px; }
-  .fs-editor-float {
-    position: absolute; top: 58px; left: 24px; width: min(760px, calc(100% - 48px));
-    height: 440px; min-width: 360px; min-height: 260px; max-width: calc(100% - 16px);
-    max-height: calc(100% - 16px); resize: both; overflow: hidden; display: flex;
-    flex-direction: column; z-index: 5; border: 1px solid #333d54; border-radius: 12px;
-    background: #151a24; box-shadow: 0 24px 70px #00000073;
-  }
-  .fs-editor-head {
-    display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px;
-    border-bottom: 1px solid #202634; background: linear-gradient(180deg, #1b2130, #161b26);
-    cursor: grab; user-select: none;
-  }
-  .fs-editor-head strong { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .fs-editor-head .hint { color: #667087; font-size: 10.5px; }
-  .fs-editor-head button {
-    padding: 4px 8px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
-    color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
-  }
-  .fs-editor-head button:hover { border-color: #3a4560; color: #fff; }
-  .fs-editor-head .tools { margin-left: auto; display: flex; gap: 4px; }
-  .fs-editor-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; background: #0d1016; }
-  .fs-editor-body .ProseMirror { outline: none; white-space: pre-wrap; font: 12px/1.6 ui-monospace, monospace; color: #e8ebf2; }
-  .fs-editor-body .ProseMirror p { margin: 0; min-height: 1.6em; }
   .tok-keyword { color: #c792ea; }
   .tok-string { color: #c3e88d; }
   .tok-number { color: #f78c6c; }
@@ -694,13 +671,6 @@ export function mount(root, context) {
     void load(path);
   }
 
-  function destroyEditor() {
-    if (!editor) return;
-    editor.view.destroy();
-    editor.overlay?.remove();
-    editor = null;
-  }
-
   function resetPreview() {
     destroyEditor();
     if (previewState?.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
@@ -973,14 +943,13 @@ export function mount(root, context) {
     const view = new EditorView(mountPoint, {
       state: editorState(previewState.text, previewState.path),
     });
-    editor = { view, floating: false, overlay: null };
+    editor = { view };
     previewState.editing = true;
     renderPreview();
   }
 
   function destroyEditor() {
     if (!editor) return;
-    editor.overlay?.remove();
     editor.view.destroy();
     editor = null;
   }
@@ -994,75 +963,6 @@ export function mount(root, context) {
   async function saveEditor() {
     if (!editor || !previewState) return;
     await saveEdit(editorText(editor.view.state.doc));
-  }
-
-  function floatEditor() {
-    if (!editor || editor.floating) return;
-    const overlay = document.createElement("section");
-    overlay.className = "fs-editor-float";
-    const header = document.createElement("header");
-    header.className = "fs-editor-head";
-    const title = document.createElement("strong");
-    title.textContent = baseName(previewState.path);
-    const hint = document.createElement("span");
-    hint.className = "hint";
-    hint.textContent = "ProseMirror · floating";
-    const tools = document.createElement("div");
-    tools.className = "tools";
-    const save = button("", "Save");
-    save.addEventListener("click", () => void saveEditor());
-    const dock = button("", "Dock");
-    dock.addEventListener("click", () => dockEditor());
-    const close = button("", "Close");
-    close.addEventListener("click", () => cancelEditor());
-    tools.append(save, dock, close);
-    header.append(title, hint, tools);
-    const body = document.createElement("div");
-    body.className = "fs-editor-body";
-    body.append(editor.view.dom);
-    overlay.append(header, body);
-    box.append(overlay);
-
-    let dragging = null;
-    header.addEventListener("pointerdown", (event) => {
-      if (event.target.closest("button")) return;
-      dragging = {
-        pointer: event.pointerId,
-        x: event.clientX - overlay.offsetLeft,
-        y: event.clientY - overlay.offsetTop,
-      };
-      header.setPointerCapture(event.pointerId);
-    });
-    header.addEventListener("pointermove", (event) => {
-      if (!dragging || dragging.pointer !== event.pointerId) return;
-      const left = Math.min(
-        Math.max(0, event.clientX - dragging.x),
-        Math.max(0, box.clientWidth - 120),
-      );
-      const top = Math.min(
-        Math.max(0, event.clientY - dragging.y),
-        Math.max(0, box.scrollHeight - 80),
-      );
-      overlay.style.left = `${left}px`;
-      overlay.style.top = `${top}px`;
-    });
-    const stop = () => {
-      dragging = null;
-    };
-    header.addEventListener("pointerup", stop);
-    header.addEventListener("pointercancel", stop);
-
-    editor.floating = true;
-    editor.overlay = overlay;
-    renderPreview();
-  }
-
-  function dockEditor() {
-    if (!editor || !editor.floating) return;
-    editor.overlay?.remove();
-    editor.overlay = null;
-    editor.floating = false;
-    renderPreview();
   }
 
   function renderPreview() {
@@ -1101,63 +1001,52 @@ export function mount(root, context) {
     const pane = document.createElement("div");
     pane.className = "pane";
     if (editing) {
-      if (editor?.floating) {
-        const hint = document.createElement("p");
-        hint.className = "hint";
-        hint.textContent = "Editing in the floating ProseMirror window.";
-        pane.append(hint);
-        const dock = button("", "Dock");
-        dock.addEventListener("click", dockEditor);
-        actions.append(dock);
-      } else {
-        const host = document.createElement("div");
-        host.className = "pm-host";
-        if (editor) host.append(editor.view.dom);
-        pane.append(host);
-        const save = button("", "Save");
-        save.addEventListener("click", () => void saveEditor());
-        const cancel = button("", "Cancel");
-        cancel.addEventListener("click", cancelEditor);
-        const pop = button("", "Pop out");
-        pop.title = "Open this file in the panel-level Editor view";
-        pop.addEventListener("click", async () => {
-          if (!previewState) return;
-          const value = editor
-            ? editorText(editor.view.state.doc)
-            : previewState.text;
-          const params = {
-            path: previewState.path,
-            name: baseName(previewState.path),
-            text: value,
-            dirty: true,
-          };
-          if (typeof context.openView === "function") {
-            setStatus("Opening the panel Editor…");
-            let opened = false;
-            try {
-              opened =
-                (await context.openView({
-                  tag: "anth-fs-editor",
-                  mode: "float",
-                  params,
-                })) === true;
-            } catch {
-              opened = false;
-            }
-            if (opened) {
-              cancelEditor();
-              setStatus(`Opened ${previewState.path} in the Editor view`);
-              return;
-            }
+      const host = document.createElement("div");
+      host.className = "pm-host";
+      if (editor) host.append(editor.view.dom);
+      pane.append(host);
+      const save = button("", "Save");
+      save.addEventListener("click", () => void saveEditor());
+      const cancel = button("", "Cancel");
+      cancel.addEventListener("click", cancelEditor);
+      const pop = button("", "Pop out");
+      pop.title = "Open this file in the panel-level Editor view";
+      pop.addEventListener("click", async () => {
+        if (!previewState) return;
+        const value = editor
+          ? editorText(editor.view.state.doc)
+          : previewState.text;
+        const params = {
+          path: previewState.path,
+          name: baseName(previewState.path),
+          text: value,
+          dirty: true,
+        };
+        if (typeof context.openView === "function") {
+          setStatus("Opening the panel Editor…");
+          let opened = false;
+          try {
+            opened =
+              (await context.openView({
+                tag: "anth-fs-editor",
+                mode: "float",
+                params,
+              })) === true;
+          } catch {
+            opened = false;
           }
-          floatEditor();
-          setStatus(
-            "The panel could not open the Editor view; using the in-frame editor.",
-            true,
-          );
-        });
-        actions.append(save, cancel, pop);
-      }
+          if (opened) {
+            cancelEditor();
+            setStatus(`Opened ${previewState.path} in the Editor view`);
+            return;
+          }
+        }
+        setStatus(
+          "The panel could not open the Editor view. Update the panel and try again; the inline editor stays open.",
+          true,
+        );
+      });
+      actions.append(save, cancel, pop);
     } else if (decoded !== null) {
       const pre = document.createElement("pre");
       pre.textContent = decoded;

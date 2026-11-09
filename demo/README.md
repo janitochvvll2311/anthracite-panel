@@ -80,7 +80,8 @@ Every bundle carries a `panel.view` module:
   download, trash and restore, plus delete. Edit opens a ProseMirror code editor
   with line-based syntax highlighting; **Pop out** opens the same file in the
   panel-level Editor view, which then uses the normal panel Float/Dock/Max/Min
-  controls and keeps its text across moves.
+  controls and keeps its text across moves. There is no in-frame floating
+  editor: if the panel cannot open the view, the inline editor stays open.
 - `web/terminal.js` — session with help/exit, history, INT/TERM/Clear, reconnect
   and resize.
 - `web/proc.js` — flat/tree process table, live refresh, allowlisted signals and
