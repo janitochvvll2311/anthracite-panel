@@ -86,15 +86,17 @@ neither was compiled against it. **That is the v0.5.0 acid test.**
 
 ### v0.6.0 — the proof (M4–M5)
 
+> **Plan:** the phased, PR-sized breakdown is [§18](18-v0.6-plan.md).
+
 **M4 — System apps**
 
 `fs`, `terminal`, `proc`, `net`, `storage`, `accounts`, `manager`. Each is a
 bundle with a manifest; each is removable; none requires an engine edit. Heavy
 compute (archives, previews, hashing) stays in wasm.
 
-**Done when:** a composition of system apps reproduces the v0.4.0 feature
-baseline, and removing `net` leaves a working system with that section gone — not
-a broken panel.
+**Done when:** a composition of system apps works on the v0.5.0 contract, the
+v0.4.0 inventory is covered as a scope reference, and removing `net` leaves a
+working system with that section gone — not a broken panel.
 
 The **demo** belongs here too, and as a separate instance rather than a flag: a
 `config.demo.toml` with its own `state` that composes `compositions/demo.toml`, whose

@@ -11,7 +11,9 @@ decision log is binding.
 `v0.5.0` is complete through M3 and the auth boundary: engine, composition,
 runtime, the official panel and the second minimal panel, generated Rust/TS
 clients, first-boot credentials, TCP sessions, panel sessions, origin checks and
-security headers. The next milestone is v0.6.0/M4 (`docs/design/11-roadmap.md`).
+security headers. The next milestone is v0.6.0/M4 (`docs/design/11-roadmap.md`);
+its phased plan is `docs/design/18-v0.6-plan.md` and work is cut from the
+`v0.6.0` branch.
 
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.
