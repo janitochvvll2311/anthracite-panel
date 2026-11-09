@@ -195,11 +195,8 @@ pub struct FatalView {
 /// composition cannot boot: the operator needs the document to repair it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SurfaceView {
-    #[serde(default)]
     pub apps: Vec<SurfaceApp>,
-    #[serde(default)]
     pub degraded: Vec<DegradedApp>,
-    #[serde(default)]
     pub links: Vec<SurfaceLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fatal: Option<FatalView>,

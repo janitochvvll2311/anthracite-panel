@@ -569,10 +569,9 @@ fn compose(
     let mut view: serde_json::Value = serde_json::from_slice(&response.body)
         .map_err(|error| Error::internal(format!("the composition is not JSON: {error}")))?;
     if let Some(fatal) = view["surface"]["fatal"].as_object() {
-        eprintln!(
-            "warning: composition {}: {}",
+        warn_fatal_fields(
             fatal["code"].as_str().unwrap_or("invalid"),
-            fatal["message"].as_str().unwrap_or("it cannot be resolved")
+            fatal["message"].as_str().unwrap_or("it cannot be resolved"),
         );
     }
     if show || (add.is_empty() && remove.is_empty()) {
@@ -644,8 +643,12 @@ fn edit_apps(apps: &mut Vec<serde_json::Value>, add: &[String], remove: &[String
 /// A composition that cannot boot is still readable; name the reason once.
 fn warn_fatal(surface: &SurfaceView) {
     if let Some(fatal) = &surface.fatal {
-        eprintln!("warning: composition {}: {}", fatal.code, fatal.message);
+        warn_fatal_fields(&fatal.code, &fatal.message);
     }
+}
+
+fn warn_fatal_fields(code: &str, message: &str) {
+    eprintln!("warning: composition {code}: {message}");
 }
 
 fn grant_label(state: GrantState) -> &'static str {
@@ -858,11 +861,10 @@ fn invoke(
         .iter()
         .find(|entry| entry.verb == verb)
         .ok_or_else(|| Error::not_found(format!("`{id}` has no CLI verb `{verb}`")))?;
-    let interface = call.interface.to_string();
     let route = composed
         .routes
         .iter()
-        .find(|route| route.interface.to_string() == interface && route.function == call.function)
+        .find(|route| route.interface == call.interface && route.function == call.function)
         .ok_or_else(|| {
             Error::unavailable(format!(
                 "`{id}` verb `{verb}` has no route; v0.5.0 invokes through routes"
@@ -1034,6 +1036,15 @@ mod tests {
     use std::os::unix::net::UnixListener;
     use std::sync::mpsc;
     use std::thread;
+
+    #[test]
+    fn a_catalogue_view_reads_contract_fields() {
+        let text = r#"{"apps":[{"id":"org.example.notes","version":"0.1.0","enabled":true,"tier":"third-party","installed_at":"2026-01-01T00:00:00Z","alias":"notes","grant_state":"current"}],"problems":[{"app":"broken","message":"bad"}]}"#;
+        let view: CatalogueView = serde_json::from_str(text).expect("catalogue");
+        assert_eq!(view.apps[0].alias.as_deref(), Some("notes"));
+        assert_eq!(grant_label(view.apps[0].grant_state), "current");
+        assert_eq!(view.problems[0].app, "broken");
+    }
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
@@ -1651,7 +1662,7 @@ mod tests {
                 answer("200 OK", r#"{"engine":"0.5.0","protocol":1}"#),
                 answer(
                     "200 OK",
-                    r#"{"composition":{"version":1,"profile":[]},"surface":{"apps":[]}}"#,
+                    r#"{"composition":{"version":1,"profile":[]},"surface":{"apps":[],"degraded":[],"links":[]}}"#,
                 ),
                 answer("200 OK", r#"{"apps":[]}"#),
             ],
