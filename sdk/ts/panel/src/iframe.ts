@@ -40,6 +40,8 @@ export type FrameHandle = {
   update: (params: unknown) => void;
   /// Asks the module whether it may close (an unsaved-changes guard).
   requestClose: () => Promise<boolean>;
+  /// Reads the current opaque view state, e.g. before a float/dock remount.
+  snapshot: () => Promise<unknown>;
 };
 
 export type FrameOptions = {
@@ -132,6 +134,8 @@ export async function mountFrame(
     string,
     { resolve: (ok: boolean) => void; timer: number }
   >();
+  let snapshotSequence = 0;
+  const snapshotPending = new Map<string, (value: unknown) => void>();
 
   const update = (params: unknown): void => {
     iframe.contentWindow?.postMessage(
@@ -154,6 +158,22 @@ export async function mountFrame(
         { type: "anth:request-close", token, requestId },
         "*",
       );
+    });
+
+  const requestSnapshot = (): Promise<unknown> =>
+    new Promise((resolve) => {
+      const requestId = `${token}-snapshot-${++snapshotSequence}`;
+      snapshotPending.set(requestId, resolve);
+      iframe.contentWindow?.postMessage(
+        { type: "anth:request-snapshot", token, requestId },
+        "*",
+      );
+      window.setTimeout(() => {
+        const pending = snapshotPending.get(requestId);
+        if (!pending) return;
+        snapshotPending.delete(requestId);
+        pending(null);
+      }, 2000);
     });
 
   const result = new Promise<() => void>((resolve, reject) => {
@@ -200,7 +220,7 @@ export async function mountFrame(
       if (message.token !== token) return;
 
       if (message.type === "anth:mounted") {
-        options.onReady?.({ update, requestClose });
+        options.onReady?.({ update, requestClose, snapshot: requestSnapshot });
         finish();
         return;
       }
@@ -253,6 +273,15 @@ export async function mountFrame(
           if (pending.timer) window.clearTimeout(pending.timer);
           closePending.delete(requestId);
           pending.resolve(message.ok !== false);
+        }
+        return;
+      }
+      if (message.type === "anth:snapshot-result") {
+        const requestId = String(message.requestId ?? "");
+        const pending = snapshotPending.get(requestId);
+        if (pending) {
+          snapshotPending.delete(requestId);
+          pending(message.value ?? null);
         }
         return;
       }
@@ -329,6 +358,8 @@ export async function mountFrame(
         pending.resolve(true);
       }
       closePending.clear();
+      for (const resolve of snapshotPending.values()) resolve(null);
+      snapshotPending.clear();
       iframe.contentWindow?.postMessage({ type: "anth:unmount", token }, "*");
       iframe.remove();
     };

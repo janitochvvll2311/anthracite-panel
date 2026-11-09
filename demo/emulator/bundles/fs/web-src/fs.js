@@ -43,16 +43,37 @@ import { rust } from "@codemirror/lang-rust";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { oneDark } from "@codemirror/theme-one-dark";
-import hljs from "highlight.js/lib/common";
+import hljs from "highlight.js/lib/core";
+import hljsBash from "highlight.js/lib/languages/bash";
+import hljsCss from "highlight.js/lib/languages/css";
+import hljsIni from "highlight.js/lib/languages/ini";
+import hljsJavascript from "highlight.js/lib/languages/javascript";
+import hljsJson from "highlight.js/lib/languages/json";
+import hljsMarkdown from "highlight.js/lib/languages/markdown";
+import hljsPlaintext from "highlight.js/lib/languages/plaintext";
+import hljsPython from "highlight.js/lib/languages/python";
+import hljsRust from "highlight.js/lib/languages/rust";
+import hljsTypescript from "highlight.js/lib/languages/typescript";
 import { marked } from "marked";
+
+hljs.registerLanguage("bash", hljsBash);
+hljs.registerLanguage("css", hljsCss);
+hljs.registerLanguage("ini", hljsIni);
+hljs.registerLanguage("javascript", hljsJavascript);
+hljs.registerLanguage("json", hljsJson);
+hljs.registerLanguage("markdown", hljsMarkdown);
+hljs.registerLanguage("plaintext", hljsPlaintext);
+hljs.registerLanguage("python", hljsPython);
+hljs.registerLanguage("rust", hljsRust);
+hljs.registerLanguage("typescript", hljsTypescript);
 
 const LANGUAGE_BY_EXTENSION = {
   js: "javascript",
   mjs: "javascript",
   cjs: "javascript",
   jsx: "javascript",
-  ts: "javascript",
-  tsx: "javascript",
+  ts: "typescript",
+  tsx: "typescript",
   json: "json",
   sh: "shell",
   bash: "shell",
@@ -105,7 +126,9 @@ function languageFor(path) {
 }
 
 function suggestionsFor(path, textValue, prefix) {
-  const words = new Set(COMPLETION_WORDS[languageFor(path)] ?? []);
+  const language = languageFor(path);
+  const keywordLanguage = language === "typescript" ? "javascript" : language;
+  const words = new Set(COMPLETION_WORDS[keywordLanguage] ?? []);
   if (textValue.length <= 200_000) {
     for (const word of textValue.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? []) {
       if (word.length <= 40) words.add(word);
@@ -121,11 +144,11 @@ function suggestionsFor(path, textValue, prefix) {
 const styles = `
   .fs { position: relative; display: flex; flex-direction: column; gap: 12px; min-height: 380px; color: #e8ebf2; }
   .fs-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .fs-bar button, .fs-form button, .fs-confirm button {
+  .fs-bar button, .fs-form button {
     padding: 6px 10px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
   }
-  .fs-bar button:hover, .fs-form button:hover, .fs-confirm button:hover { border-color: #3a4560; color: #fff; }
+  .fs-bar button:hover, .fs-form button:hover { border-color: #3a4560; color: #fff; }
   .fs-bar button:disabled { opacity: .4; cursor: default; border-color: #2a3142; color: #667087; }
   .fs-bar .grow { flex: 1; }
   .fs-address {
@@ -192,7 +215,7 @@ const styles = `
   .fs-tool.delete:hover { color: #ff7d8a; }
   .fs-tool.confirm { border: 1px solid #ff7d8a66; color: #ffb3ba; }
   .fs-new, .fs-rename { display: flex; gap: 6px; flex: 1; }
-  .fs-new[hidden], .fs-rename[hidden], .fs-confirm[hidden] { display: none; }
+  .fs-new[hidden], .fs-rename[hidden] { display: none; }
   .fs-new input, .fs-rename input {
     flex: 1; min-width: 120px; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
     background: #0f1219; color: #e8ebf2; font: inherit; font-size: 12px;
@@ -202,11 +225,6 @@ const styles = `
     background: #0f1219; color: #e8ebf2; font: inherit; font-size: 12px;
   }
   .fs-new input[hidden] { display: none; }
-  .fs-confirm {
-    display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px dashed #ff7d8a66;
-    border-radius: 8px; background: #1d1218; color: #ffb3ba; font-size: 12px;
-  }
-  .fs-confirm button { padding: 4px 8px; font-size: 11px; }
   .fs-preview {
     border: 1px solid #202632; border-radius: 9px; background: #0d1016; padding: 10px 12px;
     overflow: auto; min-height: 300px; display: flex; flex-direction: column; gap: 8px;
@@ -525,15 +543,7 @@ const MIME_BY_EXTENSION = {
   yaml: "application/yaml",
   yml: "application/yaml",
   ini: "text/plain",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  svg: "image/svg+xml",
-  avif: "image/avif",
-  bmp: "image/bmp",
-  ico: "image/x-icon",
+  ...IMAGES,
   pdf: "application/pdf",
   zip: "application/zip",
   gz: "application/gzip",
@@ -770,6 +780,7 @@ function normalizePath(input) {
 
 const LANGUAGE_LABELS = {
   javascript: "JavaScript",
+  typescript: "TypeScript",
   json: "JSON",
   shell: "Shell",
   markdown: "Markdown",
@@ -908,8 +919,9 @@ marked.use({
   renderer: {
     code({ text, lang }) {
       const source = normalizeNewlines(text);
-      const language =
-        lang && hljs.getLanguage(lang) ? lang : "plaintext";
+      const language = lang
+        ? hljsLanguageFor(`file.${lang}`)
+        : "plaintext";
       const highlighted = hljs.getLanguage(language)
         ? hljs.highlight(source, { language }).value
         : escape(source);
@@ -1015,6 +1027,10 @@ export function onParams(params) {
 
 export function beforeClose() {
   return editorBridge?.confirmClose?.() ?? true;
+}
+
+export function snapshot() {
+  return editorBridge?.snapshot?.() ?? null;
 }
 
 function mountEditorView(root, context) {
@@ -1138,6 +1154,8 @@ function mountEditorView(root, context) {
   const treeData = new Map();
 
   const activeTab = () => (active >= 0 ? tabs[active] : null);
+  const readFile = (path) =>
+    call(context, `/file?path=${encodeURIComponent(path)}`);
 
   function setInfo(message, bad = false) {
     info.textContent = message ?? "";
@@ -1164,9 +1182,10 @@ function mountEditorView(root, context) {
     applyTreeState(publish);
   }
 
-  function publishSession() {
-    if (typeof context.updateParams !== "function") return;
-    context.updateParams({
+  let publishTimer = null;
+
+  function sessionPayload() {
+    return {
       session: {
         active: activeTab()?.path ?? null,
         tree: treeOpen,
@@ -1187,7 +1206,22 @@ function mountEditorView(root, context) {
               },
         ),
       },
-    });
+    };
+  }
+
+  function flushSession() {
+    if (publishTimer) {
+      window.clearTimeout(publishTimer);
+      publishTimer = null;
+    }
+    if (typeof context.updateParams === "function") {
+      context.updateParams(sessionPayload());
+    }
+  }
+
+  function publishSession() {
+    if (publishTimer) window.clearTimeout(publishTimer);
+    publishTimer = window.setTimeout(flushSession, 150);
   }
 
   function renderTabs() {
@@ -1405,10 +1439,7 @@ function mountEditorView(root, context) {
 
   async function loadImageTab(tab) {
     try {
-      const data = await call(
-        context,
-        `/file?path=${encodeURIComponent(tab.path)}`,
-      );
+      const data = await readFile(tab.path);
       if (disposed || !tabs.includes(tab)) return;
       if (!Array.isArray(data)) throw new Error("invalid image data");
       if (tab.objectUrl) {
@@ -1482,6 +1513,13 @@ function mountEditorView(root, context) {
       publishSession();
       return;
     }
+    if (!tabs.some((candidate) => !candidate.image) && view) {
+      view.destroy();
+      view = null;
+      mountedTab = null;
+      content.replaceChildren();
+      content.hidden = true;
+    }
     if (active === index) active = Math.min(index, tabs.length - 1);
     else if (active > index) active -= 1;
     activate(active);
@@ -1502,10 +1540,7 @@ function mountEditorView(root, context) {
     if (mime) {
       setInfo(`Reading ${target}…`);
       try {
-        const data = await call(
-          context,
-          `/file?path=${encodeURIComponent(target)}`,
-        );
+        const data = await readFile(target);
         if (disposed) return;
         if (!Array.isArray(data)) throw new Error("invalid image data");
         const tab = {
@@ -1535,10 +1570,7 @@ function mountEditorView(root, context) {
     if (value === null) {
       setInfo(`Reading ${target}…`);
       try {
-        const data = await call(
-          context,
-          `/file?path=${encodeURIComponent(target)}`,
-        );
+        const data = await readFile(target);
         if (disposed) return;
         value = text(data);
         if (value === null) {
@@ -1977,6 +2009,7 @@ function mountEditorView(root, context) {
   const bridge = {
     openPath: (path) => openFile(path),
     confirmClose: () => confirmClose(),
+    snapshot: () => sessionPayload(),
   };
   editorBridge = bridge;
 
@@ -2050,7 +2083,14 @@ function mountEditorView(root, context) {
   return () => {
     disposed = true;
     if (editorBridge === bridge) editorBridge = null;
+    if (publishTimer) {
+      window.clearTimeout(publishTimer);
+      publishTimer = null;
+    }
     mobileQuery.removeEventListener("change", treeModeChanged);
+    for (const tab of tabs) {
+      if (tab.objectUrl) URL.revokeObjectURL(tab.objectUrl);
+    }
     view?.destroy();
     view = null;
     root.replaceChildren();
@@ -2096,11 +2136,6 @@ export function mount(root, context) {
       <button type="submit">Rename</button>
       <button type="button" data-cancel-rename>Cancel</button>
     </form>
-    <div class="fs-confirm" hidden>
-      <span data-confirm-text></span>
-      <button type="button" data-confirm-yes>Overwrite</button>
-      <button type="button" data-confirm-no>Cancel</button>
-    </div>
     <div class="fs-body">
       <ul class="fs-list" aria-label="Directory entries"></ul>
       <section class="fs-preview"><p class="hint">Select a file to preview it.</p></section>
@@ -2131,8 +2166,6 @@ export function mount(root, context) {
   const newTarget = newForm.querySelector("[name=target]");
   const renameForm = box.querySelector(".fs-rename");
   const renameInput = renameForm.querySelector("input");
-  const confirmBox = box.querySelector(".fs-confirm");
-  const confirmText = box.querySelector("[data-confirm-text]");
   const uploadInput = box.querySelector("[data-file]");
   const trashButton = box.querySelector("[data-trash]");
   const newButton = box.querySelector("[data-new]");
@@ -2146,7 +2179,6 @@ export function mount(root, context) {
   let nextCursor = null;
   let confirmPath = null;
   let renamePath = null;
-  let pendingUpload = null;
   let view = "files";
   let disposed = false;
   let previewState = null;
@@ -2231,19 +2263,6 @@ export function mount(root, context) {
     renameForm.hidden = false;
     renameInput.focus();
     renameInput.select();
-  }
-
-  function cancelConfirms() {
-    confirmPath = null;
-    pendingUpload = null;
-    confirmBox.hidden = true;
-  }
-
-  function askOverwrite(path) {
-    pendingUpload = { path };
-    confirmText.textContent = `Overwrite ${path}?`;
-    box.querySelector("[data-confirm-yes]").textContent = "Overwrite";
-    confirmBox.hidden = false;
   }
 
   function confirmDelete(row, path, remove) {
@@ -2369,7 +2388,7 @@ export function mount(root, context) {
     up.hidden = true;
     newForm.hidden = true;
     clearRename();
-    cancelConfirms();
+    confirmPath = null;
     trashButton.textContent = "Files";
     newButton.hidden = true;
     uploadButton.hidden = true;
@@ -2439,7 +2458,7 @@ export function mount(root, context) {
       const data = await request(`/file?path=${encodeURIComponent(path)}`);
       if (disposed) return;
       if (previewState?.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
-      const decoded = text(data);
+      const decoded = IMAGES[extensionOf(path)] ? null : text(data);
       previewState = {
         path,
         entry,
@@ -2832,41 +2851,6 @@ export function mount(root, context) {
     }
   }
 
-  async function upload(file, overwrite) {
-    if (!file) return;
-    const target = join(current, file.name);
-    if (!overwrite) {
-      try {
-        await request(`/stat?path=${encodeURIComponent(target)}`);
-        pendingUpload = { path: target, file };
-        askOverwrite(target);
-        return;
-      } catch (error) {
-        if (!reason(error).includes("not-found")) {
-          if (!disposed) setStatus(reason(error), true);
-          return;
-        }
-      }
-    }
-    try {
-      const buffer = await file.arrayBuffer();
-      await request("/file", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          path: target,
-          bytes: Array.from(new Uint8Array(buffer)),
-        }),
-      });
-      pendingUpload = null;
-      confirmBox.hidden = true;
-      await load(current);
-      setStatus(`Uploaded ${target}`);
-    } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
-    }
-  }
-
   async function renameTo(source, destination) {
     const previousEntry =
       previewState?.path === source ? previewState.entry : null;
@@ -3072,14 +3056,16 @@ export function mount(root, context) {
     hideDrop();
     if (files.length) enqueueUploads(files, target);
   });
-  box.querySelector("[data-confirm-yes]").addEventListener("click", () => {
-    if (!pendingUpload) return;
-    const uploadTask = pendingUpload;
-    pendingUpload = null;
-    confirmBox.hidden = true;
-    if (uploadTask.file) void upload(uploadTask.file, true);
+  window.addEventListener("dragleave", (event) => {
+    if (!event.relatedTarget) hideDrop();
   });
-  box.querySelector("[data-confirm-no]").addEventListener("click", cancelConfirms);
+  window.addEventListener("dragover", (event) => {
+    if (hasFiles(event)) event.preventDefault();
+  });
+  window.addEventListener("drop", (event) => {
+    if (hasFiles(event)) event.preventDefault();
+    hideDrop();
+  });
 
   renderPaths();
   void load("/");

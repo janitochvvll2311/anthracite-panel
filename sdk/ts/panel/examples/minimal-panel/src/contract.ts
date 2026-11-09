@@ -11,7 +11,9 @@ import {
 } from "@anthracite/panel";
 
 export function visibleViews(apps: App[]): Contribution[] {
-  return ordered(apps, VIEW);
+  return ordered(apps, VIEW).filter(
+    (contribution) => !contribution.slot.hidden,
+  );
 }
 
 export function ignoredViews(apps: App[]): Contribution[] {

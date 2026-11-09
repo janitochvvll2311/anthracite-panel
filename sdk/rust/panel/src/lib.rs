@@ -41,6 +41,7 @@ pub struct Contribution {
     pub label: String,
     pub icon: Option<String>,
     pub order: i64,
+    pub hidden: bool,
     pub tag: String,
     pub module: String,
     pub sha256: String,
@@ -54,6 +55,7 @@ impl Contribution {
             label: slot.label.clone(),
             icon: slot.icon.clone(),
             order: slot.order,
+            hidden: slot.hidden,
             tag: slot.tag.clone(),
             module: slot.module.clone(),
             sha256: slot.sha256.clone(),
@@ -187,6 +189,10 @@ mod tests {
             contribution.asset_url(),
             "/api/apps/org.example.notes/assets/web/a%20b%23c%3F.js"
         );
+        let mut hidden = slot(VIEW, "hidden", 1);
+        hidden.hidden = true;
+        let contribution = Contribution::from_surface(&app("org.example.notes"), &hidden);
+        assert!(contribution.hidden);
     }
 
     #[test]

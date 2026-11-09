@@ -76,6 +76,8 @@ type Mounted = {
   update?: (params: unknown) => void;
   /// Asks the live frame for permission before closing (unsaved changes).
   requestClose?: () => Promise<boolean>;
+  /// Reads the current view state before moving it (float/dock).
+  snapshot?: () => Promise<unknown>;
   /// Set when the host closes or replaces the mount; a late module must not
   /// attach to a detached root.
   cancelled: boolean;
@@ -381,7 +383,7 @@ function renderTabs(): void {
     const detach = button("tab-tool", "⇱", "Open in a floating window");
     detach.addEventListener("click", (event) => {
       event.stopPropagation();
-      detachTab(tab.key);
+      void detachTab(tab.key);
     });
 
     const close = button("tab-tool", "×", "Close");
@@ -479,6 +481,7 @@ function trackMount(
     (frame) => {
       state.update = frame.update;
       state.requestClose = frame.requestClose;
+      state.snapshot = frame.snapshot;
     },
   ).then((dispose) => {
     if (state.cancelled || current() !== state) {
@@ -573,7 +576,9 @@ function ensurePane(contribution: Contribution, params?: unknown): void {
   );
   const tools = element("div", "pane-tools");
   const detach = button("ghost small", "Float", "Open in a floating window");
-  detach.addEventListener("click", () => detachTab(key));
+  detach.addEventListener("click", () => {
+    void detachTab(key);
+  });
   const close = button("ghost small", "Close", "Close this view");
   close.addEventListener("click", () => {
     void requestTabClose(key);
@@ -671,25 +676,27 @@ function closeTab(key: string): void {
   renderWorkspace();
 }
 
-async function requestTabClose(key: string): Promise<void> {
-  const state = mounted.get(key);
-  if (state?.requestClose) {
-    let ok = false;
-    try {
-      ok = await state.requestClose();
-    } catch {
-      ok = false;
-    }
-    if (!ok) return;
+async function allowClose(state: Mounted | undefined): Promise<boolean> {
+  if (!state?.requestClose) return true;
+  try {
+    return await state.requestClose();
+  } catch {
+    return false;
   }
+}
+
+async function requestTabClose(key: string): Promise<void> {
+  if (!(await allowClose(mounted.get(key)))) return;
   closeTab(key);
 }
 
-function detachTab(key: string): void {
+async function detachTab(key: string): Promise<void> {
   const tab = tabs.get(key);
   if (!tab) return;
+  const params = await latestParams(mounted.get(key), tab.params);
+  if (!tabs.has(key)) return;
   closeDrawer();
-  openWindow(tab.contribution, "view", tab.params);
+  openWindow(tab.contribution, "view", params);
   closeTab(key);
 }
 
@@ -712,16 +719,21 @@ function closeFloating(state: Floating): void {
 }
 
 async function requestWindowClose(state: Floating): Promise<void> {
-  if (state.requestClose) {
-    let ok = false;
-    try {
-      ok = await state.requestClose();
-    } catch {
-      ok = false;
-    }
-    if (!ok) return;
-  }
+  if (!(await allowClose(state))) return;
   closeFloating(state);
+}
+
+async function latestParams(
+  state: Mounted | undefined,
+  fallback: unknown,
+): Promise<unknown> {
+  if (!state?.snapshot) return fallback;
+  try {
+    const value = await state.snapshot();
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function setMaximized(state: Floating, maximized: boolean): void {
@@ -801,11 +813,13 @@ function restoreStack(state: Floating): void {
   focusWindow(state);
 }
 
-function dockWindow(state: Floating): void {
+async function dockWindow(state: Floating): Promise<void> {
   if (state.kind !== "view") return;
+  const params = await latestParams(state, state.params);
+  if (!floating.has(state.key)) return;
   const contribution = state.contribution;
   closeFloating(state);
-  openTab(contribution, true, state.params);
+  openTab(contribution, true, params);
 }
 
 function openWindow(
@@ -895,7 +909,9 @@ function openWindow(
     setMaximized(state, toggleMaximized(state.mode) === "maximized"),
   );
   minimize.addEventListener("click", () => minimizeWindow(state));
-  dock.addEventListener("click", () => dockWindow(state));
+  dock.addEventListener("click", () => {
+    void dockWindow(state);
+  });
   close.addEventListener("click", () => {
     void requestWindowClose(state);
   });
