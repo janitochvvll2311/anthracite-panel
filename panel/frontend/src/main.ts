@@ -11,10 +11,16 @@ import {
   SETTINGS,
   VIEW,
   assetUrl,
+  byId,
+  button,
   contributionKey,
+  element,
+  errorCard,
+  frameContext,
   ignored as sdkIgnored,
   mountFrame,
   ordered as orderContributions,
+  safeDispose,
   type App,
   type Contribution,
   type FrameContext,
@@ -62,12 +68,6 @@ type Mounted = {
 type Floating = Mounted & {
   key: string;
   element: HTMLElement;
-};
-
-const byId = <T extends HTMLElement>(id: string): T => {
-  const element = document.getElementById(id);
-  if (!element) throw new Error(`missing #${id}`);
-  return element as T;
 };
 
 /// Every panel request goes through here: an expired session sends the browser
@@ -202,24 +202,6 @@ function status(kind: "ok" | "warn" | "offline", text: string): void {
   health.textContent = text;
 }
 
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-  text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-function button(className: string, text: string, title?: string): HTMLButtonElement {
-  const node = element("button", className, text);
-  node.type = "button";
-  if (title) node.title = title;
-  return node;
-}
-
 function renderSidebar(): void {
   views.replaceChildren();
   if (!surface) {
@@ -341,39 +323,6 @@ function renderTabs(): void {
   }
 }
 
-function contextFor(
-  contribution: Contribution,
-  kind: FrameContext["kind"],
-): FrameContext {
-  return {
-    app: {
-      id: contribution.app.id,
-      version: contribution.app.version,
-      risk: contribution.app.risk,
-    },
-    contribution: { ...contribution.slot, app: contribution.app.id },
-    panel: { slots: [...implemented], version: panelVersion },
-    kind,
-  };
-}
-
-function errorCard(error: unknown): HTMLElement {
-  const card = element("div", "error-card");
-  card.append(
-    element("strong", "", "This module did not mount"),
-    element("p", "", error instanceof Error ? error.message : String(error)),
-  );
-  return card;
-}
-
-function safeDispose(dispose: () => void): void {
-  try {
-    dispose();
-  } catch (error) {
-    console.error("disposing a module failed", error);
-  }
-}
-
 async function mountInto(
   root: HTMLElement,
   contribution: Contribution,
@@ -391,7 +340,10 @@ async function mountInto(
     if (cancelled()) return () => root.replaceChildren();
     const dispose = await mountFrame(root, {
       source,
-      context: contextFor(contribution, kind),
+      context: frameContext(contribution, kind, {
+        slots: implemented,
+        version: panelVersion,
+      }),
       close,
       request: (input, init) => request(input, init),
     });

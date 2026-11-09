@@ -5,6 +5,7 @@ import {
   VIEW,
   assetUrl,
   contributionKey,
+  frameContext,
   ignored,
   ordered,
   type App,
@@ -76,4 +77,23 @@ test("ignored contributions target slots the panel does not implement", () => {
   expect(ignored([notes], [VIEW]).map((contribution) => contribution.slot.id)).toEqual([
     ACTION,
   ]);
+});
+
+test("frame context copies the panel declaration and the contribution", () => {
+  const contribution = {
+    app: app("org.example.notes", []),
+    slot: slot(VIEW, "notes", 1),
+  };
+  const context = frameContext(contribution, "view", {
+    slots: [VIEW],
+    version: "0.5.0",
+  });
+  expect(context.app).toEqual({
+    id: "org.example.notes",
+    version: "0.1.0",
+    risk: "read",
+  });
+  expect(context.contribution.app).toBe("org.example.notes");
+  expect(context.panel).toEqual({ slots: [VIEW], version: "0.5.0" });
+  expect(context.kind).toBe("view");
 });

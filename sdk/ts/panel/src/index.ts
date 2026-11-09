@@ -4,36 +4,15 @@
 // not reimplement either.
 
 export * from "./iframe";
+export * from "./dom";
+
+import type { App, Contribution } from "./model";
+export type { App, Contribution, Slot } from "./model";
 
 export const VIEW = "panel.view";
 export const ACTION = "panel.action";
 export const SETTINGS = "panel.settings";
 export const PORTABLE = [VIEW, ACTION, SETTINGS] as const;
-
-/// One slot contribution, as `GET /api/engine/composition` reports it.
-export type Slot = {
-  id: string;
-  label: string;
-  icon?: string;
-  order: number;
-  tag: string;
-  module: string;
-  sha256: string;
-};
-
-/// The fields of a running app the panel reads.
-export type App = {
-  id: string;
-  version: string;
-  risk: string;
-  slots: Slot[];
-};
-
-/// A slot with the app that owns it.
-export type Contribution = {
-  app: App;
-  slot: Slot;
-};
 
 /// Stable identity for a mounted pane or window.
 export function contributionKey(contribution: Contribution): string {

@@ -6,11 +6,16 @@
 import {
   VIEW,
   assetUrl,
+  byId,
+  button,
   contributionKey,
+  element,
+  errorCard,
+  frameContext,
   mountFrame,
+  safeDispose,
   type App,
   type Contribution,
-  type FrameContext,
 } from "@anthracite/panel";
 
 import { ignoredViews, visibleViews } from "./contract";
@@ -36,9 +41,6 @@ type Tab = {
   generation: number;
 };
 
-const byId = <T extends HTMLElement>(id: string): T =>
-  document.getElementById(id) as T;
-
 const views = byId("views");
 const ignored = byId("ignored");
 const tabsElement = byId("tabs");
@@ -52,24 +54,6 @@ let degraded: Surface["degraded"] = [];
 let active: string | null = null;
 let retry = 0;
 
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-  text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-function button(className: string, text: string, title?: string): HTMLButtonElement {
-  const node = element("button", className, text);
-  node.type = "button";
-  if (title) node.title = title;
-  return node;
-}
-
 function setStatus(kind: "ok" | "bad", text: string): void {
   status.dataset.state = kind;
   status.textContent = text;
@@ -77,36 +61,6 @@ function setStatus(kind: "ok" | "bad", text: string): void {
 
 function viewsFor(): Contribution[] {
   return visibleViews(apps);
-}
-
-function safeDispose(dispose: () => void): void {
-  try {
-    dispose();
-  } catch (error) {
-    console.error("disposing a view failed", error);
-  }
-}
-
-function contextFor(contribution: Contribution): FrameContext {
-  return {
-    app: {
-      id: contribution.app.id,
-      version: contribution.app.version,
-      risk: contribution.app.risk,
-    },
-    contribution: { ...contribution.slot, app: contribution.app.id },
-    panel: { slots: [VIEW], version: "0.5.0-second" },
-    kind: "view",
-  };
-}
-
-function errorCard(error: unknown): HTMLElement {
-  const card = element("div", "error");
-  card.append(
-    element("strong", "", "This view did not mount"),
-    element("span", "", error instanceof Error ? error.message : String(error)),
-  );
-  return card;
 }
 
 async function mount(tab: Tab): Promise<void> {
@@ -121,7 +75,10 @@ async function mount(tab: Tab): Promise<void> {
     if (tab.cancelled || tab.generation !== generation) return;
     const dispose = await mountFrame(tab.body, {
       source,
-      context: contextFor(tab.contribution),
+      context: frameContext(tab.contribution, "view", {
+        slots: [VIEW],
+        version: "0.5.0-second",
+      }),
       close: () => close(tab.key),
       request: (input, init) => fetch(input, init),
     });
@@ -136,7 +93,13 @@ async function mount(tab: Tab): Promise<void> {
     tab.dispose = dispose;
   } catch (error) {
     if (!tab.cancelled && tab.generation === generation) {
-      tab.body.replaceChildren(errorCard(error));
+      tab.body.replaceChildren(
+        errorCard(error, {
+          className: "error",
+          title: "This view did not mount",
+          detailTag: "span",
+        }),
+      );
     }
   }
 }
