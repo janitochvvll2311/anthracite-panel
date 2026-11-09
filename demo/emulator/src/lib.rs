@@ -22,7 +22,7 @@ const FS_READ: &str = "anthracite:fs/read@1.1.0";
 const FS_WRITE: &str = "anthracite:fs/write@1.1.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
-const NET: &str = "anthracite:net/net@1.0.0";
+const NET: &str = "anthracite:net/net@1.1.0";
 const STORAGE: &str = "anthracite:storage/storage@1.0.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.0.0";
 
@@ -39,7 +39,7 @@ pub struct Emulator {
     fs: Mutex<Fs>,
     terminals: Mutex<Terminals>,
     procs: Mutex<proc::ProcFixture>,
-    net: net::NetFixture,
+    net: Mutex<net::NetFixture>,
     storage: storage::StorageFixture,
     accounts: accounts::AccountsFixture,
 }
@@ -56,7 +56,7 @@ impl Emulator {
             fs: Mutex::new(Fs::demo()),
             terminals: Mutex::new(Terminals::default()),
             procs: Mutex::new(proc::ProcFixture::demo()),
-            net: net::NetFixture::new(),
+            net: Mutex::new(net::NetFixture::new()),
             storage: storage::StorageFixture::new(),
             accounts: accounts::AccountsFixture::new(),
         }
@@ -81,7 +81,11 @@ impl Handler for Emulator {
                 .lock()
                 .expect("the fixture mutex is not poisoned")
                 .handle(function, &input),
-            NET => self.net.handle(function, &input),
+            NET => self
+                .net
+                .lock()
+                .expect("the fixture mutex is not poisoned")
+                .handle(function, &input),
             STORAGE => self.storage.handle(function, &input),
             ACCOUNTS => self.accounts.handle(function, &input),
             _ => Err(Error::not_found(format!(

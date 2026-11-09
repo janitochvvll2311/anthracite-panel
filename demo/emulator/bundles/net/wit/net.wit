@@ -1,4 +1,4 @@
-package anthracite:net@1.0.0;
+package anthracite:net@1.1.0;
 
 interface net {
     use anth:error/kinds@1.0.0.{error};
@@ -34,6 +34,9 @@ interface net {
 
     interfaces: func() -> result<list<network-interface>, error>;
     routes: func() -> result<list<route>, error>;
+    set-up: func(name: string, up: bool) -> result<_, error>;
+    add-route: func(family: family, destination: string, gateway: option<string>, device: string, metric: u32) -> result<_, error>;
+    remove-route: func(destination: string, device: string) -> result<_, error>;
 }
 
 world app {
