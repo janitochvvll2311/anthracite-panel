@@ -12,6 +12,20 @@ const styles = `
   .st-mounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
   .st-card { border: 1px solid #202632; border-radius: 9px; background: #0d1016; padding: 11px 12px; display: grid; gap: 8px; }
   .st-mount-head { display: flex; align-items: baseline; gap: 8px; }
+  .st-unmount {
+    margin-left: auto; padding: 3px 7px; border-radius: 6px; border: 1px solid #2a3142;
+    background: #151a24; color: #8f98ab; font: inherit; font-size: 10.5px; cursor: pointer;
+  }
+  .st-unmount:hover { border-color: #ff7d8a66; color: #ffb3ba; }
+  .st-add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .st-add input, .st-add select, .st-add button {
+    padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142; background: #0f1219;
+    color: #e8ebf2; font: 12px ui-monospace, monospace;
+  }
+  .st-add button { background: #151a24; cursor: pointer; }
+  .st-add button:hover { border-color: #3a4560; color: #fff; }
+  .st-add input[data-mountpoint] { flex: 1; min-width: 160px; }
+  .st-add input[data-filesystem] { width: 100px; }
   .st-mountpoint { font-weight: 600; color: #e8ebf2; }
   .st-fs { color: #cbb8ff; font: 11px ui-monospace, monospace; }
   .st-device { color: #667087; font: 11px ui-monospace, monospace; }
@@ -36,10 +50,11 @@ const styles = `
   .st-status.bad { color: #ffb3ba; }
 `;
 
-async function call(context, route) {
+async function call(context, route, init) {
+  const { headers, ...rest } = init ?? {};
   const response = await context.fetch(
     `/api/apps/${encodeURIComponent(context.app.id)}${route}`,
-    { headers: { accept: "application/json" } },
+    { ...rest, headers: { accept: "application/json", ...(headers ?? {}) } },
   );
   const body = await response.text();
   let value = null;
@@ -87,6 +102,12 @@ export function mount(root, context) {
     </div>
     <div class="st-mounts"></div>
     <div class="st-table" role="table" aria-label="Block devices"></div>
+    <form class="st-add">
+      <select data-device aria-label="Device"></select>
+      <input data-mountpoint placeholder="mountpoint, e.g. /media/sd" aria-label="Mountpoint" autocomplete="off" />
+      <input data-filesystem value="ext4" aria-label="Filesystem" autocomplete="off" />
+      <button type="submit">Mount</button>
+    </form>
     <p class="st-status" role="status"></p>
   `;
   root.append(box);
@@ -94,6 +115,10 @@ export function mount(root, context) {
   const mounts = box.querySelector(".st-mounts");
   const table = box.querySelector(".st-table");
   const status = box.querySelector(".st-status");
+  const form = box.querySelector(".st-add");
+  const device = box.querySelector("[data-device]");
+  const mountpoint = box.querySelector("[data-mountpoint]");
+  const filesystem = box.querySelector("[data-filesystem]");
   let disposed = false;
 
   const setStatus = (message, bad = false) => {
@@ -119,7 +144,14 @@ export function mount(root, context) {
           cell("st-mountpoint", mount.mountpoint),
           cell("st-fs", mount.filesystem),
         );
-        const device = cell("st-device", mount.device);
+        const unmount = document.createElement("button");
+        unmount.type = "button";
+        unmount.className = "st-unmount";
+        unmount.textContent = "Unmount";
+        unmount.title = `Unmount ${mount.device}`;
+        unmount.addEventListener("click", () => void detach(mount.device));
+        head.append(unmount);
+        const deviceLine = cell("st-device", mount.device);
         const ratio = mount["total-bytes"]
           ? mount["used-bytes"] / mount["total-bytes"]
           : 0;
@@ -132,7 +164,7 @@ export function mount(root, context) {
         const numbers = document.createElement("div");
         numbers.className = "st-numbers";
         numbers.innerHTML = `<span><b>${size(mount["used-bytes"])}</b> used</span><span><b>${size(mount["total-bytes"])}</b> total</span>`;
-        card.append(head, device, track, numbers);
+        card.append(head, deviceLine, track, numbers);
         mounts.append(card);
       }
 
@@ -155,11 +187,66 @@ export function mount(root, context) {
         );
         table.append(row);
       }
+
+      const selected = device.value;
+      device.replaceChildren();
+      for (const candidate of devices.filter((candidate) => !candidate.mounted)) {
+        const option = document.createElement("option");
+        option.value = candidate.path;
+        option.textContent = `${candidate.path} · ${candidate.model}`;
+        device.append(option);
+      }
+      if (devices.some((candidate) => candidate.path === selected && !candidate.mounted)) {
+        device.value = selected;
+      }
+      form.querySelector("button").disabled = device.options.length === 0;
       setStatus(`${list.length} mounts · ${devices.length} devices`);
     } catch (error) {
       if (!disposed) setStatus(String(error), true);
     }
   }
+
+  async function detach(path) {
+    setStatus(`Unmounting ${path}…`);
+    try {
+      await call(context, "/unmount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device: path }),
+      });
+      await load();
+      setStatus(`Unmounted ${path}`);
+    } catch (error) {
+      if (!disposed) setStatus(String(error), true);
+    }
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const target = mountpoint.value.trim();
+    if (!device.value || !target) {
+      setStatus("Pick a device and write a mountpoint.", true);
+      return;
+    }
+    const attached = device.value;
+    setStatus(`Mounting ${attached}…`);
+    try {
+      await call(context, "/mount", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          device: attached,
+          mountpoint: target,
+          filesystem: filesystem.value.trim() || "ext4",
+        }),
+      });
+      mountpoint.value = "";
+      await load();
+      setStatus(`Mounted ${attached} at ${target}`);
+    } catch (error) {
+      if (!disposed) setStatus(String(error), true);
+    }
+  });
 
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
   void load();
