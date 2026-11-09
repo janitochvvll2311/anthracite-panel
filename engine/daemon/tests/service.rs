@@ -61,6 +61,7 @@ fn launch(state: &Path, extra: &[&str], start_timeout: Duration) -> ServiceLaunc
         binary: fixture(),
         argv,
         socket,
+        data_dir: state.join("data").join(APP),
         exports,
         start_timeout,
     }

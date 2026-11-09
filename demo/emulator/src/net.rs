@@ -5,22 +5,25 @@ use serde_json::{json, Value};
 
 use crate::{boolean, number, optional_text, text};
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Address {
-    family: &'static str,
-    address: &'static str,
+    family: String,
+    address: String,
     prefix: u8,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Interface {
-    name: &'static str,
+    name: String,
     up: bool,
-    mac: &'static str,
+    mac: String,
     mtu: u32,
     addresses: Vec<Address>,
     rx_bytes: u64,
     tx_bytes: u64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Route {
     family: String,
     destination: String,
@@ -29,6 +32,7 @@ struct Route {
     metric: u32,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct NetFixture {
     interfaces: Vec<Interface>,
     routes: Vec<Route>,
@@ -39,19 +43,19 @@ impl NetFixture {
         Self {
             interfaces: vec![
                 Interface {
-                    name: "lo",
+                    name: "lo".to_string(),
                     up: true,
-                    mac: "00:00:00:00:00:00",
+                    mac: "00:00:00:00:00:00".to_string(),
                     mtu: 65536,
                     addresses: vec![
                         Address {
-                            family: "ipv4",
-                            address: "127.0.0.1",
+                            family: "ipv4".to_string(),
+                            address: "127.0.0.1".to_string(),
                             prefix: 8,
                         },
                         Address {
-                            family: "ipv6",
-                            address: "::1",
+                            family: "ipv6".to_string(),
+                            address: "::1".to_string(),
                             prefix: 128,
                         },
                     ],
@@ -59,19 +63,19 @@ impl NetFixture {
                     tx_bytes: 1_048_576,
                 },
                 Interface {
-                    name: "eth0",
+                    name: "eth0".to_string(),
                     up: true,
-                    mac: "02:42:ac:11:00:02",
+                    mac: "02:42:ac:11:00:02".to_string(),
                     mtu: 1500,
                     addresses: vec![
                         Address {
-                            family: "ipv4",
-                            address: "10.0.0.2",
+                            family: "ipv4".to_string(),
+                            address: "10.0.0.2".to_string(),
                             prefix: 24,
                         },
                         Address {
-                            family: "ipv6",
-                            address: "fe80::42:acff:fe11:2",
+                            family: "ipv6".to_string(),
+                            address: "fe80::42:acff:fe11:2".to_string(),
                             prefix: 64,
                         },
                     ],
@@ -79,13 +83,13 @@ impl NetFixture {
                     tx_bytes: 2_147_483_648,
                 },
                 Interface {
-                    name: "wlan0",
+                    name: "wlan0".to_string(),
                     up: false,
-                    mac: "02:42:ac:11:00:03",
+                    mac: "02:42:ac:11:00:03".to_string(),
                     mtu: 1500,
                     addresses: vec![Address {
-                        family: "ipv4",
-                        address: "192.168.1.40",
+                        family: "ipv4".to_string(),
+                        address: "192.168.1.40".to_string(),
                         prefix: 24,
                     }],
                     rx_bytes: 0,

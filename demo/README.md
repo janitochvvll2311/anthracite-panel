@@ -83,12 +83,16 @@ Every bundle carries a `panel.view` module:
 The panel mounts them like any other slot; the modules only see their own app's
 routes.
 
-## What is deterministic
+## State
 
-The tree, sizes, timestamps, session ids, process table, interfaces, mounts and
-accounts are fixed; writes, sessions, signals, routes and mounts live in memory
-and reset when the service restarts. Removing an app from the composition
-degrades only that view.
+The fixtures are deterministic. Files, accounts, network and storage are durable:
+each of those bundles writes a plain JSON snapshot to
+`state/data/<app-id>/state.json` (`0600`, atomic write) through the approved
+`{data}` argv. They survive a panel/service restart. Delete an app’s
+`state.json` to reseed that domain.
+
+The process table and terminal sessions are runtime state and reset on restart.
+Removing an app from the composition degrades only that view.
 
 The emulator is not engine code. It lives outside the wasm `apps/` workspace, is
 unsigned, class `socket`, and never receives the host root.
