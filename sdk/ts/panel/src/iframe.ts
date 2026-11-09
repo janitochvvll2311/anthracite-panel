@@ -20,12 +20,26 @@ export type FrameContext = {
   };
   panel: { slots: string[]; version: string };
   kind: "view" | "action" | "settings";
+  /// Opaque data the panel passed when opening this view.
+  params?: unknown;
+};
+
+/// A request from an app module to open another of its own views.
+export type OpenViewRequest = {
+  tag: string;
+  params?: unknown;
+  /// `tab` (default) or `float`, so a view can pop straight into a panel window.
+  mode?: "tab" | "float";
 };
 
 export type FrameOptions = {
   source: string;
   context: FrameContext;
   close?: () => void;
+  /// Opens another contribution of the same app at panel level.
+  openView?: (request: OpenViewRequest) => void;
+  /// Records opaque parameters the module wants to keep across float/dock.
+  onParams?: (params: unknown) => void;
   /// A same-origin fetch, so a host can add authentication or logging.
   request?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   frameUrl?: string;
@@ -154,6 +168,21 @@ export async function mountFrame(
       }
       if (message.type === "anth:close") {
         options.close?.();
+        return;
+      }
+      if (message.type === "anth:open-view") {
+        const tag = String(message.tag ?? "");
+        if (tag) {
+          options.openView?.({
+            tag,
+            params: message.params,
+            mode: message.mode === "float" ? "float" : "tab",
+          });
+        }
+        return;
+      }
+      if (message.type === "anth:params") {
+        options.onParams?.(message.params);
         return;
       }
       if (message.type === "anth:resize") {

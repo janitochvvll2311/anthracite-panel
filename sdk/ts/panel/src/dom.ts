@@ -68,6 +68,7 @@ export function frameContext(
   contribution: Contribution,
   kind: FrameContext["kind"],
   panel: { slots: readonly string[]; version: string },
+  params?: unknown,
 ): FrameContext {
   return {
     app: {
@@ -78,5 +79,6 @@ export function frameContext(
     contribution: { ...contribution.slot, app: contribution.app.id },
     panel: { slots: [...panel.slots], version: panel.version },
     kind,
+    ...(params === undefined ? {} : { params }),
   };
 }

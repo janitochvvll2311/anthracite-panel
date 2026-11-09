@@ -4,7 +4,7 @@ manifest_version = 3
 id = "org.anthracite.fs"
 namespace = "anthracite:fs"
 name = "Files (emulator)"
-version = "0.2.0"
+version = "0.3.0"
 summary = "Deterministic filesystem fixture for the demo; replaced by the real fs app."
 license = "Apache-2.0"
 
@@ -95,5 +95,14 @@ label = "Files"
 icon = "folder"
 order = 10
 tag = "anth-fs"
+module = "web/fs.js"
+sha256 = "{{module_sha256}}"
+
+[[slot]]
+id = "panel.view"
+label = "Editor"
+icon = "pen"
+order = 11
+tag = "anth-fs-editor"
 module = "web/fs.js"
 sha256 = "{{module_sha256}}"

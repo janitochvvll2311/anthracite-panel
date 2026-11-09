@@ -11206,6 +11206,110 @@ function checkStateComponent(plugin) {
 }
 
 // bundles/fs/web-src/fs.js
+var LANGUAGE_BY_EXTENSION = {
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "javascript",
+  ts: "javascript",
+  tsx: "javascript",
+  json: "json",
+  sh: "shell",
+  bash: "shell",
+  zsh: "shell",
+  md: "markdown",
+  markdown: "markdown",
+  toml: "toml",
+  py: "python",
+  rs: "rust",
+  css: "css"
+};
+var KEYWORDS = {
+  javascript: /\b(async|await|break|case|catch|class|const|continue|default|delete|do|else|export|extends|false|finally|for|from|function|if|import|in|instanceof|let|new|null|of|return|static|super|switch|this|throw|true|try|typeof|undefined|var|void|while|with|yield)\b/g,
+  python: /\b(and|as|assert|async|await|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|None|nonlocal|not|or|pass|raise|return|True|try|while|with|yield)\b/g,
+  rust: /\b(as|async|await|break|const|continue|crate|dyn|else|enum|extern|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|true|type|unsafe|use|where|while)\b/g,
+  shell: /\b(if|then|else|elif|fi|for|while|do|done|case|esac|function|in|return|export|local|echo|cd|set)\b/g,
+  toml: /\b(true|false)\b/g,
+  css: /(?:^|\s)(color|background|margin|padding|display|font|border|width|height|flex|grid|position|top|left|right|bottom|gap)\b/g
+};
+function languageFor(path) {
+  const extension = String(path).split(".").pop()?.toLowerCase() ?? "";
+  return LANGUAGE_BY_EXTENSION[extension] ?? "plain";
+}
+function tokenizeLine(line, language) {
+  const tokens = [];
+  const taken = new Array(line.length).fill(false);
+  const add = (start, end, className) => {
+    if (start >= end)
+      return;
+    if (taken.slice(start, end).some(Boolean))
+      return;
+    for (let index = start;index < end; index += 1)
+      taken[index] = true;
+    tokens.push({ start, end, className });
+  };
+  const strings = /(["'`])(?:\\.|(?!\1).)*\1/g;
+  let match;
+  while (match = strings.exec(line)) {
+    add(match.index, match.index + match[0].length, "tok-string");
+  }
+  if (["javascript", "rust", "python", "shell", "toml"].includes(language)) {
+    const marker = ["python", "shell", "toml"].includes(language) ? "#" : "//";
+    const index = line.indexOf(marker);
+    if (index >= 0)
+      add(index, line.length, "tok-comment");
+  }
+  if (language === "markdown") {
+    const heading = /^#{1,6}\s.*$/.exec(line);
+    if (heading)
+      add(0, line.length, "tok-heading");
+  }
+  const numbers = /\b\d+(?:\.\d+)?\b/g;
+  while (match = numbers.exec(line)) {
+    add(match.index, match.index + match[0].length, "tok-number");
+  }
+  const keywords = KEYWORDS[language];
+  if (keywords) {
+    keywords.lastIndex = 0;
+    while (match = keywords.exec(line)) {
+      add(match.index, match.index + match[0].length, "tok-keyword");
+    }
+  }
+  if (language === "toml") {
+    const key = /^\s*[A-Za-z0-9_.-]+(?=\s*=)/.exec(line);
+    if (key)
+      add(key.index, key.index + key[0].length, "tok-key");
+  }
+  return tokens.sort((left, right) => left.start - right.start);
+}
+function decorationsFor(doc, language) {
+  const decorations = [];
+  doc.descendants((node, pos) => {
+    if (node.type.name !== "paragraph" || !node.textContent)
+      return;
+    for (const token of tokenizeLine(node.textContent, language)) {
+      decorations.push(Decoration.inline(pos + 1 + token.start, pos + 1 + token.end, {
+        class: token.className
+      }));
+    }
+  });
+  return DecorationSet.create(doc, decorations);
+}
+var highlightKey = new PluginKey("anth-syntax");
+function highlightPlugin(language) {
+  return new Plugin({
+    key: highlightKey,
+    state: {
+      init: (_, state) => decorationsFor(state.doc, language),
+      apply: (tr, old) => tr.docChanged ? decorationsFor(tr.doc, language) : old
+    },
+    props: {
+      decorations(state) {
+        return this.getState(state);
+      }
+    }
+  });
+}
 var styles = `
   .fs { position: relative; display: flex; flex-direction: column; gap: 12px; min-height: 380px; color: #e8ebf2; }
   .fs-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -11229,6 +11333,9 @@ var styles = `
     font: 12px/1.6 ui-monospace, monospace; color: #e8ebf2; tab-size: 4;
   }
   .pm-host .ProseMirror p { margin: 0; min-height: 1.6em; }
+  .fs-editor-app { min-height: 100%; }
+  .fs-editor-app .fs-editor-full { flex: 1; min-height: 260px; }
+  .fs-editor-app .fs-editor-full .ProseMirror { min-height: 240px; }
   .fs-editor-float {
     position: absolute; top: 58px; left: 24px; width: min(760px, calc(100% - 48px));
     height: 440px; min-width: 360px; min-height: 260px; max-width: calc(100% - 16px);
@@ -11252,6 +11359,12 @@ var styles = `
   .fs-editor-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; background: #0d1016; }
   .fs-editor-body .ProseMirror { outline: none; white-space: pre-wrap; font: 12px/1.6 ui-monospace, monospace; color: #e8ebf2; }
   .fs-editor-body .ProseMirror p { margin: 0; min-height: 1.6em; }
+  .tok-keyword { color: #c792ea; }
+  .tok-string { color: #c3e88d; }
+  .tok-number { color: #f78c6c; }
+  .tok-comment { color: #667087; font-style: italic; }
+  .tok-heading { color: #7aa2ff; font-weight: 600; }
+  .tok-key { color: #89ddff; }
   .fs-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1.25fr); gap: 12px; min-height: 300px; }
   .fs-list { list-style: none; margin: 0; padding: 0; border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016; }
   .fs-row { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid #171c26; }
@@ -11351,6 +11464,53 @@ function parent(path) {
 function baseName(path) {
   return path === "/" ? "/" : path.substring(path.lastIndexOf("/") + 1);
 }
+function normalizePath(input) {
+  let path = String(input).trim();
+  if (!path)
+    path = "/";
+  if (!path.startsWith("/"))
+    path = `/${path}`;
+  const parts = [];
+  for (const part of path.split("/")) {
+    if (!part || part === ".")
+      continue;
+    if (part === "..") {
+      if (!parts.length)
+        return null;
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+}
+function editorDoc(textValue) {
+  const lines = textValue.split(`
+`);
+  return schema.node("doc", null, lines.map((line) => schema.node("paragraph", null, line ? [schema.text(line)] : [])));
+}
+function editorText(doc) {
+  const lines = [];
+  doc.forEach((node) => lines.push(node.textContent));
+  return lines.join(`
+`);
+}
+function editorState(textValue, path) {
+  return EditorState.create({
+    schema,
+    doc: editorDoc(textValue),
+    plugins: [
+      history(),
+      keymap({
+        "Mod-z": undo,
+        "Mod-y": redo,
+        "Shift-Mod-z": redo,
+        ...baseKeymap
+      }),
+      highlightPlugin(languageFor(path))
+    ]
+  });
+}
 function bytes(size) {
   if (size < 1024)
     return `${size} B`;
@@ -11396,7 +11556,153 @@ function cell(className, textValue) {
   node.textContent = textValue;
   return node;
 }
+function mountEditorView(root, context) {
+  const style = document.createElement("style");
+  style.textContent = styles;
+  root.append(style);
+  const box = document.createElement("div");
+  box.className = "fs fs-editor-app";
+  box.innerHTML = `
+    <header class="fs-bar">
+      <input class="fs-address" aria-label="Path" spellcheck="false" autocomplete="off" />
+      <button type="button" data-open>Open</button>
+      <button type="button" data-save>Save</button>
+    </header>
+    <div class="pm-host fs-editor-full"></div>
+    <p class="fs-status"></p>
+  `;
+  root.append(box);
+  const address = box.querySelector(".fs-address");
+  const host = box.querySelector(".fs-editor-full");
+  const status = box.querySelector(".fs-status");
+  const openButton = box.querySelector("[data-open]");
+  const saveButton = box.querySelector("[data-save]");
+  let view = null;
+  let path = "";
+  let dirty = false;
+  let disposed = false;
+  function setStatus(message, bad = false) {
+    status.textContent = message ?? "";
+    status.className = bad ? "fs-status bad" : "fs-status";
+  }
+  function publish(pending) {
+    dirty = pending;
+    if (typeof context.updateParams !== "function" || !view)
+      return;
+    context.updateParams({
+      path,
+      name: baseName(path),
+      text: editorText(view.state.doc),
+      dirty: pending
+    });
+  }
+  function show(value, target, pending = false) {
+    path = target;
+    address.value = target;
+    const state = editorState(value, target);
+    if (view) {
+      view.updateState(state);
+    } else {
+      const mountPoint = document.createElement("div");
+      view = new EditorView(mountPoint, {
+        state,
+        dispatchTransaction(transaction) {
+          const next = view.state.apply(transaction);
+          view.updateState(next);
+          if (transaction.docChanged)
+            publish(true);
+        }
+      });
+      host.append(view.dom);
+    }
+    dirty = pending;
+    view.focus();
+  }
+  async function loadPath(input) {
+    const target = normalizePath(input);
+    if (target === null) {
+      setStatus("The path cannot escape the root.", true);
+      return;
+    }
+    setStatus("Reading…");
+    try {
+      const data = await call(context, `/file?path=${encodeURIComponent(target)}`);
+      if (disposed)
+        return;
+      const decoded = text(data);
+      if (decoded === null) {
+        setStatus(`${target} is not UTF-8 text.`, true);
+        return;
+      }
+      show(decoded, target);
+      publish(false);
+      setStatus(`${target} · ${data.length} bytes`);
+    } catch (error) {
+      if (!disposed)
+        setStatus(reason(error), true);
+    }
+  }
+  async function save() {
+    if (!view)
+      return;
+    const target = normalizePath(address.value || path);
+    if (target === null) {
+      setStatus("The path cannot escape the root.", true);
+      return;
+    }
+    const value = editorText(view.state.doc);
+    const data = Array.from(encoder.encode(value));
+    setStatus("Saving…");
+    try {
+      await call(context, "/file", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: target, bytes: data })
+      });
+      if (disposed)
+        return;
+      path = target;
+      address.value = target;
+      dirty = false;
+      publish(false);
+      setStatus(`Saved ${target}`);
+    } catch (error) {
+      if (!disposed)
+        setStatus(reason(error), true);
+    }
+  }
+  openButton.addEventListener("click", () => void loadPath(address.value));
+  saveButton.addEventListener("click", () => void save());
+  address.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter")
+      return;
+    event.preventDefault();
+    loadPath(address.value);
+  });
+  address.addEventListener("focus", () => address.select());
+  const params = context.params ?? {};
+  const initialPath = typeof params.path === "string" ? params.path : "";
+  const initialText = typeof params.text === "string" ? params.text : null;
+  if (initialPath && initialText !== null) {
+    const pending = params.dirty !== false;
+    show(initialText, initialPath, pending);
+    setStatus(`${initialPath} · ${pending ? "unsaved copy" : "saved"}`);
+  } else if (initialPath) {
+    address.value = initialPath;
+    loadPath(initialPath);
+  } else {
+    setStatus("Enter a path and press Open.");
+  }
+  return () => {
+    disposed = true;
+    view?.destroy();
+    root.replaceChildren();
+  };
+}
 function mount(root, context) {
+  if (context.contribution.tag === "anth-fs-editor") {
+    return mountEditorView(root, context);
+  }
   const style = document.createElement("style");
   style.textContent = styles;
   root.append(style);
@@ -11489,26 +11795,6 @@ function mount(root, context) {
   function rememberPath(path) {
     knownPaths.add(path);
     renderPaths();
-  }
-  function normalizePath(input) {
-    let path = input.trim();
-    if (!path)
-      path = "/";
-    if (!path.startsWith("/"))
-      path = `/${path}`;
-    const parts = [];
-    for (const part of path.split("/")) {
-      if (!part || part === ".")
-        continue;
-      if (part === "..") {
-        if (!parts.length)
-          return null;
-        parts.pop();
-        continue;
-      }
-      parts.push(part);
-    }
-    return `/${parts.join("/")}`;
   }
   function navigate(input) {
     const path = normalizePath(input);
@@ -11761,37 +12047,15 @@ function mount(root, context) {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  function editorDoc(text) {
-    const lines = text.split(`
-`);
-    return schema.node("doc", null, lines.map((line) => schema.node("paragraph", null, line ? [schema.text(line)] : [])));
-  }
-  function editorText(doc) {
-    const lines = [];
-    doc.forEach((node) => lines.push(node.textContent));
-    return lines.join(`
-`);
-  }
   function startEditor() {
     if (!previewState || previewState.text === null)
       return;
     if (editor)
       return;
-    const state = EditorState.create({
-      schema,
-      doc: editorDoc(previewState.text),
-      plugins: [
-        history(),
-        keymap({
-          "Mod-z": undo,
-          "Mod-y": redo,
-          "Shift-Mod-z": redo,
-          ...baseKeymap
-        })
-      ]
-    });
     const mountPoint = document.createElement("div");
-    const view = new EditorView(mountPoint, { state });
+    const view = new EditorView(mountPoint, {
+      state: editorState(previewState.text, previewState.path)
+    });
     editor = { view, floating: false, overlay: null };
     previewState.editing = true;
     renderPreview();
@@ -11924,9 +12188,27 @@ function mount(root, context) {
         save.addEventListener("click", () => void saveEditor());
         const cancel = button("", "Cancel");
         cancel.addEventListener("click", cancelEditor);
-        const float = button("", "Float");
-        float.addEventListener("click", floatEditor);
-        actions.append(save, cancel, float);
+        const pop = button("", "Pop out");
+        pop.title = "Open this file in the panel-level Editor view";
+        pop.addEventListener("click", () => {
+          const value = editor ? editorText(editor.view.state.doc) : previewState.text;
+          if (typeof context.openView === "function") {
+            context.openView({
+              tag: "anth-fs-editor",
+              mode: "float",
+              params: {
+                path: previewState.path,
+                name: baseName(previewState.path),
+                text: value,
+                dirty: true
+              }
+            });
+            cancelEditor();
+          } else {
+            floatEditor();
+          }
+        });
+        actions.append(save, cancel, pop);
       }
     } else if (decoded !== null) {
       const pre = document.createElement("pre");
