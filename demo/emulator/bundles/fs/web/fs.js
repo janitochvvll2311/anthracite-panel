@@ -27,7 +27,14 @@ const styles = `
   .fs-entry:hover { background: #151a24; color: #fff; }
   .fs-entry .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fs-entry .size { margin-left: auto; color: #667087; font-size: 11px; }
-  .fs-entry .glyph { width: 14px; color: #7aa2ff; }
+  .fs-entry .glyph { width: 14px; display: inline-flex; align-items: center; }
+  .fs-entry .glyph.dir::before {
+    content: ""; width: 0; height: 0; border-left: 5px solid #7aa2ff;
+    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  }
+  .fs-entry .glyph.file::before {
+    content: ""; width: 7px; height: 9px; border: 1px solid #667087; border-radius: 1px;
+  }
   .fs-delete {
     margin-right: 6px; border: 0; background: transparent; color: #667087; cursor: pointer;
     font-size: 14px; line-height: 1; padding: 4px;
@@ -123,7 +130,7 @@ export function mount(root, context) {
   box.className = "fs";
   box.innerHTML = `
     <header class="fs-bar">
-      <button type="button" data-up title="Parent directory">↑</button>
+      <button type="button" data-up title="Parent directory">Up</button>
       <span class="fs-path">/</span>
       <button type="button" data-new>New folder</button>
     </header>
@@ -173,7 +180,7 @@ export function mount(root, context) {
         button.className = "fs-entry";
         button.dataset.name = entry.name;
         button.dataset.kind = entry.kind;
-        button.innerHTML = `<span class="glyph">${entry.kind === "dir" ? "▸" : "·"}</span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+        button.innerHTML = `<span class="glyph ${entry.kind === "dir" ? "dir" : "file"}"></span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
         button.addEventListener("click", () => {
           if (entry.kind === "dir") {
             void load(join(path, entry.name));
