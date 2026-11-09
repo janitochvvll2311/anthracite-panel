@@ -212,25 +212,34 @@ async fn health() -> impl IntoResponse {
 /// shell gate reads it on the next navigation.
 async fn login_page() -> Response {
     page(
-        "Sign in",
-        r#"<h1>Sign in</h1>
-<p>The operator name is <code>operator</code>. If this is the first boot, read
-the password from <code>state/credentials.txt</code>.</p>
-<form id="login">
-  <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
-  <button type="submit">Sign in</button>
+        "Sign in · Anthracite",
+        r#"<div class="copy">
+  <h1>Welcome back</h1>
+  <p>Sign in as <code>operator</code> to open the workspace.</p>
+</div>
+<form id="login" class="form">
+  <label class="field">
+    <span>Password</span>
+    <input id="password" type="password" autocomplete="current-password" placeholder="Operator password" autofocus required>
+  </label>
+  <button class="primary" type="submit">Sign in</button>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
 </form>
-<p id="status" role="status"></p>
+<p class="hint">First boot? Read the password from <code>state/credentials.txt</code>.</p>
 <script>
 document.getElementById('login').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const status = document.getElementById('status');
+  status.textContent = '';
+  status.dataset.state = '';
   const response = await fetch('/api/engine/session', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ operator: 'operator', password: document.getElementById('password').value }),
   });
   if (!response.ok) {
-    document.getElementById('status').textContent = await response.text();
+    status.dataset.state = 'bad';
+    status.textContent = await response.text();
     return;
   }
   const session = await response.json();
@@ -244,19 +253,30 @@ document.getElementById('login').addEventListener('submit', async (event) => {
 /// changes it; the engine gate refuses every other resource until then.
 async fn setup() -> Response {
     page(
-        "Change the first-boot password",
-        r#"<h1>Change the first-boot password</h1>
-<p>Read the current password from <code>state/credentials.txt</code>. The engine
-refuses every other resource until it changes.</p>
-<form id="setup">
-  <label>Current password <input id="current" type="password" autocomplete="current-password" required></label>
-  <label>New password <input id="new" type="password" autocomplete="new-password" minlength="12" required></label>
-  <button type="submit">Change password</button>
+        "Set a password · Anthracite",
+        r#"<div class="copy">
+  <h1>Set a new password</h1>
+  <p>Replace the generated operator password before opening the workspace.</p>
+</div>
+<form id="setup" class="form">
+  <label class="field">
+    <span>Current password</span>
+    <input id="current" type="password" autocomplete="current-password" placeholder="From state/credentials.txt" autofocus required>
+  </label>
+  <label class="field">
+    <span>New password</span>
+    <input id="new" type="password" autocomplete="new-password" placeholder="At least 12 characters" minlength="12" required>
+  </label>
+  <button class="primary" type="submit">Change password</button>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
 </form>
-<p id="status" role="status"></p>
+<p class="hint">The current password is in <code>state/credentials.txt</code>. The engine refuses every other resource until it changes.</p>
 <script>
 document.getElementById('setup').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const status = document.getElementById('status');
+  status.textContent = '';
+  status.dataset.state = '';
   const current = document.getElementById('current').value;
   const next = document.getElementById('new').value;
   const login = await fetch('/api/engine/session', {
@@ -265,7 +285,8 @@ document.getElementById('setup').addEventListener('submit', async (event) => {
     body: JSON.stringify({ operator: 'operator', password: current }),
   });
   if (!login.ok) {
-    document.getElementById('status').textContent = await login.text();
+    status.dataset.state = 'bad';
+    status.textContent = await login.text();
     return;
   }
   const response = await fetch('/api/engine/operator', {
@@ -273,30 +294,176 @@ document.getElementById('setup').addEventListener('submit', async (event) => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ current_password: current, new_password: next }),
   });
-  document.getElementById('status').textContent = response.ok
-    ? 'Password changed. Open /.'
-    : await response.text();
-  if (response.ok) location.href = '/';
+  if (!response.ok) {
+    status.dataset.state = 'bad';
+    status.textContent = await response.text();
+    return;
+  }
+  status.dataset.state = 'ok';
+  status.textContent = 'Password changed. Opening the workspace…';
+  location.href = '/';
 });
 </script>"#,
     )
 }
 
 fn page(title: &str, body: &str) -> Response {
+    let version = env!("CARGO_PKG_VERSION");
     let html = format!(
         r#"<!doctype html>
 <html lang="en">
+<head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>{title}</title>
 <style>
-  body {{ font: 16px system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; padding: 0 1rem; }}
-  label {{ display: block; margin: 1rem 0; }}
-  input {{ display: block; width: 100%; padding: .5rem; margin-top: .25rem; }}
-  button {{ padding: .6rem 1rem; }}
-  code {{ background: #eee; padding: .1rem .25rem; }}
+  /* Mirrors panel/frontend/src/style.css; /login is public and cannot load
+     the gated shell CSS. */
+  :root {{
+    color-scheme: dark;
+    --bg: #0b0d12;
+    --bg-soft: #0f1219;
+    --panel: #141821;
+    --line: #2a3142;
+    --line-soft: #202634;
+    --text: #e8ebf2;
+    --muted: #8f98ab;
+    --muted-2: #667087;
+    --accent: #7aa2ff;
+    --accent-2: #9d7bff;
+    --danger: #ff7d8a;
+    --good: #52d1a4;
+    --shadow: 0 24px 70px #00000073;
+    font-synthesis: none;
+  }}
+  * {{ box-sizing: border-box; }}
+  html, body {{ min-height: 100%; }}
+  body {{
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 2rem 1rem;
+    background:
+      radial-gradient(900px 420px at 12% -10%, #1b2540 0%, transparent 62%),
+      radial-gradient(760px 420px at 96% 0%, #241b3d 0%, transparent 58%),
+      var(--bg);
+    color: var(--text);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }}
+  .auth {{ width: min(420px, 100%); display: grid; gap: 1rem; }}
+  .card {{
+    padding: 2rem;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: linear-gradient(180deg, #171b24, #12151c);
+    box-shadow: var(--shadow);
+  }}
+  .brand {{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 1.6rem;
+    font-size: 15px;
+    font-weight: 650;
+    letter-spacing: .01em;
+  }}
+  .brand-mark {{
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 62%, #f08fb1 100%);
+    box-shadow: 0 0 22px #7aa2ff59;
+    position: relative;
+  }}
+  .brand-mark::after {{
+    content: "";
+    position: absolute;
+    inset: 7px;
+    border-radius: 3px;
+    border: 1.5px solid #ffffffc7;
+    border-left-color: transparent;
+    border-bottom-color: transparent;
+    transform: rotate(45deg);
+  }}
+  .copy h1 {{
+    margin: 0 0 .35rem;
+    font-size: 1.55rem;
+    line-height: 1.2;
+    letter-spacing: -.02em;
+    font-weight: 650;
+  }}
+  .copy p {{ margin: 0 0 1.5rem; color: var(--muted); }}
+  .field {{ display: block; margin-bottom: 1rem; }}
+  .field span {{
+    display: block;
+    margin-bottom: .4rem;
+    color: var(--muted);
+    font-size: .72rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }}
+  input {{
+    width: 100%;
+    padding: .7rem .8rem;
+    color: var(--text);
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    font: inherit;
+    outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }}
+  input::placeholder {{ color: var(--muted-2); }}
+  input:focus {{
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px #7aa2ff22;
+  }}
+  .primary {{
+    width: 100%;
+    margin-top: .35rem;
+    padding: .72rem 1rem;
+    border: 1px solid #8aa9ff55;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #0b0d12;
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+    transition: filter .15s ease, transform .15s ease;
+  }}
+  .primary:hover {{ filter: brightness(1.06); }}
+  .primary:active {{ transform: translateY(1px); }}
+  .status {{
+    min-height: 1.2em;
+    margin: .9rem 0 0;
+    color: var(--danger);
+    font-size: .82rem;
+    white-space: pre-wrap;
+  }}
+  .status[data-state="ok"] {{ color: var(--good); }}
+  .hint {{ margin: 1.25rem 0 0; color: var(--muted); font-size: .8rem; }}
+  code {{
+    padding: .1rem .3rem;
+    border: 1px solid var(--line-soft);
+    border-radius: 5px;
+    background: #ffffff0d;
+    color: var(--muted);
+    font-size: .9em;
+  }}
+  .version {{ margin: 0; color: var(--muted-2); font-size: .75rem; text-align: center; }}
 </style>
-{body}
+</head>
+<body>
+<main class="auth">
+  <section class="card">
+    <header class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Anthracite</span></header>
+    {body}
+  </section>
+  <p class="version">Anthracite v{version}</p>
+</main>
+</body>
 </html>"#
     );
     (
@@ -542,6 +709,9 @@ mod tests {
         let text = String::from_utf8(body.to_vec()).expect("utf8");
         assert!(text.contains("/api/engine/session"), "{text}");
         assert!(text.contains("must_change_password"), "{text}");
+        assert!(text.contains("class=\"card\""), "{text}");
+        assert!(text.contains("brand-mark"), "{text}");
+        assert!(text.contains("Welcome back"), "{text}");
     }
 
     #[tokio::test]
