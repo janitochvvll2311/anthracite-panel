@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use anth_contract::{AppId, SurfaceSlot};
 
 pub mod host;
-pub use anth_api::SessionInfo;
+pub use anth_api::{session_token, SessionInfo, SESSION_COOKIE};
 pub use anth_contract::Error;
 pub use host::{Host, Sessions};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};

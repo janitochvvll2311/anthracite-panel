@@ -36,8 +36,8 @@ use axum::extract::{
     State,
 };
 use axum::http::header::{
-    ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, ETAG, HOST, IF_MATCH,
-    IF_NONE_MATCH, LOCATION, ORIGIN, SET_COOKIE,
+    ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, ETAG, HOST, LOCATION,
+    ORIGIN, SET_COOKIE,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -364,7 +364,7 @@ async fn readiness(State(state): State<Arc<EngineState>>) -> Response {
 
 /// The cookie name. It is deliberately not `__Host-`: v0.5.0 serves plain HTTP
 /// and the prefix would make browsers reject the cookie.
-const SESSION_COOKIE: &str = "anth_session";
+pub const SESSION_COOKIE: &str = "anth_session";
 const SESSION_BODY_LIMIT: u64 = 16 * 1024;
 
 #[derive(Deserialize)]
@@ -388,7 +388,7 @@ fn auth(state: &EngineState) -> Result<&Arc<Auth>, ApiError> {
     })
 }
 
-fn session_token(headers: &HeaderMap) -> Option<String> {
+pub fn session_token(headers: &HeaderMap) -> Option<String> {
     let header = headers.get(COOKIE)?.to_str().ok()?;
     header.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
@@ -637,20 +637,22 @@ fn current_composition(state: &EngineState) -> Result<Composition, ApiError> {
         .map_err(|_| ApiError(Error::internal("the composition lock is poisoned")))
 }
 
+/// A comma-list header (`If-Match`, `If-None-Match`, the acknowledgment token)
+/// split and trimmed once, including repeated header lines.
+fn header_tokens<'a>(headers: &'a HeaderMap, name: &str) -> impl Iterator<Item = &'a str> {
+    headers
+        .get_all(name)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+}
+
 /// `If-Match` is required and uses strong comparison: `*` matches any existing
 /// document, a comma-separated list matches if any validator does, and repeated
 /// header lines are the same list.
 fn if_matches(headers: &HeaderMap, etag: &str) -> bool {
-    headers
-        .get_all(IF_MATCH)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .any(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .any(|candidate| candidate == "*" || candidate == etag)
-        })
+    header_tokens(headers, "if-match").any(|candidate| candidate == "*" || candidate == etag)
 }
 
 /// The resolution as a client reads it (§8.7).
@@ -1103,14 +1105,9 @@ async fn app_asset(
 }
 
 fn if_none_match(headers: &HeaderMap, hash: &str) -> bool {
-    headers
-        .get(IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.split(',').map(str::trim).any(|candidate| {
-                candidate == "*" || candidate == hash || candidate.trim_matches('"') == hash
-            })
-        })
+    header_tokens(headers, "if-none-match").any(|candidate| {
+        candidate == "*" || candidate == hash || candidate.trim_matches('"') == hash
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1455,10 +1452,7 @@ fn installed_apps(apps: &Apps) -> Result<Vec<InstalledApp>, Error> {
 const ACKNOWLEDGE: &str = "x-anth-acknowledge";
 
 fn acknowledged(headers: &HeaderMap, token: &str) -> bool {
-    headers
-        .get(ACKNOWLEDGE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == token))
+    header_tokens(headers, ACKNOWLEDGE).any(|item| item == token)
 }
 
 /// Refuses a breaking action when other composed apps depend on this one,
@@ -1860,6 +1854,7 @@ impl IntoResponse for ApiError {
 mod tests {
     use super::*;
     use axum::body::Body;
+    use axum::http::header::IF_MATCH;
     use axum::http::Request;
     use tower::ServiceExt;
 
