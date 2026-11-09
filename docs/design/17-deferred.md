@@ -7,6 +7,19 @@ it is, why it is not in v0.5.0, and what has to be true before it is worth takin
 on. A deferred item is not a forgotten one: v0.5.0 is the platform, and the
 platform is only finished when it can carry these.
 
+## 0. v0.5.0 release follow-ups
+
+The code baseline is tagged `v0.5.0` at `ea3b86d`. These are operational, not
+design work:
+
+- **CI:** GitHub Actions is blocked by the account's billing/spending limit. Rerun
+  the workflow on the tag once it is resolved; local suites are green.
+- **Release:** there is no GitHub Release for `v0.5.0` yet. Draft the notes and
+  mark it pre-release until the artifact policy is settled.
+- **Artifacts:** the repository has no release workflow. Decide whether a tag
+  builds the engine, panel, SDK crates and the `hello` bundle, and where the
+  distribution key lives ([§3.9](#39-the-distribution-key-and-the-system-tier)).
+
 ---
 
 ## 1. Mechanisms
