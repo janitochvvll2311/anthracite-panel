@@ -2,7 +2,9 @@
 
 > Part of the [design index](../../DESIGN.md).
 
-Nothing is ported wholesale. `v0.4.0-freeze` is a library of decisions:
+Nothing is ported wholesale. `v0.4.0-freeze` is a library of decisions. The
+v0.6.0 reference checklist and the service/terminal contracts are in
+[§19](19-v0.6-baseline.md).
 
 | Keep | Drop |
 | --- | --- |
