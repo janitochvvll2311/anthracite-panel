@@ -13,11 +13,37 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anth_contract::{Error, ErrorKind};
+use anth_contract::{
+    AppProblem, AppView, CompositionView, Error, ErrorKind, GrantState, KeyView, SurfaceView,
+};
+use serde::Deserialize;
 
 pub mod client;
 
 pub use client::Client;
+
+#[derive(Deserialize)]
+struct HealthView {
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct VersionView {
+    engine: String,
+    protocol: u32,
+}
+
+#[derive(Deserialize)]
+struct CatalogueView {
+    apps: Vec<AppView>,
+    #[serde(default)]
+    problems: Vec<AppProblem>,
+}
+
+#[derive(Deserialize)]
+struct KeysView {
+    keys: Vec<KeyView>,
+}
 
 pub const USAGE: &str = "\
 usage: anth [--socket <path>] <command> [options]
@@ -183,6 +209,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Err
     }
 }
 
+/// The fixed `anth app` verbs. `parse_invoke` handles everything else.
+const APP_SUBCOMMANDS: &[&str] = &[
+    "list", "show", "install", "upgrade", "enable", "disable", "remove", "approve", "revoke",
+];
+
 fn parse_app(
     args: impl Iterator<Item = OsString>,
     socket: Option<PathBuf>,
@@ -192,18 +223,7 @@ fn parse_app(
         .next()
         .ok_or_else(|| usage("`app` needs a subcommand".to_string()))?;
     let sub = as_text(&sub)?.to_string();
-    if !matches!(
-        sub.as_str(),
-        "list"
-            | "show"
-            | "install"
-            | "upgrade"
-            | "enable"
-            | "disable"
-            | "remove"
-            | "approve"
-            | "revoke"
-    ) {
+    if !APP_SUBCOMMANDS.contains(&sub.as_str()) {
         return parse_invoke(sub, args, socket);
     }
     let mut acknowledge = None;
@@ -548,7 +568,13 @@ fn compose(
         .ok_or_else(|| Error::internal("the engine answered without an ETag"))?;
     let mut view: serde_json::Value = serde_json::from_slice(&response.body)
         .map_err(|error| Error::internal(format!("the composition is not JSON: {error}")))?;
-    warn_fatal(&view["surface"]);
+    if let Some(fatal) = view["surface"]["fatal"].as_object() {
+        eprintln!(
+            "warning: composition {}: {}",
+            fatal["code"].as_str().unwrap_or("invalid"),
+            fatal["message"].as_str().unwrap_or("it cannot be resolved")
+        );
+    }
     if show || (add.is_empty() && remove.is_empty()) {
         return print_value(
             &serde_json::to_vec(&view["composition"])
@@ -616,13 +642,18 @@ fn edit_apps(apps: &mut Vec<serde_json::Value>, add: &[String], remove: &[String
 }
 
 /// A composition that cannot boot is still readable; name the reason once.
-fn warn_fatal(surface: &serde_json::Value) {
-    if let Some(fatal) = surface["fatal"].as_object() {
-        eprintln!(
-            "warning: composition {}: {}",
-            fatal["code"].as_str().unwrap_or("invalid"),
-            fatal["message"].as_str().unwrap_or("it cannot be resolved")
-        );
+fn warn_fatal(surface: &SurfaceView) {
+    if let Some(fatal) = &surface.fatal {
+        eprintln!("warning: composition {}: {}", fatal.code, fatal.message);
+    }
+}
+
+fn grant_label(state: GrantState) -> &'static str {
+    match state {
+        GrantState::None => "none",
+        GrantState::Current => "current",
+        GrantState::Stale => "stale",
+        GrantState::Invalid => "invalid",
     }
 }
 
@@ -630,13 +661,13 @@ fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
     let client = client(socket);
     match command {
         KeyCommand::List => {
-            let value = client.get_json("/api/engine/keys")?;
-            for key in value["keys"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let value: KeysView = client.get_typed("/api/engine/keys")?;
+            for key in &value.keys {
                 println!(
                     "{}\t{}\t{}",
-                    key["fingerprint"].as_str().unwrap_or("?"),
-                    key["label"].as_str().unwrap_or("-"),
-                    key["added_at"].as_str().unwrap_or("?")
+                    key.fingerprint,
+                    key.key.label.as_deref().unwrap_or("-"),
+                    key.key.added_at
                 );
             }
             Ok(0)
@@ -674,51 +705,29 @@ fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
 /// Readiness, the composition, the version and the catalogue in one answer.
 fn status(socket: Option<PathBuf>) -> Result<u8, Error> {
     let client = client(socket);
-    let health = client.get_json("/api/health")?;
-    let version = client.get_json("/api/engine/version")?;
-    let composition = client.get_json("/api/engine/composition")?;
-    let apps = client.get_json("/api/engine/apps")?;
-    println!(
-        "engine {} (protocol {})",
-        version["engine"].as_str().unwrap_or("?"),
-        version["protocol"].as_u64().unwrap_or(0)
-    );
-    println!("health {}", health["status"].as_str().unwrap_or("?"));
-    let profiles = composition["composition"]["profile"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let composed: usize = profiles
+    let health: HealthView = client.get_typed("/api/health")?;
+    let version: VersionView = client.get_typed("/api/engine/version")?;
+    let composition: CompositionView = client.get_typed("/api/engine/composition")?;
+    let apps: CatalogueView = client.get_typed("/api/engine/apps")?;
+    println!("engine {} (protocol {})", version.engine, version.protocol);
+    println!("health {}", health.status);
+    let composed: usize = composition
+        .composition
+        .profile
         .iter()
-        .map(|profile| profile["apps"].as_array().map_or(0, Vec::len))
+        .map(|profile| profile.apps.len())
         .sum();
     println!(
         "composition {composed} app(s) in {} profile(s)",
-        profiles.len()
+        composition.composition.profile.len()
     );
-    warn_fatal(&composition["surface"]);
-    for degraded in composition["surface"]["degraded"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        eprintln!(
-            "warning: degraded {}: {}",
-            degraded["app"].as_str().unwrap_or("?"),
-            degraded["reason"].as_str().unwrap_or("?")
-        );
+    warn_fatal(&composition.surface);
+    for degraded in &composition.surface.degraded {
+        eprintln!("warning: degraded {}: {}", degraded.app, degraded.reason);
     }
-    println!("apps {}", apps["apps"].as_array().map_or(0, Vec::len));
-    for problem in apps["problems"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-    {
-        eprintln!(
-            "warning: {}: {}",
-            problem["app"].as_str().unwrap_or("?"),
-            problem["message"].as_str().unwrap_or("?")
-        );
+    println!("apps {}", apps.apps.len());
+    for problem in &apps.problems {
+        eprintln!("warning: {}: {}", problem.app, problem.message);
     }
     Ok(0)
 }
@@ -727,31 +736,19 @@ fn app(socket: Option<PathBuf>, command: AppCommand) -> Result<u8, Error> {
     let client = client(socket);
     match command {
         AppCommand::List => {
-            let value = client.get_json("/api/engine/apps")?;
-            for app in value["apps"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            let value: CatalogueView = client.get_typed("/api/engine/apps")?;
+            for app in &value.apps {
                 println!(
                     "{}\t{}\t{}\t{}\t{}",
-                    app["id"].as_str().unwrap_or("?"),
-                    app["version"].as_str().unwrap_or("?"),
-                    if app["enabled"].as_bool().unwrap_or(false) {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    },
-                    app["alias"].as_str().unwrap_or("-"),
-                    app["grant_state"].as_str().unwrap_or("none")
+                    app.id,
+                    app.version,
+                    if app.enabled { "enabled" } else { "disabled" },
+                    app.alias.as_deref().unwrap_or("-"),
+                    grant_label(app.grant_state)
                 );
             }
-            for problem in value["problems"]
-                .as_array()
-                .map(Vec::as_slice)
-                .unwrap_or(&[])
-            {
-                eprintln!(
-                    "warning: {}: {}",
-                    problem["app"].as_str().unwrap_or("?"),
-                    problem["message"].as_str().unwrap_or("?")
-                );
+            for problem in &value.problems {
+                eprintln!("warning: {}: {}", problem.app, problem.message);
             }
             Ok(0)
         }
@@ -820,25 +817,25 @@ fn invoke(
     verb: &str,
     flags: &[(String, Option<String>)],
 ) -> Result<u8, Error> {
-    let apps = client.get_json("/api/engine/apps")?;
-    let installed = apps["apps"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let apps: CatalogueView = client.get_typed("/api/engine/apps")?;
+    let installed = &apps.apps;
     let chosen = if let Some(exact) = installed
         .iter()
-        .find(|candidate| candidate["id"].as_str() == Some(app))
+        .find(|candidate| candidate.id.as_str() == app)
     {
         exact
     } else {
-        let matches: Vec<&serde_json::Value> = installed
+        let matches: Vec<&AppView> = installed
             .iter()
-            .filter(|candidate| candidate["alias"].as_str() == Some(app))
+            .filter(|candidate| candidate.alias.as_deref() == Some(app))
             .collect();
         match matches.as_slice() {
             [] => return Err(Error::not_found(format!("`{app}` is not installed"))),
             [only] => *only,
             many => {
-                let ids: Vec<&str> = many
+                let ids: Vec<String> = many
                     .iter()
-                    .filter_map(|candidate| candidate["id"].as_str())
+                    .map(|candidate| candidate.id.to_string())
                     .collect();
                 return Err(Error::conflict(format!(
                     "`{app}` names more than one app ({}); use the full id",
@@ -848,43 +845,31 @@ fn invoke(
             }
         }
     };
-    let id = chosen["id"]
-        .as_str()
-        .ok_or_else(|| Error::internal("the catalogue entry has no id"))?
-        .to_string();
-    let composition = client.get_json("/api/engine/composition")?;
-    let composed = composition["surface"]["apps"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
+    let id = chosen.id.to_string();
+    let composition: CompositionView = client.get_typed("/api/engine/composition")?;
+    let composed = composition
+        .surface
+        .apps
         .iter()
-        .find(|candidate| candidate["id"].as_str() == Some(id.as_str()))
+        .find(|candidate| candidate.id.as_str() == id)
         .ok_or_else(|| Error::unavailable(format!("`{id}` is not running")))?;
-    let call = composed["cli"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
+    let call = composed
+        .cli
         .iter()
-        .find(|entry| entry["verb"].as_str() == Some(verb))
+        .find(|entry| entry.verb == verb)
         .ok_or_else(|| Error::not_found(format!("`{id}` has no CLI verb `{verb}`")))?;
-    let interface = call["interface"].as_str().unwrap_or_default();
-    let function = call["function"].as_str().unwrap_or_default();
-    let route = composed["routes"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
+    let interface = call.interface.to_string();
+    let route = composed
+        .routes
         .iter()
-        .find(|route| {
-            route["interface"].as_str() == Some(interface)
-                && route["function"].as_str() == Some(function)
-        })
+        .find(|route| route.interface.to_string() == interface && route.function == call.function)
         .ok_or_else(|| {
             Error::unavailable(format!(
                 "`{id}` verb `{verb}` has no route; v0.5.0 invokes through routes"
             ))
         })?;
-    let method = route["method"].as_str().unwrap_or("GET");
-    let path = route["path"].as_str().unwrap_or("/");
+    let method = route.method.as_str();
+    let path = route.path.as_str();
     let no_body = matches!(method, "GET" | "HEAD" | "DELETE");
     let mut body = Vec::new();
     let mut url = format!("/api/apps/{id}{path}");
@@ -1557,7 +1542,7 @@ mod tests {
     fn an_app_can_be_invoked_by_alias_or_id() {
         let dir = scratch("invoke");
         let socket = dir.join("engine.sock");
-        let apps = r#"{"apps":[{"id":"org.anthracite.hello","alias":"hello"}],"problems":[]}"#;
+        let apps = r#"{"apps":[{"id":"org.anthracite.hello","version":"0.1.0","enabled":true,"tier":"third-party","installed_at":"2026-01-01T00:00:00Z","alias":"hello","grant_state":"none"}],"problems":[]}"#;
         let composition = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":["org.anthracite.hello"]}]},"surface":{"apps":[{"id":"org.anthracite.hello","version":"0.1.0","risk":"read","routes":[{"method":"GET","path":"/hello","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}],"slots":[],"cli":[{"verb":"greet","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}]}],"degraded":[],"links":[]}}"#;
         let receive = serve(
             &socket,
@@ -1598,7 +1583,7 @@ mod tests {
     fn an_ambiguous_alias_requires_the_full_id() {
         let dir = scratch("ambiguous");
         let socket = dir.join("engine.sock");
-        let apps = r#"{"apps":[{"id":"org.example.one","alias":"notes"},{"id":"org.example.two","alias":"notes"}],"problems":[]}"#;
+        let apps = r#"{"apps":[{"id":"org.example.one","version":"0.1.0","enabled":true,"tier":"third-party","installed_at":"2026-01-01T00:00:00Z","alias":"notes","grant_state":"none"},{"id":"org.example.two","version":"0.1.0","enabled":true,"tier":"third-party","installed_at":"2026-01-01T00:00:00Z","alias":"notes","grant_state":"none"}],"problems":[]}"#;
         let _receive = serve(&socket, vec![answer("200 OK", apps)]);
         let error = app(
             Some(socket),
@@ -1618,7 +1603,7 @@ mod tests {
     fn a_verb_with_a_body_sends_flag_values() {
         let dir = scratch("invoke-body");
         let socket = dir.join("engine.sock");
-        let apps = r#"{"apps":[{"id":"org.anthracite.hello","alias":"hello"}],"problems":[]}"#;
+        let apps = r#"{"apps":[{"id":"org.anthracite.hello","version":"0.1.0","enabled":true,"tier":"third-party","installed_at":"2026-01-01T00:00:00Z","alias":"hello","grant_state":"none"}],"problems":[]}"#;
         let composition = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":["org.anthracite.hello"]}]},"surface":{"apps":[{"id":"org.anthracite.hello","version":"0.1.0","risk":"read","routes":[{"method":"POST","path":"/echo","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}],"slots":[],"cli":[{"verb":"greet","interface":"anthracite:hello/greeting@1.0.0","function":"greet"}]}],"degraded":[],"links":[]}}"#;
         let receive = serve(
             &socket,

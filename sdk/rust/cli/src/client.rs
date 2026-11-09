@@ -96,6 +96,15 @@ impl Client {
     pub fn get_json(&self, path: &str) -> Result<serde_json::Value, Error> {
         self.json("GET", path, &[])
     }
+
+    /// A typed GET for the CLI's own projections; the wire format is the
+    /// contract DTOs, so a malformed answer is an internal error here.
+    pub fn get_typed<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, Error> {
+        let value = self.get_json(path)?;
+        serde_json::from_value(value).map_err(|error| {
+            Error::internal(format!("the engine answered an unexpected shape: {error}"))
+        })
+    }
 }
 
 fn parse(raw: &[u8]) -> Result<Response, Error> {
