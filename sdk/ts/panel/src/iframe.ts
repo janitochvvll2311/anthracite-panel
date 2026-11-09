@@ -37,7 +37,7 @@ export type FrameOptions = {
   context: FrameContext;
   close?: () => void;
   /// Opens another contribution of the same app at panel level.
-  openView?: (request: OpenViewRequest) => void;
+  openView?: (request: OpenViewRequest) => boolean | void;
   /// Records opaque parameters the module wants to keep across float/dock.
   onParams?: (params: unknown) => void;
   /// A same-origin fetch, so a host can add authentication or logging.
@@ -172,12 +172,21 @@ export async function mountFrame(
       }
       if (message.type === "anth:open-view") {
         const tag = String(message.tag ?? "");
+        const requestId = String(message.requestId ?? "");
+        let ok = false;
         if (tag) {
-          options.openView?.({
-            tag,
-            params: message.params,
-            mode: message.mode === "float" ? "float" : "tab",
-          });
+          ok =
+            options.openView?.({
+              tag,
+              params: message.params,
+              mode: message.mode === "float" ? "float" : "tab",
+            }) !== false;
+        }
+        if (requestId) {
+          iframe.contentWindow?.postMessage(
+            { type: "anth:open-view-result", token, requestId, ok },
+            "*",
+          );
         }
         return;
       }

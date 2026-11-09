@@ -20,8 +20,8 @@ mod net;
 mod proc;
 mod storage;
 
-const FS_READ: &str = "anthracite:fs/read@1.1.0";
-const FS_WRITE: &str = "anthracite:fs/write@1.1.0";
+const FS_READ: &str = "anthracite:fs/read@1.2.0";
+const FS_WRITE: &str = "anthracite:fs/write@1.2.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
 const NET: &str = "anthracite:net/net@1.1.0";
@@ -197,6 +197,8 @@ impl Handler for Emulator {
 enum Node {
     Dir,
     File(Vec<u8>),
+    /// A symbolic link stored as an absolute target inside the fixture root.
+    Link(String),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -255,6 +257,67 @@ impl Fs {
         self.nodes
             .get(path)
             .ok_or_else(|| Error::not_found(format!("`{path}` does not exist")))
+    }
+
+    /// Follows symlinks in every component and returns the canonical path.
+    ///
+    /// A missing tail is preserved: callers that create entries use the result
+    /// as the insertion path, while callers that read require it to exist.
+    fn resolve_path(&self, path: &str) -> Result<String, Error> {
+        let mut parts: Vec<String> = path
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .map(str::to_string)
+            .collect();
+        let mut current = String::from("/");
+        let mut hops = 0usize;
+        let mut index = 0usize;
+        while index < parts.len() {
+            let part = &parts[index];
+            if part == ".." {
+                current = parent(&current).unwrap_or("/").to_string();
+                index += 1;
+                continue;
+            }
+            let candidate = if current == "/" {
+                format!("/{part}")
+            } else {
+                format!("{current}/{part}")
+            };
+            match self.nodes.get(&candidate) {
+                Some(Node::Link(target)) => {
+                    if !target.starts_with('/') {
+                        return Err(Error::internal(format!(
+                            "`{candidate}` has a relative target"
+                        )));
+                    }
+                    hops += 1;
+                    if hops > 16 {
+                        return Err(Error::invalid(format!(
+                            "`{path}` has too many symbolic links"
+                        )));
+                    }
+                    let mut replacement: Vec<String> = target
+                        .split('/')
+                        .filter(|part| !part.is_empty() && *part != ".")
+                        .map(str::to_string)
+                        .collect();
+                    replacement.extend(parts[index + 1..].iter().cloned());
+                    parts = replacement;
+                    current = String::from("/");
+                    index = 0;
+                }
+                Some(_) => {
+                    current = candidate;
+                    index += 1;
+                }
+                None => {
+                    current = candidate;
+                    index += 1;
+                }
+            }
+        }
+        Ok(current)
     }
 
     fn children(&self, path: &str) -> Vec<(String, &Node)> {
@@ -469,6 +532,12 @@ fn entry(path: &str, node: &Node) -> Value {
             "size": bytes.len() as u64,
             "modified-ms": MODIFIED_MS,
         }),
+        Node::Link(target) => json!({
+            "name": name(path),
+            "kind": "link",
+            "size": target.len() as u64,
+            "modified-ms": MODIFIED_MS,
+        }),
     }
 }
 
@@ -522,11 +591,12 @@ impl Emulator {
         match function {
             "list" => {
                 let path = normalize(&text(input, "path").unwrap_or_else(|_| "/".to_string()))?;
-                let node = fs.node(&path)?;
+                let resolved = fs.resolve_path(&path)?;
+                let node = fs.node(&resolved)?;
                 if !matches!(node, Node::Dir) {
                     return Err(Error::invalid(format!("`{path}` is not a directory")));
                 }
-                let children = fs.children(&path);
+                let children = fs.children(&resolved);
                 let start = optional_text(input, "cursor")
                     .map(|cursor| cursor.parse::<usize>())
                     .transpose()
@@ -548,11 +618,13 @@ impl Emulator {
             }
             "stat" => {
                 let path = normalize(&text(input, "path")?)?;
-                Ok(entry(&path, fs.node(&path)?))
+                let resolved = fs.resolve_path(&path)?;
+                Ok(entry(&path, fs.node(&resolved)?))
             }
             "read-file" => {
                 let path = normalize(&text(input, "path")?)?;
-                let Node::File(bytes) = fs.node(&path)? else {
+                let resolved = fs.resolve_path(&path)?;
+                let Node::File(bytes) = fs.node(&resolved)? else {
                     return Err(Error::invalid(format!("`{path}` is not a file")));
                 };
                 if bytes.len() > MAX_FILE {
@@ -567,6 +639,14 @@ impl Emulator {
                         .map(|byte| Value::from(u64::from(*byte)))
                         .collect(),
                 ))
+            }
+            "read-link" => {
+                let path = normalize(&text(input, "path")?)?;
+                let resolved = fs.resolve_path(&path)?;
+                if resolved == path {
+                    return Err(Error::invalid(format!("`{path}` is not a symbolic link")));
+                }
+                Ok(Value::String(resolved))
             }
             "trash" => {
                 let mut entries = Vec::with_capacity(fs.trash.len());
@@ -592,10 +672,11 @@ impl Emulator {
         let mut fs = self.fs.lock().expect("the fixture mutex is not poisoned");
         match function {
             "write-file" => {
-                let path = normalize(&text(input, "path")?)?;
-                if path == "/" {
+                let requested = normalize(&text(input, "path")?)?;
+                if requested == "/" {
                     return Err(Error::invalid("the root is not a file"));
                 }
+                let path = fs.resolve_path(&requested)?;
                 let Some(parent) = parent(&path).map(str::to_string) else {
                     return Err(Error::invalid("the root is not a file"));
                 };
@@ -617,12 +698,13 @@ impl Emulator {
                 Ok(Value::from(length))
             }
             "mkdir" => {
-                let path = normalize(&text(input, "path")?)?;
-                if path == "/" {
+                let requested = normalize(&text(input, "path")?)?;
+                if requested == "/" {
                     return Err(Error::conflict("the root already exists"));
                 }
+                let path = fs.resolve_path(&requested)?;
                 if fs.nodes.contains_key(&path) {
-                    return Err(Error::conflict(format!("`{path}` already exists")));
+                    return Err(Error::conflict(format!("`{requested}` already exists")));
                 }
                 let parent =
                     parent(&path).ok_or_else(|| Error::invalid("the root is not a directory"))?;
@@ -630,6 +712,30 @@ impl Emulator {
                     return Err(Error::invalid(format!("`{parent}` is not a directory")));
                 }
                 fs.nodes.insert(path, Node::Dir);
+                Ok(Value::Null)
+            }
+            "symlink" => {
+                let requested = normalize(&text(input, "path")?)?;
+                if requested == "/" {
+                    return Err(Error::invalid("the root cannot become a symbolic link"));
+                }
+                let target = normalize(&text(input, "target")?)?;
+                let target = fs.resolve_path(&target)?;
+                if !fs.nodes.contains_key(&target) {
+                    return Err(Error::not_found(format!(
+                        "the symlink target `{target}` does not exist"
+                    )));
+                }
+                let path = fs.resolve_path(&requested)?;
+                if fs.nodes.contains_key(&path) {
+                    return Err(Error::conflict(format!("`{requested}` already exists")));
+                }
+                let parent =
+                    parent(&path).ok_or_else(|| Error::invalid("the root is not a directory"))?;
+                if !matches!(fs.node(parent)?, Node::Dir) {
+                    return Err(Error::invalid(format!("`{parent}` is not a directory")));
+                }
+                fs.nodes.insert(path, Node::Link(target));
                 Ok(Value::Null)
             }
             "remove" => {
@@ -873,6 +979,92 @@ mod tests {
         let error = emulator
             .call(FS_READ, "stat", json!({"path": "/tmp/new.txt"}))
             .expect_err("removed");
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn symlinks_resolve_for_reads_and_write_through() {
+        let emulator = Emulator::new();
+        emulator
+            .call(
+                FS_WRITE,
+                "write-file",
+                json!({"path": "/tmp/blank.txt", "bytes": []}),
+            )
+            .expect("blank file");
+        assert_eq!(
+            call(&emulator, "read-file", json!({"path": "/tmp/blank.txt"})),
+            json!([])
+        );
+
+        emulator
+            .call(
+                FS_WRITE,
+                "symlink",
+                json!({"path": "/tmp/blank.link", "target": "/tmp/blank.txt"}),
+            )
+            .expect("file symlink");
+        assert_eq!(
+            call(&emulator, "stat", json!({"path": "/tmp/blank.link"}))["kind"],
+            "file"
+        );
+        assert_eq!(
+            call(&emulator, "read-link", json!({"path": "/tmp/blank.link"})),
+            json!("/tmp/blank.txt")
+        );
+        let entries = call(&emulator, "list", json!({"path": "/tmp"}));
+        let link = entries["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .find(|entry| entry["name"] == "blank.link")
+            .expect("link row");
+        assert_eq!(link["kind"], "link");
+
+        emulator
+            .call(
+                FS_WRITE,
+                "write-file",
+                json!({"path": "/tmp/blank.link", "bytes": [104, 105]}),
+            )
+            .expect("write through link");
+        assert_eq!(
+            call(&emulator, "read-file", json!({"path": "/tmp/blank.txt"})),
+            json!([104, 105])
+        );
+
+        emulator
+            .call(
+                FS_WRITE,
+                "symlink",
+                json!({"path": "/tmp/home.link", "target": "/home/operator"}),
+            )
+            .expect("dir symlink");
+        let page = call(&emulator, "list", json!({"path": "/tmp/home.link"}));
+        assert!(page["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|entry| entry["name"] == "notes.txt"));
+
+        emulator
+            .call(
+                FS_WRITE,
+                "remove",
+                json!({"path": "/tmp/blank.link", "trash": false}),
+            )
+            .expect("remove link");
+        assert_eq!(
+            call(&emulator, "read-file", json!({"path": "/tmp/blank.txt"})),
+            json!([104, 105])
+        );
+        let error = emulator
+            .call(
+                FS_WRITE,
+                "symlink",
+                json!({"path": "/tmp/missing.link", "target": "/tmp/missing"}),
+            )
+            .expect_err("missing target");
         assert_eq!(error.kind(), ErrorKind::NotFound);
     }
 

@@ -76,10 +76,11 @@ Every bundle carries a `panel.view` module:
 
 - `web/fs.js` — Files plus a second `panel.view` called Editor, both from the
   same module. Files has an editable address bar, tree navigation, preview,
-  rename, upload, download, trash and restore, plus new folder and delete. Edit
-  opens a ProseMirror code editor with line-based syntax highlighting; **Pop
-  out** opens the same file in the panel-level Editor view, which then uses the
-  normal panel Float/Dock/Max/Min controls and keeps its text across moves.
+  **New** (blank file, folder or symlink), symlink navigation, rename, upload,
+  download, trash and restore, plus delete. Edit opens a ProseMirror code editor
+  with line-based syntax highlighting; **Pop out** opens the same file in the
+  panel-level Editor view, which then uses the normal panel Float/Dock/Max/Min
+  controls and keeps its text across moves.
 - `web/terminal.js` — session with help/exit, history, INT/TERM/Clear, reconnect
   and resize.
 - `web/proc.js` — flat/tree process table, live refresh, allowlisted signals and

@@ -1,4 +1,4 @@
-package anthracite:fs@1.1.0;
+package anthracite:fs@1.2.0;
 
 interface read {
     use anth:error/kinds@1.0.0.{error};
@@ -33,6 +33,7 @@ interface read {
     %list: func(path: string, cursor: option<string>, limit: u32) -> result<page, error>;
     stat: func(path: string) -> result<entry, error>;
     read-file: func(path: string) -> result<list<u8>, error>;
+    read-link: func(path: string) -> result<string, error>;
     trash: func() -> result<list<trashed>, error>;
 }
 
@@ -41,6 +42,7 @@ interface write {
 
     write-file: func(path: string, bytes: list<u8>) -> result<u64, error>;
     mkdir: func(path: string) -> result<_, error>;
+    symlink: func(path: string, target: string) -> result<_, error>;
     remove: func(path: string, trash: bool) -> result<_, error>;
     rename: func(source: string, destination: string) -> result<_, error>;
     restore: func(original: string) -> result<_, error>;

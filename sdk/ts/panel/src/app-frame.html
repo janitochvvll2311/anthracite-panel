@@ -34,6 +34,7 @@
       // from a blob, and forwards every request through a scoped RPC.
       (() => {
         const pending = new Map();
+        const pendingViews = new Map();
         let token = "";
         let dispose = null;
 
@@ -82,6 +83,16 @@
           if (height > 0) send("anth:resize", { height });
         };
 
+        const openView = (request) =>
+          new Promise((resolve) => {
+            const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+            pendingViews.set(id, resolve);
+            send("anth:open-view", { ...request, requestId: id });
+            setTimeout(() => {
+              if (pendingViews.delete(id)) resolve(false);
+            }, 1200);
+          });
+
         window.addEventListener("message", async (event) => {
           if (event.source !== parent) return;
           const message = event.data;
@@ -105,7 +116,7 @@
                 ...message.context,
                 fetch: request,
                 close: () => send("anth:close"),
-                openView: (request) => send("anth:open-view", request),
+                openView,
                 updateParams: (params) => send("anth:params", { params }),
               };
               dispose = await module.mount(document.body, context);
@@ -123,6 +134,11 @@
             pending.delete(message.id);
             if (message.result?.error) call.reject(new Error(message.result.error));
             else call.resolve(message.result);
+          } else if (message.type === "anth:open-view-result") {
+            const resolve = pendingViews.get(message.requestId);
+            if (!resolve) return;
+            pendingViews.delete(message.requestId);
+            resolve(message.ok === true);
           } else if (message.type === "anth:unmount") {
             try {
               if (typeof dispose === "function") await dispose();
