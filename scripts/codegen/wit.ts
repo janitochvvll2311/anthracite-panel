@@ -95,7 +95,3 @@ export function rustPrimitive(ref: string): string {
   return fail(`unsupported WIT type \`${ref}\``);
 }
 
-type Generation = {
-  files: Record<string, string>;
-};
-

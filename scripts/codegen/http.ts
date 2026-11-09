@@ -1,6 +1,7 @@
 import type { WitDoc, WitFunction } from "./model";
 import { camel, fail, rustField } from "./util";
 import type { Types } from "./types";
+import { witType } from "./wit";
 
 /// The typed HTTP/route client for one exported interface. It owns only the
 /// method body; the type graph and the two runtimes come from `Types`.

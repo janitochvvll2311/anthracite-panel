@@ -1,7 +1,7 @@
-import type { WitDoc, WitFunction } from "./model";
+import type { TypeRef, WitDoc, WitFunction } from "./model";
 import { camel, fail, header, rustField, snake } from "./util";
 import type { Types } from "./types";
-import { interfaceId, witType } from "./wit";
+import { interfaceId, rustPrimitive, witType } from "./wit";
 
 export type ClientRef = { className: string; module: string };
 
@@ -15,8 +15,16 @@ export function createCli(
   types: Types,
   classByInterface: Map<string, ClientRef>,
 ) {
-  const { collect, inner, isOption, returnRef, rustType, tsType, typeLabel } =
-    types;
+  const {
+    collect,
+    inner,
+    isOption,
+    returnRef,
+    rustType,
+    tsType,
+    typeKey,
+    typeLabel,
+  } = types;
 
   const commands: any[] = [];
   const cliEntries: {
