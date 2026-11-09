@@ -23,7 +23,7 @@ const FS_WRITE: &str = "anthracite:fs/write@1.1.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
 const NET: &str = "anthracite:net/net@1.1.0";
-const STORAGE: &str = "anthracite:storage/storage@1.0.0";
+const STORAGE: &str = "anthracite:storage/storage@1.1.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.0.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.
@@ -40,7 +40,7 @@ pub struct Emulator {
     terminals: Mutex<Terminals>,
     procs: Mutex<proc::ProcFixture>,
     net: Mutex<net::NetFixture>,
-    storage: storage::StorageFixture,
+    storage: Mutex<storage::StorageFixture>,
     accounts: accounts::AccountsFixture,
 }
 
@@ -57,7 +57,7 @@ impl Emulator {
             terminals: Mutex::new(Terminals::default()),
             procs: Mutex::new(proc::ProcFixture::demo()),
             net: Mutex::new(net::NetFixture::new()),
-            storage: storage::StorageFixture::new(),
+            storage: Mutex::new(storage::StorageFixture::new()),
             accounts: accounts::AccountsFixture::new(),
         }
     }
@@ -86,7 +86,11 @@ impl Handler for Emulator {
                 .lock()
                 .expect("the fixture mutex is not poisoned")
                 .handle(function, &input),
-            STORAGE => self.storage.handle(function, &input),
+            STORAGE => self
+                .storage
+                .lock()
+                .expect("the fixture mutex is not poisoned")
+                .handle(function, &input),
             ACCOUNTS => self.accounts.handle(function, &input),
             _ => Err(Error::not_found(format!(
                 "`{interface}` is not exported by the emulator"
