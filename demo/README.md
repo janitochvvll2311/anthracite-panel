@@ -7,6 +7,10 @@ real app's WIT package and id, and both share one native binary.
 The engine is a debug build here, so `[services] allow-third-party` defaults on
 and the unsigned bundles are accepted. A release build keeps both closed.
 
+The emulator claims the future first-party ids and WIT packages (`org.anthracite.fs`,
+`anthracite:fs`, …). In a release those bundles are `system`-signed; in the demo
+they are third-party and run under the explicit developer switch.
+
 ## Build the bundles
 
 ```bash

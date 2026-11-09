@@ -4,10 +4,12 @@ interface terminal {
     use anth:error/kinds@1.0.0.{error};
 
     record session {
+        /// The last sequence the service emitted. A reader starts at 0 and
+        /// advances by one per chunk it consumes.
+        seq: u64,
         id: string,
         shell: string,
         owner: string,
-        seq: u64,
     }
 
     record output {

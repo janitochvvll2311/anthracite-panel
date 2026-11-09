@@ -187,7 +187,9 @@ impl Term {
             "id": id,
             "shell": self.shell,
             "owner": self.owner,
-            "seq": self.next_seq,
+            // The last sequence the service emitted; a reader starts at 0 and
+            // advances by one per chunk it consumes.
+            "seq": self.next_seq.saturating_sub(1),
         })
     }
 }

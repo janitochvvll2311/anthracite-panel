@@ -215,6 +215,11 @@ impl ServiceSupervisor {
                 "the service `{app}` is not running"
             )));
         }
+        if !service.exports.contains_key(interface) {
+            return Err(Error::not_found(format!(
+                "the service `{app}` does not export `{interface}`"
+            )));
+        }
         let body = serde_json::to_vec(&serde_json::json!({
             "interface": interface,
             "function": function,
