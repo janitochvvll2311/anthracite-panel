@@ -1,0 +1,41 @@
+package anthracite:net@1.0.0;
+
+interface net {
+    use anth:error/kinds@1.0.0.{error};
+
+    enum family {
+        ipv4,
+        ipv6,
+    }
+
+    record address {
+        family: family,
+        address: string,
+        prefix: u8,
+    }
+
+    record network-interface {
+        name: string,
+        up: bool,
+        mac: string,
+        mtu: u32,
+        addresses: list<address>,
+        rx-bytes: u64,
+        tx-bytes: u64,
+    }
+
+    record route {
+        family: family,
+        destination: string,
+        gateway: option<string>,
+        device: string,
+        metric: u32,
+    }
+
+    interfaces: func() -> result<list<network-interface>, error>;
+    routes: func() -> result<list<route>, error>;
+}
+
+world app {
+    export net;
+}

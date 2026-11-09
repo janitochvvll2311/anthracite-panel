@@ -1,0 +1,45 @@
+manifest_version = 3
+
+[app]
+id = "org.anthracite.proc"
+namespace = "anthracite:proc"
+name = "Processes (emulator)"
+version = "0.1.0"
+summary = "Deterministic process table fixture for the demo; replaced by the real proc app."
+license = "Apache-2.0"
+
+[service]
+path = "bin/host-emulator"
+sha256 = "{{sha256}}"
+class = "socket"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "anthracite:proc/proc@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/processes"
+call = "anthracite:proc/proc@1.0.0#list"
+
+[[route]]
+method = "POST"
+path = "/signal"
+call = "anthracite:proc/proc@1.0.0#signal"
+
+[[slot]]
+id = "panel.view"
+label = "Processes"
+icon = "activity"
+order = 20
+tag = "anth-proc"
+module = "web/proc.js"
+sha256 = "{{module_sha256}}"
+
+[[cli]]
+call = "anthracite:proc/proc@1.0.0#list"
+verb = "processes"
+
+[[cli]]
+call = "anthracite:proc/proc@1.0.0#signal"
+verb = "process-signal"

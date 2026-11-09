@@ -1,0 +1,36 @@
+package anthracite:proc@1.0.0;
+
+interface proc {
+    use anth:error/kinds@1.0.0.{error};
+
+    enum state {
+        running,
+        sleeping,
+        stopped,
+        zombie,
+    }
+
+    record process {
+        pid: u32,
+        ppid: u32,
+        name: string,
+        user: string,
+        state: state,
+        cpu-percent: f32,
+        memory-bytes: u64,
+        start-ticks: u64,
+    }
+
+    record page {
+        processes: list<process>,
+        cursor: option<string>,
+        done: bool,
+    }
+
+    %list: func(cursor: option<string>, limit: u32) -> result<page, error>;
+    signal: func(pid: u32, start-ticks: u64, signal: string) -> result<_, error>;
+}
+
+world app {
+    export proc;
+}

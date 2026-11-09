@@ -1,0 +1,28 @@
+package anthracite:accounts@1.0.0;
+
+interface accounts {
+    use anth:error/kinds@1.0.0.{error};
+
+    record user {
+        name: string,
+        uid: u32,
+        gid: u32,
+        home: string,
+        shell: string,
+        system: bool,
+        locked: bool,
+    }
+
+    record group {
+        name: string,
+        gid: u32,
+        members: list<string>,
+    }
+
+    users: func() -> result<list<user>, error>;
+    groups: func() -> result<list<group>, error>;
+}
+
+world app {
+    export accounts;
+}

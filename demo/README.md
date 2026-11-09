@@ -1,8 +1,9 @@
 # Demo instance
 
-The v0.6.0 demo runs the deterministic host emulator as two service apps:
-`org.anthracite.fs` and `org.anthracite.terminal`. Each bundle carries the future
-real app's WIT package and id, and both share one native binary.
+The v0.6.0 demo runs the deterministic host emulator as six service apps:
+`org.anthracite.fs`, `terminal`, `proc`, `net`, `storage` and `accounts`. Each
+bundle carries the future real app's WIT package and id, and all six share one
+native binary.
 
 The engine is a debug build here, so `[services] allow-third-party` defaults on
 and the unsigned bundles are accepted. A release build keeps both closed.
@@ -19,7 +20,7 @@ cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulat
     --binary target/release/host-emulator --out demo/dist
 ```
 
-`demo/dist/fs.anth` and `demo/dist/terminal.anth` are the installable zips.
+`demo/dist/{fs,terminal,proc,net,storage,accounts}.anth` are the installable zips.
 
 ## Run
 
@@ -34,19 +35,14 @@ The first boot writes `demo/state/` and creates the operator account. In another
 terminal, using the CLI:
 
 ```bash
-cargo run --manifest-path sdk/rust/Cargo.toml -p anth-cli -- \
-    --socket demo/state/engine.sock app install demo/dist/fs.anth
-cargo run --manifest-path sdk/rust/Cargo.toml -p anth-cli -- \
-    --socket demo/state/engine.sock app install demo/dist/terminal.anth
-cargo run --manifest-path sdk/rust/Cargo.toml -p anth-cli -- \
-    --socket demo/state/engine.sock app approve org.anthracite.fs \
-    --accept-write --accept-admin
-cargo run --manifest-path sdk/rust/Cargo.toml -p anth-cli -- \
-    --socket demo/state/engine.sock app approve org.anthracite.terminal \
-    --accept-write --accept-admin
-cargo run --manifest-path sdk/rust/Cargo.toml -p anth-cli -- \
-    --socket demo/state/engine.sock compose \
-    --add org.anthracite.fs --add org.anthracite.terminal --now
+ANTH="cargo run --quiet --manifest-path sdk/rust/Cargo.toml -p anth-cli -- --socket demo/state/engine.sock"
+for app in fs terminal proc net storage accounts; do
+    $ANTH app install demo/dist/$app.anth
+    $ANTH app approve org.anthracite.$app --accept-write --accept-admin
+done
+$ANTH compose --add org.anthracite.fs --add org.anthracite.terminal \
+    --add org.anthracite.proc --add org.anthracite.net \
+    --add org.anthracite.storage --add org.anthracite.accounts --now
 ```
 
 A v0.5 engine recomposes on the next restart; restart the panel after `compose`.
@@ -55,27 +51,41 @@ Then, from the panel session (or the CLI), the app routes answer:
 
 ```bash
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.fs/files?path=/
-curl --unix-socket demo/state/engine.sock \
-    -X POST http://localhost/api/apps/org.anthracite.terminal/open \
-    -H 'content-type: application/json' \
-    -d '{"shell":"/bin/sh","cols":80,"rows":24}'
+curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.proc/processes
+curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.net/interfaces
+curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.storage/mounts
+curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.accounts/users
 ```
 
-The CLI verbs are `fs files`, `fs file-stat`, `fs file-read`, `terminal sessions`,
-`terminal session-open`, `terminal session-read` and `terminal session-close`.
+CLI verbs:
+
+- `fs files`, `fs file-stat`, `fs file-read`
+- `terminal sessions`, `terminal session-open`, `terminal session-read`, `terminal session-close`
+- `proc processes`, `proc process-signal`
+- `net interfaces`, `net routes`
+- `storage devices`, `storage mounts`
+- `accounts users`, `accounts groups`
 
 ## Views
 
-Both bundles carry a `panel.view` module: `web/fs.js` renders the tree with a
-two-pane explorer (navigate, preview, new folder, move to trash) and
-`web/terminal.js` opens a session, polls `read` and echoes commands. The panel
-mounts them like any other slot; the modules only see their own app's routes.
+Every bundle carries a `panel.view` module:
+
+- `web/fs.js` — tree explorer with preview, new folder and move-to-trash.
+- `web/terminal.js` — opens a session, polls `read` and echoes commands.
+- `web/proc.js` — process table with CPU/memory and an allowlisted signal action.
+- `web/net.js` — interfaces with addresses/counters and the routing table.
+- `web/storage.js` — mount usage bars and block devices.
+- `web/accounts.js` — users and groups with system/locked badges.
+
+The panel mounts them like any other slot; the modules only see their own app's
+routes.
 
 ## What is deterministic
 
-The tree, sizes, timestamps, session ids and command output are fixed; writes and
-sessions live in memory and reset when the service restarts. Removing either app
-from the composition degrades only that view.
+The tree, sizes, timestamps, session ids, process table, interfaces, mounts and
+accounts are fixed; writes, sessions and signals live in memory and reset when
+the service restarts. Removing an app from the composition degrades only that
+view.
 
 The emulator is not engine code. It lives outside the wasm `apps/` workspace, is
 unsigned, class `socket`, and never receives the host root.

@@ -15,6 +15,10 @@ use zip::write::SimpleFileOptions;
 pub const BUNDLES: &[(&str, &str)] = &[
     ("fs", "org.anthracite.fs"),
     ("terminal", "org.anthracite.terminal"),
+    ("proc", "org.anthracite.proc"),
+    ("net", "org.anthracite.net"),
+    ("storage", "org.anthracite.storage"),
+    ("accounts", "org.anthracite.accounts"),
 ];
 
 #[derive(Debug)]
@@ -112,7 +116,7 @@ mod tests {
         fs::write(&binary, b"\x7fELF a deterministic fixture").expect("binary");
         let out = dir.join("dist");
         let built = build(&binary, &out).expect("build");
-        assert_eq!(built.len(), 2);
+        assert_eq!(built.len(), BUNDLES.len());
         for bundle in &built {
             let bytes = fs::read(&bundle.path).expect("read bundle");
             let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");

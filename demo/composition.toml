@@ -4,4 +4,11 @@ version = 1
 # answers under that id, so replacing the provider is `anth app upgrade`.
 [[profile]]
 id = "default"
-apps = ["org.anthracite.fs", "org.anthracite.terminal"]
+apps = [
+    "org.anthracite.fs",
+    "org.anthracite.terminal",
+    "org.anthracite.proc",
+    "org.anthracite.net",
+    "org.anthracite.storage",
+    "org.anthracite.accounts",
+]
