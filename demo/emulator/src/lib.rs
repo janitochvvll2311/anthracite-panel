@@ -18,8 +18,8 @@ mod net;
 mod proc;
 mod storage;
 
-const FS_READ: &str = "anthracite:fs/read@1.0.0";
-const FS_WRITE: &str = "anthracite:fs/write@1.0.0";
+const FS_READ: &str = "anthracite:fs/read@1.1.0";
+const FS_WRITE: &str = "anthracite:fs/write@1.1.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.0.0";
 const NET: &str = "anthracite:net/net@1.0.0";
@@ -98,8 +98,14 @@ enum Node {
 
 struct Fs {
     nodes: BTreeMap<String, Node>,
-    /// Paths removed with `trash = true`; a demo's trash is a fixture too.
-    trash: Vec<String>,
+    /// Subtrees removed with `trash = true`, kept for listing and restore.
+    trash: Vec<Trashed>,
+}
+
+struct Trashed {
+    original: String,
+    node: Node,
+    descendants: Vec<(String, Node)>,
 }
 
 impl Fs {
@@ -168,10 +174,97 @@ impl Fs {
         }
         self.node(path)?;
         let prefix = format!("{path}/");
-        self.nodes
-            .retain(|candidate, _| candidate != path && !candidate.starts_with(&prefix));
+        let keys: Vec<String> = self
+            .nodes
+            .keys()
+            .filter(|candidate| candidate.as_str() == path || candidate.starts_with(&prefix))
+            .cloned()
+            .collect();
+        let mut removed: BTreeMap<String, Node> = BTreeMap::new();
+        for key in keys {
+            if let Some(node) = self.nodes.remove(&key) {
+                removed.insert(key, node);
+            }
+        }
         if trash {
-            self.trash.push(path.to_string());
+            let node = removed
+                .remove(path)
+                .expect("the removed subtree contains its root");
+            self.trash.push(Trashed {
+                original: path.to_string(),
+                node,
+                descendants: removed.into_iter().collect(),
+            });
+        }
+        Ok(())
+    }
+
+    fn restore(&mut self, original: &str) -> Result<(), Error> {
+        let index = self
+            .trash
+            .iter()
+            .position(|entry| entry.original == original)
+            .ok_or_else(|| Error::not_found(format!("`{original}` is not in the trash")))?;
+        let entry = self.trash.remove(index);
+        let mut conflicts = entry
+            .descendants
+            .iter()
+            .any(|(key, _)| self.nodes.contains_key(key));
+        conflicts |= self.nodes.contains_key(original);
+        if conflicts {
+            self.trash.insert(index, entry);
+            return Err(Error::conflict(format!(
+                "`{original}` is occupied; move the new entry first"
+            )));
+        }
+        self.nodes.insert(original.to_string(), entry.node);
+        for (key, node) in entry.descendants {
+            self.nodes.insert(key, node);
+        }
+        Ok(())
+    }
+
+    fn rename(&mut self, from: &str, to: &str) -> Result<(), Error> {
+        if from == "/" || to == "/" {
+            return Err(Error::invalid("the root cannot be renamed"));
+        }
+        if from == to {
+            return Ok(());
+        }
+        if self.nodes.contains_key(to) {
+            return Err(Error::conflict(format!("`{to}` already exists")));
+        }
+        self.node(from)?;
+        let parent = parent(to).ok_or_else(|| Error::invalid("the root is not a directory"))?;
+        if !matches!(self.node(parent)?, Node::Dir) {
+            return Err(Error::invalid(format!("`{parent}` is not a directory")));
+        }
+        if to.starts_with(&format!("{from}/")) {
+            return Err(Error::invalid("a directory cannot be moved inside itself"));
+        }
+        let prefix = format!("{from}/");
+        let keys: Vec<String> = self
+            .nodes
+            .keys()
+            .filter(|candidate| candidate.as_str() == from || candidate.starts_with(&prefix))
+            .cloned()
+            .collect();
+        let destinations: Vec<String> = keys
+            .iter()
+            .map(|key| format!("{to}{}", &key[from.len()..]))
+            .collect();
+        if destinations.iter().any(|key| self.nodes.contains_key(key)) {
+            return Err(Error::conflict(format!(
+                "`{to}` has entries that would collide"
+            )));
+        }
+        let moved: Vec<(String, Node)> = keys
+            .into_iter()
+            .filter_map(|key| self.nodes.remove(&key).map(|node| (key, node)))
+            .collect();
+        for (old, node) in moved {
+            let destination = format!("{to}{}", &old[from.len()..]);
+            self.nodes.insert(destination, node);
         }
         Ok(())
     }
@@ -179,7 +272,10 @@ impl Fs {
     /// The paths removed with `trash = true`, oldest first. Deterministic like
     /// the rest of the fixture, and available to the emulator's tests.
     pub fn trashed(&self) -> Vec<String> {
-        self.trash.clone()
+        self.trash
+            .iter()
+            .map(|entry| entry.original.clone())
+            .collect()
     }
 }
 
@@ -367,6 +463,20 @@ impl Emulator {
                         .collect(),
                 ))
             }
+            "trash" => {
+                let mut entries = Vec::with_capacity(fs.trash.len());
+                for trashed in &fs.trash {
+                    let mut value = entry(&trashed.original, &trashed.node);
+                    if let Value::Object(object) = &mut value {
+                        object.insert(
+                            "original".to_string(),
+                            Value::String(trashed.original.clone()),
+                        );
+                    }
+                    entries.push(value);
+                }
+                Ok(Value::Array(entries))
+            }
             other => Err(Error::not_found(format!(
                 "`anthracite:fs/read#{other}` is not implemented"
             ))),
@@ -420,6 +530,17 @@ impl Emulator {
             "remove" => {
                 let path = normalize(&text(input, "path")?)?;
                 fs.remove(&path, boolean(input, "trash"))?;
+                Ok(Value::Null)
+            }
+            "rename" => {
+                let from = normalize(&text(input, "source")?)?;
+                let to = normalize(&text(input, "destination")?)?;
+                fs.rename(&from, &to)?;
+                Ok(Value::Null)
+            }
+            "restore" => {
+                let original = normalize(&text(input, "original")?)?;
+                fs.restore(&original)?;
                 Ok(Value::Null)
             }
             other => Err(Error::not_found(format!(
@@ -628,6 +749,99 @@ mod tests {
         let error = emulator
             .call(FS_READ, "stat", json!({"path": "/tmp/new.txt"}))
             .expect_err("removed");
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn rename_moves_files_and_subtrees() {
+        let emulator = Emulator::new();
+        emulator
+            .call(
+                FS_WRITE,
+                "rename",
+                json!({"source": "/home/operator/deep", "destination": "/home/operator/deeper"}),
+            )
+            .expect("rename dir");
+        let error = emulator
+            .call(FS_READ, "stat", json!({"path": "/home/operator/deep"}))
+            .expect_err("old path");
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+        assert_eq!(
+            call(
+                &emulator,
+                "read-file",
+                json!({"path": "/home/operator/deeper/answer.txt"})
+            ),
+            json!([52, 50, 10])
+        );
+
+        emulator
+            .call(
+                FS_WRITE,
+                "rename",
+                json!({"source": "/tmp/scratch.txt", "destination": "/tmp/renamed.txt"}),
+            )
+            .expect("rename file");
+        assert_eq!(
+            call(&emulator, "read-file", json!({"path": "/tmp/renamed.txt"})),
+            json!([116, 101, 109, 112, 111, 114, 97, 114, 121, 10])
+        );
+
+        let error = emulator
+            .call(
+                FS_WRITE,
+                "rename",
+                json!({"source": "/tmp/renamed.txt", "destination": "/etc/hostname"}),
+            )
+            .expect_err("occupied");
+        assert_eq!(error.kind(), ErrorKind::Conflict);
+    }
+
+    #[test]
+    fn trash_lists_and_restores_a_subtree() {
+        let emulator = Emulator::new();
+        emulator
+            .call(
+                FS_WRITE,
+                "remove",
+                json!({"path": "/home/operator/deep", "trash": true}),
+            )
+            .expect("trash");
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/home/operator/deep"}))
+                .expect_err("trashed")
+                .kind(),
+            ErrorKind::NotFound
+        );
+        let trash = emulator
+            .call(FS_READ, "trash", json!({}))
+            .expect("trash list");
+        assert_eq!(trash[0]["original"], "/home/operator/deep");
+        assert_eq!(trash[0]["kind"], "dir");
+
+        emulator
+            .call(
+                FS_WRITE,
+                "restore",
+                json!({"original": "/home/operator/deep"}),
+            )
+            .expect("restore");
+        assert_eq!(
+            call(
+                &emulator,
+                "read-file",
+                json!({"path": "/home/operator/deep/answer.txt"})
+            ),
+            json!([52, 50, 10])
+        );
+        let error = emulator
+            .call(
+                FS_WRITE,
+                "restore",
+                json!({"original": "/home/operator/deep"}),
+            )
+            .expect_err("already restored");
         assert_eq!(error.kind(), ErrorKind::NotFound);
     }
 
