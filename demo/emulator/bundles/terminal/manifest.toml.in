@@ -1,0 +1,69 @@
+manifest_version = 3
+
+[app]
+id = "org.anthracite.terminal"
+namespace = "anthracite:terminal"
+name = "Terminal (emulator)"
+version = "0.1.0"
+summary = "Scripted terminal fixture for the demo; replaced by the real terminal app."
+license = "Apache-2.0"
+
+[service]
+path = "bin/host-emulator"
+sha256 = "{{sha256}}"
+class = "socket"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "anthracite:terminal/terminal@1.0.0"
+
+[[route]]
+method = "POST"
+path = "/open"
+call = "anthracite:terminal/terminal@1.0.0#open"
+
+[[route]]
+method = "GET"
+path = "/sessions"
+call = "anthracite:terminal/terminal@1.0.0#list"
+
+[[route]]
+method = "GET"
+path = "/read"
+call = "anthracite:terminal/terminal@1.0.0#read"
+
+[[route]]
+method = "POST"
+path = "/write"
+call = "anthracite:terminal/terminal@1.0.0#write"
+
+[[route]]
+method = "POST"
+path = "/resize"
+call = "anthracite:terminal/terminal@1.0.0#resize"
+
+[[route]]
+method = "POST"
+path = "/signal"
+call = "anthracite:terminal/terminal@1.0.0#signal"
+
+[[route]]
+method = "DELETE"
+path = "/session"
+call = "anthracite:terminal/terminal@1.0.0#close"
+
+[[cli]]
+call = "anthracite:terminal/terminal@1.0.0#list"
+verb = "sessions"
+
+[[cli]]
+call = "anthracite:terminal/terminal@1.0.0#open"
+verb = "session-open"
+
+[[cli]]
+call = "anthracite:terminal/terminal@1.0.0#read"
+verb = "session-read"
+
+[[cli]]
+call = "anthracite:terminal/terminal@1.0.0#close"
+verb = "session-close"

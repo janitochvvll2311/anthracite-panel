@@ -39,10 +39,11 @@ allow-unverified-assets = false
 max-bundle-bytes = 33_554_432
 
 [services]
-# Startup-only. Off refuses every third-party bundle that declares a native
-# service; system-tier bundles are unaffected. Turning it off and restarting
-# stops third-party services and degrades their consumers without deleting
-# their state.
+# Startup-only and off in release. A developer build turns it on so the host
+# emulator (a third-party bundle) can run without a system key. Off refuses
+# every third-party bundle that declares a native service; system-tier bundles
+# are unaffected. Turning it off and restarting stops third-party services and
+# degrades their consumers without deleting their state.
 allow-third-party = false
 
 [limits]
