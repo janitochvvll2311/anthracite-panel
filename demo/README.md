@@ -92,3 +92,9 @@ degrades only that view.
 
 The emulator is not engine code. It lives outside the wasm `apps/` workspace, is
 unsigned, class `socket`, and never receives the host root.
+
+## Not in the simulator
+
+Firewall rules, interface create/rename/delete, format/partition/swap, password
+and group mutations, and a real PTY with ANSI emulation are **real-service
+scope**. The simulator stays focused on the demo UI and the protocol.
