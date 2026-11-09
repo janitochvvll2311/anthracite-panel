@@ -360,8 +360,6 @@ async fn readiness(State(state): State<Arc<EngineState>>) -> Response {
     }
 }
 
-/// The cookie name. It is deliberately not `__Host-`: v0.5.0 serves plain HTTP
-/// and the prefix would make browsers reject the cookie.
 /// Readiness and the protocol version.
 async fn version(State(state): State<Arc<EngineState>>) -> Json<Value> {
     Json(json!({
