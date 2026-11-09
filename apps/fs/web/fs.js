@@ -34685,7 +34685,7 @@ var Cn = x.parseInline;
 var An = w.parse;
 var En = O.lex;
 
-// bundles/fs/web-src/fs.js
+// web-src/fs.js
 core_default.registerLanguage("bash", bash);
 core_default.registerLanguage("css", css2);
 core_default.registerLanguage("ini", ini);

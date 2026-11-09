@@ -16,8 +16,8 @@ they are third-party and run under the explicit developer switch.
 
 ```bash
 # Only needed after editing the Files editor source; the generated module is
-# committed and already bundles ProseMirror.
-demo/emulator/build-web.sh
+# committed and already bundles CodeMirror.
+apps/fs/build-web.sh
 
 cargo build --manifest-path demo/emulator/Cargo.toml --release
 cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulator -- \
@@ -25,6 +25,8 @@ cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulat
 ```
 
 `demo/dist/{fs,terminal,proc,net,storage,accounts}.anth` are the installable zips.
+The app sources (manifest, WIT and web UI) live in `apps/<name>/`; the demo
+builder packages them with the shared `demo/emulator` service binary.
 
 ## Run
 
@@ -72,6 +74,8 @@ CLI verbs:
 
 ## Views
 
+The app source lives under `apps/<name>/` (`manifest.toml.in`, `wit/` and
+`web/`); the demo builder packages each one with the shared emulator service.
 Every bundle carries a `panel.view` module:
 
 - `web/fs.js` — Files plus a hidden `panel.view` called Editor, both from the

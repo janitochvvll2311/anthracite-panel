@@ -1,5 +1,5 @@
 {
-  "name": "anth-host-emulator-web",
+  "name": "anth-fs-web",
   "private": true,
   "type": "module",
   "dependencies": {
