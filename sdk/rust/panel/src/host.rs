@@ -131,6 +131,7 @@ impl Host {
             &services,
             &config.state,
             &composition,
+            config.services.allow_third_party,
             &config.limits,
             LogSettings {
                 level: config.log.level,

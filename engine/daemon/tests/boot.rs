@@ -128,6 +128,7 @@ async fn boot(
         &services,
         dir,
         composition,
+        false,
         &LimitsSection::default(),
         LogSettings::default(),
     )
@@ -301,6 +302,37 @@ fn service_app(dir: &Path) -> (AppId, PathBuf) {
 }
 
 #[tokio::test]
+async fn the_switch_off_degrades_an_installed_service() {
+    let dir = scratch("service-off");
+    fs::create_dir_all(dir.join("apps")).expect("apps");
+    fs::set_permissions(dir.join("apps"), fs::Permissions::from_mode(0o700)).expect("chmod");
+    let (app, socket) = service_app(&dir);
+    let composition = Composition::parse(
+        "version = 1\n\n[[profile]]\nid = \"default\"\napps = [\"org.example.service\"]\n",
+    )
+    .expect("parse");
+    let services =
+        anth_engine::service::ServiceSupervisor::for_state(&dir, std::time::Duration::from_secs(2));
+    let supervisor = Supervisor::new(Arc::new(FakeRuntime::new()));
+    let report = start_composed(
+        &supervisor,
+        &services,
+        &dir,
+        &composition,
+        false,
+        &LimitsSection::default(),
+        LogSettings::default(),
+    )
+    .await
+    .expect("boot");
+    assert!(report.started.is_empty());
+    let reason = report.degraded.get(&app).expect("degraded");
+    assert!(reason.contains("allow-third-party"), "{reason}");
+    assert!(!socket.exists());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn a_service_only_app_starts_answers_and_stops() {
     let dir = scratch("service");
     fs::create_dir_all(dir.join("apps")).expect("apps");
@@ -318,13 +350,14 @@ async fn a_service_only_app_starts_answers_and_stops() {
         &services,
         &dir,
         &composition,
+        true,
         &LimitsSection::default(),
         LogSettings::default(),
     )
     .await
     .expect("boot");
     assert_eq!(report.started, vec![app.clone()]);
-    assert!(socket.is_file() || socket.exists());
+    assert!(socket.exists());
     let value = services
         .call(
             app.as_str(),

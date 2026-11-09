@@ -10,7 +10,7 @@ use std::path::{Component, Path};
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::resolve;
-use anth_contract::{AppId, Composition, Error, Grant};
+use anth_contract::{AppId, Composition, Error, Grant, Tier};
 use anth_runtime::{Budget, InstanceSpec, LogSettings};
 use sha2::{Digest, Sha256};
 
@@ -50,6 +50,7 @@ pub async fn start_composed(
     services: &ServiceSupervisor,
     state: &Path,
     composition: &Composition,
+    allow_third_party_service: bool,
     limits: &LimitsSection,
     log: LogSettings,
 ) -> Result<BootReport, Error> {
@@ -107,6 +108,18 @@ pub async fn start_composed(
             degrade(&mut report, &mut failed, id, "not-installed");
             continue;
         };
+        if app.manifest.service.is_some()
+            && app.descriptor.tier == Tier::ThirdParty
+            && !allow_third_party_service
+        {
+            degrade(
+                &mut report,
+                &mut failed,
+                id,
+                "third-party services are disabled; start with `[services] allow-third-party = true`",
+            );
+            continue;
+        }
         let grant = match grants.load(id) {
             Ok(Some(grant)) => grant,
             Ok(None) => {
@@ -436,6 +449,7 @@ mod tests {
             &services,
             &dir,
             &composition,
+            false,
             &LimitsSection::default(),
             LogSettings::default(),
         )

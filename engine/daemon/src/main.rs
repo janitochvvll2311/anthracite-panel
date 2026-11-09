@@ -246,6 +246,7 @@ async fn run(args: Args) -> Result<(), Error> {
         &services,
         &config.state,
         &composition,
+        config.services.allow_third_party,
         &config.limits,
         LogSettings {
             level: config.log.level,
