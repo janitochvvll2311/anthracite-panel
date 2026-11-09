@@ -36,7 +36,26 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
     for (name, app) in BUNDLES {
         let dir = root.join(name);
         let template = fs::read_to_string(dir.join("manifest.toml.in"))?;
-        let manifest = template.replace("{{sha256}}", &hash);
+        let mut web: Vec<PathBuf> = fs::read_dir(dir.join("web"))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<_, _>>()?;
+        web.sort();
+        if web.len() != 1 {
+            return Err(format!(
+                "`{}` needs exactly one module under `web/`, it has {}",
+                dir.display(),
+                web.len()
+            )
+            .into());
+        }
+        let module = fs::read(&web[0])?;
+        let module_hash: String = Sha256::digest(&module)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let manifest = template
+            .replace("{{sha256}}", &hash)
+            .replace("{{module_sha256}}", &module_hash);
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default();
         writer.start_file("manifest.toml", options)?;
@@ -53,6 +72,12 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             writer.start_file(format!("wit/{file}"), options)?;
             writer.write_all(&fs::read(&path)?)?;
         }
+        let module_name = web[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{} is not UTF-8", web[0].display()))?;
+        writer.start_file(format!("web/{module_name}"), options)?;
+        writer.write_all(&module)?;
         writer.start_file("bin/host-emulator", options)?;
         writer.write_all(&bytes)?;
         let path = out.join(format!("{name}.anth"));
@@ -110,6 +135,19 @@ mod tests {
             manifest.validate().expect("validate");
             assert_eq!(manifest.app.id, bundle.app);
             assert!(manifest.service.is_some());
+            let slot = manifest.slot.first().expect("a panel.view slot");
+            assert_eq!(slot.id, "panel.view");
+            let mut module = Vec::new();
+            std::io::Read::read_to_end(
+                &mut archive.by_name(&slot.module).expect("module"),
+                &mut module,
+            )
+            .expect("read module");
+            let hash: String = Sha256::digest(&module)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(hash, slot.sha256);
             let wit_name = names
                 .iter()
                 .find(|name| name.starts_with("wit/"))

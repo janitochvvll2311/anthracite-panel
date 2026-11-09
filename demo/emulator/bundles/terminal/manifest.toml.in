@@ -67,3 +67,12 @@ verb = "session-read"
 [[cli]]
 call = "anthracite:terminal/terminal@1.0.0#close"
 verb = "session-close"
+
+[[slot]]
+id = "panel.view"
+label = "Terminal"
+icon = "terminal"
+order = 11
+tag = "anth-terminal"
+module = "web/terminal.js"
+sha256 = "{{module_sha256}}"
