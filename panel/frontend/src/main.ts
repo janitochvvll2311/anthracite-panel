@@ -355,7 +355,7 @@ async function mountInto(
   close: () => void,
   cancelled: () => boolean,
   params?: unknown,
-  openView?: (request: OpenViewRequest) => void,
+  openView?: (request: OpenViewRequest) => boolean | void,
   onParams?: (params: unknown) => void,
 ): Promise<() => void> {
   root.replaceChildren(element("div", "loading", "Loading module…"));
@@ -415,7 +415,7 @@ function trackMount(
   close: () => void,
   current: () => Mounted | undefined,
   params?: unknown,
-  openView?: (request: OpenViewRequest) => void,
+  openView?: (request: OpenViewRequest) => boolean | void,
   onParams?: (params: unknown) => void,
 ): void {
   void mountInto(
@@ -464,25 +464,26 @@ function rememberParams(contribution: Contribution, params: unknown): void {
 function openAppView(
   source: Contribution,
   request: OpenViewRequest,
-): void {
+): boolean {
   const target = ordered(VIEW).find(
     (contribution) =>
       contribution.app.id === source.app.id &&
       contribution.slot.tag === request.tag,
   );
-  if (!target) return;
+  if (!target) return false;
   const key = contributionKey(target);
   if (request.mode === "float") {
     const tab = tabs.get(key);
     if (tab) closeTab(key);
     openWindow(target, "view", request.params);
-    return;
+    return true;
   }
   if (floating.has(`window:view:${key}`)) {
     openWindow(target, "view", request.params);
   } else {
     openTab(target, true, request.params);
   }
+  return true;
 }
 
 function ensurePane(contribution: Contribution, params?: unknown): void {

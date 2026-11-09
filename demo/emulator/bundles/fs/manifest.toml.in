@@ -4,7 +4,7 @@ manifest_version = 3
 id = "org.anthracite.fs"
 namespace = "anthracite:fs"
 name = "Files (emulator)"
-version = "0.3.0"
+version = "0.4.0"
 summary = "Deterministic filesystem fixture for the demo; replaced by the real fs app."
 license = "Apache-2.0"
 
@@ -15,78 +15,88 @@ class = "socket"
 argv = ["--socket", "{socket}", "--state", "{data}/state.json"]
 
 [[export]]
-interface = "anthracite:fs/read@1.1.0"
+interface = "anthracite:fs/read@1.2.0"
 
 [[export]]
-interface = "anthracite:fs/write@1.1.0"
+interface = "anthracite:fs/write@1.2.0"
 
 [[route]]
 method = "GET"
 path = "/files"
-call = "anthracite:fs/read@1.1.0#list"
+call = "anthracite:fs/read@1.2.0#list"
 
 [[route]]
 method = "GET"
 path = "/stat"
-call = "anthracite:fs/read@1.1.0#stat"
+call = "anthracite:fs/read@1.2.0#stat"
 
 [[route]]
 method = "GET"
 path = "/file"
-call = "anthracite:fs/read@1.1.0#read-file"
+call = "anthracite:fs/read@1.2.0#read-file"
+
+[[route]]
+method = "GET"
+path = "/target"
+call = "anthracite:fs/read@1.2.0#read-link"
 
 [[route]]
 method = "PUT"
 path = "/file"
-call = "anthracite:fs/write@1.1.0#write-file"
+call = "anthracite:fs/write@1.2.0#write-file"
 
 [[route]]
 method = "POST"
 path = "/dir"
-call = "anthracite:fs/write@1.1.0#mkdir"
+call = "anthracite:fs/write@1.2.0#mkdir"
+
+[[route]]
+method = "POST"
+path = "/symlink"
+call = "anthracite:fs/write@1.2.0#symlink"
 
 [[route]]
 method = "DELETE"
 path = "/entry"
-call = "anthracite:fs/write@1.1.0#remove"
+call = "anthracite:fs/write@1.2.0#remove"
 
 [[route]]
 method = "GET"
 path = "/trash"
-call = "anthracite:fs/read@1.1.0#trash"
+call = "anthracite:fs/read@1.2.0#trash"
 
 [[route]]
 method = "POST"
 path = "/rename"
-call = "anthracite:fs/write@1.1.0#rename"
+call = "anthracite:fs/write@1.2.0#rename"
 
 [[route]]
 method = "POST"
 path = "/restore"
-call = "anthracite:fs/write@1.1.0#restore"
+call = "anthracite:fs/write@1.2.0#restore"
 
 [[cli]]
-call = "anthracite:fs/read@1.1.0#list"
+call = "anthracite:fs/read@1.2.0#list"
 verb = "files"
 
 [[cli]]
-call = "anthracite:fs/read@1.1.0#stat"
+call = "anthracite:fs/read@1.2.0#stat"
 verb = "file-stat"
 
 [[cli]]
-call = "anthracite:fs/read@1.1.0#read-file"
+call = "anthracite:fs/read@1.2.0#read-file"
 verb = "file-read"
 
 [[cli]]
-call = "anthracite:fs/read@1.1.0#trash"
+call = "anthracite:fs/read@1.2.0#trash"
 verb = "trash"
 
 [[cli]]
-call = "anthracite:fs/write@1.1.0#rename"
+call = "anthracite:fs/write@1.2.0#rename"
 verb = "rename"
 
 [[cli]]
-call = "anthracite:fs/write@1.1.0#restore"
+call = "anthracite:fs/write@1.2.0#restore"
 verb = "restore"
 
 [[slot]]

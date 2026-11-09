@@ -11385,6 +11385,9 @@ var styles = `
   .fs-entry .glyph.file::before {
     content: ""; width: 7px; height: 9px; border: 1px solid #667087; border-radius: 1px;
   }
+  .fs-entry .glyph.link::before {
+    content: "↗"; color: #7aa2ff; font-size: 11px; line-height: 1;
+  }
   .fs-tool {
     border: 0; background: transparent; color: #667087; cursor: pointer; font-size: 11px;
     padding: 4px 6px; border-radius: 5px;
@@ -11398,6 +11401,11 @@ var styles = `
     flex: 1; min-width: 120px; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
     background: #0f1219; color: #e8ebf2; font: inherit; font-size: 12px;
   }
+  .fs-new select {
+    padding: 6px 8px; border-radius: 7px; border: 1px solid #2a3142;
+    background: #0f1219; color: #e8ebf2; font: inherit; font-size: 12px;
+  }
+  .fs-new input[hidden] { display: none; }
   .fs-confirm {
     display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px dashed #ff7d8a66;
     border-radius: 8px; background: #1d1218; color: #ffb3ba; font-size: 12px;
@@ -11526,6 +11534,9 @@ function modified(ms) {
 }
 function kindLabel(kind) {
   return kind === "dir" ? "directory" : kind === "link" ? "symlink" : "file";
+}
+function glyphClass(kind) {
+  return kind === "dir" ? "dir" : kind === "link" ? "link" : "file";
 }
 function text(bytes) {
   try {
@@ -11717,11 +11728,17 @@ function mount(root, context) {
       <button type="button" data-trash>Trash</button>
       <span class="grow"></span>
       <button type="button" data-upload>Upload</button>
-      <button type="button" data-new>New folder</button>
+      <button type="button" data-new>New</button>
       <input type="file" data-file hidden />
     </header>
     <form class="fs-new" hidden>
-      <input name="name" placeholder="Folder name" aria-label="Folder name" autocomplete="off" />
+      <select name="kind" aria-label="New entry type">
+        <option value="file">File</option>
+        <option value="dir">Folder</option>
+        <option value="link">Symlink</option>
+      </select>
+      <input name="name" placeholder="Name" aria-label="Name" autocomplete="off" />
+      <input name="target" placeholder="Target path (absolute)" aria-label="Symlink target" autocomplete="off" hidden />
       <button type="submit">Create</button>
       <button type="button" data-cancel-new>Cancel</button>
     </form>
@@ -11751,7 +11768,9 @@ function mount(root, context) {
   const up = box.querySelector("[data-up]");
   const more = box.querySelector("[data-more]");
   const newForm = box.querySelector(".fs-new");
-  const newInput = newForm.querySelector("input");
+  const newKind = newForm.querySelector("select");
+  const newInput = newForm.querySelector("[name=name]");
+  const newTarget = newForm.querySelector("[name=target]");
   const renameForm = box.querySelector(".fs-rename");
   const renameInput = renameForm.querySelector("input");
   const confirmBox = box.querySelector(".fs-confirm");
@@ -11795,6 +11814,13 @@ function mount(root, context) {
   function rememberPath(path) {
     knownPaths.add(path);
     renderPaths();
+  }
+  function syncNewKind() {
+    const link = newKind.value === "link";
+    newTarget.hidden = !link;
+    newInput.placeholder = link ? "Link name" : newKind.value === "dir" ? "Folder name" : "File name";
+    if (!link)
+      newTarget.value = "";
   }
   function navigate(input) {
     const path = normalizePath(input);
@@ -11868,10 +11894,12 @@ function mount(root, context) {
     entryButton.className = "fs-entry";
     entryButton.dataset.name = entry.name;
     entryButton.dataset.kind = entry.kind;
-    entryButton.innerHTML = `<span class="glyph ${entry.kind === "dir" ? "dir" : "file"}"></span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+    entryButton.innerHTML = `<span class="glyph ${glyphClass(entry.kind)}"></span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
     entryButton.addEventListener("click", () => {
       if (entry.kind === "dir")
         load(full);
+      else if (entry.kind === "link")
+        openLink(full);
       else
         open(full, entry);
     });
@@ -11973,7 +12001,7 @@ function mount(root, context) {
         row.className = "fs-row";
         const copy = document.createElement("span");
         copy.className = "fs-entry";
-        copy.innerHTML = `<span class="glyph ${entry.kind === "dir" ? "dir" : "file"}"></span><span class="name">${escape(entry.original)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+        copy.innerHTML = `<span class="glyph ${glyphClass(entry.kind)}"></span><span class="name">${escape(entry.original)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
         const restoreButton = button("fs-tool", "Restore", `Restore ${entry.original}`);
         restoreButton.addEventListener("click", () => void restore(entry.original));
         row.append(copy, restoreButton);
@@ -12005,7 +12033,26 @@ function mount(root, context) {
         setStatus(reason(error), true);
     }
   }
-  async function open(path, entry) {
+  async function openLink(path) {
+    setStatus("Resolving…");
+    try {
+      const target = await request(`/target?path=${encodeURIComponent(path)}`);
+      const stat = await request(`/stat?path=${encodeURIComponent(target)}`);
+      if (disposed)
+        return;
+      if (stat.kind === "dir") {
+        await load(target);
+        if (!disposed)
+          setStatus(`${path} → ${target}`);
+        return;
+      }
+      await open(target, { ...stat, name: baseName(target) }, path);
+    } catch (error) {
+      if (!disposed)
+        setStatus(reason(error), true);
+    }
+  }
+  async function open(path, entry, link = null) {
     setStatus("Reading…");
     destroyEditor();
     if (previewState)
@@ -12020,6 +12067,7 @@ function mount(root, context) {
       previewState = {
         path,
         entry,
+        link,
         bytes: data,
         text: decoded,
         editing: false,
@@ -12150,11 +12198,13 @@ function mount(root, context) {
       preview.append(hint);
       return;
     }
-    const { path, entry, text: decoded, editing } = previewState;
+    const { path, entry, link, text: decoded, editing } = previewState;
     const extension = path.split(".").pop()?.toLowerCase() ?? "";
     const meta = document.createElement("div");
     meta.className = "fs-meta";
     meta.append(cell("", kindLabel(entry.kind)), cell("", bytes(entry.size)), cell("", `modified ${modified(entry["modified-ms"])}`));
+    if (link)
+      meta.append(cell("", `via ${link}`));
     const actions = document.createElement("div");
     actions.className = "fs-actions";
     if (!editing) {
@@ -12190,23 +12240,36 @@ function mount(root, context) {
         cancel.addEventListener("click", cancelEditor);
         const pop = button("", "Pop out");
         pop.title = "Open this file in the panel-level Editor view";
-        pop.addEventListener("click", () => {
+        pop.addEventListener("click", async () => {
+          if (!previewState)
+            return;
           const value = editor ? editorText(editor.view.state.doc) : previewState.text;
+          const params = {
+            path: previewState.path,
+            name: baseName(previewState.path),
+            text: value,
+            dirty: true
+          };
           if (typeof context.openView === "function") {
-            context.openView({
-              tag: "anth-fs-editor",
-              mode: "float",
-              params: {
-                path: previewState.path,
-                name: baseName(previewState.path),
-                text: value,
-                dirty: true
-              }
-            });
-            cancelEditor();
-          } else {
-            floatEditor();
+            setStatus("Opening the panel Editor…");
+            let opened = false;
+            try {
+              opened = await context.openView({
+                tag: "anth-fs-editor",
+                mode: "float",
+                params
+              }) === true;
+            } catch {
+              opened = false;
+            }
+            if (opened) {
+              cancelEditor();
+              setStatus(`Opened ${previewState.path} in the Editor view`);
+              return;
+            }
           }
+          floatEditor();
+          setStatus("The panel could not open the Editor view; using the in-frame editor.", true);
         });
         actions.append(save, cancel, pop);
       }
@@ -12360,29 +12423,70 @@ function mount(root, context) {
   newButton.addEventListener("click", () => {
     newForm.hidden = !newForm.hidden;
     clearRename();
-    if (!newForm.hidden)
+    if (!newForm.hidden) {
+      syncNewKind();
       newInput.focus();
+    }
   });
+  newKind.addEventListener("change", syncNewKind);
   box.querySelector("[data-cancel-new]").addEventListener("click", () => {
     newForm.hidden = true;
   });
   box.querySelector("[data-cancel-rename]").addEventListener("click", clearRename);
   newForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const kind = newKind.value;
     const name = newInput.value.trim();
     if (!name || name.includes("/") || name === "." || name === "..") {
-      setStatus("A folder name cannot be empty or contain `/`.", true);
+      setStatus("A name cannot be empty or contain `/`.", true);
       return;
     }
+    const path = join2(current, name);
     try {
-      await request("/dir", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: join2(current, name) })
-      });
+      if (kind === "dir") {
+        await request("/dir", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path })
+        });
+      } else if (kind === "link") {
+        const raw = newTarget.value.trim();
+        if (!raw.startsWith("/")) {
+          setStatus("The symlink target must be an absolute path.", true);
+          return;
+        }
+        const target = normalizePath(raw);
+        if (target === null) {
+          setStatus("The path cannot escape the root.", true);
+          return;
+        }
+        await request("/symlink", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path, target })
+        });
+      } else {
+        try {
+          await request(`/stat?path=${encodeURIComponent(path)}`);
+          setStatus(`${path} already exists.`, true);
+          return;
+        } catch (error) {
+          if (!reason(error).includes("not-found")) {
+            setStatus(reason(error), true);
+            return;
+          }
+        }
+        await request("/file", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path, bytes: [] })
+        });
+      }
       newForm.hidden = true;
       newInput.value = "";
+      newTarget.value = "";
       await load(current);
+      setStatus(`Created ${path}`);
     } catch (error) {
       if (!disposed)
         setStatus(reason(error), true);
