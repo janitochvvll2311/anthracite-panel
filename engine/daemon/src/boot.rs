@@ -240,6 +240,13 @@ fn service_launch(
     let socket_text = socket
         .to_str()
         .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
+    // `sockaddr_un.sun_path` is 108 bytes on Linux, NUL included.
+    if socket_text.len() >= 108 {
+        return Err(Error::invalid(format!(
+            "the service socket path is {} bytes; the kernel limit is 107",
+            socket_text.len()
+        )));
+    }
     let argv = service
         .argv
         .iter()

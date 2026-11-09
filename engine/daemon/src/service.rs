@@ -497,14 +497,20 @@ fn kill_group(pid: i32, signal: i32) {
 async fn wait_healthy(socket: &Path, timeout: Duration) -> Result<(), Error> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        match health(socket).await {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(error);
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(Error::unavailable(format!(
+                "the service did not answer /health within {}ms",
+                timeout.as_millis()
+            )));
+        }
+        // One attempt must not outlive the whole budget: a service that accepts
+        // and never answers is slow, not a reason to hang the boot.
+        let attempt = (deadline - now).min(Duration::from_millis(250));
+        match tokio::time::timeout(attempt, health(socket)).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) if tokio::time::Instant::now() >= deadline => return Err(error),
+            Ok(Err(_)) | Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
         }
     }
 }
