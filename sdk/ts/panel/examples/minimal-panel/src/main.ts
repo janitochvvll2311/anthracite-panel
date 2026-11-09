@@ -6,6 +6,7 @@
 import {
   VIEW,
   assetUrl,
+  byId,
   button,
   contributionKey,
   element,
@@ -39,9 +40,6 @@ type Tab = {
   detached: boolean;
   generation: number;
 };
-
-const byId = <T extends HTMLElement>(id: string): T =>
-  document.getElementById(id) as T;
 
 const views = byId("views");
 const ignored = byId("ignored");
@@ -96,12 +94,12 @@ async function mount(tab: Tab): Promise<void> {
   } catch (error) {
     if (!tab.cancelled && tab.generation === generation) {
       tab.body.replaceChildren(
-      errorCard(error, {
-        className: "error",
-        title: "This view did not mount",
-        detailTag: "span",
-      }),
-    );
+        errorCard(error, {
+          className: "error",
+          title: "This view did not mount",
+          detailTag: "span",
+        }),
+      );
     }
   }
 }

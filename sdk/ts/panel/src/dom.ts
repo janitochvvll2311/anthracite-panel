@@ -2,7 +2,7 @@
 // small: the SDK owns the contract, not the panel's layout.
 
 import type { FrameContext } from "./iframe";
-import type { Contribution } from "./index";
+import type { Contribution } from "./model";
 
 export function byId<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
