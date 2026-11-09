@@ -67,7 +67,7 @@ impl AccountsFixture {
                     "gid": 27,
                     "members": ["operator"],
                 },
-                { "name": "docker", "gid": 999, "members": ["operator"] },
+                { "name": "docker", "gid": 998, "members": ["operator"] },
                 {
                     "name": "postgres",
                     "gid": 999,
