@@ -1022,27 +1022,40 @@ export function mount(root, context) {
           text: value,
           dirty: true,
         };
-        if (typeof context.openView === "function") {
-          setStatus("Opening the panel Editor…");
-          let opened = false;
-          try {
-            opened =
-              (await context.openView({
-                tag: "anth-fs-editor",
-                mode: "float",
-                params,
-              })) === true;
-          } catch {
-            opened = false;
-          }
-          if (opened) {
-            cancelEditor();
-            setStatus(`Opened ${previewState.path} in the Editor view`);
-            return;
-          }
+        if (typeof context.openView !== "function") {
+          setStatus(
+            "This panel build has no global-view bridge. Reload the panel (Ctrl/Cmd+R) and try again; the inline editor stays open.",
+            true,
+          );
+          return;
+        }
+        setStatus("Opening the panel Editor…");
+        let result;
+        try {
+          result = await context.openView({
+            tag: "anth-fs-editor",
+            mode: "float",
+            params,
+          });
+        } catch {
+          result = false;
+        }
+        if (result === true) {
+          cancelEditor();
+          setStatus(`Opened ${previewState.path} in the Editor view`);
+          return;
+        }
+        if (result === undefined) {
+          // The pre-ack bridge opens the view but returns nothing, and ignores
+          // `mode`. The Editor is a tab; Float detaches it to the global layer.
+          cancelEditor();
+          setStatus(
+            `Opened ${previewState.path} in the Editor tab. Use Float to detach it, or reload the panel for direct Pop out.`,
+          );
+          return;
         }
         setStatus(
-          "The panel could not open the Editor view. Update the panel and try again; the inline editor stays open.",
+          "This panel tab is running an older frontend. Reload it (Ctrl/Cmd+R or Cmd+Shift+R) and try again; the inline editor stays open.",
           true,
         );
       });
