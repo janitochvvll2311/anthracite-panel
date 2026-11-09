@@ -1,0 +1,26 @@
+[package]
+name = "anth-host-emulator"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Deterministic native fixtures for the v0.6.0 demo"
+
+[[bin]]
+name = "host-emulator"
+path = "src/main.rs"
+
+[[bin]]
+name = "bundle-emulator"
+path = "src/bin/bundle.rs"
+
+[dependencies]
+anth-contract = { path = "../../engine/contract" }
+anth-service = { path = "../../sdk/rust/service" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+sha2 = "0.10"
+zip = { version = "2.6", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+anth-contract = { path = "../../engine/contract", features = ["parse"] }
+wit-parser = "0.263"

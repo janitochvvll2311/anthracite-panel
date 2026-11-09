@@ -1,0 +1,22 @@
+# The demo engine: no signature requirement and no host reach.
+#
+# Run the panel from the repository root:
+#
+#   cargo run -p anth-panel-backend -- --config demo/config.toml --listen 127.0.0.1:5173
+#
+# Relative paths resolve from the working directory, so start it from the root.
+
+version = 1
+socket = "./demo/state/engine.sock"
+state = "./demo/state"
+
+[apps]
+require-signature = false
+allow-unverified-assets = true
+
+[services]
+# The emulator is a third-party bundle; this demo is the explicit opt-in.
+allow-third-party = true
+
+[limits]
+start-timeout-ms = 5_000

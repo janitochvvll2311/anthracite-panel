@@ -1,0 +1,29 @@
+package anthracite:terminal@1.0.0;
+
+interface terminal {
+    use anth:error/kinds@1.0.0.{error};
+
+    record session {
+        id: string,
+        shell: string,
+        owner: string,
+        seq: u64,
+    }
+
+    record output {
+        seq: u64,
+        data: list<u8>,
+    }
+
+    open: func(shell: string, cols: u32, rows: u32) -> result<session, error>;
+    %list: func() -> result<list<session>, error>;
+    read: func(id: string, seq: u64, wait-ms: u32) -> result<option<output>, error>;
+    write: func(id: string, data: list<u8>) -> result<_, error>;
+    resize: func(id: string, cols: u32, rows: u32) -> result<_, error>;
+    signal: func(id: string, signal: string) -> result<_, error>;
+    close: func(id: string) -> result<_, error>;
+}
+
+world app {
+    export terminal;
+}

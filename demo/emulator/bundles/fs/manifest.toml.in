@@ -1,0 +1,63 @@
+manifest_version = 3
+
+[app]
+id = "org.anthracite.fs"
+namespace = "anthracite:fs"
+name = "Files (emulator)"
+version = "0.1.0"
+summary = "Deterministic filesystem fixture for the demo; replaced by the real fs app."
+license = "Apache-2.0"
+
+[service]
+path = "bin/host-emulator"
+sha256 = "{{sha256}}"
+class = "socket"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "anthracite:fs/read@1.0.0"
+
+[[export]]
+interface = "anthracite:fs/write@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/files"
+call = "anthracite:fs/read@1.0.0#list"
+
+[[route]]
+method = "GET"
+path = "/stat"
+call = "anthracite:fs/read@1.0.0#stat"
+
+[[route]]
+method = "GET"
+path = "/file"
+call = "anthracite:fs/read@1.0.0#read-file"
+
+[[route]]
+method = "PUT"
+path = "/file"
+call = "anthracite:fs/write@1.0.0#write-file"
+
+[[route]]
+method = "POST"
+path = "/dir"
+call = "anthracite:fs/write@1.0.0#mkdir"
+
+[[route]]
+method = "DELETE"
+path = "/entry"
+call = "anthracite:fs/write@1.0.0#remove"
+
+[[cli]]
+call = "anthracite:fs/read@1.0.0#list"
+verb = "files"
+
+[[cli]]
+call = "anthracite:fs/read@1.0.0#stat"
+verb = "file-stat"
+
+[[cli]]
+call = "anthracite:fs/read@1.0.0#read-file"
+verb = "file-read"

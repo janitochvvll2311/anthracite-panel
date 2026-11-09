@@ -38,6 +38,7 @@ apps/                      backend-frontend app catalogue
   fs/ terminal/ proc/ net/ storage/ accounts/ manager/     (v0.6.0)
 
 demo/                      (v0.6.0) a demo instance: config, composition and demo apps
+  emulator/                native service fixtures; one bundle per app, one binary
 
 tests/
   e2e/                     Playwright against a running panel

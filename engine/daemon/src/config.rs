@@ -130,6 +130,15 @@ fn yes() -> bool {
     true
 }
 
+/// Whether the file names a key explicitly, so a profile default does not
+/// override an operator's `false`.
+fn declares(text: &str, table: &str, key: &str) -> bool {
+    toml::from_str::<toml::Value>(text)
+        .ok()
+        .and_then(|value| value.get(table)?.get(key).map(|_| ()))
+        .is_some()
+}
+
 fn default_bundle_cap() -> u64 {
     32 * 1024 * 1024
 }
@@ -197,6 +206,9 @@ impl Config {
         config.state = PathBuf::from("./state");
         config.apps.require_signature = false;
         config.apps.allow_unverified_assets = true;
+        // The host emulator is a third-party bundle; a developer build opts in by
+        // default so the demo runs without a system key. Release stays closed.
+        config.services.allow_third_party = true;
         config
     }
 
@@ -214,6 +226,13 @@ impl Config {
     }
 
     pub fn load(path: &Path) -> Result<Self, Error> {
+        Self::load_with(path, Profile::default())
+    }
+
+    /// Loads with the profile's defaults for sections the file omits. A developer
+    /// build turns the third-party service switch on unless the file says
+    /// otherwise; a release build keeps it off.
+    pub fn load_with(path: &Path, profile: Profile) -> Result<Self, Error> {
         let text = std::fs::read_to_string(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 Error::not_found(format!("no configuration at {}", path.display()))
@@ -221,13 +240,17 @@ impl Config {
                 Error::internal(format!("reading {}: {error}", path.display()))
             }
         })?;
-        Self::parse(&text)
+        let mut config = Self::parse(&text)?;
+        if profile == Profile::Debug && !declares(&text, "services", "allow-third-party") {
+            config.services.allow_third_party = true;
+        }
+        Ok(config)
     }
 
     /// Loads the file, writing it first with the profile's defaults if missing.
     pub fn load_or_create(path: &Path, profile: Profile) -> Result<Self, Error> {
         if path.exists() {
-            return Self::load(path);
+            return Self::load_with(path, profile);
         }
         let config = Self::defaults(profile);
         let text = match profile {
@@ -387,12 +410,13 @@ mod tests {
         assert_eq!(debug.state, PathBuf::from("./state"));
         assert!(!debug.apps.require_signature);
         assert!(debug.apps.allow_unverified_assets);
+        assert!(debug.services.allow_third_party);
     }
 
     #[test]
-    fn third_party_services_are_off_by_default() {
+    fn third_party_services_are_off_in_release_and_on_for_developers() {
         assert!(!Config::release().services.allow_third_party);
-        assert!(!Config::debug().services.allow_third_party);
+        assert!(Config::debug().services.allow_third_party);
         let text = TEMPLATE.replace("allow-third-party = false", "allow-third-party = true");
         let config = Config::parse(&text).expect("parse");
         assert!(config.services.allow_third_party);
@@ -484,6 +508,43 @@ mod tests {
         assert_eq!(config, Config::release());
         let again = Config::load(&path).expect("load");
         assert_eq!(again, config);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn an_omitted_service_switch_uses_the_profile_default() {
+        let dir = std::env::temp_dir().join(format!("anth-config-profile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "version = 1\nsocket = \"/tmp/anth.sock\"\nstate = \"/tmp/anth-state\"\n\n[apps]\nrequire-signature = false\nallow-unverified-assets = true\n",
+        )
+        .expect("write");
+        assert!(
+            Config::load_with(&path, Profile::Debug)
+                .expect("debug")
+                .services
+                .allow_third_party
+        );
+        assert!(
+            !Config::load_with(&path, Profile::Release)
+                .expect("release")
+                .services
+                .allow_third_party
+        );
+        std::fs::write(
+            &path,
+            "version = 1\nsocket = \"/tmp/anth.sock\"\nstate = \"/tmp/anth-state\"\n\n[services]\nallow-third-party = false\n",
+        )
+        .expect("write");
+        assert!(
+            !Config::load_with(&path, Profile::Debug)
+                .expect("explicit false")
+                .services
+                .allow_third_party
+        );
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }

@@ -119,7 +119,7 @@ fn choose_profile(debug: bool, release: bool, debug_build: bool) -> Result<Profi
 /// the whole of the doctor command: a daemon that is not running can still be
 /// configured wrong.
 async fn check(config_path: PathBuf, profile: Profile) -> Result<(), Error> {
-    let config = Config::load(&config_path)?;
+    let config = Config::load_with(&config_path, profile)?;
     config.validate(profile)?;
     match anth_engine::state::check(&config.state)? {
         anth_engine::state::StateStatus::Missing => {

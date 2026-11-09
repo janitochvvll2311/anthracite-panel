@@ -1,0 +1,7 @@
+version = 1
+
+# The demo composition. Each id is the future real app's id; the emulator bundle
+# answers under that id, so replacing the provider is `anth app upgrade`.
+[[profile]]
+id = "default"
+apps = ["org.anthracite.fs", "org.anthracite.terminal"]
