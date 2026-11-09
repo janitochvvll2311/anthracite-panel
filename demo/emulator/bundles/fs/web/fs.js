@@ -11,6 +11,7 @@ const styles = `
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
   }
   .fs-bar button:hover { border-color: #3a4560; color: #fff; }
+  .fs-bar button:disabled { opacity: .4; cursor: default; border-color: #2a3142; color: #667087; }
   .fs-path {
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: ui-monospace, monospace; font-size: 12px; color: #8f98ab;
@@ -40,6 +41,17 @@ const styles = `
     font-size: 14px; line-height: 1; padding: 4px;
   }
   .fs-delete:hover { color: #ff7d8a; }
+  .fs-delete.confirm {
+    padding: 4px 7px; border: 1px solid #ff7d8a66; border-radius: 5px; color: #ffb3ba;
+    font-size: 10.5px;
+  }
+  .fs-delete.cancel { padding: 4px 7px; font-size: 10.5px; }
+  .fs-more { display: flex; justify-content: center; }
+  .fs-more button {
+    padding: 6px 12px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .fs-more button:hover { border-color: #3a4560; color: #fff; }
   .fs-new { display: flex; gap: 6px; }
   .fs-new[hidden] { display: none; }
   .fs-new input {
@@ -132,6 +144,7 @@ export function mount(root, context) {
     <header class="fs-bar">
       <button type="button" data-up title="Parent directory">Up</button>
       <span class="fs-path">/</span>
+      <button type="button" data-refresh>Refresh</button>
       <button type="button" data-new>New folder</button>
     </header>
     <form class="fs-new" hidden>
@@ -142,6 +155,7 @@ export function mount(root, context) {
       <ul class="fs-list" aria-label="Directory entries"></ul>
       <section class="fs-preview"><p class="hint">Select a file to preview it.</p></section>
     </div>
+    <div class="fs-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="fs-status" role="status"></p>
   `;
   root.append(box);
@@ -152,7 +166,11 @@ export function mount(root, context) {
   const status = box.querySelector(".fs-status");
   const form = box.querySelector(".fs-new");
   const input = form.querySelector("input");
+  const up = box.querySelector("[data-up]");
+  const more = box.querySelector("[data-more]");
   let current = "/";
+  let nextCursor = null;
+  let confirmPath = null;
   let disposed = false;
 
   const setStatus = (message, bad = false) => {
@@ -160,55 +178,109 @@ export function mount(root, context) {
     status.className = bad ? "fs-status bad" : "fs-status";
   };
 
-  const request = (route, init) => call(context, route, init);
+  function resetPreview() {
+    preview.replaceChildren();
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Select a file to preview it.";
+    preview.append(hint);
+  }
 
-  async function load(path) {
-    setStatus("Loading…");
+  const request = (route, init) => call(context, route, init);
+  const rows = () => list.querySelectorAll(".fs-row").length;
+
+  function confirmDelete(row, path, remove) {
+    remove.hidden = true;
+    const yes = document.createElement("button");
+    yes.type = "button";
+    yes.className = "fs-delete confirm";
+    yes.textContent = "Delete";
+    const no = document.createElement("button");
+    no.type = "button";
+    no.className = "fs-delete cancel";
+    no.textContent = "Cancel";
+    yes.addEventListener("click", () => void drop(path));
+    no.addEventListener("click", () => {
+      yes.remove();
+      no.remove();
+      remove.hidden = false;
+      confirmPath = null;
+    });
+    row.append(yes, no);
+  }
+
+  function appendRow(entry, base) {
+    const full = join(base, entry.name);
+    const row = document.createElement("li");
+    row.className = "fs-row";
+    const entryButton = document.createElement("button");
+    entryButton.type = "button";
+    entryButton.className = "fs-entry";
+    entryButton.dataset.name = entry.name;
+    entryButton.dataset.kind = entry.kind;
+    entryButton.innerHTML = `<span class="glyph ${entry.kind === "dir" ? "dir" : "file"}"></span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+    entryButton.addEventListener("click", () => {
+      if (entry.kind === "dir") {
+        void load(full);
+      } else {
+        void open(full);
+      }
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "fs-delete";
+    remove.title =
+      entry.kind === "dir"
+        ? `Delete ${entry.name} and everything inside it`
+        : `Move ${entry.name} to trash`;
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      if (confirmPath === full) {
+        void drop(full);
+        return;
+      }
+      confirmPath = full;
+      confirmDelete(row, full, remove);
+    });
+    row.append(entryButton, remove);
+    list.append(row);
+  }
+
+  async function loadPage(path, cursor, append) {
+    setStatus(append ? "Loading more…" : "Loading…");
     try {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
       const page = await request(
-        `/files?path=${encodeURIComponent(path)}&limit=200`,
+        `/files?path=${encodeURIComponent(path)}&limit=200${suffix}`,
       );
       if (disposed) return;
-      current = path;
-      pathLabel.textContent = path;
-      list.replaceChildren();
-      for (const entry of page.entries) {
-        const row = document.createElement("li");
-        row.className = "fs-row";
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "fs-entry";
-        button.dataset.name = entry.name;
-        button.dataset.kind = entry.kind;
-        button.innerHTML = `<span class="glyph ${entry.kind === "dir" ? "dir" : "file"}"></span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
-        button.addEventListener("click", () => {
-          if (entry.kind === "dir") {
-            void load(join(path, entry.name));
-          } else {
-            void open(join(path, entry.name));
-          }
-        });
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "fs-delete";
-        remove.title = `Move ${entry.name} to trash`;
-        remove.textContent = "×";
-        remove.addEventListener("click", () => {
-          void drop(join(path, entry.name));
-        });
-        row.append(button, remove);
-        list.append(row);
+      if (!append) {
+        current = path;
+        confirmPath = null;
+        pathLabel.textContent = path;
+        up.disabled = path === "/";
+        list.replaceChildren();
+        resetPreview();
       }
-      if (page.entries.length === 0) {
+      for (const entry of page.entries) appendRow(entry, path);
+      nextCursor = page.cursor;
+      more.hidden = Boolean(page.done) || !page.cursor;
+      if (rows() === 0) {
         const empty = document.createElement("li");
         empty.className = "fs-status";
         empty.textContent = "This directory is empty.";
         list.append(empty);
       }
-      setStatus(`${page.entries.length} entr${page.entries.length === 1 ? "y" : "ies"}`);
+      setStatus(
+        `${rows()} entr${rows() === 1 ? "y" : "ies"}${page.done ? "" : " · more available"}`,
+      );
     } catch (error) {
       if (!disposed) setStatus(String(error), true);
     }
+  }
+
+  function load(path) {
+    return loadPage(path, null, false);
   }
 
   async function open(path) {
@@ -239,6 +311,7 @@ export function mount(root, context) {
       await request(`/entry?path=${encodeURIComponent(path)}&trash=true`, {
         method: "DELETE",
       });
+      confirmPath = null;
       await load(current);
       setStatus(`Moved ${path} to trash`);
     } catch (error) {
@@ -246,8 +319,14 @@ export function mount(root, context) {
     }
   }
 
-  box.querySelector("[data-up]").addEventListener("click", () => {
+  up.addEventListener("click", () => {
     if (current !== "/") void load(parent(current));
+  });
+  box.querySelector("[data-refresh]").addEventListener("click", () => {
+    void load(current);
+  });
+  more.addEventListener("click", () => {
+    if (nextCursor) void loadPage(current, nextCursor, true);
   });
   box.querySelector("[data-new]").addEventListener("click", () => {
     form.hidden = !form.hidden;

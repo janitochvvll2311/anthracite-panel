@@ -20,6 +20,7 @@ interface terminal {
     open: func(shell: string, cols: u32, rows: u32) -> result<session, error>;
     %list: func() -> result<list<session>, error>;
     read: func(id: string, seq: u64, wait-ms: u32) -> result<option<output>, error>;
+    /// Writing the `exit` line ends the session; queued output stays readable.
     write: func(id: string, data: list<u8>) -> result<_, error>;
     resize: func(id: string, cols: u32, rows: u32) -> result<_, error>;
     signal: func(id: string, signal: string) -> result<_, error>;
