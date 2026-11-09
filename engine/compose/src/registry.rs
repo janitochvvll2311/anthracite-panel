@@ -233,23 +233,10 @@ impl Registry {
     /// Every installed app, sorted by id. Staging and swap directories are
     /// hidden by their leading dot.
     pub fn list(&self) -> Result<Vec<Installed>, Error> {
-        if !store::check_dir(&self.apps)? {
-            return Ok(Vec::new());
-        }
-        let entries = fs::read_dir(&self.apps).map_err(|error| {
-            Error::internal(format!("reading {}: {error}", self.apps.display()))
-        })?;
         let mut installed = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                Error::internal(format!("reading {}: {error}", self.apps.display()))
-            })?;
+        for entry in self.visible_entries()? {
             let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with('.') {
-                continue;
-            }
-            let id = AppId::parse(&name)?;
+            let id = AppId::parse(&name.to_string_lossy())?;
             if let Some(app) = self.get(&id)? {
                 installed.push(app);
             }
@@ -263,22 +250,10 @@ impl Registry {
     /// The catalogue must not disappear because one install is broken: the
     /// operator needs the rest of it to repair the broken one.
     pub fn catalogue(&self) -> Result<(Vec<Installed>, Vec<Problem>), Error> {
-        if !store::check_dir(&self.apps)? {
-            return Ok((Vec::new(), Vec::new()));
-        }
-        let entries = fs::read_dir(&self.apps).map_err(|error| {
-            Error::internal(format!("reading {}: {error}", self.apps.display()))
-        })?;
         let mut apps = Vec::new();
         let mut problems = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                Error::internal(format!("reading {}: {error}", self.apps.display()))
-            })?;
+        for entry in self.visible_entries()? {
             let app = entry.file_name().to_string_lossy().to_string();
-            if app.starts_with('.') {
-                continue;
-            }
             match read_app(&entry.path()) {
                 Ok(installed) => apps.push(installed),
                 Err(error) => problems.push(Problem {
@@ -290,6 +265,27 @@ impl Registry {
         apps.sort_by(|a, b| a.manifest.app.id.cmp(&b.manifest.app.id));
         problems.sort_by(|a, b| a.app.cmp(&b.app));
         Ok((apps, problems))
+    }
+
+    /// The app directories a reader may see: staging and swap trees start with
+    /// a dot, and a missing tree is empty rather than an error.
+    fn visible_entries(&self) -> Result<Vec<fs::DirEntry>, Error> {
+        if !store::check_dir(&self.apps)? {
+            return Ok(Vec::new());
+        }
+        let entries = fs::read_dir(&self.apps).map_err(|error| {
+            Error::internal(format!("reading {}: {error}", self.apps.display()))
+        })?;
+        let mut visible = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                Error::internal(format!("reading {}: {error}", self.apps.display()))
+            })?;
+            if !entry.file_name().to_string_lossy().starts_with('.') {
+                visible.push(entry);
+            }
+        }
+        Ok(visible)
     }
 
     /// The installed catalogue plus the compose-side view of each app: its
@@ -490,7 +486,7 @@ impl Registry {
         let Some(alias) = alias else {
             return Ok(None);
         };
-        for other in self.readable() {
+        for other in self.readable()? {
             if other.manifest.app.id == app.as_str() {
                 continue;
             }
@@ -505,7 +501,7 @@ impl Registry {
     /// the set the bundle is allowed to import.
     fn extract(&self, bundle: &[u8], options: &Options) -> Result<StagedBundle, Error> {
         let mut options = options.clone();
-        options.known_packages.extend(self.known_packages());
+        options.known_packages.extend(self.known_packages()?);
         bundle::extract(bundle, &self.apps, &options, &self.keyring)
     }
 
@@ -515,37 +511,25 @@ impl Registry {
     /// replacing something else; `list` is where corruption is reported. Only
     /// the manifest matters here, so a missing descriptor does not hide a
     /// provider.
-    fn known_packages(&self) -> Vec<String> {
+    fn known_packages(&self) -> Result<Vec<String>, Error> {
         let mut packages = Vec::new();
-        let Ok(entries) = fs::read_dir(&self.apps) else {
-            return packages;
-        };
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
+        for entry in self.visible_entries()? {
             if let Ok(manifest) = read_manifest(&entry.path()) {
                 packages.push(manifest.app.namespace);
             }
         }
-        packages
+        Ok(packages)
     }
 
     /// The installed apps that can be read, skipping a corrupt tree.
-    fn readable(&self) -> Vec<Installed> {
+    fn readable(&self) -> Result<Vec<Installed>, Error> {
         let mut apps = Vec::new();
-        let Ok(entries) = fs::read_dir(&self.apps) else {
-            return apps;
-        };
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
+        for entry in self.visible_entries()? {
             if let Ok(installed) = read_app(&entry.path()) {
                 apps.push(installed);
             }
         }
-        apps
+        Ok(apps)
     }
 
     /// A free `.old-*` name. A crashed process can leave one behind, and a
@@ -1531,6 +1515,19 @@ mod tests {
             .expect_err("untrusted");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
         assert!(Registry::new(&state).list().expect("list").is_empty());
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_wrong_mode_root_fails_closed_for_internal_readers() {
+        let state = scratch("wrong-mode-readers");
+        let registry = Registry::new(&state);
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        fs::set_permissions(registry.dir(), fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert!(registry.readable().is_err());
+        assert!(registry.known_packages().is_err());
         fs::remove_dir_all(&state).expect("cleanup");
     }
 }
