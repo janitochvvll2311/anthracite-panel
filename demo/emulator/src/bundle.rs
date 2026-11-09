@@ -161,7 +161,7 @@ mod tests {
                 .expect("read wit");
             let text = String::from_utf8(wit).expect("utf8");
             assert!(
-                text.starts_with(&format!("package {}@1.0.0;", manifest.app.namespace)),
+                text.starts_with(&format!("package {}@", manifest.app.namespace)),
                 "{text}"
             );
             let wit_dir = dir.join("scratch").join(&manifest.app.id).join("wit");

@@ -90,7 +90,7 @@ export async function mountFrame(
   const allow = `/api/apps/${encodeURIComponent(options.context.app.id)}/`;
   const iframe = document.createElement("iframe");
   iframe.className = "app-frame";
-  iframe.setAttribute("sandbox", "allow-scripts allow-forms");
+  iframe.setAttribute("sandbox", "allow-scripts allow-forms allow-downloads");
   iframe.setAttribute(
     "title",
     `${options.context.contribution.label} — ${options.context.app.id}`,
