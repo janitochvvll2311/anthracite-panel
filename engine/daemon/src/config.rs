@@ -151,6 +151,8 @@ pub struct LimitsSection {
     pub fuel: u64,
     #[serde(rename = "memory-pages", default = "default_memory_pages")]
     pub memory_pages: u32,
+    #[serde(rename = "start-timeout-ms", default = "default_start_timeout_ms")]
+    pub start_timeout_ms: u64,
     #[serde(rename = "wall-ms", default = "default_wall_ms")]
     pub wall_ms: u64,
 }
@@ -160,6 +162,7 @@ impl Default for LimitsSection {
         Self {
             fuel: default_fuel(),
             memory_pages: default_memory_pages(),
+            start_timeout_ms: default_start_timeout_ms(),
             wall_ms: default_wall_ms(),
         }
     }
@@ -171,6 +174,10 @@ fn default_fuel() -> u64 {
 
 fn default_memory_pages() -> u32 {
     256
+}
+
+fn default_start_timeout_ms() -> u64 {
+    5_000
 }
 
 fn default_wall_ms() -> u64 {
@@ -262,7 +269,11 @@ impl Config {
                 "`apps.max-bundle-bytes` must be greater than zero",
             ));
         }
-        if self.limits.fuel == 0 || self.limits.memory_pages == 0 || self.limits.wall_ms == 0 {
+        if self.limits.fuel == 0
+            || self.limits.memory_pages == 0
+            || self.limits.wall_ms == 0
+            || self.limits.start_timeout_ms == 0
+        {
             return Err(Error::invalid(
                 "every `limits` value must be greater than zero",
             ));

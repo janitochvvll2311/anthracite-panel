@@ -1,0 +1,210 @@
+//! The service supervisor against the fixture in `examples/echo_service.rs`.
+
+use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anth_compose::audit::AuditLog;
+use anth_contract::{AppId, AuditAction, ExportTarget};
+use anth_engine::service::{ServiceLaunch, ServiceSupervisor};
+use serde_json::json;
+
+const APP: &str = "org.example.notes";
+const INTERFACE: &str = "example:notes/list@1.0.0";
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir()
+        .join("anthracite-panel")
+        .join(format!("anth-service-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    dir
+}
+
+fn fixture() -> PathBuf {
+    let test = std::env::current_exe().expect("test binary");
+    let path = test
+        .parent()
+        .and_then(Path::parent)
+        .expect("target directory")
+        .join("examples")
+        .join("echo_service");
+    if !path.exists() {
+        // `cargo test --workspace` builds examples; a narrow `--test service`
+        // does not, so build the one this test needs instead of failing oddly.
+        let status = std::process::Command::new(
+            std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()),
+        )
+        .args(["build", "--example", "echo_service", "--manifest-path"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .status()
+        .expect("build the service fixture");
+        assert!(status.success(), "the service fixture did not build");
+    }
+    path
+}
+
+fn launch(state: &Path, extra: &[&str], start_timeout: Duration) -> ServiceLaunch {
+    let app = AppId::parse(APP).expect("app id");
+    let socket = ServiceSupervisor::socket_path(state, &app);
+    let mut argv = vec![
+        "--socket".to_string(),
+        socket.to_string_lossy().into_owned(),
+    ];
+    argv.extend(extra.iter().map(|argument| argument.to_string()));
+    let mut exports = BTreeMap::new();
+    exports.insert(INTERFACE.to_string(), ExportTarget::Service);
+    ServiceLaunch {
+        app: APP.to_string(),
+        binary: fixture(),
+        argv,
+        socket,
+        exports,
+        start_timeout,
+    }
+}
+
+#[tokio::test]
+async fn a_service_starts_answers_and_stops() {
+    let state = scratch("lifecycle");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let spec = launch(&state, &[], Duration::from_millis(500));
+    let socket = spec.socket.clone();
+    services.start(spec).await.expect("start");
+
+    let mode = std::fs::metadata(&socket)
+        .expect("socket")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+
+    let output = services
+        .call(APP, INTERFACE, "echo", json!({"message": "hi"}))
+        .await
+        .expect("call");
+    assert_eq!(output, json!({"message": "hi"}));
+
+    services.stop(APP).await;
+    assert!(!socket.exists(), "the socket is removed on stop");
+    let error = services
+        .call(APP, INTERFACE, "echo", json!({}))
+        .await
+        .expect_err("stopped");
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_service_error_keeps_its_contract_envelope() {
+    let state = scratch("error");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services
+        .start(launch(&state, &[], Duration::from_millis(500)))
+        .await
+        .expect("start");
+    let error = services
+        .call(APP, INTERFACE, "fail", json!({}))
+        .await
+        .expect_err("refused");
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+    assert!(error.message().contains("refused"), "{error}");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_service_that_never_answers_health_is_degraded() {
+    let state = scratch("health");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let mut spec = launch(&state, &[], Duration::from_millis(300));
+    // `false` exits immediately, so the socket never answers.
+    spec.binary = PathBuf::from("/bin/false");
+    let error = services.start(spec).await.expect_err("no health");
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn the_engine_caller_routes_a_service_export() {
+    use anth_api::AppCaller;
+
+    let state = scratch("caller");
+    let services =
+        std::sync::Arc::new(ServiceSupervisor::for_state(&state, Duration::from_secs(2)));
+    services
+        .start(launch(&state, &[], Duration::from_millis(500)))
+        .await
+        .expect("start");
+    let wasm = anth_engine::supervisor::SupervisorCaller::new(std::sync::Arc::new(
+        anth_engine::supervisor::Supervisor::new(std::sync::Arc::new(
+            anth_runtime::FakeRuntime::new(),
+        )),
+    ));
+    let caller = anth_engine::service::EngineCaller::new(wasm, services.clone());
+    let output = caller
+        .call(APP, INTERFACE, "echo", json!({"routed": true}))
+        .await
+        .expect("routed");
+    assert_eq!(output, json!({"routed": true}));
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_crash_restarts_the_service() {
+    let state = scratch("restart");
+    let marker = state.join("crashed");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services
+        .start(launch(
+            &state,
+            &[
+                "--die-once",
+                marker.to_string_lossy().as_ref(),
+                "--die-after-ms",
+                "300",
+            ],
+            Duration::from_millis(500),
+        ))
+        .await
+        .expect("start");
+
+    // The fixture exits once; make sure it has, then wait for the restart.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut output = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Ok(value) = services
+            .call(APP, INTERFACE, "echo", json!({"again": true}))
+            .await
+        {
+            output = Some(value);
+            break;
+        }
+    }
+    assert_eq!(
+        output,
+        Some(json!({"again": true})),
+        "the restarted service answers"
+    );
+    let actions: Vec<AuditAction> = AuditLog::new(&state)
+        .entries()
+        .expect("audit")
+        .into_iter()
+        .map(|entry| entry.action)
+        .collect();
+    assert!(
+        actions
+            .iter()
+            .filter(|action| **action == AuditAction::ServiceStart)
+            .count()
+            >= 2,
+        "{actions:?}"
+    );
+    assert!(actions.contains(&AuditAction::ServiceCrash), "{actions:?}");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}

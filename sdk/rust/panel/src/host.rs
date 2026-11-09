@@ -35,6 +35,7 @@ impl Sessions {
 pub struct Host {
     state: Arc<EngineState>,
     supervisor: Arc<Supervisor>,
+    services: Arc<anth_engine::service::ServiceSupervisor>,
     stop: watch::Sender<bool>,
     socket: JoinHandle<std::io::Result<()>>,
 }
@@ -82,6 +83,10 @@ impl Host {
         let allowed_uid = unsafe { libc::geteuid() };
         let runtime = Arc::new(WasmtimeRuntime::new()?);
         let supervisor = Arc::new(Supervisor::new(runtime));
+        let services = Arc::new(anth_engine::service::ServiceSupervisor::for_state(
+            &config.state,
+            std::time::Duration::from_millis(config.limits.wall_ms),
+        ));
         let state = Arc::new(
             EngineState::new(allowed_uid)
                 .with_composition(composition.clone())
@@ -91,7 +96,10 @@ impl Host {
                     config.apps.require_signature,
                     config.services.allow_third_party,
                 )
-                .with_caller(Arc::new(SupervisorCaller::new(supervisor.clone())))
+                .with_caller(Arc::new(anth_engine::service::EngineCaller::new(
+                    SupervisorCaller::new(supervisor.clone()),
+                    services.clone(),
+                )))
                 .with_auth(auth)
                 .booting(),
         );
@@ -120,8 +128,10 @@ impl Host {
 
         let report = anth_engine::boot::start_composed(
             &supervisor,
+            &services,
             &config.state,
             &composition,
+            config.services.allow_third_party,
             &config.limits,
             LogSettings {
                 level: config.log.level,
@@ -134,6 +144,7 @@ impl Host {
             Err(error) => {
                 let _ = stop.send(true);
                 let _ = socket_task.await;
+                services.stop_all().await;
                 supervisor.stop_all().await;
                 return Err(error);
             }
@@ -158,6 +169,7 @@ impl Host {
         Ok(Self {
             state,
             supervisor,
+            services,
             stop,
             socket: socket_task,
         })
@@ -180,6 +192,7 @@ impl Host {
     pub async fn stop(self) {
         let _ = self.stop.send(true);
         let _ = self.socket.await;
+        self.services.stop_all().await;
         self.supervisor.stop_all().await;
     }
 }

@@ -43,6 +43,14 @@ pub enum AuditAction {
     Deny,
     #[serde(rename = "session.login")]
     SessionLogin,
+    #[serde(rename = "service.start")]
+    ServiceStart,
+    #[serde(rename = "service.stop")]
+    ServiceStop,
+    #[serde(rename = "service.crash")]
+    ServiceCrash,
+    #[serde(rename = "service.deny")]
+    ServiceDeny,
 }
 
 impl AuditAction {
@@ -60,6 +68,10 @@ impl AuditAction {
         AuditAction::Acknowledge,
         AuditAction::Deny,
         AuditAction::SessionLogin,
+        AuditAction::ServiceStart,
+        AuditAction::ServiceStop,
+        AuditAction::ServiceCrash,
+        AuditAction::ServiceDeny,
     ];
 }
 
@@ -167,6 +179,10 @@ mod tests {
                 "acknowledge",
                 "deny",
                 "session.login",
+                "service.start",
+                "service.stop",
+                "service.crash",
+                "service.deny",
             ]
         );
     }

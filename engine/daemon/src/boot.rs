@@ -10,11 +10,12 @@ use std::path::{Component, Path};
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::resolve;
-use anth_contract::{AppId, Composition, Error, Grant};
+use anth_contract::{AppId, Composition, Error, Grant, Tier};
 use anth_runtime::{Budget, InstanceSpec, LogSettings};
 use sha2::{Digest, Sha256};
 
 use crate::config::LimitsSection;
+use crate::service::{ServiceLaunch, ServiceSupervisor};
 use crate::supervisor::Supervisor;
 
 #[derive(Debug, Default)]
@@ -46,11 +47,14 @@ fn degrade(
 
 pub async fn start_composed(
     supervisor: &Supervisor,
+    services: &ServiceSupervisor,
     state: &Path,
     composition: &Composition,
+    allow_third_party_service: bool,
     limits: &LimitsSection,
     log: LogSettings,
 ) -> Result<BootReport, Error> {
+    services.clear_stale();
     let registry = Registry::new(state);
     let grants = GrantStore::new(state);
     let (apps, installed, problems) = registry.installed_apps(&grants)?;
@@ -104,6 +108,18 @@ pub async fn start_composed(
             degrade(&mut report, &mut failed, id, "not-installed");
             continue;
         };
+        if app.manifest.service.is_some()
+            && app.descriptor.tier == Tier::ThirdParty
+            && !allow_third_party_service
+        {
+            degrade(
+                &mut report,
+                &mut failed,
+                id,
+                "third-party services are disabled; start with `[services] allow-third-party = true`",
+            );
+            continue;
+        }
         let grant = match grants.load(id) {
             Ok(Some(grant)) => grant,
             Ok(None) => {
@@ -120,25 +136,136 @@ pub async fn start_composed(
                 continue;
             }
         };
-        match spec_for(state, id, app, &grant, limits, log) {
-            Ok(spec) => {
-                let wall = std::time::Duration::from_millis(spec.budget.wall_ms);
-                match tokio::time::timeout(wall, supervisor.start(spec)).await {
-                    Ok(Ok(_)) => report.started.push(id.clone()),
-                    Ok(Err(error)) => {
-                        degrade(&mut report, &mut failed, id, error.message());
-                    }
-                    Err(_) => {
-                        degrade(&mut report, &mut failed, id, "start timed out");
-                    }
-                }
-            }
+        match start_one(supervisor, services, state, id, app, &grant, limits, log).await {
+            Ok(()) => report.started.push(id.clone()),
             Err(error) => {
                 degrade(&mut report, &mut failed, id, error.message());
             }
         }
     }
     Ok(report)
+}
+
+/// Starts both halves of an app: the service first, then the component. A
+/// half that fails stops the other, so a hybrid never runs half-composed.
+#[allow(clippy::too_many_arguments)]
+async fn start_one(
+    supervisor: &Supervisor,
+    services: &ServiceSupervisor,
+    state: &Path,
+    id: &AppId,
+    app: &Installed,
+    grant: &Grant,
+    limits: &LimitsSection,
+    log: LogSettings,
+) -> Result<(), Error> {
+    let mut service_started = false;
+    if app.manifest.service.is_some() {
+        let launch = service_launch(state, id, app, limits)?;
+        services.start(launch).await?;
+        service_started = true;
+    }
+    if app.manifest.wasm.is_some() {
+        let spec = match spec_for(state, id, app, grant, limits, log) {
+            Ok(spec) => spec,
+            Err(error) => {
+                if service_started {
+                    services.stop(id.as_str()).await;
+                }
+                return Err(error);
+            }
+        };
+        let wall = std::time::Duration::from_millis(spec.budget.wall_ms);
+        match tokio::time::timeout(wall, supervisor.start(spec)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                if service_started {
+                    services.stop(id.as_str()).await;
+                }
+                return Err(error);
+            }
+            Err(_) => {
+                if service_started {
+                    services.stop(id.as_str()).await;
+                }
+                return Err(Error::unavailable(format!("`{id}` start timed out")));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn service_launch(
+    state: &Path,
+    id: &AppId,
+    app: &Installed,
+    limits: &LimitsSection,
+) -> Result<ServiceLaunch, Error> {
+    let service = app
+        .manifest
+        .service
+        .as_ref()
+        .expect("the caller checked for a service half");
+    let relative = Path::new(&service.path);
+    if relative
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(Error::invalid(format!(
+            "`{id}` names an unsafe service path `{}`",
+            service.path
+        )));
+    }
+    let binary = state.join("apps").join(id.as_str()).join(relative);
+    let metadata = std::fs::symlink_metadata(&binary)
+        .map_err(|error| Error::internal(format!("inspecting {}: {error}", binary.display())))?;
+    if !metadata.is_file() {
+        return Err(Error::invalid(format!(
+            "{} is not a file",
+            binary.display()
+        )));
+    }
+    let bytes = std::fs::read(&binary)
+        .map_err(|error| Error::internal(format!("reading {}: {error}", binary.display())))?;
+    let hash: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if hash != service.sha256 {
+        return Err(Error::invalid(format!(
+            "`{id}` service bytes do not match the manifest hash"
+        )));
+    }
+    let socket = ServiceSupervisor::socket_path(state, id);
+    let socket_text = socket
+        .to_str()
+        .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
+    // `sockaddr_un.sun_path` is 108 bytes on Linux, NUL included.
+    if socket_text.len() >= 108 {
+        return Err(Error::invalid(format!(
+            "the service socket path is {} bytes; the kernel limit is 107",
+            socket_text.len()
+        )));
+    }
+    let argv = service
+        .argv
+        .iter()
+        .map(|argument| argument.replace("{socket}", socket_text))
+        .collect();
+    let exports = app
+        .manifest
+        .export
+        .iter()
+        .map(|export| (export.interface.clone(), app.manifest.export_target(export)))
+        .collect();
+    Ok(ServiceLaunch {
+        app: id.to_string(),
+        binary,
+        argv,
+        socket,
+        exports,
+        start_timeout: std::time::Duration::from_millis(limits.start_timeout_ms),
+    })
 }
 
 fn spec_for(
@@ -319,10 +446,17 @@ mod tests {
         )
         .expect("parse");
         let supervisor = Supervisor::new(std::sync::Arc::new(anth_runtime::FakeRuntime::new()));
+        let services = crate::service::ServiceSupervisor::new(
+            &dir,
+            anth_compose::audit::AuditLog::new(&dir),
+            std::time::Duration::from_secs(5),
+        );
         let report = start_composed(
             &supervisor,
+            &services,
             &dir,
             &composition,
+            false,
             &LimitsSection::default(),
             LogSettings::default(),
         )
