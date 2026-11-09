@@ -3,12 +3,48 @@
 // The module only knows the app's own routes. Every call goes through the
 // frame's scoped fetch, so the panel origin and the cookie stay out of reach.
 
-import { baseKeymap } from "prosemirror-commands";
-import { history, redo, undo } from "prosemirror-history";
-import { keymap } from "prosemirror-keymap";
-import { schema as basicSchema } from "prosemirror-schema-basic";
-import { EditorState, Plugin, PluginKey } from "prosemirror-state";
-import { Decoration, DecorationSet, EditorView } from "prosemirror-view";
+import { Compartment, EditorState } from "@codemirror/state";
+import {
+  EditorView,
+  drawSelection,
+  dropCursor,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  highlightSpecialChars,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+} from "@codemirror/view";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+  toggleComment,
+} from "@codemirror/commands";
+import {
+  StreamLanguage,
+  ensureSyntaxTree,
+  indentUnit,
+  syntaxTree,
+} from "@codemirror/language";
+import {
+  autocompletion,
+  completionKeymap,
+  startCompletion,
+} from "@codemirror/autocomplete";
+import { forEachDiagnostic, linter, lintGutter } from "@codemirror/lint";
+import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/lang-json";
+import { markdown } from "@codemirror/lang-markdown";
+import { css } from "@codemirror/lang-css";
+import { python } from "@codemirror/lang-python";
+import { rust } from "@codemirror/lang-rust";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { oneDark } from "@codemirror/theme-one-dark";
+import hljs from "highlight.js/lib/common";
+import { marked } from "marked";
 
 const LANGUAGE_BY_EXTENSION = {
   js: "javascript",
@@ -29,18 +65,38 @@ const LANGUAGE_BY_EXTENSION = {
   css: "css",
 };
 
-const KEYWORDS = {
-  javascript:
-    /\b(async|await|break|case|catch|class|const|continue|default|delete|do|else|export|extends|false|finally|for|from|function|if|import|in|instanceof|let|new|null|of|return|static|super|switch|this|throw|true|try|typeof|undefined|var|void|while|with|yield)\b/g,
-  python:
-    /\b(and|as|assert|async|await|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|None|nonlocal|not|or|pass|raise|return|True|try|while|with|yield)\b/g,
-  rust:
-    /\b(as|async|await|break|const|continue|crate|dyn|else|enum|extern|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|true|type|unsafe|use|where|while)\b/g,
-  shell:
-    /\b(if|then|else|elif|fi|for|while|do|done|case|esac|function|in|return|export|local|echo|cd|set)\b/g,
-  toml: /\b(true|false)\b/g,
-  css:
-    /(?:^|\s)(color|background|margin|padding|display|font|border|width|height|flex|grid|position|top|left|right|bottom|gap)\b/g,
+const COMPLETION_WORDS = {
+  javascript: [
+    "async", "await", "break", "case", "catch", "class", "const", "continue",
+    "default", "delete", "do", "else", "export", "extends", "false", "finally",
+    "for", "from", "function", "if", "import", "in", "instanceof", "let", "new",
+    "null", "of", "return", "static", "super", "switch", "this", "throw", "true",
+    "try", "typeof", "undefined", "var", "void", "while", "with", "yield",
+  ],
+  python: [
+    "and", "as", "assert", "async", "await", "break", "class", "continue", "def",
+    "del", "elif", "else", "except", "False", "finally", "for", "from", "global",
+    "if", "import", "in", "is", "lambda", "None", "nonlocal", "not", "or", "pass",
+    "raise", "return", "True", "try", "while", "with", "yield",
+  ],
+  rust: [
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else",
+    "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop",
+    "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self",
+    "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where",
+    "while",
+  ],
+  shell: [
+    "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case",
+    "esac", "function", "in", "return", "export", "local", "echo", "cd", "set",
+  ],
+  toml: ["true", "false"],
+  css: [
+    "color", "background", "margin", "padding", "display", "font", "border",
+    "width", "height", "flex", "grid", "position", "top", "left", "right",
+    "bottom", "gap",
+  ],
+  json: ["true", "false", "null"],
 };
 
 function languageFor(path) {
@@ -48,79 +104,18 @@ function languageFor(path) {
   return LANGUAGE_BY_EXTENSION[extension] ?? "plain";
 }
 
-function tokenizeLine(line, language) {
-  const tokens = [];
-  const taken = new Array(line.length).fill(false);
-  const add = (start, end, className) => {
-    if (start >= end) return;
-    if (taken.slice(start, end).some(Boolean)) return;
-    for (let index = start; index < end; index += 1) taken[index] = true;
-    tokens.push({ start, end, className });
-  };
-
-  const strings = /(["'`])(?:\\.|(?!\1).)*\1/g;
-  let match;
-  while ((match = strings.exec(line))) {
-    add(match.index, match.index + match[0].length, "tok-string");
-  }
-  if (["javascript", "rust", "python", "shell", "toml"].includes(language)) {
-    const marker = ["python", "shell", "toml"].includes(language) ? "#" : "//";
-    const index = line.indexOf(marker);
-    if (index >= 0) add(index, line.length, "tok-comment");
-  }
-  if (language === "markdown") {
-    const heading = /^#{1,6}\s.*$/.exec(line);
-    if (heading) add(0, line.length, "tok-heading");
-  }
-  const numbers = /\b\d+(?:\.\d+)?\b/g;
-  while ((match = numbers.exec(line))) {
-    add(match.index, match.index + match[0].length, "tok-number");
-  }
-  const keywords = KEYWORDS[language];
-  if (keywords) {
-    keywords.lastIndex = 0;
-    while ((match = keywords.exec(line))) {
-      add(match.index, match.index + match[0].length, "tok-keyword");
+function suggestionsFor(path, textValue, prefix) {
+  const words = new Set(COMPLETION_WORDS[languageFor(path)] ?? []);
+  if (textValue.length <= 200_000) {
+    for (const word of textValue.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? []) {
+      if (word.length <= 40) words.add(word);
     }
   }
-  if (language === "toml") {
-    const key = /^\s*[A-Za-z0-9_.-]+(?=\s*=)/.exec(line);
-    if (key) add(key.index, key.index + key[0].length, "tok-key");
-  }
-  return tokens.sort((left, right) => left.start - right.start);
-}
-
-function decorationsFor(doc, language) {
-  const decorations = [];
-  doc.descendants((node, pos) => {
-    if (node.type.name !== "paragraph" || !node.textContent) return;
-    for (const token of tokenizeLine(node.textContent, language)) {
-      decorations.push(
-        Decoration.inline(pos + 1 + token.start, pos + 1 + token.end, {
-          class: token.className,
-        }),
-      );
-    }
-  });
-  return DecorationSet.create(doc, decorations);
-}
-
-const highlightKey = new PluginKey("anth-syntax");
-
-function highlightPlugin(language) {
-  return new Plugin({
-    key: highlightKey,
-    state: {
-      init: (_, state) => decorationsFor(state.doc, language),
-      apply: (tr, old) =>
-        tr.docChanged ? decorationsFor(tr.doc, language) : old,
-    },
-    props: {
-      decorations(state) {
-        return this.getState(state);
-      },
-    },
-  });
+  const lower = prefix.toLowerCase();
+  return [...words]
+    .filter((word) => word !== prefix && word.toLowerCase().startsWith(lower))
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, 100);
 }
 
 const styles = `
@@ -140,21 +135,14 @@ const styles = `
   }
   .fs-address:focus { outline: 2px solid #7aa2ff66; outline-offset: 1px; border-color: #3a4560; }
   .fs-address:disabled { opacity: .6; }
-  .pm-host { min-height: 220px; display: flex; flex-direction: column; padding: 8px; border: 1px solid #2a3142; border-radius: 8px; background: #0f1219; }
-  .pm-host .ProseMirror {
-    flex: 1; min-height: 220px; outline: none; white-space: pre-wrap; overflow-wrap: anywhere;
-    font: 12px/1.6 ui-monospace, monospace; color: #e8ebf2; tab-size: 4;
-  }
-  .pm-host .ProseMirror p { margin: 0; min-height: 1.6em; }
-  .fs-editor-app { min-height: 100%; }
-  .fs-editor-app .fs-editor-full { flex: 1; min-height: 260px; }
-  .fs-editor-app .fs-editor-full .ProseMirror { min-height: 240px; }
-  .tok-keyword { color: #c792ea; }
-  .tok-string { color: #c3e88d; }
-  .tok-number { color: #f78c6c; }
-  .tok-comment { color: #667087; font-style: italic; }
-  .tok-heading { color: #7aa2ff; font-weight: 600; }
-  .tok-key { color: #89ddff; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-literal { color: #c792ea; }
+  .hljs-string, .hljs-template-tag, .hljs-template-variable { color: #c3e88d; }
+  .hljs-number, .hljs-symbol, .hljs-bullet { color: #f78c6c; }
+  .hljs-comment, .hljs-quote { color: #667087; font-style: italic; }
+  .hljs-title, .hljs-section, .hljs-name, .hljs-selector-id { color: #7aa2ff; font-weight: 600; }
+  .hljs-attr, .hljs-attribute, .hljs-variable { color: #89ddff; }
+  .hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: #ffcb6b; }
+  .hljs-meta { color: #8f98ab; }
   .fs-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1.25fr); gap: 12px; min-height: 300px; }
   .fs-list { list-style: none; margin: 0; padding: 0; border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016; }
   .fs-row { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid #171c26; }
@@ -212,12 +200,24 @@ const styles = `
     margin: 0; flex: 1; font: 12px/1.55 ui-monospace, monospace; white-space: pre-wrap;
     overflow-wrap: anywhere; color: #c8d0df;
   }
-  .fs-preview textarea {
-    flex: 1; min-height: 220px; width: 100%; resize: vertical; padding: 9px; border-radius: 7px;
-    border: 1px solid #2a3142; background: #0f1219; color: #e8ebf2; font: 12px/1.55 ui-monospace, monospace;
-  }
   .fs-preview img { max-width: 100%; max-height: 280px; object-fit: contain; border-radius: 6px; }
   .fs-preview .hint { color: #667087; font-size: 12px; margin: 0; }
+  .fs-formatted { flex: 1; min-height: 0; overflow: auto; border: 1px solid #202632; border-radius: 8px; background: #0d1016; padding: 10px 12px; }
+  .fs-code { margin: 0; font: 12px/1.6 ui-monospace, monospace; white-space: pre; color: #c8d0df; tab-size: 4; }
+  .fs-code code { background: transparent; border: 0; padding: 0; font: inherit; color: inherit; white-space: pre; }
+  .fs-markdown { font-size: 13px; line-height: 1.6; color: #d5dbea; }
+  .fs-markdown h1, .fs-markdown h2, .fs-markdown h3, .fs-markdown h4, .fs-markdown h5, .fs-markdown h6 { margin: 14px 0 6px; color: #fff; line-height: 1.25; }
+  .fs-markdown h1 { font-size: 22px; }
+  .fs-markdown h2 { font-size: 18px; }
+  .fs-markdown h3 { font-size: 15px; }
+  .fs-markdown p { margin: 0 0 8px; }
+  .fs-markdown ul, .fs-markdown ol { margin: 0 0 8px; padding-left: 22px; }
+  .fs-markdown li { margin: 2px 0; }
+  .fs-markdown blockquote { margin: 8px 0; padding: 4px 10px; border-left: 3px solid #3a4560; color: #aab4c8; }
+  .fs-markdown code { background: #1b2130; border: 1px solid #2a3142; border-radius: 4px; padding: 0 4px; font: 12px ui-monospace, monospace; color: #c3e88d; }
+  .fs-markdown .fs-code code { background: transparent; border: 0; padding: 0; }
+  .fs-markdown hr { border: 0; border-top: 1px solid #2a3142; margin: 12px 0; }
+  .md-link { color: #7aa2ff; text-decoration: underline; text-decoration-style: dotted; }
   .fs-actions { display: flex; gap: 5px; flex-wrap: wrap; }
   .fs-actions button {
     padding: 4px 8px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
@@ -231,6 +231,120 @@ const styles = `
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
   }
   .fs-more button:hover { border-color: #3a4560; color: #fff; }
+  .editor-app {
+    display: grid; grid-template-rows: 38px minmax(0, 1fr) 28px;
+    min-height: 480px; height: 100%; border: 1px solid #202632; border-radius: 10px;
+    background: #0d1016; color: #e8ebf2; overflow: hidden;
+  }
+  .editor-toolbar, .editor-status {
+    display: flex; align-items: center; gap: 8px; padding: 0 8px;
+    background: #12161f; min-width: 0;
+  }
+  .editor-toolbar { border-bottom: 1px solid #202634; }
+  .editor-status { border-top: 1px solid #202634; color: #8f98ab; font: 11px ui-monospace, monospace; white-space: nowrap; overflow: hidden; }
+  .editor-toolbar .grow, .editor-status .grow { flex: 1; }
+  .editor-toolbar button {
+    padding: 5px 9px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 11.5px; cursor: pointer;
+  }
+  .editor-toolbar button:hover { border-color: #3a4560; color: #fff; }
+  .editor-toolbar button.editor-tree-toggle {
+    width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .editor-tree-toggle svg { width: 15px; height: 15px; display: block; }
+  .editor-path {
+    flex: 1; min-width: 120px; padding: 5px 8px; border-radius: 6px;
+    border: 1px solid #2a3142; background: #0f1219; color: #c8d0df;
+    font: 12px ui-monospace, monospace;
+  }
+  .editor-path:focus { outline: 2px solid #7aa2ff66; outline-offset: 1px; border-color: #3a4560; }
+  .editor-info { color: #8f98ab; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34%; }
+  .editor-info.bad { color: #ffb3ba; }
+  .editor-tabs {
+    display: flex; align-items: stretch; gap: 1px; overflow-x: auto;
+    flex: 0 0 34px; border-bottom: 1px solid #202634; background: #0f1219;
+  }
+  .editor-tab { display: flex; align-items: center; border-right: 1px solid #202634; background: #12161f; }
+  .editor-tab.active { background: #1b2130; box-shadow: inset 0 2px 0 #7aa2ff; }
+  .editor-tab-open {
+    border: 0; background: transparent; color: #c8d0df; padding: 0 8px; height: 33px;
+    font: 12px ui-monospace, monospace; cursor: pointer; display: flex; align-items: center; gap: 6px;
+    white-space: nowrap;
+  }
+  .editor-tab.active .editor-tab-open { color: #fff; }
+  .editor-dirty { color: #f78c6c; font-size: 8px; }
+  .editor-tab-close {
+    border: 0; background: transparent; color: #667087; width: 22px; height: 33px;
+    cursor: pointer; font-size: 14px;
+  }
+  .editor-tab-close:hover { color: #ff8f9a; }
+  .editor-main { display: flex; min-height: 0; position: relative; }
+  .editor-tree {
+    width: 212px; min-width: 150px; overflow: auto; border-right: 1px solid #202634;
+    padding: 6px 0; background: #0b0e14;
+  }
+  .tree-hidden .editor-tree { display: none; }
+  .tree-hidden .editor-tree-backdrop { display: none !important; }
+  .editor-tree-backdrop {
+    position: absolute; inset: 0; z-index: 4; background: #00000073;
+    border: 0; padding: 0; margin: 0;
+  }
+  .editor-tree-backdrop[hidden] { display: none; }
+  .editor-tree-head { display: flex; align-items: center; gap: 4px; padding: 0 8px 6px; }
+  .editor-tree-root, .editor-tree-up {
+    border: 0; background: transparent; color: #8f98ab; font: 11.5px ui-monospace, monospace;
+    text-align: left; padding: 3px 4px; border-radius: 4px; cursor: pointer;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .editor-tree-root:hover, .editor-tree-up:hover { background: #1b2130; color: #fff; }
+  .editor-tree-row { display: flex; min-width: 0; }
+  .editor-tree-label {
+    border: 0; background: transparent; color: #c8d0df; padding: 3px 6px;
+    font: 12px ui-monospace, monospace; text-align: left; cursor: pointer; width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px;
+  }
+  .editor-tree-label:hover { background: #151a24; color: #fff; }
+  .editor-tree-label.dir { color: #aab4c8; }
+  .editor-tree-label.link { color: #7aa2ff; }
+  .editor-tree-label.active { background: #1b2a4a; color: #fff; }
+  .editor-workspace { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .editor-empty { color: #667087; font-size: 12px; padding: 18px; }
+  .editor-content { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+  .editor-content[hidden] { display: none; }
+  .editor-content .cm-editor { height: 100%; }
+  .editor-content .cm-scroller { overflow: auto; font: 12px/1.6 ui-monospace, monospace; }
+  .editor-content .cm-content { padding: 0; }
+  .editor-content .cm-gutters { background: #0b0e14; border-right: 1px solid #171c26; }
+  .editor-content .cm-activeLine { background: #ffffff08; }
+  .editor-content .cm-activeLineGutter { background: #1b2130; }
+  .editor-content .cm-tooltip-autocomplete {
+    border: 1px solid #333d54; border-radius: 8px; background: #151a24; color: #c8d0df;
+    box-shadow: 0 16px 44px #00000099;
+  }
+  .editor-content .cm-tooltip-autocomplete > ul > li[aria-selected] { background: #1b2a4a; color: #fff; }
+  .editor-content .cm-lintRange-error { text-decoration: underline wavy #ff7d8a; text-underline-offset: 2px; }
+  .editor-content .cm-lint-marker-error { content: "●"; color: #ff7d8a; }
+  .editor-eol-label, .editor-indent-label { display: flex; align-items: center; gap: 4px; }
+  .editor-eol-label select, .editor-indent-label select {
+    background: #0f1219; color: #c8d0df; border: 1px solid #2a3142; border-radius: 4px;
+    font: 11px ui-monospace, monospace; padding: 1px 2px;
+  }
+  .editor-error { overflow: hidden; text-overflow: ellipsis; }
+  .editor-error.bad { color: #ffb3ba; }
+  .editor-language { color: #7aa2ff; }
+  .editor-tree-close {
+    display: none; margin-left: auto; border: 0; background: transparent; color: #8f98ab;
+    width: 24px; height: 24px; cursor: pointer; border-radius: 4px; font-size: 15px;
+  }
+  .editor-tree-close:hover { background: #1b2130; color: #fff; }
+  @media (max-width: 700px) {
+    .editor-tree {
+      position: absolute; top: 0; bottom: 0; left: 0; width: min(78%, 260px);
+      z-index: 5; border-right: 1px solid #333d54; box-shadow: 0 18px 50px #000000a6;
+    }
+    .editor-tree-close { display: inline-flex; align-items: center; justify-content: center; }
+    .editor-tree-backdrop { display: block; }
+  }
   .fs-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .fs-status.bad { color: #ffb3ba; }
 `;
@@ -290,42 +404,43 @@ function normalizePath(input) {
   return `/${parts.join("/")}`;
 }
 
-function editorDoc(textValue) {
-  const lines = textValue.split("\n");
-  return basicSchema.node(
-    "doc",
-    null,
-    lines.map((line) =>
-      basicSchema.node(
-        "paragraph",
-        null,
-        line ? [basicSchema.text(line)] : [],
-      ),
-    ),
-  );
+const LANGUAGE_LABELS = {
+  javascript: "JavaScript",
+  json: "JSON",
+  shell: "Shell",
+  markdown: "Markdown",
+  toml: "TOML",
+  python: "Python",
+  rust: "Rust",
+  css: "CSS",
+  plain: "Plain text",
+};
+
+function extensionOf(path) {
+  const name = String(path).split("/").pop() ?? "";
+  const index = name.lastIndexOf(".");
+  return index <= 0 ? "" : name.slice(index + 1).toLowerCase();
 }
 
-function editorText(doc) {
-  const lines = [];
-  doc.forEach((node) => lines.push(node.textContent));
-  return lines.join("\n");
+function languageLabel(language) {
+  return LANGUAGE_LABELS[language] ?? "Plain text";
 }
 
-function editorState(textValue, path) {
-  return EditorState.create({
-    schema: basicSchema,
-    doc: editorDoc(textValue),
-    plugins: [
-      history(),
-      keymap({
-        "Mod-z": undo,
-        "Mod-y": redo,
-        "Shift-Mod-z": redo,
-        ...baseKeymap,
-      }),
-      highlightPlugin(languageFor(path)),
-    ],
-  });
+function detectEol(value) {
+  const crlf = (value.match(/\r\n/g) || []).length;
+  const cr = (value.match(/\r(?!\n)/g) || []).length;
+  const lf = (value.match(/(?<!\r)\n/g) || []).length;
+  if (crlf && !cr && !lf) return "CRLF";
+  if (!crlf && !cr) return "LF";
+  return "Mixed";
+}
+
+function splitLines(value) {
+  return value.split(/\r\n|\r|\n/);
+}
+
+function joinEol(value, eol) {
+  return splitLines(value).join(eol === "CRLF" ? "\r\n" : "\n");
 }
 
 function bytes(size) {
@@ -386,152 +501,876 @@ function cell(className, textValue) {
   return node;
 }
 
+function normalizeNewlines(value) {
+  return String(value).replace(/\r\n?/g, "\n");
+}
+
+const HLJS_LANGUAGE_BY_EXTENSION = {
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  jsx: "javascript",
+  ts: "typescript",
+  tsx: "typescript",
+  json: "json",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  md: "markdown",
+  markdown: "markdown",
+  toml: "ini",
+  py: "python",
+  rs: "rust",
+  css: "css",
+};
+
+function hljsLanguageFor(path) {
+  return HLJS_LANGUAGE_BY_EXTENSION[extensionOf(path)] ?? "plaintext";
+}
+
+function highlightCode(value, path) {
+  const source = normalizeNewlines(value);
+  const language = hljsLanguageFor(path);
+  if (!hljs.getLanguage(language)) {
+    return `<pre class="fs-code hljs"><code>${escape(source)}</code></pre>`;
+  }
+  return `<pre class="fs-code hljs"><code class="language-${language}">${hljs.highlight(source, { language }).value}</code></pre>`;
+}
+
+marked.use({
+  gfm: true,
+  breaks: false,
+  renderer: {
+    code({ text, lang }) {
+      const source = normalizeNewlines(text);
+      const language =
+        lang && hljs.getLanguage(lang) ? lang : "plaintext";
+      const highlighted = hljs.getLanguage(language)
+        ? hljs.highlight(source, { language }).value
+        : escape(source);
+      return `<pre class="fs-code hljs"><code class="language-${language}">${highlighted}</code></pre>`;
+    },
+  },
+});
+
+function formattedPreview(value, path) {
+  const limit = 200_000;
+  const truncated = value.length > limit;
+  const textValue = truncated ? value.slice(0, limit) : value;
+  const extension = extensionOf(path);
+  let html;
+  if (extension === "md" || extension === "markdown") {
+    html = `<div class="fs-markdown">${marked.parse(textValue)}</div>`;
+  } else if (extension === "json") {
+    let pretty = textValue;
+    try {
+      pretty = JSON.stringify(JSON.parse(textValue), null, 2);
+    } catch {
+      // Keep the original text so the preview still shows the bad JSON.
+    }
+    html = highlightCode(pretty, path);
+  } else {
+    html = highlightCode(textValue, path);
+  }
+  return `${html}${truncated ? '<p class="hint">Preview truncated at 200 KB.</p>' : ""}`;
+}
+
+const indentCompartment = new Compartment();
+
+function indentExtensions(settings) {
+  return [
+    EditorState.tabSize.of(settings.size),
+    indentUnit.of(settings.useTabs ? "\t" : " ".repeat(settings.size)),
+  ];
+}
+
+function languageExtension(path) {
+  const extension = extensionOf(path);
+  if (["js", "mjs", "cjs"].includes(extension)) return javascript();
+  if (extension === "jsx") return javascript({ jsx: true });
+  if (extension === "ts") return javascript({ typescript: true });
+  if (extension === "tsx") return javascript({ typescript: true, jsx: true });
+  if (extension === "json") return json();
+  if (extension === "css") return css();
+  if (extension === "py") return python();
+  if (extension === "rs") return rust();
+  if (extension === "md" || extension === "markdown") return markdown();
+  if (["sh", "bash", "zsh"].includes(extension)) {
+    return StreamLanguage.define(shell);
+  }
+  if (extension === "toml") return StreamLanguage.define(toml);
+  return [];
+}
+
+function completionSource(path) {
+  return (context) => {
+    const word = context.matchBefore(/[A-Za-z_$][A-Za-z0-9_$]*/);
+    if (!word && !context.explicit) return null;
+    const from = word ? word.from : context.pos;
+    const prefix = word ? context.state.sliceDoc(word.from, context.pos) : "";
+    const items = suggestionsFor(path, context.state.doc.toString(), prefix);
+    if (!items.length) return null;
+    return {
+      from,
+      options: items.map((label) => ({ label, type: "keyword" })),
+    };
+  };
+}
+
+function syntaxDiagnostics(view) {
+  const diagnostics = [];
+  const tree =
+    ensureSyntaxTree(view.state, view.state.doc.length, 500) ??
+    syntaxTree(view.state);
+  tree.iterate({
+    enter(node) {
+      if (!node.type.isError) return;
+      const from = node.from;
+      const to = Math.max(node.to, from + 1);
+      diagnostics.push({
+        from,
+        to: Math.min(to, view.state.doc.length),
+        severity: "error",
+        message: "Syntax error",
+      });
+      if (diagnostics.length >= 20) return false;
+    },
+  });
+  return diagnostics;
+}
+
+let editorBridge = null;
+
+export function onParams(params) {
+  if (!params || typeof params !== "object") return;
+  if (typeof params.path === "string") {
+    void editorBridge?.openPath(params.path);
+  }
+}
+
 function mountEditorView(root, context) {
   const style = document.createElement("style");
   style.textContent = styles;
   root.append(style);
 
   const box = document.createElement("div");
-  box.className = "fs fs-editor-app";
+  box.className = "editor-app";
   box.innerHTML = `
-    <header class="fs-bar">
-      <input class="fs-address" aria-label="Path" spellcheck="false" autocomplete="off" />
+    <header class="editor-toolbar">
+      <button type="button" class="editor-tree-toggle" data-tree-toggle aria-label="Toggle file tree" aria-expanded="true" title="Toggle file tree">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>
+      </button>
+      <input class="editor-path" aria-label="Path" spellcheck="false" autocomplete="off" />
       <button type="button" data-open>Open</button>
       <button type="button" data-save>Save</button>
+      <span class="editor-info" data-info></span>
+      <span class="grow"></span>
+      <button type="button" data-refresh>Refresh tree</button>
     </header>
-    <div class="pm-host fs-editor-full"></div>
-    <p class="fs-status"></p>
+    <div class="editor-main">
+      <aside class="editor-tree" aria-label="Files"></aside>
+      <div class="editor-tree-backdrop" data-tree-backdrop hidden></div>
+      <section class="editor-workspace">
+        <div class="editor-tabs" role="tablist" aria-label="Open files"></div>
+        <div class="editor-empty">Open a file from the tree or enter a path.</div>
+        <div class="editor-content" hidden></div>
+      </section>
+    </div>
+    <footer class="editor-status">
+      <span class="editor-language" data-language>Plain text</span>
+      <label class="editor-eol-label">EOL
+        <select data-eol>
+          <option value="LF">LF</option>
+          <option value="CRLF">CRLF</option>
+          <option value="Mixed" hidden>Mixed</option>
+        </select>
+      </label>
+      <label class="editor-indent-label">Indent
+        <select data-indent>
+          <option value="2">2 spaces</option>
+          <option value="4">4 spaces</option>
+          <option value="8">8 spaces</option>
+          <option value="tab">Tab</option>
+        </select>
+      </label>
+      <span class="editor-error" data-error></span>
+      <span class="grow"></span>
+      <span data-position>Ln 1, Col 1</span>
+      <span data-selection>Sel 0</span>
+    </footer>
   `;
   root.append(box);
 
-  const address = box.querySelector(".fs-address");
-  const host = box.querySelector(".fs-editor-full");
-  const status = box.querySelector(".fs-status");
-  const openButton = box.querySelector("[data-open]");
-  const saveButton = box.querySelector("[data-save]");
+  const pathInput = box.querySelector(".editor-path");
+  const tabsElement = box.querySelector(".editor-tabs");
+  const treeElement = box.querySelector(".editor-tree");
+  const content = box.querySelector(".editor-content");
+  const empty = box.querySelector(".editor-empty");
+  const info = box.querySelector("[data-info]");
+  const language = box.querySelector("[data-language]");
+  const eolSelect = box.querySelector("[data-eol]");
+  const eolMixed = eolSelect.querySelector('option[value="Mixed"]');
+  const indentSelect = box.querySelector("[data-indent]");
+  const errorElement = box.querySelector("[data-error]");
+  const position = box.querySelector("[data-position]");
+  const selection = box.querySelector("[data-selection]");
+  const treeToggle = box.querySelector("[data-tree-toggle]");
+  const treeBackdrop = box.querySelector("[data-tree-backdrop]");
+  const mobileQuery = window.matchMedia("(max-width: 700px)");
 
-  let view = null;
-  let path = "";
-  let dirty = false;
-  let disposed = false;
-
-  function setStatus(message, bad = false) {
-    status.textContent = message ?? "";
-    status.className = bad ? "fs-status bad" : "fs-status";
+  if (typeof context.fill === "function") {
+    context.fill();
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
   }
 
-  function publish(pending) {
-    dirty = pending;
-    if (typeof context.updateParams !== "function" || !view) return;
+  const tabs = [];
+  let active = -1;
+  let view = null;
+  let disposed = false;
+  let switching = false;
+  let treeRoot = "/";
+  let treeOpen = !mobileQuery.matches;
+  let indentSetting = { size: 4, useTabs: false };
+  const treeData = new Map();
+
+  const activeTab = () => (active >= 0 ? tabs[active] : null);
+
+  function setInfo(message, bad = false) {
+    info.textContent = message ?? "";
+    info.className = bad ? "editor-info bad" : "editor-info";
+  }
+
+  function indentLabel() {
+    return indentSetting.useTabs
+      ? `Tab (${indentSetting.size})`
+      : `${indentSetting.size} spaces`;
+  }
+
+  function applyTreeState(publish = false) {
+    const mobile = mobileQuery.matches;
+    box.classList.toggle("tree-hidden", !treeOpen);
+    treeBackdrop.hidden = !(treeOpen && mobile);
+    treeToggle.setAttribute("aria-expanded", String(treeOpen));
+    treeToggle.title = treeOpen ? "Hide file tree" : "Show file tree";
+    if (publish) publishSession();
+  }
+
+  function setTreeOpen(open, publish = true) {
+    treeOpen = open;
+    applyTreeState(publish);
+  }
+
+  function publishSession() {
+    if (typeof context.updateParams !== "function") return;
     context.updateParams({
-      path,
-      name: baseName(path),
-      text: editorText(view.state.doc),
-      dirty: pending,
+      session: {
+        active: activeTab()?.path ?? null,
+        tree: treeOpen,
+        indent: { ...indentSetting },
+        tabs: tabs.map((tab) => ({
+          path: tab.path,
+          text: tab.state.doc.toString(),
+          eol: tab.eol,
+          dirty: tab.dirty,
+        })),
+      },
     });
   }
 
-  function show(value, target, pending = false) {
-    path = target;
-    address.value = target;
-    const state = editorState(value, target);
-    if (view) {
-      view.updateState(state);
-    } else {
-      const mountPoint = document.createElement("div");
-      view = new EditorView(mountPoint, {
-        state,
-        dispatchTransaction(transaction) {
-          const next = view.state.apply(transaction);
-          view.updateState(next);
-          if (transaction.docChanged) publish(true);
-        },
+  function renderTabs() {
+    tabsElement.replaceChildren();
+    tabs.forEach((tab, index) => {
+      const node = document.createElement("div");
+      node.className = `editor-tab${index === active ? " active" : ""}`;
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "editor-tab-open";
+      open.title = tab.path;
+      open.append(document.createTextNode(baseName(tab.path)));
+      if (tab.dirty) {
+        const dot = document.createElement("span");
+        dot.className = "editor-dirty";
+        dot.textContent = "●";
+        dot.title = "Unsaved changes";
+        open.append(dot);
+      }
+      open.addEventListener("click", () => activate(index));
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "editor-tab-close";
+      close.textContent = "×";
+      close.title = `Close ${tab.path}`;
+      close.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeTab(index);
       });
-      host.append(view.dom);
+      node.append(open, close);
+      tabsElement.append(node);
+    });
+  }
+
+  function refreshStatus() {
+    const tab = activeTab();
+    if (!tab || !view) {
+      language.textContent = "Plain text";
+      eolSelect.disabled = true;
+      eolMixed.hidden = true;
+      eolSelect.value = "LF";
+      indentSelect.value = "4";
+      errorElement.textContent = "";
+      errorElement.title = "";
+      errorElement.className = "editor-error";
+      position.textContent = "Ln 1, Col 1";
+      selection.textContent = "Sel 0";
+      return;
     }
-    dirty = pending;
+    language.textContent = languageLabel(languageFor(tab.path));
+    eolSelect.disabled = false;
+    if (tab.eol === "Mixed") {
+      eolMixed.hidden = false;
+      eolSelect.value = "Mixed";
+    } else {
+      eolMixed.hidden = true;
+      eolSelect.value = tab.eol === "CRLF" ? "CRLF" : "LF";
+    }
+    indentSelect.value = indentSetting.useTabs
+      ? "tab"
+      : String(indentSetting.size);
+    const tabOption = indentSelect.querySelector('option[value="tab"]');
+    if (tabOption) tabOption.textContent = `Tab (${indentSetting.size})`;
+    indentSelect.title = `Indentation: ${indentLabel()}`;
+    const state = view.state;
+    const main = state.selection.main;
+    const line = state.doc.lineAt(main.head);
+    position.textContent = `Ln ${line.number}, Col ${main.head - line.from + 1}`;
+    selection.textContent = `Sel ${Math.max(0, main.to - main.from)}`;
+    let diagnostic = null;
+    forEachDiagnostic(state, (entry) => {
+      if (!diagnostic && entry.severity === "error") diagnostic = entry;
+    });
+    if (diagnostic) {
+      const at = state.doc.lineAt(diagnostic.from);
+      errorElement.textContent = `Syntax · Ln ${at.number}: ${diagnostic.message}`;
+      errorElement.title = diagnostic.message;
+      errorElement.className = "editor-error bad";
+    } else {
+      errorElement.textContent = "";
+      errorElement.title = "";
+      errorElement.className = "editor-error";
+    }
+  }
+
+  const updateListener = EditorView.updateListener.of((update) => {
+    if (switching) return;
+    const tab = activeTab();
+    if (!tab) return;
+    tab.state = update.state;
+    if (update.docChanged) {
+      tab.dirty = true;
+      renderTabs();
+      publishSession();
+    }
+    refreshStatus();
+  });
+
+  function createState(path, text) {
+    return EditorState.create({
+      doc: normalizeNewlines(text),
+      extensions: [
+        lineNumbers(),
+        highlightActiveLineGutter(),
+        highlightSpecialChars(),
+        history(),
+        drawSelection(),
+        dropCursor(),
+        EditorState.allowMultipleSelections.of(true),
+        rectangularSelection(),
+        highlightActiveLine(),
+        indentCompartment.of(indentExtensions(indentSetting)),
+        keymap.of([
+          { key: "Mod-/", run: toggleComment },
+          { key: "Ctrl-Space", run: startCompletion },
+          ...completionKeymap,
+          indentWithTab,
+          ...defaultKeymap,
+          ...historyKeymap,
+        ]),
+        languageExtension(path),
+        autocompletion({
+          override: [completionSource(path)],
+          activateOnTyping: true,
+        }),
+        linter(syntaxDiagnostics),
+        lintGutter(),
+        oneDark,
+        updateListener,
+        EditorView.theme({
+          "&": { height: "100%", backgroundColor: "#0d1016" },
+          ".cm-scroller": {
+            fontFamily: "ui-monospace, monospace",
+            fontSize: "12px",
+            lineHeight: "1.6",
+            padding: "0",
+          },
+          ".cm-content": { padding: "0" },
+          ".cm-gutters": {
+            backgroundColor: "#0b0e14",
+            borderRight: "1px solid #171c26",
+            padding: "0",
+          },
+          ".cm-activeLine": { backgroundColor: "#ffffff08" },
+          ".cm-activeLineGutter": { backgroundColor: "#1b2130" },
+        }),
+      ],
+    });
+  }
+
+  function ensureView() {
+    if (view) return view;
+    view = new EditorView({ state: activeTab().state, parent: content });
+    return view;
+  }
+
+  function activate(index) {
+    const tab = tabs[index];
+    if (!tab) return;
+    active = index;
+    pathInput.value = tab.path;
+    empty.hidden = true;
+    content.hidden = false;
+    ensureView();
+    switching = true;
+    view.setState(tab.state);
+    switching = false;
+    renderTabs();
+    refreshStatus();
+    renderTree();
+    if (mobileQuery.matches && treeOpen) setTreeOpen(false, false);
+    publishSession();
     view.focus();
   }
 
-  async function loadPath(input) {
-    const target = normalizePath(input);
-    if (target === null) {
-      setStatus("The path cannot escape the root.", true);
+  function closeTab(index) {
+    const tab = tabs[index];
+    if (!tab) return;
+    tabs.splice(index, 1);
+    if (tabs.length === 0) {
+      active = -1;
+      view?.destroy();
+      view = null;
+      content.replaceChildren();
+      content.hidden = true;
+      empty.hidden = false;
+      pathInput.value = "";
+      refreshStatus();
+      renderTabs();
+      renderTree();
+      publishSession();
       return;
     }
-    setStatus("Reading…");
-    try {
-      const data = await call(
-        context,
-        `/file?path=${encodeURIComponent(target)}`,
-      );
-      if (disposed) return;
-      const decoded = text(data);
-      if (decoded === null) {
-        setStatus(`${target} is not UTF-8 text.`, true);
-        return;
-      }
-      show(decoded, target);
-      publish(false);
-      setStatus(`${target} · ${data.length} bytes`);
-    } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
-    }
+    if (active === index) active = Math.min(index, tabs.length - 1);
+    else if (active > index) active -= 1;
+    activate(active);
   }
 
-  async function save() {
-    if (!view) return;
-    const target = normalizePath(address.value || path);
+  async function openFile(path, options = {}) {
+    const target = normalizePath(path);
     if (target === null) {
-      setStatus("The path cannot escape the root.", true);
+      setInfo("The path cannot escape the root.", true);
       return;
     }
-    const value = editorText(view.state.doc);
-    const data = Array.from(encoder.encode(value));
-    setStatus("Saving…");
+    const existing = tabs.findIndex((tab) => tab.path === target);
+    if (existing >= 0 && typeof options.text !== "string") {
+      activate(existing);
+      return;
+    }
+    let value = typeof options.text === "string" ? options.text : null;
+    if (value === null) {
+      setInfo(`Reading ${target}…`);
+      try {
+        const data = await call(
+          context,
+          `/file?path=${encodeURIComponent(target)}`,
+        );
+        if (disposed) return;
+        value = text(data);
+        if (value === null) {
+          setInfo(`${target} is not UTF-8 text.`, true);
+          return;
+        }
+      } catch (error) {
+        if (!disposed) setInfo(reason(error), true);
+        return;
+      }
+    }
+    const tab = {
+      path: target,
+      state: createState(target, value),
+      eol: options.eol ?? detectEol(value),
+      dirty: options.dirty === true,
+    };
+    if (existing >= 0) tabs[existing] = tab;
+    else tabs.push(tab);
+    activate(tabs.indexOf(tab));
+    void ensureTreePath(target);
+    setInfo(`${target} · ${languageLabel(languageFor(target))}`);
+  }
+
+  async function saveActive() {
+    const tab = activeTab();
+    if (!tab) return;
+    const eol = tab.eol === "CRLF" ? "CRLF" : "LF";
+    const data = Array.from(
+      encoder.encode(joinEol(tab.state.doc.toString(), eol)),
+    );
+    setInfo(`Saving ${tab.path}…`);
     try {
       await call(context, "/file", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: target, bytes: data }),
+        body: JSON.stringify({ path: tab.path, bytes: data }),
       });
       if (disposed) return;
-      path = target;
-      address.value = target;
-      dirty = false;
-      publish(false);
-      setStatus(`Saved ${target}`);
+      tab.dirty = false;
+      tab.eol = eol;
+      renderTabs();
+      refreshStatus();
+      publishSession();
+      setInfo(`Saved ${tab.path} · ${data.length} bytes`);
     } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
+      if (!disposed) setInfo(reason(error), true);
     }
   }
 
-  openButton.addEventListener("click", () => void loadPath(address.value));
-  saveButton.addEventListener("click", () => void save());
-  address.addEventListener("keydown", (event) => {
+  function applyIndent(next) {
+    indentSetting = next;
+    for (const tab of tabs) {
+      tab.state = tab.state.update({
+        effects: indentCompartment.reconfigure(indentExtensions(indentSetting)),
+      }).state;
+    }
+    if (view && activeTab()) {
+      switching = true;
+      view.setState(activeTab().state);
+      switching = false;
+    }
+    refreshStatus();
+    publishSession();
+    setInfo(`Indentation: ${indentLabel()}`);
+  }
+
+  async function loadDirectory(path) {
+    const page = await call(
+      context,
+      `/files?path=${encodeURIComponent(path)}&limit=500`,
+    );
+    treeData.set(path, {
+      open: treeData.get(path)?.open ?? true,
+      entries: page.entries,
+    });
+  }
+
+  async function ensureTreePath(path) {
+    if (treeRoot !== "/") {
+      treeRoot = "/";
+      treeData.clear();
+    }
+    const parts = path.split("/").filter(Boolean);
+    if (!treeData.has("/")) {
+      try {
+        await loadDirectory("/");
+      } catch {
+        return;
+      }
+    }
+    let current = "/";
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      current = join(current, parts[index]);
+      if (!treeData.has(current)) {
+        try {
+          await loadDirectory(current);
+        } catch {
+          break;
+        }
+      }
+      const state = treeData.get(current);
+      if (state) state.open = true;
+    }
+    if (!disposed) renderTree();
+  }
+
+  async function loadTree(path) {
+    treeRoot = path;
+    treeData.clear();
+    treeElement.textContent = "Loading…";
+    try {
+      await loadDirectory(path);
+      if (!disposed) renderTree();
+    } catch (error) {
+      if (!disposed) treeElement.textContent = reason(error);
+    }
+  }
+
+  function renderTree() {
+    treeElement.replaceChildren();
+    const root = treeData.get(treeRoot);
+    const header = document.createElement("div");
+    header.className = "editor-tree-head";
+    const rootButton = document.createElement("button");
+    rootButton.type = "button";
+    rootButton.className = "editor-tree-root";
+    rootButton.textContent = treeRoot;
+    rootButton.title = "Refresh this directory";
+    rootButton.addEventListener("click", () => void loadTree(treeRoot));
+    header.append(rootButton);
+    if (treeRoot !== "/") {
+      const up = document.createElement("button");
+      up.type = "button";
+      up.className = "editor-tree-up";
+      up.textContent = "↑ /";
+      up.title = "Back to the filesystem root";
+      up.addEventListener("click", () => void loadTree("/"));
+      header.append(up);
+    }
+    const closeTree = document.createElement("button");
+    closeTree.type = "button";
+    closeTree.className = "editor-tree-close";
+    closeTree.textContent = "×";
+    closeTree.title = "Close file tree";
+    closeTree.setAttribute("aria-label", "Close file tree");
+    closeTree.addEventListener("click", () => setTreeOpen(false));
+    header.append(closeTree);
+    treeElement.append(header);
+    if (!root) {
+      treeElement.append(cell("hint", "Loading…"));
+      return;
+    }
+    const list = document.createElement("div");
+    list.className = "editor-tree-list";
+    renderTreeEntries(treeRoot, root.entries, list, 0);
+    treeElement.append(list);
+  }
+
+  function renderTreeEntries(base, entries, container, depth) {
+    for (const entry of entries) {
+      const path = join(base, entry.name);
+      const row = document.createElement("div");
+      row.className = "editor-tree-row";
+      row.style.paddingLeft = `${8 + depth * 14}px`;
+      if (entry.kind === "dir") {
+        const state = treeData.get(path);
+        const open = state?.open === true;
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "editor-tree-label dir";
+        toggle.textContent = `${open ? "▾" : "▸"} ${entry.name}`;
+        toggle.addEventListener("click", () => void toggleDirectory(path));
+        row.append(toggle);
+        container.append(row);
+        if (open && state?.entries) {
+          renderTreeEntries(path, state.entries, container, depth + 1);
+        }
+      } else if (entry.kind === "link") {
+        const link = document.createElement("button");
+        link.type = "button";
+        link.className = "editor-tree-label link";
+        link.textContent = `↗ ${entry.name}`;
+        link.title = `Open symbolic link ${path}`;
+        link.addEventListener("click", () => void openLink(path));
+        row.append(link);
+        container.append(row);
+      } else {
+        const file = document.createElement("button");
+        file.type = "button";
+        file.className = "editor-tree-label file";
+        if (activeTab()?.path === path) file.classList.add("active");
+        file.textContent = entry.name;
+        file.addEventListener("click", () => void openFile(path));
+        row.append(file);
+        container.append(row);
+      }
+    }
+  }
+
+  async function toggleDirectory(path) {
+    const state = treeData.get(path);
+    if (state?.open) {
+      state.open = false;
+      renderTree();
+      return;
+    }
+    if (!state) {
+      try {
+        await loadDirectory(path);
+      } catch (error) {
+        setInfo(reason(error), true);
+        return;
+      }
+    }
+    const next = treeData.get(path);
+    if (next) next.open = true;
+    renderTree();
+  }
+
+  async function openLink(path) {
+    setInfo(`Resolving ${path}…`);
+    try {
+      const target = await call(
+        context,
+        `/target?path=${encodeURIComponent(path)}`,
+      );
+      const stat = await call(
+        context,
+        `/stat?path=${encodeURIComponent(target)}`,
+      );
+      if (disposed) return;
+      if (stat.kind === "dir") {
+        await loadTree(target);
+        setInfo(`${path} → ${target}`);
+      } else {
+        await openFile(target);
+        setInfo(`${path} → ${target}`);
+      }
+    } catch (error) {
+      if (!disposed) setInfo(reason(error), true);
+    }
+  }
+
+  async function openPathFromInput() {
+    const target = normalizePath(pathInput.value);
+    if (target === null) {
+      setInfo("The path cannot escape the root.", true);
+      return;
+    }
+    try {
+      const stat = await call(
+        context,
+        `/stat?path=${encodeURIComponent(target)}`,
+      );
+      if (disposed) return;
+      if (stat.kind === "dir") {
+        await loadTree(target);
+        setInfo(`${target} · directory`);
+      } else {
+        await openFile(target);
+      }
+    } catch (error) {
+      if (!disposed) setInfo(reason(error), true);
+    }
+  }
+
+  box.querySelector("[data-open]").addEventListener("click", () => {
+    void openPathFromInput();
+  });
+  box.querySelector("[data-save]").addEventListener("click", () => {
+    void saveActive();
+  });
+  box.querySelector("[data-refresh]").addEventListener("click", () => {
+    void loadTree(treeRoot);
+  });
+  treeToggle.addEventListener("click", () => setTreeOpen(!treeOpen));
+  treeBackdrop.addEventListener("click", () => setTreeOpen(false));
+  const treeModeChanged = () => applyTreeState();
+  mobileQuery.addEventListener("change", treeModeChanged);
+  pathInput.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    void loadPath(address.value);
+    void openPathFromInput();
   });
-  address.addEventListener("focus", () => address.select());
+  pathInput.addEventListener("focus", () => pathInput.select());
+  eolSelect.addEventListener("change", () => {
+    const tab = activeTab();
+    if (!tab) return;
+    tab.eol = eolSelect.value === "CRLF" ? "CRLF" : "LF";
+    tab.dirty = true;
+    renderTabs();
+    publishSession();
+    setInfo(`EOL ${tab.eol} · ${tab.path}`);
+  });
+  indentSelect.addEventListener("change", () => {
+    applyIndent(
+      indentSelect.value === "tab"
+        ? { size: Number(indentSetting.size) || 4, useTabs: true }
+        : { size: Number(indentSelect.value), useTabs: false },
+    );
+  });
+  box.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void saveActive();
+    }
+    if (
+      event.key === "Escape" &&
+      mobileQuery.matches &&
+      treeOpen
+    ) {
+      event.preventDefault();
+      setTreeOpen(false);
+    }
+  });
+
+  const bridge = { openPath: (path) => openFile(path) };
+  editorBridge = bridge;
 
   const params = context.params ?? {};
-  const initialPath = typeof params.path === "string" ? params.path : "";
-  const initialText = typeof params.text === "string" ? params.text : null;
-  if (initialPath && initialText !== null) {
-    const pending = params.dirty !== false;
-    show(initialText, initialPath, pending);
-    setStatus(`${initialPath} · ${pending ? "unsaved copy" : "saved"}`);
-  } else if (initialPath) {
-    address.value = initialPath;
-    void loadPath(initialPath);
-  } else {
-    setStatus("Enter a path and press Open.");
+  const session = params && typeof params === "object" ? params.session : null;
+  if (session && session.indent && typeof session.indent === "object") {
+    indentSetting = {
+      size: Number(session.indent.size) || 4,
+      useTabs: session.indent.useTabs === true,
+    };
   }
+  if (session && typeof session.tree === "boolean") {
+    treeOpen = session.tree;
+  }
+  if (session && Array.isArray(session.tabs)) {
+    for (const entry of session.tabs) {
+      if (
+        !entry ||
+        typeof entry.path !== "string" ||
+        typeof entry.text !== "string"
+      ) {
+        continue;
+      }
+      tabs.push({
+        path: entry.path,
+        state: createState(entry.path, entry.text),
+        eol:
+          entry.eol === "CRLF" || entry.eol === "LF"
+            ? entry.eol
+            : detectEol(entry.text),
+        dirty: entry.dirty === true,
+      });
+    }
+    if (tabs.length) {
+      const index = tabs.findIndex((tab) => tab.path === session.active);
+      activate(index >= 0 ? index : 0);
+    }
+  } else if (params && typeof params.path === "string") {
+    if (typeof params.text === "string") {
+      void openFile(params.path, {
+        text: params.text,
+        dirty: params.dirty !== false,
+        eol: detectEol(params.text),
+      });
+    } else {
+      void openFile(params.path);
+    }
+  }
+  if (!tabs.length) {
+    refreshStatus();
+    renderTabs();
+  }
+  applyTreeState(false);
+  void loadTree("/");
 
   return () => {
     disposed = true;
+    if (editorBridge === bridge) editorBridge = null;
+    mobileQuery.removeEventListener("change", treeModeChanged);
     view?.destroy();
+    view = null;
     root.replaceChildren();
   };
 }
@@ -617,7 +1456,6 @@ export function mount(root, context) {
   let view = "files";
   let disposed = false;
   let previewState = null;
-  let editor = null;
   const knownPaths = new Set([
     "/",
     "/etc",
@@ -672,7 +1510,6 @@ export function mount(root, context) {
   }
 
   function resetPreview() {
-    destroyEditor();
     if (previewState?.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
     previewState = null;
     preview.replaceChildren();
@@ -898,8 +1735,6 @@ export function mount(root, context) {
 
   async function open(path, entry, link = null) {
     setStatus("Reading…");
-    destroyEditor();
-    if (previewState) previewState.editing = false;
     try {
       const data = await request(`/file?path=${encodeURIComponent(path)}`);
       if (disposed) return;
@@ -911,7 +1746,6 @@ export function mount(root, context) {
         link,
         bytes: data,
         text: decoded,
-        editing: false,
         objectUrl: null,
       };
       renderPreview();
@@ -936,33 +1770,43 @@ export function mount(root, context) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  function startEditor() {
-    if (!previewState || previewState.text === null) return;
-    if (editor) return;
-    const mountPoint = document.createElement("div");
-    const view = new EditorView(mountPoint, {
-      state: editorState(previewState.text, previewState.path),
-    });
-    editor = { view };
-    previewState.editing = true;
-    renderPreview();
-  }
-
-  function destroyEditor() {
-    if (!editor) return;
-    editor.view.destroy();
-    editor = null;
-  }
-
-  function cancelEditor() {
-    if (previewState) previewState.editing = false;
-    destroyEditor();
-    renderPreview();
-  }
-
-  async function saveEditor() {
-    if (!editor || !previewState) return;
-    await saveEdit(editorText(editor.view.state.doc));
+  async function openInEditor() {
+    if (!previewState) return;
+    if (typeof context.openView !== "function") {
+      setStatus(
+        "This panel build has no global-view bridge. Reload the panel (Ctrl/Cmd+R) and try again.",
+        true,
+      );
+      return;
+    }
+    setStatus("Opening the panel Editor…");
+    let result;
+    try {
+      result = await context.openView({
+        tag: "anth-fs-editor",
+        mode: "float",
+        size: { width: 860, height: 580 },
+        params: { path: previewState.path },
+      });
+    } catch {
+      result = false;
+    }
+    if (result === true) {
+      setStatus(`Opened ${previewState.path} in the Editor`);
+      return;
+    }
+    if (result === undefined) {
+      // The pre-ack bridge opens the view but returns nothing, and ignores
+      // `mode`. The Editor is a tab; Float detaches it to the global layer.
+      setStatus(
+        `Opened ${previewState.path} in the Editor tab. Use Float to detach it, or reload the panel for direct Pop out.`,
+      );
+      return;
+    }
+    setStatus(
+      "This panel tab is running an older frontend. Reload it (Ctrl/Cmd+R or Cmd+Shift+R) and try again.",
+      true,
+    );
   }
 
   function renderPreview() {
@@ -974,8 +1818,8 @@ export function mount(root, context) {
       preview.append(hint);
       return;
     }
-    const { path, entry, link, text: decoded, editing } = previewState;
-    const extension = path.split(".").pop()?.toLowerCase() ?? "";
+    const { path, entry, link, text: decoded } = previewState;
+    const extension = extensionOf(path);
     const meta = document.createElement("div");
     meta.className = "fs-meta";
     meta.append(
@@ -987,83 +1831,23 @@ export function mount(root, context) {
 
     const actions = document.createElement("div");
     actions.className = "fs-actions";
-    if (!editing) {
-      if (decoded !== null) {
-        const edit = button("", "Edit");
-        edit.addEventListener("click", startEditor);
-        actions.append(edit);
-      }
-      const save = button("", "Download");
-      save.addEventListener("click", download);
-      actions.append(save);
+    if (decoded !== null) {
+      const edit = button("", "Open in Editor");
+      edit.title = "Edit this file in the floating Editor window";
+      edit.addEventListener("click", () => void openInEditor());
+      actions.append(edit);
     }
+    const downloadButton = button("", "Download");
+    downloadButton.addEventListener("click", download);
+    actions.append(downloadButton);
 
     const pane = document.createElement("div");
     pane.className = "pane";
-    if (editing) {
-      const host = document.createElement("div");
-      host.className = "pm-host";
-      if (editor) host.append(editor.view.dom);
-      pane.append(host);
-      const save = button("", "Save");
-      save.addEventListener("click", () => void saveEditor());
-      const cancel = button("", "Cancel");
-      cancel.addEventListener("click", cancelEditor);
-      const pop = button("", "Pop out");
-      pop.title = "Open this file in the panel-level Editor view";
-      pop.addEventListener("click", async () => {
-        if (!previewState) return;
-        const value = editor
-          ? editorText(editor.view.state.doc)
-          : previewState.text;
-        const params = {
-          path: previewState.path,
-          name: baseName(previewState.path),
-          text: value,
-          dirty: true,
-        };
-        if (typeof context.openView !== "function") {
-          setStatus(
-            "This panel build has no global-view bridge. Reload the panel (Ctrl/Cmd+R) and try again; the inline editor stays open.",
-            true,
-          );
-          return;
-        }
-        setStatus("Opening the panel Editor…");
-        let result;
-        try {
-          result = await context.openView({
-            tag: "anth-fs-editor",
-            mode: "float",
-            params,
-          });
-        } catch {
-          result = false;
-        }
-        if (result === true) {
-          cancelEditor();
-          setStatus(`Opened ${previewState.path} in the Editor view`);
-          return;
-        }
-        if (result === undefined) {
-          // The pre-ack bridge opens the view but returns nothing, and ignores
-          // `mode`. The Editor is a tab; Float detaches it to the global layer.
-          cancelEditor();
-          setStatus(
-            `Opened ${previewState.path} in the Editor tab. Use Float to detach it, or reload the panel for direct Pop out.`,
-          );
-          return;
-        }
-        setStatus(
-          "This panel tab is running an older frontend. Reload it (Ctrl/Cmd+R or Cmd+Shift+R) and try again; the inline editor stays open.",
-          true,
-        );
-      });
-      actions.append(save, cancel, pop);
-    } else if (decoded !== null) {
-      const pre = document.createElement("pre");
-      pre.textContent = decoded;
-      pane.append(pre);
+    if (decoded !== null) {
+      const formatted = document.createElement("div");
+      formatted.className = "fs-formatted";
+      formatted.innerHTML = formattedPreview(decoded, path);
+      pane.append(formatted);
     } else if (IMAGES[extension]) {
       if (previewState.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
       previewState.objectUrl = URL.createObjectURL(
@@ -1081,27 +1865,6 @@ export function mount(root, context) {
     }
 
     preview.append(meta, actions, pane);
-  }
-
-  async function saveEdit(value) {
-    if (!previewState) return;
-    const data = Array.from(encoder.encode(value));
-    setStatus("Saving…");
-    try {
-      await request("/file", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: previewState.path, bytes: data }),
-      });
-      previewState.bytes = data;
-      previewState.text = value;
-      previewState.editing = false;
-      destroyEditor();
-      renderPreview();
-      setStatus(`Saved ${previewState.path}`);
-    } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
-    }
   }
 
   async function drop(path) {
@@ -1304,7 +2067,6 @@ export function mount(root, context) {
 
   return () => {
     disposed = true;
-    destroyEditor();
     if (previewState?.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
     root.replaceChildren();
   };

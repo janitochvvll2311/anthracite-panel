@@ -37,6 +37,7 @@
         const pendingViews = new Map();
         let token = "";
         let dispose = null;
+        let moduleApi = null;
 
         const send = (type, payload = {}) => {
           parent.postMessage({ type, token, ...payload }, "*");
@@ -112,12 +113,14 @@
                   "the module does not export mount(root, context)",
                 );
               }
+              moduleApi = module;
               const context = {
                 ...message.context,
                 fetch: request,
                 close: () => send("anth:close"),
                 openView,
                 updateParams: (params) => send("anth:params", { params }),
+                fill: () => send("anth:fill"),
               };
               dispose = await module.mount(document.body, context);
               send("anth:mounted");
@@ -139,11 +142,16 @@
             if (!resolve) return;
             pendingViews.delete(message.requestId);
             resolve(message.ok === true);
+          } else if (message.type === "anth:update-params") {
+            if (typeof moduleApi?.onParams === "function") {
+              moduleApi.onParams(message.params);
+            }
           } else if (message.type === "anth:unmount") {
             try {
               if (typeof dispose === "function") await dispose();
             } finally {
               dispose = null;
+              moduleApi = null;
               document.body.replaceChildren();
             }
           }

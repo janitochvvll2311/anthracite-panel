@@ -7,6 +7,8 @@ export type Slot = {
   label: string;
   icon?: string;
   order: number;
+  /// Hidden contributions can be opened by other views, but not listed.
+  hidden?: boolean;
   tag: string;
   module: string;
   sha256: string;

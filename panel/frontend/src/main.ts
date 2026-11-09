@@ -24,6 +24,7 @@ import {
   type App,
   type Contribution,
   type FrameContext,
+  type FrameHandle,
   type OpenViewRequest,
 } from "@anthracite/panel";
 
@@ -71,6 +72,8 @@ type Mounted = {
   /// The panel data this mount was opened with.
   params?: unknown;
   dispose: () => void;
+  /// Sends a transient open request to a live frame without remounting it.
+  update?: (params: unknown) => void;
   /// Set when the host closes or replaces the mount; a late module must not
   /// attach to a detached root.
   cancelled: boolean;
@@ -222,6 +225,44 @@ function icon(value: string | undefined, fallback: string): string {
   return [...trimmed][0] ?? fallback;
 }
 
+const WINDOW_ICONS = {
+  dock:
+    '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v7"/><path d="m5 6 3 3 3-3"/><path d="M3 13h10"/></svg>',
+  min:
+    '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3 8h10"/></svg>',
+  max:
+    '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></svg>',
+  restore:
+    '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1"/><path d="M3 10.5V4.5A1.5 1.5 0 0 1 4.5 3h6"/></svg>',
+  close:
+    '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="m4 4 8 8M12 4l-8 8"/></svg>',
+} as const;
+
+type WindowIcon = keyof typeof WINDOW_ICONS;
+
+function windowIconButton(
+  iconName: WindowIcon,
+  title: string,
+  label: string,
+): HTMLButtonElement {
+  const node = button("ghost small", "", title);
+  node.innerHTML = WINDOW_ICONS[iconName];
+  node.setAttribute("aria-label", label);
+  return node;
+}
+
+function setMaximizeIcon(
+  node: HTMLButtonElement,
+  maximized: boolean,
+): void {
+  node.innerHTML = WINDOW_ICONS[maximized ? "restore" : "max"];
+  node.title = maximized ? "Restore the window" : "Maximize in the page";
+  node.setAttribute(
+    "aria-label",
+    maximized ? "Restore the window" : "Maximize in the page",
+  );
+}
+
 function status(kind: "ok" | "warn" | "offline", text: string): void {
   health.dataset.state = kind;
   health.textContent = text;
@@ -234,7 +275,9 @@ function renderSidebar(): void {
     return;
   }
 
-  const contributions = ordered(VIEW).filter(implementedByPanel);
+  const contributions = ordered(VIEW).filter(
+    (contribution) => implementedByPanel(contribution) && !contribution.slot.hidden,
+  );
   if (contributions.length === 0) {
     views.append(element("div", "placeholder", "No app contributes a view."));
     return;
@@ -271,7 +314,9 @@ function renderSidebar(): void {
 function renderActions(): void {
   actions.replaceChildren();
   if (!surface) return;
-  for (const contribution of ordered(ACTION).filter(implementedByPanel)) {
+  for (const contribution of ordered(ACTION).filter(
+    (candidate) => implementedByPanel(candidate) && !candidate.slot.hidden,
+  )) {
     const node = button(
       "action-button",
       contribution.slot.label,
@@ -357,6 +402,7 @@ async function mountInto(
   params?: unknown,
   openView?: (request: OpenViewRequest) => boolean | void,
   onParams?: (params: unknown) => void,
+  onReady?: (frame: FrameHandle) => void,
 ): Promise<() => void> {
   root.replaceChildren(element("div", "loading", "Loading module…"));
   try {
@@ -380,6 +426,7 @@ async function mountInto(
       close,
       openView,
       onParams,
+      onReady,
       request: (input, init) => request(input, init),
     });
     if (cancelled()) {
@@ -427,6 +474,9 @@ function trackMount(
     params,
     openView,
     onParams,
+    (frame) => {
+      state.update = frame.update;
+    },
   ).then((dispose) => {
     if (state.cancelled || current() !== state) {
       safeDispose(dispose);
@@ -472,17 +522,24 @@ function openAppView(
   );
   if (!target) return false;
   const key = contributionKey(target);
-  if (request.mode === "float") {
-    const tab = tabs.get(key);
-    if (tab) closeTab(key);
-    openWindow(target, "view", request.params);
+  const windowKey = `window:view:${key}`;
+  const windowState = floating.get(windowKey);
+  if (windowState) {
+    if (windowState.mode === "minimized") restoreStack(windowState);
+    else focusWindow(windowState);
+    windowState.update?.(request.params);
+    closeDrawer();
     return true;
   }
-  if (floating.has(`window:view:${key}`)) {
-    openWindow(target, "view", request.params);
-  } else {
-    openTab(target, true, request.params);
+  const tab = tabs.get(key);
+  if (tab) {
+    activate(key);
+    mounted.get(key)?.update?.(request.params);
+    renderWorkspace();
+    closeDrawer();
+    return true;
   }
+  openWindow(target, "view", request.params, request.size);
   return true;
 }
 
@@ -652,8 +709,7 @@ function setMaximized(state: Floating, maximized: boolean): void {
     state.element.style.height = "auto";
     state.element.classList.add("maximized");
     state.mode = "maximized";
-    state.maximizeButton.textContent = "Restore";
-    state.maximizeButton.title = "Restore the window";
+    setMaximizeIcon(state.maximizeButton, true);
     focusWindow(state);
     return;
   }
@@ -667,8 +723,7 @@ function setMaximized(state: Floating, maximized: boolean): void {
     state.element.style.height = state.bounds.height;
   }
   state.mode = "normal";
-  state.maximizeButton.textContent = "Max";
-  state.maximizeButton.title = "Maximize in the page";
+  setMaximizeIcon(state.maximizeButton, false);
 }
 
 function minimizeWindow(state: Floating): void {
@@ -704,13 +759,11 @@ function restoreStack(state: Floating): void {
   if (state.restoreMode === "maximized") {
     state.element.classList.add("maximized");
     state.mode = "maximized";
-    state.maximizeButton.textContent = "Restore";
-    state.maximizeButton.title = "Restore the window";
+    setMaximizeIcon(state.maximizeButton, true);
   } else {
     state.element.classList.remove("maximized");
     state.mode = "normal";
-    state.maximizeButton.textContent = "Max";
-    state.maximizeButton.title = "Maximize in the page";
+    setMaximizeIcon(state.maximizeButton, false);
   }
   updateStack();
   focusWindow(state);
@@ -727,6 +780,7 @@ function openWindow(
   contribution: Contribution,
   kind: FrameContext["kind"],
   params?: unknown,
+  size?: { width?: number; height?: number },
 ): void {
   const key = `window:${kind}:${contributionKey(contribution)}`;
   const existing = floating.get(key);
@@ -743,10 +797,20 @@ function openWindow(
     closeFloating(existing);
   }
 
+  const width = Math.max(
+    320,
+    Math.min(size?.width ?? 480, window.innerWidth - 24),
+  );
+  const height = Math.max(
+    220,
+    Math.min(size?.height ?? 340, window.innerHeight - 24),
+  );
   const offset = 74 + floating.size * 28;
   const windowElement = element("section", "window");
-  windowElement.style.left = `${Math.min(offset, window.innerWidth - 480)}px`;
-  windowElement.style.top = `${Math.min(offset, window.innerHeight - 320)}px`;
+  windowElement.style.width = `${width}px`;
+  windowElement.style.height = `${height}px`;
+  windowElement.style.left = `${Math.min(offset, window.innerWidth - width - 12)}px`;
+  windowElement.style.top = `${Math.min(offset, window.innerHeight - height - 12)}px`;
 
   const header = element("header", "window-head");
   const copy = element("div", "window-copy");
@@ -755,12 +819,24 @@ function openWindow(
     element("span", "window-app", contribution.app.id),
   );
   const tools = element("div", "window-tools");
-  const maximize = button("ghost small", "Max", "Maximize in the page");
-  const minimize = button("ghost small", "Min", "Minimize to the bottom stack");
-  const dock = button("ghost small", "Dock", "Dock this view back into the tabs");
+  const dock = windowIconButton(
+    "dock",
+    "Dock this view back into the tabs",
+    "Dock",
+  );
   dock.hidden = kind !== "view";
-  const close = button("ghost small", "×", "Close");
-  tools.append(maximize, minimize, dock, close);
+  const minimize = windowIconButton(
+    "min",
+    "Minimize to the bottom stack",
+    "Minimize",
+  );
+  const maximize = windowIconButton(
+    "max",
+    "Maximize in the page",
+    "Maximize",
+  );
+  const close = windowIconButton("close", "Close", "Close");
+  tools.append(dock, minimize, maximize, close);
   header.append(copy, tools);
 
   const body = element("div", "window-body");
@@ -852,7 +928,9 @@ function disposeSettings(): void {
 }
 
 function renderSettings(): void {
-  const contributions = ordered(SETTINGS).filter(implementedByPanel);
+  const contributions = ordered(SETTINGS).filter(
+    (contribution) => implementedByPanel(contribution) && !contribution.slot.hidden,
+  );
   const signature = contributions
     .map((contribution) => `${contributionKey(contribution)}:${contribution.slot.sha256}`)
     .join("|");
