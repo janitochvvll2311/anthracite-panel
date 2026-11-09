@@ -4,6 +4,7 @@
 // not reimplement either.
 
 export * from "./iframe";
+export * from "./dom";
 
 export const VIEW = "panel.view";
 export const ACTION = "panel.action";
