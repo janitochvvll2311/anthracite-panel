@@ -406,14 +406,53 @@ async function mountInto(
   }
 }
 
+function retire(state: Mounted): void {
+  state.cancelled = true;
+  safeDispose(state.dispose);
+  state.root.parentElement?.remove();
+}
+
+function retireFloating(state: Floating): void {
+  state.cancelled = true;
+  safeDispose(state.dispose);
+  state.element.remove();
+}
+
+function trackMount(
+  state: Mounted,
+  body: HTMLElement,
+  contribution: Contribution,
+  kind: FrameContext["kind"],
+  close: () => void,
+  current: () => Mounted | undefined,
+): void {
+  void mountInto(body, contribution, kind, close, () => state.cancelled).then(
+    (dispose) => {
+      if (state.cancelled || current() !== state) {
+        safeDispose(dispose);
+        return;
+      }
+      state.dispose = dispose;
+    },
+  );
+}
+
+function lastTabKey(): string | null {
+  return tabs.size > 0 ? [...tabs.keys()][tabs.size - 1] : null;
+}
+
+function renderWorkspace(): void {
+  renderSidebar();
+  renderTabs();
+  renderPanes();
+}
+
 function ensurePane(contribution: Contribution): void {
   const key = contributionKey(contribution);
   const existing = mounted.get(key);
   if (existing) {
     if (existing.contribution.slot.sha256 !== contribution.slot.sha256) {
-      existing.cancelled = true;
-      safeDispose(existing.dispose);
-      existing.root.parentElement?.remove();
+      retire(existing);
       mounted.delete(key);
     } else {
       existing.contribution = contribution;
@@ -449,27 +488,20 @@ function ensurePane(contribution: Contribution): void {
     cancelled: false,
   };
   mounted.set(key, state);
-  void mountInto(
+  trackMount(
+    state,
     body,
     contribution,
     "view",
     () => closeTab(key),
-    () => state.cancelled,
-  ).then((dispose) => {
-    if (state.cancelled || mounted.get(key) !== state) {
-      safeDispose(dispose);
-      return;
-    }
-    state.dispose = dispose;
-  });
+    () => mounted.get(key),
+  );
 }
 
 function renderPanes(): void {
   for (const [key, state] of mounted) {
     if (!tabs.has(key)) {
-      state.cancelled = true;
-      safeDispose(state.dispose);
-      state.root.parentElement?.remove();
+      retire(state);
       mounted.delete(key);
     }
   }
@@ -488,34 +520,26 @@ function openTab(contribution: Contribution, activateTab = true): void {
   if (existing) existing.contribution = contribution;
   else tabs.set(key, { key, contribution });
   if (activateTab) activate(key);
-  renderTabs();
-  renderPanes();
-  renderSidebar();
+  renderWorkspace();
   closeDrawer();
 }
 
 function activate(key: string): void {
   activeKey = key;
-  renderTabs();
-  renderPanes();
-  renderSidebar();
+  renderWorkspace();
 }
 
 function closeTab(key: string): void {
   const state = mounted.get(key);
   if (state) {
-    state.cancelled = true;
-    safeDispose(state.dispose);
-    state.root.parentElement?.remove();
+    retire(state);
     mounted.delete(key);
   }
   tabs.delete(key);
   if (activeKey === key) {
-    activeKey = tabs.size > 0 ? [...tabs.keys()][tabs.size - 1] : null;
+    activeKey = lastTabKey();
   }
-  renderTabs();
-  renderPanes();
-  renderSidebar();
+  renderWorkspace();
 }
 
 function detachTab(key: string): void {
@@ -541,9 +565,7 @@ function openWindow(
       focusWindow(existing);
       return;
     }
-    existing.cancelled = true;
-    safeDispose(existing.dispose);
-    existing.element.remove();
+    retireFloating(existing);
     floating.delete(key);
   }
 
@@ -577,23 +599,13 @@ function openWindow(
   focusWindow(state);
 
   const closeWindow = (): void => {
-    state.cancelled = true;
-    safeDispose(state.dispose);
-    windowElement.remove();
+    retireFloating(state);
     floating.delete(key);
   };
   close.addEventListener("click", closeWindow);
   windowElement.addEventListener("pointerdown", () => focusWindow(state));
   makeDraggable(windowElement, header);
-  void mountInto(body, contribution, kind, closeWindow, () => state.cancelled).then(
-    (dispose) => {
-      if (state.cancelled || floating.get(key) !== state) {
-        safeDispose(dispose);
-        return;
-      }
-      state.dispose = dispose;
-    },
-  );
+  trackMount(state, body, contribution, kind, closeWindow, () => floating.get(key));
 }
 
 function makeDraggable(elementNode: HTMLElement, handle: HTMLElement): void {
@@ -635,8 +647,7 @@ function makeDraggable(elementNode: HTMLElement, handle: HTMLElement): void {
 
 function disposeSettings(): void {
   for (const state of settingsMounted) {
-    state.cancelled = true;
-    safeDispose(state.dispose);
+    retire(state);
   }
   settingsMounted = [];
 }
@@ -675,19 +686,14 @@ function renderSettings(): void {
       cancelled: false,
     };
     settingsMounted.push(state);
-    void mountInto(
+    trackMount(
+      state,
       body,
       contribution,
       "settings",
       closeSettings,
-      () => state.cancelled,
-    ).then((dispose) => {
-      if (state.cancelled) {
-        safeDispose(dispose);
-        return;
-      }
-      state.dispose = dispose;
-    });
+      () => (settingsMounted.includes(state) ? state : undefined),
+    );
   }
 }
 
@@ -714,16 +720,12 @@ function reconcileWindows(): void {
   for (const [key, state] of floating) {
     const contribution = known.get(contributionKey(state.contribution));
     if (!contribution) {
-      state.cancelled = true;
-      safeDispose(state.dispose);
-      state.element.remove();
+      retireFloating(state);
       floating.delete(key);
       continue;
     }
     if (state.contribution.slot.sha256 !== contribution.slot.sha256) {
-      state.cancelled = true;
-      safeDispose(state.dispose);
-      state.element.remove();
+      retireFloating(state);
       floating.delete(key);
       openWindow(contribution, key.includes(":action:") ? "action" : "view");
     }
@@ -742,7 +744,7 @@ function reconcile(): void {
     tabs.get(key)!.contribution = updated;
   }
   if (activeKey && !tabs.has(activeKey)) {
-    activeKey = tabs.size > 0 ? [...tabs.keys()][tabs.size - 1] : null;
+    activeKey = lastTabKey();
   }
   reconcileWindows();
   renderSidebar();
