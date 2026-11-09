@@ -19,6 +19,20 @@ use crate::{cycle_members, parse_interfaces, risk_over, InstalledApp, Resolution
 
 /// The effective risk of `app`, over the installed apps it can reach.
 pub fn app_risk(app: &AppId, installed: &[InstalledApp]) -> Result<Risk, ResolutionError> {
+    let mut by_id: BTreeMap<&str, Vec<&InstalledApp>> = BTreeMap::new();
+    let mut by_export: BTreeMap<&str, Vec<&InstalledApp>> = BTreeMap::new();
+    for candidate in installed {
+        by_id
+            .entry(candidate.manifest.app.id.as_str())
+            .or_default()
+            .push(candidate);
+        for export in &candidate.manifest.export {
+            by_export
+                .entry(export.interface.as_str())
+                .or_default()
+                .push(candidate);
+        }
+    }
     let mut imports: BTreeMap<AppId, Vec<InterfaceId>> = BTreeMap::new();
     let mut exporters: BTreeMap<InterfaceId, AppId> = BTreeMap::new();
     let mut stack = vec![app.clone()];
@@ -26,7 +40,7 @@ pub fn app_risk(app: &AppId, installed: &[InstalledApp]) -> Result<Risk, Resolut
         if imports.contains_key(&id) {
             continue;
         }
-        let entry = find(&id, installed)?;
+        let entry = unique(&by_id, &id)?;
         entry
             .manifest
             .validate()
@@ -36,19 +50,14 @@ pub fn app_risk(app: &AppId, installed: &[InstalledApp]) -> Result<Risk, Resolut
             if catalog::is_native(import) {
                 continue;
             }
-            // The exporter is searched by the raw interface string, so an
-            // unrelated manifest is never parsed or validated to answer this.
-            let candidates: Vec<&InstalledApp> = installed
-                .iter()
-                .filter(|candidate| {
-                    candidate
-                        .manifest
-                        .export
-                        .iter()
-                        .any(|export| export.interface == import.to_string())
-                })
-                .collect();
-            match candidates.as_slice() {
+            // The index is built once; an unrelated manifest is never parsed
+            // or validated to answer this.
+            let key = import.to_string();
+            let candidates = by_export
+                .get(key.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            match candidates {
                 [] => {
                     return Err(ResolutionError::UnresolvedImport {
                         app: id.to_string(),
@@ -130,6 +139,22 @@ pub fn approve(
     };
     grant.validate().map_err(ResolutionError::InvalidGrant)?;
     Ok(grant)
+}
+
+fn unique<'a>(
+    by_id: &BTreeMap<&str, Vec<&'a InstalledApp>>,
+    app: &AppId,
+) -> Result<&'a InstalledApp, ResolutionError> {
+    match by_id.get(app.as_str()).map(Vec::as_slice) {
+        None => Err(ResolutionError::NotInstalled {
+            app: app.to_string(),
+            malformed: None,
+        }),
+        Some([one]) => Ok(one),
+        Some(_) => Err(ResolutionError::DuplicateInstalled {
+            app: app.to_string(),
+        }),
+    }
 }
 
 fn find<'a>(

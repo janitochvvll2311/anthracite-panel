@@ -20,20 +20,40 @@ pub const MESSAGE_PREFIX: &[u8] = b"anth-manifest-v2\0";
 /// Builds the canonical message. The caller supplies the files in any order;
 /// sorting happens here so two equivalent sets always produce the same bytes.
 pub fn message(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Error> {
-    let mut files: Vec<&(String, Vec<u8>)> = files.iter().collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
     if !files.iter().any(|(name, _)| name == "manifest.toml") {
         return Err(Error::invalid(
             "the signed set must contain `manifest.toml`",
         ));
     }
-    let mut message = MESSAGE_PREFIX.to_vec();
+    framed(MESSAGE_PREFIX, files, check_name, "signed")
+}
+
+/// The prefix of the WIT-set hash (D-Wit-Hash).
+pub const WIT_PREFIX: &[u8] = b"anth-wit-set-v1\0";
+
+/// The WIT set hash covers exactly the files under `wit/`, sorted, with the same
+/// `name \0 u64le(length) bytes` framing as the signed message, under its own
+/// prefix. A grant stores this as `wit_sha256`.
+pub fn wit_message(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Error> {
+    framed(WIT_PREFIX, files, check_wit_name, "WIT")
+}
+
+/// The one framing: sort by name, refuse duplicates, then `name \0 u64le(bytes)`.
+fn framed(
+    prefix: &[u8],
+    files: &[(String, Vec<u8>)],
+    validate: fn(&str) -> Result<(), Error>,
+    label: &str,
+) -> Result<Vec<u8>, Error> {
+    let mut files: Vec<&(String, Vec<u8>)> = files.iter().collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut message = prefix.to_vec();
     let mut previous: Option<&str> = None;
     for (name, bytes) in files {
-        check_name(name)?;
+        validate(name)?;
         if previous == Some(name.as_str()) {
             return Err(Error::invalid(format!(
-                "`{name}` is in the signed set twice"
+                "`{name}` is in the {label} set twice"
             )));
         }
         previous = Some(name.as_str());
@@ -45,36 +65,16 @@ pub fn message(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Error> {
     Ok(message)
 }
 
-/// The prefix of the WIT-set hash (D-Wit-Hash).
-pub const WIT_PREFIX: &[u8] = b"anth-wit-set-v1\0";
-
-/// The WIT set hash covers exactly the files under `wit/`, sorted, with the same
-/// `name \0 u64le(length) bytes` framing as the signed message, under its own
-/// prefix. A grant stores this as `wit_sha256`.
-pub fn wit_message(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, Error> {
-    let mut files: Vec<&(String, Vec<u8>)> = files.iter().collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut message = WIT_PREFIX.to_vec();
-    let mut previous: Option<&str> = None;
-    for (name, bytes) in files {
-        let valid = name
-            .strip_prefix("wit/")
-            .is_some_and(|rest| !rest.is_empty() && !rest.contains('/') && rest.ends_with(".wit"));
-        if !valid {
-            return Err(Error::invalid(format!(
-                "`{name}` is not a WIT file; the set is `wit/*.wit`"
-            )));
-        }
-        if previous == Some(name.as_str()) {
-            return Err(Error::invalid(format!("`{name}` is in the WIT set twice")));
-        }
-        previous = Some(name.as_str());
-        message.extend_from_slice(name.as_bytes());
-        message.push(0);
-        message.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        message.extend_from_slice(bytes);
+fn check_wit_name(name: &str) -> Result<(), Error> {
+    let valid = name
+        .strip_prefix("wit/")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains('/') && rest.ends_with(".wit"));
+    if !valid {
+        return Err(Error::invalid(format!(
+            "`{name}` is not a WIT file; the set is `wit/*.wit`"
+        )));
     }
-    Ok(message)
+    Ok(())
 }
 
 /// The signed set is closed: the manifest and the WIT files, nothing else.
