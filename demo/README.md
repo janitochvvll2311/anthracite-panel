@@ -15,6 +15,10 @@ they are third-party and run under the explicit developer switch.
 ## Build the bundles
 
 ```bash
+# Only needed after editing the Files editor source; the generated module is
+# committed and already bundles ProseMirror.
+demo/emulator/build-web.sh
+
 cargo build --manifest-path demo/emulator/Cargo.toml --release
 cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulator -- \
     --binary target/release/host-emulator --out demo/dist
@@ -70,8 +74,9 @@ CLI verbs:
 
 Every bundle carries a `panel.view` module:
 
-- `web/fs.js` — tree explorer with preview, edit/save, rename, upload, download,
-  trash and restore, plus new folder and delete.
+- `web/fs.js` — explorer with an editable address bar, tree navigation, preview,
+  ProseMirror edit/save (inline or floating), rename, upload, download, trash and
+  restore, plus new folder and delete.
 - `web/terminal.js` — session with help/exit, history, INT/TERM/Clear, reconnect
   and resize.
 - `web/proc.js` — flat/tree process table, live refresh, allowlisted signals and
