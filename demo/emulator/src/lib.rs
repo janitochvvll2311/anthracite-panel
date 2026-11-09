@@ -662,8 +662,27 @@ impl Emulator {
                 if !matches!(signal.as_str(), "HUP" | "INT" | "TERM" | "KILL" | "WINCH") {
                     return Err(Error::invalid(format!("`{signal}` is not allowlisted")));
                 }
-                if !terminals.sessions.get(&id).is_some_and(|term| !term.closed) {
-                    return Err(Error::not_found(format!("session `{id}` does not exist")));
+                let term = terminals
+                    .sessions
+                    .get_mut(&id)
+                    .filter(|term| !term.closed)
+                    .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
+                match signal.as_str() {
+                    "INT" => {
+                        term.push(b"^C\r\n".to_vec());
+                        term.push(PROMPT.as_bytes().to_vec());
+                    }
+                    "HUP" | "TERM" => {
+                        term.push(b"Session terminated\r\n".to_vec());
+                        term.closed = true;
+                    }
+                    "KILL" => {
+                        term.push(b"Killed\r\n".to_vec());
+                        term.closed = true;
+                    }
+                    // WINCH only asks the shell to reflow; the fixture has no
+                    // pixel grid, so the resize itself is the observable effect.
+                    _ => {}
                 }
                 Ok(Value::Null)
             }
@@ -891,6 +910,37 @@ mod tests {
         let error = emulator
             .call(TERMINAL, "read", json!({"id": id, "seq": 0}))
             .expect_err("closed");
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn a_signal_interrupts_or_ends_the_session() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+        emulator
+            .call(TERMINAL, "signal", json!({"id": id, "signal": "INT"}))
+            .expect("int");
+        let interrupt = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 1}))
+            .expect("^C");
+        assert_eq!(interrupt["seq"], 1);
+        emulator
+            .call(TERMINAL, "signal", json!({"id": id, "signal": "TERM"}))
+            .expect("term");
+        let terminated = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 3}))
+            .expect("terminated");
+        assert_eq!(terminated["seq"], 3);
+        let error = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 4}))
+            .expect_err("ended");
         assert_eq!(error.kind(), ErrorKind::NotFound);
     }
 

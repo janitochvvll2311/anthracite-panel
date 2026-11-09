@@ -15,6 +15,7 @@ const styles = `
     color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
   }
   .term-bar button:hover { border-color: #3a4560; color: #fff; }
+  .term-bar button:disabled { opacity: .4; cursor: default; }
   .term-screen {
     flex: 1; min-height: 320px; margin: 0; padding: 12px 14px; overflow: auto;
     border: 1px solid #202632; border-radius: 9px; background: #080a0f;
@@ -77,6 +78,9 @@ export function mount(root, context) {
     <div class="term-bar">
       <span class="who">operator@anthracite</span>
       <span>· scripted fixture</span>
+      <button type="button" data-signal="INT" data-session-control>INT</button>
+      <button type="button" data-signal="TERM" data-session-control>TERM</button>
+      <button type="button" data-clear data-session-control>Clear</button>
       <button type="button" data-reconnect>Reconnect</button>
       <span class="state">connecting…</span>
     </div>
@@ -95,10 +99,18 @@ export function mount(root, context) {
   const send = form.querySelector("button");
   const status = box.querySelector(".term-status");
   const state = box.querySelector(".state");
+  const sessionControls = [...box.querySelectorAll("[data-session-control]")];
+  const history = [];
+  let historyIndex = 0;
   let session = null;
   let cursor = 0;
   let timer = null;
   let disposed = false;
+
+  const setSessionControls = (enabled) => {
+    for (const control of sessionControls) control.disabled = !enabled;
+  };
+  setSessionControls(false);
 
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
@@ -135,6 +147,7 @@ export function mount(root, context) {
         session = null;
         input.disabled = true;
         send.disabled = true;
+        setSessionControls(false);
         state.textContent = "ended";
         setStatus("Session ended. Reconnect to start a new one.", true);
         return;
@@ -174,6 +187,7 @@ export function mount(root, context) {
     }
     input.disabled = true;
     send.disabled = true;
+    setSessionControls(false);
     try {
       session = await call(context, "/open", {
         method: "POST",
@@ -183,6 +197,7 @@ export function mount(root, context) {
       if (disposed) return;
       cursor = 0;
       input.disabled = false;
+      setSessionControls(true);
       send.disabled = false;
       state.textContent = `session ${session.id}`;
       setStatus("Connected to the scripted fixture.");
@@ -191,9 +206,24 @@ export function mount(root, context) {
       input.focus();
     } catch (error) {
       session = null;
+      setSessionControls(false);
       input.disabled = true;
       send.disabled = true;
       state.textContent = "unavailable";
+      setStatus(String(error), true);
+    }
+  }
+
+  async function sendSignal(name) {
+    if (!session) return;
+    try {
+      await call(context, "/signal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: session.id, signal: name }),
+      });
+      setStatus(`${name} sent to ${session.id}`);
+    } catch (error) {
       setStatus(String(error), true);
     }
   }
@@ -203,6 +233,8 @@ export function mount(root, context) {
     if (!session) return;
     const line = input.value;
     input.value = "";
+    if (line.trim()) history.push(line);
+    historyIndex = history.length;
     try {
       await call(context, "/write", {
         method: "POST",
@@ -215,6 +247,27 @@ export function mount(root, context) {
     } catch (error) {
       setStatus(String(error), true);
     }
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    if (history.length === 0) return;
+    event.preventDefault();
+    historyIndex =
+      event.key === "ArrowUp"
+        ? Math.max(0, historyIndex - 1)
+        : Math.min(history.length, historyIndex + 1);
+    input.value = history[historyIndex] ?? "";
+  });
+
+  for (const control of box.querySelectorAll("[data-signal]")) {
+    control.addEventListener("click", () => {
+      void sendSignal(control.dataset.signal);
+    });
+  }
+  box.querySelector("[data-clear]").addEventListener("click", () => {
+    screen.textContent = "";
+    setStatus("Screen cleared");
   });
 
   const onResize = () => resize();
