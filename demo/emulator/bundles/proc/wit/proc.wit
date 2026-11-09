@@ -1,4 +1,4 @@
-package anthracite:proc@1.0.0;
+package anthracite:proc@1.1.0;
 
 interface proc {
     use anth:error/kinds@1.0.0.{error};
@@ -29,6 +29,7 @@ interface proc {
 
     %list: func(cursor: option<string>, limit: u32) -> result<page, error>;
     signal: func(pid: u32, start-ticks: u64, signal: string) -> result<_, error>;
+    spawn: func(argv: list<string>) -> result<u32, error>;
 }
 
 world app {

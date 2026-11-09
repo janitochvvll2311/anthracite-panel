@@ -21,7 +21,7 @@ mod storage;
 const FS_READ: &str = "anthracite:fs/read@1.1.0";
 const FS_WRITE: &str = "anthracite:fs/write@1.1.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
-const PROC: &str = "anthracite:proc/proc@1.0.0";
+const PROC: &str = "anthracite:proc/proc@1.1.0";
 const NET: &str = "anthracite:net/net@1.0.0";
 const STORAGE: &str = "anthracite:storage/storage@1.0.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.0.0";
