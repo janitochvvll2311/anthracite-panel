@@ -1,0 +1,14 @@
+{
+  "name": "anth-host-emulator-web",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "prosemirror-commands": "^1.6.2",
+    "prosemirror-history": "^1.4.1",
+    "prosemirror-keymap": "^1.2.2",
+    "prosemirror-model": "^1.25.0",
+    "prosemirror-schema-basic": "^1.2.3",
+    "prosemirror-state": "^1.4.3",
+    "prosemirror-view": "^1.42.0"
+  }
+}
