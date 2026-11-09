@@ -162,6 +162,19 @@
               requestId: message.requestId,
               ok,
             });
+          } else if (message.type === "anth:request-snapshot") {
+            let value = null;
+            try {
+              if (typeof moduleApi?.snapshot === "function") {
+                value = (await moduleApi.snapshot()) ?? null;
+              }
+            } catch {
+              value = null;
+            }
+            send("anth:snapshot-result", {
+              requestId: message.requestId,
+              value,
+            });
           } else if (message.type === "anth:unmount") {
             try {
               if (typeof dispose === "function") await dispose();
