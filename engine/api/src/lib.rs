@@ -36,8 +36,8 @@ use axum::extract::{
     State,
 };
 use axum::http::header::{
-    ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, ETAG, HOST, LOCATION,
-    ORIGIN, SET_COOKIE,
+    ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, COOKIE, ETAG, HOST, IF_MATCH,
+    IF_NONE_MATCH, LOCATION, ORIGIN, SET_COOKIE,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -408,9 +408,10 @@ fn set_session_cookie(response: &mut Response, token: &str, max_age: u64, secure
 }
 
 fn clear_session_cookie(response: &mut Response) {
+    let value = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_static("anth_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
+        HeaderValue::from_str(&value).expect("a session cookie is a valid header"),
     );
 }
 
@@ -639,7 +640,10 @@ fn current_composition(state: &EngineState) -> Result<Composition, ApiError> {
 
 /// A comma-list header (`If-Match`, `If-None-Match`, the acknowledgment token)
 /// split and trimmed once, including repeated header lines.
-fn header_tokens<'a>(headers: &'a HeaderMap, name: &str) -> impl Iterator<Item = &'a str> {
+fn header_tokens<K: axum::http::header::AsHeaderName>(
+    headers: &HeaderMap,
+    name: K,
+) -> impl Iterator<Item = &str> {
     headers
         .get_all(name)
         .iter()
@@ -652,7 +656,7 @@ fn header_tokens<'a>(headers: &'a HeaderMap, name: &str) -> impl Iterator<Item =
 /// document, a comma-separated list matches if any validator does, and repeated
 /// header lines are the same list.
 fn if_matches(headers: &HeaderMap, etag: &str) -> bool {
-    header_tokens(headers, "if-match").any(|candidate| candidate == "*" || candidate == etag)
+    header_tokens(headers, IF_MATCH).any(|candidate| candidate == "*" || candidate == etag)
 }
 
 /// The resolution as a client reads it (§8.7).
@@ -1105,7 +1109,7 @@ async fn app_asset(
 }
 
 fn if_none_match(headers: &HeaderMap, hash: &str) -> bool {
-    header_tokens(headers, "if-none-match").any(|candidate| {
+    header_tokens(headers, IF_NONE_MATCH).any(|candidate| {
         candidate == "*" || candidate == hash || candidate.trim_matches('"') == hash
     })
 }
@@ -3964,6 +3968,18 @@ mod tests {
         repeated.append(IF_MATCH, HeaderValue::from_static("\"nope\""));
         repeated.append(IF_MATCH, HeaderValue::from_static("\"abc\""));
         assert!(if_matches(&repeated, etag));
+    }
+
+    #[test]
+    fn a_header_token_list_can_span_lines() {
+        use axum::http::header::HeaderValue;
+        let mut headers = HeaderMap::new();
+        headers.append("x-test", HeaderValue::from_static("a, b"));
+        headers.append("x-test", HeaderValue::from_static("c"));
+        assert_eq!(
+            header_tokens(&headers, "x-test").collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
     }
 
     #[tokio::test]
