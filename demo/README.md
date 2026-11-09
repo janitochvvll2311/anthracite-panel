@@ -59,23 +59,26 @@ curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthraci
 
 CLI verbs:
 
-- `fs files`, `fs file-stat`, `fs file-read`
+- `fs files`, `fs file-stat`, `fs file-read`, `fs trash`, `fs rename`, `fs restore`
 - `terminal sessions`, `terminal session-open`, `terminal session-read`, `terminal session-close`
-- `proc processes`, `proc process-signal`
-- `net interfaces`, `net routes`
-- `storage devices`, `storage mounts`
-- `accounts users`, `accounts groups`
+- `proc processes`, `proc process-signal`, `proc process-spawn`
+- `net interfaces`, `net routes`, `net interface-up`, `net route-add`, `net route-remove`
+- `storage devices`, `storage mounts`, `storage mount`, `storage unmount`
+- `accounts users`, `accounts groups`, `accounts user-create`, `accounts user-delete`, `accounts user-lock`
 
 ## Views
 
 Every bundle carries a `panel.view` module:
 
-- `web/fs.js` — tree explorer with preview, new folder and move-to-trash.
-- `web/terminal.js` — opens a session, polls `read` and echoes commands.
-- `web/proc.js` — process table with CPU/memory and an allowlisted signal action.
-- `web/net.js` — interfaces with addresses/counters and the routing table.
-- `web/storage.js` — mount usage bars and block devices.
-- `web/accounts.js` — users and groups with system/locked badges.
+- `web/fs.js` — tree explorer with preview, edit/save, rename, upload, download,
+  trash and restore, plus new folder and delete.
+- `web/terminal.js` — session with help/exit, history, INT/TERM/Clear, reconnect
+  and resize.
+- `web/proc.js` — flat/tree process table, live refresh, allowlisted signals and
+  detached spawn.
+- `web/net.js` — interfaces with up/down, addresses/counters and route add/remove.
+- `web/storage.js` — mount usage bars, unmount and mount.
+- `web/accounts.js` — users and groups with create, delete and lock/unlock.
 
 The panel mounts them like any other slot; the modules only see their own app's
 routes.
@@ -83,9 +86,9 @@ routes.
 ## What is deterministic
 
 The tree, sizes, timestamps, session ids, process table, interfaces, mounts and
-accounts are fixed; writes, sessions and signals live in memory and reset when
-the service restarts. Removing an app from the composition degrades only that
-view.
+accounts are fixed; writes, sessions, signals, routes and mounts live in memory
+and reset when the service restarts. Removing an app from the composition
+degrades only that view.
 
 The emulator is not engine code. It lives outside the wasm `apps/` workspace, is
 unsigned, class `socket`, and never receives the host root.
