@@ -12,11 +12,19 @@ use anth_contract::Error;
 use anth_service::Handler;
 use serde_json::{json, Value};
 
+mod accounts;
 pub mod bundle;
+mod net;
+mod proc;
+mod storage;
 
 const FS_READ: &str = "anthracite:fs/read@1.0.0";
 const FS_WRITE: &str = "anthracite:fs/write@1.0.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
+const PROC: &str = "anthracite:proc/proc@1.0.0";
+const NET: &str = "anthracite:net/net@1.0.0";
+const STORAGE: &str = "anthracite:storage/storage@1.0.0";
+const ACCOUNTS: &str = "anthracite:accounts/accounts@1.0.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.
 const MODIFIED_MS: u64 = 1_760_000_000_000;
@@ -30,6 +38,10 @@ const HELP: &str = "help: ls, cat, echo, help, exit\r\n";
 pub struct Emulator {
     fs: Mutex<Fs>,
     terminals: Mutex<Terminals>,
+    procs: Mutex<proc::ProcFixture>,
+    net: net::NetFixture,
+    storage: storage::StorageFixture,
+    accounts: accounts::AccountsFixture,
 }
 
 impl Default for Emulator {
@@ -43,6 +55,10 @@ impl Emulator {
         Self {
             fs: Mutex::new(Fs::demo()),
             terminals: Mutex::new(Terminals::default()),
+            procs: Mutex::new(proc::ProcFixture::demo()),
+            net: net::NetFixture::new(),
+            storage: storage::StorageFixture::new(),
+            accounts: accounts::AccountsFixture::new(),
         }
     }
 
@@ -60,6 +76,14 @@ impl Handler for Emulator {
             FS_READ => self.fs_read(function, &input),
             FS_WRITE => self.fs_write(function, &input),
             TERMINAL => self.terminal(function, &input),
+            PROC => self
+                .procs
+                .lock()
+                .expect("the fixture mutex is not poisoned")
+                .handle(function, &input),
+            NET => self.net.handle(function, &input),
+            STORAGE => self.storage.handle(function, &input),
+            ACCOUNTS => self.accounts.handle(function, &input),
             _ => Err(Error::not_found(format!(
                 "`{interface}` is not exported by the emulator"
             ))),
@@ -245,7 +269,7 @@ fn entry(path: &str, node: &Node) -> Value {
     }
 }
 
-fn text(input: &Value, field: &str) -> Result<String, Error> {
+pub(crate) fn text(input: &Value, field: &str) -> Result<String, Error> {
     input
         .get(field)
         .and_then(Value::as_str)
@@ -253,11 +277,11 @@ fn text(input: &Value, field: &str) -> Result<String, Error> {
         .ok_or_else(|| Error::invalid(format!("`{field}` is required and must be a string")))
 }
 
-fn optional_text(input: &Value, field: &str) -> Option<String> {
+pub(crate) fn optional_text(input: &Value, field: &str) -> Option<String> {
     input.get(field).and_then(Value::as_str).map(str::to_string)
 }
 
-fn number(input: &Value, field: &str) -> Option<u64> {
+pub(crate) fn number(input: &Value, field: &str) -> Option<u64> {
     match input.get(field)? {
         Value::Number(value) => value.as_u64(),
         Value::String(value) => value.parse().ok(),
@@ -265,7 +289,7 @@ fn number(input: &Value, field: &str) -> Option<u64> {
     }
 }
 
-fn boolean(input: &Value, field: &str) -> bool {
+pub(crate) fn boolean(input: &Value, field: &str) -> bool {
     match input.get(field) {
         Some(Value::Bool(value)) => *value,
         Some(Value::String(value)) => value == "true",
@@ -273,7 +297,7 @@ fn boolean(input: &Value, field: &str) -> bool {
     }
 }
 
-fn bytes(input: &Value) -> Result<Vec<u8>, Error> {
+pub(crate) fn bytes(input: &Value) -> Result<Vec<u8>, Error> {
     let values = input
         .as_array()
         .ok_or_else(|| Error::invalid("`bytes` is a list of u8"))?;

@@ -1,0 +1,29 @@
+package anthracite:storage@1.0.0;
+
+interface storage {
+    use anth:error/kinds@1.0.0.{error};
+
+    record device {
+        name: string,
+        path: string,
+        size-bytes: u64,
+        model: string,
+        removable: bool,
+        mounted: bool,
+    }
+
+    record mount {
+        device: string,
+        mountpoint: string,
+        filesystem: string,
+        used-bytes: u64,
+        total-bytes: u64,
+    }
+
+    devices: func() -> result<list<device>, error>;
+    mounts: func() -> result<list<mount>, error>;
+}
+
+world app {
+    export storage;
+}

@@ -1,0 +1,45 @@
+manifest_version = 3
+
+[app]
+id = "org.anthracite.accounts"
+namespace = "anthracite:accounts"
+name = "Accounts (emulator)"
+version = "0.1.0"
+summary = "Deterministic users and groups fixture for the demo; replaced by the real accounts app."
+license = "Apache-2.0"
+
+[service]
+path = "bin/host-emulator"
+sha256 = "{{sha256}}"
+class = "socket"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "anthracite:accounts/accounts@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/users"
+call = "anthracite:accounts/accounts@1.0.0#users"
+
+[[route]]
+method = "GET"
+path = "/groups"
+call = "anthracite:accounts/accounts@1.0.0#groups"
+
+[[slot]]
+id = "panel.view"
+label = "Accounts"
+icon = "users"
+order = 23
+tag = "anth-accounts"
+module = "web/accounts.js"
+sha256 = "{{module_sha256}}"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.0.0#users"
+verb = "users"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.0.0#groups"
+verb = "groups"

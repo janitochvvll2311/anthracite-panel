@@ -1,0 +1,45 @@
+manifest_version = 3
+
+[app]
+id = "org.anthracite.storage"
+namespace = "anthracite:storage"
+name = "Storage (emulator)"
+version = "0.1.0"
+summary = "Deterministic block-device and mount fixture for the demo; replaced by the real storage app."
+license = "Apache-2.0"
+
+[service]
+path = "bin/host-emulator"
+sha256 = "{{sha256}}"
+class = "socket"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "anthracite:storage/storage@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/devices"
+call = "anthracite:storage/storage@1.0.0#devices"
+
+[[route]]
+method = "GET"
+path = "/mounts"
+call = "anthracite:storage/storage@1.0.0#mounts"
+
+[[slot]]
+id = "panel.view"
+label = "Storage"
+icon = "disk"
+order = 22
+tag = "anth-storage"
+module = "web/storage.js"
+sha256 = "{{module_sha256}}"
+
+[[cli]]
+call = "anthracite:storage/storage@1.0.0#devices"
+verb = "devices"
+
+[[cli]]
+call = "anthracite:storage/storage@1.0.0#mounts"
+verb = "mounts"
