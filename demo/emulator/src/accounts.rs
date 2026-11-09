@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use crate::{boolean, number, text};
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct User {
     name: String,
     uid: u32,
@@ -15,12 +16,14 @@ struct User {
     locked: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Group {
     name: String,
     gid: u32,
     members: Vec<String>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct AccountsFixture {
     users: Vec<User>,
     groups: Vec<Group>,

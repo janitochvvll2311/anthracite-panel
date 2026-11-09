@@ -543,6 +543,7 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
         ));
     }
     let mut sockets = 0usize;
+    let mut data = 0usize;
     for arg in &service.argv {
         if arg.len() > 4096 {
             return Err(Error::invalid("a service argv entry is longer than 4 KiB"));
@@ -551,7 +552,8 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
             return Err(Error::invalid("a service argv entry contains a NUL byte"));
         }
         sockets += arg.matches("{socket}").count();
-        let rest = arg.replace("{socket}", "");
+        data += arg.matches("{data}").count();
+        let rest = arg.replace("{socket}", "").replace("{data}", "");
         if rest.contains('{') || rest.contains('}') {
             return Err(Error::invalid(
                 "a service argv entry has an unknown placeholder",
@@ -561,6 +563,11 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
     if sockets != 1 {
         return Err(Error::invalid(
             "service argv must contain exactly one `{socket}`",
+        ));
+    }
+    if data > 1 {
+        return Err(Error::invalid(
+            "service argv may contain at most one `{data}`",
         ));
     }
     Ok(())
@@ -878,6 +885,27 @@ target = "wasm"
             let error = manifest.validate().expect_err(path);
             assert!(error.message().contains("bin/"), "{path}: {error}");
         }
+    }
+
+    #[test]
+    fn a_service_argv_may_name_one_data_directory() {
+        let mut manifest = Manifest::parse(SERVICE).expect("parse");
+        manifest.service.as_mut().expect("service").argv = vec![
+            "--socket".to_string(),
+            "{socket}".to_string(),
+            "--state".to_string(),
+            "{data}/state.json".to_string(),
+        ];
+        manifest.validate().expect("data dir");
+
+        manifest.service.as_mut().expect("service").argv = vec![
+            "--socket".to_string(),
+            "{socket}".to_string(),
+            "{data}".to_string(),
+            "{data}".to_string(),
+        ];
+        let error = manifest.validate().expect_err("two data dirs");
+        assert!(error.message().contains("at most one `{data}`"), "{error}");
     }
 
     #[test]

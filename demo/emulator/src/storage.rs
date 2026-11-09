@@ -5,15 +5,17 @@ use serde_json::{json, Value};
 
 use crate::text;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Device {
-    name: &'static str,
-    path: &'static str,
+    name: String,
+    path: String,
     size_bytes: u64,
-    model: &'static str,
+    model: String,
     removable: bool,
     mounted: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Mount {
     device: String,
     mountpoint: String,
@@ -22,6 +24,7 @@ struct Mount {
     total_bytes: u64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct StorageFixture {
     devices: Vec<Device>,
     mounts: Vec<Mount>,
@@ -32,34 +35,34 @@ impl StorageFixture {
         Self {
             devices: vec![
                 Device {
-                    name: "nvme0n1p1",
-                    path: "/dev/nvme0n1p1",
+                    name: "nvme0n1p1".to_string(),
+                    path: "/dev/nvme0n1p1".to_string(),
                     size_bytes: 536_870_912,
-                    model: "Demo NVMe",
+                    model: "Demo NVMe".to_string(),
                     removable: false,
                     mounted: true,
                 },
                 Device {
-                    name: "nvme0n1p2",
-                    path: "/dev/nvme0n1p2",
+                    name: "nvme0n1p2".to_string(),
+                    path: "/dev/nvme0n1p2".to_string(),
                     size_bytes: 51_539_607_552,
-                    model: "Demo NVMe",
+                    model: "Demo NVMe".to_string(),
                     removable: false,
                     mounted: true,
                 },
                 Device {
-                    name: "sdb1",
-                    path: "/dev/sdb1",
+                    name: "sdb1".to_string(),
+                    path: "/dev/sdb1".to_string(),
                     size_bytes: 68_719_476_736,
-                    model: "Demo USB",
+                    model: "Demo USB".to_string(),
                     removable: true,
                     mounted: true,
                 },
                 Device {
-                    name: "sdc",
-                    path: "/dev/sdc",
+                    name: "sdc".to_string(),
+                    path: "/dev/sdc".to_string(),
                     size_bytes: 15_931_064_320,
-                    model: "Demo SD",
+                    model: "Demo SD".to_string(),
                     removable: true,
                     mounted: false,
                 },

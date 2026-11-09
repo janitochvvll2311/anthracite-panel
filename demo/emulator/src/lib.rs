@@ -1,11 +1,13 @@
 //! Deterministic fixtures for the demo services (D-Host-Emulator).
 //!
 //! One binary backs one bundle per app: the bundles carry the real app's WIT
-//! package and manifest id, and only the binary is shared. The handler is
-//! deliberately synchronous and in-memory, so a restart resets the fixture and
-//! every run renders the same tree, sessions and outputs.
+//! package and manifest id, and only the binary is shared. Host state (files,
+//! accounts, network and storage) is a JSON snapshot under the per-app `{data}`
+//! directory; runtime state (processes and terminal sessions) resets on restart.
 
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use anth_contract::Error;
@@ -34,7 +36,7 @@ const DEFAULT_PAGE: u32 = 50;
 const PROMPT: &str = "operator@anthracite:~$ ";
 const HELP: &str = "help: ls, cat, echo, help, exit\r\n";
 
-/// The service handler: filesystem and terminal state, reset on restart.
+/// The service handler: persistent host state plus runtime processes/sessions.
 pub struct Emulator {
     fs: Mutex<Fs>,
     terminals: Mutex<Terminals>,
@@ -42,12 +44,31 @@ pub struct Emulator {
     net: Mutex<net::NetFixture>,
     storage: Mutex<storage::StorageFixture>,
     accounts: Mutex<accounts::AccountsFixture>,
+    state_path: Option<PathBuf>,
 }
 
 impl Default for Emulator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The persistent snapshot. Only fs, accounts, net and storage are durable;
+/// processes and terminal sessions are runtime.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct State {
+    fs: Fs,
+    accounts: accounts::AccountsFixture,
+    net: net::NetFixture,
+    storage: storage::StorageFixture,
+}
+
+#[derive(serde::Serialize)]
+struct StateRef<'a> {
+    fs: &'a Fs,
+    accounts: &'a accounts::AccountsFixture,
+    net: &'a net::NetFixture,
+    storage: &'a storage::StorageFixture,
 }
 
 impl Emulator {
@@ -59,7 +80,32 @@ impl Emulator {
             net: Mutex::new(net::NetFixture::new()),
             storage: Mutex::new(storage::StorageFixture::new()),
             accounts: Mutex::new(accounts::AccountsFixture::new()),
+            state_path: None,
         }
+    }
+
+    /// Opens a persistent snapshot if `state` names one, or seeds the fixtures.
+    pub fn open(state: Option<PathBuf>) -> Result<Self, Error> {
+        let mut emulator = Self::new();
+        if let Some(path) = &state {
+            if path.exists() {
+                let bytes = std::fs::read(path).map_err(|error| {
+                    Error::internal(format!("reading {}: {error}", path.display()))
+                })?;
+                let loaded: State = serde_json::from_slice(&bytes).map_err(|error| {
+                    Error::invalid(format!(
+                        "{} is not a valid state snapshot: {error}",
+                        path.display()
+                    ))
+                })?;
+                emulator.fs = Mutex::new(loaded.fs);
+                emulator.accounts = Mutex::new(loaded.accounts);
+                emulator.net = Mutex::new(loaded.net);
+                emulator.storage = Mutex::new(loaded.storage);
+            }
+        }
+        emulator.state_path = state;
+        Ok(emulator)
     }
 
     pub fn trashed(&self) -> Vec<String> {
@@ -68,11 +114,51 @@ impl Emulator {
             .expect("the fixture mutex is not poisoned")
             .trashed()
     }
+
+    /// Writes the durable state atomically (`state.json.tmp` then rename).
+    fn persist(&self) -> Result<(), Error> {
+        let Some(path) = &self.state_path else {
+            return Ok(());
+        };
+        let fs = self.fs.lock().expect("the fixture mutex is not poisoned");
+        let accounts = self
+            .accounts
+            .lock()
+            .expect("the fixture mutex is not poisoned");
+        let net = self.net.lock().expect("the fixture mutex is not poisoned");
+        let storage = self
+            .storage
+            .lock()
+            .expect("the fixture mutex is not poisoned");
+        let bytes = serde_json::to_vec_pretty(&StateRef {
+            fs: &fs,
+            accounts: &accounts,
+            net: &net,
+            storage: &storage,
+        })
+        .map_err(|error| Error::internal(format!("encoding host state: {error}")))?;
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, &bytes).map_err(|error| {
+            Error::internal(format!("writing {}: {error}", temporary.display()))
+        })?;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600)).map_err(
+            |error| Error::internal(format!("setting {} to 0600: {error}", temporary.display())),
+        )?;
+        std::fs::rename(&temporary, path)
+            .map_err(|error| Error::internal(format!("publishing {}: {error}", path.display())))
+    }
 }
 
 impl Handler for Emulator {
     fn call(&self, interface: &str, function: &str, input: Value) -> Result<Value, Error> {
-        match interface {
+        let mutating = match interface {
+            FS_WRITE => true,
+            NET => !matches!(function, "interfaces" | "routes"),
+            STORAGE => !matches!(function, "devices" | "mounts"),
+            ACCOUNTS => !matches!(function, "users" | "groups"),
+            _ => false,
+        };
+        let result = match interface {
             FS_READ => self.fs_read(function, &input),
             FS_WRITE => self.fs_write(function, &input),
             TERMINAL => self.terminal(function, &input),
@@ -99,21 +185,28 @@ impl Handler for Emulator {
             _ => Err(Error::not_found(format!(
                 "`{interface}` is not exported by the emulator"
             ))),
+        };
+        if mutating && result.is_ok() {
+            self.persist()?;
         }
+        result
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 enum Node {
     Dir,
     File(Vec<u8>),
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Fs {
     nodes: BTreeMap<String, Node>,
     /// Subtrees removed with `trash = true`, kept for listing and restore.
     trash: Vec<Trashed>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Trashed {
     original: String,
     node: Node,
@@ -988,5 +1081,67 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::NotFound);
         let list = emulator.call(TERMINAL, "list", json!({})).expect("list");
         assert_eq!(list, json!([]));
+    }
+
+    #[test]
+    fn host_state_survives_a_reopen() {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("anth-emulator-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("state.json");
+        let emulator = Emulator::open(Some(path.clone())).expect("open");
+
+        emulator
+            .call(
+                FS_WRITE,
+                "write-file",
+                json!({"path": "/tmp/persisted.txt", "bytes": [104, 105]}),
+            )
+            .expect("write");
+        emulator
+            .call(
+                ACCOUNTS,
+                "create-user",
+                json!({"name": "persisted", "uid": 1500, "gid": 1500, "home": "/home/persisted", "shell": "/bin/sh", "system": false}),
+            )
+            .expect("user");
+        emulator
+            .call(NET, "set-up", json!({"name": "wlan0", "up": true}))
+            .expect("up");
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdc", "mountpoint": "/media/sd", "filesystem": "exfat"}),
+            )
+            .expect("mount");
+        drop(emulator);
+
+        let reopened = Emulator::open(Some(path)).expect("reopen");
+        assert_eq!(
+            reopened
+                .call(FS_READ, "read-file", json!({"path": "/tmp/persisted.txt"}))
+                .expect("read"),
+            json!([104, 105])
+        );
+        let users = reopened.call(ACCOUNTS, "users", json!({})).expect("users");
+        assert!(users
+            .as_array()
+            .expect("users")
+            .iter()
+            .any(|user| user["name"] == "persisted"));
+        let interfaces = reopened
+            .call(NET, "interfaces", json!({}))
+            .expect("interfaces");
+        assert_eq!(interfaces[2]["up"], true);
+        let mounts = reopened.call(STORAGE, "mounts", json!({})).expect("mounts");
+        assert!(mounts
+            .as_array()
+            .expect("mounts")
+            .iter()
+            .any(|mount| mount["mountpoint"] == "/media/sd"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

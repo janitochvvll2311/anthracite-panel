@@ -52,6 +52,8 @@ pub struct ServiceLaunch {
     pub binary: PathBuf,
     pub argv: Vec<String>,
     pub socket: PathBuf,
+    /// The per-app data directory substituted for `{data}`.
+    pub data_dir: PathBuf,
     pub exports: BTreeMap<String, ExportTarget>,
     pub start_timeout: Duration,
 }

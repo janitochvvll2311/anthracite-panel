@@ -12,7 +12,7 @@ license = "Apache-2.0"
 path = "bin/host-emulator"
 sha256 = "{{sha256}}"
 class = "socket"
-argv = ["--socket", "{socket}"]
+argv = ["--socket", "{socket}", "--state", "{data}/state.json"]
 
 [[export]]
 interface = "anthracite:fs/read@1.1.0"

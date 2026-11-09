@@ -5,6 +5,7 @@
 //! degrades that app and its dependents; it never takes the engine down.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
 
 use anth_compose::grant::GrantStore;
@@ -247,10 +248,23 @@ fn service_launch(
             socket_text.len()
         )));
     }
+    let data_dir = state.join("data").join(id.as_str());
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|error| Error::internal(format!("creating {}: {error}", data_dir.display())))?;
+    std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700)).map_err(
+        |error| Error::internal(format!("setting {} to 0700: {error}", data_dir.display())),
+    )?;
+    let data_text = data_dir
+        .to_str()
+        .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
     let argv = service
         .argv
         .iter()
-        .map(|argument| argument.replace("{socket}", socket_text))
+        .map(|argument| {
+            argument
+                .replace("{socket}", socket_text)
+                .replace("{data}", data_text)
+        })
         .collect();
     let exports = app
         .manifest
@@ -263,6 +277,7 @@ fn service_launch(
         binary,
         argv,
         socket,
+        data_dir,
         exports,
         start_timeout: std::time::Duration::from_millis(limits.start_timeout_ms),
     })
