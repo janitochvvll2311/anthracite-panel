@@ -96,4 +96,20 @@ test("frame context copies the panel declaration and the contribution", () => {
   expect(context.contribution.app).toBe("org.example.notes");
   expect(context.panel).toEqual({ slots: [VIEW], version: "0.5.0" });
   expect(context.kind).toBe("view");
+  expect("params" in context).toBe(false);
+});
+
+test("frame context carries opaque params when the panel opened a view", () => {
+  const contribution = {
+    app: app("org.example.notes", []),
+    slot: slot(VIEW, "notes", 1),
+  };
+  const params = { path: "/home/operator/notes.txt", text: "hello" };
+  const context = frameContext(
+    contribution,
+    "view",
+    { slots: [VIEW], version: "0.5.0" },
+    params,
+  );
+  expect(context.params).toEqual(params);
 });

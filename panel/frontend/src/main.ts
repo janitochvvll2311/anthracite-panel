@@ -24,6 +24,7 @@ import {
   type App,
   type Contribution,
   type FrameContext,
+  type OpenViewRequest,
 } from "@anthracite/panel";
 
 import {
@@ -61,11 +62,14 @@ type CompositionView = {
 type Tab = {
   key: string;
   contribution: Contribution;
+  params?: unknown;
 };
 
 type Mounted = {
   root: HTMLElement;
   contribution: Contribution;
+  /// The panel data this mount was opened with.
+  params?: unknown;
   dispose: () => void;
   /// Set when the host closes or replaces the mount; a late module must not
   /// attach to a detached root.
@@ -350,6 +354,9 @@ async function mountInto(
   kind: FrameContext["kind"],
   close: () => void,
   cancelled: () => boolean,
+  params?: unknown,
+  openView?: (request: OpenViewRequest) => void,
+  onParams?: (params: unknown) => void,
 ): Promise<() => void> {
   root.replaceChildren(element("div", "loading", "Loading module…"));
   try {
@@ -361,11 +368,18 @@ async function mountInto(
     if (cancelled()) return () => root.replaceChildren();
     const dispose = await mountFrame(root, {
       source,
-      context: frameContext(contribution, kind, {
-        slots: implemented,
-        version: panelVersion,
-      }),
+      context: frameContext(
+        contribution,
+        kind,
+        {
+          slots: implemented,
+          version: panelVersion,
+        },
+        params,
+      ),
       close,
+      openView,
+      onParams,
       request: (input, init) => request(input, init),
     });
     if (cancelled()) {
@@ -400,16 +414,26 @@ function trackMount(
   kind: FrameContext["kind"],
   close: () => void,
   current: () => Mounted | undefined,
+  params?: unknown,
+  openView?: (request: OpenViewRequest) => void,
+  onParams?: (params: unknown) => void,
 ): void {
-  void mountInto(body, contribution, kind, close, () => state.cancelled).then(
-    (dispose) => {
-      if (state.cancelled || current() !== state) {
-        safeDispose(dispose);
-        return;
-      }
-      state.dispose = dispose;
-    },
-  );
+  void mountInto(
+    body,
+    contribution,
+    kind,
+    close,
+    () => state.cancelled,
+    params,
+    openView,
+    onParams,
+  ).then((dispose) => {
+    if (state.cancelled || current() !== state) {
+      safeDispose(dispose);
+      return;
+    }
+    state.dispose = dispose;
+  });
 }
 
 function lastTabKey(): string | null {
@@ -422,11 +446,53 @@ function renderWorkspace(): void {
   renderPanes();
 }
 
-function ensurePane(contribution: Contribution): void {
+function paramsKey(params: unknown): string {
+  return JSON.stringify(params ?? null);
+}
+
+function rememberParams(contribution: Contribution, params: unknown): void {
+  const key = contributionKey(contribution);
+  const tab = tabs.get(key);
+  if (tab) tab.params = params;
+  const pane = mounted.get(key);
+  if (pane) pane.params = params;
+  for (const state of floating.values()) {
+    if (contributionKey(state.contribution) === key) state.params = params;
+  }
+}
+
+function openAppView(
+  source: Contribution,
+  request: OpenViewRequest,
+): void {
+  const target = ordered(VIEW).find(
+    (contribution) =>
+      contribution.app.id === source.app.id &&
+      contribution.slot.tag === request.tag,
+  );
+  if (!target) return;
+  const key = contributionKey(target);
+  if (request.mode === "float") {
+    const tab = tabs.get(key);
+    if (tab) closeTab(key);
+    openWindow(target, "view", request.params);
+    return;
+  }
+  if (floating.has(`window:view:${key}`)) {
+    openWindow(target, "view", request.params);
+  } else {
+    openTab(target, true, request.params);
+  }
+}
+
+function ensurePane(contribution: Contribution, params?: unknown): void {
   const key = contributionKey(contribution);
   const existing = mounted.get(key);
   if (existing) {
-    if (existing.contribution.slot.sha256 !== contribution.slot.sha256) {
+    if (
+      existing.contribution.slot.sha256 !== contribution.slot.sha256 ||
+      paramsKey(existing.params) !== paramsKey(params)
+    ) {
       retire(existing);
       mounted.delete(key);
     } else {
@@ -459,6 +525,7 @@ function ensurePane(contribution: Contribution): void {
   const state: Mounted = {
     root: body,
     contribution,
+    params,
     dispose: () => body.replaceChildren(),
     cancelled: false,
   };
@@ -470,6 +537,9 @@ function ensurePane(contribution: Contribution): void {
     "view",
     () => closeTab(key),
     () => mounted.get(key),
+    params,
+    (request) => openAppView(contribution, request),
+    (next) => rememberParams(contribution, next),
   );
 }
 
@@ -480,7 +550,7 @@ function renderPanes(): void {
       mounted.delete(key);
     }
   }
-  for (const tab of tabs.values()) ensurePane(tab.contribution);
+  for (const tab of tabs.values()) ensurePane(tab.contribution, tab.params);
   for (const [key, state] of mounted) {
     const pane = state.root.parentElement;
     if (!pane) continue;
@@ -489,20 +559,32 @@ function renderPanes(): void {
   empty.classList.toggle("hidden", tabs.size > 0);
 }
 
-function openTab(contribution: Contribution, activateTab = true): void {
+function openTab(
+  contribution: Contribution,
+  activateTab = true,
+  params?: unknown,
+): void {
   const key = contributionKey(contribution);
   // A view that is already floating (or minimized) comes forward instead of
   // mounting a second copy as a tab.
   const detached = floating.get(`window:view:${key}`);
   if (detached) {
-    if (detached.mode === "minimized") restoreStack(detached);
-    else focusWindow(detached);
-    closeDrawer();
-    return;
+    if (paramsKey(detached.params) !== paramsKey(params)) {
+      closeFloating(detached);
+    } else {
+      if (detached.mode === "minimized") restoreStack(detached);
+      else focusWindow(detached);
+      closeDrawer();
+      return;
+    }
   }
   const existing = tabs.get(key);
-  if (existing) existing.contribution = contribution;
-  else tabs.set(key, { key, contribution });
+  if (existing) {
+    existing.contribution = contribution;
+    if (params !== undefined) existing.params = params;
+  } else {
+    tabs.set(key, { key, contribution, params });
+  }
   if (activateTab) activate(key);
   renderWorkspace();
   closeDrawer();
@@ -530,7 +612,7 @@ function detachTab(key: string): void {
   const tab = tabs.get(key);
   if (!tab) return;
   closeDrawer();
-  openWindow(tab.contribution, "view");
+  openWindow(tab.contribution, "view", tab.params);
   closeTab(key);
 }
 
@@ -637,17 +719,22 @@ function dockWindow(state: Floating): void {
   if (state.kind !== "view") return;
   const contribution = state.contribution;
   closeFloating(state);
-  openTab(contribution);
+  openTab(contribution, true, state.params);
 }
 
 function openWindow(
   contribution: Contribution,
   kind: FrameContext["kind"],
+  params?: unknown,
 ): void {
   const key = `window:${kind}:${contributionKey(contribution)}`;
   const existing = floating.get(key);
   if (existing) {
-    if (existing.contribution.slot.sha256 === contribution.slot.sha256) {
+    if (params === undefined) params = existing.params;
+    if (
+      existing.contribution.slot.sha256 === contribution.slot.sha256 &&
+      paramsKey(existing.params) === paramsKey(params)
+    ) {
       if (existing.mode === "minimized") restoreStack(existing);
       else focusWindow(existing);
       return;
@@ -685,6 +772,7 @@ function openWindow(
     element: windowElement,
     root: body,
     contribution,
+    params,
     dispose: () => body.replaceChildren(),
     cancelled: false,
     mode: "normal",
@@ -709,6 +797,11 @@ function openWindow(
     kind,
     () => closeFloating(state),
     () => floating.get(key),
+    params,
+    kind === "view"
+      ? (request) => openAppView(contribution, request)
+      : undefined,
+    (next) => rememberParams(contribution, next),
   );
 }
 
@@ -851,8 +944,9 @@ function reconcileWindows(): void {
     }
     if (state.contribution.slot.sha256 !== contribution.slot.sha256) {
       const kind = state.kind;
+      const params = state.params;
       closeFloating(state);
-      openWindow(contribution, kind);
+      openWindow(contribution, kind, params);
     }
   }
 }

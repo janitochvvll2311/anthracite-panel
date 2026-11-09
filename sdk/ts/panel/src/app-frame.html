@@ -105,6 +105,8 @@
                 ...message.context,
                 fetch: request,
                 close: () => send("anth:close"),
+                openView: (request) => send("anth:open-view", request),
+                updateParams: (params) => send("anth:params", { params }),
               };
               dispose = await module.mount(document.body, context);
               send("anth:mounted");
