@@ -1,7 +1,9 @@
-//! Builds the demo's service bundles: one zip per app, one shared binary.
+//! Builds the demo's app bundles: one zip per app, one shared emulator binary.
 //!
-//! The binary is hashed into each manifest and the bundle carries exactly one
-//! WIT package, which is what the engine's validator requires.
+//! App manifests, WIT and web modules come from `apps/<name>`; the binary is
+//! the deterministic emulator service. The binary is hashed into each manifest
+//! and the bundle carries exactly one WIT package, which is what the engine's
+//! validator requires.
 
 use std::error::Error;
 use std::fs;
@@ -34,7 +36,7 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("bundles");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
     fs::create_dir_all(out)?;
     let mut built = Vec::with_capacity(BUNDLES.len());
     for (name, app) in BUNDLES {

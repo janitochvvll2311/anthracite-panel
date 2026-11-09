@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rebuild the Files module with its bundled ProseMirror dependency.
+# Rebuild the Files module with its bundled editor dependencies.
 #
 # The iframe forbids remote imports, so the app serves one self-contained ES
 # module. Run this after editing `web-src/fs.js`; the generated `web/fs.js` is
@@ -7,7 +7,7 @@
 set -eu
 cd "$(dirname "$0")"
 bun install
-bun build bundles/fs/web-src/fs.js \
-    --outfile bundles/fs/web/fs.js \
+bun build web-src/fs.js \
+    --outfile web/fs.js \
     --format esm \
     --target browser
