@@ -142,6 +142,9 @@ pub struct SurfaceSlot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub order: i64,
+    /// The panel renders this contribution only on request, not in navigation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     pub tag: String,
     pub module: String,
     pub sha256: String,
@@ -340,6 +343,7 @@ mod tests {
                         label: "Notes".to_string(),
                         icon: None,
                         order: 1,
+                        hidden: false,
                         tag: "notes".to_string(),
                         module: "web/notes.js".to_string(),
                         sha256: "c".repeat(64),

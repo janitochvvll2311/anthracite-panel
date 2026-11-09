@@ -169,6 +169,10 @@ pub struct SlotSection {
     pub icon: Option<String>,
     #[serde(default)]
     pub order: i64,
+    /// Hidden contributions can still be opened by other views of the same app,
+    /// but the panel does not list them in its navigation.
+    #[serde(default)]
+    pub hidden: bool,
     pub tag: String,
     pub module: String,
     pub sha256: String,
@@ -665,6 +669,7 @@ id = "panel.view"
 label = "Notes"
 icon = "notes"
 order = 10
+hidden = true
 tag = "anth-notes"
 module = "web/notes.js"
 sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -749,6 +754,7 @@ target = "wasm"
         manifest.validate().expect("validate");
         assert_eq!(manifest.app.id, "org.example.notes");
         assert_eq!(manifest.slot[0].order, 10);
+        assert!(manifest.slot[0].hidden);
     }
 
     #[test]

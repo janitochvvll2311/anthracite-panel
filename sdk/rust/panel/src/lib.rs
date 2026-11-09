@@ -150,6 +150,7 @@ mod tests {
             label: tag.to_string(),
             icon: None,
             order,
+            hidden: false,
             tag: tag.to_string(),
             module: format!("web/{tag}.js"),
             sha256: "a".repeat(64),

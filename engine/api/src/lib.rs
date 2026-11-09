@@ -514,6 +514,7 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
                 label: slot.label.clone(),
                 icon: slot.icon.clone(),
                 order: slot.order,
+                hidden: slot.hidden,
                 tag: slot.tag.clone(),
                 module: slot.module.clone(),
                 sha256: slot.sha256.clone(),

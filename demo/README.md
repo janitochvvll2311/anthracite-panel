@@ -74,14 +74,18 @@ CLI verbs:
 
 Every bundle carries a `panel.view` module:
 
-- `web/fs.js` — Files plus a second `panel.view` called Editor, both from the
-  same module. Files has an editable address bar, tree navigation, preview,
-  **New** (blank file, folder or symlink), symlink navigation, rename, upload,
-  download, trash and restore, plus delete. Edit opens a ProseMirror code editor
-  with line-based syntax highlighting; **Pop out** opens the same file in the
-  panel-level Editor view, which then uses the normal panel Float/Dock/Max/Min
-  controls and keeps its text across moves. There is no in-frame floating
-  editor: if the panel cannot open the view, the inline editor stays open.
+- `web/fs.js` — Files plus a hidden `panel.view` called Editor, both from the
+  same module. Files has an editable address bar, tree navigation, a formatted
+  read-only preview (highlight.js for code, marked for Markdown), **New** (blank
+  file, folder or symlink), symlink navigation, rename, upload, download, trash
+  and restore, plus delete. **Open in Editor** opens the file in the panel-level
+  Editor: it reuses the docked tab when the Editor is docked, and a floating
+  window otherwise. The editor is CodeMirror 6: syntax highlighting,
+  autocomplete, line numbers, lint diagnostics, internal file tabs, its own file
+  tree (inline or mobile drawer), line/column and selection counters, EOL,
+  detected language, and indentation size/tab character. Shortcuts include
+  `Shift+Tab` to outdent, `Ctrl+/` to toggle comments and `Ctrl+Space` to open
+  completion. No inline editing or in-frame floating editor remains.
 - `web/terminal.js` — session with help/exit, history, INT/TERM/Clear, reconnect
   and resize.
 - `web/proc.js` — flat/tree process table, live refresh, allowlisted signals and

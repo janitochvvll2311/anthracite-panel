@@ -30,6 +30,14 @@ export type OpenViewRequest = {
   params?: unknown;
   /// `tab` (default) or `float`, so a view can pop straight into a panel window.
   mode?: "tab" | "float";
+  /// Preferred size when the panel has to create a window.
+  size?: { width?: number; height?: number };
+};
+
+/// A live frame the panel can talk to after it mounted.
+export type FrameHandle = {
+  /// Delivers a transient open request without remounting the view.
+  update: (params: unknown) => void;
 };
 
 export type FrameOptions = {
@@ -40,6 +48,8 @@ export type FrameOptions = {
   openView?: (request: OpenViewRequest) => boolean | void;
   /// Records opaque parameters the module wants to keep across float/dock.
   onParams?: (params: unknown) => void;
+  /// Called once the module mounted, so the panel can send later requests.
+  onReady?: (frame: FrameHandle) => void;
   /// A same-origin fetch, so a host can add authentication or logging.
   request?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   frameUrl?: string;
@@ -113,7 +123,15 @@ export async function mountFrame(
 
   let settled = false;
   let ready = false;
+  let filled = false;
   let cleanup = (): void => {};
+
+  const update = (params: unknown): void => {
+    iframe.contentWindow?.postMessage(
+      { type: "anth:update-params", token, params },
+      "*",
+    );
+  };
 
   const result = new Promise<() => void>((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -159,6 +177,7 @@ export async function mountFrame(
       if (message.token !== token) return;
 
       if (message.type === "anth:mounted") {
+        options.onReady?.({ update });
         finish();
         return;
       }
@@ -180,6 +199,7 @@ export async function mountFrame(
               tag,
               params: message.params,
               mode: message.mode === "float" ? "float" : "tab",
+              size: message.size as OpenViewRequest["size"],
             }) !== false;
         }
         if (requestId) {
@@ -194,7 +214,16 @@ export async function mountFrame(
         options.onParams?.(message.params);
         return;
       }
+      if (message.type === "anth:fill") {
+        filled = true;
+        host.classList.add("app-fill");
+        iframe.classList.add("app-frame-fill");
+        iframe.style.height = "100%";
+        iframe.style.minHeight = "0";
+        return;
+      }
       if (message.type === "anth:resize") {
+        if (filled) return;
         const height = Math.max(120, Number(message.height) || 0);
         iframe.style.height = `${height}px`;
         return;

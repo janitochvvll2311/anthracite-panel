@@ -530,6 +530,17 @@ button.drawer-close {
   padding: 22px;
 }
 
+.pane-body.app-fill,
+.window-body.app-fill {
+  overflow: hidden;
+  padding: 0;
+}
+
+.app-frame-fill {
+  height: 100%;
+  min-height: 0;
+}
+
 .app-frame {
   display: block;
   width: 100%;
@@ -692,6 +703,26 @@ button.drawer-close {
   align-items: center;
   gap: 2px;
   margin-left: auto;
+}
+
+.window-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border-radius: 5px;
+}
+
+.window-tools button[hidden] {
+  display: none;
+}
+
+.window-tools svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .window-body {
