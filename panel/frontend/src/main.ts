@@ -816,15 +816,16 @@ function reconcileWindows(): void {
       .flatMap((slot) => ordered(slot))
       .map((contribution) => [contributionKey(contribution), contribution]),
   );
-  for (const [key, state] of floating) {
+  for (const state of [...floating.values()]) {
     const contribution = known.get(contributionKey(state.contribution));
     if (!contribution) {
       closeFloating(state);
       continue;
     }
     if (state.contribution.slot.sha256 !== contribution.slot.sha256) {
+      const kind = state.kind;
       closeFloating(state);
-      openWindow(contribution, key.includes(":action:") ? "action" : "view");
+      openWindow(contribution, kind);
     }
   }
 }
