@@ -231,12 +231,14 @@ document.getElementById('login').addEventListener('submit', async (event) => {
   event.preventDefault();
   const status = document.getElementById('status');
   status.textContent = '';
+  status.dataset.state = '';
   const response = await fetch('/api/engine/session', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ operator: 'operator', password: document.getElementById('password').value }),
   });
   if (!response.ok) {
+    status.dataset.state = 'bad';
     status.textContent = await response.text();
     return;
   }
@@ -274,6 +276,7 @@ document.getElementById('setup').addEventListener('submit', async (event) => {
   event.preventDefault();
   const status = document.getElementById('status');
   status.textContent = '';
+  status.dataset.state = '';
   const current = document.getElementById('current').value;
   const next = document.getElementById('new').value;
   const login = await fetch('/api/engine/session', {
@@ -282,6 +285,7 @@ document.getElementById('setup').addEventListener('submit', async (event) => {
     body: JSON.stringify({ operator: 'operator', password: current }),
   });
   if (!login.ok) {
+    status.dataset.state = 'bad';
     status.textContent = await login.text();
     return;
   }
@@ -291,9 +295,11 @@ document.getElementById('setup').addEventListener('submit', async (event) => {
     body: JSON.stringify({ current_password: current, new_password: next }),
   });
   if (!response.ok) {
+    status.dataset.state = 'bad';
     status.textContent = await response.text();
     return;
   }
+  status.dataset.state = 'ok';
   status.textContent = 'Password changed. Opening the workspace…';
   location.href = '/';
 });
@@ -312,6 +318,8 @@ fn page(title: &str, body: &str) -> Response {
 <meta name="color-scheme" content="dark">
 <title>{title}</title>
 <style>
+  /* Mirrors panel/frontend/src/style.css; /login is public and cannot load
+     the gated shell CSS. */
   :root {{
     color-scheme: dark;
     --bg: #0b0d12;
@@ -325,6 +333,7 @@ fn page(title: &str, body: &str) -> Response {
     --accent: #7aa2ff;
     --accent-2: #9d7bff;
     --danger: #ff7d8a;
+    --good: #52d1a4;
     --shadow: 0 24px 70px #00000073;
     font-synthesis: none;
   }}
@@ -433,7 +442,8 @@ fn page(title: &str, body: &str) -> Response {
     font-size: .82rem;
     white-space: pre-wrap;
   }}
-  .hint {{ margin: 1.25rem 0 0; color: var(--muted-2); font-size: .8rem; }}
+  .status[data-state="ok"] {{ color: var(--good); }}
+  .hint {{ margin: 1.25rem 0 0; color: var(--muted); font-size: .8rem; }}
   code {{
     padding: .1rem .3rem;
     border: 1px solid var(--line-soft);
