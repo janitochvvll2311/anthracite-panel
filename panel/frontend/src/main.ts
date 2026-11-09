@@ -40,6 +40,7 @@ import {
   type RestoreMode,
   type WindowMode,
 } from "./windows";
+import { mountManager } from "./manager";
 
 type DegradedApp = {
   app: string;
@@ -111,6 +112,10 @@ const settings = byId<HTMLElement>("settings");
 const settingsBody = byId<HTMLElement>("settings-body");
 const settingsButton = byId<HTMLButtonElement>("settings-button");
 const settingsClose = byId<HTMLButtonElement>("settings-close");
+const manager = byId<HTMLElement>("manager");
+const managerBody = byId<HTMLElement>("manager-body");
+const managerButton = byId<HTMLButtonElement>("manager-button");
+const managerClose = byId<HTMLButtonElement>("manager-close");
 const viewportSelect = byId<HTMLSelectElement>("viewport-select");
 const viewportEffective = byId<HTMLElement>("viewport-effective");
 const navToggle = byId<HTMLButtonElement>("nav-toggle");
@@ -130,6 +135,7 @@ let retryTimer: number | undefined;
 let zIndex = 10;
 const panelVersionElement = document.getElementById("panel-version");
 let settingsSignature = "";
+let managerDispose: (() => void) | null = null;
 
 const tabs = new Map<string, Tab>();
 const mounted = new Map<string, Mounted>();
@@ -798,6 +804,9 @@ function renderSettings(): void {
 
 function openSettings(): void {
   closeDrawer();
+  manager.classList.add("hidden");
+  managerDispose?.();
+  managerDispose = null;
   settings.classList.remove("hidden");
   renderSettings();
 }
@@ -807,6 +816,24 @@ function closeSettings(): void {
   disposeSettings();
   settingsBody.replaceChildren();
   settingsSignature = "";
+}
+
+function openManager(): void {
+  closeDrawer();
+  closeSettings();
+  manager.classList.remove("hidden");
+  managerDispose?.();
+  managerDispose = mountManager(managerBody, {
+    request: (input, init) => request(input, init),
+    onChanged: () => refresh(),
+  });
+}
+
+function closeManager(): void {
+  manager.classList.add("hidden");
+  managerDispose?.();
+  managerDispose = null;
+  managerBody.replaceChildren();
 }
 
 function reconcileWindows(): void {
@@ -967,8 +994,20 @@ settingsClose.addEventListener("click", closeSettings);
 settings.addEventListener("pointerdown", (event) => {
   if (event.target === settings) closeSettings();
 });
+managerButton.addEventListener("click", () => {
+  if (manager.classList.contains("hidden")) openManager();
+  else closeManager();
+});
+managerClose.addEventListener("click", closeManager);
+manager.addEventListener("pointerdown", (event) => {
+  if (event.target === manager) closeManager();
+});
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (!manager.classList.contains("hidden")) {
+    closeManager();
+    return;
+  }
   if (!settings.classList.contains("hidden")) {
     closeSettings();
     return;
