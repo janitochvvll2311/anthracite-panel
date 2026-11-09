@@ -8,6 +8,7 @@
 pub mod boot;
 pub mod config;
 pub mod log;
+pub mod service;
 pub mod socket;
 pub mod state;
 pub mod supervisor;

@@ -49,4 +49,6 @@ allow-third-party = false
 # Defaults for an app whose manifest omits them.
 fuel = 10_000_000
 memory-pages = 256
+# How long a native service has to answer `GET /health` before it is degraded.
+start-timeout-ms = 5_000
 wall-ms = 5_000

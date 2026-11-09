@@ -173,6 +173,10 @@ async fn run(args: Args) -> Result<(), Error> {
     let allowed_uid = unsafe { libc::geteuid() };
     let runtime = Arc::new(WasmtimeRuntime::new()?);
     let supervisor = Arc::new(Supervisor::new(runtime));
+    let services = Arc::new(anth_engine::service::ServiceSupervisor::for_state(
+        &config.state,
+        std::time::Duration::from_millis(config.limits.wall_ms),
+    ));
     let state = Arc::new(
         anth_api::EngineState::new(allowed_uid)
             .with_composition(composition)
@@ -182,8 +186,9 @@ async fn run(args: Args) -> Result<(), Error> {
                 config.apps.require_signature,
                 config.services.allow_third_party,
             )
-            .with_caller(Arc::new(anth_engine::supervisor::SupervisorCaller::new(
-                supervisor.clone(),
+            .with_caller(Arc::new(anth_engine::service::EngineCaller::new(
+                anth_engine::supervisor::SupervisorCaller::new(supervisor.clone()),
+                services.clone(),
             )))
             .with_auth(auth)
             .booting(),
@@ -238,6 +243,7 @@ async fn run(args: Args) -> Result<(), Error> {
     let composition = state.composition.read().expect("composition").clone();
     let report = anth_engine::boot::start_composed(
         &supervisor,
+        &services,
         &config.state,
         &composition,
         &config.limits,
@@ -272,6 +278,7 @@ async fn run(args: Args) -> Result<(), Error> {
             .map_err(|error| Error::internal(format!("serving the API: {error}")))?
             .map_err(|error| Error::internal(format!("serving the API: {error}")))?;
     }
+    services.stop_all().await;
     supervisor.stop_all().await;
     logger.info("stopped");
     Ok(())

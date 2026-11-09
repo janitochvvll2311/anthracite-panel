@@ -118,8 +118,14 @@ async fn boot(
     runtime: Arc<FakeRuntime>,
 ) -> anth_engine::boot::BootReport {
     let supervisor = Supervisor::new(runtime);
+    let services = anth_engine::service::ServiceSupervisor::new(
+        dir,
+        anth_compose::audit::AuditLog::new(dir),
+        std::time::Duration::from_secs(5),
+    );
     start_composed(
         &supervisor,
+        &services,
         dir,
         composition,
         &LimitsSection::default(),
@@ -210,5 +216,126 @@ apps = ["org.example.missing"]
         Some("not-found")
     );
     assert!(report.started.is_empty());
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Copies the fixture binary into a service-only app tree and approves it at
+/// its class risk. The fixture speaks the private protocol of §19 §4.
+fn service_app(dir: &Path) -> (AppId, PathBuf) {
+    use sha2::{Digest, Sha256};
+
+    let app = AppId::parse("org.example.service").expect("id");
+    let app_dir = dir.join("apps").join(app.as_str());
+    for path in [app_dir.join("bin"), app_dir.join("wit")] {
+        fs::create_dir_all(&path).expect("mkdir");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("chmod");
+    }
+    let test = std::env::current_exe().expect("test binary");
+    let fixture = test
+        .parent()
+        .and_then(Path::parent)
+        .expect("target directory")
+        .join("examples/echo_service");
+    if !fixture.exists() {
+        let status = std::process::Command::new(
+            std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()),
+        )
+        .args(["build", "--example", "echo_service", "--manifest-path"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .status()
+        .expect("build the service fixture");
+        assert!(status.success(), "the service fixture did not build");
+    }
+    let binary = app_dir.join("bin/service");
+    fs::copy(&fixture, &binary).expect("copy fixture");
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).expect("chmod");
+    let hash: String = Sha256::digest(fs::read(&binary).expect("read binary"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let manifest = format!(
+        "manifest_version = 3\n\n[app]\nid = \"org.example.service\"\nnamespace = \"example:service\"\nname = \"Service\"\nversion = \"0.1.0\"\n\n[service]\npath = \"bin/service\"\nsha256 = \"{hash}\"\nclass = \"socket\"\nargv = [\"--socket\", \"{{socket}}\"]\n\n[[export]]\ninterface = \"example:service/notes@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:service/notes@1.0.0#echo\"\n\n[[cli]]\ncall = \"example:service/notes@1.0.0#echo\"\nverb = \"list\"\n"
+    );
+    let manifest_path = app_dir.join("manifest.toml");
+    fs::write(&manifest_path, manifest).expect("manifest");
+    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600)).expect("chmod");
+    fs::write(
+        app_dir.join("wit/service.wit"),
+        "package example:service@1.0.0;\n\ninterface notes {\n  echo: func(input: string) -> string;\n}\n\nworld app {\n  export notes;\n}\n",
+    )
+    .expect("wit");
+    fs::set_permissions(
+        app_dir.join("wit/service.wit"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .expect("chmod");
+
+    let registry = Registry::new(dir);
+    let material = registry
+        .approval_material(&app)
+        .expect("material")
+        .expect("installed");
+    let installed = registry.get(&app).expect("get").expect("installed");
+    let grant = Grant {
+        version: GRANT_VERSION,
+        app: app.clone(),
+        app_version: installed.manifest.app.version.clone(),
+        manifest_sha256: material.manifest_sha256,
+        wit_sha256: material.wit_sha256,
+        signature: material.signature,
+        risk: Risk::Admin,
+        accepted: Grant::required_levels(Risk::Admin).collect(),
+        approved_by: "uid:1000".to_string(),
+        approved_at: "2026-11-06T12:00:00Z".to_string(),
+        export: installed
+            .manifest
+            .export
+            .iter()
+            .map(|value| InterfaceId::parse(&value.interface).expect("export"))
+            .collect(),
+        import: Vec::new(),
+    };
+    GrantStore::new(dir).save(&grant).expect("grant");
+    let socket = anth_engine::service::ServiceSupervisor::socket_path(dir, &app);
+    (app, socket)
+}
+
+#[tokio::test]
+async fn a_service_only_app_starts_answers_and_stops() {
+    let dir = scratch("service");
+    fs::create_dir_all(dir.join("apps")).expect("apps");
+    fs::set_permissions(dir.join("apps"), fs::Permissions::from_mode(0o700)).expect("chmod");
+    let (app, socket) = service_app(&dir);
+    let composition = Composition::parse(
+        "version = 1\n\n[[profile]]\nid = \"default\"\napps = [\"org.example.service\"]\n",
+    )
+    .expect("parse");
+    let services =
+        anth_engine::service::ServiceSupervisor::for_state(&dir, std::time::Duration::from_secs(2));
+    let supervisor = Supervisor::new(Arc::new(FakeRuntime::new()));
+    let report = start_composed(
+        &supervisor,
+        &services,
+        &dir,
+        &composition,
+        &LimitsSection::default(),
+        LogSettings::default(),
+    )
+    .await
+    .expect("boot");
+    assert_eq!(report.started, vec![app.clone()]);
+    assert!(socket.is_file() || socket.exists());
+    let value = services
+        .call(
+            app.as_str(),
+            "example:service/notes@1.0.0",
+            "echo",
+            serde_json::json!({"message": "hello"}),
+        )
+        .await
+        .expect("call");
+    assert_eq!(value, serde_json::json!({"message": "hello"}));
+    services.stop_all().await;
+    assert!(!socket.exists());
     let _ = fs::remove_dir_all(dir);
 }
