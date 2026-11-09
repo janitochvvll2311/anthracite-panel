@@ -4,7 +4,7 @@ manifest_version = 3
 id = "org.anthracite.accounts"
 namespace = "anthracite:accounts"
 name = "Accounts (emulator)"
-version = "0.1.0"
+version = "0.2.0"
 summary = "Deterministic users and groups fixture for the demo; replaced by the real accounts app."
 license = "Apache-2.0"
 
@@ -15,17 +15,32 @@ class = "socket"
 argv = ["--socket", "{socket}"]
 
 [[export]]
-interface = "anthracite:accounts/accounts@1.0.0"
+interface = "anthracite:accounts/accounts@1.1.0"
 
 [[route]]
 method = "GET"
 path = "/users"
-call = "anthracite:accounts/accounts@1.0.0#users"
+call = "anthracite:accounts/accounts@1.1.0#users"
 
 [[route]]
 method = "GET"
 path = "/groups"
-call = "anthracite:accounts/accounts@1.0.0#groups"
+call = "anthracite:accounts/accounts@1.1.0#groups"
+
+[[route]]
+method = "POST"
+path = "/user"
+call = "anthracite:accounts/accounts@1.1.0#create-user"
+
+[[route]]
+method = "DELETE"
+path = "/user"
+call = "anthracite:accounts/accounts@1.1.0#delete-user"
+
+[[route]]
+method = "POST"
+path = "/lock"
+call = "anthracite:accounts/accounts@1.1.0#set-lock"
 
 [[slot]]
 id = "panel.view"
@@ -37,9 +52,21 @@ module = "web/accounts.js"
 sha256 = "{{module_sha256}}"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.0.0#users"
+call = "anthracite:accounts/accounts@1.1.0#users"
 verb = "users"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.0.0#groups"
+call = "anthracite:accounts/accounts@1.1.0#groups"
 verb = "groups"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.1.0#create-user"
+verb = "user-create"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.1.0#delete-user"
+verb = "user-delete"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.1.0#set-lock"
+verb = "user-lock"

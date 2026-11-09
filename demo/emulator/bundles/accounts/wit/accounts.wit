@@ -1,4 +1,4 @@
-package anthracite:accounts@1.0.0;
+package anthracite:accounts@1.1.0;
 
 interface accounts {
     use anth:error/kinds@1.0.0.{error};
@@ -21,6 +21,9 @@ interface accounts {
 
     users: func() -> result<list<user>, error>;
     groups: func() -> result<list<group>, error>;
+    create-user: func(name: string, uid: u32, gid: u32, home: string, shell: string, system: bool) -> result<_, error>;
+    delete-user: func(name: string) -> result<_, error>;
+    set-lock: func(name: string, locked: bool) -> result<_, error>;
 }
 
 world app {
