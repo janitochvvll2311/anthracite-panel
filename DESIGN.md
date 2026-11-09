@@ -61,6 +61,7 @@ and a change to one of them is a design change, not an implementation detail.
 | 15 | [Open decisions](docs/design/15-open-decisions.md) | What is still undecided, with a recommendation and a deadline |
 | 16 | [Decision log](docs/design/16-decision-log.md) | Every binding decision taken during the review |
 | 17 | [Deferred](docs/design/17-deferred.md) | Everything postponed to v0.6.0, with the reason and the trigger |
+| 18 | [v0.6.0 plan](docs/design/18-v0.6-plan.md) | M4–M5 phases, entry conditions and the open decisions |
 | A | [Vertical slice](docs/design/appendix-a-vertical-slice.md) | `hello` end to end: install, approve, compose, call |
 
 ---

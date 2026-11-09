@@ -86,6 +86,8 @@ neither was compiled against it. **That is the v0.5.0 acid test.**
 
 ### v0.6.0 — the proof (M4–M5)
 
+> **Plan:** the phased, PR-sized breakdown is [§18](18-v0.6-plan.md).
+
 **M4 — System apps**
 
 `fs`, `terminal`, `proc`, `net`, `storage`, `accounts`, `manager`. Each is a
