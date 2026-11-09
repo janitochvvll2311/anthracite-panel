@@ -6,6 +6,10 @@ Milestones are ordered so each one is demonstrable on its own.
 
 ### v0.5.0 — the platform (M0–M3)
 
+> **Status:** implemented. The auth boundary (first-boot credentials, TCP
+> sessions, panel sessions, origin checks and security headers) landed after M3
+> as the v0.5.0 auth slice; M1–M3 are composed and exercised by the two panels.
+
 **M0 — Kernel (no features)**
 
 - The engine, SDK and panel workspaces, and the Bun ones, with the shared target

@@ -57,6 +57,7 @@ struct Args {
     listen: SocketAddr,
     config: PathBuf,
     allow_remote: bool,
+    reset_credentials: bool,
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     web: PathBuf,
 }
@@ -66,6 +67,7 @@ impl Args {
         let mut listen = "127.0.0.1:8090".to_string();
         let mut config = "config.toml".to_string();
         let mut allow_remote = false;
+        let mut reset_credentials = false;
         let mut web = std::env::var("ANTH_PANEL_WEB").unwrap_or_else(|_| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../frontend/dist")
@@ -77,11 +79,12 @@ impl Args {
                 "--listen" => listen = args.next().ok_or("`--listen` needs an address")?,
                 "--config" => config = args.next().ok_or("`--config` needs a path")?,
                 "--allow-remote" => allow_remote = true,
+                "--reset-credentials" => reset_credentials = true,
                 "--web" => web = args.next().ok_or("`--web` needs a directory")?,
                 "--help" | "-h" => {
                     return Err(
                         "usage: anth-panel [--listen 127.0.0.1:8090] [--config <path>] \
-                         [--allow-remote] [--web <dir>]"
+                         [--allow-remote] [--reset-credentials] [--web <dir>]"
                             .to_string(),
                     );
                 }
@@ -94,6 +97,7 @@ impl Args {
                 .map_err(|_| format!("`{listen}` is not a socket address"))?,
             config: PathBuf::from(config),
             allow_remote,
+            reset_credentials,
             web: PathBuf::from(web),
         })
     }
@@ -142,7 +146,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    let host = match Host::start(&args.config).await {
+    let host = match Host::start_with_reset(&args.config, args.reset_credentials).await {
         Ok(host) => host,
         Err(error) => {
             eprintln!("{}: {}", error.kind().code(), error.message());
@@ -522,6 +526,10 @@ mod tests {
         )
         .expect("args");
         assert!(args.allow_remote);
+        assert!(!args.reset_credentials);
+        let args =
+            Args::parse(["--reset-credentials"].into_iter().map(str::to_string)).expect("args");
+        assert!(args.reset_credentials);
     }
 
     #[test]

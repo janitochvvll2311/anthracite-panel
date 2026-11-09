@@ -61,6 +61,18 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+/// Deletes the recovery file so the next boot mints a new password. Missing is
+/// success: resetting a tree that never had credentials is still a reset.
+pub fn reset_credentials(state: &Path) -> Result<bool, Error> {
+    match fs::remove_file(state.join(anth_auth::CREDENTIALS)) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(Error::internal(format!(
+            "removing the operator credentials: {error}"
+        ))),
+    }
+}
+
 /// Verifies the shape of an existing tree without creating or fixing anything:
 /// names, types, no symlinks, and the modes §6.8 requires.
 pub fn check(root: &Path) -> Result<StateStatus, Error> {

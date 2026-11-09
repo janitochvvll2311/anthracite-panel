@@ -8,8 +8,10 @@ decision log is binding.
 
 ## State
 
-`v0.5.0` is a blank tree plus the design documents and this file. Nothing is implemented
-yet. The next milestone is M0 (`docs/design/11-roadmap.md`).
+`v0.5.0` is complete through M3 and the auth boundary: engine, composition,
+runtime, the official panel and the second minimal panel, generated Rust/TS
+clients, first-boot credentials, TCP sessions, panel sessions, origin checks and
+security headers. The next milestone is v0.6.0/M4 (`docs/design/11-roadmap.md`).
 
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.
@@ -32,10 +34,10 @@ code, its crates or its structure.
 Four Rust workspaces and three Bun ones. They are separate on purpose: a
 dependency that should not exist becomes unrepresentable instead of discouraged.
 
-- `engine/` — the platform: `contract`, `runtime`, `broker`, `compose`,
-  `api`, `daemon`. Builds `anth-engine`, the headless daemon.
-- `sdk/rust/` — `guest` (wasm apps), `panel` (panels), `cli` (the `anth`
-  commands).
+- `engine/` — the platform: `contract`, `runtime`, `compose`, `auth`, `api`,
+  `daemon`. Builds `anth-engine`, the headless daemon.
+- `sdk/rust/` — `guest` (wasm apps), `panel` (panels), `client` (generated
+  HTTP/CLI clients), `cli` (the `anth` commands).
 - `panel/backend/` — the official panel binary; links the SDK, mounts the engine
   router, wires the CLI and embeds `panel/frontend/dist`.
 - `apps/` — app bundles. Its own workspace; never built for the host.

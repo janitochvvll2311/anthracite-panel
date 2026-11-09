@@ -43,11 +43,20 @@ impl Host {
     /// Reads the configuration, creates state on first boot, starts the
     /// composition and binds both the Unix socket and the API state.
     pub async fn start(config_path: &Path) -> Result<Self, Error> {
+        Self::start_with_reset(config_path, false).await
+    }
+
+    /// Same boot, optionally deleting the recovery file first. The panel exposes
+    /// this as `--reset-credentials`, matching the daemon.
+    pub async fn start_with_reset(config_path: &Path, reset: bool) -> Result<Self, Error> {
         let profile = Profile::default();
         let config = Config::load_or_create(config_path, profile)?;
         config.validate(profile)?;
         let logger = Logger::new(config.log.clone());
 
+        if reset && anth_engine::state::reset_credentials(&config.state)? {
+            logger.warn("operator credentials reset; a new password will be generated");
+        }
         anth_engine::state::ensure(&config.state)?;
         let composition = anth_engine::state::load_composition(&config.state)?;
         composition.validate()?;

@@ -38,6 +38,9 @@ unless `--allow-remote` is explicit; put TLS in front and preserve
 connect to the panel over loopback; a remote proxy must forward the original
 `Host` instead.
 
+If the recovery file is lost, `--reset-credentials` deletes it and the next boot
+mints a new operator password.
+
 ## Viewport modes
 
 The shell has four discrete modes: `auto`, `desktop`, `tablet` and `mobile`.
