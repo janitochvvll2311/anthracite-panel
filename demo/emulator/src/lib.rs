@@ -197,6 +197,8 @@ struct Term {
     /// Output chunks, each with the sequence a reader uses as its cursor.
     chunks: Vec<(u64, Vec<u8>)>,
     next_seq: u64,
+    /// Set by `exit`: the shell ended, but the queued output is still readable.
+    closed: bool,
 }
 
 impl Term {
@@ -446,6 +448,7 @@ impl Emulator {
                     rows: number(input, "rows").unwrap_or(24).max(1) as u32,
                     chunks: Vec::new(),
                     next_seq: 0,
+                    closed: false,
                 };
                 term.push(PROMPT.as_bytes().to_vec());
                 let view = term.view(&id);
@@ -456,6 +459,7 @@ impl Emulator {
                 terminals
                     .sessions
                     .iter()
+                    .filter(|(_, term)| !term.closed)
                     .map(|(id, term)| term.view(id))
                     .collect(),
             )),
@@ -466,13 +470,16 @@ impl Emulator {
                     .get(&id)
                     .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
                 let cursor = number(input, "seq").unwrap_or(0);
-                match term.chunks.iter().find(|(seq, _)| *seq >= cursor) {
-                    None => Ok(Value::Null),
-                    Some((seq, data)) => Ok(json!({
+                if let Some((seq, data)) = term.chunks.iter().find(|(seq, _)| *seq >= cursor) {
+                    return Ok(json!({
                         "seq": seq,
                         "data": data.iter().map(|byte| Value::from(u64::from(*byte))).collect::<Vec<_>>(),
-                    })),
+                    }));
                 }
+                if term.closed {
+                    return Err(Error::not_found(format!("session `{id}` has ended")));
+                }
+                Ok(Value::Null)
             }
             "write" => {
                 let id = text(input, "id")?;
@@ -480,15 +487,22 @@ impl Emulator {
                     .sessions
                     .get_mut(&id)
                     .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
+                if term.closed {
+                    return Err(Error::not_found(format!("session `{id}` has ended")));
+                }
                 let data = bytes(input.get("data").unwrap_or(&Value::Null))?;
                 let line = String::from_utf8_lossy(&data).to_string();
                 let newline = line.ends_with('\n') || line.ends_with('\r');
                 term.push(data);
                 if newline {
                     let trimmed = line.trim();
+                    if trimmed == "exit" {
+                        term.push(b"logout\r\n".to_vec());
+                        term.closed = true;
+                        return Ok(Value::Null);
+                    }
                     let response = match trimmed {
                         "help" => HELP.to_string(),
-                        "exit" => "logout\r\n".to_string(),
                         "ls" => "deep  notes.txt  readme.md\r\n".to_string(),
                         "cat" => "usage: cat <file>\r\n".to_string(),
                         "" => String::new(),
@@ -514,6 +528,9 @@ impl Emulator {
                     .sessions
                     .get_mut(&id)
                     .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
+                if term.closed {
+                    return Err(Error::not_found(format!("session `{id}` has ended")));
+                }
                 term.cols = cols as u32;
                 term.rows = rows as u32;
                 Ok(Value::Null)
@@ -524,7 +541,7 @@ impl Emulator {
                 if !matches!(signal.as_str(), "HUP" | "INT" | "TERM" | "KILL" | "WINCH") {
                     return Err(Error::invalid(format!("`{signal}` is not allowlisted")));
                 }
-                if !terminals.sessions.contains_key(&id) {
+                if !terminals.sessions.get(&id).is_some_and(|term| !term.closed) {
                     return Err(Error::not_found(format!("session `{id}` does not exist")));
                 }
                 Ok(Value::Null)
@@ -661,5 +678,39 @@ mod tests {
             .call(TERMINAL, "read", json!({"id": id, "seq": 0}))
             .expect_err("closed");
         assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn exit_delivers_logout_then_ends_the_session() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [101, 120, 105, 116, 10]}),
+            )
+            .expect("exit");
+        let echo = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 1}))
+            .expect("echo");
+        assert_eq!(echo["seq"], 1);
+        let logout = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 2}))
+            .expect("logout");
+        assert_eq!(logout["seq"], 2);
+        let error = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 3}))
+            .expect_err("ended");
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+        let list = emulator.call(TERMINAL, "list", json!({})).expect("list");
+        assert_eq!(list, json!([]));
     }
 }

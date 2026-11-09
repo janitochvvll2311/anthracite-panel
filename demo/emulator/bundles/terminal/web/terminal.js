@@ -10,6 +10,11 @@ const styles = `
   .term-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #667087; }
   .term-bar .who { color: #8f98ab; }
   .term-bar .state { margin-left: auto; }
+  .term-bar button {
+    padding: 4px 8px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .term-bar button:hover { border-color: #3a4560; color: #fff; }
   .term-screen {
     flex: 1; min-height: 320px; margin: 0; padding: 12px 14px; overflow: auto;
     border: 1px solid #202632; border-radius: 9px; background: #080a0f;
@@ -22,6 +27,8 @@ const styles = `
     background: #0f1219; color: #e8ebf2; font: 12.5px ui-monospace, monospace;
   }
   .term-form input:focus { outline: 2px solid #7aa2ff66; outline-offset: 1px; border-color: #3a4560; }
+  .term-form input:disabled { opacity: .55; cursor: not-allowed; }
+  .term-form button:disabled { opacity: .45; cursor: not-allowed; }
   .term-form button {
     padding: 8px 13px; border-radius: 8px; border: 1px solid #3a4560; cursor: pointer;
     background: linear-gradient(180deg, #2a3550, #222b3f); color: #e8ebf2; font: inherit;
@@ -70,12 +77,13 @@ export function mount(root, context) {
     <div class="term-bar">
       <span class="who">operator@anthracite</span>
       <span>· scripted fixture</span>
+      <button type="button" data-reconnect>Reconnect</button>
       <span class="state">connecting…</span>
     </div>
     <pre class="term-screen" aria-label="Terminal output"></pre>
     <form class="term-form">
-      <input name="line" aria-label="Terminal input" autocomplete="off" spellcheck="false" placeholder="Type a command and press Enter" />
-      <button type="submit">Send</button>
+      <input name="line" aria-label="Terminal input" autocomplete="off" spellcheck="false" placeholder="Type a command and press Enter" disabled />
+      <button type="submit" disabled>Send</button>
     </form>
     <p class="term-status" role="status"></p>
   `;
@@ -84,6 +92,7 @@ export function mount(root, context) {
   const screen = box.querySelector(".term-screen");
   const form = box.querySelector(".term-form");
   const input = form.querySelector("input");
+  const send = form.querySelector("button");
   const status = box.querySelector(".term-status");
   const state = box.querySelector(".state");
   let session = null;
@@ -121,8 +130,17 @@ export function mount(root, context) {
       }
     } catch (error) {
       if (disposed) return;
+      const text = error instanceof Error ? error.message : String(error);
+      if (text.startsWith("not-found:")) {
+        session = null;
+        input.disabled = true;
+        send.disabled = true;
+        state.textContent = "ended";
+        setStatus("Session ended. Reconnect to start a new one.", true);
+        return;
+      }
       state.textContent = "degraded";
-      setStatus(String(error), true);
+      setStatus(text, true);
       timer = setTimeout(poll, 500);
     }
   };
@@ -138,7 +156,24 @@ export function mount(root, context) {
     }).catch((error) => setStatus(String(error), true));
   };
 
-  async function open() {
+  async function open(reset = false) {
+    if (reset) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (session) {
+        const previous = session.id;
+        session = null;
+        await call(context, `/session?id=${encodeURIComponent(previous)}`, {
+          method: "DELETE",
+        }).catch(() => {});
+      }
+      screen.textContent = "";
+      cursor = 0;
+    }
+    input.disabled = true;
+    send.disabled = true;
     try {
       session = await call(context, "/open", {
         method: "POST",
@@ -147,12 +182,17 @@ export function mount(root, context) {
       });
       if (disposed) return;
       cursor = 0;
+      input.disabled = false;
+      send.disabled = false;
       state.textContent = `session ${session.id}`;
       setStatus("Connected to the scripted fixture.");
       resize();
       void poll();
       input.focus();
     } catch (error) {
+      session = null;
+      input.disabled = true;
+      send.disabled = true;
       state.textContent = "unavailable";
       setStatus(String(error), true);
     }
@@ -179,6 +219,9 @@ export function mount(root, context) {
 
   const onResize = () => resize();
   window.addEventListener("resize", onResize);
+  box.querySelector("[data-reconnect]").addEventListener("click", () => {
+    void open(true);
+  });
   void open();
 
   return () => {
