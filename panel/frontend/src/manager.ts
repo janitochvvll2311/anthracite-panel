@@ -233,26 +233,26 @@ export function mountManager(
 
         const actions = element("td");
         const tools = element("div", "mgr-actions");
-        const toggle = button(
+        const toggleButton = button(
           "mgr-btn",
           app.enabled ? "Disable" : "Enable",
           app.enabled ? "Disable this app" : "Enable this app",
         );
-        toggle.addEventListener("click", () => void patch(app, !app.enabled));
-        const approve = button("mgr-btn primary", "Approve", "Approve a grant");
-        approve.addEventListener("click", () => {
+        toggleButton.addEventListener("click", () => void patch(app, !app.enabled));
+        const approveButton = button("mgr-btn primary", "Approve", "Approve a grant");
+        approveButton.addEventListener("click", () => {
           pendingApprove = pendingApprove === app.id ? null : app.id;
           renderApps();
         });
-        const remove = button("mgr-btn danger", "Remove", "Remove this app");
-        remove.addEventListener("click", () => void remove(app));
-        tools.append(toggle, approve);
+        const removeButton = button("mgr-btn danger", "Remove", "Remove this app");
+        removeButton.addEventListener("click", () => void remove(app));
+        tools.append(toggleButton, approveButton);
         if (app.grant_state !== "none") {
-          const revoke = button("mgr-btn danger", "Revoke", "Revoke the grant");
-          revoke.addEventListener("click", () => void revoke(app));
-          tools.append(revoke);
+          const revokeButton = button("mgr-btn danger", "Revoke", "Revoke the grant");
+          revokeButton.addEventListener("click", () => void revoke(app));
+          tools.append(revokeButton);
         }
-        tools.append(remove);
+        tools.append(removeButton);
         actions.append(tools);
         row.append(actions);
         table.append(row);
