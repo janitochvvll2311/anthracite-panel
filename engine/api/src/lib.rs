@@ -364,7 +364,7 @@ async fn readiness(State(state): State<Arc<EngineState>>) -> Response {
 
 /// The cookie name. It is deliberately not `__Host-`: v0.5.0 serves plain HTTP
 /// and the prefix would make browsers reject the cookie.
-const SESSION_COOKIE: &str = "anth_session";
+pub const SESSION_COOKIE: &str = "anth_session";
 const SESSION_BODY_LIMIT: u64 = 16 * 1024;
 
 #[derive(Deserialize)]
@@ -388,7 +388,7 @@ fn auth(state: &EngineState) -> Result<&Arc<Auth>, ApiError> {
     })
 }
 
-fn session_token(headers: &HeaderMap) -> Option<String> {
+pub fn session_token(headers: &HeaderMap) -> Option<String> {
     let header = headers.get(COOKIE)?.to_str().ok()?;
     header.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
@@ -408,9 +408,10 @@ fn set_session_cookie(response: &mut Response, token: &str, max_age: u64, secure
 }
 
 fn clear_session_cookie(response: &mut Response) {
+    let value = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
     response.headers_mut().insert(
         SET_COOKIE,
-        HeaderValue::from_static("anth_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
+        HeaderValue::from_str(&value).expect("a session cookie is a valid header"),
     );
 }
 
@@ -637,20 +638,25 @@ fn current_composition(state: &EngineState) -> Result<Composition, ApiError> {
         .map_err(|_| ApiError(Error::internal("the composition lock is poisoned")))
 }
 
+/// A comma-list header (`If-Match`, `If-None-Match`, the acknowledgment token)
+/// split and trimmed once, including repeated header lines.
+fn header_tokens<K: axum::http::header::AsHeaderName>(
+    headers: &HeaderMap,
+    name: K,
+) -> impl Iterator<Item = &str> {
+    headers
+        .get_all(name)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+}
+
 /// `If-Match` is required and uses strong comparison: `*` matches any existing
 /// document, a comma-separated list matches if any validator does, and repeated
 /// header lines are the same list.
 fn if_matches(headers: &HeaderMap, etag: &str) -> bool {
-    headers
-        .get_all(IF_MATCH)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .any(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .any(|candidate| candidate == "*" || candidate == etag)
-        })
+    header_tokens(headers, IF_MATCH).any(|candidate| candidate == "*" || candidate == etag)
 }
 
 /// The resolution as a client reads it (§8.7).
@@ -1103,14 +1109,9 @@ async fn app_asset(
 }
 
 fn if_none_match(headers: &HeaderMap, hash: &str) -> bool {
-    headers
-        .get(IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.split(',').map(str::trim).any(|candidate| {
-                candidate == "*" || candidate == hash || candidate.trim_matches('"') == hash
-            })
-        })
+    header_tokens(headers, IF_NONE_MATCH).any(|candidate| {
+        candidate == "*" || candidate == hash || candidate.trim_matches('"') == hash
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1455,10 +1456,7 @@ fn installed_apps(apps: &Apps) -> Result<Vec<InstalledApp>, Error> {
 const ACKNOWLEDGE: &str = "x-anth-acknowledge";
 
 fn acknowledged(headers: &HeaderMap, token: &str) -> bool {
-    headers
-        .get(ACKNOWLEDGE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(',').map(str::trim).any(|item| item == token))
+    header_tokens(headers, ACKNOWLEDGE).any(|item| item == token)
 }
 
 /// Refuses a breaking action when other composed apps depend on this one,
@@ -1860,6 +1858,7 @@ impl IntoResponse for ApiError {
 mod tests {
     use super::*;
     use axum::body::Body;
+    use axum::http::header::IF_MATCH;
     use axum::http::Request;
     use tower::ServiceExt;
 
@@ -3969,6 +3968,18 @@ mod tests {
         repeated.append(IF_MATCH, HeaderValue::from_static("\"nope\""));
         repeated.append(IF_MATCH, HeaderValue::from_static("\"abc\""));
         assert!(if_matches(&repeated, etag));
+    }
+
+    #[test]
+    fn a_header_token_list_can_span_lines() {
+        use axum::http::header::HeaderValue;
+        let mut headers = HeaderMap::new();
+        headers.append("x-test", HeaderValue::from_static("a, b"));
+        headers.append("x-test", HeaderValue::from_static("c"));
+        assert_eq!(
+            header_tokens(&headers, "x-test").collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
     }
 
     #[tokio::test]

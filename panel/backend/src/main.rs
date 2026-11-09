@@ -411,21 +411,13 @@ async fn require_shell_session(
         return next.run(request).await;
     }
     let session = state.sessions.as_ref().and_then(|sessions| {
-        session_token(request.headers()).and_then(|token| sessions.authenticate(&token))
+        anth_panel::session_token(request.headers()).and_then(|token| sessions.authenticate(&token))
     });
     match session {
         Some(session) if session.must_change_password => redirect("/setup"),
         Some(_) => next.run(request).await,
         None => redirect("/login"),
     }
-}
-
-fn session_token(headers: &axum::http::HeaderMap) -> Option<String> {
-    let header = headers.get(header::COOKIE)?.to_str().ok()?;
-    header.split(';').find_map(|part| {
-        let (name, value) = part.trim().split_once('=')?;
-        (name == "anth_session").then(|| value.to_string())
-    })
 }
 
 fn redirect(location: &str) -> Response {

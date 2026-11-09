@@ -149,14 +149,16 @@ impl Auth {
     /// failures from one source are refused before the password is checked.
     pub fn login(&self, source: &str, operator: &str, password: &str) -> Result<Login, Error> {
         let mut inner = self.inner.lock().expect("credentials");
-        if let Some(retry_after) = inner.blocked(source) {
+        let now = Instant::now();
+        inner.prune(now);
+        if let Some(retry_after) = inner.blocked(source, now) {
             return Err(Error::rate_limited("too many login attempts; retry later")
                 .with_detail(json!({ "retry_after": retry_after })));
         }
         if !constant_time_eq(&inner.document.operator, operator)
             || !constant_time_eq(&inner.document.password, password)
         {
-            inner.failed(source);
+            inner.failed(source, now);
             return Err(Error::unauthenticated("invalid operator or password"));
         }
         inner.succeeded(source);
@@ -230,11 +232,8 @@ impl Auth {
 }
 
 impl Inner {
-    /// Drops expired sources and evicts one arbitrary entry when the map is at
-    /// its cap. The cap is a memory bound, not a security boundary: the window
-    /// still refuses repeated failures from any source that stays in the map.
-    fn touch(&mut self, source: &str) -> &mut Attempts {
-        let now = Instant::now();
+    /// Drops expired sources in one pass per login, not once per lookup.
+    fn prune(&mut self, now: Instant) {
         self.attempts.retain(|_, attempts| {
             let recent = attempts
                 .failures
@@ -243,6 +242,10 @@ impl Inner {
             let blocked = attempts.blocked_until.is_some_and(|until| until > now);
             recent || blocked
         });
+    }
+
+    /// The source's entry, bounded and with its own sliding window applied.
+    fn touch(&mut self, source: &str, now: Instant) -> &mut Attempts {
         if self.attempts.len() >= MAX_SOURCES && !self.attempts.contains_key(source) {
             if let Some(key) = self.attempts.keys().next().cloned() {
                 self.attempts.remove(&key);
@@ -257,9 +260,8 @@ impl Inner {
         attempts
     }
 
-    fn blocked(&mut self, source: &str) -> Option<u64> {
-        let now = Instant::now();
-        let attempts = self.touch(source);
+    fn blocked(&mut self, source: &str, now: Instant) -> Option<u64> {
+        let attempts = self.touch(source, now);
         if let Some(until) = attempts.blocked_until {
             if until > now {
                 return Some((until - now).as_secs().max(1));
@@ -269,9 +271,8 @@ impl Inner {
         None
     }
 
-    fn failed(&mut self, source: &str) {
-        let now = Instant::now();
-        let attempts = self.touch(source);
+    fn failed(&mut self, source: &str, now: Instant) {
+        let attempts = self.touch(source, now);
         attempts.failures.push_back(now);
         if attempts.failures.len() >= LOGIN_LIMIT {
             attempts.failures.clear();
