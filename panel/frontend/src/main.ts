@@ -34,6 +34,12 @@ import {
   type ResolvedViewport,
   type ViewportMode,
 } from "./viewport";
+import {
+  minimizedFrom,
+  toggleMaximized,
+  type RestoreMode,
+  type WindowMode,
+} from "./windows";
 
 type DegradedApp = {
   app: string;
@@ -67,7 +73,15 @@ type Mounted = {
 
 type Floating = Mounted & {
   key: string;
+  kind: FrameContext["kind"];
   element: HTMLElement;
+  mode: WindowMode;
+  /// What to restore after a minimize: a maximized window stays maximized.
+  restoreMode: RestoreMode;
+  /// The geometry captured when the window was maximized.
+  bounds?: { left: string; top: string; width: string; height: string };
+  maximizeButton: HTMLButtonElement;
+  stackItem?: HTMLElement;
 };
 
 /// Every panel request goes through here: an expired session sends the browser
@@ -92,6 +106,7 @@ const tabsElement = byId<HTMLElement>("tabs");
 const panes = byId<HTMLElement>("panes");
 const empty = byId<HTMLElement>("empty");
 const windowsElement = byId<HTMLElement>("windows");
+const stackElement = byId<HTMLElement>("stack");
 const settings = byId<HTMLElement>("settings");
 const settingsBody = byId<HTMLElement>("settings-body");
 const settingsButton = byId<HTMLButtonElement>("settings-button");
@@ -368,6 +383,8 @@ function retireFloating(state: Floating): void {
   state.cancelled = true;
   safeDispose(state.dispose);
   state.element.remove();
+  state.stackItem?.remove();
+  state.stackItem = undefined;
 }
 
 function trackMount(
@@ -468,6 +485,15 @@ function renderPanes(): void {
 
 function openTab(contribution: Contribution, activateTab = true): void {
   const key = contributionKey(contribution);
+  // A view that is already floating (or minimized) comes forward instead of
+  // mounting a second copy as a tab.
+  const detached = floating.get(`window:view:${key}`);
+  if (detached) {
+    if (detached.mode === "minimized") restoreStack(detached);
+    else focusWindow(detached);
+    closeDrawer();
+    return;
+  }
   const existing = tabs.get(key);
   if (existing) existing.contribution = contribution;
   else tabs.set(key, { key, contribution });
@@ -503,7 +529,109 @@ function detachTab(key: string): void {
 }
 
 function focusWindow(state: Floating): void {
+  if (state.mode === "minimized") return;
   state.element.style.zIndex = String(++zIndex);
+}
+
+function updateStack(): void {
+  const minimized = [...floating.values()].filter(
+    (state) => state.mode === "minimized",
+  ).length;
+  stackElement.hidden = minimized === 0;
+}
+
+function closeFloating(state: Floating): void {
+  retireFloating(state);
+  floating.delete(state.key);
+  updateStack();
+}
+
+function setMaximized(state: Floating, maximized: boolean): void {
+  if (maximized) {
+    if (state.mode === "maximized") return;
+    state.bounds = {
+      left: state.element.style.left || `${state.element.offsetLeft}px`,
+      top: state.element.style.top || `${state.element.offsetTop}px`,
+      width: `${state.element.offsetWidth}px`,
+      height: `${state.element.offsetHeight}px`,
+    };
+    state.element.style.left = "0px";
+    state.element.style.top = "0px";
+    state.element.style.right = "0px";
+    state.element.style.bottom = "0px";
+    state.element.style.width = "auto";
+    state.element.style.height = "auto";
+    state.element.classList.add("maximized");
+    state.mode = "maximized";
+    state.maximizeButton.textContent = "Restore";
+    state.maximizeButton.title = "Restore the window";
+    focusWindow(state);
+    return;
+  }
+  state.element.classList.remove("maximized");
+  state.element.style.right = "";
+  state.element.style.bottom = "";
+  if (state.bounds) {
+    state.element.style.left = state.bounds.left;
+    state.element.style.top = state.bounds.top;
+    state.element.style.width = state.bounds.width;
+    state.element.style.height = state.bounds.height;
+  }
+  state.mode = "normal";
+  state.maximizeButton.textContent = "Max";
+  state.maximizeButton.title = "Maximize in the page";
+}
+
+function minimizeWindow(state: Floating): void {
+  if (state.mode === "minimized") return;
+  state.restoreMode = minimizedFrom(state.mode);
+  state.mode = "minimized";
+  state.element.classList.add("minimized");
+
+  const item = element("div", "stack-item");
+  const open = button("stack-open", "", "");
+  open.title = `Restore ${state.contribution.slot.label}`;
+  open.append(
+    element("span", "stack-label", state.contribution.slot.label),
+    element("span", "stack-app", state.contribution.app.id),
+  );
+  open.addEventListener("click", () => restoreStack(state));
+  const close = button("stack-close", "×", "Close");
+  close.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeFloating(state);
+  });
+  item.append(open, close);
+  state.stackItem = item;
+  stackElement.append(item);
+  updateStack();
+}
+
+function restoreStack(state: Floating): void {
+  if (state.mode !== "minimized") return;
+  state.stackItem?.remove();
+  state.stackItem = undefined;
+  state.element.classList.remove("minimized");
+  if (state.restoreMode === "maximized") {
+    state.element.classList.add("maximized");
+    state.mode = "maximized";
+    state.maximizeButton.textContent = "Restore";
+    state.maximizeButton.title = "Restore the window";
+  } else {
+    state.element.classList.remove("maximized");
+    state.mode = "normal";
+    state.maximizeButton.textContent = "Max";
+    state.maximizeButton.title = "Maximize in the page";
+  }
+  updateStack();
+  focusWindow(state);
+}
+
+function dockWindow(state: Floating): void {
+  if (state.kind !== "view") return;
+  const contribution = state.contribution;
+  closeFloating(state);
+  openTab(contribution);
 }
 
 function openWindow(
@@ -514,11 +642,11 @@ function openWindow(
   const existing = floating.get(key);
   if (existing) {
     if (existing.contribution.slot.sha256 === contribution.slot.sha256) {
-      focusWindow(existing);
+      if (existing.mode === "minimized") restoreStack(existing);
+      else focusWindow(existing);
       return;
     }
-    retireFloating(existing);
-    floating.delete(key);
+    closeFloating(existing);
   }
 
   const offset = 74 + floating.size * 28;
@@ -532,8 +660,14 @@ function openWindow(
     element("strong", "", contribution.slot.label),
     element("span", "window-app", contribution.app.id),
   );
+  const tools = element("div", "window-tools");
+  const maximize = button("ghost small", "Max", "Maximize in the page");
+  const minimize = button("ghost small", "Min", "Minimize to the bottom stack");
+  const dock = button("ghost small", "Dock", "Dock this view back into the tabs");
+  dock.hidden = kind !== "view";
   const close = button("ghost small", "×", "Close");
-  header.append(copy, close);
+  tools.append(maximize, minimize, dock, close);
+  header.append(copy, tools);
 
   const body = element("div", "window-body");
   windowElement.append(header, body);
@@ -541,23 +675,35 @@ function openWindow(
 
   const state: Floating = {
     key,
+    kind,
     element: windowElement,
     root: body,
     contribution,
     dispose: () => body.replaceChildren(),
     cancelled: false,
+    mode: "normal",
+    restoreMode: "normal",
+    maximizeButton: maximize,
   };
   floating.set(key, state);
   focusWindow(state);
 
-  const closeWindow = (): void => {
-    retireFloating(state);
-    floating.delete(key);
-  };
-  close.addEventListener("click", closeWindow);
+  maximize.addEventListener("click", () =>
+    setMaximized(state, toggleMaximized(state.mode) === "maximized"),
+  );
+  minimize.addEventListener("click", () => minimizeWindow(state));
+  dock.addEventListener("click", () => dockWindow(state));
+  close.addEventListener("click", () => closeFloating(state));
   windowElement.addEventListener("pointerdown", () => focusWindow(state));
   makeDraggable(windowElement, header);
-  trackMount(state, body, contribution, kind, closeWindow, () => floating.get(key));
+  trackMount(
+    state,
+    body,
+    contribution,
+    kind,
+    () => closeFloating(state),
+    () => floating.get(key),
+  );
 }
 
 function makeDraggable(elementNode: HTMLElement, handle: HTMLElement): void {
@@ -566,6 +712,7 @@ function makeDraggable(elementNode: HTMLElement, handle: HTMLElement): void {
   let pointerId = -1;
 
   handle.addEventListener("pointerdown", (event) => {
+    if (elementNode.classList.contains("maximized")) return;
     if ((event.target as HTMLElement).closest("button")) return;
     pointerId = event.pointerId;
     originX = event.clientX - elementNode.offsetLeft;
@@ -672,13 +819,11 @@ function reconcileWindows(): void {
   for (const [key, state] of floating) {
     const contribution = known.get(contributionKey(state.contribution));
     if (!contribution) {
-      retireFloating(state);
-      floating.delete(key);
+      closeFloating(state);
       continue;
     }
     if (state.contribution.slot.sha256 !== contribution.slot.sha256) {
-      retireFloating(state);
-      floating.delete(key);
+      closeFloating(state);
       openWindow(contribution, key.includes(":action:") ? "action" : "view");
     }
   }
@@ -831,15 +976,14 @@ document.addEventListener("keydown", (event) => {
     closeDrawer();
     return;
   }
-  const top = [...floating.values()].sort(
-    (left, right) =>
-      Number(left.element.style.zIndex) - Number(right.element.style.zIndex),
-  ).at(-1);
-  if (top) {
-    top.dispose();
-    top.element.remove();
-    floating.delete(top.key);
-  }
+  const top = [...floating.values()]
+    .filter((state) => state.mode !== "minimized")
+    .sort(
+      (left, right) =>
+        Number(left.element.style.zIndex) - Number(right.element.style.zIndex),
+    )
+    .at(-1);
+  if (top) closeFloating(top);
 });
 
 document.addEventListener("visibilitychange", () => {

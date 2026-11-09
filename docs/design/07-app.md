@@ -323,7 +323,7 @@ implements `panel.view` is implementing the contract, not borrowing our name.
 
 | Slot | The app provides | The panel does |
 | --- | --- | --- |
-| `panel.view` | `label`, `icon`, `order`, `tag`, `module`, `sha256` | derives the sidebar entry, opens the view as a tab, and may detach it to a floating window |
+| `panel.view` | `label`, `icon`, `order`, `tag`, `module`, `sha256` | derives the sidebar entry, opens the view as a tab, and may detach it to a floating window (maximize, minimize to the bottom stack, dock back to the tabs) |
 | `panel.action` | `label`, `icon`, `order`, and a `target` — its own view or a `METHOD /path` of the same app | lists it in the action button |
 | `panel.settings` | `label`, `order`, `tag`, `module`, `sha256` | renders it as a section inside settings |
 
