@@ -64,6 +64,13 @@ curl --unix-socket demo/state/engine.sock \
 The CLI verbs are `fs files`, `fs file-stat`, `fs file-read`, `terminal sessions`,
 `terminal session-open`, `terminal session-read` and `terminal session-close`.
 
+## Views
+
+Both bundles carry a `panel.view` module: `web/fs.js` renders the tree with a
+two-pane explorer (navigate, preview, new folder, move to trash) and
+`web/terminal.js` opens a session, polls `read` and echoes commands. The panel
+mounts them like any other slot; the modules only see their own app's routes.
+
 ## What is deterministic
 
 The tree, sizes, timestamps, session ids and command output are fixed; writes and

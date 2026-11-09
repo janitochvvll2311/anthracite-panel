@@ -61,3 +61,12 @@ verb = "file-stat"
 [[cli]]
 call = "anthracite:fs/read@1.0.0#read-file"
 verb = "file-read"
+
+[[slot]]
+id = "panel.view"
+label = "Files"
+icon = "folder"
+order = 10
+tag = "anth-fs"
+module = "web/fs.js"
+sha256 = "{{module_sha256}}"
