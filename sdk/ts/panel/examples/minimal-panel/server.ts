@@ -60,7 +60,7 @@ const SHELL_CSP =
    base-uri 'none'; frame-ancestors 'none'";
 const FRAME_CSP =
   "default-src 'none'; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'; \
-   img-src data:; connect-src 'none'; base-uri 'none'; frame-ancestors 'self'";
+   img-src data: blob:; connect-src 'none'; base-uri 'none'; frame-ancestors 'self'";
 
 function text(body: string, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(body, {

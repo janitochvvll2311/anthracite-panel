@@ -76,16 +76,25 @@ Every bundle carries a `panel.view` module:
 
 - `web/fs.js` — Files plus a hidden `panel.view` called Editor, both from the
   same module. Files has an editable address bar, tree navigation, a formatted
-  read-only preview (highlight.js for code, marked for Markdown), **New** (blank
-  file, folder or symlink), symlink navigation, rename, upload, download, trash
-  and restore, plus delete. **Open in Editor** opens the file in the panel-level
-  Editor: it reuses the docked tab when the Editor is docked, and a floating
-  window otherwise. The editor is CodeMirror 6: syntax highlighting,
-  autocomplete, line numbers, lint diagnostics, internal file tabs, its own file
-  tree (inline or mobile drawer), line/column and selection counters, EOL,
-  detected language, and indentation size/tab character. Shortcuts include
+  read-only preview (highlight.js for code, marked for Markdown, images via a
+  blob preview), **New** (blank file, folder or symlink), symlink navigation,
+  rename, upload, download, trash and restore, plus delete. Uploads and downloads
+  go through a visible transfer queue with progress, conflicts, retry and cancel;
+  dragging files onto the view (or a folder row) queues uploads to that folder.
+  MIME-aware folder and file icons carry the extension in the badge (image,
+  video, audio, database, archive, code, config...). On narrow screens
+  the preview opens full-screen only after selecting a file, with a back
+  button. **Open in Editor** opens the file in the panel-level Editor: it
+  reuses the docked tab when the Editor is docked, and a floating window
+  otherwise. The editor is CodeMirror 6: syntax highlighting, autocomplete,
+  line numbers, lint diagnostics, internal file tabs (text and image tabs, with
+  image previews), its own file tree (inline or mobile drawer), line/column and
+  selection counters, EOL, detected language, and indentation size/tab
+  character. Shortcuts include
   `Shift+Tab` to outdent, `Ctrl+/` to toggle comments and `Ctrl+Space` to open
-  completion. No inline editing or in-frame floating editor remains.
+  completion. Closing a dirty tab or the Editor opens a real `<dialog>` with
+  Save all / Discard / Cancel; no `confirm()` is used. No inline editing or
+  in-frame floating editor remains.
 - `web/terminal.js` — session with help/exit, history, INT/TERM/Clear, reconnect
   and resize.
 - `web/proc.js` — flat/tree process table, live refresh, allowlisted signals and

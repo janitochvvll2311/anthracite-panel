@@ -34,7 +34,7 @@ const PANEL_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'
 /// The sandboxed frame document. Its origin is opaque (no `allow-same-origin`),
 /// so inline bootstrap and blob imports are contained; network is off.
 const FRAME_CSP: &str = "default-src 'none'; script-src 'unsafe-inline' blob:; \
-                         style-src 'unsafe-inline'; img-src data:; connect-src 'none'; \
+                         style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; \
                          base-uri 'none'; frame-ancestors 'self'";
 
 /// The one page that needs an inline script. It carries no user content: a form

@@ -146,6 +146,22 @@
             if (typeof moduleApi?.onParams === "function") {
               moduleApi.onParams(message.params);
             }
+          } else if (message.type === "anth:request-close") {
+            let ok = true;
+            try {
+              if (typeof moduleApi?.beforeClose === "function") {
+                send("anth:close-pending", {
+                  requestId: message.requestId,
+                });
+                ok = (await moduleApi.beforeClose()) !== false;
+              }
+            } catch {
+              ok = false;
+            }
+            send("anth:close-result", {
+              requestId: message.requestId,
+              ok,
+            });
           } else if (message.type === "anth:unmount") {
             try {
               if (typeof dispose === "function") await dispose();

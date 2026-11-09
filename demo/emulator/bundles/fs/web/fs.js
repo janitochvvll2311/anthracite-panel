@@ -36278,7 +36278,7 @@ class Buffer {
   }
 }
 
-class Element {
+class Element2 {
   constructor(type, from, to, children = none4) {
     this.type = type;
     this.from = from;
@@ -36318,7 +36318,7 @@ class TreeElement {
   }
 }
 function elt(type, from, to, children) {
-  return new Element(type, from, to, children);
+  return new Element2(type, from, to, children);
 }
 var EmphasisUnderscore = { resolve: "Emphasis", mark: "EmphasisMark" };
 var EmphasisAsterisk = { resolve: "Emphasis", mark: "EmphasisMark" };
@@ -36619,7 +36619,7 @@ class InlineContext {
       if (open.type.mark)
         content.push(this.elt(open.type.mark, start, open.to));
       for (let k = j + 1;k < i; k++) {
-        if (this.parts[k] instanceof Element)
+        if (this.parts[k] instanceof Element2)
           content.push(this.parts[k]);
         this.parts[k] = null;
       }
@@ -36636,7 +36636,7 @@ class InlineContext {
     let result = [];
     for (let i = from;i < this.parts.length; i++) {
       let part = this.parts[i];
-      if (part instanceof Element)
+      if (part instanceof Element2)
         result.push(part);
     }
     return result;
@@ -36682,8 +36682,8 @@ function injectMarks(elements, marks) {
       eI++;
     if (eI < elts.length && elts[eI].from < mark.from) {
       let e = elts[eI];
-      if (e instanceof Element)
-        elts[eI] = new Element(e.type, e.from, e.to, injectMarks(e.children, [mark]));
+      if (e instanceof Element2)
+        elts[eI] = new Element2(e.type, e.from, e.to, injectMarks(e.children, [mark]));
     } else {
       elts.splice(eI++, 0, mark);
     }
@@ -37151,7 +37151,7 @@ var missingCloseTag = 58;
 var IncompleteTag = 14;
 var IncompleteCloseTag = 15;
 var commentContent$1 = 59;
-var Element2 = 21;
+var Element3 = 21;
 var TagName = 23;
 var Attribute = 24;
 var AttributeName = 25;
@@ -37280,7 +37280,7 @@ var elementContext = new ContextTracker({
     return startTagTerms.indexOf(term) > -1 ? new ElementContext(tagNameAfter(input, 1) || "", context) : context;
   },
   reduce(context, term) {
-    return term == Element2 && context ? context.parent : context;
+    return term == Element3 && context ? context.parent : context;
   },
   reuse(context, node, stack, input) {
     let type = node.type.id;
@@ -37468,7 +37468,7 @@ function configureNesting(tags2 = [], attributes = []) {
       return maybeNest(node, input, style);
     if (id == TextareaText)
       return maybeNest(node, input, textarea);
-    if (id == Element2 && other.length) {
+    if (id == Element3 && other.length) {
       let n = node.node, open = n.firstChild, tagName = open && findTagName(open, input), attrs;
       if (tagName)
         for (let tag of other) {
@@ -42900,17 +42900,35 @@ var styles = `
   .fs-entry:hover { background: #151a24; color: #fff; }
   .fs-entry .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fs-entry .size { margin-left: auto; color: #667087; font-size: 11px; white-space: nowrap; }
-  .fs-entry .glyph { width: 14px; display: inline-flex; align-items: center; }
-  .fs-entry .glyph.dir::before {
-    content: ""; width: 0; height: 0; border-left: 5px solid #7aa2ff;
-    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  .file-icon {
+    --icon-color: #8f98ab;
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; flex: 0 0 22px; color: var(--icon-color);
   }
-  .fs-entry .glyph.file::before {
-    content: ""; width: 7px; height: 9px; border: 1px solid #667087; border-radius: 1px;
+  .file-icon svg { display: block; width: 22px; height: 22px; }
+  .file-icon-badge {
+    position: absolute; left: 3px; right: 3px; bottom: 1px;
+    padding: 0 1px; border-radius: 2px; background: var(--icon-color);
+    color: #0b0e14; font: 700 6.5px/1.1 ui-monospace, monospace;
+    letter-spacing: -.4px; text-align: center; overflow: hidden;
   }
-  .fs-entry .glyph.link::before {
-    content: "↗"; color: #7aa2ff; font-size: 11px; line-height: 1;
-  }
+  .file-icon.dir, .file-icon.link { --icon-color: #7aa2ff; }
+  .file-icon.code { --icon-color: #f7c948; }
+  .file-icon.code-strong { --icon-color: #7aa2ff; }
+  .file-icon.data { --icon-color: #f78c6c; }
+  .file-icon.doc { --icon-color: #7aa2ff; }
+  .file-icon.web { --icon-color: #c792ea; }
+  .file-icon.shell { --icon-color: #89ddff; }
+  .file-icon.config { --icon-color: #4dd0c8; }
+  .file-icon.database { --icon-color: #6ee7b7; }
+  .file-icon.image { --icon-color: #ff8fbf; }
+  .file-icon.audio { --icon-color: #c792ea; }
+  .file-icon.video { --icon-color: #ff9e64; }
+  .file-icon.archive { --icon-color: #c3a06b; }
+  .file-icon.pdf { --icon-color: #ff7d8a; }
+  .file-icon.text { --icon-color: #aab4c8; }
+  .file-icon.binary { --icon-color: #ff7d8a; }
+  .file-icon.unknown { --icon-color: #8f98ab; }
   .fs-tool {
     border: 0; background: transparent; color: #667087; cursor: pointer; font-size: 11px;
     padding: 4px 6px; border-radius: 5px;
@@ -42947,6 +42965,16 @@ var styles = `
   }
   .fs-preview img { max-width: 100%; max-height: 280px; object-fit: contain; border-radius: 6px; }
   .fs-preview .hint { color: #667087; font-size: 12px; margin: 0; }
+  .fs-preview-head { display: none; align-items: center; gap: 8px; }
+  .fs-preview-head button {
+    padding: 4px 8px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .fs-preview-head button:hover { border-color: #3a4560; color: #fff; }
+  .fs-preview-head strong {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 13px; font-weight: 600;
+  }
   .fs-formatted { flex: 1; min-height: 0; overflow: auto; border: 1px solid #202632; border-radius: 8px; background: #0d1016; padding: 10px 12px; }
   .fs-code { margin: 0; font: 12px/1.6 ui-monospace, monospace; white-space: pre; color: #c8d0df; tab-size: 4; }
   .fs-code code { background: transparent; border: 0; padding: 0; font: inherit; color: inherit; white-space: pre; }
@@ -42976,6 +43004,41 @@ var styles = `
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
   }
   .fs-more button:hover { border-color: #3a4560; color: #fff; }
+  .fs-drop {
+    position: absolute; inset: 0; z-index: 30; display: flex; align-items: center;
+    justify-content: center; border: 2px dashed #7aa2ff; border-radius: 10px;
+    background: #0b1220d9; color: #cfe0ff; font-size: 14px; pointer-events: none;
+  }
+  .fs-drop[hidden] { display: none; }
+  .fs-row.drop-target { outline: 2px solid #7aa2ff66; outline-offset: -2px; background: #13203a; }
+  .fs-queue { border: 1px solid #202632; border-radius: 9px; background: #0b0e14; overflow: hidden; }
+  .fs-queue[hidden] { display: none; }
+  .fs-queue header {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    border-bottom: 1px solid #202632; background: #12161f;
+  }
+  .fs-queue header strong { font-size: 12px; color: #fff; }
+  .fs-queue header button {
+    margin-left: auto; padding: 3px 7px; border-radius: 5px; border: 1px solid #2a3142;
+    background: #151a24; color: #c8d0df; font: inherit; font-size: 10.5px; cursor: pointer;
+  }
+  .fs-queue header button:hover { border-color: #3a4560; color: #fff; }
+  .fs-queue ul { list-style: none; margin: 0; padding: 0; max-height: 180px; overflow: auto; }
+  .fs-queue-item {
+    display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 2px 8px;
+    align-items: center; padding: 6px 10px; border-bottom: 1px solid #171c26;
+    font-size: 11.5px;
+  }
+  .fs-queue-item:last-child { border-bottom: 0; }
+  .fs-queue-dir { color: #7aa2ff; font-size: 12px; }
+  .fs-queue-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .fs-queue-name { color: #c8d0df; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fs-queue-meta { color: #667087; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fs-queue-progress { grid-column: 2 / 3; height: 3px; border-radius: 2px; background: #1b2130; overflow: hidden; }
+  .fs-queue-progress span { display: block; height: 100%; background: #7aa2ff; transition: width .2s; }
+  .fs-queue-actions { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 3px; }
+  .fs-queue-actions .fs-tool { padding: 2px 5px; font-size: 10.5px; }
+  .fs-queue-done { color: #6ee7b7; font-size: 12px; }
   .editor-app {
     display: grid; grid-template-rows: 38px minmax(0, 1fr) 28px;
     min-height: 480px; height: 100%; border: 1px solid #202632; border-radius: 10px;
@@ -43017,6 +43080,10 @@ var styles = `
     white-space: nowrap;
   }
   .editor-tab.active .editor-tab-open { color: #fff; }
+  .editor-tab-icon { display: inline-flex; flex: 0 0 14px; }
+  .editor-tab-icon .file-icon { width: 14px; height: 14px; flex-basis: 14px; }
+  .editor-tab-icon .file-icon svg { width: 14px; height: 14px; }
+  .editor-tab-icon .file-icon-badge { left: 2px; right: 2px; bottom: 0; font-size: 5px; }
   .editor-dirty { color: #f78c6c; font-size: 8px; }
   .editor-tab-close {
     border: 0; background: transparent; color: #667087; width: 22px; height: 33px;
@@ -43041,13 +43108,22 @@ var styles = `
     text-align: left; padding: 3px 4px; border-radius: 4px; cursor: pointer;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .editor-tree-root { display: flex; align-items: center; gap: 5px; }
+  .editor-tree-root .file-icon { width: 18px; height: 18px; flex-basis: 18px; }
+  .editor-tree-root .file-icon svg { width: 18px; height: 18px; }
   .editor-tree-root:hover, .editor-tree-up:hover { background: #1b2130; color: #fff; }
   .editor-tree-row { display: flex; min-width: 0; }
   .editor-tree-label {
     border: 0; background: transparent; color: #c8d0df; padding: 3px 6px;
     font: 12px ui-monospace, monospace; text-align: left; cursor: pointer; width: 100%;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px;
+    display: flex; align-items: center; gap: 5px;
   }
+  .editor-tree-label .file-icon { width: 18px; height: 18px; flex-basis: 18px; }
+  .editor-tree-label .file-icon svg { width: 18px; height: 18px; }
+  .editor-tree-label .file-icon-badge { left: 2px; right: 2px; bottom: 0; font-size: 6px; }
+  .editor-tree-arrow { width: 10px; flex: 0 0 10px; color: #8f98ab; text-align: center; }
+  .editor-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .editor-tree-label:hover { background: #151a24; color: #fff; }
   .editor-tree-label.dir { color: #aab4c8; }
   .editor-tree-label.link { color: #7aa2ff; }
@@ -43069,6 +43145,17 @@ var styles = `
   .editor-content .cm-tooltip-autocomplete > ul > li[aria-selected] { background: #1b2a4a; color: #fff; }
   .editor-content .cm-lintRange-error { text-decoration: underline wavy #ff7d8a; text-underline-offset: 2px; }
   .editor-content .cm-lint-marker-error { content: "●"; color: #ff7d8a; }
+  .editor-image {
+    flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+    overflow: auto; padding: 12px;
+    background: repeating-conic-gradient(#0f1219 0% 25%, #0b0e14 0% 50%) 50% / 20px 20px;
+  }
+  .editor-image[hidden] { display: none; }
+  .editor-image img {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+    background: #0b0e14; box-shadow: 0 12px 44px #00000073;
+  }
+  .editor-image .hint { color: #667087; font-size: 12px; }
   .editor-eol-label, .editor-indent-label { display: flex; align-items: center; gap: 4px; }
   .editor-eol-label select, .editor-indent-label select {
     background: #0f1219; color: #c8d0df; border: 1px solid #2a3142; border-radius: 4px;
@@ -43082,6 +43169,43 @@ var styles = `
     width: 24px; height: 24px; cursor: pointer; border-radius: 4px; font-size: 15px;
   }
   .editor-tree-close:hover { background: #1b2130; color: #fff; }
+  .editor-dialog {
+    width: min(520px, calc(100vw - 32px)); padding: 0; border: 1px solid #333d54;
+    border-radius: 12px; background: #151a24; color: #e8ebf2;
+    box-shadow: 0 30px 90px #000000b3;
+  }
+  .editor-dialog::backdrop { background: #00000080; }
+  .editor-dialog-card { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
+  .editor-dialog-card strong { font-size: 14px; font-weight: 600; }
+  .editor-dialog-card p { margin: 0; color: #aab4c8; font-size: 12px; }
+  .editor-dialog-card ul {
+    margin: 0; padding-left: 18px; max-height: 160px; overflow: auto;
+    color: #c8d0df; font: 12px ui-monospace, monospace;
+  }
+  .editor-dialog-error { color: #ffb3ba; min-height: 16px; }
+  .editor-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+  .editor-dialog-actions button {
+    padding: 6px 10px; border-radius: 6px; border: 1px solid #2a3142;
+    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .editor-dialog-actions button:hover { border-color: #3a4560; color: #fff; }
+  .editor-dialog-actions button[data-dialog-save] {
+    background: #24406e; border-color: #3f63a0; color: #fff;
+  }
+  .editor-dialog-actions button:disabled { opacity: .5; cursor: default; }
+  @media (max-width: 700px) {
+    .fs { min-height: 0; }
+    .fs-body { grid-template-columns: 1fr; min-height: 0; }
+    .fs-preview { display: none; }
+    .fs.preview-open .fs-list { display: none; }
+    .fs.preview-open .fs-preview {
+      display: flex; position: absolute; inset: 0; z-index: 20; margin: 0;
+      border: 0; border-radius: 0; padding: 12px; background: #0d1016;
+      min-height: 0; overflow: auto;
+    }
+    .fs-preview-head { display: flex; }
+    .fs.preview-open .fs-preview img { max-height: calc(100vh - 160px); }
+  }
   @media (max-width: 700px) {
     .editor-tree {
       position: absolute; top: 0; bottom: 0; left: 0; width: min(78%, 260px);
@@ -43098,7 +43222,11 @@ var IMAGES = {
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   gif: "image/gif",
-  webp: "image/webp"
+  webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  svg: "image/svg+xml"
 };
 var encoder = new TextEncoder;
 var escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({
@@ -43108,6 +43236,220 @@ var escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({
   '"': "&quot;",
   "'": "&#39;"
 })[character]);
+var MIME_BY_EXTENSION = {
+  js: "text/javascript",
+  mjs: "text/javascript",
+  cjs: "text/javascript",
+  jsx: "text/javascript",
+  ts: "text/typescript",
+  tsx: "text/typescript",
+  json: "application/json",
+  md: "text/markdown",
+  markdown: "text/markdown",
+  txt: "text/plain",
+  log: "text/plain",
+  html: "text/html",
+  htm: "text/html",
+  css: "text/css",
+  scss: "text/x-scss",
+  sh: "application/x-sh",
+  bash: "application/x-sh",
+  zsh: "application/x-sh",
+  py: "text/x-python",
+  rs: "text/x-rust",
+  toml: "application/toml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  ini: "text/plain",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  pdf: "application/pdf",
+  zip: "application/zip",
+  gz: "application/gzip",
+  tgz: "application/gzip",
+  tar: "application/x-tar",
+  "7z": "application/x-7z-compressed",
+  rar: "application/vnd.rar",
+  bz2: "application/x-bzip2",
+  tbz2: "application/x-bzip2",
+  xz: "application/x-xz",
+  zst: "application/zstd",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mkv: "video/x-matroska",
+  mov: "video/quicktime",
+  wasm: "application/wasm",
+  db: "application/x-sqlite3",
+  sqlite: "application/vnd.sqlite3",
+  sqlite3: "application/vnd.sqlite3",
+  db3: "application/x-sqlite3",
+  sql: "text/x-sql",
+  duckdb: "application/x-duckdb",
+  mdb: "application/x-msaccess",
+  accdb: "application/x-msaccess",
+  dbf: "application/dbase"
+};
+var ICON_LABELS = {
+  js: "JS",
+  mjs: "JS",
+  cjs: "JS",
+  jsx: "JSX",
+  ts: "TS",
+  tsx: "TSX",
+  json: "JSON",
+  md: "MD",
+  markdown: "MD",
+  txt: "TXT",
+  log: "LOG",
+  html: "HTML",
+  htm: "HTML",
+  css: "CSS",
+  scss: "SCSS",
+  sh: "SH",
+  bash: "SH",
+  zsh: "SH",
+  py: "PY",
+  rs: "RS",
+  toml: "TOML",
+  yaml: "YML",
+  yml: "YML",
+  ini: "INI",
+  png: "PNG",
+  jpg: "JPG",
+  jpeg: "JPG",
+  gif: "GIF",
+  webp: "WEBP",
+  svg: "SVG",
+  avif: "AVIF",
+  bmp: "BMP",
+  ico: "ICO",
+  pdf: "PDF",
+  zip: "ZIP",
+  gz: "GZ",
+  tgz: "TGZ",
+  tar: "TAR",
+  "7z": "7Z",
+  rar: "RAR",
+  bz2: "BZ2",
+  tbz2: "TBZ2",
+  xz: "XZ",
+  zst: "ZST",
+  mp3: "MP3",
+  wav: "WAV",
+  ogg: "OGG",
+  flac: "FLAC",
+  mp4: "MP4",
+  webm: "WEBM",
+  mkv: "MKV",
+  mov: "MOV",
+  wasm: "WASM",
+  db: "DB",
+  sqlite: "SQL",
+  sqlite3: "SQL",
+  db3: "DB",
+  sql: "SQL",
+  duckdb: "DUCK",
+  mdb: "MDB",
+  accdb: "ACCD",
+  dbf: "DBF"
+};
+var FOLDER_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h4l1.7 2h6.3A1.5 1.5 0 0 1 17.5 7.5v7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" fill="var(--icon-color)" fill-opacity=".18" stroke="var(--icon-color)" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+var FILE_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.5h6.5L15 6v11.5H5z" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1" stroke-linejoin="round"/><path d="M11.5 2.5V6H15" fill="none" stroke="var(--icon-color)" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+var IMAGE_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="12" rx="1.5" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1"/><circle cx="7" cy="7.5" r="1.3" fill="var(--icon-color)"/><path d="m4.5 13.5 4-4 2.5 2.5 2-2 2.5 2.5" fill="none" stroke="var(--icon-color)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+var VIDEO_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="11.5" rx="1.5" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M8.2 7.2v5.1l4.2-2.55z" fill="var(--icon-color)"/></svg>';
+var AUDIO_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 13.2V6.1l7-1.8v2.4L10 8v6.2" fill="none" stroke="var(--icon-color)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.1" cy="14" r="1.9" fill="var(--icon-color)" fill-opacity=".22" stroke="var(--icon-color)" stroke-width="1.1"/><circle cx="13.1" cy="12.6" r="1.9" fill="var(--icon-color)" fill-opacity=".22" stroke="var(--icon-color)" stroke-width="1.1"/></svg>';
+var DATABASE_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6" ry="2.5" fill="var(--icon-color)" fill-opacity=".18" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M4 5v9.5c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5" fill="none" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M4 9.5c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5" fill="none" stroke="var(--icon-color)" stroke-width="1.1"/></svg>';
+var ARCHIVE_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3.5" width="14" height="13" rx="1.8" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M10 3.5v10" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M8.4 5.5h3.2M8.4 8h3.2M8.4 10.5h3.2" stroke="var(--icon-color)" stroke-width="1.05" stroke-linecap="round"/><path d="M9 13.5h2v2.2H9z" fill="var(--icon-color)"/></svg>';
+var LINK_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="var(--icon-color)" stroke-width="1.3" stroke-linecap="round"><path d="m8.2 11.8 3.6-3.6"/><path d="M6.8 9.9 5.4 11.3a3 3 0 0 0 4.2 4.2l1.4-1.4"/><path d="m13.2 10.1 1.4-1.4a3 3 0 0 0-4.2-4.2L9 5.9"/></svg>';
+function mimeFor(path) {
+  return MIME_BY_EXTENSION[extensionOf(path)] ?? "application/octet-stream";
+}
+function iconLabel(path) {
+  const extension = extensionOf(path);
+  if (!extension)
+    return "FILE";
+  return ICON_LABELS[extension] ?? extension.toUpperCase().slice(0, 4);
+}
+function iconCategory(mime, extension) {
+  if (mime.startsWith("image/"))
+    return "image";
+  if (mime.startsWith("audio/"))
+    return "audio";
+  if (mime.startsWith("video/"))
+    return "video";
+  if (mime === "application/pdf")
+    return "pdf";
+  if ([
+    "zip",
+    "gzip",
+    "x-tar",
+    "x-7z-compressed",
+    "vnd.rar",
+    "x-bzip2",
+    "x-xz",
+    "zstd"
+  ].some((part) => mime.includes(part))) {
+    return "archive";
+  }
+  if (mime === "application/wasm")
+    return "binary";
+  if ([
+    "db",
+    "sqlite",
+    "sqlite3",
+    "db3",
+    "sql",
+    "duckdb",
+    "mdb",
+    "accdb",
+    "dbf"
+  ].includes(extension)) {
+    return "database";
+  }
+  if (mime === "application/json" || mime.endsWith("+json") || mime.includes("xml")) {
+    return "data";
+  }
+  if (["js", "mjs", "cjs", "jsx", "py", "rs"].includes(extension)) {
+    return "code";
+  }
+  if (["ts", "tsx"].includes(extension))
+    return "code-strong";
+  if (["md", "markdown"].includes(extension))
+    return "doc";
+  if (["html", "htm", "css", "scss"].includes(extension))
+    return "web";
+  if (["sh", "bash", "zsh"].includes(extension))
+    return "shell";
+  if (["toml", "yaml", "yml", "ini"].includes(extension))
+    return "config";
+  if (mime.startsWith("text/"))
+    return "text";
+  return "unknown";
+}
+function iconMarkup(kind, path) {
+  if (kind === "dir") {
+    return `<span class="file-icon dir" title="Directory">${FOLDER_ICON}</span>`;
+  }
+  if (kind === "link") {
+    return `<span class="file-icon link" title="Symbolic link">${LINK_ICON}</span>`;
+  }
+  const mime = mimeFor(path);
+  const extension = extensionOf(path);
+  const category = iconCategory(mime, extension);
+  const shape = category === "image" ? IMAGE_ICON : category === "video" ? VIDEO_ICON : category === "audio" ? AUDIO_ICON : category === "database" ? DATABASE_ICON : category === "archive" ? ARCHIVE_ICON : FILE_ICON;
+  return `<span class="file-icon ${category}" title="${escape(mime)}">${shape}<span class="file-icon-badge">${escape(iconLabel(path))}</span></span>`;
+}
 function join(path, name) {
   return path === "/" ? `/${name}` : `${path}/${name}`;
 }
@@ -43160,6 +43502,10 @@ function extensionOf(path) {
 function languageLabel(language) {
   return LANGUAGE_LABELS[language] ?? "Plain text";
 }
+function imageLabel(path) {
+  const extension = extensionOf(path).toUpperCase();
+  return extension ? `${extension} image` : "Image";
+}
 function detectEol(value) {
   const crlf = (value.match(/\r\n/g) || []).length;
   const cr = (value.match(/\r(?!\n)/g) || []).length;
@@ -43193,9 +43539,6 @@ function modified(ms) {
 }
 function kindLabel(kind) {
   return kind === "dir" ? "directory" : kind === "link" ? "symlink" : "file";
-}
-function glyphClass(kind) {
-  return kind === "dir" ? "dir" : kind === "link" ? "link" : "file";
 }
 function text(bytes) {
   try {
@@ -43369,6 +43712,9 @@ function onParams(params) {
     editorBridge?.openPath(params.path);
   }
 }
+function beforeClose() {
+  return editorBridge?.confirmClose?.() ?? true;
+}
 function mountEditorView(root, context) {
   const style = document.createElement("style");
   style.textContent = styles;
@@ -43394,6 +43740,10 @@ function mountEditorView(root, context) {
         <div class="editor-tabs" role="tablist" aria-label="Open files"></div>
         <div class="editor-empty">Open a file from the tree or enter a path.</div>
         <div class="editor-content" hidden></div>
+        <div class="editor-image" data-image hidden>
+          <p class="hint" data-image-empty>Loading image…</p>
+          <img data-image-preview alt="" />
+        </div>
       </section>
     </div>
     <footer class="editor-status">
@@ -43418,12 +43768,28 @@ function mountEditorView(root, context) {
       <span data-position>Ln 1, Col 1</span>
       <span data-selection>Sel 0</span>
     </footer>
+    <dialog class="editor-dialog" data-close-dialog>
+      <div class="editor-dialog-card">
+        <strong data-dialog-title>Unsaved changes</strong>
+        <p data-dialog-text>This file has unsaved changes.</p>
+        <ul data-dialog-files></ul>
+        <p class="editor-dialog-error" data-dialog-error></p>
+        <div class="editor-dialog-actions">
+          <button type="button" data-dialog-save>Save</button>
+          <button type="button" data-dialog-discard>Discard</button>
+          <button type="button" data-dialog-cancel>Cancel</button>
+        </div>
+      </div>
+    </dialog>
   `;
   root.append(box);
   const pathInput = box.querySelector(".editor-path");
   const tabsElement = box.querySelector(".editor-tabs");
   const treeElement = box.querySelector(".editor-tree");
   const content = box.querySelector(".editor-content");
+  const imageWrap = box.querySelector("[data-image]");
+  const imagePreview = box.querySelector("[data-image-preview]");
+  const imageEmpty = box.querySelector("[data-image-empty]");
   const empty = box.querySelector(".editor-empty");
   const info = box.querySelector("[data-info]");
   const language = box.querySelector("[data-language]");
@@ -43433,8 +43799,17 @@ function mountEditorView(root, context) {
   const errorElement = box.querySelector("[data-error]");
   const position = box.querySelector("[data-position]");
   const selection = box.querySelector("[data-selection]");
+  const saveButton = box.querySelector("[data-save]");
   const treeToggle = box.querySelector("[data-tree-toggle]");
   const treeBackdrop = box.querySelector("[data-tree-backdrop]");
+  const dialog = box.querySelector("[data-close-dialog]");
+  const dialogTitle = dialog.querySelector("[data-dialog-title]");
+  const dialogText = dialog.querySelector("[data-dialog-text]");
+  const dialogFiles = dialog.querySelector("[data-dialog-files]");
+  const dialogError = dialog.querySelector("[data-dialog-error]");
+  const dialogSave = dialog.querySelector("[data-dialog-save]");
+  const dialogDiscard = dialog.querySelector("[data-dialog-discard]");
+  const dialogCancel = dialog.querySelector("[data-dialog-cancel]");
   const mobileQuery = window.matchMedia("(max-width: 700px)");
   if (typeof context.fill === "function") {
     context.fill();
@@ -43444,11 +43819,16 @@ function mountEditorView(root, context) {
   const tabs = [];
   let active = -1;
   let view = null;
+  let mountedTab = null;
   let disposed = false;
   let switching = false;
   let treeRoot = "/";
   let treeOpen = !mobileQuery.matches;
   let indentSetting = { size: 4, useTabs: false };
+  let dialogTabs = [];
+  let dialogResolve = null;
+  let dialogPromise = null;
+  let dialogBusy = false;
   const treeData = new Map;
   const activeTab = () => active >= 0 ? tabs[active] : null;
   function setInfo(message, bad = false) {
@@ -43479,12 +43859,17 @@ function mountEditorView(root, context) {
         active: activeTab()?.path ?? null,
         tree: treeOpen,
         indent: { ...indentSetting },
-        tabs: tabs.map((tab) => ({
+        tabs: tabs.map((tab) => tab.image ? {
+          path: tab.path,
+          image: true,
+          mime: tab.mime,
+          dirty: false
+        } : {
           path: tab.path,
           text: tab.state.doc.toString(),
           eol: tab.eol,
           dirty: tab.dirty
-        }))
+        })
       }
     });
   }
@@ -43497,7 +43882,10 @@ function mountEditorView(root, context) {
       open.type = "button";
       open.className = "editor-tab-open";
       open.title = tab.path;
-      open.append(document.createTextNode(baseName(tab.path)));
+      const tabIcon = document.createElement("span");
+      tabIcon.className = "editor-tab-icon";
+      tabIcon.innerHTML = iconMarkup("file", tab.path);
+      open.append(tabIcon, document.createTextNode(baseName(tab.path)));
       if (tab.dirty) {
         const dot = document.createElement("span");
         dot.className = "editor-dirty";
@@ -43513,7 +43901,7 @@ function mountEditorView(root, context) {
       close.title = `Close ${tab.path}`;
       close.addEventListener("click", (event) => {
         event.stopPropagation();
-        closeTab(index);
+        requestCloseTab(index);
       });
       node.append(open, close);
       tabsElement.append(node);
@@ -43521,12 +43909,14 @@ function mountEditorView(root, context) {
   }
   function refreshStatus() {
     const tab = activeTab();
-    if (!tab || !view) {
+    if (!tab) {
       language.textContent = "Plain text";
       eolSelect.disabled = true;
       eolMixed.hidden = true;
       eolSelect.value = "LF";
       indentSelect.value = "4";
+      indentSelect.disabled = true;
+      saveButton.disabled = true;
       errorElement.textContent = "";
       errorElement.title = "";
       errorElement.className = "editor-error";
@@ -43534,8 +43924,23 @@ function mountEditorView(root, context) {
       selection.textContent = "Sel 0";
       return;
     }
-    language.textContent = languageLabel(languageFor(tab.path));
+    if (tab.image) {
+      language.textContent = imageLabel(tab.path);
+      eolSelect.disabled = true;
+      eolMixed.hidden = true;
+      indentSelect.disabled = true;
+      saveButton.disabled = true;
+      errorElement.textContent = tab.error ?? "";
+      errorElement.title = tab.error ?? "";
+      errorElement.className = tab.error ? "editor-error bad" : "editor-error";
+      position.textContent = tab.width && tab.height ? `${tab.width} × ${tab.height}` : "—";
+      selection.textContent = tab.bytes ? bytes(tab.bytes.length) : "";
+      return;
+    }
+    saveButton.disabled = false;
     eolSelect.disabled = false;
+    indentSelect.disabled = false;
+    language.textContent = languageLabel(languageFor(tab.path));
     if (tab.eol === "Mixed") {
       eolMixed.hidden = false;
       eolSelect.value = "Mixed";
@@ -43548,6 +43953,11 @@ function mountEditorView(root, context) {
     if (tabOption)
       tabOption.textContent = `Tab (${indentSetting.size})`;
     indentSelect.title = `Indentation: ${indentLabel()}`;
+    if (!view) {
+      position.textContent = "Ln 1, Col 1";
+      selection.textContent = "Sel 0";
+      return;
+    }
     const state = view.state;
     const main = state.selection.main;
     const line = state.doc.lineAt(main.head);
@@ -43572,8 +43982,8 @@ function mountEditorView(root, context) {
   const updateListener = EditorView.updateListener.of((update) => {
     if (switching)
       return;
-    const tab = activeTab();
-    if (!tab)
+    const tab = mountedTab;
+    if (!tab || tab.image || !tabs.includes(tab))
       return;
     tab.state = update.state;
     if (update.docChanged) {
@@ -43581,7 +43991,8 @@ function mountEditorView(root, context) {
       renderTabs();
       publishSession();
     }
-    refreshStatus();
+    if (activeTab() === tab)
+      refreshStatus();
   });
   function createState(path, text) {
     return EditorState.create({
@@ -43640,6 +44051,63 @@ function mountEditorView(root, context) {
     view = new EditorView({ state: activeTab().state, parent: content });
     return view;
   }
+  function renderImage(tab) {
+    imagePreview.onload = () => {
+      tab.width = imagePreview.naturalWidth;
+      tab.height = imagePreview.naturalHeight;
+      if (activeTab() === tab)
+        refreshStatus();
+    };
+    imagePreview.onerror = () => {
+      tab.error = "The image could not be decoded.";
+      imagePreview.hidden = true;
+      imageEmpty.hidden = false;
+      imageEmpty.textContent = `Could not preview: ${tab.error}`;
+      if (activeTab() === tab)
+        refreshStatus();
+    };
+    if (!tab.bytes) {
+      imagePreview.hidden = true;
+      imagePreview.removeAttribute("src");
+      imageEmpty.hidden = false;
+      imageEmpty.textContent = tab.error ? `Could not preview: ${tab.error}` : "Loading image…";
+      return;
+    }
+    if (!tab.objectUrl) {
+      tab.objectUrl = URL.createObjectURL(new Blob([new Uint8Array(tab.bytes)], { type: tab.mime }));
+    }
+    imageEmpty.hidden = true;
+    imagePreview.hidden = false;
+    imagePreview.alt = baseName(tab.path);
+    imagePreview.src = tab.objectUrl;
+  }
+  async function loadImageTab(tab) {
+    try {
+      const data = await call(context, `/file?path=${encodeURIComponent(tab.path)}`);
+      if (disposed || !tabs.includes(tab))
+        return;
+      if (!Array.isArray(data))
+        throw new Error("invalid image data");
+      if (tab.objectUrl) {
+        URL.revokeObjectURL(tab.objectUrl);
+        tab.objectUrl = null;
+      }
+      tab.bytes = data;
+      tab.error = null;
+      if (activeTab() === tab) {
+        renderImage(tab);
+        refreshStatus();
+      }
+    } catch (error) {
+      if (disposed || !tabs.includes(tab))
+        return;
+      tab.error = reason(error);
+      if (activeTab() === tab) {
+        renderImage(tab);
+        refreshStatus();
+      }
+    }
+  }
   function activate(index) {
     const tab = tabs[index];
     if (!tab)
@@ -43647,23 +44115,36 @@ function mountEditorView(root, context) {
     active = index;
     pathInput.value = tab.path;
     empty.hidden = true;
-    content.hidden = false;
-    ensureView();
-    switching = true;
-    view.setState(tab.state);
-    switching = false;
+    if (tab.image) {
+      content.hidden = true;
+      imageWrap.hidden = false;
+      renderImage(tab);
+    } else {
+      imageWrap.hidden = true;
+      content.hidden = false;
+      ensureView();
+      mountedTab = tab;
+      switching = true;
+      view.setState(tab.state);
+      switching = false;
+    }
     renderTabs();
     refreshStatus();
     renderTree();
     if (mobileQuery.matches && treeOpen)
       setTreeOpen(false, false);
     publishSession();
-    view.focus();
+    if (!tab.image)
+      view.focus();
   }
   function closeTab(index) {
     const tab = tabs[index];
     if (!tab)
       return;
+    if (tab.objectUrl)
+      URL.revokeObjectURL(tab.objectUrl);
+    if (mountedTab === tab)
+      mountedTab = null;
     tabs.splice(index, 1);
     if (tabs.length === 0) {
       active = -1;
@@ -43671,6 +44152,10 @@ function mountEditorView(root, context) {
       view = null;
       content.replaceChildren();
       content.hidden = true;
+      imageWrap.hidden = true;
+      imagePreview.removeAttribute("src");
+      imageEmpty.hidden = false;
+      imageEmpty.textContent = "Loading image…";
       empty.hidden = false;
       pathInput.value = "";
       refreshStatus();
@@ -43694,6 +44179,41 @@ function mountEditorView(root, context) {
     const existing = tabs.findIndex((tab) => tab.path === target);
     if (existing >= 0 && typeof options.text !== "string") {
       activate(existing);
+      return;
+    }
+    const mime = IMAGES[extensionOf(target)];
+    if (mime) {
+      setInfo(`Reading ${target}…`);
+      try {
+        const data = await call(context, `/file?path=${encodeURIComponent(target)}`);
+        if (disposed)
+          return;
+        if (!Array.isArray(data))
+          throw new Error("invalid image data");
+        const tab = {
+          path: target,
+          image: true,
+          mime,
+          bytes: data,
+          error: null,
+          width: 0,
+          height: 0,
+          objectUrl: null,
+          dirty: false,
+          eol: "LF",
+          state: null
+        };
+        if (existing >= 0)
+          tabs[existing] = tab;
+        else
+          tabs.push(tab);
+        activate(tabs.indexOf(tab));
+        ensureTreePath(target);
+        setInfo(`${target} · ${imageLabel(target)}`);
+      } catch (error) {
+        if (!disposed)
+          setInfo(reason(error), true);
+      }
       return;
     }
     let value = typeof options.text === "string" ? options.text : null;
@@ -43728,10 +44248,9 @@ function mountEditorView(root, context) {
     ensureTreePath(target);
     setInfo(`${target} · ${languageLabel(languageFor(target))}`);
   }
-  async function saveActive() {
-    const tab = activeTab();
-    if (!tab)
-      return;
+  async function saveTab(tab) {
+    if (!tab || tab.image)
+      return false;
     const eol = tab.eol === "CRLF" ? "CRLF" : "LF";
     const data = Array.from(encoder.encode(joinEol(tab.state.doc.toString(), eol)));
     setInfo(`Saving ${tab.path}…`);
@@ -43742,26 +44261,107 @@ function mountEditorView(root, context) {
         body: JSON.stringify({ path: tab.path, bytes: data })
       });
       if (disposed)
-        return;
+        return false;
       tab.dirty = false;
       tab.eol = eol;
       renderTabs();
       refreshStatus();
       publishSession();
       setInfo(`Saved ${tab.path} · ${data.length} bytes`);
+      return true;
     } catch (error) {
       if (!disposed)
         setInfo(reason(error), true);
+      return false;
     }
+  }
+  async function saveTabs(list) {
+    for (const tab of list) {
+      if (!await saveTab(tab))
+        return false;
+    }
+    return true;
+  }
+  async function saveActive() {
+    const tab = activeTab();
+    if (tab)
+      await saveTab(tab);
+  }
+  function settleDialog(choice) {
+    if (!dialogResolve)
+      return;
+    const resolve = dialogResolve;
+    dialogResolve = null;
+    dialogPromise = null;
+    dialogTabs = [];
+    dialogBusy = false;
+    if (dialog.open)
+      dialog.close();
+    resolve(choice);
+  }
+  function renderDialogFiles() {
+    dialogFiles.replaceChildren();
+    for (const tab of dialogTabs) {
+      const item = document.createElement("li");
+      item.textContent = tab.path;
+      dialogFiles.append(item);
+    }
+    dialogTitle.textContent = dialogTabs.length === 1 ? `Save changes to ${baseName(dialogTabs[0].path)}?` : `Save ${dialogTabs.length} files?`;
+    dialogText.textContent = dialogTabs.length === 1 ? "This file has unsaved changes." : "These files have unsaved changes.";
+    dialogSave.textContent = dialogTabs.length === 1 ? "Save" : "Save all";
+  }
+  function showCloseDialog(list) {
+    if (dialogPromise) {
+      for (const tab of list) {
+        if (!dialogTabs.includes(tab))
+          dialogTabs.push(tab);
+      }
+      renderDialogFiles();
+      return dialogPromise;
+    }
+    dialogTabs = [...list];
+    renderDialogFiles();
+    dialogError.textContent = "";
+    dialogSave.disabled = false;
+    dialogDiscard.disabled = false;
+    dialogCancel.disabled = false;
+    dialogPromise = new Promise((resolve) => {
+      dialogResolve = resolve;
+    });
+    dialog.showModal();
+    dialogSave.focus();
+    return dialogPromise;
+  }
+  async function requestCloseTab(index) {
+    const tab = tabs[index];
+    if (!tab)
+      return;
+    if (!tab.dirty) {
+      closeTab(index);
+      return;
+    }
+    const choice = await showCloseDialog([tab]);
+    if (choice === "cancel")
+      return;
+    closeTab(index);
+  }
+  async function confirmClose() {
+    const dirty = tabs.filter((tab) => tab.dirty);
+    if (!dirty.length)
+      return true;
+    const choice = await showCloseDialog(dirty);
+    return choice !== "cancel";
   }
   function applyIndent(next) {
     indentSetting = next;
     for (const tab of tabs) {
+      if (!tab.state)
+        continue;
       tab.state = tab.state.update({
         effects: indentCompartment.reconfigure(indentExtensions(indentSetting))
       }).state;
     }
-    if (view && activeTab()) {
+    if (view && activeTab() && !activeTab().image) {
       switching = true;
       view.setState(activeTab().state);
       switching = false;
@@ -43828,7 +44428,7 @@ function mountEditorView(root, context) {
     const rootButton = document.createElement("button");
     rootButton.type = "button";
     rootButton.className = "editor-tree-root";
-    rootButton.textContent = treeRoot;
+    rootButton.innerHTML = `${iconMarkup("dir", treeRoot)}<span class="editor-tree-name">${escape(treeRoot)}</span>`;
     rootButton.title = "Refresh this directory";
     rootButton.addEventListener("click", () => void loadTree(treeRoot));
     header.append(rootButton);
@@ -43871,7 +44471,7 @@ function mountEditorView(root, context) {
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "editor-tree-label dir";
-        toggle.textContent = `${open ? "▾" : "▸"} ${entry.name}`;
+        toggle.innerHTML = `<span class="editor-tree-arrow">${open ? "▾" : "▸"}</span>${iconMarkup("dir", path)}<span class="editor-tree-name">${escape(entry.name)}</span>`;
         toggle.addEventListener("click", () => void toggleDirectory(path));
         row.append(toggle);
         container.append(row);
@@ -43882,7 +44482,7 @@ function mountEditorView(root, context) {
         const link = document.createElement("button");
         link.type = "button";
         link.className = "editor-tree-label link";
-        link.textContent = `↗ ${entry.name}`;
+        link.innerHTML = `${iconMarkup("link", path)}<span class="editor-tree-name">${escape(entry.name)}</span>`;
         link.title = `Open symbolic link ${path}`;
         link.addEventListener("click", () => void openLink(path));
         row.append(link);
@@ -43893,7 +44493,7 @@ function mountEditorView(root, context) {
         file.className = "editor-tree-label file";
         if (activeTab()?.path === path)
           file.classList.add("active");
-        file.textContent = entry.name;
+        file.innerHTML = `${iconMarkup("file", path)}<span class="editor-tree-name">${escape(entry.name)}</span>`;
         file.addEventListener("click", () => void openFile(path));
         row.append(file);
         container.append(row);
@@ -43993,7 +44593,46 @@ function mountEditorView(root, context) {
   indentSelect.addEventListener("change", () => {
     applyIndent(indentSelect.value === "tab" ? { size: Number(indentSetting.size) || 4, useTabs: true } : { size: Number(indentSelect.value), useTabs: false });
   });
+  dialogSave.addEventListener("click", async () => {
+    if (dialogBusy || !dialogTabs.length)
+      return;
+    dialogBusy = true;
+    dialogSave.disabled = true;
+    dialogDiscard.disabled = true;
+    dialogCancel.disabled = true;
+    dialogError.textContent = "";
+    const files = [...dialogTabs];
+    const ok = await saveTabs(files);
+    if (ok) {
+      settleDialog("save");
+      return;
+    }
+    dialogBusy = false;
+    dialogSave.disabled = false;
+    dialogDiscard.disabled = false;
+    dialogCancel.disabled = false;
+    dialogError.textContent = "Could not save every file. Check the status and try again.";
+  });
+  dialogDiscard.addEventListener("click", () => {
+    if (!dialogBusy)
+      settleDialog("discard");
+  });
+  dialogCancel.addEventListener("click", () => {
+    if (!dialogBusy)
+      settleDialog("cancel");
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    if (!dialogBusy)
+      settleDialog("cancel");
+  });
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog && !dialogBusy)
+      settleDialog("cancel");
+  });
   box.addEventListener("keydown", (event) => {
+    if (dialog.open)
+      return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       saveActive();
@@ -44003,7 +44642,10 @@ function mountEditorView(root, context) {
       setTreeOpen(false);
     }
   });
-  const bridge = { openPath: (path) => openFile(path) };
+  const bridge = {
+    openPath: (path) => openFile(path),
+    confirmClose: () => confirmClose()
+  };
   editorBridge = bridge;
   const params = context.params ?? {};
   const session = params && typeof params === "object" ? params.session : null;
@@ -44018,9 +44660,31 @@ function mountEditorView(root, context) {
   }
   if (session && Array.isArray(session.tabs)) {
     for (const entry of session.tabs) {
-      if (!entry || typeof entry.path !== "string" || typeof entry.text !== "string") {
+      if (!entry || typeof entry.path !== "string")
+        continue;
+      if (entry.image === true) {
+        const mime = entry.mime ?? IMAGES[extensionOf(entry.path)];
+        if (!mime)
+          continue;
+        const tab = {
+          path: entry.path,
+          image: true,
+          mime,
+          bytes: null,
+          error: null,
+          width: 0,
+          height: 0,
+          objectUrl: null,
+          dirty: false,
+          eol: "LF",
+          state: null
+        };
+        tabs.push(tab);
+        loadImageTab(tab);
         continue;
       }
+      if (typeof entry.text !== "string")
+        continue;
       tabs.push({
         path: entry.path,
         state: createState(entry.path, entry.text),
@@ -44078,7 +44742,7 @@ function mount(root, context) {
       <span class="grow"></span>
       <button type="button" data-upload>Upload</button>
       <button type="button" data-new>New</button>
-      <input type="file" data-file hidden />
+      <input type="file" data-file multiple hidden />
     </header>
     <form class="fs-new" hidden>
       <select name="kind" aria-label="New entry type">
@@ -44106,7 +44770,15 @@ function mount(root, context) {
       <section class="fs-preview"><p class="hint">Select a file to preview it.</p></section>
     </div>
     <div class="fs-more"><button type="button" data-more hidden>Load more</button></div>
+    <section class="fs-queue" data-queue hidden>
+      <header>
+        <strong>Transfers</strong>
+        <button type="button" data-queue-clear>Clear finished</button>
+      </header>
+      <ul data-queue-list></ul>
+    </section>
     <p class="fs-status" role="status"></p>
+    <div class="fs-drop" data-drop hidden>Drop files to upload</div>
   `;
   root.append(box);
   const address = box.querySelector(".fs-address");
@@ -44128,6 +44800,10 @@ function mount(root, context) {
   const trashButton = box.querySelector("[data-trash]");
   const newButton = box.querySelector("[data-new]");
   const uploadButton = box.querySelector("[data-upload]");
+  const queueBox = box.querySelector("[data-queue]");
+  const queueList = box.querySelector("[data-queue-list]");
+  const queueClear = box.querySelector("[data-queue-clear]");
+  const dropOverlay = box.querySelector("[data-drop]");
   let current = "/";
   let nextCursor = null;
   let confirmPath = null;
@@ -44136,6 +44812,10 @@ function mount(root, context) {
   let view = "files";
   let disposed = false;
   let previewState = null;
+  const queue = [];
+  let queueNext = 0;
+  let queueBusy = false;
+  let dragDepth = 0;
   const knownPaths = new Set([
     "/",
     "/etc",
@@ -44180,6 +44860,7 @@ function mount(root, context) {
     load(path);
   }
   function resetPreview() {
+    box.classList.remove("preview-open");
     if (previewState?.objectUrl)
       URL.revokeObjectURL(previewState.objectUrl);
     previewState = null;
@@ -44241,7 +44922,8 @@ function mount(root, context) {
     entryButton.className = "fs-entry";
     entryButton.dataset.name = entry.name;
     entryButton.dataset.kind = entry.kind;
-    entryButton.innerHTML = `<span class="glyph ${glyphClass(entry.kind)}"></span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+    entryButton.dataset.path = full;
+    entryButton.innerHTML = `${iconMarkup(entry.kind, full)}<span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
     entryButton.addEventListener("click", () => {
       if (entry.kind === "dir")
         load(full);
@@ -44348,7 +45030,7 @@ function mount(root, context) {
         row.className = "fs-row";
         const copy = document.createElement("span");
         copy.className = "fs-entry";
-        copy.innerHTML = `<span class="glyph ${glyphClass(entry.kind)}"></span><span class="name">${escape(entry.original)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+        copy.innerHTML = `${iconMarkup(entry.kind, entry.original)}<span class="name">${escape(entry.original)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
         const restoreButton = button("fs-tool", "Restore", `Restore ${entry.original}`);
         restoreButton.addEventListener("click", () => void restore(entry.original));
         row.append(copy, restoreButton);
@@ -44417,18 +45099,17 @@ function mount(root, context) {
         objectUrl: null
       };
       renderPreview();
+      box.classList.add("preview-open");
       setStatus(`${path} · ${data.length} bytes`);
     } catch (error) {
       if (!disposed)
         setStatus(reason(error), true);
     }
   }
-  function download() {
-    if (!previewState)
-      return;
-    const name = baseName(previewState.path);
-    const extension = name.split(".").pop()?.toLowerCase() ?? "";
-    const blob = new Blob([new Uint8Array(previewState.bytes)], {
+  function triggerDownload(path, data) {
+    const name = baseName(path);
+    const extension = extensionOf(path);
+    const blob = new Blob([new Uint8Array(data)], {
       type: IMAGES[extension] ?? "application/octet-stream"
     });
     const url = URL.createObjectURL(blob);
@@ -44437,6 +45118,237 @@ function mount(root, context) {
     link.download = name;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function enqueueDownload(path) {
+    queue.push({
+      id: ++queueNext,
+      type: "download",
+      name: baseName(path),
+      path,
+      status: "queued",
+      progress: 0,
+      message: "Queued"
+    });
+    renderQueue();
+    pumpQueue();
+  }
+  function enqueueUploads(files, target) {
+    if (view !== "files") {
+      setStatus("Return to Files to upload.", true);
+      return;
+    }
+    let added = 0;
+    for (const file of files) {
+      const path = join(target, file.name);
+      const active = queue.some((item) => item.type === "upload" && item.path === path && ["queued", "uploading", "conflict"].includes(item.status));
+      if (active)
+        continue;
+      queue.push({
+        id: ++queueNext,
+        type: "upload",
+        name: file.name,
+        path,
+        file,
+        status: "queued",
+        progress: 0,
+        message: `→ ${target}`,
+        cancelled: false,
+        overwrite: false
+      });
+      added += 1;
+    }
+    if (!added) {
+      setStatus("Those files are already queued.", true);
+      return;
+    }
+    setStatus(`Queued ${added} upload${added === 1 ? "" : "s"}`);
+    renderQueue();
+    pumpQueue();
+  }
+  function queueStatus(item) {
+    if (item.status === "queued") {
+      return item.type === "upload" ? `Queued → ${parent(item.path)}` : "Queued";
+    }
+    if (item.status === "uploading")
+      return `Uploading ${item.progress}%`;
+    if (item.status === "downloading")
+      return `Downloading ${item.progress}%`;
+    if (item.status === "done")
+      return "Done";
+    if (item.status === "conflict")
+      return "Already exists";
+    if (item.status === "error")
+      return item.message || "Failed";
+    if (item.status === "cancelled")
+      return "Cancelled";
+    return item.status;
+  }
+  function renderQueue() {
+    queueBox.hidden = queue.length === 0;
+    queueList.replaceChildren();
+    for (const item of queue) {
+      const row = document.createElement("li");
+      row.className = "fs-queue-item";
+      const dir = document.createElement("span");
+      dir.className = "fs-queue-dir";
+      dir.textContent = item.type === "upload" ? "↑" : "↓";
+      const main = document.createElement("div");
+      main.className = "fs-queue-main";
+      const name = document.createElement("span");
+      name.className = "fs-queue-name";
+      name.textContent = item.name;
+      name.title = item.path;
+      const meta = document.createElement("span");
+      meta.className = "fs-queue-meta";
+      meta.textContent = queueStatus(item);
+      main.append(name, meta);
+      const progress = document.createElement("div");
+      progress.className = "fs-queue-progress";
+      const fill = document.createElement("span");
+      fill.style.width = `${Math.max(0, Math.min(100, item.progress ?? 0))}%`;
+      progress.append(fill);
+      const actions = document.createElement("div");
+      actions.className = "fs-queue-actions";
+      if (item.status === "conflict") {
+        const overwrite = button("fs-tool", "Overwrite");
+        overwrite.addEventListener("click", () => {
+          item.overwrite = true;
+          item.status = "queued";
+          item.message = "";
+          renderQueue();
+          pumpQueue();
+        });
+        const remove = button("fs-tool", "Remove");
+        remove.addEventListener("click", () => removeQueueItem(item));
+        actions.append(overwrite, remove);
+      } else if (item.status === "error") {
+        const retry = button("fs-tool", "Retry");
+        retry.addEventListener("click", () => {
+          item.status = "queued";
+          item.message = "";
+          renderQueue();
+          pumpQueue();
+        });
+        const remove = button("fs-tool", "Remove");
+        remove.addEventListener("click", () => removeQueueItem(item));
+        actions.append(retry, remove);
+      } else if (item.status === "queued" || item.status === "uploading" || item.status === "downloading") {
+        const cancel = button("fs-tool", "Cancel");
+        cancel.addEventListener("click", () => {
+          item.cancelled = true;
+          if (item.status === "queued")
+            item.status = "cancelled";
+          renderQueue();
+        });
+        actions.append(cancel);
+      } else if (item.status === "done") {
+        const done = document.createElement("span");
+        done.className = "fs-queue-done";
+        done.textContent = "✓";
+        actions.append(done);
+      } else if (item.status === "cancelled") {
+        const remove = button("fs-tool", "Remove");
+        remove.addEventListener("click", () => removeQueueItem(item));
+        actions.append(remove);
+      }
+      row.append(dir, main, progress, actions);
+      queueList.append(row);
+    }
+  }
+  function removeQueueItem(item) {
+    const index = queue.indexOf(item);
+    if (index >= 0)
+      queue.splice(index, 1);
+    renderQueue();
+  }
+  async function runUpload(item) {
+    item.status = "uploading";
+    item.progress = 10;
+    renderQueue();
+    if (!item.overwrite) {
+      try {
+        await request(`/stat?path=${encodeURIComponent(item.path)}`);
+        item.status = "conflict";
+        item.message = "Already exists";
+        return;
+      } catch (error) {
+        if (!reason(error).includes("not-found")) {
+          item.status = "error";
+          item.message = reason(error);
+          return;
+        }
+      }
+    }
+    try {
+      const buffer = await item.file.arrayBuffer();
+      item.progress = 55;
+      renderQueue();
+      if (item.cancelled) {
+        item.status = "cancelled";
+        return;
+      }
+      await request("/file", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: item.path,
+          bytes: Array.from(new Uint8Array(buffer))
+        })
+      });
+      item.progress = 100;
+      item.status = "done";
+      item.message = "Uploaded";
+      if (parent(item.path) === current)
+        load(current);
+    } catch (error) {
+      item.status = "error";
+      item.message = reason(error);
+    }
+  }
+  async function runDownload(item) {
+    item.status = "downloading";
+    item.progress = 25;
+    renderQueue();
+    try {
+      const data = await request(`/file?path=${encodeURIComponent(item.path)}`);
+      item.progress = 80;
+      renderQueue();
+      if (item.cancelled) {
+        item.status = "cancelled";
+        return;
+      }
+      triggerDownload(item.path, data);
+      item.progress = 100;
+      item.status = "done";
+      item.message = "Downloaded";
+    } catch (error) {
+      item.status = "error";
+      item.message = reason(error);
+    }
+  }
+  async function pumpQueue() {
+    if (queueBusy)
+      return;
+    const item = queue.find((entry) => entry.status === "queued");
+    if (!item)
+      return;
+    queueBusy = true;
+    try {
+      if (item.type === "upload")
+        await runUpload(item);
+      else
+        await runDownload(item);
+    } finally {
+      queueBusy = false;
+      renderQueue();
+      if (queue.some((entry) => entry.status === "queued"))
+        pumpQueue();
+    }
+  }
+  function download() {
+    if (!previewState)
+      return;
+    enqueueDownload(previewState.path);
   }
   async function openInEditor() {
     if (!previewState)
@@ -44478,16 +45390,17 @@ function mount(root, context) {
     }
     const { path, entry, link, text: decoded } = previewState;
     const extension = extensionOf(path);
+    const imageType = IMAGES[extension];
     const meta = document.createElement("div");
     meta.className = "fs-meta";
-    meta.append(cell("", kindLabel(entry.kind)), cell("", bytes(entry.size)), cell("", `modified ${modified(entry["modified-ms"])}`));
+    meta.append(cell("", kindLabel(entry.kind)), cell("", bytes(entry.size)), cell("", `modified ${modified(entry["modified-ms"])}`), cell("", mimeFor(path)));
     if (link)
       meta.append(cell("", `via ${link}`));
     const actions = document.createElement("div");
     actions.className = "fs-actions";
-    if (decoded !== null) {
+    if (decoded !== null || imageType) {
       const edit = button("", "Open in Editor");
-      edit.title = "Edit this file in the floating Editor window";
+      edit.title = imageType ? "Open this image in the Editor" : "Edit this file in the floating Editor window";
       edit.addEventListener("click", () => void openInEditor());
       actions.append(edit);
     }
@@ -44496,26 +45409,39 @@ function mount(root, context) {
     actions.append(downloadButton);
     const pane = document.createElement("div");
     pane.className = "pane";
-    if (decoded !== null) {
+    if (imageType) {
+      if (previewState.objectUrl)
+        URL.revokeObjectURL(previewState.objectUrl);
+      previewState.objectUrl = URL.createObjectURL(new Blob([new Uint8Array(previewState.bytes)], { type: imageType }));
+      const image = document.createElement("img");
+      image.src = previewState.objectUrl;
+      image.alt = baseName(path);
+      image.addEventListener("error", () => {
+        if (!disposed && previewState?.path === path) {
+          setStatus(`Could not render ${path} as ${imageType}.`, true);
+        }
+      });
+      pane.append(image);
+    } else if (decoded !== null) {
       const formatted = document.createElement("div");
       formatted.className = "fs-formatted";
       formatted.innerHTML = formattedPreview(decoded, path);
       pane.append(formatted);
-    } else if (IMAGES[extension]) {
-      if (previewState.objectUrl)
-        URL.revokeObjectURL(previewState.objectUrl);
-      previewState.objectUrl = URL.createObjectURL(new Blob([new Uint8Array(previewState.bytes)], { type: IMAGES[extension] }));
-      const image = document.createElement("img");
-      image.src = previewState.objectUrl;
-      image.alt = baseName(path);
-      pane.append(image);
     } else {
       const hint = document.createElement("p");
       hint.className = "hint";
       hint.textContent = `Binary file · ${previewState.bytes.length} bytes`;
       pane.append(hint);
     }
-    preview.append(meta, actions, pane);
+    const head = document.createElement("div");
+    head.className = "fs-preview-head";
+    const back = button("", "← Files");
+    back.title = "Back to the file list";
+    back.addEventListener("click", resetPreview);
+    const name = document.createElement("strong");
+    name.textContent = baseName(path);
+    head.append(back, name);
+    preview.append(head, meta, actions, pane);
   }
   async function drop(path) {
     try {
@@ -44706,11 +45632,78 @@ function mount(root, context) {
     await renameTo(renamePath, join(parent(renamePath), name));
   });
   uploadButton.addEventListener("click", () => uploadInput.click());
+  queueClear.addEventListener("click", () => {
+    for (let index = queue.length - 1;index >= 0; index -= 1) {
+      if (["done", "cancelled", "error"].includes(queue[index].status)) {
+        queue.splice(index, 1);
+      }
+    }
+    renderQueue();
+  });
   uploadInput.addEventListener("change", () => {
-    const file = uploadInput.files?.[0];
+    const files = [...uploadInput.files ?? []];
     uploadInput.value = "";
-    if (file)
-      upload(file, false);
+    if (files.length)
+      enqueueUploads(files, current);
+  });
+  const hasFiles = (event) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  const dropTarget = (event) => {
+    const row = event.target instanceof Element ? event.target.closest(".fs-row") : null;
+    const entry = row?.querySelector(".fs-entry");
+    return entry?.dataset.kind === "dir" ? entry.dataset.path : current;
+  };
+  const clearDropRows = () => {
+    list.querySelectorAll(".fs-row.drop-target").forEach((row) => {
+      row.classList.remove("drop-target");
+    });
+  };
+  const showDrop = (target) => {
+    dropOverlay.hidden = false;
+    dropOverlay.textContent = `Drop to upload to ${target}`;
+    box.classList.add("dragging");
+  };
+  const hideDrop = () => {
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+    box.classList.remove("dragging");
+    clearDropRows();
+  };
+  box.addEventListener("dragenter", (event) => {
+    if (!hasFiles(event))
+      return;
+    event.preventDefault();
+    dragDepth += 1;
+    showDrop(dropTarget(event));
+  });
+  box.addEventListener("dragover", (event) => {
+    if (!hasFiles(event))
+      return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    const target = dropTarget(event);
+    dropOverlay.textContent = `Drop to upload to ${target}`;
+    clearDropRows();
+    const row = event.target instanceof Element ? event.target.closest(".fs-row") : null;
+    if (row?.querySelector(".fs-entry")?.dataset.kind === "dir") {
+      row.classList.add("drop-target");
+    }
+  });
+  box.addEventListener("dragleave", (event) => {
+    if (!hasFiles(event))
+      return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0)
+      hideDrop();
+  });
+  box.addEventListener("drop", (event) => {
+    if (!hasFiles(event))
+      return;
+    event.preventDefault();
+    const target = dropTarget(event);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    hideDrop();
+    if (files.length)
+      enqueueUploads(files, target);
   });
   box.querySelector("[data-confirm-yes]").addEventListener("click", () => {
     if (!pendingUpload)
@@ -44735,6 +45728,7 @@ function reason(error) {
   return error instanceof Error ? error.message : String(error);
 }
 export {
+  beforeClose,
   mount,
   onParams
 };
