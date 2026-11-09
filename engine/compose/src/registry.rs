@@ -486,7 +486,7 @@ impl Registry {
         let Some(alias) = alias else {
             return Ok(None);
         };
-        for other in self.readable() {
+        for other in self.readable()? {
             if other.manifest.app.id == app.as_str() {
                 continue;
             }
@@ -501,7 +501,7 @@ impl Registry {
     /// the set the bundle is allowed to import.
     fn extract(&self, bundle: &[u8], options: &Options) -> Result<StagedBundle, Error> {
         let mut options = options.clone();
-        options.known_packages.extend(self.known_packages());
+        options.known_packages.extend(self.known_packages()?);
         bundle::extract(bundle, &self.apps, &options, &self.keyring)
     }
 
@@ -511,31 +511,25 @@ impl Registry {
     /// replacing something else; `list` is where corruption is reported. Only
     /// the manifest matters here, so a missing descriptor does not hide a
     /// provider.
-    fn known_packages(&self) -> Vec<String> {
+    fn known_packages(&self) -> Result<Vec<String>, Error> {
         let mut packages = Vec::new();
-        let Ok(entries) = self.visible_entries() else {
-            return packages;
-        };
-        for entry in entries {
+        for entry in self.visible_entries()? {
             if let Ok(manifest) = read_manifest(&entry.path()) {
                 packages.push(manifest.app.namespace);
             }
         }
-        packages
+        Ok(packages)
     }
 
     /// The installed apps that can be read, skipping a corrupt tree.
-    fn readable(&self) -> Vec<Installed> {
+    fn readable(&self) -> Result<Vec<Installed>, Error> {
         let mut apps = Vec::new();
-        let Ok(entries) = self.visible_entries() else {
-            return apps;
-        };
-        for entry in entries {
+        for entry in self.visible_entries()? {
             if let Ok(installed) = read_app(&entry.path()) {
                 apps.push(installed);
             }
         }
-        apps
+        Ok(apps)
     }
 
     /// A free `.old-*` name. A crashed process can leave one behind, and a
@@ -1521,6 +1515,19 @@ mod tests {
             .expect_err("untrusted");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
         assert!(Registry::new(&state).list().expect("list").is_empty());
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_wrong_mode_root_fails_closed_for_internal_readers() {
+        let state = scratch("wrong-mode-readers");
+        let registry = Registry::new(&state);
+        registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect("install");
+        fs::set_permissions(registry.dir(), fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert!(registry.readable().is_err());
+        assert!(registry.known_packages().is_err());
         fs::remove_dir_all(&state).expect("cleanup");
     }
 }
