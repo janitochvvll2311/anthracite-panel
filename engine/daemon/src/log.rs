@@ -28,35 +28,17 @@ impl Logger {
     }
 
     fn log(&self, level: LogLevel, message: &str) {
-        if rank(level) > rank(self.level) {
+        if !self.level.allows(level) {
             return;
         }
         let at = humantime::format_rfc3339_seconds(SystemTime::now()).to_string();
         match self.format {
-            LogFormat::Text => eprintln!("{at} {:<5} {message}", name(level)),
+            LogFormat::Text => eprintln!("{at} {:<5} {message}", level.name()),
             LogFormat::Json => eprintln!(
                 "{{\"at\":\"{at}\",\"level\":\"{}\",\"message\":{}}}",
-                name(level).to_ascii_lowercase(),
+                level.name().to_ascii_lowercase(),
                 serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_string())
             ),
         }
-    }
-}
-
-fn rank(level: LogLevel) -> u8 {
-    match level {
-        LogLevel::Error => 0,
-        LogLevel::Warn => 1,
-        LogLevel::Info => 2,
-        LogLevel::Debug => 3,
-    }
-}
-
-fn name(level: LogLevel) -> &'static str {
-    match level {
-        LogLevel::Error => "ERROR",
-        LogLevel::Warn => "WARN",
-        LogLevel::Info => "INFO",
-        LogLevel::Debug => "DEBUG",
     }
 }

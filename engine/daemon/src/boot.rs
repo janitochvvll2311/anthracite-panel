@@ -4,7 +4,7 @@
 //! data directory and asks the supervisor to start it. An instantiation failure
 //! degrades that app and its dependents; it never takes the engine down.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path};
 
 use anth_compose::grant::GrantStore;
@@ -32,6 +32,16 @@ impl BootReport {
     pub fn runs(&self, app: &AppId) -> bool {
         self.started.contains(app)
     }
+}
+
+fn degrade(
+    report: &mut BootReport,
+    failed: &mut BTreeSet<AppId>,
+    id: &AppId,
+    reason: impl Into<String>,
+) {
+    failed.insert(id.clone());
+    report.degraded.insert(id.clone(), reason.into());
 }
 
 pub async fn start_composed(
@@ -66,8 +76,7 @@ pub async fn start_composed(
                 .push(provider.clone());
         }
     }
-    let mut failed: std::collections::BTreeSet<AppId> =
-        resolution.degraded.keys().cloned().collect();
+    let mut failed: BTreeSet<AppId> = resolution.degraded.keys().cloned().collect();
     for (id, degraded) in &resolution.degraded {
         report
             .degraded
@@ -83,30 +92,29 @@ pub async fn start_composed(
             .get(id)
             .and_then(|providers| providers.iter().find(|provider| failed.contains(*provider)))
         {
-            failed.insert(id.clone());
-            report
-                .degraded
-                .insert(id.clone(), format!("`{provider}` is not running"));
+            degrade(
+                &mut report,
+                &mut failed,
+                id,
+                format!("`{provider}` is not running"),
+            );
             continue;
         }
         let Some(app) = apps.iter().find(|app| app.manifest.app.id == id.as_str()) else {
-            failed.insert(id.clone());
-            report
-                .degraded
-                .insert(id.clone(), "not-installed".to_string());
+            degrade(&mut report, &mut failed, id, "not-installed");
             continue;
         };
         let grant = match grants.load(id) {
             Ok(Some(grant)) => grant,
             Ok(None) => {
-                failed.insert(id.clone());
-                report.degraded.insert(id.clone(), "unapproved".to_string());
+                degrade(&mut report, &mut failed, id, "unapproved");
                 continue;
             }
             Err(error) => {
-                failed.insert(id.clone());
-                report.degraded.insert(
-                    id.clone(),
+                degrade(
+                    &mut report,
+                    &mut failed,
+                    id,
                     format!("the grant is unreadable: {}", error.message()),
                 );
                 continue;
@@ -118,24 +126,15 @@ pub async fn start_composed(
                 match tokio::time::timeout(wall, supervisor.start(spec)).await {
                     Ok(Ok(_)) => report.started.push(id.clone()),
                     Ok(Err(error)) => {
-                        failed.insert(id.clone());
-                        report
-                            .degraded
-                            .insert(id.clone(), error.message().to_string());
+                        degrade(&mut report, &mut failed, id, error.message());
                     }
                     Err(_) => {
-                        failed.insert(id.clone());
-                        report
-                            .degraded
-                            .insert(id.clone(), "start timed out".to_string());
+                        degrade(&mut report, &mut failed, id, "start timed out");
                     }
                 }
             }
             Err(error) => {
-                failed.insert(id.clone());
-                report
-                    .degraded
-                    .insert(id.clone(), error.message().to_string());
+                degrade(&mut report, &mut failed, id, error.message());
             }
         }
     }
