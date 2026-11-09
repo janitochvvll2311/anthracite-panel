@@ -36278,7 +36278,7 @@ class Buffer {
   }
 }
 
-class Element {
+class Element2 {
   constructor(type, from, to, children = none4) {
     this.type = type;
     this.from = from;
@@ -36318,7 +36318,7 @@ class TreeElement {
   }
 }
 function elt(type, from, to, children) {
-  return new Element(type, from, to, children);
+  return new Element2(type, from, to, children);
 }
 var EmphasisUnderscore = { resolve: "Emphasis", mark: "EmphasisMark" };
 var EmphasisAsterisk = { resolve: "Emphasis", mark: "EmphasisMark" };
@@ -36619,7 +36619,7 @@ class InlineContext {
       if (open.type.mark)
         content.push(this.elt(open.type.mark, start, open.to));
       for (let k = j + 1;k < i; k++) {
-        if (this.parts[k] instanceof Element)
+        if (this.parts[k] instanceof Element2)
           content.push(this.parts[k]);
         this.parts[k] = null;
       }
@@ -36636,7 +36636,7 @@ class InlineContext {
     let result = [];
     for (let i = from;i < this.parts.length; i++) {
       let part = this.parts[i];
-      if (part instanceof Element)
+      if (part instanceof Element2)
         result.push(part);
     }
     return result;
@@ -36682,8 +36682,8 @@ function injectMarks(elements, marks) {
       eI++;
     if (eI < elts.length && elts[eI].from < mark.from) {
       let e = elts[eI];
-      if (e instanceof Element)
-        elts[eI] = new Element(e.type, e.from, e.to, injectMarks(e.children, [mark]));
+      if (e instanceof Element2)
+        elts[eI] = new Element2(e.type, e.from, e.to, injectMarks(e.children, [mark]));
     } else {
       elts.splice(eI++, 0, mark);
     }
@@ -37151,7 +37151,7 @@ var missingCloseTag = 58;
 var IncompleteTag = 14;
 var IncompleteCloseTag = 15;
 var commentContent$1 = 59;
-var Element2 = 21;
+var Element3 = 21;
 var TagName = 23;
 var Attribute = 24;
 var AttributeName = 25;
@@ -37280,7 +37280,7 @@ var elementContext = new ContextTracker({
     return startTagTerms.indexOf(term) > -1 ? new ElementContext(tagNameAfter(input, 1) || "", context) : context;
   },
   reduce(context, term) {
-    return term == Element2 && context ? context.parent : context;
+    return term == Element3 && context ? context.parent : context;
   },
   reuse(context, node, stack, input) {
     let type = node.type.id;
@@ -37468,7 +37468,7 @@ function configureNesting(tags2 = [], attributes = []) {
       return maybeNest(node, input, style);
     if (id == TextareaText)
       return maybeNest(node, input, textarea);
-    if (id == Element2 && other.length) {
+    if (id == Element3 && other.length) {
       let n = node.node, open = n.firstChild, tagName = open && findTagName(open, input), attrs;
       if (tagName)
         for (let tag of other) {
@@ -43004,6 +43004,41 @@ var styles = `
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
   }
   .fs-more button:hover { border-color: #3a4560; color: #fff; }
+  .fs-drop {
+    position: absolute; inset: 0; z-index: 30; display: flex; align-items: center;
+    justify-content: center; border: 2px dashed #7aa2ff; border-radius: 10px;
+    background: #0b1220d9; color: #cfe0ff; font-size: 14px; pointer-events: none;
+  }
+  .fs-drop[hidden] { display: none; }
+  .fs-row.drop-target { outline: 2px solid #7aa2ff66; outline-offset: -2px; background: #13203a; }
+  .fs-queue { border: 1px solid #202632; border-radius: 9px; background: #0b0e14; overflow: hidden; }
+  .fs-queue[hidden] { display: none; }
+  .fs-queue header {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    border-bottom: 1px solid #202632; background: #12161f;
+  }
+  .fs-queue header strong { font-size: 12px; color: #fff; }
+  .fs-queue header button {
+    margin-left: auto; padding: 3px 7px; border-radius: 5px; border: 1px solid #2a3142;
+    background: #151a24; color: #c8d0df; font: inherit; font-size: 10.5px; cursor: pointer;
+  }
+  .fs-queue header button:hover { border-color: #3a4560; color: #fff; }
+  .fs-queue ul { list-style: none; margin: 0; padding: 0; max-height: 180px; overflow: auto; }
+  .fs-queue-item {
+    display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 2px 8px;
+    align-items: center; padding: 6px 10px; border-bottom: 1px solid #171c26;
+    font-size: 11.5px;
+  }
+  .fs-queue-item:last-child { border-bottom: 0; }
+  .fs-queue-dir { color: #7aa2ff; font-size: 12px; }
+  .fs-queue-main { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .fs-queue-name { color: #c8d0df; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fs-queue-meta { color: #667087; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fs-queue-progress { grid-column: 2 / 3; height: 3px; border-radius: 2px; background: #1b2130; overflow: hidden; }
+  .fs-queue-progress span { display: block; height: 100%; background: #7aa2ff; transition: width .2s; }
+  .fs-queue-actions { grid-column: 3; grid-row: 1 / span 2; display: flex; gap: 3px; }
+  .fs-queue-actions .fs-tool { padding: 2px 5px; font-size: 10.5px; }
+  .fs-queue-done { color: #6ee7b7; font-size: 12px; }
   .editor-app {
     display: grid; grid-template-rows: 38px minmax(0, 1fr) 28px;
     min-height: 480px; height: 100%; border: 1px solid #202632; border-radius: 10px;
@@ -44707,7 +44742,7 @@ function mount(root, context) {
       <span class="grow"></span>
       <button type="button" data-upload>Upload</button>
       <button type="button" data-new>New</button>
-      <input type="file" data-file hidden />
+      <input type="file" data-file multiple hidden />
     </header>
     <form class="fs-new" hidden>
       <select name="kind" aria-label="New entry type">
@@ -44735,7 +44770,15 @@ function mount(root, context) {
       <section class="fs-preview"><p class="hint">Select a file to preview it.</p></section>
     </div>
     <div class="fs-more"><button type="button" data-more hidden>Load more</button></div>
+    <section class="fs-queue" data-queue hidden>
+      <header>
+        <strong>Transfers</strong>
+        <button type="button" data-queue-clear>Clear finished</button>
+      </header>
+      <ul data-queue-list></ul>
+    </section>
     <p class="fs-status" role="status"></p>
+    <div class="fs-drop" data-drop hidden>Drop files to upload</div>
   `;
   root.append(box);
   const address = box.querySelector(".fs-address");
@@ -44757,6 +44800,10 @@ function mount(root, context) {
   const trashButton = box.querySelector("[data-trash]");
   const newButton = box.querySelector("[data-new]");
   const uploadButton = box.querySelector("[data-upload]");
+  const queueBox = box.querySelector("[data-queue]");
+  const queueList = box.querySelector("[data-queue-list]");
+  const queueClear = box.querySelector("[data-queue-clear]");
+  const dropOverlay = box.querySelector("[data-drop]");
   let current = "/";
   let nextCursor = null;
   let confirmPath = null;
@@ -44765,6 +44812,10 @@ function mount(root, context) {
   let view = "files";
   let disposed = false;
   let previewState = null;
+  const queue = [];
+  let queueNext = 0;
+  let queueBusy = false;
+  let dragDepth = 0;
   const knownPaths = new Set([
     "/",
     "/etc",
@@ -44871,6 +44922,7 @@ function mount(root, context) {
     entryButton.className = "fs-entry";
     entryButton.dataset.name = entry.name;
     entryButton.dataset.kind = entry.kind;
+    entryButton.dataset.path = full;
     entryButton.innerHTML = `${iconMarkup(entry.kind, full)}<span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
     entryButton.addEventListener("click", () => {
       if (entry.kind === "dir")
@@ -45054,12 +45106,10 @@ function mount(root, context) {
         setStatus(reason(error), true);
     }
   }
-  function download() {
-    if (!previewState)
-      return;
-    const name = baseName(previewState.path);
-    const extension = name.split(".").pop()?.toLowerCase() ?? "";
-    const blob = new Blob([new Uint8Array(previewState.bytes)], {
+  function triggerDownload(path, data) {
+    const name = baseName(path);
+    const extension = extensionOf(path);
+    const blob = new Blob([new Uint8Array(data)], {
       type: IMAGES[extension] ?? "application/octet-stream"
     });
     const url = URL.createObjectURL(blob);
@@ -45068,6 +45118,237 @@ function mount(root, context) {
     link.download = name;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function enqueueDownload(path) {
+    queue.push({
+      id: ++queueNext,
+      type: "download",
+      name: baseName(path),
+      path,
+      status: "queued",
+      progress: 0,
+      message: "Queued"
+    });
+    renderQueue();
+    pumpQueue();
+  }
+  function enqueueUploads(files, target) {
+    if (view !== "files") {
+      setStatus("Return to Files to upload.", true);
+      return;
+    }
+    let added = 0;
+    for (const file of files) {
+      const path = join(target, file.name);
+      const active = queue.some((item) => item.type === "upload" && item.path === path && ["queued", "uploading", "conflict"].includes(item.status));
+      if (active)
+        continue;
+      queue.push({
+        id: ++queueNext,
+        type: "upload",
+        name: file.name,
+        path,
+        file,
+        status: "queued",
+        progress: 0,
+        message: `→ ${target}`,
+        cancelled: false,
+        overwrite: false
+      });
+      added += 1;
+    }
+    if (!added) {
+      setStatus("Those files are already queued.", true);
+      return;
+    }
+    setStatus(`Queued ${added} upload${added === 1 ? "" : "s"}`);
+    renderQueue();
+    pumpQueue();
+  }
+  function queueStatus(item) {
+    if (item.status === "queued") {
+      return item.type === "upload" ? `Queued → ${parent(item.path)}` : "Queued";
+    }
+    if (item.status === "uploading")
+      return `Uploading ${item.progress}%`;
+    if (item.status === "downloading")
+      return `Downloading ${item.progress}%`;
+    if (item.status === "done")
+      return "Done";
+    if (item.status === "conflict")
+      return "Already exists";
+    if (item.status === "error")
+      return item.message || "Failed";
+    if (item.status === "cancelled")
+      return "Cancelled";
+    return item.status;
+  }
+  function renderQueue() {
+    queueBox.hidden = queue.length === 0;
+    queueList.replaceChildren();
+    for (const item of queue) {
+      const row = document.createElement("li");
+      row.className = "fs-queue-item";
+      const dir = document.createElement("span");
+      dir.className = "fs-queue-dir";
+      dir.textContent = item.type === "upload" ? "↑" : "↓";
+      const main = document.createElement("div");
+      main.className = "fs-queue-main";
+      const name = document.createElement("span");
+      name.className = "fs-queue-name";
+      name.textContent = item.name;
+      name.title = item.path;
+      const meta = document.createElement("span");
+      meta.className = "fs-queue-meta";
+      meta.textContent = queueStatus(item);
+      main.append(name, meta);
+      const progress = document.createElement("div");
+      progress.className = "fs-queue-progress";
+      const fill = document.createElement("span");
+      fill.style.width = `${Math.max(0, Math.min(100, item.progress ?? 0))}%`;
+      progress.append(fill);
+      const actions = document.createElement("div");
+      actions.className = "fs-queue-actions";
+      if (item.status === "conflict") {
+        const overwrite = button("fs-tool", "Overwrite");
+        overwrite.addEventListener("click", () => {
+          item.overwrite = true;
+          item.status = "queued";
+          item.message = "";
+          renderQueue();
+          pumpQueue();
+        });
+        const remove = button("fs-tool", "Remove");
+        remove.addEventListener("click", () => removeQueueItem(item));
+        actions.append(overwrite, remove);
+      } else if (item.status === "error") {
+        const retry = button("fs-tool", "Retry");
+        retry.addEventListener("click", () => {
+          item.status = "queued";
+          item.message = "";
+          renderQueue();
+          pumpQueue();
+        });
+        const remove = button("fs-tool", "Remove");
+        remove.addEventListener("click", () => removeQueueItem(item));
+        actions.append(retry, remove);
+      } else if (item.status === "queued" || item.status === "uploading" || item.status === "downloading") {
+        const cancel = button("fs-tool", "Cancel");
+        cancel.addEventListener("click", () => {
+          item.cancelled = true;
+          if (item.status === "queued")
+            item.status = "cancelled";
+          renderQueue();
+        });
+        actions.append(cancel);
+      } else if (item.status === "done") {
+        const done = document.createElement("span");
+        done.className = "fs-queue-done";
+        done.textContent = "✓";
+        actions.append(done);
+      } else if (item.status === "cancelled") {
+        const remove = button("fs-tool", "Remove");
+        remove.addEventListener("click", () => removeQueueItem(item));
+        actions.append(remove);
+      }
+      row.append(dir, main, progress, actions);
+      queueList.append(row);
+    }
+  }
+  function removeQueueItem(item) {
+    const index = queue.indexOf(item);
+    if (index >= 0)
+      queue.splice(index, 1);
+    renderQueue();
+  }
+  async function runUpload(item) {
+    item.status = "uploading";
+    item.progress = 10;
+    renderQueue();
+    if (!item.overwrite) {
+      try {
+        await request(`/stat?path=${encodeURIComponent(item.path)}`);
+        item.status = "conflict";
+        item.message = "Already exists";
+        return;
+      } catch (error) {
+        if (!reason(error).includes("not-found")) {
+          item.status = "error";
+          item.message = reason(error);
+          return;
+        }
+      }
+    }
+    try {
+      const buffer = await item.file.arrayBuffer();
+      item.progress = 55;
+      renderQueue();
+      if (item.cancelled) {
+        item.status = "cancelled";
+        return;
+      }
+      await request("/file", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: item.path,
+          bytes: Array.from(new Uint8Array(buffer))
+        })
+      });
+      item.progress = 100;
+      item.status = "done";
+      item.message = "Uploaded";
+      if (parent(item.path) === current)
+        load(current);
+    } catch (error) {
+      item.status = "error";
+      item.message = reason(error);
+    }
+  }
+  async function runDownload(item) {
+    item.status = "downloading";
+    item.progress = 25;
+    renderQueue();
+    try {
+      const data = await request(`/file?path=${encodeURIComponent(item.path)}`);
+      item.progress = 80;
+      renderQueue();
+      if (item.cancelled) {
+        item.status = "cancelled";
+        return;
+      }
+      triggerDownload(item.path, data);
+      item.progress = 100;
+      item.status = "done";
+      item.message = "Downloaded";
+    } catch (error) {
+      item.status = "error";
+      item.message = reason(error);
+    }
+  }
+  async function pumpQueue() {
+    if (queueBusy)
+      return;
+    const item = queue.find((entry) => entry.status === "queued");
+    if (!item)
+      return;
+    queueBusy = true;
+    try {
+      if (item.type === "upload")
+        await runUpload(item);
+      else
+        await runDownload(item);
+    } finally {
+      queueBusy = false;
+      renderQueue();
+      if (queue.some((entry) => entry.status === "queued"))
+        pumpQueue();
+    }
+  }
+  function download() {
+    if (!previewState)
+      return;
+    enqueueDownload(previewState.path);
   }
   async function openInEditor() {
     if (!previewState)
@@ -45351,11 +45632,78 @@ function mount(root, context) {
     await renameTo(renamePath, join(parent(renamePath), name));
   });
   uploadButton.addEventListener("click", () => uploadInput.click());
+  queueClear.addEventListener("click", () => {
+    for (let index = queue.length - 1;index >= 0; index -= 1) {
+      if (["done", "cancelled", "error"].includes(queue[index].status)) {
+        queue.splice(index, 1);
+      }
+    }
+    renderQueue();
+  });
   uploadInput.addEventListener("change", () => {
-    const file = uploadInput.files?.[0];
+    const files = [...uploadInput.files ?? []];
     uploadInput.value = "";
-    if (file)
-      upload(file, false);
+    if (files.length)
+      enqueueUploads(files, current);
+  });
+  const hasFiles = (event) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+  const dropTarget = (event) => {
+    const row = event.target instanceof Element ? event.target.closest(".fs-row") : null;
+    const entry = row?.querySelector(".fs-entry");
+    return entry?.dataset.kind === "dir" ? entry.dataset.path : current;
+  };
+  const clearDropRows = () => {
+    list.querySelectorAll(".fs-row.drop-target").forEach((row) => {
+      row.classList.remove("drop-target");
+    });
+  };
+  const showDrop = (target) => {
+    dropOverlay.hidden = false;
+    dropOverlay.textContent = `Drop to upload to ${target}`;
+    box.classList.add("dragging");
+  };
+  const hideDrop = () => {
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+    box.classList.remove("dragging");
+    clearDropRows();
+  };
+  box.addEventListener("dragenter", (event) => {
+    if (!hasFiles(event))
+      return;
+    event.preventDefault();
+    dragDepth += 1;
+    showDrop(dropTarget(event));
+  });
+  box.addEventListener("dragover", (event) => {
+    if (!hasFiles(event))
+      return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    const target = dropTarget(event);
+    dropOverlay.textContent = `Drop to upload to ${target}`;
+    clearDropRows();
+    const row = event.target instanceof Element ? event.target.closest(".fs-row") : null;
+    if (row?.querySelector(".fs-entry")?.dataset.kind === "dir") {
+      row.classList.add("drop-target");
+    }
+  });
+  box.addEventListener("dragleave", (event) => {
+    if (!hasFiles(event))
+      return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0)
+      hideDrop();
+  });
+  box.addEventListener("drop", (event) => {
+    if (!hasFiles(event))
+      return;
+    event.preventDefault();
+    const target = dropTarget(event);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    hideDrop();
+    if (files.length)
+      enqueueUploads(files, target);
   });
   box.querySelector("[data-confirm-yes]").addEventListener("click", () => {
     if (!pendingUpload)

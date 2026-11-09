@@ -78,9 +78,11 @@ Every bundle carries a `panel.view` module:
   same module. Files has an editable address bar, tree navigation, a formatted
   read-only preview (highlight.js for code, marked for Markdown, images via a
   blob preview), **New** (blank file, folder or symlink), symlink navigation,
-  rename, upload, download, trash and restore, plus delete. MIME-aware folder
-  and file icons carry the extension in the badge (image, video, audio,
-  database, archive, code, config...). On narrow screens
+  rename, upload, download, trash and restore, plus delete. Uploads and downloads
+  go through a visible transfer queue with progress, conflicts, retry and cancel;
+  dragging files onto the view (or a folder row) queues uploads to that folder.
+  MIME-aware folder and file icons carry the extension in the badge (image,
+  video, audio, database, archive, code, config...). On narrow screens
   the preview opens full-screen only after selecting a file, with a back
   button. **Open in Editor** opens the file in the panel-level Editor: it
   reuses the docked tab when the Editor is docked, and a floating window
