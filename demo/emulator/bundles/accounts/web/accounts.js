@@ -13,7 +13,7 @@ const styles = `
   .acc-title { color: #667087; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
   .acc-table { border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016; }
   .acc-row {
-    display: grid; grid-template-columns: minmax(110px, 1fr) 70px 60px minmax(120px, 1fr) minmax(110px, 1fr) 70px;
+    display: grid; grid-template-columns: minmax(160px, 1.2fr) 70px 60px minmax(140px, 1fr) minmax(110px, 1fr);
     gap: 10px; padding: 7px 10px; border-bottom: 1px solid #171c26; font-size: 12px; align-items: center;
   }
   .acc-row:last-child { border-bottom: 0; }
@@ -130,12 +130,11 @@ export function mount(root, context) {
           cell("acc-mono", String(user.gid)),
           cell("acc-mono", user.home),
           cell("acc-mono", user.shell),
-          cell("acc-mono", user.system ? "system" : "user"),
         );
         return row;
       });
       usersRoot.replaceChildren(
-        table(["USER", "UID", "GID", "HOME", "SHELL", "KIND"], userRows),
+        table(["USER", "UID", "GID", "HOME", "SHELL"], userRows),
       );
 
       const groupRows = groups.map((group) => {
