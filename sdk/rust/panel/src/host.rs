@@ -54,18 +54,8 @@ impl Host {
         config.validate(profile)?;
         let logger = Logger::new(config.log.clone());
 
-        if reset {
-            match std::fs::remove_file(config.state.join(anth_auth::CREDENTIALS)) {
-                Ok(()) => {
-                    logger.warn("operator credentials reset; a new password will be generated")
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(Error::internal(format!(
-                        "removing the operator credentials: {error}"
-                    )));
-                }
-            }
+        if reset && anth_engine::state::reset_credentials(&config.state)? {
+            logger.warn("operator credentials reset; a new password will be generated");
         }
         anth_engine::state::ensure(&config.state)?;
         let composition = anth_engine::state::load_composition(&config.state)?;
