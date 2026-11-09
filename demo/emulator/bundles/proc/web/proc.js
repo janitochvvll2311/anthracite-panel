@@ -32,8 +32,16 @@ const styles = `
   .proc-state.sleeping { color: #8f98ab; }
   .proc-state.stopped { color: #f3c969; }
   .proc-state.zombie { color: #ff7d8a; }
-  .proc-bar-track { height: 5px; border-radius: 999px; background: #202634; overflow: hidden; }
+  .proc-bar-track { height: 5px; border-radius: 999px; background: #202634; overflow: hidden; flex: 1; }
   .proc-bar-fill { height: 100%; background: linear-gradient(90deg, #7aa2ff, #9d7bff); }
+  .proc-cpu { display: flex; align-items: center; gap: 6px; }
+  .proc-cpu .percent { width: 38px; text-align: right; color: #8f98ab; font: 11px ui-monospace, monospace; }
+  .proc-more { display: flex; justify-content: center; }
+  .proc-more button {
+    padding: 6px 12px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .proc-more button:hover { border-color: #3a4560; color: #fff; }
   .proc-signal {
     padding: 4px 7px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
     color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
@@ -102,6 +110,7 @@ export function mount(root, context) {
       <button type="button" data-refresh>Refresh</button>
     </div>
     <div class="proc-table" role="table" aria-label="Processes"></div>
+    <div class="proc-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
@@ -110,6 +119,8 @@ export function mount(root, context) {
   const count = box.querySelector(".proc-count");
   const status = box.querySelector(".proc-status");
   const signal = box.querySelector(".proc-pick");
+  const more = box.querySelector("[data-more]");
+  let nextCursor = null;
   let disposed = false;
 
   const setStatus = (message, bad = false) => {
@@ -117,20 +128,21 @@ export function mount(root, context) {
     status.className = bad ? "proc-status bad" : "proc-status";
   };
 
-  async function load() {
-    setStatus("Reading the process table…");
+  async function load(cursor = null, append = false) {
+    setStatus(append ? "Loading more processes…" : "Reading the process table…");
     try {
-      const page = await call(context, "/processes?limit=200");
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const page = await call(context, `/processes?limit=200${suffix}`);
       if (disposed) return;
-      count.textContent = `${page.processes.length} process${page.processes.length === 1 ? "" : "es"}`;
-      table.replaceChildren();
-
-      const head = document.createElement("div");
-      head.className = "proc-row head";
-      for (const label of ["PID", "PPID", "NAME", "USER", "STATE", "CPU", "MEMORY", ""]) {
-        head.append(cell("", label));
+      if (!append) {
+        table.replaceChildren();
+        const head = document.createElement("div");
+        head.className = "proc-row head";
+        for (const label of ["PID", "PPID", "NAME", "USER", "STATE", "CPU", "MEMORY", ""]) {
+          head.append(cell("", label));
+        }
+        table.append(head);
       }
-      table.append(head);
 
       for (const process of page.processes) {
         const row = document.createElement("div");
@@ -144,13 +156,17 @@ export function mount(root, context) {
         );
 
         const cpu = document.createElement("span");
+        cpu.className = "proc-cpu";
         const track = document.createElement("span");
         track.className = "proc-bar-track";
         const fill = document.createElement("span");
         fill.className = "proc-bar-fill";
-        fill.style.width = `${Math.min(100, Math.max(0, process["cpu-percent"] * 10))}%`;
+        fill.style.width = `${Math.min(100, Math.max(0, process["cpu-percent"]))}%`;
         track.append(fill);
-        cpu.append(track);
+        cpu.append(
+          track,
+          cell("percent", `${process["cpu-percent"].toFixed(1)}%`),
+        );
         cpu.title = `${process["cpu-percent"].toFixed(1)}% CPU`;
         row.append(cpu);
 
@@ -169,7 +185,12 @@ export function mount(root, context) {
         row.append(action);
         table.append(row);
       }
-      setStatus(`Snapshot updated · ${page.processes.length} processes`);
+
+      nextCursor = page.cursor;
+      more.hidden = Boolean(page.done) || !page.cursor;
+      const shown = table.querySelectorAll(".proc-row:not(.head)").length;
+      count.textContent = `${shown} process${shown === 1 ? "" : "es"}${page.done ? "" : " · more available"}`;
+      setStatus(`Snapshot updated · ${shown} processes`);
     } catch (error) {
       if (!disposed) setStatus(String(error), true);
     }
@@ -192,6 +213,9 @@ export function mount(root, context) {
   }
 
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  more.addEventListener("click", () => {
+    if (nextCursor) void load(nextCursor, true);
+  });
   void load();
 
   return () => {
