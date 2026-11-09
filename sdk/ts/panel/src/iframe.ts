@@ -38,6 +38,8 @@ export type OpenViewRequest = {
 export type FrameHandle = {
   /// Delivers a transient open request without remounting the view.
   update: (params: unknown) => void;
+  /// Asks the module whether it may close (an unsaved-changes guard).
+  requestClose: () => Promise<boolean>;
 };
 
 export type FrameOptions = {
@@ -125,6 +127,11 @@ export async function mountFrame(
   let ready = false;
   let filled = false;
   let cleanup = (): void => {};
+  let closeSequence = 0;
+  const closePending = new Map<
+    string,
+    { resolve: (ok: boolean) => void; timer: number }
+  >();
 
   const update = (params: unknown): void => {
     iframe.contentWindow?.postMessage(
@@ -132,6 +139,22 @@ export async function mountFrame(
       "*",
     );
   };
+
+  const requestClose = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      const requestId = `${token}-close-${++closeSequence}`;
+      const timer = window.setTimeout(() => {
+        const pending = closePending.get(requestId);
+        if (!pending) return;
+        closePending.delete(requestId);
+        pending.resolve(false);
+      }, 2000);
+      closePending.set(requestId, { resolve, timer });
+      iframe.contentWindow?.postMessage(
+        { type: "anth:request-close", token, requestId },
+        "*",
+      );
+    });
 
   const result = new Promise<() => void>((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -177,7 +200,7 @@ export async function mountFrame(
       if (message.token !== token) return;
 
       if (message.type === "anth:mounted") {
-        options.onReady?.({ update });
+        options.onReady?.({ update, requestClose });
         finish();
         return;
       }
@@ -212,6 +235,25 @@ export async function mountFrame(
       }
       if (message.type === "anth:params") {
         options.onParams?.(message.params);
+        return;
+      }
+      if (message.type === "anth:close-pending") {
+        const requestId = String(message.requestId ?? "");
+        const pending = closePending.get(requestId);
+        if (pending) {
+          window.clearTimeout(pending.timer);
+          pending.timer = 0;
+        }
+        return;
+      }
+      if (message.type === "anth:close-result") {
+        const requestId = String(message.requestId ?? "");
+        const pending = closePending.get(requestId);
+        if (pending) {
+          if (pending.timer) window.clearTimeout(pending.timer);
+          closePending.delete(requestId);
+          pending.resolve(message.ok !== false);
+        }
         return;
       }
       if (message.type === "anth:fill") {
@@ -282,6 +324,11 @@ export async function mountFrame(
     cleanup = () => {
       window.clearTimeout(timer);
       window.removeEventListener("message", listener);
+      for (const pending of closePending.values()) {
+        if (pending.timer) window.clearTimeout(pending.timer);
+        pending.resolve(true);
+      }
+      closePending.clear();
       iframe.contentWindow?.postMessage({ type: "anth:unmount", token }, "*");
       iframe.remove();
     };

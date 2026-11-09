@@ -155,17 +155,35 @@ const styles = `
   .fs-entry:hover { background: #151a24; color: #fff; }
   .fs-entry .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .fs-entry .size { margin-left: auto; color: #667087; font-size: 11px; white-space: nowrap; }
-  .fs-entry .glyph { width: 14px; display: inline-flex; align-items: center; }
-  .fs-entry .glyph.dir::before {
-    content: ""; width: 0; height: 0; border-left: 5px solid #7aa2ff;
-    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  .file-icon {
+    --icon-color: #8f98ab;
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; flex: 0 0 22px; color: var(--icon-color);
   }
-  .fs-entry .glyph.file::before {
-    content: ""; width: 7px; height: 9px; border: 1px solid #667087; border-radius: 1px;
+  .file-icon svg { display: block; width: 22px; height: 22px; }
+  .file-icon-badge {
+    position: absolute; left: 3px; right: 3px; bottom: 1px;
+    padding: 0 1px; border-radius: 2px; background: var(--icon-color);
+    color: #0b0e14; font: 700 6.5px/1.1 ui-monospace, monospace;
+    letter-spacing: -.4px; text-align: center; overflow: hidden;
   }
-  .fs-entry .glyph.link::before {
-    content: "↗"; color: #7aa2ff; font-size: 11px; line-height: 1;
-  }
+  .file-icon.dir, .file-icon.link { --icon-color: #7aa2ff; }
+  .file-icon.code { --icon-color: #f7c948; }
+  .file-icon.code-strong { --icon-color: #7aa2ff; }
+  .file-icon.data { --icon-color: #f78c6c; }
+  .file-icon.doc { --icon-color: #7aa2ff; }
+  .file-icon.web { --icon-color: #c792ea; }
+  .file-icon.shell { --icon-color: #89ddff; }
+  .file-icon.config { --icon-color: #4dd0c8; }
+  .file-icon.database { --icon-color: #6ee7b7; }
+  .file-icon.image { --icon-color: #ff8fbf; }
+  .file-icon.audio { --icon-color: #c792ea; }
+  .file-icon.video { --icon-color: #ff9e64; }
+  .file-icon.archive { --icon-color: #c3a06b; }
+  .file-icon.pdf { --icon-color: #ff7d8a; }
+  .file-icon.text { --icon-color: #aab4c8; }
+  .file-icon.binary { --icon-color: #ff7d8a; }
+  .file-icon.unknown { --icon-color: #8f98ab; }
   .fs-tool {
     border: 0; background: transparent; color: #667087; cursor: pointer; font-size: 11px;
     padding: 4px 6px; border-radius: 5px;
@@ -202,6 +220,16 @@ const styles = `
   }
   .fs-preview img { max-width: 100%; max-height: 280px; object-fit: contain; border-radius: 6px; }
   .fs-preview .hint { color: #667087; font-size: 12px; margin: 0; }
+  .fs-preview-head { display: none; align-items: center; gap: 8px; }
+  .fs-preview-head button {
+    padding: 4px 8px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .fs-preview-head button:hover { border-color: #3a4560; color: #fff; }
+  .fs-preview-head strong {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 13px; font-weight: 600;
+  }
   .fs-formatted { flex: 1; min-height: 0; overflow: auto; border: 1px solid #202632; border-radius: 8px; background: #0d1016; padding: 10px 12px; }
   .fs-code { margin: 0; font: 12px/1.6 ui-monospace, monospace; white-space: pre; color: #c8d0df; tab-size: 4; }
   .fs-code code { background: transparent; border: 0; padding: 0; font: inherit; color: inherit; white-space: pre; }
@@ -272,6 +300,10 @@ const styles = `
     white-space: nowrap;
   }
   .editor-tab.active .editor-tab-open { color: #fff; }
+  .editor-tab-icon { display: inline-flex; flex: 0 0 14px; }
+  .editor-tab-icon .file-icon { width: 14px; height: 14px; flex-basis: 14px; }
+  .editor-tab-icon .file-icon svg { width: 14px; height: 14px; }
+  .editor-tab-icon .file-icon-badge { left: 2px; right: 2px; bottom: 0; font-size: 5px; }
   .editor-dirty { color: #f78c6c; font-size: 8px; }
   .editor-tab-close {
     border: 0; background: transparent; color: #667087; width: 22px; height: 33px;
@@ -296,13 +328,22 @@ const styles = `
     text-align: left; padding: 3px 4px; border-radius: 4px; cursor: pointer;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .editor-tree-root { display: flex; align-items: center; gap: 5px; }
+  .editor-tree-root .file-icon { width: 18px; height: 18px; flex-basis: 18px; }
+  .editor-tree-root .file-icon svg { width: 18px; height: 18px; }
   .editor-tree-root:hover, .editor-tree-up:hover { background: #1b2130; color: #fff; }
   .editor-tree-row { display: flex; min-width: 0; }
   .editor-tree-label {
     border: 0; background: transparent; color: #c8d0df; padding: 3px 6px;
     font: 12px ui-monospace, monospace; text-align: left; cursor: pointer; width: 100%;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px;
+    display: flex; align-items: center; gap: 5px;
   }
+  .editor-tree-label .file-icon { width: 18px; height: 18px; flex-basis: 18px; }
+  .editor-tree-label .file-icon svg { width: 18px; height: 18px; }
+  .editor-tree-label .file-icon-badge { left: 2px; right: 2px; bottom: 0; font-size: 6px; }
+  .editor-tree-arrow { width: 10px; flex: 0 0 10px; color: #8f98ab; text-align: center; }
+  .editor-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .editor-tree-label:hover { background: #151a24; color: #fff; }
   .editor-tree-label.dir { color: #aab4c8; }
   .editor-tree-label.link { color: #7aa2ff; }
@@ -324,6 +365,17 @@ const styles = `
   .editor-content .cm-tooltip-autocomplete > ul > li[aria-selected] { background: #1b2a4a; color: #fff; }
   .editor-content .cm-lintRange-error { text-decoration: underline wavy #ff7d8a; text-underline-offset: 2px; }
   .editor-content .cm-lint-marker-error { content: "●"; color: #ff7d8a; }
+  .editor-image {
+    flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+    overflow: auto; padding: 12px;
+    background: repeating-conic-gradient(#0f1219 0% 25%, #0b0e14 0% 50%) 50% / 20px 20px;
+  }
+  .editor-image[hidden] { display: none; }
+  .editor-image img {
+    max-width: 100%; max-height: 100%; object-fit: contain;
+    background: #0b0e14; box-shadow: 0 12px 44px #00000073;
+  }
+  .editor-image .hint { color: #667087; font-size: 12px; }
   .editor-eol-label, .editor-indent-label { display: flex; align-items: center; gap: 4px; }
   .editor-eol-label select, .editor-indent-label select {
     background: #0f1219; color: #c8d0df; border: 1px solid #2a3142; border-radius: 4px;
@@ -337,6 +389,43 @@ const styles = `
     width: 24px; height: 24px; cursor: pointer; border-radius: 4px; font-size: 15px;
   }
   .editor-tree-close:hover { background: #1b2130; color: #fff; }
+  .editor-dialog {
+    width: min(520px, calc(100vw - 32px)); padding: 0; border: 1px solid #333d54;
+    border-radius: 12px; background: #151a24; color: #e8ebf2;
+    box-shadow: 0 30px 90px #000000b3;
+  }
+  .editor-dialog::backdrop { background: #00000080; }
+  .editor-dialog-card { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; }
+  .editor-dialog-card strong { font-size: 14px; font-weight: 600; }
+  .editor-dialog-card p { margin: 0; color: #aab4c8; font-size: 12px; }
+  .editor-dialog-card ul {
+    margin: 0; padding-left: 18px; max-height: 160px; overflow: auto;
+    color: #c8d0df; font: 12px ui-monospace, monospace;
+  }
+  .editor-dialog-error { color: #ffb3ba; min-height: 16px; }
+  .editor-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+  .editor-dialog-actions button {
+    padding: 6px 10px; border-radius: 6px; border: 1px solid #2a3142;
+    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .editor-dialog-actions button:hover { border-color: #3a4560; color: #fff; }
+  .editor-dialog-actions button[data-dialog-save] {
+    background: #24406e; border-color: #3f63a0; color: #fff;
+  }
+  .editor-dialog-actions button:disabled { opacity: .5; cursor: default; }
+  @media (max-width: 700px) {
+    .fs { min-height: 0; }
+    .fs-body { grid-template-columns: 1fr; min-height: 0; }
+    .fs-preview { display: none; }
+    .fs.preview-open .fs-list { display: none; }
+    .fs.preview-open .fs-preview {
+      display: flex; position: absolute; inset: 0; z-index: 20; margin: 0;
+      border: 0; border-radius: 0; padding: 12px; background: #0d1016;
+      min-height: 0; overflow: auto;
+    }
+    .fs-preview-head { display: flex; }
+    .fs.preview-open .fs-preview img { max-height: calc(100vh - 160px); }
+  }
   @media (max-width: 700px) {
     .editor-tree {
       position: absolute; top: 0; bottom: 0; left: 0; width: min(78%, 260px);
@@ -355,6 +444,10 @@ const IMAGES = {
   jpeg: "image/jpeg",
   gif: "image/gif",
   webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  svg: "image/svg+xml",
 };
 
 const encoder = new TextEncoder();
@@ -371,6 +464,242 @@ const escape = (value) =>
         "'": "&#39;",
       })[character],
   );
+
+const MIME_BY_EXTENSION = {
+  js: "text/javascript",
+  mjs: "text/javascript",
+  cjs: "text/javascript",
+  jsx: "text/javascript",
+  ts: "text/typescript",
+  tsx: "text/typescript",
+  json: "application/json",
+  md: "text/markdown",
+  markdown: "text/markdown",
+  txt: "text/plain",
+  log: "text/plain",
+  html: "text/html",
+  htm: "text/html",
+  css: "text/css",
+  scss: "text/x-scss",
+  sh: "application/x-sh",
+  bash: "application/x-sh",
+  zsh: "application/x-sh",
+  py: "text/x-python",
+  rs: "text/x-rust",
+  toml: "application/toml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  ini: "text/plain",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  pdf: "application/pdf",
+  zip: "application/zip",
+  gz: "application/gzip",
+  tgz: "application/gzip",
+  tar: "application/x-tar",
+  "7z": "application/x-7z-compressed",
+  rar: "application/vnd.rar",
+  bz2: "application/x-bzip2",
+  tbz2: "application/x-bzip2",
+  xz: "application/x-xz",
+  zst: "application/zstd",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mkv: "video/x-matroska",
+  mov: "video/quicktime",
+  wasm: "application/wasm",
+  db: "application/x-sqlite3",
+  sqlite: "application/vnd.sqlite3",
+  sqlite3: "application/vnd.sqlite3",
+  db3: "application/x-sqlite3",
+  sql: "text/x-sql",
+  duckdb: "application/x-duckdb",
+  mdb: "application/x-msaccess",
+  accdb: "application/x-msaccess",
+  dbf: "application/dbase",
+};
+
+const ICON_LABELS = {
+  js: "JS",
+  mjs: "JS",
+  cjs: "JS",
+  jsx: "JSX",
+  ts: "TS",
+  tsx: "TSX",
+  json: "JSON",
+  md: "MD",
+  markdown: "MD",
+  txt: "TXT",
+  log: "LOG",
+  html: "HTML",
+  htm: "HTML",
+  css: "CSS",
+  scss: "SCSS",
+  sh: "SH",
+  bash: "SH",
+  zsh: "SH",
+  py: "PY",
+  rs: "RS",
+  toml: "TOML",
+  yaml: "YML",
+  yml: "YML",
+  ini: "INI",
+  png: "PNG",
+  jpg: "JPG",
+  jpeg: "JPG",
+  gif: "GIF",
+  webp: "WEBP",
+  svg: "SVG",
+  avif: "AVIF",
+  bmp: "BMP",
+  ico: "ICO",
+  pdf: "PDF",
+  zip: "ZIP",
+  gz: "GZ",
+  tgz: "TGZ",
+  tar: "TAR",
+  "7z": "7Z",
+  rar: "RAR",
+  bz2: "BZ2",
+  tbz2: "TBZ2",
+  xz: "XZ",
+  zst: "ZST",
+  mp3: "MP3",
+  wav: "WAV",
+  ogg: "OGG",
+  flac: "FLAC",
+  mp4: "MP4",
+  webm: "WEBM",
+  mkv: "MKV",
+  mov: "MOV",
+  wasm: "WASM",
+  db: "DB",
+  sqlite: "SQL",
+  sqlite3: "SQL",
+  db3: "DB",
+  sql: "SQL",
+  duckdb: "DUCK",
+  mdb: "MDB",
+  accdb: "ACCD",
+  dbf: "DBF",
+};
+
+const FOLDER_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5.5A1.5 1.5 0 0 1 4 4h4l1.7 2h6.3A1.5 1.5 0 0 1 17.5 7.5v7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" fill="var(--icon-color)" fill-opacity=".18" stroke="var(--icon-color)" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+const FILE_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.5h6.5L15 6v11.5H5z" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1" stroke-linejoin="round"/><path d="M11.5 2.5V6H15" fill="none" stroke="var(--icon-color)" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+const IMAGE_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="12" rx="1.5" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1"/><circle cx="7" cy="7.5" r="1.3" fill="var(--icon-color)"/><path d="m4.5 13.5 4-4 2.5 2.5 2-2 2.5 2.5" fill="none" stroke="var(--icon-color)" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const VIDEO_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="11.5" rx="1.5" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M8.2 7.2v5.1l4.2-2.55z" fill="var(--icon-color)"/></svg>';
+const AUDIO_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 13.2V6.1l7-1.8v2.4L10 8v6.2" fill="none" stroke="var(--icon-color)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.1" cy="14" r="1.9" fill="var(--icon-color)" fill-opacity=".22" stroke="var(--icon-color)" stroke-width="1.1"/><circle cx="13.1" cy="12.6" r="1.9" fill="var(--icon-color)" fill-opacity=".22" stroke="var(--icon-color)" stroke-width="1.1"/></svg>';
+const DATABASE_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6" ry="2.5" fill="var(--icon-color)" fill-opacity=".18" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M4 5v9.5c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5" fill="none" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M4 9.5c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5" fill="none" stroke="var(--icon-color)" stroke-width="1.1"/></svg>';
+const ARCHIVE_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3.5" width="14" height="13" rx="1.8" fill="var(--icon-color)" fill-opacity=".14" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M10 3.5v10" stroke="var(--icon-color)" stroke-width="1.1"/><path d="M8.4 5.5h3.2M8.4 8h3.2M8.4 10.5h3.2" stroke="var(--icon-color)" stroke-width="1.05" stroke-linecap="round"/><path d="M9 13.5h2v2.2H9z" fill="var(--icon-color)"/></svg>';
+const LINK_ICON =
+  '<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="var(--icon-color)" stroke-width="1.3" stroke-linecap="round"><path d="m8.2 11.8 3.6-3.6"/><path d="M6.8 9.9 5.4 11.3a3 3 0 0 0 4.2 4.2l1.4-1.4"/><path d="m13.2 10.1 1.4-1.4a3 3 0 0 0-4.2-4.2L9 5.9"/></svg>';
+
+function mimeFor(path) {
+  return MIME_BY_EXTENSION[extensionOf(path)] ?? "application/octet-stream";
+}
+
+function iconLabel(path) {
+  const extension = extensionOf(path);
+  if (!extension) return "FILE";
+  return ICON_LABELS[extension] ?? extension.toUpperCase().slice(0, 4);
+}
+
+function iconCategory(mime, extension) {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (mime === "application/pdf") return "pdf";
+  if (
+    [
+      "zip",
+      "gzip",
+      "x-tar",
+      "x-7z-compressed",
+      "vnd.rar",
+      "x-bzip2",
+      "x-xz",
+      "zstd",
+    ].some((part) => mime.includes(part))
+  ) {
+    return "archive";
+  }
+  if (mime === "application/wasm") return "binary";
+  if (
+    [
+      "db",
+      "sqlite",
+      "sqlite3",
+      "db3",
+      "sql",
+      "duckdb",
+      "mdb",
+      "accdb",
+      "dbf",
+    ].includes(extension)
+  ) {
+    return "database";
+  }
+  if (
+    mime === "application/json" ||
+    mime.endsWith("+json") ||
+    mime.includes("xml")
+  ) {
+    return "data";
+  }
+  if (["js", "mjs", "cjs", "jsx", "py", "rs"].includes(extension)) {
+    return "code";
+  }
+  if (["ts", "tsx"].includes(extension)) return "code-strong";
+  if (["md", "markdown"].includes(extension)) return "doc";
+  if (["html", "htm", "css", "scss"].includes(extension)) return "web";
+  if (["sh", "bash", "zsh"].includes(extension)) return "shell";
+  if (["toml", "yaml", "yml", "ini"].includes(extension)) return "config";
+  if (mime.startsWith("text/")) return "text";
+  return "unknown";
+}
+
+function iconMarkup(kind, path) {
+  if (kind === "dir") {
+    return `<span class="file-icon dir" title="Directory">${FOLDER_ICON}</span>`;
+  }
+  if (kind === "link") {
+    return `<span class="file-icon link" title="Symbolic link">${LINK_ICON}</span>`;
+  }
+  const mime = mimeFor(path);
+  const extension = extensionOf(path);
+  const category = iconCategory(mime, extension);
+  const shape =
+    category === "image"
+      ? IMAGE_ICON
+      : category === "video"
+        ? VIDEO_ICON
+        : category === "audio"
+          ? AUDIO_ICON
+          : category === "database"
+            ? DATABASE_ICON
+            : category === "archive"
+              ? ARCHIVE_ICON
+              : FILE_ICON;
+  return `<span class="file-icon ${category}" title="${escape(mime)}">${shape}<span class="file-icon-badge">${escape(iconLabel(path))}</span></span>`;
+}
 
 function join(path, name) {
   return path === "/" ? `/${name}` : `${path}/${name}`;
@@ -426,6 +755,11 @@ function languageLabel(language) {
   return LANGUAGE_LABELS[language] ?? "Plain text";
 }
 
+function imageLabel(path) {
+  const extension = extensionOf(path).toUpperCase();
+  return extension ? `${extension} image` : "Image";
+}
+
 function detectEol(value) {
   const crlf = (value.match(/\r\n/g) || []).length;
   const cr = (value.match(/\r(?!\n)/g) || []).length;
@@ -457,10 +791,6 @@ function modified(ms) {
 
 function kindLabel(kind) {
   return kind === "dir" ? "directory" : kind === "link" ? "symlink" : "file";
-}
-
-function glyphClass(kind) {
-  return kind === "dir" ? "dir" : kind === "link" ? "link" : "file";
 }
 
 function text(bytes) {
@@ -648,6 +978,10 @@ export function onParams(params) {
   }
 }
 
+export function beforeClose() {
+  return editorBridge?.confirmClose?.() ?? true;
+}
+
 function mountEditorView(root, context) {
   const style = document.createElement("style");
   style.textContent = styles;
@@ -674,6 +1008,10 @@ function mountEditorView(root, context) {
         <div class="editor-tabs" role="tablist" aria-label="Open files"></div>
         <div class="editor-empty">Open a file from the tree or enter a path.</div>
         <div class="editor-content" hidden></div>
+        <div class="editor-image" data-image hidden>
+          <p class="hint" data-image-empty>Loading image…</p>
+          <img data-image-preview alt="" />
+        </div>
       </section>
     </div>
     <footer class="editor-status">
@@ -698,6 +1036,19 @@ function mountEditorView(root, context) {
       <span data-position>Ln 1, Col 1</span>
       <span data-selection>Sel 0</span>
     </footer>
+    <dialog class="editor-dialog" data-close-dialog>
+      <div class="editor-dialog-card">
+        <strong data-dialog-title>Unsaved changes</strong>
+        <p data-dialog-text>This file has unsaved changes.</p>
+        <ul data-dialog-files></ul>
+        <p class="editor-dialog-error" data-dialog-error></p>
+        <div class="editor-dialog-actions">
+          <button type="button" data-dialog-save>Save</button>
+          <button type="button" data-dialog-discard>Discard</button>
+          <button type="button" data-dialog-cancel>Cancel</button>
+        </div>
+      </div>
+    </dialog>
   `;
   root.append(box);
 
@@ -705,6 +1056,9 @@ function mountEditorView(root, context) {
   const tabsElement = box.querySelector(".editor-tabs");
   const treeElement = box.querySelector(".editor-tree");
   const content = box.querySelector(".editor-content");
+  const imageWrap = box.querySelector("[data-image]");
+  const imagePreview = box.querySelector("[data-image-preview]");
+  const imageEmpty = box.querySelector("[data-image-empty]");
   const empty = box.querySelector(".editor-empty");
   const info = box.querySelector("[data-info]");
   const language = box.querySelector("[data-language]");
@@ -714,8 +1068,17 @@ function mountEditorView(root, context) {
   const errorElement = box.querySelector("[data-error]");
   const position = box.querySelector("[data-position]");
   const selection = box.querySelector("[data-selection]");
+  const saveButton = box.querySelector("[data-save]");
   const treeToggle = box.querySelector("[data-tree-toggle]");
   const treeBackdrop = box.querySelector("[data-tree-backdrop]");
+  const dialog = box.querySelector("[data-close-dialog]");
+  const dialogTitle = dialog.querySelector("[data-dialog-title]");
+  const dialogText = dialog.querySelector("[data-dialog-text]");
+  const dialogFiles = dialog.querySelector("[data-dialog-files]");
+  const dialogError = dialog.querySelector("[data-dialog-error]");
+  const dialogSave = dialog.querySelector("[data-dialog-save]");
+  const dialogDiscard = dialog.querySelector("[data-dialog-discard]");
+  const dialogCancel = dialog.querySelector("[data-dialog-cancel]");
   const mobileQuery = window.matchMedia("(max-width: 700px)");
 
   if (typeof context.fill === "function") {
@@ -727,11 +1090,16 @@ function mountEditorView(root, context) {
   const tabs = [];
   let active = -1;
   let view = null;
+  let mountedTab = null;
   let disposed = false;
   let switching = false;
   let treeRoot = "/";
   let treeOpen = !mobileQuery.matches;
   let indentSetting = { size: 4, useTabs: false };
+  let dialogTabs = [];
+  let dialogResolve = null;
+  let dialogPromise = null;
+  let dialogBusy = false;
   const treeData = new Map();
 
   const activeTab = () => (active >= 0 ? tabs[active] : null);
@@ -768,12 +1136,21 @@ function mountEditorView(root, context) {
         active: activeTab()?.path ?? null,
         tree: treeOpen,
         indent: { ...indentSetting },
-        tabs: tabs.map((tab) => ({
-          path: tab.path,
-          text: tab.state.doc.toString(),
-          eol: tab.eol,
-          dirty: tab.dirty,
-        })),
+        tabs: tabs.map((tab) =>
+          tab.image
+            ? {
+                path: tab.path,
+                image: true,
+                mime: tab.mime,
+                dirty: false,
+              }
+            : {
+                path: tab.path,
+                text: tab.state.doc.toString(),
+                eol: tab.eol,
+                dirty: tab.dirty,
+              },
+        ),
       },
     });
   }
@@ -787,7 +1164,10 @@ function mountEditorView(root, context) {
       open.type = "button";
       open.className = "editor-tab-open";
       open.title = tab.path;
-      open.append(document.createTextNode(baseName(tab.path)));
+      const tabIcon = document.createElement("span");
+      tabIcon.className = "editor-tab-icon";
+      tabIcon.innerHTML = iconMarkup("file", tab.path);
+      open.append(tabIcon, document.createTextNode(baseName(tab.path)));
       if (tab.dirty) {
         const dot = document.createElement("span");
         dot.className = "editor-dirty";
@@ -803,7 +1183,7 @@ function mountEditorView(root, context) {
       close.title = `Close ${tab.path}`;
       close.addEventListener("click", (event) => {
         event.stopPropagation();
-        closeTab(index);
+        void requestCloseTab(index);
       });
       node.append(open, close);
       tabsElement.append(node);
@@ -812,12 +1192,14 @@ function mountEditorView(root, context) {
 
   function refreshStatus() {
     const tab = activeTab();
-    if (!tab || !view) {
+    if (!tab) {
       language.textContent = "Plain text";
       eolSelect.disabled = true;
       eolMixed.hidden = true;
       eolSelect.value = "LF";
       indentSelect.value = "4";
+      indentSelect.disabled = true;
+      saveButton.disabled = true;
       errorElement.textContent = "";
       errorElement.title = "";
       errorElement.className = "editor-error";
@@ -825,8 +1207,24 @@ function mountEditorView(root, context) {
       selection.textContent = "Sel 0";
       return;
     }
-    language.textContent = languageLabel(languageFor(tab.path));
+    if (tab.image) {
+      language.textContent = imageLabel(tab.path);
+      eolSelect.disabled = true;
+      eolMixed.hidden = true;
+      indentSelect.disabled = true;
+      saveButton.disabled = true;
+      errorElement.textContent = tab.error ?? "";
+      errorElement.title = tab.error ?? "";
+      errorElement.className = tab.error ? "editor-error bad" : "editor-error";
+      position.textContent =
+        tab.width && tab.height ? `${tab.width} × ${tab.height}` : "—";
+      selection.textContent = tab.bytes ? bytes(tab.bytes.length) : "";
+      return;
+    }
+    saveButton.disabled = false;
     eolSelect.disabled = false;
+    indentSelect.disabled = false;
+    language.textContent = languageLabel(languageFor(tab.path));
     if (tab.eol === "Mixed") {
       eolMixed.hidden = false;
       eolSelect.value = "Mixed";
@@ -840,6 +1238,11 @@ function mountEditorView(root, context) {
     const tabOption = indentSelect.querySelector('option[value="tab"]');
     if (tabOption) tabOption.textContent = `Tab (${indentSetting.size})`;
     indentSelect.title = `Indentation: ${indentLabel()}`;
+    if (!view) {
+      position.textContent = "Ln 1, Col 1";
+      selection.textContent = "Sel 0";
+      return;
+    }
     const state = view.state;
     const main = state.selection.main;
     const line = state.doc.lineAt(main.head);
@@ -863,15 +1266,15 @@ function mountEditorView(root, context) {
 
   const updateListener = EditorView.updateListener.of((update) => {
     if (switching) return;
-    const tab = activeTab();
-    if (!tab) return;
+    const tab = mountedTab;
+    if (!tab || tab.image || !tabs.includes(tab)) return;
     tab.state = update.state;
     if (update.docChanged) {
       tab.dirty = true;
       renderTabs();
       publishSession();
     }
-    refreshStatus();
+    if (activeTab() === tab) refreshStatus();
   });
 
   function createState(path, text) {
@@ -932,28 +1335,99 @@ function mountEditorView(root, context) {
     return view;
   }
 
+  function renderImage(tab) {
+    imagePreview.onload = () => {
+      tab.width = imagePreview.naturalWidth;
+      tab.height = imagePreview.naturalHeight;
+      if (activeTab() === tab) refreshStatus();
+    };
+    imagePreview.onerror = () => {
+      tab.error = "The image could not be decoded.";
+      imagePreview.hidden = true;
+      imageEmpty.hidden = false;
+      imageEmpty.textContent = `Could not preview: ${tab.error}`;
+      if (activeTab() === tab) refreshStatus();
+    };
+    if (!tab.bytes) {
+      imagePreview.hidden = true;
+      imagePreview.removeAttribute("src");
+      imageEmpty.hidden = false;
+      imageEmpty.textContent = tab.error
+        ? `Could not preview: ${tab.error}`
+        : "Loading image…";
+      return;
+    }
+    if (!tab.objectUrl) {
+      tab.objectUrl = URL.createObjectURL(
+        new Blob([new Uint8Array(tab.bytes)], { type: tab.mime }),
+      );
+    }
+    imageEmpty.hidden = true;
+    imagePreview.hidden = false;
+    imagePreview.alt = baseName(tab.path);
+    imagePreview.src = tab.objectUrl;
+  }
+
+  async function loadImageTab(tab) {
+    try {
+      const data = await call(
+        context,
+        `/file?path=${encodeURIComponent(tab.path)}`,
+      );
+      if (disposed || !tabs.includes(tab)) return;
+      if (!Array.isArray(data)) throw new Error("invalid image data");
+      if (tab.objectUrl) {
+        URL.revokeObjectURL(tab.objectUrl);
+        tab.objectUrl = null;
+      }
+      tab.bytes = data;
+      tab.error = null;
+      if (activeTab() === tab) {
+        renderImage(tab);
+        refreshStatus();
+      }
+    } catch (error) {
+      if (disposed || !tabs.includes(tab)) return;
+      tab.error = reason(error);
+      if (activeTab() === tab) {
+        renderImage(tab);
+        refreshStatus();
+      }
+    }
+  }
+
   function activate(index) {
     const tab = tabs[index];
     if (!tab) return;
     active = index;
     pathInput.value = tab.path;
     empty.hidden = true;
-    content.hidden = false;
-    ensureView();
-    switching = true;
-    view.setState(tab.state);
-    switching = false;
+    if (tab.image) {
+      content.hidden = true;
+      imageWrap.hidden = false;
+      renderImage(tab);
+    } else {
+      imageWrap.hidden = true;
+      content.hidden = false;
+      ensureView();
+      mountedTab = tab;
+      switching = true;
+      view.setState(tab.state);
+      switching = false;
+    }
     renderTabs();
     refreshStatus();
     renderTree();
     if (mobileQuery.matches && treeOpen) setTreeOpen(false, false);
     publishSession();
-    view.focus();
+    if (!tab.image) view.focus();
   }
 
   function closeTab(index) {
     const tab = tabs[index];
     if (!tab) return;
+    if (tab.objectUrl) URL.revokeObjectURL(tab.objectUrl);
+    if (mountedTab === tab) mountedTab = null;
     tabs.splice(index, 1);
     if (tabs.length === 0) {
       active = -1;
@@ -961,6 +1435,10 @@ function mountEditorView(root, context) {
       view = null;
       content.replaceChildren();
       content.hidden = true;
+      imageWrap.hidden = true;
+      imagePreview.removeAttribute("src");
+      imageEmpty.hidden = false;
+      imageEmpty.textContent = "Loading image…";
       empty.hidden = false;
       pathInput.value = "";
       refreshStatus();
@@ -983,6 +1461,39 @@ function mountEditorView(root, context) {
     const existing = tabs.findIndex((tab) => tab.path === target);
     if (existing >= 0 && typeof options.text !== "string") {
       activate(existing);
+      return;
+    }
+    const mime = IMAGES[extensionOf(target)];
+    if (mime) {
+      setInfo(`Reading ${target}…`);
+      try {
+        const data = await call(
+          context,
+          `/file?path=${encodeURIComponent(target)}`,
+        );
+        if (disposed) return;
+        if (!Array.isArray(data)) throw new Error("invalid image data");
+        const tab = {
+          path: target,
+          image: true,
+          mime,
+          bytes: data,
+          error: null,
+          width: 0,
+          height: 0,
+          objectUrl: null,
+          dirty: false,
+          eol: "LF",
+          state: null,
+        };
+        if (existing >= 0) tabs[existing] = tab;
+        else tabs.push(tab);
+        activate(tabs.indexOf(tab));
+        void ensureTreePath(target);
+        setInfo(`${target} · ${imageLabel(target)}`);
+      } catch (error) {
+        if (!disposed) setInfo(reason(error), true);
+      }
       return;
     }
     let value = typeof options.text === "string" ? options.text : null;
@@ -1017,9 +1528,8 @@ function mountEditorView(root, context) {
     setInfo(`${target} · ${languageLabel(languageFor(target))}`);
   }
 
-  async function saveActive() {
-    const tab = activeTab();
-    if (!tab) return;
+  async function saveTab(tab) {
+    if (!tab || tab.image) return false;
     const eol = tab.eol === "CRLF" ? "CRLF" : "LF";
     const data = Array.from(
       encoder.encode(joinEol(tab.state.doc.toString(), eol)),
@@ -1031,26 +1541,111 @@ function mountEditorView(root, context) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ path: tab.path, bytes: data }),
       });
-      if (disposed) return;
+      if (disposed) return false;
       tab.dirty = false;
       tab.eol = eol;
       renderTabs();
       refreshStatus();
       publishSession();
       setInfo(`Saved ${tab.path} · ${data.length} bytes`);
+      return true;
     } catch (error) {
       if (!disposed) setInfo(reason(error), true);
+      return false;
     }
+  }
+
+  async function saveTabs(list) {
+    for (const tab of list) {
+      if (!(await saveTab(tab))) return false;
+    }
+    return true;
+  }
+
+  async function saveActive() {
+    const tab = activeTab();
+    if (tab) await saveTab(tab);
+  }
+
+  function settleDialog(choice) {
+    if (!dialogResolve) return;
+    const resolve = dialogResolve;
+    dialogResolve = null;
+    dialogPromise = null;
+    dialogTabs = [];
+    dialogBusy = false;
+    if (dialog.open) dialog.close();
+    resolve(choice);
+  }
+
+  function renderDialogFiles() {
+    dialogFiles.replaceChildren();
+    for (const tab of dialogTabs) {
+      const item = document.createElement("li");
+      item.textContent = tab.path;
+      dialogFiles.append(item);
+    }
+    dialogTitle.textContent =
+      dialogTabs.length === 1
+        ? `Save changes to ${baseName(dialogTabs[0].path)}?`
+        : `Save ${dialogTabs.length} files?`;
+    dialogText.textContent =
+      dialogTabs.length === 1
+        ? "This file has unsaved changes."
+        : "These files have unsaved changes.";
+    dialogSave.textContent = dialogTabs.length === 1 ? "Save" : "Save all";
+  }
+
+  function showCloseDialog(list) {
+    if (dialogPromise) {
+      for (const tab of list) {
+        if (!dialogTabs.includes(tab)) dialogTabs.push(tab);
+      }
+      renderDialogFiles();
+      return dialogPromise;
+    }
+    dialogTabs = [...list];
+    renderDialogFiles();
+    dialogError.textContent = "";
+    dialogSave.disabled = false;
+    dialogDiscard.disabled = false;
+    dialogCancel.disabled = false;
+    dialogPromise = new Promise((resolve) => {
+      dialogResolve = resolve;
+    });
+    dialog.showModal();
+    dialogSave.focus();
+    return dialogPromise;
+  }
+
+  async function requestCloseTab(index) {
+    const tab = tabs[index];
+    if (!tab) return;
+    if (!tab.dirty) {
+      closeTab(index);
+      return;
+    }
+    const choice = await showCloseDialog([tab]);
+    if (choice === "cancel") return;
+    closeTab(index);
+  }
+
+  async function confirmClose() {
+    const dirty = tabs.filter((tab) => tab.dirty);
+    if (!dirty.length) return true;
+    const choice = await showCloseDialog(dirty);
+    return choice !== "cancel";
   }
 
   function applyIndent(next) {
     indentSetting = next;
     for (const tab of tabs) {
+      if (!tab.state) continue;
       tab.state = tab.state.update({
         effects: indentCompartment.reconfigure(indentExtensions(indentSetting)),
       }).state;
     }
-    if (view && activeTab()) {
+    if (view && activeTab() && !activeTab().image) {
       switching = true;
       view.setState(activeTab().state);
       switching = false;
@@ -1120,7 +1715,7 @@ function mountEditorView(root, context) {
     const rootButton = document.createElement("button");
     rootButton.type = "button";
     rootButton.className = "editor-tree-root";
-    rootButton.textContent = treeRoot;
+    rootButton.innerHTML = `${iconMarkup("dir", treeRoot)}<span class="editor-tree-name">${escape(treeRoot)}</span>`;
     rootButton.title = "Refresh this directory";
     rootButton.addEventListener("click", () => void loadTree(treeRoot));
     header.append(rootButton);
@@ -1164,7 +1759,7 @@ function mountEditorView(root, context) {
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "editor-tree-label dir";
-        toggle.textContent = `${open ? "▾" : "▸"} ${entry.name}`;
+        toggle.innerHTML = `<span class="editor-tree-arrow">${open ? "▾" : "▸"}</span>${iconMarkup("dir", path)}<span class="editor-tree-name">${escape(entry.name)}</span>`;
         toggle.addEventListener("click", () => void toggleDirectory(path));
         row.append(toggle);
         container.append(row);
@@ -1175,7 +1770,7 @@ function mountEditorView(root, context) {
         const link = document.createElement("button");
         link.type = "button";
         link.className = "editor-tree-label link";
-        link.textContent = `↗ ${entry.name}`;
+        link.innerHTML = `${iconMarkup("link", path)}<span class="editor-tree-name">${escape(entry.name)}</span>`;
         link.title = `Open symbolic link ${path}`;
         link.addEventListener("click", () => void openLink(path));
         row.append(link);
@@ -1185,7 +1780,7 @@ function mountEditorView(root, context) {
         file.type = "button";
         file.className = "editor-tree-label file";
         if (activeTab()?.path === path) file.classList.add("active");
-        file.textContent = entry.name;
+        file.innerHTML = `${iconMarkup("file", path)}<span class="editor-tree-name">${escape(entry.name)}</span>`;
         file.addEventListener("click", () => void openFile(path));
         row.append(file);
         container.append(row);
@@ -1295,7 +1890,41 @@ function mountEditorView(root, context) {
         : { size: Number(indentSelect.value), useTabs: false },
     );
   });
+  dialogSave.addEventListener("click", async () => {
+    if (dialogBusy || !dialogTabs.length) return;
+    dialogBusy = true;
+    dialogSave.disabled = true;
+    dialogDiscard.disabled = true;
+    dialogCancel.disabled = true;
+    dialogError.textContent = "";
+    const files = [...dialogTabs];
+    const ok = await saveTabs(files);
+    if (ok) {
+      settleDialog("save");
+      return;
+    }
+    dialogBusy = false;
+    dialogSave.disabled = false;
+    dialogDiscard.disabled = false;
+    dialogCancel.disabled = false;
+    dialogError.textContent =
+      "Could not save every file. Check the status and try again.";
+  });
+  dialogDiscard.addEventListener("click", () => {
+    if (!dialogBusy) settleDialog("discard");
+  });
+  dialogCancel.addEventListener("click", () => {
+    if (!dialogBusy) settleDialog("cancel");
+  });
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    if (!dialogBusy) settleDialog("cancel");
+  });
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog && !dialogBusy) settleDialog("cancel");
+  });
   box.addEventListener("keydown", (event) => {
+    if (dialog.open) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveActive();
@@ -1310,7 +1939,10 @@ function mountEditorView(root, context) {
     }
   });
 
-  const bridge = { openPath: (path) => openFile(path) };
+  const bridge = {
+    openPath: (path) => openFile(path),
+    confirmClose: () => confirmClose(),
+  };
   editorBridge = bridge;
 
   const params = context.params ?? {};
@@ -1326,13 +1958,28 @@ function mountEditorView(root, context) {
   }
   if (session && Array.isArray(session.tabs)) {
     for (const entry of session.tabs) {
-      if (
-        !entry ||
-        typeof entry.path !== "string" ||
-        typeof entry.text !== "string"
-      ) {
+      if (!entry || typeof entry.path !== "string") continue;
+      if (entry.image === true) {
+        const mime = entry.mime ?? IMAGES[extensionOf(entry.path)];
+        if (!mime) continue;
+        const tab = {
+          path: entry.path,
+          image: true,
+          mime,
+          bytes: null,
+          error: null,
+          width: 0,
+          height: 0,
+          objectUrl: null,
+          dirty: false,
+          eol: "LF",
+          state: null,
+        };
+        tabs.push(tab);
+        void loadImageTab(tab);
         continue;
       }
+      if (typeof entry.text !== "string") continue;
       tabs.push({
         path: entry.path,
         state: createState(entry.path, entry.text),
@@ -1510,6 +2157,7 @@ export function mount(root, context) {
   }
 
   function resetPreview() {
+    box.classList.remove("preview-open");
     if (previewState?.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
     previewState = null;
     preview.replaceChildren();
@@ -1576,7 +2224,7 @@ export function mount(root, context) {
     entryButton.className = "fs-entry";
     entryButton.dataset.name = entry.name;
     entryButton.dataset.kind = entry.kind;
-    entryButton.innerHTML = `<span class="glyph ${glyphClass(entry.kind)}"></span><span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+    entryButton.innerHTML = `${iconMarkup(entry.kind, full)}<span class="name">${escape(entry.name)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
     entryButton.addEventListener("click", () => {
       if (entry.kind === "dir") void load(full);
       else if (entry.kind === "link") void openLink(full);
@@ -1684,7 +2332,7 @@ export function mount(root, context) {
         row.className = "fs-row";
         const copy = document.createElement("span");
         copy.className = "fs-entry";
-        copy.innerHTML = `<span class="glyph ${glyphClass(entry.kind)}"></span><span class="name">${escape(entry.original)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
+        copy.innerHTML = `${iconMarkup(entry.kind, entry.original)}<span class="name">${escape(entry.original)}</span><span class="size">${entry.kind === "dir" ? "" : bytes(entry.size)}</span>`;
         const restoreButton = button("fs-tool", "Restore", `Restore ${entry.original}`);
         restoreButton.addEventListener("click", () => void restore(entry.original));
         row.append(copy, restoreButton);
@@ -1749,6 +2397,7 @@ export function mount(root, context) {
         objectUrl: null,
       };
       renderPreview();
+      box.classList.add("preview-open");
       setStatus(`${path} · ${data.length} bytes`);
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
@@ -1820,20 +2469,24 @@ export function mount(root, context) {
     }
     const { path, entry, link, text: decoded } = previewState;
     const extension = extensionOf(path);
+    const imageType = IMAGES[extension];
     const meta = document.createElement("div");
     meta.className = "fs-meta";
     meta.append(
       cell("", kindLabel(entry.kind)),
       cell("", bytes(entry.size)),
       cell("", `modified ${modified(entry["modified-ms"])}`),
+      cell("", mimeFor(path)),
     );
     if (link) meta.append(cell("", `via ${link}`));
 
     const actions = document.createElement("div");
     actions.className = "fs-actions";
-    if (decoded !== null) {
+    if (decoded !== null || imageType) {
       const edit = button("", "Open in Editor");
-      edit.title = "Edit this file in the floating Editor window";
+      edit.title = imageType
+        ? "Open this image in the Editor"
+        : "Edit this file in the floating Editor window";
       edit.addEventListener("click", () => void openInEditor());
       actions.append(edit);
     }
@@ -1843,20 +2496,25 @@ export function mount(root, context) {
 
     const pane = document.createElement("div");
     pane.className = "pane";
-    if (decoded !== null) {
-      const formatted = document.createElement("div");
-      formatted.className = "fs-formatted";
-      formatted.innerHTML = formattedPreview(decoded, path);
-      pane.append(formatted);
-    } else if (IMAGES[extension]) {
+    if (imageType) {
       if (previewState.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
       previewState.objectUrl = URL.createObjectURL(
-        new Blob([new Uint8Array(previewState.bytes)], { type: IMAGES[extension] }),
+        new Blob([new Uint8Array(previewState.bytes)], { type: imageType }),
       );
       const image = document.createElement("img");
       image.src = previewState.objectUrl;
       image.alt = baseName(path);
+      image.addEventListener("error", () => {
+        if (!disposed && previewState?.path === path) {
+          setStatus(`Could not render ${path} as ${imageType}.`, true);
+        }
+      });
       pane.append(image);
+    } else if (decoded !== null) {
+      const formatted = document.createElement("div");
+      formatted.className = "fs-formatted";
+      formatted.innerHTML = formattedPreview(decoded, path);
+      pane.append(formatted);
     } else {
       const hint = document.createElement("p");
       hint.className = "hint";
@@ -1864,7 +2522,16 @@ export function mount(root, context) {
       pane.append(hint);
     }
 
-    preview.append(meta, actions, pane);
+    const head = document.createElement("div");
+    head.className = "fs-preview-head";
+    const back = button("", "← Files");
+    back.title = "Back to the file list";
+    back.addEventListener("click", resetPreview);
+    const name = document.createElement("strong");
+    name.textContent = baseName(path);
+    head.append(back, name);
+
+    preview.append(head, meta, actions, pane);
   }
 
   async function drop(path) {

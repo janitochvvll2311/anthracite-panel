@@ -74,6 +74,8 @@ type Mounted = {
   dispose: () => void;
   /// Sends a transient open request to a live frame without remounting it.
   update?: (params: unknown) => void;
+  /// Asks the live frame for permission before closing (unsaved changes).
+  requestClose?: () => Promise<boolean>;
   /// Set when the host closes or replaces the mount; a late module must not
   /// attach to a detached root.
   cancelled: boolean;
@@ -385,7 +387,7 @@ function renderTabs(): void {
     const close = button("tab-tool", "×", "Close");
     close.addEventListener("click", (event) => {
       event.stopPropagation();
-      closeTab(tab.key);
+      void requestTabClose(tab.key);
     });
 
     node.append(select, detach, close);
@@ -476,6 +478,7 @@ function trackMount(
     onParams,
     (frame) => {
       state.update = frame.update;
+      state.requestClose = frame.requestClose;
     },
   ).then((dispose) => {
     if (state.cancelled || current() !== state) {
@@ -572,7 +575,9 @@ function ensurePane(contribution: Contribution, params?: unknown): void {
   const detach = button("ghost small", "Float", "Open in a floating window");
   detach.addEventListener("click", () => detachTab(key));
   const close = button("ghost small", "Close", "Close this view");
-  close.addEventListener("click", () => closeTab(key));
+  close.addEventListener("click", () => {
+    void requestTabClose(key);
+  });
   tools.append(detach, close);
   head.append(copy, tools);
 
@@ -666,6 +671,20 @@ function closeTab(key: string): void {
   renderWorkspace();
 }
 
+async function requestTabClose(key: string): Promise<void> {
+  const state = mounted.get(key);
+  if (state?.requestClose) {
+    let ok = false;
+    try {
+      ok = await state.requestClose();
+    } catch {
+      ok = false;
+    }
+    if (!ok) return;
+  }
+  closeTab(key);
+}
+
 function detachTab(key: string): void {
   const tab = tabs.get(key);
   if (!tab) return;
@@ -690,6 +709,19 @@ function closeFloating(state: Floating): void {
   retireFloating(state);
   floating.delete(state.key);
   updateStack();
+}
+
+async function requestWindowClose(state: Floating): Promise<void> {
+  if (state.requestClose) {
+    let ok = false;
+    try {
+      ok = await state.requestClose();
+    } catch {
+      ok = false;
+    }
+    if (!ok) return;
+  }
+  closeFloating(state);
 }
 
 function setMaximized(state: Floating, maximized: boolean): void {
@@ -743,7 +775,7 @@ function minimizeWindow(state: Floating): void {
   const close = button("stack-close", "×", "Close");
   close.addEventListener("click", (event) => {
     event.stopPropagation();
-    closeFloating(state);
+    void requestWindowClose(state);
   });
   item.append(open, close);
   state.stackItem = item;
@@ -864,7 +896,9 @@ function openWindow(
   );
   minimize.addEventListener("click", () => minimizeWindow(state));
   dock.addEventListener("click", () => dockWindow(state));
-  close.addEventListener("click", () => closeFloating(state));
+  close.addEventListener("click", () => {
+    void requestWindowClose(state);
+  });
   windowElement.addEventListener("pointerdown", () => focusWindow(state));
   makeDraggable(windowElement, header);
   trackMount(
