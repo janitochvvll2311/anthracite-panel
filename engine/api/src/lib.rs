@@ -55,6 +55,8 @@ pub struct Apps {
     /// `apps.max-bundle-bytes` and `apps.require-signature`.
     pub max_bundle_bytes: u64,
     pub require_signature: bool,
+    /// `services.allow-third-party`: the startup opt-in for native services.
+    pub allow_third_party_service: bool,
     /// The composition file under the same state root.
     pub compositions: CompositionStore,
 }
@@ -64,6 +66,7 @@ impl Apps {
         BundleOptions {
             max_bundle_bytes: self.max_bundle_bytes,
             require_signature: self.require_signature,
+            allow_third_party_service: self.allow_third_party_service,
             known_packages: Vec::new(),
         }
     }
@@ -146,6 +149,7 @@ impl EngineState {
         state: &std::path::Path,
         max_bundle_bytes: u64,
         require_signature: bool,
+        allow_third_party_service: bool,
     ) -> Self {
         self.apps = Some(Arc::new(Apps {
             registry: Registry::new(state),
@@ -153,6 +157,7 @@ impl EngineState {
             audit: AuditLog::new(state),
             max_bundle_bytes,
             require_signature,
+            allow_third_party_service,
             compositions: CompositionStore::new(state),
         }));
         self

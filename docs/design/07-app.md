@@ -121,6 +121,38 @@ not change shape later.
 A manifest is a *claim*. Nothing in it is trusted until the composer resolves it
 and the operator approves the resulting grant.
 
+`manifest_version = 3` keeps the same keys and adds one half. The public API does
+not change: `[[export]]`, `[[route]]` and `[[cli]]` still name `interface#function`
+and the engine resolves the provider.
+
+```toml
+manifest_version = 3
+
+[app]
+id = "org.anthracite.fs"
+namespace = "anthracite:fs"
+name = "Files"
+version = "0.1.0"
+
+[service]
+path   = "bin/fs"                  # exactly `bin/<file>`
+sha256 = "…"
+class  = "host"                    # exec | socket | device | admin | host
+argv   = ["--socket", "{socket}", "--root", "/"]
+
+[[export]]
+interface = "anthracite:fs/read@1.0.0"
+
+[[export]]
+interface = "anthracite:fs/write@1.0.0"
+```
+
+A bundle may carry `bin/`, `wasm/`, `web/` and `wit/` together. In a **hybrid**
+manifest every `[[export]]` names its half with `target = "wasm" | "service"` and
+the two sets must be disjoint. The service binary is hashed like the component and
+made owner-executable after verification; `argv` has exactly one `{socket}` and
+no other placeholder, and is frozen in the grant along with the class.
+
 ### 7.3 WIT as the contract
 
 Interfaces are WIT, in the canonical form:
@@ -188,7 +220,9 @@ composer can resolve *before* instantiating. The component embeds the real world
 The engine compares them and refuses the app on any difference ([§7.12](07-app.md#712-enforcement-the-world-must-match-the-grant)). The
 manifest lets us plan; the component is what we check.
 
-**What the signature covers.** One detached signature over a canonical message:
+**What the signature covers.** One detached signature over a canonical message
+(the `v2` in the prefix names this framing, not the manifest schema; v3 manifests
+use the same message):
 
 ```
 "anth-manifest-v2\0"
@@ -213,18 +247,22 @@ them.
 | --- | --- | --- | --- |
 | `wasm` | in-process component, sandboxed, fuel-metered | any granted interface | all logic, including heavy compute |
 | `ui` | sandboxed iframe served by the engine | RPC to its own app only | rendering |
+| `service` | supervised child process behind a private socket | the OS, under its approved class | host reach: PTY, `/proc`, sysfs, mounts |
 
-**`service` arrives in v0.6.0, with the terminal.** A service is a supervised child
-process, and it is the one kind that cannot speak WIT: it is a binary, and the only
-way to reach it is a socket. That is an exception to [§3.5](appendix-a-vertical-slice.md), and an exception needs
-its first real consumer — a PTY, with half-close and out-of-band control — to be
-designed correctly. Until then the tier rule already stands: **a third-party app
-never gets a service.**
+**`service` arrives in v0.6.0** as a *provider transport*, not a second API. The
+public surface is always WIT: a service answers `interface#function` over a
+private `POST /__anth/call`, and routes, CLI and generated clients do not know
+whether the provider is a component or a process (D-Service-Wit-Rpc). The socket
+exists because a native binary cannot be linked as a component; it is not exposed
+as `/service/*`. A service declares a class (`exec`, `socket`, `device`, `admin`,
+`host`) that becomes part of its risk, its argv is frozen in the grant, and a
+third-party service is refused unless the daemon starts with
+`[services] allow-third-party = true` (D-Service-Third-Party).
 
-An app may be wasm-only (a provider such as `fs`), ui-only (a slot contribution
-with no logic), or both. `[wasm]` is required if and only if the app declares at
-least one `[[export]]`; the validator says so in the error rather than letting an
-author ship an empty component.
+An app may be wasm-only, service-only, or **hybrid** (both halves in one bundle,
+with disjoint exports). v3 requires at least one half; a `[wasm]` needs at least
+one wasm export and a `[service]` needs at least one service export. v2 apps keep
+their exact meaning, and `[service]` requires `manifest_version = 3`.
 
 ### 7.5 The component world
 

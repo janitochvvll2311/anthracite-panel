@@ -38,6 +38,13 @@ require-signature = true
 allow-unverified-assets = false
 max-bundle-bytes = 33_554_432
 
+[services]
+# Startup-only. Off refuses every third-party bundle that declares a native
+# service; system-tier bundles are unaffected. Turning it off and restarting
+# stops third-party services and degrades their consumers without deleting
+# their state.
+allow-third-party = false
+
 [limits]
 # Defaults for an app whose manifest omits them.
 fuel = 10_000_000
