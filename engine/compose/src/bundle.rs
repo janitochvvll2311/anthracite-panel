@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{Cursor, Read};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -33,6 +33,9 @@ pub struct Options {
     pub max_bundle_bytes: u64,
     /// `apps.require-signature`.
     pub require_signature: bool,
+    /// `services.allow-third-party`: a third-party bundle with `[service]` is
+    /// refused at install unless the deployment opted in (D-Service-Third-Party).
+    pub allow_third_party_service: bool,
     /// Packages the bundle may import besides the native set: the installed
     /// providers' `namespace:package` names.
     pub known_packages: Vec<String>,
@@ -274,6 +277,9 @@ fn check_layout(root: &Path) -> Result<(), Error> {
             || (relative.starts_with("wasm/")
                 && !relative["wasm/".len()..].contains('/')
                 && relative.ends_with(".wasm"))
+            || (relative.starts_with("bin/")
+                && !relative["bin/".len()..].contains('/')
+                && !relative["bin/".len()..].starts_with('.'))
             || (relative.starts_with("web/")
                 && !relative["web/".len()..].contains('/')
                 && (relative.ends_with(".js")
@@ -405,13 +411,24 @@ fn check_hashes(root: &Path, manifest: &Manifest) -> Result<(), Error> {
         declared.insert(wasm.path.clone());
         check_hash(root, &wasm.path, &wasm.sha256)?;
     }
+    if let Some(service) = &manifest.service {
+        declared.insert(service.path.clone());
+        check_hash(root, &service.path, &service.sha256)?;
+        // Verified bytes, owner-executable, nobody else: the supervisor launches
+        // this path directly and the bundle directory is already `0700`.
+        fs::set_permissions(root.join(&service.path), fs::Permissions::from_mode(0o700)).map_err(
+            |error| Error::internal(format!("marking `{}` executable: {error}", service.path)),
+        )?;
+    }
     for slot in &manifest.slot {
         declared.insert(slot.module.clone());
         check_hash(root, &slot.module, &slot.sha256)?;
     }
     for (relative, is_file) in walk(root)? {
         if is_file
-            && (relative.starts_with("wasm/") || relative.starts_with("web/"))
+            && (relative.starts_with("wasm/")
+                || relative.starts_with("bin/")
+                || relative.starts_with("web/"))
             && !declared.contains(&relative)
         {
             return Err(Error::invalid(format!(
@@ -564,7 +581,6 @@ mod tests {
     use anth_contract::{KeyAlgorithm, TrustedKey, KEY_VERSION};
     use ed25519_dalek::{Signer, SigningKey};
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
     use zip::write::SimpleFileOptions;
 
     const WASM: &[u8] = b"\0asm a fake component";
@@ -599,6 +615,21 @@ mod tests {
         ]
     }
 
+    fn service_manifest(binary: &[u8]) -> String {
+        format!(
+            "manifest_version = 3\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[service]\npath = \"bin/notes\"\nsha256 = \"{}\"\nclass = \"socket\"\nargv = [\"--socket\", \"{{socket}}\"]\n\n[[export]]\ninterface = \"example:notes/notes@1.0.0\"\n",
+            hex(&Sha256::digest(binary))
+        )
+    }
+
+    fn service_entries(manifest: &str, wit: &str, binary: &[u8]) -> Vec<(String, Vec<u8>)> {
+        vec![
+            ("manifest.toml".to_string(), manifest.as_bytes().to_vec()),
+            ("wit/notes.wit".to_string(), wit.as_bytes().to_vec()),
+            ("bin/notes".to_string(), binary.to_vec()),
+        ]
+    }
+
     fn zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, bytes) in entries {
@@ -614,6 +645,7 @@ mod tests {
         Options {
             max_bundle_bytes: 1 << 20,
             require_signature,
+            allow_third_party_service: false,
             known_packages: Vec::new(),
         }
     }
@@ -719,7 +751,97 @@ mod tests {
         let manifest = manifest(WASM);
         let mut files = entries(&manifest, WIT, WASM);
         files.push(("bin/helper".to_string(), b"payload".to_vec()));
+        let error =
+            extract(&zip(&files), &state, &options(false), &keyring).expect_err("undeclared");
+        assert!(
+            error.message().contains("not declared in the manifest"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_file_outside_the_layout_is_refused() {
+        let state = scratch("layout");
+        let keyring = Keyring::new(&state);
+        let manifest = manifest(WASM);
+        let mut files = entries(&manifest, WIT, WASM);
+        files.push(("lib/helper.so".to_string(), b"payload".to_vec()));
         let error = extract(&zip(&files), &state, &options(false), &keyring).expect_err("layout");
+        assert!(
+            error.message().contains("not part of the bundle layout"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_service_bundle_verifies_and_is_executable() {
+        let state = scratch("service");
+        let keyring = Keyring::new(&state);
+        let binary = b"\x7fELF a fake service";
+        let manifest = service_manifest(binary);
+        let staged = extract(
+            &zip(&service_entries(&manifest, WIT, binary)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect("service bundle");
+        let path = staged.root().join("bin/notes");
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        assert_eq!(
+            staged.manifest().service.as_ref().unwrap().path,
+            "bin/notes"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_service_binary_that_does_not_match_its_hash_is_refused() {
+        let state = scratch("service-hash");
+        let keyring = Keyring::new(&state);
+        let manifest = service_manifest(b"\x7fELF the real service");
+        let error = extract(
+            &zip(&service_entries(
+                &manifest,
+                WIT,
+                b"\x7fELF a swapped service",
+            )),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("service hash");
+        assert!(error.message().contains("manifest hash"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_undeclared_service_binary_is_refused() {
+        let state = scratch("service-undeclared");
+        let keyring = Keyring::new(&state);
+        let binary = b"\x7fELF a fake service";
+        let manifest = service_manifest(binary);
+        let mut files = service_entries(&manifest, WIT, binary);
+        files.push(("bin/helper".to_string(), b"payload".to_vec()));
+        let error = extract(&zip(&files), &state, &options(false), &keyring)
+            .expect_err("undeclared service file");
+        assert!(error.message().contains("not declared"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_bin_subdirectory_is_refused() {
+        let state = scratch("service-subdir");
+        let keyring = Keyring::new(&state);
+        let binary = b"\x7fELF a fake service";
+        let manifest = service_manifest(binary);
+        let mut files = service_entries(&manifest, WIT, binary);
+        files.push(("bin/lib/notes.so".to_string(), b"payload".to_vec()));
+        let error =
+            extract(&zip(&files), &state, &options(false), &keyring).expect_err("subdirectory");
         assert!(
             error.message().contains("not part of the bundle layout"),
             "{error}"
@@ -1041,6 +1163,7 @@ mod tests {
             &Options {
                 max_bundle_bytes: 10,
                 require_signature: false,
+                allow_third_party_service: false,
                 known_packages: Vec::new(),
             },
             &keyring,

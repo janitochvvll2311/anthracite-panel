@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `engine` | compiled in | nothing; it *provides* the native set |
 | `system` | signed by the distribution key, shipped in `apps/` | wasm, ui; services in v0.6.0 |
-| `third-party` | any other signer, approved by the operator | wasm, ui only |
+| `third-party` | any other signer, approved by the operator | wasm, ui; a service only with `[services] allow-third-party = true` |
 
 The **distribution key is compiled into the binary**. Rotating it requires a
 release; no configuration file can mint a `system` app. An operator may add keys
@@ -30,10 +30,12 @@ Revocation is manual in v0.5.0: uninstall the app, or rotate the distribution ke
 in a release. There is no CRL, and that is a documented limitation, not an
 oversight.
 
-A third-party app never gets a service (`D-Services`). Services arrive in v0.6.0
-with the terminal, and even then they stay `system`-tier: a service is a host
-process, and "run arbitrary binaries" is not a capability we hand out with a
-checkbox.
+A third-party app never gets a service by default (`D-Service-Third-Party`).
+Services arrive in v0.6.0 as WIT providers over a private socket, and they still
+do not hand out host reach for free: the daemon must start with
+`[services] allow-third-party = true`, the class and argv are shown at approval,
+and a service is always at least `admin`. System-tier services are unaffected by
+the switch.
 
 ### 9.2 The closed native capability set
 

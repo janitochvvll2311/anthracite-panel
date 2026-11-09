@@ -25,7 +25,7 @@ pub use error::{Error, ErrorEnvelope, ErrorKind};
 pub use grant::{Grant, GRANT_VERSION};
 pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use key::{KeyAlgorithm, TrustedKey, KEY_VERSION};
-pub use manifest::{Manifest, MANIFEST_VERSION};
+pub use manifest::{Manifest, MANIFEST_VERSION, SERVICE_MANIFEST_VERSION};
 pub use view::{
     AppProblem, AppView, CompositionView, DegradedApp, FatalView, GrantState, GrantView, KeyView,
     SurfaceApp, SurfaceCli, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,

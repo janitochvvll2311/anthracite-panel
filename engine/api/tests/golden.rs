@@ -131,7 +131,7 @@ fn fixture_state(composition: &str, approved: &[&str]) -> (Arc<EngineState>, Pat
     let state = Arc::new(
         EngineState::new(1000)
             .with_composition(composition)
-            .with_apps(&dir, 1 << 20, false),
+            .with_apps(&dir, 1 << 20, false, false),
     );
     (state, dir)
 }

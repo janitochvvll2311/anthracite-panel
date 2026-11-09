@@ -100,6 +100,7 @@ impl Registry {
         let staged = self.extract(bundle, options)?;
         let manifest = staged.manifest().clone();
         let id = AppId::parse(&manifest.app.id)?;
+        check_service_tier(&manifest, Tier::ThirdParty, options)?;
         let target = self.apps.join(id.as_str());
         match fs::symlink_metadata(&target) {
             Ok(_) => {
@@ -160,6 +161,7 @@ impl Registry {
                 manifest.app.id
             )));
         }
+        check_service_tier(&manifest, Tier::ThirdParty, options)?;
         let descriptor = Descriptor {
             version: DESCRIPTOR_VERSION,
             app: app.clone(),
@@ -700,6 +702,19 @@ fn read_installed(dir: &Path) -> Result<Installed, Error> {
     })
 }
 
+/// A service is never silently allowed: the tier decides, and the deployment's
+/// startup switch decides for third-party (D-Service-Third-Party).
+fn check_service_tier(manifest: &Manifest, tier: Tier, options: &Options) -> Result<(), Error> {
+    if manifest.service.is_some() && tier == Tier::ThirdParty && !options.allow_third_party_service
+    {
+        return Err(Error::denied(
+            "this engine refuses third-party service bundles; start it with \
+             `[services] allow-third-party = true` to opt in",
+        ));
+    }
+    Ok(())
+}
+
 fn read_descriptor(dir: &Path) -> Result<Descriptor, Error> {
     let path = dir.join("descriptor.toml");
     let text = match fs::read_to_string(&path) {
@@ -861,12 +876,64 @@ mod tests {
         plain_bundle("org.example.other", "example:other", None)
     }
 
+    fn service_bundle() -> Vec<u8> {
+        let binary = b"\x7fELF a fake service";
+        let manifest = format!(
+            "manifest_version = 3\n\n[app]\nid = \"org.example.service\"\nnamespace = \"example:service\"\nname = \"Service\"\nversion = \"0.1.0\"\n\n[service]\npath = \"bin/service\"\nsha256 = \"{}\"\nclass = \"socket\"\nargv = [\"--socket\", \"{{socket}}\"]\n\n[[export]]\ninterface = \"example:service/notes@1.0.0\"\n",
+            hex(&Sha256::digest(binary))
+        );
+        let wit = "package example:service@1.0.0;\ninterface notes { all: func(); }\nworld app { export notes; }\n";
+        zip(&[
+            ("manifest.toml".to_string(), manifest.into_bytes()),
+            ("wit/service.wit".to_string(), wit.as_bytes().to_vec()),
+            ("bin/service".to_string(), binary.to_vec()),
+        ])
+    }
+
     fn options() -> Options {
         Options {
             max_bundle_bytes: 1 << 20,
             require_signature: false,
+            allow_third_party_service: false,
             known_packages: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_third_party_service_is_refused_unless_allowed() {
+        let state = scratch("service-switch");
+        let registry = Registry::new(&state);
+        let error = registry
+            .install(&service_bundle(), &options())
+            .expect_err("third-party service");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        assert!(error.message().contains("allow-third-party"), "{error}");
+        assert!(!registry.dir().join("org.example.service").exists());
+
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        let installed = registry
+            .install(&service_bundle(), &allowed)
+            .expect("opted in");
+        assert_eq!(installed.manifest.app.id, "org.example.service");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_service_replacement_is_gated_too() {
+        let state = scratch("service-replace");
+        let registry = Registry::new(&state);
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        registry
+            .install(&service_bundle(), &allowed)
+            .expect("install");
+        let app = AppId::parse("org.example.service").unwrap();
+        let error = registry
+            .replace(&app, &service_bundle(), &options())
+            .expect_err("switch is off");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        fs::remove_dir_all(&state).expect("cleanup");
     }
 
     #[test]

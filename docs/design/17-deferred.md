@@ -56,12 +56,11 @@ An app kind that runs as a supervised child process for kernel-facing work, with
 declared binary, an argv allowlist, a class (`exec`, `socket`, `device`, `admin`,
 `host`) and a socket the supervisor hands over.
 
-**Why deferred.** A service cannot speak WIT, so its routes are raw HTTP and it is
-the one exception to "WIT is the only type system". That exception needs a real
-consumer to be designed honestly, and the first one is the PTY.
-
-**Ready when** the terminal app is written. Until then the tier rule stands
-unchanged: **a third-party app never gets a service.**
+**Status: scheduled, not deferred.** v0.6.0 Phase 1 implements services as WIT
+providers over a private `/__anth/call`, with manifest v3, the startup switch and
+the host emulator before real host processes ([§19](19-v0.6-baseline.md)). The
+earlier "raw HTTP" shape was dropped: a service is a transport behind the same
+`AppCaller` as a component, so it stays inside the type system.
 
 ### 1.4 Blobs
 

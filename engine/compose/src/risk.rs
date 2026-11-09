@@ -34,6 +34,7 @@ pub fn app_risk(app: &AppId, installed: &[InstalledApp]) -> Result<Risk, Resolut
         }
     }
     let mut imports: BTreeMap<AppId, Vec<InterfaceId>> = BTreeMap::new();
+    let mut own: BTreeMap<AppId, Risk> = BTreeMap::new();
     let mut exporters: BTreeMap<InterfaceId, AppId> = BTreeMap::new();
     let mut stack = vec![app.clone()];
     while let Some(id) = stack.pop() {
@@ -81,12 +82,14 @@ pub fn app_risk(app: &AppId, installed: &[InstalledApp]) -> Result<Risk, Resolut
                 }
             }
         }
-        imports.insert(id, reachable);
+        imports.insert(id.clone(), reachable);
+        own.insert(id, entry.manifest.service_risk());
     }
 
     let order = order(&imports, &exporters)?;
     let risk = risk_over(
         &order,
+        |id| own.get(id).copied().unwrap_or(Risk::Read),
         |id| imports.get(id).cloned().unwrap_or_default(),
         |import| exporters.get(import).cloned(),
     );
@@ -252,6 +255,30 @@ mod tests {
         manifest
     }
 
+    fn service(
+        id: &str,
+        namespace: &str,
+        class: &str,
+        exports: &[&str],
+        imports: &[&str],
+    ) -> Manifest {
+        let mut text = format!(
+            "manifest_version = 3\n\n[app]\nid = \"{id}\"\nnamespace = \"{namespace}\"\nname = \"Test\"\nversion = \"0.1.0\"\n\n[service]\npath = \"bin/test\"\nsha256 = \"{}\"\nclass = \"{class}\"\nargv = [\"--socket\", \"{{socket}}\"]\n",
+            "c".repeat(64)
+        );
+        for export in exports {
+            text.push_str(&format!(
+                "\n[[export]]\ninterface = \"{export}\"\ntarget = \"service\"\n"
+            ));
+        }
+        for import in imports {
+            text.push_str(&format!("\n[[import]]\ninterface = \"{import}\"\n"));
+        }
+        let manifest = Manifest::parse(&text).expect("manifest parses");
+        manifest.validate().expect("manifest validates");
+        manifest
+    }
+
     fn broken_manifest(id: &str) -> Manifest {
         // Parses, but does not validate: the version is not semver.
         Manifest::parse(&format!(
@@ -299,6 +326,53 @@ mod tests {
             )),
             installed(manifest(CONSUMER, "example:consumer", &[], &[GREETING])),
         ]
+    }
+
+    #[test]
+    fn a_service_class_is_the_apps_own_risk() {
+        let apps = vec![installed(service(
+            PROVIDER,
+            "example:provider",
+            "socket",
+            &[GREETING],
+            &[],
+        ))];
+        assert_eq!(app_risk(&app(PROVIDER), &apps).expect("risk"), Risk::Admin);
+    }
+
+    #[test]
+    fn a_service_class_travels_to_consumers() {
+        let apps = vec![
+            installed(service(
+                PROVIDER,
+                "example:provider",
+                "host",
+                &[GREETING],
+                &[],
+            )),
+            installed(manifest(CONSUMER, "example:consumer", &[], &[GREETING])),
+        ];
+        assert_eq!(app_risk(&app(PROVIDER), &apps).expect("risk"), Risk::Host);
+        assert_eq!(
+            app_risk(&app(CONSUMER), &apps).expect("risk"),
+            Risk::Host,
+            "a consumer of a host-class provider inherits its authority"
+        );
+    }
+
+    #[test]
+    fn approve_requires_the_service_class_level() {
+        let apps = vec![installed(service(
+            PROVIDER,
+            "example:provider",
+            "exec",
+            &[GREETING],
+            &[],
+        ))];
+        let mut missing = approval();
+        missing.accepted = vec![Risk::Write, Risk::Admin];
+        let error = approve(&app(PROVIDER), &apps, missing).expect_err("missing --accept-host");
+        assert!(error.to_string().contains("--accept-host"), "{error}");
     }
 
     #[test]

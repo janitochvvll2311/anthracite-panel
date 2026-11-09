@@ -187,7 +187,7 @@ fn apps_state_with(composed: &[&str]) -> (Arc<EngineState>, std::path::PathBuf) 
                         apps: composed.iter().map(|app| app.to_string()).collect(),
                     }],
                 })
-                .with_apps(&dir, 1 << 20, false),
+                .with_apps(&dir, 1 << 20, false, false),
         ),
         dir,
     )
@@ -1545,7 +1545,7 @@ async fn an_unauthenticated_request_is_audited() {
 #[tokio::test]
 async fn an_oversized_install_is_too_large() {
     let (_, dir) = apps_state();
-    let state = Arc::new(EngineState::new(1000).with_apps(&dir, 10, false));
+    let state = Arc::new(EngineState::new(1000).with_apps(&dir, 10, false, false));
     let (status, _, value) = call(state, "POST", "/api/engine/apps", vec![0u8; 20]).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(value["error"]["code"], "too-large");
@@ -1578,7 +1578,7 @@ async fn a_chunked_body_over_the_limit_is_too_large() {
     use axum::body::Bytes;
     use futures_util::stream;
     let (_, dir) = apps_state();
-    let state = Arc::new(EngineState::new(1000).with_apps(&dir, 10, false));
+    let state = Arc::new(EngineState::new(1000).with_apps(&dir, 10, false, false));
     let body = axum::body::Body::from_stream(stream::iter(vec![
         Ok::<_, std::io::Error>(Bytes::from_static(b"0123456789")),
         Ok(Bytes::from_static(b"more")),

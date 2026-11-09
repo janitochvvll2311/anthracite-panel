@@ -145,6 +145,11 @@ async fn run(args: Args) -> Result<(), Error> {
     config.validate(args.profile)?;
     let logger = Logger::new(config.log.clone());
 
+    if config.services.allow_third_party {
+        logger.warn(
+            "`services.allow-third-party` is on: third-party bundles may declare native services",
+        );
+    }
     if args.reset_credentials && anth_engine::state::reset_credentials(&config.state)? {
         logger.warn("operator credentials reset; a new password will be generated");
     }
@@ -175,6 +180,7 @@ async fn run(args: Args) -> Result<(), Error> {
                 &config.state,
                 config.apps.max_bundle_bytes,
                 config.apps.require_signature,
+                config.services.allow_third_party,
             )
             .with_caller(Arc::new(anth_engine::supervisor::SupervisorCaller::new(
                 supervisor.clone(),

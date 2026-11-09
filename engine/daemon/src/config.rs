@@ -51,6 +51,8 @@ pub struct Config {
     #[serde(default)]
     pub apps: AppsSection,
     #[serde(default)]
+    pub services: ServicesSection,
+    #[serde(default)]
     pub limits: LimitsSection,
 }
 
@@ -130,6 +132,16 @@ fn yes() -> bool {
 
 fn default_bundle_cap() -> u64 {
     32 * 1024 * 1024
+}
+
+/// The startup decision on native service bundles (D-Service-Third-Party).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServicesSection {
+    /// A third-party bundle that declares `[service]` is refused at install
+    /// unless this is on. System-tier apps are unaffected.
+    #[serde(rename = "allow-third-party", default)]
+    pub allow_third_party: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -364,6 +376,15 @@ mod tests {
         assert_eq!(debug.state, PathBuf::from("./state"));
         assert!(!debug.apps.require_signature);
         assert!(debug.apps.allow_unverified_assets);
+    }
+
+    #[test]
+    fn third_party_services_are_off_by_default() {
+        assert!(!Config::release().services.allow_third_party);
+        assert!(!Config::debug().services.allow_third_party);
+        let text = TEMPLATE.replace("allow-third-party = false", "allow-third-party = true");
+        let config = Config::parse(&text).expect("parse");
+        assert!(config.services.allow_third_party);
     }
 
     #[test]

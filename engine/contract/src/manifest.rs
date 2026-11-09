@@ -9,9 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::id::{is_kebab, is_sha256, parse_version, AppId, InterfaceId, Namespace};
+use crate::Risk;
 
 /// The manifest schema this version speaks.
 pub const MANIFEST_VERSION: u32 = 2;
+/// The service/hybrid schema. v2 apps stay valid unchanged.
+pub const SERVICE_MANIFEST_VERSION: u32 = 3;
 
 /// The verbs a route may declare. `OPTIONS` belongs to the engine.
 pub const ROUTE_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
@@ -32,6 +35,8 @@ pub struct Manifest {
     pub requires: Option<RequiresSection>,
     #[serde(default)]
     pub wasm: Option<WasmSection>,
+    #[serde(default)]
+    pub service: Option<ServiceSection>,
     #[serde(default)]
     pub export: Vec<ExportSection>,
     #[serde(default)]
@@ -75,10 +80,70 @@ pub struct WasmSection {
     pub sha256: String,
 }
 
+/// A native child process. v3 only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceSection {
+    pub path: String,
+    pub sha256: String,
+    pub class: ServiceClass,
+    pub argv: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceClass {
+    Exec,
+    Socket,
+    Device,
+    Admin,
+    Host,
+}
+
+impl ServiceClass {
+    pub const ALL: &'static [ServiceClass] = &[
+        ServiceClass::Exec,
+        ServiceClass::Socket,
+        ServiceClass::Device,
+        ServiceClass::Admin,
+        ServiceClass::Host,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Exec => "exec",
+            Self::Socket => "socket",
+            Self::Device => "device",
+            Self::Admin => "admin",
+            Self::Host => "host",
+        }
+    }
+
+    /// The risk a service adds to its app and to every consumer of its exports.
+    pub const fn risk(self) -> Risk {
+        match self {
+            Self::Socket | Self::Device | Self::Admin => Risk::Admin,
+            Self::Exec | Self::Host => Risk::Host,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportTarget {
+    #[default]
+    Wasm,
+    Service,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExportSection {
     pub interface: String,
+    /// Required when the app has both `[wasm]` and `[service]`; otherwise it is
+    /// inferred from the half that exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<ExportTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -154,13 +219,59 @@ impl Manifest {
         }
     }
 
+    /// The half that implements an export. Validation rejects the ambiguous
+    /// hybrid case where both halves exist and `target` is omitted.
+    pub fn export_target(&self, export: &ExportSection) -> ExportTarget {
+        export.target.unwrap_or_else(|| {
+            if self.wasm.is_none() && self.service.is_some() {
+                ExportTarget::Service
+            } else {
+                ExportTarget::Wasm
+            }
+        })
+    }
+
+    /// The half that implements an exported interface, if it is exported.
+    pub fn interface_target(&self, interface: &str) -> Option<ExportTarget> {
+        self.export
+            .iter()
+            .find(|export| export.interface == interface)
+            .map(|export| self.export_target(export))
+    }
+
+    /// The risk the declared service class adds, independent of imports.
+    pub fn service_risk(&self) -> Risk {
+        self.service
+            .as_ref()
+            .map(|service| service.class.risk())
+            .unwrap_or(Risk::Read)
+    }
+
     /// Every rule that does not need a component or the catalog.
     pub fn validate(&self) -> Result<(), Error> {
-        if self.manifest_version != MANIFEST_VERSION {
+        if !matches!(
+            self.manifest_version,
+            MANIFEST_VERSION | SERVICE_MANIFEST_VERSION
+        ) {
             return Err(Error::invalid(format!(
-                "manifest_version {} is not supported; this engine speaks {MANIFEST_VERSION}",
+                "manifest_version {} is not supported; this engine speaks \
+                 {MANIFEST_VERSION} and {SERVICE_MANIFEST_VERSION}",
                 self.manifest_version
             )));
+        }
+        if self.manifest_version == MANIFEST_VERSION && self.service.is_some() {
+            return Err(Error::invalid("`[service]` needs `manifest_version = 3`"));
+        }
+        if self.manifest_version == SERVICE_MANIFEST_VERSION
+            && self.wasm.is_none()
+            && self.service.is_none()
+        {
+            return Err(Error::invalid(
+                "a v3 app needs a `[wasm]` component, a `[service]`, or both",
+            ));
+        }
+        if let Some(service) = &self.service {
+            check_service(service)?;
         }
 
         AppId::parse(&self.app.id)?;
@@ -194,6 +305,9 @@ impl Manifest {
             )));
         }
 
+        let hybrid = self.wasm.is_some() && self.service.is_some();
+        let mut wasm_exports = 0usize;
+        let mut service_exports = 0usize;
         let mut exports = Vec::with_capacity(self.export.len());
         for export in &self.export {
             let id = InterfaceId::parse(&export.interface)?;
@@ -215,6 +329,44 @@ impl Manifest {
                     export.interface
                 )));
             }
+            let target = match export.target {
+                Some(ExportTarget::Service) if self.manifest_version == MANIFEST_VERSION => {
+                    return Err(Error::invalid(format!(
+                        "`{}` is a service export; it needs `manifest_version = 3`",
+                        export.interface
+                    )));
+                }
+                Some(target) => target,
+                None if hybrid => {
+                    return Err(Error::invalid(format!(
+                        "hybrid `[[export]]` `{}` must declare `target = \"wasm\"` or `target = \"service\"`",
+                        export.interface
+                    )));
+                }
+                None if self.wasm.is_none() && self.service.is_none() => {
+                    return Err(Error::invalid(
+                        "an app with `[[export]]` needs a `[wasm]` component",
+                    ));
+                }
+                None if self.wasm.is_none() => ExportTarget::Service,
+                None => ExportTarget::Wasm,
+            };
+            match target {
+                ExportTarget::Wasm if self.wasm.is_none() => {
+                    return Err(Error::invalid(format!(
+                        "`{}` is a wasm export but the app has no `[wasm]`",
+                        export.interface
+                    )));
+                }
+                ExportTarget::Service if self.service.is_none() => {
+                    return Err(Error::invalid(format!(
+                        "`{}` is a service export but the app has no `[service]`",
+                        export.interface
+                    )));
+                }
+                ExportTarget::Wasm => wasm_exports += 1,
+                ExportTarget::Service => service_exports += 1,
+            }
             exports.push(export.interface.clone());
         }
 
@@ -230,14 +382,14 @@ impl Manifest {
             imports.push(import.interface.clone());
         }
 
-        if exports.is_empty() && self.wasm.is_some() {
+        if self.wasm.is_some() && wasm_exports == 0 {
             return Err(Error::invalid(
-                "a `[wasm]` section needs at least one `[[export]]`; remove one or the other",
+                "a `[wasm]` section needs at least one wasm `[[export]]`",
             ));
         }
-        if !exports.is_empty() && self.wasm.is_none() {
+        if self.service.is_some() && service_exports == 0 {
             return Err(Error::invalid(
-                "an app with `[[export]]` needs a `[wasm]` component",
+                "a `[service]` section needs at least one service `[[export]]`",
             ));
         }
         if let Some(wasm) = &self.wasm {
@@ -366,6 +518,54 @@ pub fn parse_call(input: &str) -> Result<(String, String), Error> {
 }
 
 /// A relative path inside the bundle.
+fn check_service(service: &ServiceSection) -> Result<(), Error> {
+    let name = service.path.strip_prefix("bin/").ok_or_else(|| {
+        Error::invalid(format!(
+            "service path `{}` must be under `bin/`",
+            service.path
+        ))
+    })?;
+    if name.is_empty() || name.contains('/') || name == "." || name == ".." || name.starts_with('.')
+    {
+        return Err(Error::invalid(format!(
+            "service path `{}` is not `bin/<file>`",
+            service.path
+        )));
+    }
+    if !is_sha256(&service.sha256) {
+        return Err(Error::invalid(
+            "the service binary `sha256` is not 64 lowercase hex",
+        ));
+    }
+    if service.argv.is_empty() || service.argv.len() > 64 {
+        return Err(Error::invalid(
+            "service argv must have between 1 and 64 entries",
+        ));
+    }
+    let mut sockets = 0usize;
+    for arg in &service.argv {
+        if arg.len() > 4096 {
+            return Err(Error::invalid("a service argv entry is longer than 4 KiB"));
+        }
+        if arg.contains('\0') {
+            return Err(Error::invalid("a service argv entry contains a NUL byte"));
+        }
+        sockets += arg.matches("{socket}").count();
+        let rest = arg.replace("{socket}", "");
+        if rest.contains('{') || rest.contains('}') {
+            return Err(Error::invalid(
+                "a service argv entry has an unknown placeholder",
+            ));
+        }
+    }
+    if sockets != 1 {
+        return Err(Error::invalid(
+            "service argv must contain exactly one `{socket}`",
+        ));
+    }
+    Ok(())
+}
+
 fn check_relative(path: &str, what: &str) -> Result<(), Error> {
     if path.is_empty()
         || path.starts_with('/')
@@ -476,6 +676,66 @@ wall-ms = 5000
         Manifest::parse(VALID).expect("parse")
     }
 
+    const SERVICE: &str = r#"
+manifest_version = 3
+
+[app]
+id = "org.example.notes"
+alias = "notes"
+namespace = "example:notes"
+name = "Notes"
+version = "0.1.0"
+
+[service]
+path = "bin/notes"
+sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+class = "host"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "example:notes/list@1.0.0"
+
+[[export]]
+interface = "example:notes/view@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/notes"
+call = "example:notes/list@1.0.0#all"
+
+[[cli]]
+call = "example:notes/list@1.0.0#all"
+verb = "list"
+"#;
+
+    const HYBRID: &str = r#"
+manifest_version = 3
+
+[app]
+id = "org.example.notes"
+namespace = "example:notes"
+name = "Notes"
+version = "0.1.0"
+
+[wasm]
+path = "wasm/notes.wasm"
+sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[service]
+path = "bin/notes"
+sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+class = "socket"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "example:notes/list@1.0.0"
+target = "service"
+
+[[export]]
+interface = "example:notes/view@1.0.0"
+target = "wasm"
+"#;
+
     #[test]
     fn a_complete_manifest_validates() {
         let manifest = valid();
@@ -526,6 +786,142 @@ wall-ms = 5000
         manifest.wasm = None;
         let error = manifest.validate().expect_err("wasm");
         assert!(error.message().contains("needs a `[wasm]`"), "{error}");
+    }
+
+    #[test]
+    fn a_service_manifest_validates() {
+        let manifest = Manifest::parse(SERVICE).expect("parse");
+        manifest.validate().expect("validate");
+        assert_eq!(manifest.export.len(), 2);
+        assert_eq!(manifest.service_risk(), Risk::Host);
+        assert_eq!(
+            manifest.interface_target("example:notes/list@1.0.0"),
+            Some(ExportTarget::Service)
+        );
+        assert_eq!(
+            manifest.interface_target("example:notes/view@1.0.0"),
+            Some(ExportTarget::Service)
+        );
+        assert_eq!(manifest.interface_target("example:other@1.0.0"), None);
+    }
+
+    #[test]
+    fn a_hybrid_manifest_validates() {
+        let manifest = Manifest::parse(HYBRID).expect("parse");
+        manifest.validate().expect("validate");
+        assert_eq!(manifest.service_risk(), Risk::Admin);
+        assert_eq!(
+            manifest.interface_target("example:notes/list@1.0.0"),
+            Some(ExportTarget::Service)
+        );
+        assert_eq!(
+            manifest.interface_target("example:notes/view@1.0.0"),
+            Some(ExportTarget::Wasm)
+        );
+    }
+
+    #[test]
+    fn a_v3_app_needs_a_half() {
+        let text = SERVICE
+            .split("[service]")
+            .next()
+            .expect("prefix")
+            .to_string();
+        let manifest = Manifest::parse(&text).expect("parse");
+        let error = manifest.validate().expect_err("no half");
+        assert!(error.message().contains("`[service]`"), "{error}");
+    }
+
+    #[test]
+    fn v2_cannot_declare_a_service() {
+        let mut manifest = Manifest::parse(SERVICE).expect("parse");
+        manifest.manifest_version = MANIFEST_VERSION;
+        let error = manifest.validate().expect_err("v2 service");
+        assert!(error.message().contains("manifest_version = 3"), "{error}");
+    }
+
+    #[test]
+    fn a_service_needs_an_export() {
+        let mut manifest = Manifest::parse(SERVICE).expect("parse");
+        manifest.export.clear();
+        let error = manifest.validate().expect_err("no export");
+        assert!(
+            error
+                .message()
+                .contains("at least one service `[[export]]`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_hybrid_export_must_declare_its_target() {
+        let mut manifest = Manifest::parse(HYBRID).expect("parse");
+        manifest.export[0].target = None;
+        let error = manifest.validate().expect_err("ambiguous target");
+        assert!(error.message().contains("must declare `target"), "{error}");
+    }
+
+    #[test]
+    fn a_service_export_needs_a_service_section() {
+        let mut manifest = valid();
+        manifest.manifest_version = SERVICE_MANIFEST_VERSION;
+        manifest.export[0].target = Some(ExportTarget::Service);
+        let error = manifest.validate().expect_err("no service");
+        assert!(error.message().contains("no `[service]`"), "{error}");
+    }
+
+    #[test]
+    fn a_service_path_is_bin_file() {
+        for path in ["apps/fs", "bin/../fs", "bin/dir/fs", "bin/.fs", "fs"] {
+            let mut manifest = Manifest::parse(SERVICE).expect("parse");
+            manifest.service.as_mut().expect("service").path = path.to_string();
+            let error = manifest.validate().expect_err(path);
+            assert!(error.message().contains("bin/"), "{path}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_service_argv_needs_exactly_one_socket() {
+        for argv in [
+            vec!["--serve".to_string()],
+            vec![
+                "--socket".to_string(),
+                "{socket}".to_string(),
+                "{socket}".to_string(),
+            ],
+            vec!["--socket".to_string(), "{root}".to_string()],
+        ] {
+            let mut manifest = Manifest::parse(SERVICE).expect("parse");
+            manifest.service.as_mut().expect("service").argv = argv.clone();
+            let error = manifest.validate().expect_err("argv");
+            assert!(
+                error.message().contains("{socket}") || error.message().contains("placeholder"),
+                "{argv:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_service_argv_is_bounded() {
+        let mut manifest = Manifest::parse(SERVICE).expect("parse");
+        let service = manifest.service.as_mut().expect("service");
+        service.argv = (0..65).map(|index| format!("--{index}")).collect();
+        let error = manifest.validate().expect_err("argv length");
+        assert!(error.message().contains("64"), "{error}");
+
+        let mut manifest = Manifest::parse(SERVICE).expect("parse");
+        let service = manifest.service.as_mut().expect("service");
+        service.argv = vec!["x".repeat(4097), "{socket}".to_string()];
+        let error = manifest.validate().expect_err("argv entry");
+        assert!(error.message().contains("4 KiB"), "{error}");
+    }
+
+    #[test]
+    fn a_service_binary_is_hashed() {
+        let mut manifest = Manifest::parse(SERVICE).expect("parse");
+        manifest.service.as_mut().expect("service").sha256 = "not-a-hash".to_string();
+        let error = manifest.validate().expect_err("hash");
+        assert!(error.message().contains("sha256"), "{error}");
     }
 
     #[test]

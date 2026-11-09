@@ -324,6 +324,8 @@ struct Entry {
     enabled: bool,
     exports: Vec<InterfaceId>,
     imports: Vec<InterfaceId>,
+    /// The authority the app adds by existing: its `[service]` class.
+    own_risk: Risk,
 }
 
 impl Entry {
@@ -436,6 +438,7 @@ pub fn resolve(
             enabled: found.enabled,
             exports,
             imports,
+            own_risk: found.manifest.service_risk(),
         });
     }
 
@@ -717,6 +720,13 @@ fn effective_risk(
             composed
                 .iter()
                 .find(|entry| &entry.id == id)
+                .map(|entry| entry.own_risk)
+                .unwrap_or(Risk::Read)
+        },
+        |id| {
+            composed
+                .iter()
+                .find(|entry| &entry.id == id)
                 .map(|entry| entry.imports.clone())
                 .unwrap_or_default()
         },
@@ -736,12 +746,15 @@ fn effective_risk(
 /// only the graph they feed it differs.
 pub(crate) fn risk_over(
     order: &[AppId],
+    own_risk_of: impl Fn(&AppId) -> Risk,
     imports_of: impl Fn(&AppId) -> Vec<InterfaceId>,
     provider_of: impl Fn(&InterfaceId) -> Option<AppId>,
 ) -> BTreeMap<AppId, Risk> {
     let mut risk: BTreeMap<AppId, Risk> = BTreeMap::new();
     for id in order {
-        let mut level = Risk::Read;
+        // A service adds authority by existing, before any import: its class is
+        // part of the app's risk and of its consumers' (§19 §3).
+        let mut level = own_risk_of(id);
         for import in imports_of(id) {
             let reached = match provider_of(&import) {
                 Some(provider) => *risk
