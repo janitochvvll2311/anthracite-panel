@@ -12,7 +12,7 @@ const DEFAULT_PAGE: u32 = 50;
 struct Process {
     pid: u32,
     ppid: u32,
-    name: &'static str,
+    name: String,
     user: &'static str,
     state: &'static str,
     cpu: f64,
@@ -32,7 +32,7 @@ impl ProcFixture {
                 Process {
                     pid: 1,
                     ppid: 0,
-                    name: "init",
+                    name: "init".to_string(),
                     user: "root",
                     state: "running",
                     cpu: 0.1,
@@ -42,7 +42,7 @@ impl ProcFixture {
                 Process {
                     pid: 120,
                     ppid: 1,
-                    name: "systemd-journal",
+                    name: "systemd-journal".to_string(),
                     user: "root",
                     state: "sleeping",
                     cpu: 0.2,
@@ -52,7 +52,7 @@ impl ProcFixture {
                 Process {
                     pid: 640,
                     ppid: 1,
-                    name: "sshd",
+                    name: "sshd".to_string(),
                     user: "root",
                     state: "sleeping",
                     cpu: 0.0,
@@ -62,7 +62,7 @@ impl ProcFixture {
                 Process {
                     pid: 981,
                     ppid: 1,
-                    name: "host-emulator",
+                    name: "host-emulator".to_string(),
                     user: "operator",
                     state: "running",
                     cpu: 2.4,
@@ -72,7 +72,7 @@ impl ProcFixture {
                 Process {
                     pid: 1204,
                     ppid: 1,
-                    name: "anth-panel",
+                    name: "anth-panel".to_string(),
                     user: "operator",
                     state: "running",
                     cpu: 1.1,
@@ -82,7 +82,7 @@ impl ProcFixture {
                 Process {
                     pid: 1400,
                     ppid: 981,
-                    name: "fs-worker",
+                    name: "fs-worker".to_string(),
                     user: "operator",
                     state: "sleeping",
                     cpu: 0.3,
@@ -92,7 +92,7 @@ impl ProcFixture {
                 Process {
                     pid: 1510,
                     ppid: 981,
-                    name: "terminal-worker",
+                    name: "terminal-worker".to_string(),
                     user: "operator",
                     state: "sleeping",
                     cpu: 0.1,
@@ -102,7 +102,7 @@ impl ProcFixture {
                 Process {
                     pid: 1601,
                     ppid: 640,
-                    name: "sleep",
+                    name: "sleep".to_string(),
                     user: "operator",
                     state: "sleeping",
                     cpu: 0.0,
@@ -112,7 +112,7 @@ impl ProcFixture {
                 Process {
                     pid: 1700,
                     ppid: 1,
-                    name: "postgres",
+                    name: "postgres".to_string(),
                     user: "postgres",
                     state: "sleeping",
                     cpu: 0.4,
@@ -122,7 +122,7 @@ impl ProcFixture {
                 Process {
                     pid: 1800,
                     ppid: 2,
-                    name: "kworker/0:1",
+                    name: "kworker/0:1".to_string(),
                     user: "root",
                     state: "running",
                     cpu: 0.0,
@@ -132,7 +132,7 @@ impl ProcFixture {
                 Process {
                     pid: 1902,
                     ppid: 1204,
-                    name: "bun",
+                    name: "bun".to_string(),
                     user: "operator",
                     state: "sleeping",
                     cpu: 0.6,
@@ -142,7 +142,7 @@ impl ProcFixture {
                 Process {
                     pid: 2044,
                     ppid: 1,
-                    name: "cron",
+                    name: "cron".to_string(),
                     user: "root",
                     state: "sleeping",
                     cpu: 0.0,
@@ -151,6 +151,41 @@ impl ProcFixture {
                 },
             ],
         }
+    }
+
+    fn spawn(&mut self, argv: Vec<String>) -> Result<u32, Error> {
+        if argv.is_empty() || argv.len() > 4 {
+            return Err(Error::invalid("`argv` must have between 1 and 4 entries"));
+        }
+        for argument in &argv {
+            if argument.len() > 128 || argument.contains('\0') {
+                return Err(Error::invalid("a spawn argument is invalid"));
+            }
+        }
+        let base = argv[0].rsplit('/').next().unwrap_or(&argv[0]).to_string();
+        if !matches!(base.as_str(), "sleep" | "echo" | "true") {
+            return Err(Error::denied(format!(
+                "`{base}` is not in the detached-spawn allowlist"
+            )));
+        }
+        let pid = self
+            .processes
+            .iter()
+            .map(|process| process.pid)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.processes.push(Process {
+            pid,
+            ppid: 1,
+            name: base,
+            user: "operator",
+            state: "running",
+            cpu: 0.0,
+            memory: 1_048_576,
+            start_ticks: u64::from(pid) + 1_000,
+        });
+        Ok(pid)
     }
 
     pub fn handle(&mut self, function: &str, input: &Value) -> Result<Value, Error> {
@@ -223,6 +258,22 @@ impl ProcFixture {
                 }
                 Ok(Value::Null)
             }
+            "spawn" => {
+                let arguments = input
+                    .get("argv")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| Error::invalid("`argv` is a list of strings"))?;
+                let mut argv = Vec::with_capacity(arguments.len());
+                for argument in arguments {
+                    argv.push(
+                        argument
+                            .as_str()
+                            .ok_or_else(|| Error::invalid("`argv` is a list of strings"))?
+                            .to_string(),
+                    );
+                }
+                Ok(Value::from(self.spawn(argv)?))
+            }
             other => Err(Error::not_found(format!(
                 "`anthracite:proc/proc#{other}` is not implemented"
             ))),
@@ -288,5 +339,30 @@ mod tests {
             )
             .expect_err("init");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+    }
+
+    #[test]
+    fn spawn_is_allowlisted_and_adds_a_process() {
+        let mut fixture = ProcFixture::demo();
+        let pid = call(&mut fixture, "spawn", json!({"argv": ["sleep", "30"]}));
+        let pid = pid.as_u64().expect("pid") as u32;
+        assert!(pid > 2044);
+        let page = call(&mut fixture, "list", json!({"limit": 500}));
+        let process = page["processes"]
+            .as_array()
+            .expect("processes")
+            .iter()
+            .find(|process| process["pid"] == pid)
+            .expect("spawned");
+        assert_eq!(process["name"], "sleep");
+
+        let error = fixture
+            .handle("spawn", &json!({"argv": ["rm", "-rf", "/"]}))
+            .expect_err("not allowlisted");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        let error = fixture
+            .handle("spawn", &json!({"argv": []}))
+            .expect_err("empty");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
     }
 }

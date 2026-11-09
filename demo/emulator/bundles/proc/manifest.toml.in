@@ -4,7 +4,7 @@ manifest_version = 3
 id = "org.anthracite.proc"
 namespace = "anthracite:proc"
 name = "Processes (emulator)"
-version = "0.1.0"
+version = "0.2.0"
 summary = "Deterministic process table fixture for the demo; replaced by the real proc app."
 license = "Apache-2.0"
 
@@ -15,17 +15,22 @@ class = "socket"
 argv = ["--socket", "{socket}"]
 
 [[export]]
-interface = "anthracite:proc/proc@1.0.0"
+interface = "anthracite:proc/proc@1.1.0"
 
 [[route]]
 method = "GET"
 path = "/processes"
-call = "anthracite:proc/proc@1.0.0#list"
+call = "anthracite:proc/proc@1.1.0#list"
 
 [[route]]
 method = "POST"
 path = "/signal"
-call = "anthracite:proc/proc@1.0.0#signal"
+call = "anthracite:proc/proc@1.1.0#signal"
+
+[[route]]
+method = "POST"
+path = "/spawn"
+call = "anthracite:proc/proc@1.1.0#spawn"
 
 [[slot]]
 id = "panel.view"
@@ -37,9 +42,13 @@ module = "web/proc.js"
 sha256 = "{{module_sha256}}"
 
 [[cli]]
-call = "anthracite:proc/proc@1.0.0#list"
+call = "anthracite:proc/proc@1.1.0#list"
 verb = "processes"
 
 [[cli]]
-call = "anthracite:proc/proc@1.0.0#signal"
+call = "anthracite:proc/proc@1.1.0#signal"
 verb = "process-signal"
+
+[[cli]]
+call = "anthracite:proc/proc@1.1.0#spawn"
+verb = "process-spawn"
