@@ -24,7 +24,7 @@ const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
 const NET: &str = "anthracite:net/net@1.1.0";
 const STORAGE: &str = "anthracite:storage/storage@1.1.0";
-const ACCOUNTS: &str = "anthracite:accounts/accounts@1.0.0";
+const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.
 const MODIFIED_MS: u64 = 1_760_000_000_000;
@@ -41,7 +41,7 @@ pub struct Emulator {
     procs: Mutex<proc::ProcFixture>,
     net: Mutex<net::NetFixture>,
     storage: Mutex<storage::StorageFixture>,
-    accounts: accounts::AccountsFixture,
+    accounts: Mutex<accounts::AccountsFixture>,
 }
 
 impl Default for Emulator {
@@ -58,7 +58,7 @@ impl Emulator {
             procs: Mutex::new(proc::ProcFixture::demo()),
             net: Mutex::new(net::NetFixture::new()),
             storage: Mutex::new(storage::StorageFixture::new()),
-            accounts: accounts::AccountsFixture::new(),
+            accounts: Mutex::new(accounts::AccountsFixture::new()),
         }
     }
 
@@ -91,7 +91,11 @@ impl Handler for Emulator {
                 .lock()
                 .expect("the fixture mutex is not poisoned")
                 .handle(function, &input),
-            ACCOUNTS => self.accounts.handle(function, &input),
+            ACCOUNTS => self
+                .accounts
+                .lock()
+                .expect("the fixture mutex is not poisoned")
+                .handle(function, &input),
             _ => Err(Error::not_found(format!(
                 "`{interface}` is not exported by the emulator"
             ))),
