@@ -28,6 +28,15 @@
       <div class="grow"></div>
       <div id="actions" class="actions" aria-label="Actions"></div>
       <button
+        id="manager-button"
+        class="ghost"
+        type="button"
+        aria-label="Manager"
+        title="Installed apps and composition"
+      >
+        <span class="label">Manager</span>
+      </button>
+      <button
         id="settings-button"
         class="ghost"
         type="button"
@@ -92,6 +101,19 @@
           <button id="settings-close" class="ghost" type="button">Close</button>
         </header>
         <div id="settings-body"></div>
+      </div>
+    </div>
+
+    <div id="manager" class="manager hidden" role="dialog" aria-modal="true" aria-label="Manager">
+      <div class="manager-card">
+        <header>
+          <div>
+            <strong>Manager</strong>
+            <span class="muted">installed apps, grants and composition</span>
+          </div>
+          <button id="manager-close" class="ghost" type="button">Close</button>
+        </header>
+        <div id="manager-body" class="manager-body"></div>
       </div>
     </div>
 
