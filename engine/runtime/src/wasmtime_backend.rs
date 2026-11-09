@@ -143,17 +143,8 @@ impl Runtime for WasmtimeRuntime {
                 for id in &spec.granted {
                     link_host(&mut linker, id)?;
                 }
-                let (cancel, cancelled) = std::sync::mpsc::channel();
-                let timer_engine = engine.clone();
-                let wall = spec.budget.wall_ms;
-                let timer = std::thread::spawn(move || {
-                    if cancelled.recv_timeout(Duration::from_millis(wall)).is_err() {
-                        timer_engine.increment_epoch();
-                    }
-                });
+                let _backstop = WallBackstop::start(&engine, spec.budget.wall_ms);
                 let result = linker.instantiate(&mut store, &component);
-                let _ = cancel.send(());
-                let _ = timer.join();
                 result.map_err(start_error)?
             };
             let id = self.next_id();
@@ -214,20 +205,10 @@ impl Runtime for WasmtimeRuntime {
                 .map(|(name, ty)| json_to_val(call.input.get(name), ty))
                 .collect::<Result<_, _>>()?;
             let mut results = vec![Val::Bool(false); ty.results().len()];
-            // The wall backstop advances the engine epoch; the channel cancels
-            // the timer when the call finishes first, so it does not leak into
-            // the next call.
-            let (cancel, cancelled) = std::sync::mpsc::channel();
-            let engine = running.engine.clone();
-            let wall = running.budget.wall_ms;
-            let timer = std::thread::spawn(move || {
-                if cancelled.recv_timeout(Duration::from_millis(wall)).is_err() {
-                    engine.increment_epoch();
-                }
-            });
+            // The wall backstop advances the engine epoch; dropping it cancels
+            // the timer when the call finishes first.
+            let _backstop = WallBackstop::start(&running.engine, running.budget.wall_ms);
             let result = func.call(&mut store, &params, &mut results);
-            let _ = cancel.send(());
-            let _ = timer.join();
             result.map_err(trap_error)?;
             let output = match results.as_slice() {
                 [] => serde_json::Value::Null,
@@ -608,6 +589,44 @@ fn trap_of(error: &wasmtime::Error) -> Option<Trap> {
     error
         .chain()
         .find_map(|cause| cause.downcast_ref::<Trap>().copied())
+}
+
+/// A timer that increments the engine epoch after the wall budget. Dropping it
+/// cancels the timer and joins the thread, so it cannot leak into the next call
+/// and also stops on a panic.
+struct WallBackstop {
+    cancel: Option<std::sync::mpsc::Sender<()>>,
+    timer: Option<std::thread::JoinHandle<()>>,
+}
+
+impl WallBackstop {
+    fn start(engine: &wasmtime::Engine, wall_ms: u64) -> Self {
+        let (cancel, cancelled) = std::sync::mpsc::channel();
+        let timer_engine = engine.clone();
+        let timer = std::thread::spawn(move || {
+            if cancelled
+                .recv_timeout(Duration::from_millis(wall_ms))
+                .is_err()
+            {
+                timer_engine.increment_epoch();
+            }
+        });
+        Self {
+            cancel: Some(cancel),
+            timer: Some(timer),
+        }
+    }
+}
+
+impl Drop for WallBackstop {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(timer) = self.timer.take() {
+            let _ = timer.join();
+        }
+    }
 }
 
 fn start_error(error: wasmtime::Error) -> Error {
