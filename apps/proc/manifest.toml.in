@@ -3,16 +3,16 @@ manifest_version = 3
 [app]
 id = "org.anthracite.proc"
 namespace = "anthracite:proc"
-name = "Processes (emulator)"
-version = "0.2.0"
-summary = "Deterministic process table fixture for the demo; replaced by the real proc app."
+name = "Processes"
+version = "0.6.0"
+summary = "Process table, allowlisted signals and detached spawn."
 license = "Apache-2.0"
 
 [service]
-path = "bin/host-emulator"
+path = "{{service_path}}"
 sha256 = "{{sha256}}"
-class = "socket"
-argv = ["--socket", "{socket}"]
+class = "{{service_class}}"
+argv = {{service_argv}}
 
 [[export]]
 interface = "anthracite:proc/proc@1.1.0"

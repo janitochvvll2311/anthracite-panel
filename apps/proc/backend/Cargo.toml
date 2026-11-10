@@ -1,0 +1,19 @@
+[package]
+name = "proc-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Native /proc reader, signal and detached-spawn service for the Processes app"
+
+[[bin]]
+name = "proc-service"
+path = "src/main.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
+anth-service = { path = "../../../sdk/rust/service" }
+libc = "0.2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+
+[workspace]

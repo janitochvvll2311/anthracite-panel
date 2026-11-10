@@ -71,6 +71,12 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                 "socket",
                 r#"["--socket", "{socket}"]"#,
             ),
+            "proc" => (
+                "Processes (emulator)",
+                "Deterministic process table fixture for the demo; replaced by the real proc app.",
+                "socket",
+                r#"["--socket", "{socket}"]"#,
+            ),
             _ => ("", "", "", ""),
         };
         let manifest = template
