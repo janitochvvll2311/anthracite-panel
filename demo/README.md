@@ -111,8 +111,14 @@ shared emulator service. Every bundle carries a `panel.view` module:
   completion. Closing a dirty tab or the Editor opens a real `<dialog>` with
   Save all / Discard / Cancel; no `confirm()` is used. No inline editing or
   in-frame floating editor remains.
-- `apps/terminal/frontend/` — session with help/exit, history, INT/TERM/Clear, reconnect
-  and resize.
+- `apps/terminal/frontend/` — direct typing in the terminal surface (the hidden
+  input only opens the soft keyboard), help/exit, history, INT/TERM/Clear,
+  reconnect and resize. On phones it adds a scrollable key bar with sticky
+  Ctrl/Alt, Esc, Tab, arrows, Home/End, PgUp/PgDn, ^C/^D/^L/^Z, symbols, Enter
+  and A−/A+. Double-tap sends Tab, pinch changes the font size, and long-press
+  plus drag sends arrow keys; a long press without movement keeps native text
+  selection. `interactive-widget=resizes-content` keeps the bar above the soft
+  keyboard.
 - `apps/proc/frontend/` — flat/tree process table, live refresh, allowlisted signals and
   detached spawn.
 - `apps/net/frontend/` — interfaces with up/down, addresses/counters and route add/remove.

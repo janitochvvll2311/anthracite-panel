@@ -825,7 +825,14 @@ impl Emulator {
                 let data = bytes(input.get("data").unwrap_or(&Value::Null))?;
                 let line = String::from_utf8_lossy(&data).to_string();
                 let newline = line.ends_with('\n') || line.ends_with('\r');
-                term.push(data);
+                // The fixture only echoes visible text (and newlines). Control
+                // bytes and escape sequences are consumed silently, like a
+                // line editor that has no matching binding.
+                let escape = data.contains(&0x1b);
+                let visible = data.iter().any(|byte| *byte >= 0x20 && *byte != 0x7f);
+                if !escape && (visible || newline) {
+                    term.push(data);
+                }
                 if newline {
                     let trimmed = line.trim();
                     if trimmed == "exit" {
