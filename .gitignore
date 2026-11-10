@@ -7,6 +7,11 @@ apps/target
 node_modules
 dist
 frontend/dist
+# The demo apps commit their generated module so bundle-emulator needs no Bun;
+# Home rebuilds its module from source in apps/home/build.sh.
+!apps/*/frontend/dist/
+!apps/*/frontend/dist/*.js
+apps/home/frontend/dist/
 panel/frontend/dist
 *.log
 .DS_Store

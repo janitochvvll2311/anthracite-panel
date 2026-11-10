@@ -18,22 +18,22 @@ they are third-party and run under the explicit developer switch.
 ## Build the bundles
 
 ```bash
-# Only needed after editing the Files editor source; the generated module is
-# committed and already bundles CodeMirror.
-apps/fs/build-web.sh
+# Only needed after editing any frontend; the generated modules are committed
+# so the bundle build itself does not need Bun.
+apps/build-frontends.sh
 
 cargo build --manifest-path demo/emulator/Cargo.toml --release
 cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulator -- \
     --binary target/release/host-emulator --out demo/dist
 
-# Home ships a native backend; --demo packages fixed host facts instead of
+# Home ships a native backend; --demo packages simulated host facts instead of
 # reading /proc, df and ip from the machine running the demo.
 apps/home/build.sh --demo --out demo/dist/home.anth
 ```
 
 `demo/dist/{fs,terminal,proc,net,storage,accounts}.anth` are the installable zips.
-Home adds `demo/dist/home.anth`. The app sources (manifest, WIT and web UI) live
-in `apps/<name>/`; the demo builder packages the six emulator apps with the
+Home adds `demo/dist/home.anth`. The app sources (manifest, WIT and frontend)
+live in `apps/<name>/`; the demo builder packages the six emulator apps with the
 shared `demo/emulator` service binary.
 
 ## Run
@@ -88,9 +88,9 @@ CLI verbs:
 ## Views
 
 The app source lives under `apps/<name>/` (`manifest.toml.in`, `wit/` and
-`web/`); the demo builder packages each one with the shared emulator service.
-Every bundle carries a `panel.view` module:
-- `web/fs.js` — Files plus a hidden `panel.view` called Editor, both from the
+`frontend/`); the demo builder packages each `frontend/dist` module with the
+shared emulator service. Every bundle carries a `panel.view` module:
+- `apps/fs/frontend/` — Files plus a hidden `panel.view` called Editor, both from the
   same module. Files has an editable address bar, tree navigation, a formatted
   read-only preview (highlight.js for code, marked for Markdown, images via a
   blob preview), **New** (blank file, folder or symlink), symlink navigation,
@@ -111,13 +111,13 @@ Every bundle carries a `panel.view` module:
   completion. Closing a dirty tab or the Editor opens a real `<dialog>` with
   Save all / Discard / Cancel; no `confirm()` is used. No inline editing or
   in-frame floating editor remains.
-- `web/terminal.js` — session with help/exit, history, INT/TERM/Clear, reconnect
+- `apps/terminal/frontend/` — session with help/exit, history, INT/TERM/Clear, reconnect
   and resize.
-- `web/proc.js` — flat/tree process table, live refresh, allowlisted signals and
+- `apps/proc/frontend/` — flat/tree process table, live refresh, allowlisted signals and
   detached spawn.
-- `web/net.js` — interfaces with up/down, addresses/counters and route add/remove.
-- `web/storage.js` — mount usage bars, unmount and mount.
-- `web/accounts.js` — users and groups with create, delete and lock/unlock.
+- `apps/net/frontend/` — interfaces with up/down, addresses/counters and route add/remove.
+- `apps/storage/frontend/` — mount usage bars, unmount and mount.
+- `apps/accounts/frontend/` — users and groups with create, delete and lock/unlock.
 - `apps/home/frontend/dist/home.js` — Host Info cards (system, CPU, memory,
   disks and network). The demo bundle uses the `home-demo` Rust backend, so the
   values are simulated and move over time; `apps/home/build.sh` without `--demo`

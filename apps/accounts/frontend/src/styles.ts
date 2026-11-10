@@ -1,0 +1,50 @@
+export const styles = `
+  .acc { display: flex; flex-direction: column; gap: 15px; min-height: 360px; }
+  .acc-bar { display: flex; align-items: center; gap: 10px; }
+  .acc-bar .grow { flex: 1; }
+  .acc-bar button {
+    padding: 6px 10px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .acc-bar button:hover { border-color: #3a4560; color: #fff; }
+  .acc-section { display: grid; gap: 7px; }
+  .acc-title { color: #667087; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  .acc-table { border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016; }
+  .acc-row {
+    display: grid; grid-template-columns: minmax(160px, 1.2fr) 70px 60px minmax(140px, 1fr) minmax(110px, 1fr) minmax(110px, auto);
+    gap: 10px; padding: 7px 10px; border-bottom: 1px solid #171c26; font-size: 12px; align-items: center;
+  }
+  .acc-row:last-child { border-bottom: 0; }
+  .acc-row.head { background: #11151e; color: #667087; text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+  .acc-row.group { grid-template-columns: minmax(140px, 1fr) 70px minmax(200px, 3fr); }
+  .acc-name { color: #e8ebf2; display: flex; align-items: center; gap: 7px; }
+  .acc-mono { font-family: ui-monospace, monospace; color: #8f98ab; font-size: 11px; }
+  .acc-badge {
+    padding: 1px 6px; border-radius: 999px; border: 1px solid #2a3142; font-size: 9.5px;
+    text-transform: uppercase; letter-spacing: .07em; color: #8f98ab;
+  }
+  .acc-badge.system { border-color: #7aa2ff44; color: #9ab8ff; }
+  .acc-badge.locked { border-color: #ff7d8a44; color: #ffb3ba; }
+  .acc-members { color: #8f98ab; font-size: 11.5px; }
+  .acc-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+  .acc-btn {
+    padding: 3px 7px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
+    color: #8f98ab; font: inherit; font-size: 10.5px; cursor: pointer;
+  }
+  .acc-btn:hover { border-color: #3a4560; color: #fff; }
+  .acc-btn.danger:hover { border-color: #ff7d8a66; color: #ffb3ba; }
+  .acc-add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .acc-add input, .acc-add button {
+    padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142; background: #0f1219;
+    color: #e8ebf2; font: 12px ui-monospace, monospace;
+  }
+  .acc-add input[data-name] { width: 120px; }
+  .acc-add input[data-uid], .acc-add input[data-gid] { width: 76px; }
+  .acc-add input[data-home] { flex: 1; min-width: 140px; }
+  .acc-add input[data-shell] { width: 110px; }
+  .acc-add button { background: #151a24; cursor: pointer; }
+  .acc-add button:hover { border-color: #3a4560; color: #fff; }
+  .acc-add .check { display: flex; align-items: center; gap: 5px; color: #8f98ab; font-size: 11px; }
+  .acc-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
+  .acc-status.bad { color: #ffb3ba; }
+`;
