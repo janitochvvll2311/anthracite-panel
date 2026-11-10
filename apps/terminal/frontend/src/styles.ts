@@ -38,7 +38,8 @@ export const styles = `
   .term-input {
     position: absolute; left: 8px; bottom: 8px; width: 1px; height: 1px;
     padding: 0; border: 0; opacity: 0; pointer-events: none;
-    font-size: 16px; caret-color: transparent;
+    font-size: 16px; caret-color: transparent; outline: none;
+    overflow: hidden; white-space: pre;
   }
   .term-status { margin: 0; min-height: 16px; flex: none; font-size: 12px; color: #667087; }
   .term-status.bad { color: #ffb3ba; }

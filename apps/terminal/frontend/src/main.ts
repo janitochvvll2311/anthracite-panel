@@ -48,12 +48,15 @@ export function mount(root: HTMLElement, context: FrameContext) {
     <p class="term-status" role="status"></p>
     <div class="term-keys" data-keys aria-label="Terminal special keys">
       <div class="term-modifiers">
+        <button type="button" data-keyboard aria-label="Show keyboard" aria-pressed="false" data-session-key>
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4 9h.01M11.5 9h.01M6 9h4"/></svg>
+        </button>
         <button type="button" data-mod="ctrl" aria-pressed="false" data-session-key>Ctrl</button>
         <button type="button" data-mod="alt" aria-pressed="false" data-session-key>Alt</button>
       </div>
       <div class="term-key-scroll" data-key-scroll></div>
     </div>
-    <input class="term-input" aria-label="Terminal input" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" disabled />
+    <div class="term-input" role="textbox" aria-label="Terminal input" aria-multiline="false" aria-disabled="true" contenteditable="false" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="send" inputmode="text" data-form-type="other" data-lpignore="true" data-1p-ignore="true" data-bwignore></div>
   `;
   root.append(box);
 
@@ -66,6 +69,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const keyScroll = box.querySelector("[data-key-scroll]") as any;
   const ctrlButton = box.querySelector('[data-mod="ctrl"]') as any;
   const altButton = box.querySelector('[data-mod="alt"]') as any;
+  const keyboardButton = box.querySelector("[data-keyboard]") as any;
   const history = [];
   let historyIndex = 0;
   let session = null;
@@ -74,6 +78,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let disposed = false;
   let ctrlArmed = false;
   let altArmed = false;
+  let composing = false;
+  let draft = "";
   let output = "";
   let pendingEcho = "";
 
@@ -93,8 +99,35 @@ export function mount(root: HTMLElement, context: FrameContext) {
     updateModifiers();
   };
 
+  const inputEnabled = (): boolean =>
+    input.getAttribute("contenteditable") !== "false";
+
+  const setInputEnabled = (enabled: boolean): void => {
+    input.setAttribute("contenteditable", enabled ? "true" : "false");
+    input.setAttribute("aria-disabled", String(!enabled));
+    if (!enabled) {
+      input.blur();
+      input.textContent = "";
+    }
+  };
+
+  const updateKeyboard = (): void => {
+    const visible = document.activeElement === input;
+    keyboardButton.classList.toggle("armed", visible);
+    keyboardButton.setAttribute("aria-pressed", String(visible));
+    const label = visible ? "Hide keyboard" : "Show keyboard";
+    keyboardButton.title = label;
+    keyboardButton.setAttribute("aria-label", label);
+  };
+
+  const toggleKeyboard = (): void => {
+    if (document.activeElement === input) input.blur();
+    else focusInput();
+    updateKeyboard();
+  };
+
   const focusInput = (): void => {
-    if (!input.disabled) input.focus({ preventScroll: true });
+    if (inputEnabled()) input.focus({ preventScroll: true });
   };
 
   const getFontSize = (): number => {
@@ -164,7 +197,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const setSessionControls = (enabled) => {
     for (const control of sessionControls) control.disabled = !enabled;
     for (const control of sessionKeys) control.disabled = !enabled;
+    setInputEnabled(enabled);
     if (!enabled) clearModifiers();
+    updateKeyboard();
   };
   setSessionControls(false);
 
@@ -174,7 +209,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   };
 
   const render = (): void => {
-    screen.textContent = output + input.value;
+    screen.textContent = output + draft;
     screen.scrollTop = screen.scrollHeight;
   };
 
@@ -192,8 +227,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   async function submitLine(): Promise<void> {
     if (!session) return;
-    const line = input.value;
-    input.value = "";
+    const line = draft;
+    draft = "";
+    input.textContent = "";
     if (line.trim()) history.push(line);
     historyIndex = history.length;
     // Show the line locally; the service echoes the same bytes back, so the
@@ -225,13 +261,14 @@ export function mount(root: HTMLElement, context: FrameContext) {
       direction === "up"
         ? Math.max(0, historyIndex - 1)
         : Math.min(history.length, historyIndex + 1);
-    input.value = history[historyIndex] ?? "";
+    draft = history[historyIndex] ?? "";
     render();
   };
 
   async function sendKey(key: KeyName): Promise<void> {
     if (key === "ctrlc") {
-      input.value = "";
+      draft = "";
+      input.textContent = "";
       render();
       clearModifiers();
       await sendSignal("INT");
@@ -265,7 +302,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   async function sendSymbol(symbol: string): Promise<void> {
     if (!ctrlArmed && !altArmed) {
-      input.value += symbol;
+      draft += symbol;
       render();
       focusInput();
       return;
@@ -300,7 +337,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
       const text = error instanceof Error ? error.message : String(error);
       if (text.startsWith("not-found:")) {
         session = null;
-        input.disabled = true;
         setSessionControls(false);
         state.textContent = "ended";
         setStatus("Session ended. Reconnect to start a new one.", true);
@@ -338,10 +374,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
       }
       output = "";
       pendingEcho = "";
-      input.value = "";
+      draft = "";
+      input.textContent = "";
       render();
-      cursor = 0;    }
-    input.disabled = true;
+      cursor = 0;
+    }
+    setInputEnabled(false);
     setSessionControls(false);
     try {
       session = await call(context, "/open", {
@@ -351,17 +389,16 @@ export function mount(root: HTMLElement, context: FrameContext) {
       });
       if (disposed) return;
       cursor = 0;
-      input.disabled = false;
+      setInputEnabled(true);
       setSessionControls(true);
       state.textContent = `session ${session.id}`;
       setStatus("Connected to the scripted fixture.");
       resize();
       void poll();
-      input.focus();
+      focusInput();
     } catch (error) {
       session = null;
       setSessionControls(false);
-      input.disabled = true;
       state.textContent = "unavailable";
       setStatus(String(error), true);
     }
@@ -370,7 +407,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
   async function sendSignal(name) {
     if (!session) return;
     if (name === "INT") {
-      input.value = "";
+      draft = "";
+      input.textContent = "";
       render();
     }
     try {
@@ -385,21 +423,77 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  input.addEventListener("input", () => {
+  const consumeInput = (): void => {
+    const text = input.textContent ?? "";
+    input.textContent = "";
+    if (!text) {
+      render();
+      return;
+    }
+    draft += text;
     render();
+  };
+
+  input.addEventListener("input", () => {
+    if (!composing) consumeInput();
+  });
+  input.addEventListener("beforeinput", (event) => {
+    if (composing) return;
+    if (event.inputType === "insertText" || event.inputType === "insertFromPaste") {
+      if (event.data) {
+        event.preventDefault();
+        draft += event.data;
+        render();
+      }
+      return;
+    }
+    if (event.inputType === "deleteContentBackward") {
+      event.preventDefault();
+      const characters = [...draft];
+      characters.pop();
+      draft = characters.join("");
+      render();
+      return;
+    }
+    if (
+      event.inputType === "insertLineBreak" ||
+      event.inputType === "insertParagraph"
+    ) {
+      event.preventDefault();
+      void submitLine();
+    }
+  });
+  input.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  input.addEventListener("compositionend", () => {
+    composing = false;
+    consumeInput();
   });
 
   input.addEventListener("focus", () => {
+    input.textContent = "";
     screen.classList.add("focused");
+    updateKeyboard();
   });
   input.addEventListener("blur", () => {
+    input.textContent = "";
     screen.classList.remove("focused");
+    updateKeyboard();
   });
 
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       void submitLine();
+      return;
+    }
+    if (event.key === "Backspace" && !composing) {
+      event.preventDefault();
+      const characters = [...draft];
+      characters.pop();
+      draft = characters.join("");
+      render();
       return;
     }
     if (
@@ -414,7 +508,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
       const data = applyModifiers(event.key, ctrlArmed, altArmed);
       clearModifiers();
       if (data === "\x03") {
-        input.value = "";
+        draft = "";
+        input.textContent = "";
         render();
         void sendSignal("INT");
         return;
@@ -436,7 +531,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
   box.querySelector("[data-clear]").addEventListener("click", () => {
     output = "";
     pendingEcho = "";
-    input.value = "";
+    draft = "";
+    input.textContent = "";
     render();
     setStatus("Screen cleared");
   });
@@ -452,6 +548,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
       | HTMLButtonElement
       | null;
     if (!target || target.disabled) return;
+    if (target.hasAttribute("data-keyboard")) {
+      toggleKeyboard();
+      return;
+    }
     if (target.dataset.mod === "ctrl") {
       ctrlArmed = !ctrlArmed;
       updateModifiers();
