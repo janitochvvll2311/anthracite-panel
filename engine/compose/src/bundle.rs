@@ -12,9 +12,10 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use anth_contract::manifest::parse_call;
 use anth_contract::{catalog, signature, Error, InterfaceId, Manifest};
 use sha2::{Digest, Sha256};
-use wit_parser::UnresolvedPackageGroup;
+use wit_parser::{Type, TypeDefKind, UnresolvedPackage, UnresolvedPackageGroup};
 
 use crate::keys::Keyring;
 use crate::store;
@@ -400,7 +401,60 @@ fn check_wit(root: &Path, manifest: &Manifest, known: &[String]) -> Result<(), E
             )));
         }
     }
+    for route in &manifest.route {
+        let (id, function) = parse_call(&route.call)?;
+        let id = InterfaceId::parse(&id)?;
+        let interface = package
+            .interfaces
+            .iter()
+            .find_map(|(_, interface)| {
+                (interface.name.as_deref() == Some(id.interface())).then_some(interface)
+            })
+            .ok_or_else(|| {
+                Error::invalid(format!(
+                    "route `{}` calls `{}`, which `wit/` does not declare",
+                    route.path, id
+                ))
+            })?;
+        let declared = interface.functions.get(&function).ok_or_else(|| {
+            Error::invalid(format!(
+                "route `{}` calls `{function}`, which `{}` does not declare",
+                route.path, id
+            ))
+        })?;
+        let returns_stream = declared
+            .result
+            .as_ref()
+            .is_some_and(|result| is_stream(package, result));
+        if route.stream && !returns_stream {
+            return Err(Error::invalid(format!(
+                "route `{}` declares `stream = true` but `{function}` does not return a stream",
+                route.path
+            )));
+        }
+        if !route.stream && returns_stream {
+            return Err(Error::invalid(format!(
+                "route `{}` calls the stream `{function}` without `stream = true`",
+                route.path
+            )));
+        }
+    }
     Ok(())
+}
+
+/// Whether a WIT result is a stream, either directly or as the success half of a
+/// `result<stream<T>, E>` (§20).
+fn is_stream(package: &UnresolvedPackage, ty: &Type) -> bool {
+    match ty {
+        Type::Id(id) => match &package.types[*id].kind {
+            TypeDefKind::Stream(_) => true,
+            TypeDefKind::Result(result) => {
+                result.ok.as_ref().is_some_and(|ok| is_stream(package, ok))
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// Every hash in the manifest is checked before the bundle becomes visible, and
@@ -1206,6 +1260,99 @@ mod tests {
         files.push(("manifest.sig".to_string(), signature.into_bytes()));
         let error = extract(&zip(&files), &state, &options(true), &keyring).expect_err("tampered");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    fn with_route(manifest: &str, call: &str, stream: bool) -> String {
+        format!(
+            "{manifest}[[route]]\nmethod = \"GET\"\npath = \"/stream\"\ncall = \"{call}\"\nstream = {stream}\n"
+        )
+    }
+
+    const STREAM_WIT: &str = "package example:notes@1.0.0;\n\ninterface notes {\n  follow: func() -> stream<list<u8>>;\n}\n\nworld app {\n  export notes;\n}\n";
+
+    #[test]
+    fn a_stream_route_must_match_a_wit_stream() {
+        let state = scratch("stream-route");
+        let keyring = Keyring::new(&state);
+        let manifest = with_route(&manifest(WASM), "example:notes/notes@1.0.0#follow", true);
+        extract(
+            &zip(&entries(&manifest, STREAM_WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect("stream route");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_result_wrapped_stream_is_accepted() {
+        let state = scratch("stream-result");
+        let keyring = Keyring::new(&state);
+        let wit = "package example:notes@1.0.0;\n\ninterface notes {\n  follow: func() -> result<stream<list<u8>>, string>;\n}\n\nworld app {\n  export notes;\n}\n";
+        let manifest = with_route(&manifest(WASM), "example:notes/notes@1.0.0#follow", true);
+        extract(
+            &zip(&entries(&manifest, wit, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect("result stream");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_stream_flag_on_a_plain_function_is_refused() {
+        let state = scratch("stream-mismatch");
+        let keyring = Keyring::new(&state);
+        let manifest = with_route(&manifest(WASM), "example:notes/notes@1.0.0#all", true);
+        let error = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("not a stream");
+        assert!(
+            error.message().contains("does not return a stream"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_stream_result_needs_the_route_flag() {
+        let state = scratch("stream-no-flag");
+        let keyring = Keyring::new(&state);
+        let manifest = with_route(&manifest(WASM), "example:notes/notes@1.0.0#follow", false);
+        let error = extract(
+            &zip(&entries(&manifest, STREAM_WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("missing flag");
+        assert!(
+            error.message().contains("without `stream = true`"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_route_function_must_exist_in_wit() {
+        let state = scratch("route-function");
+        let keyring = Keyring::new(&state);
+        let manifest = with_route(&manifest(WASM), "example:notes/notes@1.0.0#missing", false);
+        let error = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect_err("missing function");
+        assert!(error.message().contains("does not declare"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 }

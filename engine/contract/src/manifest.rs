@@ -158,6 +158,11 @@ pub struct RouteSection {
     pub method: String,
     pub path: String,
     pub call: String,
+    /// The call returns a stream (§20). The response is chunked bytes instead of
+    /// a JSON document; the function and its result shape are checked against
+    /// `wit/` at install time.
+    #[serde(default)]
+    pub stream: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -418,6 +423,12 @@ impl Manifest {
                 )));
             }
             check_route_path(&route.path)?;
+            if route.stream && route.method == "HEAD" {
+                return Err(Error::invalid(format!(
+                    "route `{}` is a stream and cannot answer HEAD",
+                    route.path
+                )));
+            }
             let (id, function) = parse_call(&route.call)?;
             if !exports.iter().any(|export| export == &id) {
                 return Err(Error::invalid(format!(
@@ -956,6 +967,32 @@ target = "wasm"
         manifest.service.as_mut().expect("service").sha256 = "not-a-hash".to_string();
         let error = manifest.validate().expect_err("hash");
         assert!(error.message().contains("sha256"), "{error}");
+    }
+
+    #[test]
+    fn a_route_can_opt_into_streaming() {
+        let text = VALID.replace(
+            "path = \"/notes\"\ncall = \"example:notes/list@1.0.0#all\"",
+            "path = \"/notes\"\ncall = \"example:notes/list@1.0.0#all\"\nstream = true",
+        );
+        let manifest = Manifest::parse(&text).expect("parse");
+        assert!(manifest.route[0].stream);
+        manifest.validate().expect("validate");
+    }
+
+    #[test]
+    fn routes_are_buffered_unless_they_opt_in() {
+        let manifest = valid();
+        assert!(!manifest.route[0].stream);
+    }
+
+    #[test]
+    fn a_stream_route_cannot_answer_head() {
+        let mut manifest = valid();
+        manifest.route[0].stream = true;
+        manifest.route[0].method = "HEAD".to_string();
+        let error = manifest.validate().expect_err("head stream");
+        assert!(error.message().contains("cannot answer HEAD"), "{error}");
     }
 
     #[test]

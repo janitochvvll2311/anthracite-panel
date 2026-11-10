@@ -9,6 +9,7 @@ description = "The engine's HTTP surface"
 anth-auth = { path = "../auth" }
 anth-compose = { path = "../compose" }
 anth-contract = { path = "../contract" }
+futures-core = "0.3"
 http-body = "1"
 http-body-util = "0.1"
 tokio = { workspace = true }

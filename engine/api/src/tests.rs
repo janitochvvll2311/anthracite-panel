@@ -162,10 +162,10 @@ fn apps_state_with(composed: &[&str]) -> (Arc<EngineState>, std::path::PathBuf) 
     for path in [&dir, &dir.join("apps"), &app, &wit, &web] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
     }
-    let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
+    let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/stream\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
     let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
     let wit_source =
-            "package example:notes@1.0.0;\ninterface thing { ping: func(); }\nworld app { export thing; }\n";
+            "package example:notes@1.0.0;\ninterface thing { ping: func(); follow: func() -> stream<list<u8>>; }\nworld app { export thing; }\n";
     let ui_source =
         "export function mount(root) { root.textContent = \"notes\"; return () => {}; }\n";
     for (path, text) in [
@@ -495,6 +495,210 @@ async fn a_manifest_route_calls_the_app() {
     )
     .await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_stream_route_returns_chunked_bytes() {
+    struct Streamer;
+    impl AppCaller for Streamer {
+        fn call<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>> {
+            Box::pin(async move { Ok(Value::Null) })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> StreamFuture<'a> {
+            Box::pin(async move {
+                let chunks = vec![
+                    Ok::<Chunk, Error>(b"one".to_vec()),
+                    Ok(b"-two".to_vec()),
+                    Ok(b"-three".to_vec()),
+                ];
+                Ok(Box::pin(futures_util::stream::iter(chunks)) as ChunkStream)
+            })
+        }
+    }
+
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Streamer)),
+    );
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/api/apps/org.example.notes/stream")
+        .body(Body::empty())
+        .expect("request");
+    request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+    let response = router(state).oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/octet-stream")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    assert_eq!(&body[..], b"one-two-three");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_stream_error_before_the_first_byte_is_the_json_envelope() {
+    struct Refusing;
+    impl AppCaller for Refusing {
+        fn call<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>> {
+            Box::pin(async move { Ok(Value::Null) })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> StreamFuture<'a> {
+            Box::pin(async move { Err(Error::denied("not for you")) })
+        }
+    }
+
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Refusing)),
+    );
+    let (status, _, value) = call(
+        state,
+        "GET",
+        "/api/apps/org.example.notes/stream",
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(value["error"]["code"], "denied");
+    assert_eq!(value["error"]["message"], "not for you");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_stream_error_after_the_first_chunk_truncates_the_body() {
+    struct Breaking;
+    impl AppCaller for Breaking {
+        fn call<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>> {
+            Box::pin(async move { Ok(Value::Null) })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> StreamFuture<'a> {
+            Box::pin(async move {
+                let chunks = vec![
+                    Ok::<Chunk, Error>(b"head".to_vec()),
+                    Err(Error::internal("the producer died")),
+                ];
+                Ok(Box::pin(futures_util::stream::iter(chunks)) as ChunkStream)
+            })
+        }
+    }
+
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Breaking)),
+    );
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/api/apps/org.example.notes/stream")
+        .body(Body::empty())
+        .expect("request");
+    request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+    let response = router(state).oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let error = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect_err("the body is truncated");
+    assert!(error.to_string().contains("producer died"), "{error}");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_caller_that_cannot_stream_answers_unavailable() {
+    struct Buffered;
+    impl AppCaller for Buffered {
+        fn call<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>> {
+            Box::pin(async move { Ok(Value::Null) })
+        }
+    }
+
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Buffered)),
+    );
+    let (status, _, value) = call(
+        state,
+        "GET",
+        "/api/apps/org.example.notes/stream",
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(value["error"]["code"], "unavailable");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 
