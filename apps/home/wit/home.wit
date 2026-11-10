@@ -54,6 +54,8 @@ interface host {
     }
 
     info: func() -> result<host-info, error>;
+    /// One snapshot every `interval-ms`; the engine serves it as SSE.
+    watch: func(interval-ms: u32) -> result<stream<host-info>, error>;
 }
 
 world app {

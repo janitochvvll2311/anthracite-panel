@@ -176,6 +176,10 @@ pub struct RouteSection {
     /// `http` (default) or `websocket`. A WebSocket route must also be a stream.
     #[serde(default)]
     pub transport: RouteTransport,
+    /// HTTP only: each stream chunk is one JSON event, served as
+    /// `text/event-stream` (§20). A record stream must set this.
+    #[serde(default)]
+    pub events: bool,
     /// A WebSocket route may name the call that receives client binary frames
     /// (§20). The frame becomes `data: list<u8>` next to the query input.
     #[serde(default)]
@@ -456,6 +460,20 @@ impl Manifest {
                 if route.method != "GET" {
                     return Err(Error::invalid(format!(
                         "route `{}` is a WebSocket and must use GET",
+                        route.path
+                    )));
+                }
+            }
+            if route.events {
+                if !route.stream {
+                    return Err(Error::invalid(format!(
+                        "route `{}` declares `events` and must also be `stream = true`",
+                        route.path
+                    )));
+                }
+                if route.transport == RouteTransport::Websocket {
+                    return Err(Error::invalid(format!(
+                        "route `{}` is a WebSocket; SSE events are HTTP only",
                         route.path
                     )));
                 }
@@ -1083,6 +1101,25 @@ target = "wasm"
         manifest.route[0].write = Some("example:notes/list@1.0.0#all".to_string());
         let error = manifest.validate().expect_err("no websocket");
         assert!(error.message().contains("not a WebSocket"), "{error}");
+    }
+
+    #[test]
+    fn an_events_route_is_an_http_stream() {
+        let mut manifest = valid();
+        manifest.route[0].stream = true;
+        manifest.route[0].events = true;
+        manifest.validate().expect("events");
+
+        manifest.route[0].stream = false;
+        let error = manifest.validate().expect_err("events without stream");
+        assert!(error.message().contains("must also be"), "{error}");
+
+        let mut manifest = valid();
+        manifest.route[0].stream = true;
+        manifest.route[0].events = true;
+        manifest.route[0].transport = RouteTransport::Websocket;
+        let error = manifest.validate().expect_err("events on ws");
+        assert!(error.message().contains("HTTP only"), "{error}");
     }
 
     #[test]

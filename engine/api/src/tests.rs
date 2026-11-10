@@ -164,10 +164,10 @@ fn apps_state_with(composed: &[&str]) -> (Arc<EngineState>, std::path::PathBuf) 
     for path in [&dir, &dir.join("apps"), &app, &wit, &web] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
     }
-    let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/stream\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\n\n[[route]]\nmethod = \"GET\"\npath = \"/socket\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\ntransport = \"websocket\"\nwrite = \"example:notes/thing@1.0.0#ping\"\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
+    let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/stream\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\n\n[[route]]\nmethod = \"GET\"\npath = \"/socket\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\ntransport = \"websocket\"\nwrite = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/events\"\ncall = \"example:notes/thing@1.0.0#watch\"\nstream = true\nevents = true\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
     let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
     let wit_source =
-            "package example:notes@1.0.0;\ninterface thing { ping: func(); follow: func() -> stream<list<u8>>; }\nworld app { export thing; }\n";
+            "package example:notes@1.0.0;\ninterface thing { record tick { value: u32 } ping: func(); follow: func() -> stream<list<u8>>; watch: func() -> stream<tick>; }\nworld app { export thing; }\n";
     let ui_source =
         "export function mount(root) { root.textContent = \"notes\"; return () => {}; }\n";
     for (path, text) in [
@@ -970,6 +970,40 @@ async fn a_websocket_route_streams_and_writes() {
 
     let _ = socket.close(None).await;
     server.abort();
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn an_events_route_frames_sse_data() {
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Emit {
+                chunks: vec![br#"{"value":1}"#.to_vec(), br#"{"value":2}"#.to_vec()],
+            })),
+    );
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/api/apps/org.example.notes/events")
+        .body(Body::empty())
+        .expect("request");
+    request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+    let response = router(state).oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    assert_eq!(&body[..], b"data: {\"value\":1}\n\ndata: {\"value\":2}\n\n");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 

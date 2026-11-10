@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anth_contract::Error;
-use anth_service::Handler;
+use anth_service::{ChunkStream, Handler};
 use serde_json::{json, Value};
 
 const HOST: &str = "anthracite:home/host@1.0.0";
@@ -21,6 +21,15 @@ impl Handler for Home {
     fn call(&self, interface: &str, function: &str, _input: Value) -> Result<Value, Error> {
         match (interface, function) {
             (HOST, "info") => Ok(info()),
+            _ => Err(Error::not_found(format!(
+                "`{interface}#{function}` is not implemented"
+            ))),
+        }
+    }
+
+    fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
+        match (interface, function) {
+            (HOST, "watch") => home_service::watch(&input, info),
             _ => Err(Error::not_found(format!(
                 "`{interface}#{function}` is not implemented"
             ))),
