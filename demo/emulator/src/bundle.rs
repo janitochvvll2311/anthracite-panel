@@ -58,9 +58,29 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
+        let (app_name, summary, service_class, service_argv) = match *name {
+            "fs" => (
+                "Files (emulator)",
+                "Deterministic filesystem fixture for the demo; replaced by the real fs app.",
+                "socket",
+                r#"["--socket", "{socket}", "--state", "{data}/state.json"]"#,
+            ),
+            "terminal" => (
+                "Terminal (emulator)",
+                "Scripted terminal fixture for the demo; replaced by the real terminal app.",
+                "socket",
+                r#"["--socket", "{socket}"]"#,
+            ),
+            _ => ("", "", "", ""),
+        };
         let manifest = template
             .replace("{{sha256}}", &hash)
-            .replace("{{module_sha256}}", &module_hash);
+            .replace("{{module_sha256}}", &module_hash)
+            .replace("{{app_name}}", app_name)
+            .replace("{{app_summary}}", summary)
+            .replace("{{service_path}}", "bin/host-emulator")
+            .replace("{{service_class}}", service_class)
+            .replace("{{service_argv}}", service_argv);
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default();
         writer.start_file("manifest.toml", options)?;

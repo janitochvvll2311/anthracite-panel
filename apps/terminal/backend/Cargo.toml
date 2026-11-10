@@ -1,0 +1,20 @@
+[package]
+name = "terminal-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Native PTY terminal service for the Terminal app"
+
+[[bin]]
+name = "terminal-service"
+path = "src/main.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
+anth-service = { path = "../../../sdk/rust/service" }
+libc = "0.2"
+portable-pty = "0.9"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+
+[workspace]

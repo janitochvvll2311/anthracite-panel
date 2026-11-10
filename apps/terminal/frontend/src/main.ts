@@ -10,14 +10,25 @@ import {
 import { styles } from "./styles";
 import type { FrameContext } from "./types";
 
-// The demo Terminal view: a scripted session from the terminal service.
+// The Terminal view: a session from the terminal service.
 //
 // The service is polled through `read(id, cursor, wait-ms)`, which keeps the
-// fixture honest: Phase 8 replaces the poll with `stream<u8>` without changing
+// contract honest: Phase 8 replaces the poll with `stream<u8>` without changing
 // this route. Everything runs inside the sandboxed frame; the module only sees
 // its own app prefix.
 
 const decoder = new TextDecoder();
+
+/// The terminal view is a plain `<pre>`, not an ANSI emulator: drop the
+/// control sequences a real PTY emits (colors, cursor movement, bracketed
+/// paste) before rendering its bytes.
+function cleanOutput(value: string): string {
+  return value
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[@-_]/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
 
 export function mount(root: HTMLElement, context: FrameContext) {
   if (typeof context.fill === "function") {
@@ -34,8 +45,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   box.className = "term";
   box.innerHTML = `
     <div class="term-bar">
-      <span class="who">operator@anthracite</span>
-      <span class="fixture">· scripted fixture</span>
+      <span class="who">terminal</span>
       <div class="term-controls">
         <button type="button" data-signal="INT" data-session-control>INT</button>
         <button type="button" data-signal="TERM" data-session-control>TERM</button>
@@ -64,6 +74,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const input = box.querySelector(".term-input") as any;
   const status = box.querySelector(".term-status") as any;
   const state = box.querySelector(".state") as any;
+  const who = box.querySelector(".who") as any;
   const sessionControls: any[] = [...box.querySelectorAll("[data-session-control]")];
   const keyBar = box.querySelector(".term-keys") as any;
   const keyScroll = box.querySelector("[data-key-scroll]") as any;
@@ -82,6 +93,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let draft = "";
   let output = "";
   let pendingEcho = "";
+  let lastSize = "";
 
   const updateModifiers = (): void => {
     for (const [button, armed] of [
@@ -214,13 +226,31 @@ export function mount(root: HTMLElement, context: FrameContext) {
   };
 
   const append = (bytes) => {
-    // The fixture echoes the bytes it receives, including `\r`; normalise line
-    // endings so the `<pre>` shows real lines instead of overstrikes.
-    const text = decoder.decode(Uint8Array.from(bytes)).replace(/\r\n?/g, "\n");
-    if (pendingEcho && text === pendingEcho) {
-      pendingEcho = "";
-      return;
+    // A service may echo the bytes it receives, including `\r`; normalise line
+    // endings so the `<pre>` shows real lines instead of overstrikes. A native
+    // PTY may also echo the submitted line together with its response, so the
+    // pending local echo is removed by prefix rather than by exact chunk.
+    const raw = decoder.decode(Uint8Array.from(bytes));
+    if (raw.includes("\x1b[6n")) {
+      const lines = (output + draft).split("\n");
+      const row = Math.max(1, lines.length);
+      const column = Math.max(1, [...(lines[lines.length - 1] ?? "")].length + 1);
+      void writeText(`\x1b[${row};${column}R`).catch(() => {});
     }
+    let text = cleanOutput(raw.replace(/\r\n?/g, "\n"));
+    if (pendingEcho) {
+      if (pendingEcho.startsWith(text)) {
+        pendingEcho = pendingEcho.slice(text.length);
+        return;
+      }
+      if (text.startsWith(pendingEcho)) {
+        text = text.slice(pendingEcho.length);
+        pendingEcho = "";
+      } else {
+        pendingEcho = "";
+      }
+    }
+    if (!text) return;
     output += text;
     render();
   };
@@ -348,10 +378,17 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   };
 
+  const size = (): { cols: number; rows: number } => ({
+    cols: Math.max(40, Math.floor(screen.clientWidth / 7.6)),
+    rows: Math.max(12, Math.floor(screen.clientHeight / 18)),
+  });
+
   const resize = () => {
     if (!session) return;
-    const cols = Math.max(40, Math.floor(screen.clientWidth / 7.6));
-    const rows = Math.max(12, Math.floor(screen.clientHeight / 18));
+    const { cols, rows } = size();
+    const key = `${cols}x${rows}`;
+    if (key === lastSize) return;
+    lastSize = key;
     void call(context, "/resize", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -378,28 +415,37 @@ export function mount(root: HTMLElement, context: FrameContext) {
       input.textContent = "";
       render();
       cursor = 0;
+      lastSize = "";
     }
     setInputEnabled(false);
     setSessionControls(false);
+    const initial = size();
     try {
       session = await call(context, "/open", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ shell: "/bin/sh", cols: 80, rows: 24 }),
+        body: JSON.stringify({
+          shell: "/bin/sh",
+          cols: initial.cols,
+          rows: initial.rows,
+        }),
       });
       if (disposed) return;
       cursor = 0;
+      lastSize = `${initial.cols}x${initial.rows}`;
       setInputEnabled(true);
       setSessionControls(true);
       state.textContent = `session ${session.id}`;
-      setStatus("Connected to the scripted fixture.");
-      resize();
+      who.textContent = `${session.owner} · ${session.shell}`;
+      setStatus("Connected.");
       void poll();
       focusInput();
     } catch (error) {
       session = null;
       setSessionControls(false);
       state.textContent = "unavailable";
+      who.textContent = "terminal";
+      lastSize = "";
       setStatus(String(error), true);
     }
   }

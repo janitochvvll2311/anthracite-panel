@@ -53,7 +53,6 @@ export const styles = `
       grid-column: 1; grid-row: 1; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .term-bar .fixture { display: none; }
     .term-bar .state {
       grid-column: 2; grid-row: 1; margin-left: 0;
       font-size: 11px; white-space: nowrap;

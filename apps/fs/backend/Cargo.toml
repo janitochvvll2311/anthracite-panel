@@ -1,0 +1,19 @@
+[package]
+name = "files-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Native filesystem service for the Files app"
+
+[[bin]]
+name = "files-service"
+path = "src/main.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
+anth-service = { path = "../../../sdk/rust/service" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+
+[workspace]
