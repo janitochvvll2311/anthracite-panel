@@ -164,7 +164,7 @@ fn apps_state_with(composed: &[&str]) -> (Arc<EngineState>, std::path::PathBuf) 
     for path in [&dir, &dir.join("apps"), &app, &wit, &web] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
     }
-    let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/stream\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
+    let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/stream\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\n\n[[route]]\nmethod = \"GET\"\npath = \"/socket\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\ntransport = \"websocket\"\nwrite = \"example:notes/thing@1.0.0#ping\"\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";
     let descriptor = "version = 1\napp = \"org.example.notes\"\nenabled = true\ntier = \"third-party\"\ninstalled_at = \"2026-11-03T20:00:00Z\"\n";
     let wit_source =
             "package example:notes@1.0.0;\ninterface thing { ping: func(); follow: func() -> stream<list<u8>>; }\nworld app { export thing; }\n";
@@ -877,6 +877,99 @@ async fn dropping_the_response_body_drops_the_stream() {
         dropped.load(std::sync::atomic::Ordering::SeqCst),
         "the caller stream is dropped with the response body"
     );
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_websocket_route_streams_and_writes() {
+    use futures_util::{SinkExt, StreamExt};
+    use std::sync::Mutex as StdMutex;
+    use tokio_tungstenite::tungstenite::Message;
+
+    struct WsCaller {
+        writes: Arc<StdMutex<Vec<Value>>>,
+    }
+
+    impl AppCaller for WsCaller {
+        fn call<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            input: Value,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>> {
+            self.writes.lock().expect("writes").push(input);
+            Box::pin(async move { Ok(Value::Null) })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> StreamFuture<'a> {
+            Box::pin(async move {
+                Ok(Box::pin(
+                    futures_util::stream::once(async { Ok::<Chunk, Error>(b"hello".to_vec()) })
+                        .chain(futures_util::stream::pending()),
+                ) as ChunkStream)
+            })
+        }
+    }
+
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    write_grant(&dir, &grant_toml(&dir));
+    let writes = Arc::new(StdMutex::new(Vec::new()));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(WsCaller {
+                writes: Arc::clone(&writes),
+            })),
+    );
+
+    let path = dir.join("engine.sock");
+    let listener = UnixListener::bind(&path).expect("bind");
+    let app = router(state).into_make_service_with_connect_info::<PeerUid>();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+    let stream = tokio::net::UnixStream::connect(&path)
+        .await
+        .expect("connect");
+    let (mut socket, response) = tokio_tungstenite::client_async(
+        "ws://localhost/api/apps/org.example.notes/socket?id=t1",
+        stream,
+    )
+    .await
+    .expect("upgrade");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+
+    match socket.next().await.expect("message").expect("ok") {
+        Message::Binary(bytes) => assert_eq!(&bytes[..], b"hello"),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    socket
+        .send(Message::Binary(b"abc".to_vec().into()))
+        .await
+        .expect("send");
+    for _ in 0..40 {
+        if !writes.lock().expect("writes").is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    {
+        let writes = writes.lock().expect("writes");
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0]["id"], "t1");
+        assert_eq!(writes[0]["data"], json!([97, 98, 99]));
+    }
+
+    let _ = socket.close(None).await;
+    server.abort();
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 

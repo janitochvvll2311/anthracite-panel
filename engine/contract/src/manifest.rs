@@ -152,6 +152,16 @@ pub struct ImportSection {
     pub interface: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RouteTransport {
+    /// A buffered JSON response, or a chunked body when `stream = true`.
+    #[default]
+    Http,
+    /// A WebSocket upgrade whose downstream is the route's stream.
+    Websocket,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteSection {
@@ -163,6 +173,13 @@ pub struct RouteSection {
     /// `wit/` at install time.
     #[serde(default)]
     pub stream: bool,
+    /// `http` (default) or `websocket`. A WebSocket route must also be a stream.
+    #[serde(default)]
+    pub transport: RouteTransport,
+    /// A WebSocket route may name the call that receives client binary frames
+    /// (§20). The frame becomes `data: list<u8>` next to the query input.
+    #[serde(default)]
+    pub write: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -428,6 +445,35 @@ impl Manifest {
                     "route `{}` is a stream and cannot answer HEAD",
                     route.path
                 )));
+            }
+            if route.transport == RouteTransport::Websocket {
+                if !route.stream {
+                    return Err(Error::invalid(format!(
+                        "route `{}` is a WebSocket and must also be `stream = true`",
+                        route.path
+                    )));
+                }
+                if route.method != "GET" {
+                    return Err(Error::invalid(format!(
+                        "route `{}` is a WebSocket and must use GET",
+                        route.path
+                    )));
+                }
+            }
+            if let Some(write) = &route.write {
+                if route.transport != RouteTransport::Websocket {
+                    return Err(Error::invalid(format!(
+                        "route `{}` declares `write` but is not a WebSocket",
+                        route.path
+                    )));
+                }
+                let (write_id, _) = parse_call(write)?;
+                if !exports.iter().any(|export| export == &write_id) {
+                    return Err(Error::invalid(format!(
+                        "route `{}` writes through `{}`, which the manifest does not export",
+                        route.path, write_id
+                    )));
+                }
             }
             let (id, function) = parse_call(&route.call)?;
             if !exports.iter().any(|export| export == &id) {
@@ -993,6 +1039,50 @@ target = "wasm"
         manifest.route[0].method = "HEAD".to_string();
         let error = manifest.validate().expect_err("head stream");
         assert!(error.message().contains("cannot answer HEAD"), "{error}");
+    }
+
+    #[test]
+    fn a_websocket_route_is_a_stream_get_with_an_optional_write() {
+        let text = VALID.replace(
+            "path = \"/notes\"\ncall = \"example:notes/list@1.0.0#all\"",
+            "path = \"/notes\"\ncall = \"example:notes/list@1.0.0#all\"\nstream = true\ntransport = \"websocket\"",
+        );
+        let manifest = Manifest::parse(&text).expect("parse");
+        assert_eq!(manifest.route[0].transport, RouteTransport::Websocket);
+
+        let mut manifest = manifest;
+        manifest.route[0].write = Some("example:notes/list@1.0.0#all".to_string());
+        manifest.validate().expect("write");
+
+        let mut manifest = valid();
+        manifest.route[0].stream = true;
+        manifest.route[0].transport = RouteTransport::Websocket;
+        manifest.route[0].write = Some("example:other/list@1.0.0#all".to_string());
+        let error = manifest.validate().expect_err("unexported write");
+        assert!(error.message().contains("does not export"), "{error}");
+    }
+
+    #[test]
+    fn a_websocket_route_needs_stream_and_get() {
+        let mut manifest = valid();
+        manifest.route[0].transport = RouteTransport::Websocket;
+        let error = manifest.validate().expect_err("no stream");
+        assert!(error.message().contains("must also be"), "{error}");
+
+        let mut manifest = valid();
+        manifest.route[0].stream = true;
+        manifest.route[0].transport = RouteTransport::Websocket;
+        manifest.route[0].method = "POST".to_string();
+        let error = manifest.validate().expect_err("not get");
+        assert!(error.message().contains("must use GET"), "{error}");
+    }
+
+    #[test]
+    fn a_write_call_needs_a_websocket_route() {
+        let mut manifest = valid();
+        manifest.route[0].write = Some("example:notes/list@1.0.0#all".to_string());
+        let error = manifest.validate().expect_err("no websocket");
+        assert!(error.message().contains("not a WebSocket"), "{error}");
     }
 
     #[test]

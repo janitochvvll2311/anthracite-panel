@@ -9,11 +9,12 @@ directory builds the real app.
   signals to the process group and closes the session by killing that group. The
   old `read` call stays for the CLI and older clients.
 - `frontend/` is the panel module. It renders the PTY stream with xterm.js, so
-  ANSI colors, cursor movement, alternate screens and clear sequences work. It
-  consumes `/stream` through `fetch(...).body.getReader()`; direct typing goes
-  through an invisible `contenteditable` capture (which avoids form autofill) and
-  the mobile key bar adds sticky Ctrl/Alt, special keys, symbols, Enter, font
-  controls and touch gestures.
+  ANSI colors, cursor movement, alternate screens and clear sequences work. When
+  the panel relays WebSockets it uses `/socket` for both output and input, so a
+  keystroke is not an HTTP call; otherwise it falls back to `/stream` plus
+  `/write`. Direct typing goes through an invisible `contenteditable` capture
+  (which avoids form autofill) and the mobile key bar adds sticky Ctrl/Alt, special
+  keys, symbols, Enter, font controls and touch gestures.
 
 ## Build
 

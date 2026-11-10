@@ -14077,6 +14077,8 @@ function mount(root, context) {
   const keyboardButton = box.querySelector("[data-keyboard]");
   let session = null;
   let streamAbort;
+  let socket;
+  let writeChain = Promise.resolve();
   let decoder = new TextDecoder;
   let disposed = false;
   let ctrlArmed = false;
@@ -14256,6 +14258,12 @@ function mount(root, context) {
     });
   }
   const sendRaw = (value) => {
+    if (!value)
+      return;
+    if (socket) {
+      socket.send(new Uint8Array(encodeText(value)).buffer);
+      return;
+    }
     writeText(value).catch((error) => setStatus(String(error), true));
   };
   const sendTyped = (value) => {
@@ -14293,25 +14301,15 @@ function mount(root, context) {
     const sequence = KEY_SEQUENCES[key];
     if (!sequence)
       return;
-    try {
-      await writeText(sequence);
-      clearModifiers();
-    } catch (error) {
-      setStatus(String(error), true);
-    } finally {
-      focusInput();
-    }
+    sendRaw(sequence);
+    clearModifiers();
+    focusInput();
   }
   async function sendSymbol(symbol) {
     const data = applyModifiers(symbol, ctrlArmed, altArmed);
-    try {
-      await writeText(data);
-      clearModifiers();
-    } catch (error) {
-      setStatus(String(error), true);
-    } finally {
-      focusInput();
-    }
+    sendRaw(data);
+    clearModifiers();
+    focusInput();
   }
   const sendResize = (cols, rows) => {
     if (!session)
@@ -14352,6 +14350,21 @@ function mount(root, context) {
     }
     term.write(text, resolve);
   });
+  const endSession = () => {
+    const ended = session?.id;
+    session = null;
+    if (ended) {
+      call(context, `/session?id=${encodeURIComponent(ended)}`, {
+        method: "DELETE"
+      }).catch(() => {});
+    }
+    setSessionControls(false);
+    state.textContent = "ended";
+    setStatus("Session ended. Reconnect to start a new one.", true);
+    term.write(`\r
+[session ended]\r
+`);
+  };
   const follow = async () => {
     if (disposed || !session)
       return;
@@ -14370,19 +14383,7 @@ function mount(root, context) {
       }
       if (disposed || controller.signal.aborted)
         return;
-      const ended = session?.id;
-      session = null;
-      if (ended) {
-        call(context, `/session?id=${encodeURIComponent(ended)}`, {
-          method: "DELETE"
-        }).catch(() => {});
-      }
-      setSessionControls(false);
-      state.textContent = "ended";
-      setStatus("Session ended. Reconnect to start a new one.", true);
-      term.write(`\r
-[session ended]\r
-`);
+      endSession();
     } catch (error) {
       if (disposed || controller.signal.aborted)
         return;
@@ -14393,10 +14394,42 @@ function mount(root, context) {
         streamAbort = undefined;
     }
   };
+  const connectSocket = () => {
+    if (disposed || !session || !context.socket)
+      return;
+    const openSocket = context.socket;
+    socket = openSocket(`/api/apps/${encodeURIComponent(context.app.id)}/socket?id=${encodeURIComponent(session.id)}&seq=0`, {
+      onOpen: () => {
+        if (!disposed)
+          setStatus("Connected.");
+      },
+      onMessage: (data) => {
+        writeChain = writeChain.then(() => append(new Uint8Array(data))).catch(() => {});
+        return writeChain;
+      },
+      onText: (text) => {
+        writeChain = writeChain.then(() => append(new TextEncoder().encode(text))).catch(() => {});
+        return writeChain;
+      },
+      onClose: (error, code) => {
+        socket = undefined;
+        if (disposed)
+          return;
+        if (error || code !== undefined && code !== 1000 && code !== 1005) {
+          state.textContent = "degraded";
+          setStatus(error ?? `socket closed (${code})`, true);
+          return;
+        }
+        endSession();
+      }
+    });
+  };
   async function open(reset = false) {
     if (reset) {
       streamAbort?.abort();
       streamAbort = undefined;
+      socket?.close();
+      socket = undefined;
       const previous = session?.id;
       session = null;
       if (previous) {
@@ -14405,6 +14438,7 @@ function mount(root, context) {
         }).catch(() => {});
       }
       decoder = new TextDecoder;
+      writeChain = Promise.resolve();
       term.reset();
     }
     setInputEnabled(false);
@@ -14428,7 +14462,10 @@ function mount(root, context) {
       who.textContent = `${session.owner} · ${session.shell}`;
       setStatus("Connected.");
       sendResize(term.cols, term.rows);
-      follow();
+      if (context.socket)
+        connectSocket();
+      else
+        follow();
       focusInput();
     } catch (error) {
       session = null;
@@ -14607,6 +14644,8 @@ function mount(root, context) {
     disposed = true;
     streamAbort?.abort();
     streamAbort = undefined;
+    socket?.close();
+    socket = undefined;
     unbindGestures();
     window.visualViewport?.removeEventListener("resize", onViewport);
     window.removeEventListener("resize", onResize);

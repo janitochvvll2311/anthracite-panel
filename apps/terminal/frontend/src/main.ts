@@ -13,7 +13,7 @@ import {
   type KeyName,
 } from "./keys";
 import { styles } from "./styles";
-import type { FrameContext } from "./types";
+import type { FrameContext, FrameSocket } from "./types";
 
 // The Terminal view renders the service's raw PTY stream with xterm.js. The
 // panel owns the frame; this module only knows its own routes.
@@ -73,6 +73,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   let session: any = null;
   let streamAbort: AbortController | undefined;
+  let socket: FrameSocket | undefined;
+  let writeChain: Promise<void> = Promise.resolve();
   let decoder = new TextDecoder();
   let disposed = false;
   let ctrlArmed = false;
@@ -269,6 +271,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   const sendRaw = (value: string): void => {
+    if (!value) return;
+    if (socket) {
+      // The socket carries input as a frame, so a keystroke is not an HTTP call.
+      socket.send(new Uint8Array(encodeText(value)).buffer);
+      return;
+    }
     void writeText(value).catch((error) => setStatus(String(error), true));
   };
 
@@ -308,26 +316,16 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
     const sequence = KEY_SEQUENCES[key];
     if (!sequence) return;
-    try {
-      await writeText(sequence);
-      clearModifiers();
-    } catch (error) {
-      setStatus(String(error), true);
-    } finally {
-      focusInput();
-    }
+    sendRaw(sequence);
+    clearModifiers();
+    focusInput();
   }
 
   async function sendSymbol(symbol: string): Promise<void> {
     const data = applyModifiers(symbol, ctrlArmed, altArmed);
-    try {
-      await writeText(data);
-      clearModifiers();
-    } catch (error) {
-      setStatus(String(error), true);
-    } finally {
-      focusInput();
-    }
+    sendRaw(data);
+    clearModifiers();
+    focusInput();
   }
 
   const sendResize = (cols: number, rows: number): void => {
@@ -370,6 +368,20 @@ export function mount(root: HTMLElement, context: FrameContext) {
       term.write(text, resolve);
     });
 
+  const endSession = (): void => {
+    const ended = session?.id;
+    session = null;
+    if (ended) {
+      void call(context, `/session?id=${encodeURIComponent(ended)}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+    setSessionControls(false);
+    state.textContent = "ended";
+    setStatus("Session ended. Reconnect to start a new one.", true);
+    term.write("\r\n[session ended]\r\n");
+  };
+
   // One live follower per session. Waiting for xterm to parse each chunk before
   // reading the next keeps the frame's stream queue bounded.
   const follow = async (): Promise<void> => {
@@ -389,17 +401,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
         if (value) await append(value);
       }
       if (disposed || controller.signal.aborted) return;
-      const ended = session?.id;
-      session = null;
-      if (ended) {
-        void call(context, `/session?id=${encodeURIComponent(ended)}`, {
-          method: "DELETE",
-        }).catch(() => {});
-      }
-      setSessionControls(false);
-      state.textContent = "ended";
-      setStatus("Session ended. Reconnect to start a new one.", true);
-      term.write("\r\n[session ended]\r\n");
+      endSession();
     } catch (error) {
       if (disposed || controller.signal.aborted) return;
       state.textContent = "degraded";
@@ -409,10 +411,50 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   };
 
+  // The socket carries both directions: output frames from the app stream and
+  // input frames that the engine turns into `write` calls. Panels without the
+  // relay fall back to the chunked route above.
+  const connectSocket = (): void => {
+    if (disposed || !session || !context.socket) return;
+    const openSocket = context.socket;
+    socket = openSocket(
+      `/api/apps/${encodeURIComponent(context.app.id)}/socket?id=${encodeURIComponent(session.id)}&seq=0`,
+      {
+        onOpen: () => {
+          if (!disposed) setStatus("Connected.");
+        },
+        onMessage: (data) => {
+          writeChain = writeChain
+            .then(() => append(new Uint8Array(data)))
+            .catch(() => {});
+          return writeChain;
+        },
+        onText: (text) => {
+          writeChain = writeChain
+            .then(() => append(new TextEncoder().encode(text)))
+            .catch(() => {});
+          return writeChain;
+        },
+        onClose: (error, code) => {
+          socket = undefined;
+          if (disposed) return;
+          if (error || (code !== undefined && code !== 1000 && code !== 1005)) {
+            state.textContent = "degraded";
+            setStatus(error ?? `socket closed (${code})`, true);
+            return;
+          }
+          endSession();
+        },
+      },
+    );
+  };
+
   async function open(reset = false) {
     if (reset) {
       streamAbort?.abort();
       streamAbort = undefined;
+      socket?.close();
+      socket = undefined;
       const previous = session?.id;
       session = null;
       if (previous) {
@@ -421,6 +463,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
         }).catch(() => {});
       }
       decoder = new TextDecoder();
+      writeChain = Promise.resolve();
       term.reset();
     }
     setInputEnabled(false);
@@ -443,7 +486,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
       who.textContent = `${session.owner} · ${session.shell}`;
       setStatus("Connected.");
       sendResize(term.cols, term.rows);
-      void follow();
+      if (context.socket) connectSocket();
+      else void follow();
       focusInput();
     } catch (error) {
       session = null;
@@ -635,6 +679,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
     disposed = true;
     streamAbort?.abort();
     streamAbort = undefined;
+    socket?.close();
+    socket = undefined;
     unbindGestures();
     window.visualViewport?.removeEventListener("resize", onViewport);
     window.removeEventListener("resize", onResize);

@@ -438,6 +438,38 @@ fn check_wit(root: &Path, manifest: &Manifest, known: &[String]) -> Result<(), E
                 route.path
             )));
         }
+        if let Some(write) = &route.write {
+            let (write_id, write_function) = parse_call(write)?;
+            let write_id = InterfaceId::parse(&write_id)?;
+            let interface = package
+                .interfaces
+                .iter()
+                .find_map(|(_, interface)| {
+                    (interface.name.as_deref() == Some(write_id.interface())).then_some(interface)
+                })
+                .ok_or_else(|| {
+                    Error::invalid(format!(
+                        "route `{}` writes through `{}`, which `wit/` does not declare",
+                        route.path, write_id
+                    ))
+                })?;
+            let declared = interface.functions.get(&write_function).ok_or_else(|| {
+                Error::invalid(format!(
+                    "route `{}` writes through `{write_function}`, which `{}` does not declare",
+                    route.path, write_id
+                ))
+            })?;
+            if declared
+                .result
+                .as_ref()
+                .is_some_and(|result| is_stream(package, result))
+            {
+                return Err(Error::invalid(format!(
+                    "route `{}` writes through the stream `{write_function}`",
+                    route.path
+                )));
+            }
+        }
     }
     Ok(())
 }

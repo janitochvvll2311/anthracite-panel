@@ -24,9 +24,10 @@ The HTTP mapping is by element type:
 | `stream<record>` | `text/event-stream`, one JSON object per event |
 | `future<T>` | `200` with `T` once it resolves |
 
-A raw WebSocket is **not** a second public API. WebSockets may be used behind the
-service boundary if a transport needs them, but the panel and generated clients
-consume the HTTP chunked/SSE shape.
+A raw WebSocket is **not** a second app API. A route may declare
+`transport = "websocket"`; the engine upgrades that route and maps the same WIT
+stream to binary frames. The app still exposes `stream<T>`, and the generated
+clients still speak the HTTP chunked/SSE shape by default.
 
 ## 2. Route opt-in
 
@@ -59,6 +60,32 @@ fn stream<'a>(
 The API route dispatcher returns `Body::from_stream` instead of `Json` when the
 route is a stream. The same session, origin, composition and grant checks apply.
 
+### 2.1 WebSocket transport
+
+A stream route may opt into a WebSocket upgrade and name the call that receives
+client frames:
+
+```toml
+[[route]]
+method = "GET"
+path = "/socket"
+call = "anthracite:terminal/subscription@1.0.0#follow"
+stream = true
+transport = "websocket"
+write = "anthracite:terminal/terminal@1.0.0#write"
+```
+
+- The handshake is a `GET` and the route must be a stream. The same session,
+  origin, composition and grant checks run before the upgrade.
+- Downstream, one WIT stream chunk becomes one binary message. The engine polls
+  the next chunk only after `send` completes, so the socket carries backpressure.
+- Upstream, a binary frame becomes a `call` to `write` with the query input plus
+  `data: list<u8>`. The app still exposes WIT; this is a transport, not a second
+  API.
+- `events = true` is an HTTP-only alternative for `stream<record>`. A WebSocket
+  route carries raw bytes.
+- A failed stream closes with code 1011; a clean end closes normally.
+
 ## 3. Service boundary
 
 Native services keep WIT-RPC for ordinary calls and add a private streaming
@@ -90,11 +117,16 @@ half-close and cancellation end the stream and release the session.
 The app frame's buffered fetch RPC cannot carry a live stream. The panel bridge
 adds a streaming request:
 
-- `anth:stream` starts a fetch, `anth:stream-chunk` carries bytes, and
-  `anth:stream-end` carries the status or error.
+- `anth:fetch` starts the request; a live response sends `anth:stream-head`, one
+  `anth:stream-chunk` per `anth:stream-pull`, and then `anth:stream-end`.
 - The frame exposes a real `ReadableStream` through the `Response.body` of
   `context.fetch`; existing `text()`/`json()` callers keep working by buffering.
+- The frame pulls one chunk at a time and the panel reads only on that pull, so
+  an app that stops reading stops the engine and the service.
 - Cancelling the reader aborts the panel fetch and therefore the engine response.
+- `context.socket(route, handlers)` opens a declared WebSocket route. The panel
+  owns the socket (cookies and origin checks), validates the same prefix, and
+  relays binary frames in both directions.
 
 The bridge applies the same scoped URL check as `anth:fetch`: a module can only
 stream from its own `/api/apps/{id}/` prefix.
@@ -155,13 +187,16 @@ Each phase landed as a separate PR against `v0.6.0`:
    `/stream` frontend, and the `/read` fallback.
 5. **Quotas and conformance.** Backpressure, cancellation, half-close,
    error-after-partial-data, byte caps and the corresponding tests.
+6. **WebSocket transport.** `transport = "websocket"`, the engine upgrade, the
+   panel relay and Terminal input frames.
+7. **Typed events / SSE.** `events = true` maps `stream<record>` to
+   `text/event-stream`; Host Info `watch` is the first consumer.
 
-Typed events (`subscribe() -> stream<event>`) and blobs build on this phase but
-stay separate PRs.
+Blobs build on this phase but stay a separate PR.
 
 ## 8. Out of scope
 
-- Raw WebSockets as a public API.
+- Raw WebSockets as a second app API (only a declared stream transport).
 - Async WIT functions.
 - Remote panel and multi-operator stream ownership.
 - Binary transfer quotas beyond the byte counters above.

@@ -10,6 +10,7 @@ anth-auth = { path = "../auth" }
 anth-compose = { path = "../compose" }
 anth-contract = { path = "../contract" }
 futures-core = "0.3"
+futures-util = "0.3"
 http-body = "1"
 http-body-util = "0.1"
 tokio = { workspace = true }
@@ -20,7 +21,7 @@ sha2 = "0.10"
 form_urlencoded = "1"
 
 [dev-dependencies]
-futures-util = "0.3"
 libc = "0.2"
+tokio-tungstenite = "0.29"
 tower = { workspace = true }
 zip = { version = "2.6", default-features = false, features = ["deflate"] }
