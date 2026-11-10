@@ -74,6 +74,12 @@
           return new Promise((resolve, reject) => {
             let controller = null;
             let settled = false;
+            let ended = false;
+            let resolvePull = null;
+            const finishPull = () => {
+              if (resolvePull) resolvePull();
+              resolvePull = null;
+            };
             const call = {
               reject: (error) => {
                 if (settled) return;
@@ -94,8 +100,19 @@
                   start: (value) => {
                     controller = value;
                   },
+                  // Returning the promise gates the next pull until this chunk
+                  // arrives, so at most one chunk is in flight at a time.
+                  pull: () => {
+                    if (ended) return;
+                    return new Promise((next) => {
+                      resolvePull = next;
+                      send("anth:stream-pull", { id });
+                    });
+                  },
                   cancel: () => {
+                    ended = true;
                     pending.delete(id);
+                    finishPull();
                     send("anth:stream-cancel", { id });
                   },
                 });
@@ -115,8 +132,11 @@
               },
               chunk: (data) => {
                 if (controller) controller.enqueue(new Uint8Array(data));
+                finishPull();
               },
               end: (error) => {
+                ended = true;
+                finishPull();
                 pending.delete(id);
                 if (!controller) return;
                 if (error) controller.error(new Error(error));

@@ -2,6 +2,8 @@ use crate::*;
 use axum::body::Body;
 use axum::http::header::IF_MATCH;
 use axum::http::Request;
+use futures_core::Stream;
+use std::task::{Context, Poll};
 use tower::ServiceExt;
 
 fn state_with(uid: u32) -> Arc<EngineState> {
@@ -699,6 +701,182 @@ async fn a_caller_that_cannot_stream_answers_unavailable() {
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(value["error"]["code"], "unavailable");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+fn set_limits(dir: &std::path::Path, limits: &str) {
+    let path = dir.join("apps/org.example.notes/manifest.toml");
+    let manifest = std::fs::read_to_string(&path).expect("manifest");
+    std::fs::write(&path, format!("{manifest}\n[limits]\n{limits}\n")).expect("write");
+}
+
+struct Emit {
+    chunks: Vec<Vec<u8>>,
+}
+
+impl AppCaller for Emit {
+    fn call<'a>(
+        &'a self,
+        _app: &'a str,
+        _interface: &'a str,
+        _function: &'a str,
+        _input: Value,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>> {
+        Box::pin(async move { Ok(Value::Null) })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        _app: &'a str,
+        _interface: &'a str,
+        _function: &'a str,
+        _input: Value,
+    ) -> StreamFuture<'a> {
+        let chunks = self.chunks.clone();
+        Box::pin(async move {
+            let items: Vec<Result<Chunk, Error>> = chunks.into_iter().map(Ok).collect();
+            Ok(Box::pin(futures_util::stream::iter(items)) as ChunkStream)
+        })
+    }
+}
+
+async fn stream_body(state: Arc<EngineState>) -> Result<Vec<u8>, axum::Error> {
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/api/apps/org.example.notes/stream")
+        .body(Body::empty())
+        .expect("request");
+    request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+    let response = router(state).oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .map(|bytes| bytes.to_vec())
+}
+
+#[tokio::test]
+async fn a_stream_over_its_total_budget_is_truncated() {
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    set_limits(&dir, "bytes-total = 100\nbytes-per-sec = 1000000");
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Emit {
+                chunks: vec![vec![b'a'; 60], vec![b'b'; 60]],
+            })),
+    );
+    let error = stream_body(state).await.expect_err("over budget");
+    assert!(error.to_string().contains("byte budget"), "{error}");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_stream_over_its_rate_budget_is_truncated() {
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    set_limits(&dir, "bytes-total = 1000000\nbytes-per-sec = 50");
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Emit {
+                chunks: vec![vec![b'a'; 60]],
+            })),
+    );
+    let error = stream_body(state).await.expect_err("over rate");
+    assert!(error.to_string().contains("byte/s budget"), "{error}");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+struct Tracked {
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+    sent: bool,
+}
+
+impl Stream for Tracked {
+    type Item = Result<Chunk, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if !self.sent {
+            self.sent = true;
+            return Poll::Ready(Some(Ok(b"first".to_vec())));
+        }
+        Poll::Pending
+    }
+}
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        self.dropped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_response_body_drops_the_stream() {
+    use http_body_util::BodyExt;
+
+    struct Endless {
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl AppCaller for Endless {
+        fn call<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<Value, Error>> + Send + 'a>> {
+            Box::pin(async move { Ok(Value::Null) })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            _app: &'a str,
+            _interface: &'a str,
+            _function: &'a str,
+            _input: Value,
+        ) -> StreamFuture<'a> {
+            let dropped = Arc::clone(&self.dropped);
+            Box::pin(async move {
+                Ok(Box::pin(Tracked {
+                    dropped,
+                    sent: false,
+                }) as ChunkStream)
+            })
+        }
+    }
+
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (state, dir) = apps_state_with(&["org.example.notes"]);
+    write_grant(&dir, &grant_toml(&dir));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("unique state")
+            .with_caller(Arc::new(Endless {
+                dropped: Arc::clone(&dropped),
+            })),
+    );
+    let mut request = Request::builder()
+        .method("GET")
+        .uri("/api/apps/org.example.notes/stream")
+        .body(Body::empty())
+        .expect("request");
+    request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+    let response = router(state).oneshot(request).await.expect("response");
+    let mut body = response.into_body();
+    let frame = body.frame().await.expect("frame").expect("data");
+    assert!(frame.data_ref().is_some());
+    assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
+    drop(body);
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "the caller stream is dropped with the response body"
+    );
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 
