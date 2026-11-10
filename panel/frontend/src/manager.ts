@@ -193,21 +193,25 @@ export function mountManager(
       appsRoot.append(element("p", "mgr-hint", "No apps are installed."));
     } else {
       const table = element("table", "mgr-table");
-      const head = element("tr");
+      const head = element("tr", "mgr-head");
       for (const label of ["APP", "VERSION", "STATE", "GRANT", "ACTIONS"]) {
         head.append(element("th", "", label));
       }
       table.append(head);
       for (const app of apps) {
         const row = element("tr");
-        const id = element("td");
+        const id = element("td", "mgr-app");
+        id.dataset.label = "App";
         id.append(element("div", "mgr-mono", app.id));
         if (app.alias) id.append(element("div", "mgr-mono", `alias ${app.alias}`));
         row.append(id);
 
-        row.append(element("td", "mgr-mono", app.version));
+        const version = element("td", "mgr-version mgr-mono", app.version);
+        version.dataset.label = "Version";
+        row.append(version);
 
-        const state = element("td");
+        const state = element("td", "mgr-state");
+        state.dataset.label = "State";
         state.append(
           badge(app.enabled ? "enabled" : "disabled", app.enabled ? "ok" : "warn"),
           document.createTextNode(" "),
@@ -215,7 +219,8 @@ export function mountManager(
         );
         row.append(state);
 
-        const grant = element("td");
+        const grant = element("td", "mgr-grant");
+        grant.dataset.label = "Grant";
         const kind =
           app.grant_state === "current"
             ? "ok"
@@ -231,7 +236,8 @@ export function mountManager(
         }
         row.append(grant);
 
-        const actions = element("td");
+        const actions = element("td", "mgr-actions-cell");
+        actions.dataset.label = "Actions";
         const tools = element("div", "mgr-actions");
         const toggleButton = button(
           "mgr-btn",
@@ -284,7 +290,8 @@ export function mountManager(
       approveRoot.hidden = true;
       return;
     }
-    approveRoot.append(element("strong", "mgr-mono", `Approve ${app.id}`));
+    approveRoot.append(element("strong", "mgr-mono mgr-approve-title", `Approve ${app.id}`));
+    const risks = element("div", "mgr-risks");
     const chosen: HTMLInputElement[] = [];
     for (const risk of RISKS) {
       const label = element("label", "mgr-check");
@@ -294,8 +301,9 @@ export function mountManager(
       if (app.grant?.accepted.includes(risk)) input.checked = true;
       chosen.push(input);
       label.append(input, document.createTextNode(` ${risk}`));
-      approveRoot.append(label);
+      risks.append(label);
     }
+    approveRoot.append(risks);
     const confirm = button("mgr-btn primary", "Approve");
     confirm.addEventListener("click", () => {
       void approve(
@@ -308,10 +316,15 @@ export function mountManager(
       pendingApprove = null;
       renderApps();
     });
-    approveRoot.append(confirm, cancel);
+    const actions = element("div", "mgr-approve-actions");
+    actions.append(confirm, cancel);
+    approveRoot.append(actions);
     approveRoot.append(
       element("span", "mgr-hint", "read is implicit; check every level the risk needs"),
     );
+    // The panel sits below the app list; on a phone it would otherwise open
+    // off-screen after the clicked card.
+    approveRoot.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   function renderUpgradeOptions(): void {

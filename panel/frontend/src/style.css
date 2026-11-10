@@ -1144,6 +1144,10 @@ button.drawer-close {
   font-size: 12px;
 }
 
+.mgr-check input {
+  accent-color: #7aa2ff;
+}
+
 .mgr-compose {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1187,6 +1191,174 @@ button.drawer-close {
   border: 1px dashed var(--line);
   border-radius: 7px;
   background: #0f1219;
+}
+
+.mgr-approve-title {
+  flex: 0 0 auto;
+}
+
+.mgr-risks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.mgr-approve-actions {
+  display: flex;
+  gap: 8px;
+}
+
+html[data-viewport="mobile"] .manager {
+  place-items: stretch;
+}
+
+html[data-viewport="mobile"] .manager-card {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  border: 0;
+  border-radius: 0;
+}
+
+html[data-viewport="mobile"] .manager-card > header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 12px;
+}
+
+html[data-viewport="mobile"] .manager-card > header > div {
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+html[data-viewport="mobile"] .manager-card > header .muted {
+  display: none;
+}
+
+html[data-viewport="mobile"] .manager-body {
+  padding: 10px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  gap: 12px;
+}
+
+html[data-viewport="mobile"] .mgr-section > header {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+html[data-viewport="mobile"] .mgr-section-body {
+  padding: 10px;
+}
+
+html[data-viewport="mobile"] .mgr-table .mgr-head {
+  display: none;
+}
+
+html[data-viewport="mobile"] .mgr-table,
+html[data-viewport="mobile"] .mgr-table tbody,
+html[data-viewport="mobile"] .mgr-table tr,
+html[data-viewport="mobile"] .mgr-table td {
+  display: block;
+  width: 100%;
+}
+
+html[data-viewport="mobile"] .mgr-table tr {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #12161e;
+}
+
+html[data-viewport="mobile"] .mgr-table tr:last-child {
+  margin-bottom: 0;
+}
+
+html[data-viewport="mobile"] .mgr-table td {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border: 0;
+}
+
+html[data-viewport="mobile"] .mgr-table td[data-label]::before {
+  content: attr(data-label);
+  flex: none;
+  width: 68px;
+  color: var(--muted-2);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+html[data-viewport="mobile"] .mgr-table td.mgr-app {
+  flex-wrap: wrap;
+}
+
+html[data-viewport="mobile"] .mgr-table td.mgr-app > div {
+  flex: 1 1 100%;
+}
+
+html[data-viewport="mobile"] .mgr-table td.mgr-actions-cell {
+  padding-top: 8px;
+}
+
+html[data-viewport="mobile"] .mgr-table td.mgr-actions-cell::before {
+  content: none;
+}
+
+html[data-viewport="mobile"] .mgr-actions {
+  gap: 6px;
+}
+
+html[data-viewport="mobile"] .mgr-btn {
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+html[data-viewport="mobile"] .mgr-form {
+  width: 100%;
+}
+
+html[data-viewport="mobile"] .mgr-form input[type="file"] {
+  max-width: none;
+  width: 100%;
+}
+
+html[data-viewport="mobile"] .mgr-select {
+  width: 100%;
+}
+
+html[data-viewport="mobile"] .mgr-compose {
+  grid-template-columns: 1fr;
+}
+
+html[data-viewport="mobile"] .mgr-compose label {
+  min-height: 40px;
+}
+
+html[data-viewport="mobile"] .mgr-approve-title {
+  flex: 1 0 100%;
+  font-size: 12px;
+}
+
+html[data-viewport="mobile"] .mgr-risks {
+  flex: 1 0 100%;
+}
+
+html[data-viewport="mobile"] .mgr-approve-actions {
+  flex: 1 0 100%;
+}
+
+html[data-viewport="mobile"] .mgr-approve .mgr-btn {
+  flex: 1;
+  min-height: 36px;
 }
 
 /* Module and shell states ------------------------------------------------ */
