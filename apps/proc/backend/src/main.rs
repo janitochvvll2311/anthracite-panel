@@ -17,7 +17,10 @@ use anth_service::Handler;
 use serde_json::{json, Value};
 
 const PROC: &str = "anthracite:proc/proc@1.1.0";
-const MAX_PAGE: u32 = 100_000;
+/// One page has to fit the engine's 4 MiB service-answer cap. At roughly 150
+/// bytes per row, 10k rows stay below it; the UI walks `cursor` until `done`,
+/// so the table itself is never truncated.
+const MAX_PAGE: u32 = 10_000;
 const DEFAULT_PAGE: u32 = 50;
 const MAX_ARGV: usize = 4;
 const MAX_ARGUMENT: usize = 128;

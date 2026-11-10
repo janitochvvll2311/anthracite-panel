@@ -1501,4 +1501,22 @@ mod tests {
             .any(|mount| mount["mountpoint"] == "/media/sd"));
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[tokio::test]
+    async fn the_home_fixture_answers_info_and_watch_through_the_handler() {
+        use futures_util::StreamExt;
+
+        let emulator = Emulator::new();
+        let info = emulator.call(HOME, "info", json!({})).expect("info");
+        assert_eq!(info["hostname"], "anthracite-demo");
+        assert_eq!(info["cpu"]["cores"], 8);
+
+        let mut stream = emulator
+            .stream(HOME, "watch", json!({"interval-ms": 1000}))
+            .expect("watch");
+        let chunk = stream.next().await.expect("chunk").expect("ok");
+        let snapshot: Value = serde_json::from_slice(&chunk).expect("json");
+        assert_eq!(snapshot["hostname"], "anthracite-demo");
+        assert!(snapshot["uptime-seconds"].as_u64().expect("uptime") >= 273_720);
+    }
 }

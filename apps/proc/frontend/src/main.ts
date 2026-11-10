@@ -92,7 +92,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const spawnInput = spawnForm.querySelector("input") as HTMLInputElement;
 
   const MOBILE_PAGE = 200;
-  const DESKTOP_LIMIT = 100_000;
+  // The engine caps one service answer at 4 MiB. Ten thousand rows stay well
+  // below it (~150 B per row); desktop and tree walk the cursor until `done`,
+  // so the table itself is never truncated.
+  const DESKTOP_PAGE = 10_000;
   const ROW_HEIGHT = 40;
   const OVERSCAN = 8;
   let currentRows: TreeRow[] = [];
@@ -449,10 +452,25 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }`;
   }
 
+  async function loadAll(): Promise<Process[]> {
+    const all: Process[] = [];
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    while (true) {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const page = await call(context, `/processes?limit=${DESKTOP_PAGE}${suffix}`);
+      all.push(...page.processes);
+      if (disposed || page.done || !page.cursor || seen.has(page.cursor)) break;
+      seen.add(page.cursor);
+      cursor = page.cursor;
+    }
+    return all;
+  }
+
   async function loadTree(): Promise<void> {
-    const page = await call(context, `/processes?limit=${DESKTOP_LIMIT}`);
+    const all = await loadAll();
     if (disposed) return;
-    processes = page.processes;
+    processes = all;
     nextCursor = null;
     more.hidden = true;
     fold.hidden = false;
@@ -472,14 +490,28 @@ export function mount(root: HTMLElement, context: FrameContext) {
         await loadTree();
         return;
       }
-      const limit = compact ? MOBILE_PAGE : DESKTOP_LIMIT;
-      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-      const page = await call(context, `/processes?limit=${limit}${suffix}`);
-      if (disposed) return;
-      if (append) processes.push(...page.processes);
-      else processes = page.processes;
-      nextCursor = compact ? page.cursor ?? null : null;
-      more.hidden = !compact || Boolean(page.done) || !page.cursor;
+      if (compact) {
+        // Live refreshes every loaded page: asking for the first page again
+        // would discard what Load more appended two seconds earlier.
+        const limit = append
+          ? MOBILE_PAGE
+          : Math.max(MOBILE_PAGE, processes.length);
+        const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+        const page = await call(
+          context,
+          `/processes?limit=${limit}${suffix}`,
+        );
+        if (disposed) return;
+        if (append) processes.push(...page.processes);
+        else processes = page.processes;
+        nextCursor = page.cursor ?? null;
+        more.hidden = Boolean(page.done) || !page.cursor;
+      } else {
+        processes = await loadAll();
+        if (disposed) return;
+        nextCursor = null;
+        more.hidden = true;
+      }
       fold.hidden = true;
       renderRows(false);
       setStatus(`Snapshot updated · ${processes.length} processes`);
@@ -525,12 +557,24 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   function setMode(next: boolean): void {
     if (next && compact) return;
+    if (next) {
+      filters.pid = "";
+      filters.ppid = "";
+      filters.name = "";
+    } else {
+      filters.query = "";
+    }
     tree = next;
+    if (!sortable(sortKey)) {
+      sortKey = "pid";
+      sortAsc = true;
+    }
     syncModeButtons();
     fold.hidden = !tree;
     allCollapsed = false;
     fold.textContent = "Collapse all";
     renderHead();
+    updateDirection();
     table.scrollTop = 0;
     scheduleLive();
     void load();
@@ -548,6 +592,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
       filters.user = "";
       filters.state = "";
       mobileFilter.value = filters.query ?? "";
+      processes = [];
+      nextCursor = null;
       if (tree) {
         tree = false;
         syncModeButtons();

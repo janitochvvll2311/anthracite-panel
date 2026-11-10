@@ -386,7 +386,7 @@ function mount(root, context) {
   const spawnForm = box.querySelector(".proc-spawn");
   const spawnInput = spawnForm.querySelector("input");
   const MOBILE_PAGE = 200;
-  const DESKTOP_LIMIT = 1e5;
+  const DESKTOP_PAGE = 1e4;
   const ROW_HEIGHT = 40;
   const OVERSCAN = 8;
   let currentRows = [];
@@ -676,11 +676,26 @@ function mount(root, context) {
     const countText = active ? `${currentRows.length} / ${processes.length}` : `${processes.length}`;
     count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : nextCursor ? " · more available" : ""}`;
   }
+  async function loadAll() {
+    const all = [];
+    const seen = new Set;
+    let cursor = null;
+    while (true) {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const page = await call(context, `/processes?limit=${DESKTOP_PAGE}${suffix}`);
+      all.push(...page.processes);
+      if (disposed || page.done || !page.cursor || seen.has(page.cursor))
+        break;
+      seen.add(page.cursor);
+      cursor = page.cursor;
+    }
+    return all;
+  }
   async function loadTree() {
-    const page = await call(context, `/processes?limit=${DESKTOP_LIMIT}`);
+    const all = await loadAll();
     if (disposed)
       return;
-    processes = page.processes;
+    processes = all;
     nextCursor = null;
     more.hidden = true;
     fold.hidden = false;
@@ -699,17 +714,25 @@ function mount(root, context) {
         await loadTree();
         return;
       }
-      const limit = compact ? MOBILE_PAGE : DESKTOP_LIMIT;
-      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-      const page = await call(context, `/processes?limit=${limit}${suffix}`);
-      if (disposed)
-        return;
-      if (append)
-        processes.push(...page.processes);
-      else
-        processes = page.processes;
-      nextCursor = compact ? page.cursor ?? null : null;
-      more.hidden = !compact || Boolean(page.done) || !page.cursor;
+      if (compact) {
+        const limit = append ? MOBILE_PAGE : Math.max(MOBILE_PAGE, processes.length);
+        const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+        const page = await call(context, `/processes?limit=${limit}${suffix}`);
+        if (disposed)
+          return;
+        if (append)
+          processes.push(...page.processes);
+        else
+          processes = page.processes;
+        nextCursor = page.cursor ?? null;
+        more.hidden = Boolean(page.done) || !page.cursor;
+      } else {
+        processes = await loadAll();
+        if (disposed)
+          return;
+        nextCursor = null;
+        more.hidden = true;
+      }
       fold.hidden = true;
       renderRows(false);
       setStatus(`Snapshot updated · ${processes.length} processes`);
@@ -756,12 +779,24 @@ function mount(root, context) {
   function setMode(next) {
     if (next && compact)
       return;
+    if (next) {
+      filters.pid = "";
+      filters.ppid = "";
+      filters.name = "";
+    } else {
+      filters.query = "";
+    }
     tree = next;
+    if (!sortable(sortKey)) {
+      sortKey = "pid";
+      sortAsc = true;
+    }
     syncModeButtons();
     fold.hidden = !tree;
     allCollapsed = false;
     fold.textContent = "Collapse all";
     renderHead();
+    updateDirection();
     table.scrollTop = 0;
     scheduleLive();
     load();
@@ -779,6 +814,8 @@ function mount(root, context) {
       filters.user = "";
       filters.state = "";
       mobileFilter.value = filters.query ?? "";
+      processes = [];
+      nextCursor = null;
       if (tree) {
         tree = false;
         syncModeButtons();

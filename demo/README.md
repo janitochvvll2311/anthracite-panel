@@ -138,11 +138,12 @@ each of those bundles writes a plain JSON snapshot to
 `{data}` argv. They survive a panel/service restart. Delete an app’s
 `state.json` to reseed that domain.
 
-The process table and terminal sessions are runtime state and reset on restart.
-Removing an app from the composition degrades only that view.
+The process table, terminal sessions and Home's metrics are runtime state and
+reset on restart. Removing an app from the composition degrades only that view.
 
 The emulator is not engine code. It lives outside the wasm `apps/` workspace, is
-unsigned, class `socket`, and never receives the host root.
+unsigned, declares `socket` for the six service apps and `host` for Home, and
+never receives the host root.
 
 ## Not in the simulator
 

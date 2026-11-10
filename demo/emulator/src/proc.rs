@@ -12,7 +12,9 @@ use serde_json::{json, Value};
 
 use crate::{number, optional_text};
 
-const MAX_PAGE: u32 = 100_000;
+/// Matches the real service: one page stays below the engine's 4 MiB answer
+/// cap, and the UI walks `cursor` until `done`.
+const MAX_PAGE: u32 = 10_000;
 const DEFAULT_PAGE: u32 = 50;
 
 #[derive(Clone)]
