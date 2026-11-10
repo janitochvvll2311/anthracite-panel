@@ -18,6 +18,7 @@ anth-api = { path = "../api" }
 anth-auth = { path = "../auth" }
 anth-compose = { path = "../compose" }
 anth-runtime = { path = "../runtime" }
+futures-util = "0.3"
 libc = "0.2"
 anth-contract = { path = "../contract", features = ["parse"] }
 axum = { workspace = true }

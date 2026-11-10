@@ -90,6 +90,7 @@ dependencies = [
  "anth-contract",
  "anth-runtime",
  "axum",
+ "futures-util",
  "humantime",
  "libc",
  "serde",

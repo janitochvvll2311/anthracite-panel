@@ -29,7 +29,7 @@ use anth_contract::{
     AppId, AuditAction, AuditEntry, Error, ErrorEnvelope, ErrorKind, ExportTarget, Outcome,
 };
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex, Notify};
@@ -196,14 +196,8 @@ impl ServiceSupervisor {
             .and_then(|service| service.exports.get(interface).copied())
     }
 
-    /// Calls one function and returns the unwrapped `ok` value.
-    pub async fn call(
-        &self,
-        app: &str,
-        interface: &str,
-        function: &str,
-        input: Value,
-    ) -> Result<Value, Error> {
+    /// The running service that exports `interface`.
+    async fn service(&self, app: &str, interface: &str) -> Result<Arc<Service>, Error> {
         let id = AppId::parse(app)?;
         let service = self
             .services
@@ -222,6 +216,18 @@ impl ServiceSupervisor {
                 "the service `{app}` does not export `{interface}`"
             )));
         }
+        Ok(service)
+    }
+
+    /// Calls one function and returns the unwrapped `ok` value.
+    pub async fn call(
+        &self,
+        app: &str,
+        interface: &str,
+        function: &str,
+        input: Value,
+    ) -> Result<Value, Error> {
+        let service = self.service(app, interface).await?;
         let body = serde_json::to_vec(&serde_json::json!({
             "interface": interface,
             "function": function,
@@ -258,6 +264,50 @@ impl ServiceSupervisor {
             })
         } else {
             Err(service_error(app, answer.0, &answer.1))
+        }
+    }
+
+    /// Starts a streamed function and returns the body as the engine sees it
+    /// (§20). The connection is held open for as long as the caller reads.
+    pub async fn stream(
+        &self,
+        app: &str,
+        interface: &str,
+        function: &str,
+        input: Value,
+    ) -> Result<anth_api::ChunkStream, Error> {
+        let service = self.service(app, interface).await?;
+        let body = serde_json::to_vec(&serde_json::json!({
+            "interface": interface,
+            "function": function,
+            "input": input,
+        }))
+        .map_err(|error| Error::internal(format!("encoding the service call: {error}")))?;
+        if body.len() > CALL_CAP {
+            return Err(Error::too_large(format!(
+                "the call is {} bytes; the limit is {CALL_CAP}",
+                body.len()
+            )));
+        }
+        let opened = tokio::time::timeout(self.call_timeout, open_stream(&service.socket, &body))
+            .await
+            .map_err(|_| {
+                Error::exhausted(format!(
+                    "the service `{app}` did not start a stream within {}ms",
+                    self.call_timeout.as_millis()
+                ))
+            })??;
+        match opened {
+            Opened::Body(reader) => Ok(Box::pin(futures_util::stream::try_unfold(
+                reader,
+                |mut reader| async move {
+                    match next_chunk(&mut reader).await? {
+                        Some(chunk) => Ok(Some((chunk, reader))),
+                        None => Ok(None),
+                    }
+                },
+            ))),
+            Opened::Error(status, payload) => Err(service_error(app, status, &payload)),
         }
     }
 
@@ -609,6 +659,158 @@ async fn http(
     Ok((status, payload))
 }
 
+/// The head of a service stream: either the chunked body or the JSON envelope of
+/// an error that happened before the first byte.
+enum Opened {
+    Body(BufReader<UnixStream>),
+    Error(u16, Vec<u8>),
+}
+
+/// Opens `POST /__anth/stream` and reads only its head, so a long-lived body does
+/// not sit behind the call timeout.
+async fn open_stream(socket: &Path, body: &[u8]) -> Result<Opened, Error> {
+    let mut reader = BufReader::new(UnixStream::connect(socket).await.map_err(|error| {
+        Error::unavailable(format!("connecting to {}: {error}", socket.display()))
+    })?);
+    let head = format!(
+        "POST /__anth/stream HTTP/1.1\r\nHost: anthracite\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    {
+        let stream = reader.get_mut();
+        stream
+            .write_all(head.as_bytes())
+            .await
+            .map_err(|error| Error::unavailable(format!("writing the stream request: {error}")))?;
+        stream
+            .write_all(body)
+            .await
+            .map_err(|error| Error::unavailable(format!("writing the stream request: {error}")))?;
+        stream
+            .flush()
+            .await
+            .map_err(|error| Error::unavailable(format!("writing the stream request: {error}")))?;
+    }
+
+    let mut status_line = String::new();
+    if reader
+        .read_line(&mut status_line)
+        .await
+        .map_err(|error| Error::unavailable(format!("reading the stream answer: {error}")))?
+        == 0
+    {
+        return Err(Error::internal("the service stream has no status line"));
+    }
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|status| status.parse::<u16>().ok())
+        .ok_or_else(|| Error::internal("the service stream has no status line"))?;
+
+    let mut content_length = None;
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .await
+            .map_err(|error| Error::unavailable(format!("reading the stream headers: {error}")))?;
+        if read == 0 {
+            return Err(Error::internal(
+                "the service stream ended inside its headers",
+            ));
+        }
+        if line == "\r\n" {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = value.parse::<usize>().ok();
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            chunked = value.eq_ignore_ascii_case("chunked");
+        }
+    }
+
+    if status == 200 {
+        if !chunked {
+            return Err(Error::internal(format!(
+                "the service `{}` stream is not chunked",
+                socket.display()
+            )));
+        }
+        return Ok(Opened::Body(reader));
+    }
+    let length = content_length
+        .ok_or_else(|| Error::internal("the service stream error has no `Content-Length`"))?;
+    if length > CALL_CAP {
+        return Err(Error::too_large(format!(
+            "the service stream error is {length} bytes; the limit is {CALL_CAP}"
+        )));
+    }
+    let mut payload = vec![0u8; length];
+    reader
+        .read_exact(&mut payload)
+        .await
+        .map_err(|error| Error::unavailable(format!("reading the stream error: {error}")))?;
+    Ok(Opened::Error(status, payload))
+}
+
+/// Reads one chunk of the service's chunked encoding. `None` is the clean
+/// terminator; a connection that ends before it is an error, not EOF.
+async fn next_chunk(reader: &mut BufReader<UnixStream>) -> Result<Option<Vec<u8>>, Error> {
+    let mut line = String::new();
+    let read = reader
+        .read_line(&mut line)
+        .await
+        .map_err(|error| Error::unavailable(format!("reading a stream chunk: {error}")))?;
+    if read == 0 {
+        return Err(Error::unavailable(
+            "the service stream ended before its terminator",
+        ));
+    }
+    let size = usize::from_str_radix(line.trim(), 16)
+        .map_err(|_| Error::internal("the service stream has an invalid chunk size"))?;
+    if size == 0 {
+        // Trailer fields, then the blank line that closes the body.
+        loop {
+            let mut trailer = String::new();
+            let read = reader
+                .read_line(&mut trailer)
+                .await
+                .map_err(|error| Error::unavailable(format!("reading stream trailers: {error}")))?;
+            if read == 0 || trailer == "\r\n" {
+                break;
+            }
+        }
+        return Ok(None);
+    }
+    if size > CALL_CAP {
+        return Err(Error::too_large(format!(
+            "the service sent a {size}-byte chunk; the limit is {CALL_CAP}"
+        )));
+    }
+    let mut chunk = vec![0u8; size];
+    reader
+        .read_exact(&mut chunk)
+        .await
+        .map_err(|_| Error::unavailable("the service stream ended in the middle of a chunk"))?;
+    let mut terminator = [0u8; 2];
+    reader
+        .read_exact(&mut terminator)
+        .await
+        .map_err(|_| Error::unavailable("the service stream ended after a chunk"))?;
+    if &terminator != b"\r\n" {
+        return Err(Error::internal(
+            "the service stream has no chunk terminator",
+        ));
+    }
+    Ok(Some(chunk))
+}
+
 fn service_error(app: &str, status: u16, payload: &[u8]) -> Error {
     let Ok(envelope) = serde_json::from_slice::<ErrorEnvelope>(payload) else {
         return Error::internal(format!(
@@ -649,6 +851,23 @@ impl anth_api::AppCaller for EngineCaller {
                     self.services.call(app, interface, function, input).await
                 }
                 _ => self.wasm.call(app, interface, function, input).await,
+            }
+        })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        app: &'a str,
+        interface: &'a str,
+        function: &'a str,
+        input: Value,
+    ) -> anth_api::StreamFuture<'a> {
+        Box::pin(async move {
+            match self.services.target(app, interface).await {
+                Some(ExportTarget::Service) => {
+                    self.services.stream(app, interface, function, input).await
+                }
+                _ => self.wasm.stream(app, interface, function, input).await,
             }
         })
     }
