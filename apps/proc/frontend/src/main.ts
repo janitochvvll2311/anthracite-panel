@@ -16,12 +16,19 @@ type SortKey = "pid" | "ppid" | "name" | "user" | "state" | "cpu" | "memory";
 // a tree with continuous guides; the layout is chosen by the component width.
 // Phones keep the list only, with the filters in their own bar.
 export function mount(root: HTMLElement, context: FrameContext) {
+  const filled = typeof context.fill === "function";
+  if (filled) {
+    context.fill();
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
+  }
+
   const style = document.createElement("style");
   style.textContent = styles;
   root.append(style);
 
   const box = document.createElement("div");
-  box.className = "proc";
+  box.className = filled ? "proc fill" : "proc";
   box.innerHTML = `
     <div class="proc-bar">
       <span class="proc-count">…</span>
@@ -29,7 +36,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
         <button type="button" data-mode="flat" aria-pressed="true">List</button>
         <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
       </div>
-      <label class="proc-check"><input type="checkbox" data-live /> Live</label>
+      <label class="proc-check"><input type="checkbox" data-live checked /> Live</label>
       <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
@@ -512,7 +519,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       () => {
         if (!document.hidden) void load();
       },
-      tree || (!compact && sortKey !== "pid") ? 5000 : 2000,
+      tree || !compact ? 5000 : 2000,
     );
   }
 
@@ -614,9 +621,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   const resize = new ResizeObserver(applyCompact);
   resize.observe(box);
+  const tableResize = new ResizeObserver(() => renderWindow(false));
+  tableResize.observe(table);
   applyCompact();
   renderHead();
   updateDirection();
+  scheduleLive();
   table.addEventListener("scroll", () => {
     if (compact || scrollFrame) return;
     scrollFrame = window.requestAnimationFrame(() => {
@@ -631,6 +641,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
     if (live !== null) window.clearInterval(live);
     if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();
+    tableResize.disconnect();
     root.replaceChildren();
   };
 }

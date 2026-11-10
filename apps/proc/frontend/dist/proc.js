@@ -39,6 +39,7 @@ function reason(error) {
 // src/styles.ts
 var styles = `
   .proc { display: flex; flex-direction: column; gap: 10px; min-height: 380px; }
+  .proc.fill { height: 100%; min-height: 0; padding: 14px 16px; }
   .proc-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .proc-count { color: #667087; font-size: 12px; }
   .proc-bar .grow { flex: 1; }
@@ -64,6 +65,7 @@ var styles = `
     border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016;
     max-height: min(70vh, 760px);
   }
+  .proc.fill .proc-table { flex: 1 1 auto; min-height: 0; max-height: none; }
   .proc-head { position: sticky; top: 0; z-index: 2; background: #0d1016; }
   .proc-body { min-width: 0; }
   .proc-body .proc-row { height: 40px; box-sizing: border-box; }
@@ -178,6 +180,8 @@ var styles = `
   .proc.compact .proc-direction { min-width: 54px; }
   .proc.compact .proc-spawn { width: 100%; }
   .proc.compact .proc-table { max-height: none; border: 0; background: transparent; overflow: visible; }
+  .proc.compact.fill { padding: 10px; }
+  .proc.compact.fill .proc-table { flex: 1 1 auto; min-height: 0; overflow: auto; }
   .proc.compact .proc-head { display: none; }
   .proc.compact .proc-body .proc-row { height: auto; }
   .proc.compact .proc-row.flat,
@@ -310,11 +314,17 @@ function orderProcesses(processes, tree, collapsed, compareBy = (left, right) =>
 
 // src/main.ts
 function mount(root, context) {
+  const filled = typeof context.fill === "function";
+  if (filled) {
+    context.fill();
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
+  }
   const style = document.createElement("style");
   style.textContent = styles;
   root.append(style);
   const box = document.createElement("div");
-  box.className = "proc";
+  box.className = filled ? "proc fill" : "proc";
   box.innerHTML = `
     <div class="proc-bar">
       <span class="proc-count">…</span>
@@ -322,7 +332,7 @@ function mount(root, context) {
         <button type="button" data-mode="flat" aria-pressed="true">List</button>
         <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
       </div>
-      <label class="proc-check"><input type="checkbox" data-live /> Live</label>
+      <label class="proc-check"><input type="checkbox" data-live checked /> Live</label>
       <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
@@ -741,7 +751,7 @@ function mount(root, context) {
     live = window.setInterval(() => {
       if (!document.hidden)
         load();
-    }, tree || !compact && sortKey !== "pid" ? 5000 : 2000);
+    }, tree || !compact ? 5000 : 2000);
   }
   function setMode(next) {
     if (next && compact)
@@ -843,9 +853,12 @@ function mount(root, context) {
   });
   const resize = new ResizeObserver(applyCompact);
   resize.observe(box);
+  const tableResize = new ResizeObserver(() => renderWindow(false));
+  tableResize.observe(table);
   applyCompact();
   renderHead();
   updateDirection();
+  scheduleLive();
   table.addEventListener("scroll", () => {
     if (compact || scrollFrame)
       return;
@@ -862,6 +875,7 @@ function mount(root, context) {
     if (scrollFrame)
       window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();
+    tableResize.disconnect();
     root.replaceChildren();
   };
 }
