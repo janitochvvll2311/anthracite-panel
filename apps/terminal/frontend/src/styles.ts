@@ -11,19 +11,12 @@ export const styles = `
   .term-bar button:hover { border-color: #3a4560; color: #fff; }
   .term-bar button:disabled { opacity: .4; cursor: default; }
   .term-screen {
-    flex: 1; min-height: 0; margin: 0; padding: 12px 14px; overflow: auto;
+    position: relative; flex: 1; min-height: 0; margin: 0; padding: 0; overflow: hidden;
     border: 1px solid #202632; border-radius: 9px; background: #080a0f;
-    font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c8d0df;
-    white-space: pre-wrap; overflow-wrap: anywhere; touch-action: pan-y;
-    cursor: text;
+    touch-action: pan-y; cursor: text;
   }
-  .term-screen.focused::after {
-    content: "▌"; margin-left: 1px; color: #7aa2ff;
-    animation: term-blink 1s steps(1) infinite;
-  }
-  @keyframes term-blink {
-    50% { opacity: 0; }
-  }
+  .term-screen .xterm { height: 100%; padding: 10px 12px; }
+  .term-screen .xterm-viewport { background: transparent !important; }
   .term-keys { display: none; }
   .term-keys button {
     flex: none; min-width: 34px; height: 36px; padding: 0 7px;
@@ -76,10 +69,7 @@ export const styles = `
       -webkit-overflow-scrolling: touch; scrollbar-width: thin;
     }
     .term-keys button.armed { box-shadow: inset 0 0 0 1px #7aa2ff; }
-    .term-screen { padding: 10px 12px; font-size: 12px; }
+    .term-screen .xterm { padding: 8px 10px; }
     .term-status { font-size: 11.5px; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .term-screen.focused::after { animation: none; }
   }
 `;

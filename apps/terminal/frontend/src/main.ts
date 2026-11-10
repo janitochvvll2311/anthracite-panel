@@ -1,3 +1,8 @@
+import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { Terminal } from "@xterm/xterm";
+import xtermCss from "@xterm/xterm/css/xterm.css" with { type: "text" };
+
 import { call } from "./api";
 import { bindTerminalGestures } from "./gestures";
 import {
@@ -10,26 +15,10 @@ import {
 import { styles } from "./styles";
 import type { FrameContext } from "./types";
 
-// The Terminal view: a session from the terminal service.
-//
-// The service is polled through `read(id, cursor, wait-ms)`, which keeps the
-// contract honest: Phase 8 replaces the poll with `stream<u8>` without changing
-// this route. Everything runs inside the sandboxed frame; the module only sees
-// its own app prefix.
-
 const decoder = new TextDecoder();
 
-/// The terminal view is a plain `<pre>`, not an ANSI emulator: drop the
-/// control sequences a real PTY emits (colors, cursor movement, bracketed
-/// paste) before rendering its bytes.
-function cleanOutput(value: string): string {
-  return value
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b[@-_]/g, "")
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
-}
-
+// The Terminal view renders the service's raw PTY stream with xterm.js. The
+// panel owns the frame; this module only knows its own routes.
 export function mount(root: HTMLElement, context: FrameContext) {
   if (typeof context.fill === "function") {
     context.fill();
@@ -38,7 +27,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   const style = document.createElement("style");
-  style.textContent = styles;
+  style.textContent = styles + xtermCss;
   root.append(style);
 
   const box = document.createElement("div");
@@ -54,7 +43,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       </div>
       <span class="state">connecting…</span>
     </div>
-    <pre class="term-screen" aria-label="Terminal output"></pre>
+    <div class="term-screen" data-terminal aria-label="Terminal output"></div>
     <p class="term-status" role="status"></p>
     <div class="term-keys" data-keys aria-label="Terminal special keys">
       <div class="term-modifiers">
@@ -70,30 +59,83 @@ export function mount(root: HTMLElement, context: FrameContext) {
   `;
   root.append(box);
 
-  const screen = box.querySelector(".term-screen") as any;
-  const input = box.querySelector(".term-input") as any;
-  const status = box.querySelector(".term-status") as any;
-  const state = box.querySelector(".state") as any;
-  const who = box.querySelector(".who") as any;
-  const sessionControls: any[] = [...box.querySelectorAll("[data-session-control]")];
-  const keyBar = box.querySelector(".term-keys") as any;
-  const keyScroll = box.querySelector("[data-key-scroll]") as any;
-  const ctrlButton = box.querySelector('[data-mod="ctrl"]') as any;
-  const altButton = box.querySelector('[data-mod="alt"]') as any;
-  const keyboardButton = box.querySelector("[data-keyboard]") as any;
-  const history = [];
-  let historyIndex = 0;
-  let session = null;
+  const screen = box.querySelector(".term-screen") as HTMLElement;
+  const input = box.querySelector(".term-input") as HTMLElement;
+  const status = box.querySelector(".term-status") as HTMLElement;
+  const state = box.querySelector(".state") as HTMLElement;
+  const who = box.querySelector(".who") as HTMLElement;
+  const sessionControls = [
+    ...box.querySelectorAll("[data-session-control]"),
+  ] as HTMLButtonElement[];
+  const keyBar = box.querySelector(".term-keys") as HTMLElement;
+  const keyScroll = box.querySelector("[data-key-scroll]") as HTMLElement;
+  const ctrlButton = box.querySelector('[data-mod="ctrl"]') as HTMLButtonElement;
+  const altButton = box.querySelector('[data-mod="alt"]') as HTMLButtonElement;
+  const keyboardButton = box.querySelector("[data-keyboard]") as HTMLButtonElement;
+
+  let session: any = null;
   let cursor = 0;
-  let timer = null;
+  let timer: number | undefined;
   let disposed = false;
   let ctrlArmed = false;
   let altArmed = false;
   let composing = false;
-  let draft = "";
-  let output = "";
-  let pendingEcho = "";
   let lastSize = "";
+
+  const term = new Terminal({
+    cols: 80,
+    rows: 24,
+    disableStdin: true,
+    cursorBlink: true,
+    cursorStyle: "block",
+    scrollback: window.matchMedia("(max-width: 560px)").matches ? 2500 : 5000,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: 13,
+    theme: {
+      background: "#080a0f",
+      foreground: "#c8d0df",
+      cursor: "#7aa2ff",
+      cursorAccent: "#080a0f",
+      selectionBackground: "#264f78",
+      black: "#0b0e14",
+      red: "#ff7d8a",
+      green: "#6ee7b7",
+      yellow: "#f7c948",
+      blue: "#7aa2ff",
+      magenta: "#c792ea",
+      cyan: "#89ddff",
+      white: "#e8ebf2",
+      brightBlack: "#667087",
+      brightRed: "#ff9aa5",
+      brightGreen: "#9af3cf",
+      brightYellow: "#ffe08a",
+      brightBlue: "#a8c2ff",
+      brightMagenta: "#ddb8ff",
+      brightCyan: "#b6ecff",
+      brightWhite: "#ffffff",
+    },
+  });
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(screen);
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch {
+    // DOM renderer fallback for browsers without WebGL.
+  }
+  term.textarea?.setAttribute("tabindex", "-1");
+  term.textarea?.setAttribute("readonly", "readonly");
+
+  const fitTerminal = (): void => {
+    if (screen.clientWidth === 0 || screen.clientHeight === 0) return;
+    try {
+      fitAddon.fit();
+    } catch {
+      // xterm may not have measured its cell size yet; the next resize retries.
+    }
+  };
 
   const updateModifiers = (): void => {
     for (const [button, armed] of [
@@ -132,24 +174,21 @@ export function mount(root: HTMLElement, context: FrameContext) {
     keyboardButton.setAttribute("aria-label", label);
   };
 
+  const focusInput = (): void => {
+    if (inputEnabled()) input.focus({ preventScroll: true });
+  };
+
   const toggleKeyboard = (): void => {
     if (document.activeElement === input) input.blur();
     else focusInput();
     updateKeyboard();
   };
 
-  const focusInput = (): void => {
-    if (inputEnabled()) input.focus({ preventScroll: true });
-  };
-
-  const getFontSize = (): number => {
-    const value = Number.parseFloat(getComputedStyle(screen).fontSize);
-    return Number.isFinite(value) ? value : 12.5;
-  };
+  const getFontSize = (): number => term.options.fontSize ?? 13;
 
   const setFontSize = (size: number): void => {
-    const next = Math.max(10, Math.min(20, Math.round(size * 10) / 10));
-    screen.style.fontSize = `${next}px`;
+    term.options.fontSize = Math.max(10, Math.min(20, Math.round(size * 10) / 10));
+    fitTerminal();
   };
 
   const keyButton = (label: string, title: string): HTMLButtonElement => {
@@ -204,9 +243,11 @@ export function mount(root: HTMLElement, context: FrameContext) {
     keyScroll.append(node);
   }
 
-  const sessionKeys: any[] = [...box.querySelectorAll("[data-session-key]")];
+  const sessionKeys = [
+    ...box.querySelectorAll("[data-session-key]"),
+  ] as HTMLButtonElement[];
 
-  const setSessionControls = (enabled) => {
+  const setSessionControls = (enabled: boolean): void => {
     for (const control of sessionControls) control.disabled = !enabled;
     for (const control of sessionKeys) control.disabled = !enabled;
     setInputEnabled(enabled);
@@ -215,66 +256,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
   };
   setSessionControls(false);
 
-  const setStatus = (message, bad = false) => {
+  const setStatus = (message: string, bad = false): void => {
     status.textContent = message ?? "";
     status.className = bad ? "term-status bad" : "term-status";
   };
-
-  const render = (): void => {
-    screen.textContent = output + draft;
-    screen.scrollTop = screen.scrollHeight;
-  };
-
-  const append = (bytes) => {
-    // A service may echo the bytes it receives, including `\r`; normalise line
-    // endings so the `<pre>` shows real lines instead of overstrikes. A native
-    // PTY may also echo the submitted line together with its response, so the
-    // pending local echo is removed by prefix rather than by exact chunk.
-    const raw = decoder.decode(Uint8Array.from(bytes));
-    if (raw.includes("\x1b[6n")) {
-      const lines = (output + draft).split("\n");
-      const row = Math.max(1, lines.length);
-      const column = Math.max(1, [...(lines[lines.length - 1] ?? "")].length + 1);
-      void writeText(`\x1b[${row};${column}R`).catch(() => {});
-    }
-    let text = cleanOutput(raw.replace(/\r\n?/g, "\n"));
-    if (pendingEcho) {
-      if (pendingEcho.startsWith(text)) {
-        pendingEcho = pendingEcho.slice(text.length);
-        return;
-      }
-      if (text.startsWith(pendingEcho)) {
-        text = text.slice(pendingEcho.length);
-        pendingEcho = "";
-      } else {
-        pendingEcho = "";
-      }
-    }
-    if (!text) return;
-    output += text;
-    render();
-  };
-
-  async function submitLine(): Promise<void> {
-    if (!session) return;
-    const line = draft;
-    draft = "";
-    input.textContent = "";
-    if (line.trim()) history.push(line);
-    historyIndex = history.length;
-    // Show the line locally; the service echoes the same bytes back, so the
-    // next matching chunk is dropped instead of drawing it twice.
-    output += `${line}\n`;
-    render();
-    pendingEcho = `${line}\n`;
-    try {
-      await writeText(`${line}\r`);
-    } catch (error) {
-      pendingEcho = "";
-      setStatus(String(error), true);
-    }
-    focusInput();
-  }
 
   async function writeText(value: string): Promise<void> {
     if (!session) return;
@@ -285,36 +270,41 @@ export function mount(root: HTMLElement, context: FrameContext) {
     });
   }
 
-  const historyStep = (direction: "up" | "down"): void => {
-    if (history.length === 0) return;
-    historyIndex =
-      direction === "up"
-        ? Math.max(0, historyIndex - 1)
-        : Math.min(history.length, historyIndex + 1);
-    draft = history[historyIndex] ?? "";
-    render();
+  const sendRaw = (value: string): void => {
+    void writeText(value).catch((error) => setStatus(String(error), true));
   };
+
+  const sendTyped = (value: string): void => {
+    if (!value) return;
+    let data = value;
+    if (ctrlArmed || altArmed) {
+      const characters = [...value];
+      data =
+        applyModifiers(characters[0], ctrlArmed, altArmed) +
+        characters.slice(1).join("");
+      clearModifiers();
+    }
+    sendRaw(data);
+  };
+
+  async function sendSignal(name: string): Promise<void> {
+    if (!session) return;
+    try {
+      await call(context, "/signal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: session.id, signal: name }),
+      });
+      setStatus(`${name} sent to ${session.id}`);
+    } catch (error) {
+      setStatus(String(error), true);
+    }
+  }
 
   async function sendKey(key: KeyName): Promise<void> {
     if (key === "ctrlc") {
-      draft = "";
-      input.textContent = "";
-      render();
       clearModifiers();
       await sendSignal("INT");
-      focusInput();
-      return;
-    }
-    if (key === "ctrll") {
-      output = "";
-      render();
-      clearModifiers();
-      focusInput();
-      return;
-    }
-    if (key === "up" || key === "down") {
-      historyStep(key);
-      clearModifiers();
       focusInput();
       return;
     }
@@ -331,14 +321,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   async function sendSymbol(symbol: string): Promise<void> {
-    if (!ctrlArmed && !altArmed) {
-      draft += symbol;
-      render();
-      focusInput();
-      return;
-    }
+    const data = applyModifiers(symbol, ctrlArmed, altArmed);
     try {
-      await writeText(applyModifiers(symbol, ctrlArmed, altArmed));
+      await writeText(data);
       clearModifiers();
     } catch (error) {
       setStatus(String(error), true);
@@ -347,7 +332,46 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  const poll = async () => {
+  const sendResize = (cols: number, rows: number): void => {
+    if (!session) return;
+    const key = `${cols}x${rows}`;
+    if (key === lastSize) return;
+    lastSize = key;
+    void call(context, "/resize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: session.id, cols, rows }),
+    }).catch((error) => setStatus(String(error), true));
+  };
+
+  term.onResize(({ cols, rows }) => {
+    sendResize(cols, rows);
+  });
+  term.onData((data) => {
+    if (data) sendRaw(data);
+  });
+  term.textarea?.addEventListener("focus", () => {
+    term.textarea?.blur();
+    focusInput();
+  });
+  screen.addEventListener("focusin", (event) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.classList.contains("xterm-helper-textarea")) {
+      target.blur();
+      focusInput();
+    }
+  });
+
+  const append = (bytes: number[], done: () => void): void => {
+    const text = decoder.decode(Uint8Array.from(bytes), { stream: true });
+    if (!text) {
+      done();
+      return;
+    }
+    term.write(text, done);
+  };
+
+  const poll = async (): Promise<void> => {
     if (disposed || !session) return;
     try {
       const output = await call(
@@ -356,11 +380,14 @@ export function mount(root: HTMLElement, context: FrameContext) {
       );
       if (disposed) return;
       if (output) {
-        append(output.data);
-        cursor = output.seq + 1;
-        timer = setTimeout(poll, 20);
+        const next = output.seq + 1;
+        append(output.data, () => {
+          if (disposed) return;
+          cursor = next;
+          timer = window.setTimeout(poll, 20);
+        });
       } else {
-        timer = setTimeout(poll, 200);
+        timer = window.setTimeout(poll, 200);
       }
     } catch (error) {
       if (disposed) return;
@@ -376,74 +403,51 @@ export function mount(root: HTMLElement, context: FrameContext) {
         setSessionControls(false);
         state.textContent = "ended";
         setStatus("Session ended. Reconnect to start a new one.", true);
+        term.write("\r\n[session ended]\r\n");
         return;
       }
       state.textContent = "degraded";
       setStatus(text, true);
-      timer = setTimeout(poll, 500);
+      timer = window.setTimeout(poll, 500);
     }
-  };
-
-  const size = (): { cols: number; rows: number } => ({
-    cols: Math.max(40, Math.floor(screen.clientWidth / 7.6)),
-    rows: Math.max(12, Math.floor(screen.clientHeight / 18)),
-  });
-
-  const resize = () => {
-    if (!session) return;
-    const { cols, rows } = size();
-    const key = `${cols}x${rows}`;
-    if (key === lastSize) return;
-    lastSize = key;
-    void call(context, "/resize", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: session.id, cols, rows }),
-    }).catch((error) => setStatus(String(error), true));
   };
 
   async function open(reset = false) {
     if (reset) {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
       }
-      if (session) {
-        const previous = session.id;
-        session = null;
+      const previous = session?.id;
+      session = null;
+      if (previous) {
         await call(context, `/session?id=${encodeURIComponent(previous)}`, {
           method: "DELETE",
         }).catch(() => {});
       }
-      output = "";
-      pendingEcho = "";
-      draft = "";
-      input.textContent = "";
-      render();
-      cursor = 0;
-      lastSize = "";
+      term.reset();
     }
     setInputEnabled(false);
     setSessionControls(false);
-    const initial = size();
+    fitTerminal();
+    const cols = Math.max(20, term.cols || 80);
+    const rows = Math.max(5, term.rows || 24);
+    lastSize = "";
     try {
       session = await call(context, "/open", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          shell: "/bin/sh",
-          cols: initial.cols,
-          rows: initial.rows,
-        }),
+        body: JSON.stringify({ shell: "/bin/sh", cols, rows }),
       });
       if (disposed) return;
       cursor = 0;
-      lastSize = `${initial.cols}x${initial.rows}`;
+      lastSize = `${cols}x${rows}`;
       setInputEnabled(true);
       setSessionControls(true);
       state.textContent = `session ${session.id}`;
       who.textContent = `${session.owner} · ${session.shell}`;
       setStatus("Connected.");
+      sendResize(term.cols, term.rows);
       void poll();
       focusInput();
     } catch (error) {
@@ -456,64 +460,45 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  async function sendSignal(name) {
-    if (!session) return;
-    if (name === "INT") {
-      draft = "";
-      input.textContent = "";
-      render();
-    }
-    try {
-      await call(context, "/signal", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: session.id, signal: name }),
-      });
-      setStatus(`${name} sent to ${session.id}`);
-    } catch (error) {
-      setStatus(String(error), true);
-    }
-  }
-
   const consumeInput = (): void => {
     const text = input.textContent ?? "";
     input.textContent = "";
-    if (!text) {
-      render();
-      return;
-    }
-    draft += text;
-    render();
+    if (text) sendTyped(text);
   };
 
-  input.addEventListener("input", () => {
-    if (!composing) consumeInput();
-  });
   input.addEventListener("beforeinput", (event) => {
     if (composing) return;
-    if (event.inputType === "insertText" || event.inputType === "insertFromPaste") {
-      if (event.data) {
+    const type = (event as InputEvent).inputType;
+    if (
+      type === "insertText" ||
+      type === "insertFromPaste" ||
+      type === "insertReplacementText"
+    ) {
+      const data = (event as InputEvent).data;
+      if (data) {
         event.preventDefault();
-        draft += event.data;
-        render();
+        input.textContent = "";
+        sendTyped(data);
       }
       return;
     }
-    if (event.inputType === "deleteContentBackward") {
+    if (type === "deleteContentBackward") {
       event.preventDefault();
-      const characters = [...draft];
-      characters.pop();
-      draft = characters.join("");
-      render();
+      sendRaw("\x7f");
       return;
     }
-    if (
-      event.inputType === "insertLineBreak" ||
-      event.inputType === "insertParagraph"
-    ) {
+    if (type === "deleteContentForward") {
       event.preventDefault();
-      void submitLine();
+      sendRaw("\x1b[3~");
+      return;
     }
+    if (type === "insertLineBreak" || type === "insertParagraph") {
+      event.preventDefault();
+      sendRaw("\r");
+    }
+  });
+  input.addEventListener("input", () => {
+    if (!composing) consumeInput();
   });
   input.addEventListener("compositionstart", () => {
     composing = true;
@@ -522,72 +507,60 @@ export function mount(root: HTMLElement, context: FrameContext) {
     composing = false;
     consumeInput();
   });
-
   input.addEventListener("focus", () => {
     input.textContent = "";
-    screen.classList.add("focused");
     updateKeyboard();
   });
   input.addEventListener("blur", () => {
     input.textContent = "";
-    screen.classList.remove("focused");
     updateKeyboard();
   });
 
   input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
+    const sequences: Record<string, string> = {
+      Enter: "\r",
+      Backspace: "\x7f",
+      Delete: "\x1b[3~",
+      Tab: "\t",
+      Escape: "\x1b",
+      ArrowUp: KEY_SEQUENCES.up,
+      ArrowDown: KEY_SEQUENCES.down,
+      ArrowLeft: KEY_SEQUENCES.left,
+      ArrowRight: KEY_SEQUENCES.right,
+      Home: KEY_SEQUENCES.home,
+      End: KEY_SEQUENCES.end,
+      PageUp: KEY_SEQUENCES.pgup,
+      PageDown: KEY_SEQUENCES.pgdn,
+    };
+    const sequence = sequences[event.key];
+    if (sequence) {
       event.preventDefault();
-      void submitLine();
-      return;
-    }
-    if (event.key === "Backspace" && !composing) {
-      event.preventDefault();
-      const characters = [...draft];
-      characters.pop();
-      draft = characters.join("");
-      render();
+      sendRaw(sequence);
       return;
     }
     if (
-      (ctrlArmed || altArmed) &&
+      (event.ctrlKey || event.altKey || ctrlArmed || altArmed) &&
       event.key.length === 1 &&
-      !event.ctrlKey &&
-      !event.altKey &&
       !event.metaKey &&
       !event.isComposing
     ) {
       event.preventDefault();
-      const data = applyModifiers(event.key, ctrlArmed, altArmed);
+      const ctrl = event.ctrlKey || ctrlArmed;
+      const alt = event.altKey || altArmed;
       clearModifiers();
-      if (data === "\x03") {
-        draft = "";
-        input.textContent = "";
-        render();
-        void sendSignal("INT");
-        return;
-      }
-      void writeText(data).catch((error) => setStatus(String(error), true));
-      return;
+      sendRaw(applyModifiers(event.key, ctrl, alt));
     }
-    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-    if (history.length === 0) return;
-    event.preventDefault();
-    historyStep(event.key === "ArrowUp" ? "up" : "down");
   });
 
-  for (const control of box.querySelectorAll("[data-signal]")) {
-    control.addEventListener("click", () => {
-      void sendSignal((control as any).dataset.signal);
-    });
-  }
-  box.querySelector("[data-clear]").addEventListener("click", () => {
-    output = "";
-    pendingEcho = "";
-    draft = "";
-    input.textContent = "";
-    render();
+  box.querySelector("[data-clear]")!.addEventListener("click", () => {
+    term.clear();
     setStatus("Screen cleared");
   });
+  for (const control of box.querySelectorAll("[data-signal]")) {
+    control.addEventListener("click", () => {
+      void sendSignal((control as HTMLElement).dataset.signal ?? "");
+    });
+  }
 
   keyBar.addEventListener("pointerdown", (event) => {
     if ((event.target as HTMLElement).closest("button")) event.preventDefault();
@@ -604,6 +577,11 @@ export function mount(root: HTMLElement, context: FrameContext) {
       toggleKeyboard();
       return;
     }
+    if (target.dataset.enter === "true") {
+      sendRaw("\r");
+      focusInput();
+      return;
+    }
     if (target.dataset.mod === "ctrl") {
       ctrlArmed = !ctrlArmed;
       updateModifiers();
@@ -614,10 +592,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
       altArmed = !altArmed;
       updateModifiers();
       focusInput();
-      return;
-    }
-    if (target.dataset.enter === "true") {
-      void submitLine();
       return;
     }
     const key = target.dataset.key as KeyName | undefined;
@@ -643,24 +617,28 @@ export function mount(root: HTMLElement, context: FrameContext) {
     getFontSize,
     setFontSize,
   });
+
   const onViewport = (): void => {
     if (document.activeElement === input) {
       input.scrollIntoView({ block: "nearest" });
     }
   };
   window.visualViewport?.addEventListener("resize", onViewport);
-
-  const onResize = () => resize();
+  const onResize = (): void => {
+    fitTerminal();
+    updateKeyboard();
+  };
   window.addEventListener("resize", onResize);
-  box.querySelector("[data-reconnect]").addEventListener("click", () => {
+  box.querySelector("[data-reconnect]")!.addEventListener("click", () => {
     void open(true);
   });
   updateModifiers();
+  requestAnimationFrame(fitTerminal);
   void open();
 
   return () => {
     disposed = true;
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) window.clearTimeout(timer);
     unbindGestures();
     window.visualViewport?.removeEventListener("resize", onViewport);
     window.removeEventListener("resize", onResize);
@@ -669,6 +647,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
         method: "DELETE",
       }).catch(() => {});
     }
+    term.dispose();
     root.replaceChildren();
   };
 }
