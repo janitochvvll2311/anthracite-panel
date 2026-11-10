@@ -275,7 +275,6 @@ var styles = `
       grid-column: 1; grid-row: 1; min-width: 0;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .term-bar .fixture { display: none; }
     .term-bar .state {
       grid-column: 2; grid-row: 1; margin-left: 0;
       font-size: 11px; white-space: nowrap;
@@ -309,6 +308,9 @@ var styles = `
 
 // src/main.ts
 var decoder = new TextDecoder;
+function cleanOutput(value) {
+  return value.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b[@-_]/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
 function mount(root, context) {
   if (typeof context.fill === "function") {
     context.fill();
@@ -322,8 +324,7 @@ function mount(root, context) {
   box.className = "term";
   box.innerHTML = `
     <div class="term-bar">
-      <span class="who">operator@anthracite</span>
-      <span class="fixture">· scripted fixture</span>
+      <span class="who">terminal</span>
       <div class="term-controls">
         <button type="button" data-signal="INT" data-session-control>INT</button>
         <button type="button" data-signal="TERM" data-session-control>TERM</button>
@@ -351,6 +352,7 @@ function mount(root, context) {
   const input = box.querySelector(".term-input");
   const status = box.querySelector(".term-status");
   const state = box.querySelector(".state");
+  const who = box.querySelector(".who");
   const sessionControls = [...box.querySelectorAll("[data-session-control]")];
   const keyBar = box.querySelector(".term-keys");
   const keyScroll = box.querySelector("[data-key-scroll]");
@@ -369,6 +371,7 @@ function mount(root, context) {
   let draft = "";
   let output = "";
   let pendingEcho = "";
+  let lastSize = "";
   const updateModifiers = () => {
     for (const [button, armed] of [
       [ctrlButton, ctrlArmed],
@@ -488,12 +491,30 @@ function mount(root, context) {
     screen.scrollTop = screen.scrollHeight;
   };
   const append = (bytes) => {
-    const text = decoder.decode(Uint8Array.from(bytes)).replace(/\r\n?/g, `
+    const raw = decoder.decode(Uint8Array.from(bytes));
+    if (raw.includes("\x1B[6n")) {
+      const lines = (output + draft).split(`
 `);
-    if (pendingEcho && text === pendingEcho) {
-      pendingEcho = "";
-      return;
+      const row = Math.max(1, lines.length);
+      const column = Math.max(1, [...lines[lines.length - 1] ?? ""].length + 1);
+      writeText(`\x1B[${row};${column}R`).catch(() => {});
     }
+    let text = cleanOutput(raw.replace(/\r\n?/g, `
+`));
+    if (pendingEcho) {
+      if (pendingEcho.startsWith(text)) {
+        pendingEcho = pendingEcho.slice(text.length);
+        return;
+      }
+      if (text.startsWith(pendingEcho)) {
+        text = text.slice(pendingEcho.length);
+        pendingEcho = "";
+      } else {
+        pendingEcho = "";
+      }
+    }
+    if (!text)
+      return;
     output += text;
     render();
   };
@@ -605,7 +626,13 @@ function mount(root, context) {
         return;
       const text = error instanceof Error ? error.message : String(error);
       if (text.startsWith("not-found:")) {
+        const ended = session?.id;
         session = null;
+        if (ended) {
+          call(context, `/session?id=${encodeURIComponent(ended)}`, {
+            method: "DELETE"
+          }).catch(() => {});
+        }
         setSessionControls(false);
         state.textContent = "ended";
         setStatus("Session ended. Reconnect to start a new one.", true);
@@ -616,11 +643,18 @@ function mount(root, context) {
       timer = setTimeout(poll, 500);
     }
   };
+  const size = () => ({
+    cols: Math.max(40, Math.floor(screen.clientWidth / 7.6)),
+    rows: Math.max(12, Math.floor(screen.clientHeight / 18))
+  });
   const resize = () => {
     if (!session)
       return;
-    const cols = Math.max(40, Math.floor(screen.clientWidth / 7.6));
-    const rows = Math.max(12, Math.floor(screen.clientHeight / 18));
+    const { cols, rows } = size();
+    const key = `${cols}x${rows}`;
+    if (key === lastSize)
+      return;
+    lastSize = key;
     call(context, "/resize", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -646,29 +680,38 @@ function mount(root, context) {
       input.textContent = "";
       render();
       cursor = 0;
+      lastSize = "";
     }
     setInputEnabled(false);
     setSessionControls(false);
+    const initial = size();
     try {
       session = await call(context, "/open", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ shell: "/bin/sh", cols: 80, rows: 24 })
+        body: JSON.stringify({
+          shell: "/bin/sh",
+          cols: initial.cols,
+          rows: initial.rows
+        })
       });
       if (disposed)
         return;
       cursor = 0;
+      lastSize = `${initial.cols}x${initial.rows}`;
       setInputEnabled(true);
       setSessionControls(true);
       state.textContent = `session ${session.id}`;
-      setStatus("Connected to the scripted fixture.");
-      resize();
+      who.textContent = `${session.owner} · ${session.shell}`;
+      setStatus("Connected.");
       poll();
       focusInput();
     } catch (error) {
       session = null;
       setSessionControls(false);
       state.textContent = "unavailable";
+      who.textContent = "terminal";
+      lastSize = "";
       setStatus(String(error), true);
     }
   }
