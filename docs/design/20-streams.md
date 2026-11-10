@@ -1,7 +1,7 @@
 # 20. Streams
 
 > Part of the [design index](../../DESIGN.md). Status: implemented in v0.6.0
-> (PRs #133–#138). The checkpoint before this work is `checkpoint/pre-streams`;
+> (PRs #133–#141). The checkpoint before this work is `checkpoint/pre-streams`;
 > the Terminal is the first real consumer.
 
 ## 1. Shape
@@ -85,6 +85,25 @@ write = "anthracite:terminal/terminal@1.0.0#write"
 - `events = true` is an HTTP-only alternative for `stream<record>`. A WebSocket
   route carries raw bytes.
 - A failed stream closes with code 1011; a clean end closes normally.
+
+### 2.2 SSE events
+
+A `stream<record>` route sets `events = true`:
+
+```toml
+[[route]]
+method = "GET"
+path = "/watch"
+call = "anthracite:home/host@1.0.0#watch"
+stream = true
+events = true
+```
+
+- Each WIT stream element is one complete JSON value; the engine prefixes it with
+  `data: ` and terminates the event with a blank line.
+- The response is `text/event-stream` and asks proxies not to buffer.
+- A byte stream (`stream<list<u8>>`) must not set `events`; a record stream must.
+- WebSocket routes carry bytes, so `events` is HTTP-only.
 
 ## 3. Service boundary
 

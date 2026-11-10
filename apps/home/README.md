@@ -5,14 +5,16 @@ Home is the host overview view. It replaces Hello in the demo composition, while
 
 The view is deliberately split:
 
-- `frontend/` is the sandboxed Bun/TypeScript panel module. It only calls its
-  own `/api/apps/org.anthracite.home/info` route.
+- `frontend/` is the sandboxed Bun/TypeScript panel module. It follows its own
+  `/api/apps/org.anthracite.home/watch` SSE route and keeps `/info` as the
+  refresh/fallback path.
 - `backend/` is a native Rust service that reads host facts (`/proc`, `df`, `ip`)
   and answers `anthracite:home/host@1.0.0#info` over the private service socket.
-  It declares `class = "host"`, so approval needs `--accept-write --accept-admin
-  --accept-host` (the engine requires every level up to the declared risk).
-  `home-demo` answers the same contract with fixtures and is what
-  `--demo` packages.
+  `watch` returns a `stream<host-info>`; the engine frames each snapshot as one
+  `text/event-stream` event. It declares `class = "host"`, so approval needs
+  `--accept-write --accept-admin --accept-host` (the engine requires every level
+  up to the declared risk). `home-demo` answers the same contract with fixtures
+  and is what `--demo` packages.
 
 ## Build
 

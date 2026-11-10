@@ -422,17 +422,31 @@ fn check_wit(root: &Path, manifest: &Manifest, known: &[String]) -> Result<(), E
                 route.path, id
             ))
         })?;
-        let returns_stream = declared
+        let element = declared
             .result
             .as_ref()
-            .is_some_and(|result| is_stream(package, result));
-        if route.stream && !returns_stream {
-            return Err(Error::invalid(format!(
-                "route `{}` declares `stream = true` but `{function}` does not return a stream",
-                route.path
-            )));
-        }
-        if !route.stream && returns_stream {
+            .and_then(|result| stream_element(package, result));
+        if route.stream {
+            let element = element.ok_or_else(|| {
+                Error::invalid(format!(
+                    "route `{}` declares `stream = true` but `{function}` does not return a stream",
+                    route.path
+                ))
+            })?;
+            if route.events {
+                if is_bytes(package, element) {
+                    return Err(Error::invalid(format!(
+                        "route `{}` declares `events = true` but `{function}` streams bytes",
+                        route.path
+                    )));
+                }
+            } else if !is_bytes(package, element) {
+                return Err(Error::invalid(format!(
+                    "route `{}` streams records and needs `events = true`",
+                    route.path
+                )));
+            }
+        } else if element.is_some() {
             return Err(Error::invalid(format!(
                 "route `{}` calls the stream `{function}` without `stream = true`",
                 route.path
@@ -485,6 +499,29 @@ fn is_stream(package: &UnresolvedPackage, ty: &Type) -> bool {
             }
             _ => false,
         },
+        _ => false,
+    }
+}
+
+/// The element type of a stream result, unwrapping `result<stream<T>, E>`.
+fn stream_element<'a>(package: &'a UnresolvedPackage, ty: &'a Type) -> Option<&'a Type> {
+    match ty {
+        Type::Id(id) => match &package.types[*id].kind {
+            TypeDefKind::Stream(element) => element.as_ref(),
+            TypeDefKind::Result(result) => result
+                .ok
+                .as_ref()
+                .and_then(|ok| stream_element(package, ok)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `list<u8>` is the byte stream the chunked transport carries.
+fn is_bytes(package: &UnresolvedPackage, ty: &Type) -> bool {
+    match ty {
+        Type::Id(id) => matches!(&package.types[*id].kind, TypeDefKind::List(Type::U8)),
         _ => false,
     }
 }

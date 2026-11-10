@@ -272,6 +272,45 @@ fn limited_stream(chunks: ChunkStream, installed: &InstalledApp) -> ChunkStream 
     })
 }
 
+/// Frames each stream chunk as one SSE `data:` event (§20). The producer emits
+/// one complete JSON value per chunk.
+struct SseStream {
+    inner: ChunkStream,
+    done: bool,
+}
+
+impl Stream for SseStream {
+    type Item = Result<Chunk, Error>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut this.inner).poll_next(context) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                let mut event = Vec::with_capacity(chunk.len() + 16);
+                for line in chunk.split(|byte| *byte == b'\n') {
+                    event.extend_from_slice(b"data: ");
+                    event.extend_from_slice(line);
+                    event.push(b'\n');
+                }
+                event.push(b'\n');
+                Poll::Ready(Some(Ok(event)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.done = true;
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                this.done = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 /// The route dispatcher's caller is a trait object; the socket task owns its
 /// clone so the engine can drop the request future safely.
 type SharedCaller = Arc<dyn AppCaller>;
@@ -1020,6 +1059,21 @@ async fn app_route(
             .stream(app.as_str(), &interface, &function, input)
             .await?;
         let chunks = limited_stream(chunks, found);
+        if route.events {
+            let chunks: ChunkStream = Box::pin(SseStream {
+                inner: chunks,
+                done: false,
+            });
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "text/event-stream")
+                .header(CACHE_CONTROL, "no-store")
+                .header("x-accel-buffering", "no")
+                .body(axum::body::Body::from_stream(chunks))
+                .map_err(|error| {
+                    ApiError(Error::internal(format!("building the response: {error}")))
+                });
+        }
         return Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, "application/octet-stream")
