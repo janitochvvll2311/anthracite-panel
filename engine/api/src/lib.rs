@@ -230,6 +230,17 @@ impl AuthContext {
 
 type CallFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, Error>> + Send + 'a>>;
 
+/// One chunk of a streamed route response (§20).
+pub type Chunk = Vec<u8>;
+
+/// The body of a streamed route: chunks until the producer ends cleanly, or one
+/// error that truncates the response after whatever the client already read.
+pub type ChunkStream = Pin<Box<dyn futures_core::Stream<Item = Result<Chunk, Error>> + Send>>;
+
+/// Resolving a streamed call yields either the error that precedes the first
+/// byte, which becomes the normal JSON envelope, or the chunk stream.
+pub type StreamFuture<'a> = Pin<Box<dyn Future<Output = Result<ChunkStream, Error>> + Send + 'a>>;
+
 /// The engine's route dispatcher: the API resolves a route to `interface#function`
 /// and this calls the running app. The daemon implements it over the supervisor;
 /// a host that mounts the router without running apps simply omits it.
@@ -241,6 +252,19 @@ pub trait AppCaller: Send + Sync {
         function: &'a str,
         input: Value,
     ) -> CallFuture<'a>;
+
+    /// Starts a route declared `stream = true` (§20). The default keeps callers
+    /// that only buffer honest: the route answers `unavailable` instead of
+    /// pretending a handle is JSON.
+    fn stream<'a>(
+        &'a self,
+        _app: &'a str,
+        _interface: &'a str,
+        _function: &'a str,
+        _input: Value,
+    ) -> StreamFuture<'a> {
+        Box::pin(async move { Err(Error::unavailable("this caller does not stream")) })
+    }
 }
 
 impl Connected<axum::serve::IncomingStream<'_, UnixListener>> for PeerUid {
@@ -799,6 +823,22 @@ async fn app_route(
         .caller
         .as_ref()
         .ok_or_else(|| ApiError(Error::unavailable("this router does not run apps")))?;
+    if route.stream {
+        if method == Method::HEAD {
+            return Err(ApiError(Error::method_not_allowed(
+                "a stream route cannot answer HEAD",
+            )));
+        }
+        let chunks = caller
+            .stream(app.as_str(), &interface, &function, input)
+            .await?;
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from_stream(chunks))
+            .map_err(|error| ApiError(Error::internal(format!("building the response: {error}"))));
+    }
     let output = caller
         .call(app.as_str(), &interface, &function, input)
         .await?;

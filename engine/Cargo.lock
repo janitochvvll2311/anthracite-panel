@@ -32,6 +32,7 @@ dependencies = [
  "anth-contract",
  "axum",
  "form_urlencoded",
+ "futures-core",
  "futures-util",
  "http-body",
  "http-body-util",
