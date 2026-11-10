@@ -129,6 +129,18 @@ button.nav-toggle {
   transform: rotate(45deg);
 }
 
+.ghost-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.topbar svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
 .health {
   display: inline-flex;
   align-items: center;
@@ -263,6 +275,48 @@ button.drawer-close {
   margin-top: 10px;
   padding: 9px 8px;
   border-top: 1px solid var(--line-soft);
+}
+
+.developer {
+  margin-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.developer summary {
+  padding: 9px 8px;
+  color: var(--muted-2);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+}
+
+.developer summary::-webkit-details-marker {
+  display: none;
+}
+
+.developer summary::after {
+  content: "";
+  float: right;
+  width: 0;
+  height: 0;
+  margin-top: 5px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform 0.15s ease;
+}
+
+.developer[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.developer .viewport-row {
+  margin-top: 0;
+  padding-top: 4px;
+  border-top: 0;
 }
 
 .viewport-row label {
@@ -408,6 +462,10 @@ button.drawer-close {
   min-height: 0;
 }
 
+.workspace.no-tabs {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .tabs {
   display: flex;
   align-items: center;
@@ -416,13 +474,18 @@ button.drawer-close {
   border-bottom: 1px solid var(--line-soft);
   background: #0d1017a8;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
 }
 
 .tab {
   display: flex;
   align-items: center;
   gap: 2px;
+  flex: none;
   padding: 2px 3px 2px 1px;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -1188,13 +1251,17 @@ html[data-viewport="tablet"] .health {
   max-width: 30ch;
 }
 
+html[data-viewport="mobile"] body {
+  grid-template-rows: 48px minmax(0, 1fr);
+}
+
 html[data-viewport="mobile"] .layout {
   grid-template-columns: minmax(0, 1fr);
 }
 
 html[data-viewport="mobile"] .sidebar {
   position: fixed;
-  top: 54px;
+  top: 48px;
   left: 0;
   bottom: 0;
   width: min(86vw, 320px);
@@ -1211,7 +1278,7 @@ html[data-viewport="mobile"] body[data-drawer="open"] .sidebar {
 html[data-viewport="mobile"] .drawer-backdrop {
   display: block;
   position: fixed;
-  inset: 54px 0 0;
+  inset: 48px 0 0;
   z-index: 75;
   background: #000000a8;
   backdrop-filter: blur(2px);
@@ -1227,8 +1294,16 @@ html[data-viewport="mobile"] button.drawer-close {
 }
 
 html[data-viewport="mobile"] .topbar {
-  gap: 8px;
-  padding: 0 10px;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+html[data-viewport="mobile"] .topbar .ghost,
+html[data-viewport="mobile"] .topbar .nav-toggle {
+  min-width: 40px;
+  min-height: 40px;
+  justify-content: center;
+  padding: 0 8px;
 }
 
 html[data-viewport="mobile"] .brand strong {
@@ -1240,7 +1315,7 @@ html[data-viewport="mobile"] .health {
 }
 
 html[data-viewport="mobile"] #actions {
-  max-width: 38vw;
+  max-width: 34vw;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -1254,36 +1329,115 @@ html[data-viewport="mobile"] #manager-button .label {
   display: none;
 }
 
+html[data-viewport="mobile"] button.drawer-close {
+  min-height: 34px;
+}
+
+html[data-viewport="mobile"] .viewport-row {
+  margin-top: 6px;
+  padding: 6px 8px;
+}
+
+html[data-viewport="mobile"] .viewport-row label {
+  font-size: 10px;
+}
+
+html[data-viewport="mobile"] .viewport-select {
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
 html[data-viewport="mobile"] .workspace {
-  grid-template-rows: 40px minmax(0, 1fr);
+  grid-template-rows: 36px minmax(0, 1fr);
+}
+
+html[data-viewport="mobile"] .workspace.no-tabs {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 html[data-viewport="mobile"] .tabs {
+  padding: 3px 6px;
+}
+
+html[data-viewport="mobile"] .tab {
+  padding: 1px 2px 1px 1px;
+}
+
+html[data-viewport="mobile"] .tab-label {
+  max-width: 18ch;
   padding: 5px 8px;
 }
 
-html[data-viewport="mobile"] .pane-head {
-  gap: 8px;
-  padding: 0 12px;
+html[data-viewport="mobile"] .tab-tool {
+  width: 30px;
+  height: 30px;
+  font-size: 15px;
 }
 
-html[data-viewport="mobile"] .pane-app {
+html[data-viewport="mobile"] .tab-float {
+  display: none;
+}
+
+html[data-viewport="mobile"] .pane {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+html[data-viewport="mobile"] .pane-head {
   display: none;
 }
 
 html[data-viewport="mobile"] .pane-body {
-  padding: 14px;
+  padding: 10px;
+}
+
+html[data-viewport="mobile"] .windows {
+  inset: 48px 0 0;
 }
 
 html[data-viewport="mobile"] .window {
-  left: 8px !important;
-  right: 8px;
-  top: 8px !important;
-  width: auto;
-  height: calc(100vh - 70px);
+  left: 0 !important;
+  right: 0 !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: auto !important;
+  height: auto !important;
   max-width: none;
   max-height: none;
+  border: 0;
+  border-radius: 0;
   resize: none;
+  grid-template-rows: 44px minmax(0, 1fr);
+}
+
+html[data-viewport="mobile"] .window-head {
+  height: 44px;
+  padding: 0 6px 0 12px;
+  cursor: default;
+}
+
+html[data-viewport="mobile"] .window-copy strong {
+  font-size: 15px;
+}
+
+html[data-viewport="mobile"] .window-app {
+  display: none;
+}
+
+html[data-viewport="mobile"] .window-tools button {
+  width: 36px;
+  height: 36px;
+}
+
+html[data-viewport="mobile"] .window-tools button:not([data-window-tool="close"]) {
+  display: none;
+}
+
+html[data-viewport="mobile"] .window-body {
+  padding: 12px;
+}
+
+html[data-viewport="mobile"] .window-body.app-fill {
+  padding: 0;
 }
 
 html[data-viewport="mobile"] .settings-card {
@@ -1309,6 +1463,10 @@ html[data-viewport="mobile"] .settings-section-body {
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar {
+    transition: none;
+  }
+
+  .developer summary::after {
     transition: none;
   }
 }

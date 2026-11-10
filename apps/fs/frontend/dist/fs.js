@@ -30021,7 +30021,7 @@ function normalizePath(input) {
 
 // src/styles.ts
 var styles = `
-  .fs { position: relative; display: flex; flex-direction: column; gap: 12px; min-height: 380px; color: #e8ebf2; }
+  .fs { position: relative; display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 380px; color: #e8ebf2; }
   .fs-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .fs-bar button, .fs-form button {
     padding: 6px 10px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
@@ -30030,6 +30030,10 @@ var styles = `
   .fs-bar button:hover, .fs-form button:hover { border-color: #3a4560; color: #fff; }
   .fs-bar button:disabled { opacity: .4; cursor: default; border-color: #2a3142; color: #667087; }
   .fs-bar .grow { flex: 1; }
+  .fs-btn-glyph { display: none; }
+  .fs-btn-glyph svg { display: block; width: 16px; height: 16px; }
+  .fs-break { display: none; }
+  .fs-tool svg { display: block; width: 14px; height: 14px; }
   .fs-address {
     flex: 1; min-width: 160px; max-width: 46%; padding: 6px 9px; border-radius: 7px;
     border: 1px solid #2a3142; background: #0f1219; color: #c8d0df;
@@ -30045,7 +30049,7 @@ var styles = `
   .hljs-attr, .hljs-attribute, .hljs-variable { color: #89ddff; }
   .hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: #ffcb6b; }
   .hljs-meta { color: #8f98ab; }
-  .fs-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1.25fr); gap: 12px; min-height: 300px; }
+  .fs-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1.25fr); gap: 12px; flex: 1; min-height: 0; }
   .fs-list { list-style: none; margin: 0; padding: 0; border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016; }
   .fs-row { display: flex; align-items: center; gap: 2px; border-bottom: 1px solid #171c26; }
   .fs-row:last-child { border-bottom: 0; }
@@ -30121,7 +30125,9 @@ var styles = `
   .fs-preview-head button {
     padding: 4px 8px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
     color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
   }
+  .fs-preview-head button svg { display: block; width: 14px; height: 14px; }
   .fs-preview-head button:hover { border-color: #3a4560; color: #fff; }
   .fs-preview-head strong {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -30192,8 +30198,8 @@ var styles = `
   .fs-queue-actions .fs-tool { padding: 2px 5px; font-size: 10.5px; }
   .fs-queue-done { color: #6ee7b7; font-size: 12px; }
   .editor-app {
-    display: grid; grid-template-rows: 38px minmax(0, 1fr) 28px;
-    min-height: 480px; height: 100%; border: 1px solid #202632; border-radius: 10px;
+    display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 38px minmax(0, 1fr) 28px;
+    min-width: 0; min-height: 480px; height: 100%; border: 1px solid #202632; border-radius: 10px;
     background: #0d1016; color: #e8ebf2; overflow: hidden;
   }
   .editor-toolbar, .editor-status {
@@ -30222,9 +30228,12 @@ var styles = `
   .editor-info.bad { color: #ffb3ba; }
   .editor-tabs {
     display: flex; align-items: stretch; gap: 1px; overflow-x: auto;
+    overflow-y: hidden; overscroll-behavior-x: contain; touch-action: pan-x;
+    -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+    min-width: 0; width: 100%;
     flex: 0 0 34px; border-bottom: 1px solid #202634; background: #0f1219;
   }
-  .editor-tab { display: flex; align-items: center; border-right: 1px solid #202634; background: #12161f; }
+  .editor-tab { display: flex; align-items: center; flex: none; border-right: 1px solid #202634; background: #12161f; }
   .editor-tab.active { background: #1b2130; box-shadow: inset 0 2px 0 #7aa2ff; }
   .editor-tab-open {
     border: 0; background: transparent; color: #c8d0df; padding: 0 8px; height: 33px;
@@ -30346,24 +30355,93 @@ var styles = `
   }
   .editor-dialog-actions button:disabled { opacity: .5; cursor: default; }
   @media (max-width: 700px) {
-    .fs { min-height: 0; }
-    .fs-body { grid-template-columns: 1fr; min-height: 0; }
+    .fs { min-height: 0; gap: 8px; }
+    .fs-bar { display: flex; flex-wrap: wrap; gap: 6px; }
+    .fs-bar .grow { display: none; }
+    .fs-address { flex: 1 1 120px; width: auto; min-width: 0; max-width: none; }
+    .fs-bar [data-up], .fs-bar [data-refresh] {
+      flex: 0 0 40px; padding: 0; display: inline-flex; align-items: center;
+      justify-content: center; font-size: 17px;
+    }
+    .fs-break { display: block; flex: 0 0 100%; height: 0; }
+    .fs-bar [data-trash], .fs-bar [data-upload], .fs-bar [data-new] {
+      flex: 1 1 0; width: auto; min-width: 0;
+    }
+    .fs-bar button { min-height: 40px; padding: 5px 8px; }
+    .fs-btn-glyph { display: inline-flex; }
+    .fs-bar [data-up] .fs-btn-label, .fs-bar [data-refresh] .fs-btn-label { display: none; }
+    .fs-body { grid-template-columns: 1fr; min-height: 0; flex: 1; }
+    .fs-list { min-height: 0; }
+    .fs-row .fs-entry { padding: 10px 8px; }
+    .fs-tool {
+      width: 36px; height: 36px; flex: 0 0 36px; display: inline-flex;
+      align-items: center; justify-content: center; font-size: 14px;
+    }
+    .fs-tool.confirm { width: auto; padding: 0 10px; }
+    .fs-new, .fs-rename { flex-wrap: wrap; }
+    .fs-new input, .fs-rename input { flex: 1 1 100%; }
+    .fs-new button, .fs-rename button { flex: 1; min-height: 36px; }
     .fs-preview { display: none; }
     .fs.preview-open .fs-list { display: none; }
     .fs.preview-open .fs-preview {
       display: flex; position: absolute; inset: 0; z-index: 20; margin: 0;
-      border: 0; border-radius: 0; padding: 12px; background: #0d1016;
-      min-height: 0; overflow: auto;
+      border: 0; border-radius: 0; padding: 10px; background: #0d1016;
+      min-height: 0; overflow: hidden; flex-direction: column; gap: 8px;
     }
-    .fs-preview-head { display: flex; }
-    .fs.preview-open .fs-preview img { max-height: calc(100vh - 160px); }
+    .fs-preview-head { display: flex; flex: 0 0 auto; min-height: 32px; }
+    .fs-preview-head button { min-height: 32px; }
+    .fs-meta { flex: 0 0 auto; gap: 6px 10px; }
+    .fs-actions { flex: 0 0 auto; }
+    .fs-actions button { min-height: 38px; padding: 0 12px; }
+    .fs-preview .pane { flex: 1; min-height: 0; }
+    .fs-formatted { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
+    .fs-preview pre { flex: none; }
+    .fs.preview-open .fs-preview img {
+      max-height: calc(100dvh - 240px); max-width: 100%; margin: auto;
+    }
   }
   @media (max-width: 700px) {
-    .editor-tree {
-      position: absolute; top: 0; bottom: 0; left: 0; width: min(78%, 260px);
-      z-index: 5; border-right: 1px solid #333d54; box-shadow: 0 18px 50px #000000a6;
+    .editor-app {
+      min-height: 0; height: 100%; border: 0; border-radius: 0;
     }
-    .editor-tree-close { display: inline-flex; align-items: center; justify-content: center; }
+    .editor-toolbar {
+      gap: 4px; padding: 0 6px; height: 40px;
+    }
+    .editor-toolbar button {
+      flex: 0 0 auto; white-space: nowrap; min-height: 36px; padding: 4px 8px;
+    }
+    .editor-toolbar .editor-info,
+    .editor-toolbar .grow,
+    .editor-toolbar [data-refresh] {
+      display: none;
+    }
+    .editor-path { min-width: 0; flex: 1 1 auto; }
+    .editor-toolbar button.editor-tree-toggle { width: 36px; }
+    .editor-tabs { flex-basis: 32px; }
+    .editor-tab-open { height: 31px; padding: 0 6px; }
+    .editor-tab-close { height: 32px; width: 30px; }
+    .editor-status {
+      gap: 6px; padding: 0 6px; height: 30px; font-size: 10.5px;
+    }
+    .editor-status .editor-eol-label,
+    .editor-status .editor-indent-label,
+    .editor-status [data-selection] {
+      display: none;
+    }
+    .editor-status [data-position] { margin-left: auto; }
+    .editor-status .editor-error { max-width: 38%; }
+    .editor-tree {
+      position: absolute; top: 0; bottom: 0; left: 0; width: min(82vw, 300px);
+      min-width: 0; z-index: 5; border-right: 1px solid #333d54;
+      box-shadow: 0 18px 50px #000000a6;
+    }
+    .editor-tree-head { padding: 4px 8px 8px; }
+    .editor-tree-root, .editor-tree-up { min-height: 36px; }
+    .editor-tree-label { min-height: 40px; font-size: 12.5px; }
+    .editor-tree-close {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px;
+    }
     .editor-tree-backdrop { display: block; }
   }
   .fs-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
@@ -30660,6 +30738,9 @@ function mountEditorView(root, context) {
       });
       node.append(open, close);
       tabsElement.append(node);
+      if (index === active) {
+        node.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
     });
   }
   function refreshStatus() {
@@ -36802,6 +36883,11 @@ function mount(root, context) {
   if (context.contribution.tag === "anth-fs-editor") {
     return mountEditorView(root, context);
   }
+  if (typeof context.fill === "function") {
+    context.fill();
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
+  }
   const style = document.createElement("style");
   style.textContent = styles;
   root.append(style);
@@ -36809,10 +36895,11 @@ function mount(root, context) {
   box.className = "fs";
   box.innerHTML = `
     <header class="fs-bar">
-      <button type="button" data-up title="Parent directory">Up</button>
+      <button type="button" data-up title="Parent directory" aria-label="Parent directory"><span class="fs-btn-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M4.5 6.5 8 3l3.5 3.5"/></svg></span><span class="fs-btn-label">Up</span></button>
       <input class="fs-address" list="fs-paths" aria-label="Path" spellcheck="false" autocomplete="off" />
       <datalist id="fs-paths"></datalist>
-      <button type="button" data-refresh>Refresh</button>
+      <button type="button" data-refresh title="Refresh" aria-label="Refresh"><span class="fs-btn-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 3v3h-3"/></svg></span><span class="fs-btn-label">Refresh</span></button>
+      <span class="fs-break" aria-hidden="true"></span>
       <button type="button" data-trash>Trash</button>
       <span class="grow"></span>
       <button type="button" data-upload>Upload</button>
@@ -36988,10 +37075,13 @@ function mount(root, context) {
       else
         open(full, entry);
     });
-    const rename = button("fs-tool", "R", `Rename ${entry.name}`);
+    const rename = button("fs-tool", "", `Rename ${entry.name}`);
+    rename.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 .5-2.5L10.8 1.2l2 2L5.5 10.5 3 11Z"/><path d="M9.5 2.5l2 2"/></svg>';
+    rename.setAttribute("aria-label", `Rename ${entry.name}`);
     rename.addEventListener("click", () => showRename(full));
-    const remove = button("fs-tool delete", "×", `Delete ${entry.name}`);
-    remove.textContent = "×";
+    const remove = button("fs-tool delete", "", `Delete ${entry.name}`);
+    remove.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m4 4 8 8M12 4l-8 8"/></svg>';
+    remove.setAttribute("aria-label", `Delete ${entry.name}`);
     remove.addEventListener("click", () => {
       if (confirmPath === full) {
         drop(full);
@@ -37491,7 +37581,8 @@ function mount(root, context) {
     }
     const head = document.createElement("div");
     head.className = "fs-preview-head";
-    const back = button("", "← Files");
+    const back = button("", "Files");
+    back.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10 3-5 5 5 5"/></svg><span>Files</span>';
     back.title = "Back to the file list";
     back.addEventListener("click", resetPreview);
     const name = document.createElement("strong");
