@@ -28,6 +28,9 @@ signals. Designing the shape against a toy guarantees redesigning it against a P
 concurrently for sources that block. Acceptance is not "it compiles": backpressure,
 cancellation, half-close and error-after-partial-data each need a conformance test.
 
+**Status: scheduled.** The terminal exists; the Phase 8 implementation plan is
+[§20](20-streams.md).
+
 ### 1.2 Typed events
 
 An event is a typed notification interface with fan-out fixed at compose time:
