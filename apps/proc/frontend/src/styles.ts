@@ -27,6 +27,8 @@ export const styles = `
   }
   .proc-head { position: sticky; top: 0; z-index: 2; background: #0d1016; }
   .proc-body { min-width: 0; }
+  .proc-body .proc-row { height: 40px; box-sizing: border-box; }
+  .proc-spacer { pointer-events: none; }
   .proc-row {
     display: grid; gap: 8px; align-items: center; padding: 7px 10px;
     border-bottom: 1px solid #171c26; font-size: 12px;
@@ -138,6 +140,7 @@ export const styles = `
   .proc.compact .proc-spawn { width: 100%; }
   .proc.compact .proc-table { max-height: none; border: 0; background: transparent; overflow: visible; }
   .proc.compact .proc-head { display: none; }
+  .proc.compact .proc-body .proc-row { height: auto; }
   .proc.compact .proc-row.flat,
   .proc.compact .proc-row.tree {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;

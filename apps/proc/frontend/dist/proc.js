@@ -66,6 +66,8 @@ var styles = `
   }
   .proc-head { position: sticky; top: 0; z-index: 2; background: #0d1016; }
   .proc-body { min-width: 0; }
+  .proc-body .proc-row { height: 40px; box-sizing: border-box; }
+  .proc-spacer { pointer-events: none; }
   .proc-row {
     display: grid; gap: 8px; align-items: center; padding: 7px 10px;
     border-bottom: 1px solid #171c26; font-size: 12px;
@@ -177,6 +179,7 @@ var styles = `
   .proc.compact .proc-spawn { width: 100%; }
   .proc.compact .proc-table { max-height: none; border: 0; background: transparent; overflow: visible; }
   .proc.compact .proc-head { display: none; }
+  .proc.compact .proc-body .proc-row { height: auto; }
   .proc.compact .proc-row.flat,
   .proc.compact .proc-row.tree {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
@@ -357,6 +360,7 @@ function mount(root, context) {
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
+  const table = box.querySelector(".proc-table");
   const headRoot = box.querySelector("[data-head]");
   const bodyRoot = box.querySelector("[data-body]");
   const count = box.querySelector(".proc-count");
@@ -371,8 +375,14 @@ function mount(root, context) {
   const liveToggle = box.querySelector("[data-live]");
   const spawnForm = box.querySelector(".proc-spawn");
   const spawnInput = spawnForm.querySelector("input");
-  const MAX_FLAT = 5000;
-  const MAX_TREE = 1000;
+  const MOBILE_PAGE = 200;
+  const DESKTOP_LIMIT = 1e5;
+  const ROW_HEIGHT = 40;
+  const OVERSCAN = 8;
+  let currentRows = [];
+  let windowStart = -1;
+  let windowEnd = -1;
+  let scrollFrame = 0;
   const COMPACT_WIDTH = 820;
   let processes = [];
   let nextCursor = null;
@@ -445,7 +455,7 @@ function mount(root, context) {
     input.setAttribute("aria-label", `Filter by ${placeholder.toLowerCase()}`);
     input.addEventListener("input", () => {
       filters[key] = input.value;
-      renderRows();
+      renderRows(true);
     });
     wrapper.append(input);
     return wrapper;
@@ -504,11 +514,7 @@ function mount(root, context) {
     updateDirection();
     renderHead();
     scheduleLive();
-    if (!tree && !compact && key !== "pid") {
-      load(null, false, true);
-    } else {
-      renderRows();
-    }
+    renderRows(true);
   }
   const metaCell = (className, label, text) => {
     const node = cell(`proc-cell ${className}`, text);
@@ -580,109 +586,122 @@ function mount(root, context) {
     identity.append(name);
     return identity;
   };
-  function renderRows() {
+  function renderRow(rowData) {
+    const process = rowData.process;
+    const row = document.createElement("div");
+    row.className = `proc-row ${tree ? "tree" : "flat"}`;
+    row.append(identityCell(process, tree ? rowData : null));
+    const meta = document.createElement("span");
+    meta.className = "proc-meta";
+    const state = cell(`proc-cell state ${process.state}`, process.state);
+    state.dataset.label = "State";
+    meta.append(metaCell("user", "User", process.user), state, cpuCell(process), metaCell("memory", "Memory", memory(process["memory-bytes"])));
+    row.append(meta);
+    const action = document.createElement("span");
+    action.className = "proc-cell action";
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "proc-signal";
+    send.textContent = "Send";
+    send.setAttribute("aria-label", `Send signal to ${process.name} (${process.pid})`);
+    send.addEventListener("click", () => {
+      signalProcess(process.pid, process["start-ticks"]);
+    });
+    action.append(send);
+    row.append(action);
+    return row;
+  }
+  function emptyCell() {
+    return cell("proc-empty", Object.values(filters).some((value) => value && value.trim()) ? "No process matches the filters." : "No processes.");
+  }
+  function renderWindow(force = false) {
+    if (compact) {
+      const fragment = document.createDocumentFragment();
+      for (const row of currentRows)
+        fragment.append(renderRow(row));
+      if (currentRows.length === 0)
+        fragment.append(emptyCell());
+      bodyRoot.replaceChildren(fragment);
+      windowStart = -1;
+      windowEnd = -1;
+      return;
+    }
+    const headHeight = headRoot.offsetHeight;
+    const viewport = Math.max(200, table.clientHeight - headHeight);
+    const top = Math.max(0, table.scrollTop - headHeight);
+    let start = Math.max(0, Math.floor(top / ROW_HEIGHT) - OVERSCAN);
+    start = Math.min(start, currentRows.length);
+    const end = Math.min(currentRows.length, Math.ceil((top + viewport) / ROW_HEIGHT) + OVERSCAN);
+    if (!force && start === windowStart && end === windowEnd)
+      return;
+    windowStart = start;
+    windowEnd = end;
+    const fragment = document.createDocumentFragment();
+    if (start > 0) {
+      const spacer = document.createElement("div");
+      spacer.className = "proc-spacer";
+      spacer.style.height = `${start * ROW_HEIGHT}px`;
+      fragment.append(spacer);
+    }
+    for (let index = start;index < end; index += 1) {
+      fragment.append(renderRow(currentRows[index]));
+    }
+    if (end < currentRows.length) {
+      const spacer = document.createElement("div");
+      spacer.className = "proc-spacer";
+      spacer.style.height = `${(currentRows.length - end) * ROW_HEIGHT}px`;
+      fragment.append(spacer);
+    }
+    if (currentRows.length === 0)
+      fragment.append(emptyCell());
+    bodyRoot.replaceChildren(fragment);
+  }
+  function renderRows(resetScroll = false) {
     const visible = filterProcesses(processes, filters, tree);
-    const rows = orderProcesses(visible, tree, collapsed, compareBy);
-    bodyRoot.replaceChildren();
-    for (const rowData of rows) {
-      const process = rowData.process;
-      const row = document.createElement("div");
-      row.className = `proc-row ${tree ? "tree" : "flat"}`;
-      row.append(identityCell(process, tree ? rowData : null));
-      const meta = document.createElement("span");
-      meta.className = "proc-meta";
-      const state = cell(`proc-cell state ${process.state}`, process.state);
-      state.dataset.label = "State";
-      meta.append(metaCell("user", "User", process.user), state, cpuCell(process), metaCell("memory", "Memory", memory(process["memory-bytes"])));
-      row.append(meta);
-      const action = document.createElement("span");
-      action.className = "proc-cell action";
-      const send = document.createElement("button");
-      send.type = "button";
-      send.className = "proc-signal";
-      send.textContent = "Send";
-      send.setAttribute("aria-label", `Send signal to ${process.name} (${process.pid})`);
-      send.addEventListener("click", () => {
-        signalProcess(process.pid, process["start-ticks"]);
-      });
-      action.append(send);
-      row.append(action);
-      bodyRoot.append(row);
-    }
-    if (rows.length === 0) {
-      bodyRoot.append(cell("proc-empty", Object.values(filters).some((value) => value && value.trim()) ? "No process matches the filters." : "No processes."));
-    }
+    currentRows = orderProcesses(visible, tree, collapsed, compareBy);
+    if (resetScroll)
+      table.scrollTop = 0;
+    renderWindow(true);
     const active = Object.values(filters).some((value) => value && value.trim());
-    const countText = active ? `${rows.length} / ${processes.length}` : `${processes.length}`;
-    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : nextCursor ? " · more available" : ""}${tree && processes.length >= MAX_TREE ? " · first 1000" : ""}`;
+    const countText = active ? `${currentRows.length} / ${processes.length}` : `${processes.length}`;
+    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : nextCursor ? " · more available" : ""}`;
   }
   async function loadTree() {
-    const all = [];
-    let cursor = null;
-    for (let pages = 0;pages < 20; pages += 1) {
-      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-      const page = await call(context, `/processes?limit=500${suffix}`);
-      if (disposed)
-        return;
-      all.push(...page.processes);
-      if (page.done || !page.cursor || all.length >= MAX_TREE)
-        break;
-      cursor = page.cursor;
-    }
-    processes = all.slice(0, MAX_TREE);
+    const page = await call(context, `/processes?limit=${DESKTOP_LIMIT}`);
+    if (disposed)
+      return;
+    processes = page.processes;
     nextCursor = null;
     more.hidden = true;
     fold.hidden = false;
-    renderRows();
+    renderRows(true);
     setStatus(`Tree snapshot · ${processes.length} processes`);
   }
-  async function load(cursor = null, append = false, fetchAll = false) {
+  async function load(cursor = null, append = false) {
     if (loading) {
       pending = true;
       return;
     }
     loading = true;
-    if (!tree && !compact && sortKey !== "pid" && cursor === null && !append) {
-      fetchAll = true;
-    }
     setStatus(append ? "Loading more processes…" : "Reading the process table…");
     try {
       if (tree) {
         await loadTree();
         return;
       }
-      if (fetchAll) {
-        const all = [];
-        let next = null;
-        for (let pages = 0;pages < 20; pages += 1) {
-          const suffix = next ? `&cursor=${encodeURIComponent(next)}` : "";
-          const page = await call(context, `/processes?limit=500${suffix}`);
-          if (disposed)
-            return;
-          all.push(...page.processes);
-          if (page.done || !page.cursor || all.length >= MAX_FLAT)
-            break;
-          next = page.cursor;
-        }
-        processes = all.slice(0, MAX_FLAT);
-        nextCursor = null;
-        more.hidden = true;
-        fold.hidden = true;
-        renderRows();
-        setStatus(`Sorted snapshot · ${processes.length} processes`);
-        return;
-      }
+      const limit = compact ? MOBILE_PAGE : DESKTOP_LIMIT;
       const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-      const page = await call(context, `/processes?limit=200${suffix}`);
+      const page = await call(context, `/processes?limit=${limit}${suffix}`);
       if (disposed)
         return;
-      if (!append)
-        processes = [];
-      processes.push(...page.processes);
-      nextCursor = page.cursor ?? null;
-      more.hidden = Boolean(page.done) || !page.cursor;
+      if (append)
+        processes.push(...page.processes);
+      else
+        processes = page.processes;
+      nextCursor = compact ? page.cursor ?? null : null;
+      more.hidden = !compact || Boolean(page.done) || !page.cursor;
       fold.hidden = true;
-      renderRows();
+      renderRows(false);
       setStatus(`Snapshot updated · ${processes.length} processes`);
     } catch (error) {
       if (!disposed)
@@ -733,6 +752,7 @@ function mount(root, context) {
     allCollapsed = false;
     fold.textContent = "Collapse all";
     renderHead();
+    table.scrollTop = 0;
     scheduleLive();
     load();
   }
@@ -759,6 +779,7 @@ function mount(root, context) {
       mobileFilter.value = "";
     }
     renderHead();
+    table.scrollTop = 0;
     scheduleLive();
     load();
   }
@@ -776,12 +797,12 @@ function mount(root, context) {
       }
     }
     fold.textContent = allCollapsed ? "Expand all" : "Collapse all";
-    renderRows();
+    renderRows(true);
   });
   liveToggle.addEventListener("change", scheduleLive);
   mobileFilter.addEventListener("input", () => {
     filters.query = mobileFilter.value;
-    renderRows();
+    renderRows(true);
   });
   mobileSort.addEventListener("change", () => {
     setSort(mobileSort.value);
@@ -790,7 +811,7 @@ function mount(root, context) {
     sortAsc = !sortAsc;
     updateDirection();
     renderHead();
-    renderRows();
+    renderRows(true);
   });
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
   more.addEventListener("click", () => {
@@ -825,11 +846,21 @@ function mount(root, context) {
   applyCompact();
   renderHead();
   updateDirection();
+  table.addEventListener("scroll", () => {
+    if (compact || scrollFrame)
+      return;
+    scrollFrame = window.requestAnimationFrame(() => {
+      scrollFrame = 0;
+      renderWindow(false);
+    });
+  });
   load();
   return () => {
     disposed = true;
     if (live !== null)
       window.clearInterval(live);
+    if (scrollFrame)
+      window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();
     root.replaceChildren();
   };

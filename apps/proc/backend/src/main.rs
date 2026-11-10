@@ -17,7 +17,7 @@ use anth_service::Handler;
 use serde_json::{json, Value};
 
 const PROC: &str = "anthracite:proc/proc@1.1.0";
-const MAX_PAGE: u32 = 500;
+const MAX_PAGE: u32 = 100_000;
 const DEFAULT_PAGE: u32 = 50;
 const MAX_ARGV: usize = 4;
 const MAX_ARGUMENT: usize = 128;
