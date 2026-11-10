@@ -139,8 +139,14 @@ export async function mountFrame(
   let snapshotSequence = 0;
   const snapshotPending = new Map<string, (value: unknown) => void>();
   /// In-flight streaming fetches, so a cancel or an unmount closes the engine
-  /// response instead of leaving a producer running.
-  const streams = new Map<string, AbortController>();
+  /// response instead of leaving a producer running. The frame pulls one chunk
+  /// at a time, which is what carries backpressure to the service.
+  type LiveStream = {
+    controller: AbortController;
+    reader?: ReadableStreamDefaultReader<Uint8Array>;
+    reading: boolean;
+  };
+  const streams = new Map<string, LiveStream>();
 
   const update = (params: unknown): void => {
     iframe.contentWindow?.postMessage(
@@ -329,13 +335,16 @@ export async function mountFrame(
           return;
         }
         const request = options.request ?? fetch;
-        const controller = new AbortController();
-        streams.set(id, controller);
+        const live: LiveStream = {
+          controller: new AbortController(),
+          reading: false,
+        };
+        streams.set(id, live);
         void request(target, {
           method: init.method ?? "GET",
           headers: new Headers(init.headers ?? []),
           body: init.body ?? null,
-          signal: controller.signal,
+          signal: live.controller.signal,
         })
           .then(async (response) => {
             const headers: Record<string, string> = {};
@@ -357,8 +366,9 @@ export async function mountFrame(
               } as RpcResult);
               return;
             }
-            // The head resolves the frame's `Response`; the chunks feed its
-            // `ReadableStream` until the producer ends or fails.
+            // The head resolves the frame's `Response`. The frame then asks for
+            // one chunk per pull; the reader stays paused in between.
+            live.reader = response.body!.getReader();
             iframe.contentWindow?.postMessage(
               {
                 type: "anth:stream-head",
@@ -371,56 +381,76 @@ export async function mountFrame(
               },
               "*",
             );
-            const reader = response.body!.getReader();
-            try {
-              for (;;) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                const copy = new Uint8Array(value);
-                iframe.contentWindow?.postMessage(
-                  { type: "anth:stream-chunk", token, id, data: copy.buffer },
-                  "*",
-                  [copy.buffer],
-                );
-              }
-              iframe.contentWindow?.postMessage(
-                { type: "anth:stream-end", token, id },
-                "*",
-              );
-            } catch (error) {
-              iframe.contentWindow?.postMessage(
-                {
-                  type: "anth:stream-end",
-                  token,
-                  id,
-                  ...(controller.signal.aborted
-                    ? {}
-                    : {
-                        error:
-                          error instanceof Error ? error.message : String(error),
-                      }),
-                },
-                "*",
-              );
-            } finally {
-              streams.delete(id);
-            }
           })
           .catch((error: unknown) => {
             streams.delete(id);
-            if (controller.signal.aborted) return;
+            if (live.controller.signal.aborted) return;
             postFetch(iframe, token, id, {
               error: error instanceof Error ? error.message : String(error),
             } as RpcResult);
           });
         return;
       }
+      if (message.type === "anth:stream-pull") {
+        const id = String(message.id ?? "");
+        const live = streams.get(id);
+        if (!live || !live.reader || live.reading) return;
+        live.reading = true;
+        void live.reader
+          .read()
+          .then(({ done, value }) => {
+            live.reading = false;
+            if (done) {
+              streams.delete(id);
+              iframe.contentWindow?.postMessage(
+                { type: "anth:stream-end", token, id },
+                "*",
+              );
+              return;
+            }
+            if (!value) {
+              streams.delete(id);
+              iframe.contentWindow?.postMessage(
+                { type: "anth:stream-end", token, id },
+                "*",
+              );
+              return;
+            }
+            const copy = new Uint8Array(value);
+            iframe.contentWindow?.postMessage(
+              { type: "anth:stream-chunk", token, id, data: copy.buffer },
+              "*",
+              [copy.buffer],
+            );
+          })
+          .catch((error: unknown) => {
+            live.reading = false;
+            streams.delete(id);
+            if (live.controller.signal.aborted) {
+              iframe.contentWindow?.postMessage(
+                { type: "anth:stream-end", token, id },
+                "*",
+              );
+              return;
+            }
+            iframe.contentWindow?.postMessage(
+              {
+                type: "anth:stream-end",
+                token,
+                id,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              "*",
+            );
+          });
+        return;
+      }
       if (message.type === "anth:stream-cancel") {
         const id = String(message.id ?? "");
-        const controller = streams.get(id);
-        if (controller) {
+        const live = streams.get(id);
+        if (live) {
           streams.delete(id);
-          controller.abort();
+          live.controller.abort();
         }
         return;
       }
@@ -436,7 +466,7 @@ export async function mountFrame(
       closePending.clear();
       for (const resolve of snapshotPending.values()) resolve(null);
       snapshotPending.clear();
-      for (const controller of streams.values()) controller.abort();
+      for (const live of streams.values()) live.controller.abort();
       streams.clear();
       iframe.contentWindow?.postMessage({ type: "anth:unmount", token }, "*");
       iframe.remove();

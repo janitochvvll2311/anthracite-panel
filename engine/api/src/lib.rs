@@ -13,6 +13,8 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 pub use anth_auth::{Auth, SessionInfo};
 use anth_compose::audit::{timestamp, AuditLog};
@@ -42,6 +44,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get};
 use axum::{Json, Router};
+use futures_core::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::UnixListener;
@@ -240,6 +243,73 @@ pub type ChunkStream = Pin<Box<dyn futures_core::Stream<Item = Result<Chunk, Err
 /// Resolving a streamed call yields either the error that precedes the first
 /// byte, which becomes the normal JSON envelope, or the chunk stream.
 pub type StreamFuture<'a> = Pin<Box<dyn Future<Output = Result<ChunkStream, Error>> + Send + 'a>>;
+
+/// The per-stream budget from §7.7, used when the manifest omits it.
+const STREAM_BYTES_TOTAL: u64 = 8 * 1024 * 1024;
+const STREAM_BYTES_PER_SEC: u64 = 1024 * 1024;
+
+struct StreamBudget {
+    total: u64,
+    per_sec: u64,
+}
+
+/// Enforces the manifest's byte budget while a stream is consumed (§7.7, §20).
+/// A violation truncates the body; the client sees a failed producer, not a
+/// clean EOF.
+struct LimitedStream {
+    inner: ChunkStream,
+    budget: StreamBudget,
+    total: u64,
+    window_start: Instant,
+    window_bytes: u64,
+    done: bool,
+}
+
+impl Stream for LimitedStream {
+    type Item = Result<Chunk, Error>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut this.inner).poll_next(context) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                this.total = this.total.saturating_add(chunk.len() as u64);
+                if this.total > this.budget.total {
+                    this.done = true;
+                    return Poll::Ready(Some(Err(Error::too_large(format!(
+                        "the stream exceeded its {} byte budget",
+                        this.budget.total
+                    )))));
+                }
+                let now = Instant::now();
+                if now.duration_since(this.window_start) >= Duration::from_secs(1) {
+                    this.window_start = now;
+                    this.window_bytes = 0;
+                }
+                this.window_bytes = this.window_bytes.saturating_add(chunk.len() as u64);
+                if this.window_bytes > this.budget.per_sec {
+                    this.done = true;
+                    return Poll::Ready(Some(Err(Error::exhausted(format!(
+                        "the stream exceeded its {} byte/s budget",
+                        this.budget.per_sec
+                    )))));
+                }
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.done = true;
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                this.done = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
 
 /// The engine's route dispatcher: the API resolves a route to `interface#function`
 /// and this calls the running app. The daemon implements it over the supervisor;
@@ -832,6 +902,25 @@ async fn app_route(
         let chunks = caller
             .stream(app.as_str(), &interface, &function, input)
             .await?;
+        let chunks: ChunkStream = Box::pin(LimitedStream {
+            inner: chunks,
+            budget: StreamBudget {
+                total: found
+                    .manifest
+                    .limits
+                    .bytes_total
+                    .unwrap_or(STREAM_BYTES_TOTAL),
+                per_sec: found
+                    .manifest
+                    .limits
+                    .bytes_per_sec
+                    .unwrap_or(STREAM_BYTES_PER_SEC),
+            },
+            total: 0,
+            window_start: Instant::now(),
+            window_bytes: 0,
+            done: false,
+        });
         return Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, "application/octet-stream")
