@@ -116,9 +116,13 @@ impl ServiceSupervisor {
     }
 
     /// The socket a service will listen on. The manifest's `{socket}` is
-    /// replaced with exactly this path.
+    /// replaced with exactly this path. The engine pid is part of the name so a
+    /// fast restart cannot have the old engine unlink the new engine's sockets
+    /// while its services are shutting down.
     pub fn socket_path(state: &Path, app: &AppId) -> PathBuf {
-        state.join("run").join(format!("{app}.sock"))
+        state
+            .join("run")
+            .join(format!("{app}-{}.sock", std::process::id()))
     }
 
     /// Launches the service and waits for `GET /health`. A slow service is an
