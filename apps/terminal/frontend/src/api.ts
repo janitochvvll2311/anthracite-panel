@@ -36,3 +36,31 @@ export async function call(
   }
   return value;
 }
+
+/// Opens a live route and returns its body reader. The caller owns the signal:
+/// aborting it closes the engine response and the service stream behind it.
+export async function openStream(
+  context: FrameContext,
+  route: string,
+  signal: AbortSignal,
+): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+  const response = await context.fetch(
+    `/api/apps/${encodeURIComponent(context.app.id)}${route}`,
+    { headers: { accept: "application/octet-stream" }, signal },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    let message = `HTTP ${response.status}`;
+    try {
+      const value = body ? JSON.parse(body) : null;
+      if (value && typeof value === "object" && value.error) {
+        message = `${value.error.code}: ${value.error.message}`;
+      }
+    } catch {
+      // The status is the best message when the body is not the envelope.
+    }
+    throw new Error(message);
+  }
+  if (!response.body) throw new Error("the stream has no body");
+  return response.body.getReader();
+}

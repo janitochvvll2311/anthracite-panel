@@ -36,7 +36,7 @@ A manifest route may declare `stream = true`:
 [[route]]
 method = "GET"
 path = "/stream"
-call = "anthracite:terminal/stream@1.0.0#follow"
+call = "anthracite:terminal/subscription@1.0.0#follow"
 stream = true
 ```
 
@@ -101,23 +101,28 @@ stream from its own `/api/apps/{id}/` prefix.
 
 ## 5. Terminal
 
-A new interface in the same package keeps the existing RPC version intact:
+A second interface in the same package keeps the existing RPC id intact:
 
 ```wit
-package anthracite:terminal@1.1.0;
+package anthracite:terminal@1.0.0;
 
-interface stream {
+interface subscription {
     use anth:error/kinds@1.0.0.{error};
     follow: func(id: string, seq: u64) -> result<stream<list<u8>>, error>;
 }
 
 world app {
     export terminal;
-    export stream;
+    export subscription;
 }
 ```
 
-- The manifest adds the `stream` export and a `GET /stream` route with
+The package version stays at 1.0.0. WIT has one version per package, so
+bumping it to add an interface would also rename `terminal@1.0.0`, even though
+that interface did not change. The new interface is additive and carries the
+same version. It is named `subscription` because `stream` is a WIT keyword.
+
+- The manifest adds the `subscription` export and a `GET /stream` route with
   `stream = true`.
 - The native Terminal and the demo fixture both implement `follow` over their
   chunk queues.
