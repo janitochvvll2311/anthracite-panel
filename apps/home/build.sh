@@ -1,20 +1,18 @@
 #!/bin/sh
 # Build the Home app bundle: Rust backend, Bun/TypeScript frontend, WIT and manifest.
-# Usage: apps/home/build.sh [--demo] [output.anth]
+# Usage: apps/home/build.sh [output.anth]
 #
-# --demo packages the deterministic fixture backend (`home-demo`) instead of the
-# real host reader, so a demo instance never exposes the machine it runs on.
+# This packages the real host reader. The demo builds the same app from
+# `demo/emulator`, so its fixture never reads the machine it runs on.
 set -eu
 
 app=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 root=$(CDPATH= cd -- "$app/../.." && pwd)
-demo=0
 out=
 for argument in "$@"; do
     case "$argument" in
-        --demo) demo=1 ;;
         -h | --help)
-            echo "usage: $0 [--demo] [output.anth]"
+            echo "usage: $0 [output.anth]"
             exit 0
             ;;
         *)
@@ -49,13 +47,8 @@ fi
     "$bun_bin" run build
 )
 
-if [ "$demo" -eq 1 ]; then
-    "$cargo_bin" build --manifest-path "$app/backend/Cargo.toml" --release --bin home-demo
-    binary="$root/target/release/home-demo"
-else
-    "$cargo_bin" build --manifest-path "$app/backend/Cargo.toml" --release --bin home-service
-    binary="$root/target/release/home-service"
-fi
+"$cargo_bin" build --manifest-path "$app/backend/Cargo.toml" --release --bin home-service
+binary="$root/target/release/home-service"
 [ -x "$binary" ] || { echo "cargo did not produce $binary" >&2; exit 2; }
 
 module="$app/frontend/dist/home.js"
@@ -74,6 +67,9 @@ cp "$app/wit/home.wit" "$tmp/wit/home.wit"
 sed \
     -e "s/{{sha256}}/$sha/g" \
     -e "s/{{module_sha256}}/$module_sha/g" \
+    -e "s|{{service_path}}|bin/home-service|g" \
+    -e "s/{{service_class}}/host/g" \
+    -e "s|{{service_argv}}|[\"--socket\", \"{socket}\"]|g" \
     "$app/manifest.toml.in" > "$tmp/manifest.toml"
 
 mkdir -p "$(dirname "$out")"

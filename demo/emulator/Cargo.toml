@@ -17,6 +17,7 @@ path = "src/bin/bundle.rs"
 anth-contract = { path = "../../engine/contract" }
 anth-service = { path = "../../sdk/rust/service" }
 futures-core = "0.3"
+futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
@@ -25,5 +26,4 @@ zip = { version = "2.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 anth-contract = { path = "../../engine/contract", features = ["parse"] }
-futures-util = "0.3"
 wit-parser = "0.263"

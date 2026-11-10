@@ -13,10 +13,6 @@ path = "src/lib.rs"
 name = "home-service"
 path = "src/main.rs"
 
-[[bin]]
-name = "home-demo"
-path = "src/bin/demo.rs"
-
 [dependencies]
 anth-contract = { path = "../../../engine/contract" }
 anth-service = { path = "../../../sdk/rust/service" }

@@ -21,6 +21,7 @@ pub const BUNDLES: &[(&str, &str)] = &[
     ("net", "org.anthracite.net"),
     ("storage", "org.anthracite.storage"),
     ("accounts", "org.anthracite.accounts"),
+    ("home", "org.anthracite.home"),
 ];
 
 #[derive(Debug)]
@@ -75,6 +76,12 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                 "Processes (emulator)",
                 "Deterministic process table fixture for the demo; replaced by the real proc app.",
                 "socket",
+                r#"["--socket", "{socket}"]"#,
+            ),
+            "home" => (
+                "Home (emulator)",
+                "Deterministic host overview fixture for the demo; replaced by the real home app.",
+                "host",
                 r#"["--socket", "{socket}"]"#,
             ),
             _ => ("", "", "", ""),

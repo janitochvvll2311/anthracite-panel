@@ -1,7 +1,7 @@
-//! The demo Home service: simulated host facts, no host access.
+//! Deterministic host overview for the demo (`anthracite:home/host@1.0.0`).
 //!
 //! The demo instance must not show the real machine's hostname, addresses or
-//! storage. This binary answers the same `anthracite:home/host@1.0.0` contract
+//! storage. This fixture answers the same contract as the real Home service
 //! with synthetic values that move over time, so the panels look alive without
 //! ever reading `/proc`, `df` or `ip`.
 //!
@@ -9,42 +9,49 @@
 //! of the host clock: metrics rise and fall on a fixed curve, and the counters
 //! only ever grow.
 
-use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use anth_contract::Error;
-use anth_service::{ChunkStream, Handler};
+use anth_service::ChunkStream;
+use futures_util::stream::unfold;
 use serde_json::{json, Value};
 
-const HOST: &str = "anthracite:home/host@1.0.0";
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 const MIB: f64 = 1024.0 * 1024.0;
 const KIB: f64 = 1024.0;
 
-struct Demo;
-
-impl Handler for Demo {
-    fn call(&self, interface: &str, function: &str, _input: Value) -> Result<Value, Error> {
-        match (interface, function) {
-            (HOST, "info") => Ok(info()),
-            _ => Err(Error::not_found(format!(
-                "`{interface}#{function}` is not implemented"
-            ))),
-        }
-    }
-
-    fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
-        match (interface, function) {
-            (HOST, "watch") => home_service::watch(&input, info),
-            _ => Err(Error::not_found(format!(
-                "`{interface}#{function}` is not implemented"
-            ))),
-        }
+pub fn handle(function: &str, _input: &Value) -> Result<Value, Error> {
+    match function {
+        "info" => Ok(info()),
+        other => Err(Error::not_found(format!(
+            "`anthracite:home/host#{other}` is not implemented"
+        ))),
     }
 }
 
-fn main() {
-    home_service::serve(Arc::new(Demo));
+/// One snapshot every `interval-ms` (clamped to 1–60 s), encoded as the JSON
+/// chunks the engine frames as SSE.
+pub fn watch(input: &Value) -> Result<ChunkStream, Error> {
+    let milliseconds = match input.get("interval-ms") {
+        Some(Value::Number(value)) => value.as_u64(),
+        Some(Value::String(value)) => value.parse::<u64>().ok(),
+        _ => None,
+    }
+    .unwrap_or(2_000)
+    .clamp(1_000, 60_000);
+    let interval = Duration::from_millis(milliseconds);
+    Ok(Box::pin(unfold(
+        (true, interval),
+        |(first, interval)| async move {
+            if !first {
+                tokio::time::sleep(interval).await;
+            }
+            let result = serde_json::to_vec(&info())
+                .map_err(|error| Error::internal(format!("encoding host info: {error}")));
+            Some((result, (false, interval)))
+        },
+    )))
 }
 
 /// Seconds since the fixture started. Every metric is a function of this.
@@ -54,7 +61,10 @@ fn elapsed() -> f64 {
 }
 
 fn info() -> Value {
-    let t = elapsed();
+    info_at(elapsed())
+}
+
+fn info_at(t: f64) -> Value {
     let memory = memory_info(t);
     json!({
         "hostname": "anthracite-demo",
@@ -178,9 +188,8 @@ mod tests {
 
     #[test]
     fn the_fixture_moves_without_reading_the_host() {
-        let first = info();
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        let second = info();
+        let first = info_at(0.0);
+        let second = info_at(10.0);
         assert!(
             second["uptime-seconds"].as_u64() > first["uptime-seconds"].as_u64(),
             "uptime must advance"
@@ -209,5 +218,13 @@ mod tests {
             assert!((0.0..=100.0).contains(&usage));
         }
         assert_eq!(first["hostname"], "anthracite-demo");
+    }
+
+    #[test]
+    fn the_contract_answers_info_and_refuses_unknown_functions() {
+        let info = handle("info", &json!({})).expect("info");
+        assert_eq!(info["cpu"]["cores"], 8);
+        let error = handle("reboot", &json!({})).expect_err("unknown");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
     }
 }
