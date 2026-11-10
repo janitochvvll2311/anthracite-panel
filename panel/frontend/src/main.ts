@@ -43,6 +43,7 @@ import {
   type WindowMode,
 } from "./windows";
 import { mountManager } from "./manager";
+import { defaultView } from "./defaults";
 
 type DegradedApp = {
   app: string;
@@ -129,6 +130,7 @@ const managerButton = byId<HTMLButtonElement>("manager-button");
 const managerClose = byId<HTMLButtonElement>("manager-close");
 const viewportSelect = byId<HTMLSelectElement>("viewport-select");
 const viewportEffective = byId<HTMLElement>("viewport-effective");
+const developer = byId<HTMLDetailsElement>("developer");
 const navToggle = byId<HTMLButtonElement>("nav-toggle");
 const drawerClose = byId<HTMLButtonElement>("drawer-close");
 const drawerBackdrop = byId<HTMLElement>("drawer-backdrop");
@@ -141,6 +143,9 @@ let panelVersion = "0.5.0";
 let engineVersion = "";
 let versionPending = false;
 let activeKey: string | null = null;
+let scrolledActiveKey: string | null = null;
+let initialViewOpened = false;
+let developerTouched = false;
 let retry = 0;
 let retryTimer: number | undefined;
 let zIndex = 10;
@@ -207,6 +212,7 @@ function applyViewport(): void {
   viewportEffective.textContent =
     viewportMode === "auto" ? `auto · ${effective}` : effective;
   viewportSelect.title = `Viewport: ${viewportMode} (${effective})`;
+  if (!developerTouched) developer.open = effective !== "mobile";
   if (effective !== "mobile") {
     closeDrawer();
     sidebar.inert = false;
@@ -251,6 +257,7 @@ function windowIconButton(
 ): HTMLButtonElement {
   const node = button("ghost small", "", title);
   node.innerHTML = WINDOW_ICONS[iconName];
+  node.dataset.windowTool = iconName;
   node.setAttribute("aria-label", label);
   return node;
 }
@@ -380,7 +387,7 @@ function renderTabs(): void {
     select.title = tab.contribution.app.id;
     select.addEventListener("click", () => activate(tab.key));
 
-    const detach = button("tab-tool", "⇱", "Open in a floating window");
+    const detach = button("tab-tool tab-float", "⇱", "Open in a floating window");
     detach.addEventListener("click", (event) => {
       event.stopPropagation();
       void detachTab(tab.key);
@@ -394,7 +401,14 @@ function renderTabs(): void {
 
     node.append(select, detach, close);
     tabsElement.append(node);
+    if (tab.key === activeKey && activeKey !== scrolledActiveKey) {
+      scrolledActiveKey = activeKey;
+      node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
   }
+  if (activeKey === null) scrolledActiveKey = null;
+  tabsElement.hidden = tabs.size === 0;
+  workspace.classList.toggle("no-tabs", tabs.size === 0);
 }
 
 async function mountInto(
@@ -938,6 +952,7 @@ function makeDraggable(elementNode: HTMLElement, handle: HTMLElement): void {
   let pointerId = -1;
 
   handle.addEventListener("pointerdown", (event) => {
+    if (document.documentElement.dataset.viewport === "mobile") return;
     if (elementNode.classList.contains("maximized")) return;
     if ((event.target as HTMLElement).closest("button")) return;
     pointerId = event.pointerId;
@@ -1083,6 +1098,13 @@ function reconcileWindows(): void {
 function reconcile(): void {
   const views = ordered(VIEW);
   const fresh = new Map(views.map((contribution) => [contributionKey(contribution), contribution]));
+  if (!initialViewOpened) {
+    initialViewOpened = true;
+    if (tabs.size === 0) {
+      const home = defaultView(views.filter((contribution) => implementedByPanel(contribution)));
+      if (home) openTab(home);
+    }
+  }
   for (const key of [...tabs.keys()]) {
     const updated = fresh.get(key);
     if (!updated) {
@@ -1204,6 +1226,9 @@ viewportSelect.addEventListener("change", () => {
   viewportMode = viewportSelect.value;
   storeViewport(viewportMode);
   applyViewport();
+});
+developer.querySelector("summary")?.addEventListener("click", () => {
+  developerTouched = true;
 });
 window.addEventListener("resize", () => {
   if (viewportMode === "auto") applyViewport();

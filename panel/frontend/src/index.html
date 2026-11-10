@@ -18,7 +18,7 @@
         aria-controls="sidebar"
         aria-expanded="false"
       >
-        <span aria-hidden="true">☰</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4h11M2.5 8h11M2.5 12h11"/></svg>
       </button>
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
@@ -34,7 +34,9 @@
         aria-label="Manager"
         title="Installed apps and composition"
       >
-        <span class="label">Manager</span>
+        <span class="ghost-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.5" y="2.5" width="4.2" height="4.2" rx="1"/><rect x="9.3" y="2.5" width="4.2" height="4.2" rx="1"/><rect x="2.5" y="9.3" width="4.2" height="4.2" rx="1"/><rect x="9.3" y="9.3" width="4.2" height="4.2" rx="1"/></svg>
+        </span> <span class="label">Manager</span>
       </button>
       <button
         id="settings-button"
@@ -43,7 +45,9 @@
         aria-label="Settings"
         title="Settings"
       >
-        <span aria-hidden="true">⚙</span> <span class="label">Settings</span>
+        <span aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 4h3.2M9.3 4h4.2M2.5 8h6.2M12.3 8h1.2M2.5 12h2.2M8.3 12h5.2"/><path d="M7.1 2.5v3M10.9 6.5v3M5.1 10.5v3"/></svg>
+        </span> <span class="label">Settings</span>
       </button>
     </header>
 
@@ -59,16 +63,19 @@
         </div>
         <nav id="views" aria-label="Views"></nav>
         <div id="warnings" class="warnings" aria-live="polite"></div>
-        <div class="viewport-row">
-          <label for="viewport-select">Viewport</label>
-          <select id="viewport-select" class="viewport-select" aria-label="Viewport mode">
-            <option value="auto">Auto</option>
-            <option value="desktop">Desktop</option>
-            <option value="tablet">Tablet</option>
-            <option value="mobile">Mobile</option>
-          </select>
-          <span id="viewport-effective" class="muted"></span>
-        </div>
+        <details id="developer" class="developer" open>
+          <summary>Developer</summary>
+          <div class="viewport-row">
+            <label for="viewport-select">Viewport</label>
+            <select id="viewport-select" class="viewport-select" aria-label="Viewport mode">
+              <option value="auto">Auto</option>
+              <option value="desktop">Desktop</option>
+              <option value="tablet">Tablet</option>
+              <option value="mobile">Mobile</option>
+            </select>
+            <span id="viewport-effective" class="muted"></span>
+          </div>
+        </details>
         <footer class="sidebar-foot">
           <span>Anthracite</span>
           <span id="panel-version" class="muted">v0.5.0</span>

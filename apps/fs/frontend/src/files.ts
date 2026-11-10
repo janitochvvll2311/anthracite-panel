@@ -13,6 +13,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
     return mountEditorView(root, context);
   }
 
+  if (typeof context.fill === "function") {
+    context.fill();
+    document.documentElement.style.height = "100%";
+    document.body.style.height = "100%";
+  }
+
   const style = document.createElement("style");
   style.textContent = styles;
   root.append(style);
@@ -21,10 +27,11 @@ export function mount(root: HTMLElement, context: FrameContext) {
   box.className = "fs";
   box.innerHTML = `
     <header class="fs-bar">
-      <button type="button" data-up title="Parent directory">Up</button>
+      <button type="button" data-up title="Parent directory" aria-label="Parent directory"><span class="fs-btn-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M4.5 6.5 8 3l3.5 3.5"/></svg></span><span class="fs-btn-label">Up</span></button>
       <input class="fs-address" list="fs-paths" aria-label="Path" spellcheck="false" autocomplete="off" />
       <datalist id="fs-paths"></datalist>
-      <button type="button" data-refresh>Refresh</button>
+      <button type="button" data-refresh title="Refresh" aria-label="Refresh"><span class="fs-btn-glyph" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 3v3h-3"/></svg></span><span class="fs-btn-label">Refresh</span></button>
+      <span class="fs-break" aria-hidden="true"></span>
       <button type="button" data-trash>Trash</button>
       <span class="grow"></span>
       <button type="button" data-upload>Upload</button>
@@ -213,11 +220,16 @@ export function mount(root: HTMLElement, context: FrameContext) {
       else void open(full, entry);
     });
 
-    const rename = button("fs-tool", "R", `Rename ${entry.name}`);
+    const rename = button("fs-tool", "", `Rename ${entry.name}`);
+    rename.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 .5-2.5L10.8 1.2l2 2L5.5 10.5 3 11Z"/><path d="M9.5 2.5l2 2"/></svg>';
+    rename.setAttribute("aria-label", `Rename ${entry.name}`);
     rename.addEventListener("click", () => showRename(full));
 
-    const remove = button("fs-tool delete", "×", `Delete ${entry.name}`);
-    remove.textContent = "×";
+    const remove = button("fs-tool delete", "", `Delete ${entry.name}`);
+    remove.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m4 4 8 8M12 4l-8 8"/></svg>';
+    remove.setAttribute("aria-label", `Delete ${entry.name}`);
     remove.addEventListener("click", () => {
       if (confirmPath === full) {
         void drop(full);
@@ -738,7 +750,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
     const head = document.createElement("div");
     head.className = "fs-preview-head";
-    const back = button("", "← Files");
+    const back = button("", "Files");
+    back.innerHTML =
+      '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10 3-5 5 5 5"/></svg><span>Files</span>';
     back.title = "Back to the file list";
     back.addEventListener("click", resetPreview);
     const name = document.createElement("strong");

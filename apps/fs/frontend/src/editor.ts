@@ -352,6 +352,9 @@ export function mountEditorView(root: HTMLElement, context: FrameContext) {
       });
       node.append(open, close);
       tabsElement.append(node);
+      if (index === active) {
+        node.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
     });
   }
 
