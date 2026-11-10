@@ -63,6 +63,7 @@ and a change to one of them is a design change, not an implementation detail.
 | 17 | [Deferred](docs/design/17-deferred.md) | Everything postponed to v0.6.0, with the reason and the trigger |
 | 18 | [v0.6.0 plan](docs/design/18-v0.6-plan.md) | M4–M5 phases, entry conditions and the open decisions |
 | 19 | [v0.6.0 baseline and service contract](docs/design/19-v0.6-baseline.md) | v0.4 reference inventory, service v3, host emulator, fs root and terminal protocol |
+| 20 | [Streams](docs/design/20-streams.md) | WIT streams, chunked/SSE mapping, service and panel transports, Terminal retrofit |
 | A | [Vertical slice](docs/design/appendix-a-vertical-slice.md) | `hello` end to end: install, approve, compose, call |
 
 ---
