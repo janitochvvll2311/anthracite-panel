@@ -260,7 +260,8 @@ var styles = `
   .term-input {
     position: absolute; left: 8px; bottom: 8px; width: 1px; height: 1px;
     padding: 0; border: 0; opacity: 0; pointer-events: none;
-    font-size: 16px; caret-color: transparent;
+    font-size: 16px; caret-color: transparent; outline: none;
+    overflow: hidden; white-space: pre;
   }
   .term-status { margin: 0; min-height: 16px; flex: none; font-size: 12px; color: #667087; }
   .term-status.bad { color: #ffb3ba; }
@@ -335,12 +336,15 @@ function mount(root, context) {
     <p class="term-status" role="status"></p>
     <div class="term-keys" data-keys aria-label="Terminal special keys">
       <div class="term-modifiers">
+        <button type="button" data-keyboard aria-label="Show keyboard" aria-pressed="false" data-session-key>
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.5h.01M6.5 6.5h.01M9 6.5h.01M11.5 6.5h.01M4 9h.01M11.5 9h.01M6 9h4"/></svg>
+        </button>
         <button type="button" data-mod="ctrl" aria-pressed="false" data-session-key>Ctrl</button>
         <button type="button" data-mod="alt" aria-pressed="false" data-session-key>Alt</button>
       </div>
       <div class="term-key-scroll" data-key-scroll></div>
     </div>
-    <input class="term-input" aria-label="Terminal input" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" disabled />
+    <div class="term-input" role="textbox" aria-label="Terminal input" aria-multiline="false" aria-disabled="true" contenteditable="false" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="send" inputmode="text" data-form-type="other" data-lpignore="true" data-1p-ignore="true" data-bwignore></div>
   `;
   root.append(box);
   const screen = box.querySelector(".term-screen");
@@ -352,6 +356,7 @@ function mount(root, context) {
   const keyScroll = box.querySelector("[data-key-scroll]");
   const ctrlButton = box.querySelector('[data-mod="ctrl"]');
   const altButton = box.querySelector('[data-mod="alt"]');
+  const keyboardButton = box.querySelector("[data-keyboard]");
   const history = [];
   let historyIndex = 0;
   let session = null;
@@ -360,6 +365,8 @@ function mount(root, context) {
   let disposed = false;
   let ctrlArmed = false;
   let altArmed = false;
+  let composing = false;
+  let draft = "";
   let output = "";
   let pendingEcho = "";
   const updateModifiers = () => {
@@ -376,8 +383,32 @@ function mount(root, context) {
     altArmed = false;
     updateModifiers();
   };
+  const inputEnabled = () => input.getAttribute("contenteditable") !== "false";
+  const setInputEnabled = (enabled) => {
+    input.setAttribute("contenteditable", enabled ? "true" : "false");
+    input.setAttribute("aria-disabled", String(!enabled));
+    if (!enabled) {
+      input.blur();
+      input.textContent = "";
+    }
+  };
+  const updateKeyboard = () => {
+    const visible = document.activeElement === input;
+    keyboardButton.classList.toggle("armed", visible);
+    keyboardButton.setAttribute("aria-pressed", String(visible));
+    const label = visible ? "Hide keyboard" : "Show keyboard";
+    keyboardButton.title = label;
+    keyboardButton.setAttribute("aria-label", label);
+  };
+  const toggleKeyboard = () => {
+    if (document.activeElement === input)
+      input.blur();
+    else
+      focusInput();
+    updateKeyboard();
+  };
   const focusInput = () => {
-    if (!input.disabled)
+    if (inputEnabled())
       input.focus({ preventScroll: true });
   };
   const getFontSize = () => {
@@ -442,8 +473,10 @@ function mount(root, context) {
       control.disabled = !enabled;
     for (const control of sessionKeys)
       control.disabled = !enabled;
+    setInputEnabled(enabled);
     if (!enabled)
       clearModifiers();
+    updateKeyboard();
   };
   setSessionControls(false);
   const setStatus = (message, bad = false) => {
@@ -451,7 +484,7 @@ function mount(root, context) {
     status.className = bad ? "term-status bad" : "term-status";
   };
   const render = () => {
-    screen.textContent = output + input.value;
+    screen.textContent = output + draft;
     screen.scrollTop = screen.scrollHeight;
   };
   const append = (bytes) => {
@@ -467,8 +500,9 @@ function mount(root, context) {
   async function submitLine() {
     if (!session)
       return;
-    const line = input.value;
-    input.value = "";
+    const line = draft;
+    draft = "";
+    input.textContent = "";
     if (line.trim())
       history.push(line);
     historyIndex = history.length;
@@ -498,12 +532,13 @@ function mount(root, context) {
     if (history.length === 0)
       return;
     historyIndex = direction === "up" ? Math.max(0, historyIndex - 1) : Math.min(history.length, historyIndex + 1);
-    input.value = history[historyIndex] ?? "";
+    draft = history[historyIndex] ?? "";
     render();
   };
   async function sendKey(key) {
     if (key === "ctrlc") {
-      input.value = "";
+      draft = "";
+      input.textContent = "";
       render();
       clearModifiers();
       await sendSignal("INT");
@@ -537,7 +572,7 @@ function mount(root, context) {
   }
   async function sendSymbol(symbol) {
     if (!ctrlArmed && !altArmed) {
-      input.value += symbol;
+      draft += symbol;
       render();
       focusInput();
       return;
@@ -571,7 +606,6 @@ function mount(root, context) {
       const text = error instanceof Error ? error.message : String(error);
       if (text.startsWith("not-found:")) {
         session = null;
-        input.disabled = true;
         setSessionControls(false);
         state.textContent = "ended";
         setStatus("Session ended. Reconnect to start a new one.", true);
@@ -608,11 +642,12 @@ function mount(root, context) {
       }
       output = "";
       pendingEcho = "";
-      input.value = "";
+      draft = "";
+      input.textContent = "";
       render();
       cursor = 0;
     }
-    input.disabled = true;
+    setInputEnabled(false);
     setSessionControls(false);
     try {
       session = await call(context, "/open", {
@@ -623,17 +658,16 @@ function mount(root, context) {
       if (disposed)
         return;
       cursor = 0;
-      input.disabled = false;
+      setInputEnabled(true);
       setSessionControls(true);
       state.textContent = `session ${session.id}`;
       setStatus("Connected to the scripted fixture.");
       resize();
       poll();
-      input.focus();
+      focusInput();
     } catch (error) {
       session = null;
       setSessionControls(false);
-      input.disabled = true;
       state.textContent = "unavailable";
       setStatus(String(error), true);
     }
@@ -642,7 +676,8 @@ function mount(root, context) {
     if (!session)
       return;
     if (name === "INT") {
-      input.value = "";
+      draft = "";
+      input.textContent = "";
       render();
     }
     try {
@@ -656,14 +691,60 @@ function mount(root, context) {
       setStatus(String(error), true);
     }
   }
-  input.addEventListener("input", () => {
+  const consumeInput = () => {
+    const text = input.textContent ?? "";
+    input.textContent = "";
+    if (!text) {
+      render();
+      return;
+    }
+    draft += text;
     render();
+  };
+  input.addEventListener("input", () => {
+    if (!composing)
+      consumeInput();
+  });
+  input.addEventListener("beforeinput", (event) => {
+    if (composing)
+      return;
+    if (event.inputType === "insertText" || event.inputType === "insertFromPaste") {
+      if (event.data) {
+        event.preventDefault();
+        draft += event.data;
+        render();
+      }
+      return;
+    }
+    if (event.inputType === "deleteContentBackward") {
+      event.preventDefault();
+      const characters = [...draft];
+      characters.pop();
+      draft = characters.join("");
+      render();
+      return;
+    }
+    if (event.inputType === "insertLineBreak" || event.inputType === "insertParagraph") {
+      event.preventDefault();
+      submitLine();
+    }
+  });
+  input.addEventListener("compositionstart", () => {
+    composing = true;
+  });
+  input.addEventListener("compositionend", () => {
+    composing = false;
+    consumeInput();
   });
   input.addEventListener("focus", () => {
+    input.textContent = "";
     screen.classList.add("focused");
+    updateKeyboard();
   });
   input.addEventListener("blur", () => {
+    input.textContent = "";
     screen.classList.remove("focused");
+    updateKeyboard();
   });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -671,12 +752,21 @@ function mount(root, context) {
       submitLine();
       return;
     }
+    if (event.key === "Backspace" && !composing) {
+      event.preventDefault();
+      const characters = [...draft];
+      characters.pop();
+      draft = characters.join("");
+      render();
+      return;
+    }
     if ((ctrlArmed || altArmed) && event.key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
       event.preventDefault();
       const data = applyModifiers(event.key, ctrlArmed, altArmed);
       clearModifiers();
       if (data === "\x03") {
-        input.value = "";
+        draft = "";
+        input.textContent = "";
         render();
         sendSignal("INT");
         return;
@@ -699,7 +789,8 @@ function mount(root, context) {
   box.querySelector("[data-clear]").addEventListener("click", () => {
     output = "";
     pendingEcho = "";
-    input.value = "";
+    draft = "";
+    input.textContent = "";
     render();
     setStatus("Screen cleared");
   });
@@ -715,6 +806,10 @@ function mount(root, context) {
     const target = event.target.closest("button");
     if (!target || target.disabled)
       return;
+    if (target.hasAttribute("data-keyboard")) {
+      toggleKeyboard();
+      return;
+    }
     if (target.dataset.mod === "ctrl") {
       ctrlArmed = !ctrlArmed;
       updateModifiers();
