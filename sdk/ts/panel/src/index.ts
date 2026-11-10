@@ -5,6 +5,7 @@
 
 export * from "./iframe";
 export * from "./dom";
+export * from "./stream";
 
 import type { App, Contribution } from "./model";
 export type { App, Contribution, Slot } from "./model";

@@ -43,6 +43,22 @@
           parent.postMessage({ type, token, ...payload }, "*");
         };
 
+        const responseLike = (meta, body, text) => ({
+          ok: meta.ok,
+          status: meta.status,
+          statusText: meta.statusText,
+          headers: {
+            get: (name) => meta.headers[String(name).toLowerCase()] ?? null,
+            forEach: (callback) =>
+              Object.entries(meta.headers).forEach(([name, value]) =>
+                callback(value, name),
+              ),
+          },
+          body,
+          text,
+          json: async () => JSON.parse(await text()),
+        });
+
         const request = (input, init = {}) => {
           const url = typeof input === "string" ? input : input.url;
           const headers = init.headers
@@ -56,21 +72,58 @@
                 : String(init.body);
           const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
           return new Promise((resolve, reject) => {
-            pending.set(id, {
-              resolve: (result) =>
-                resolve({
-                  ok: result.ok,
-                  status: result.status,
-                  statusText: result.statusText,
-                  headers: {
-                    get: (name) =>
-                      result.headers[String(name).toLowerCase()] ?? null,
+            let controller = null;
+            let settled = false;
+            const call = {
+              reject: (error) => {
+                if (settled) return;
+                settled = true;
+                pending.delete(id);
+                reject(error);
+              },
+              buffered: (result) => {
+                if (settled) return;
+                settled = true;
+                pending.delete(id);
+                resolve(responseLike(result, null, async () => result.body));
+              },
+              head: (meta) => {
+                if (settled) return;
+                settled = true;
+                const stream = new ReadableStream({
+                  start: (value) => {
+                    controller = value;
                   },
-                  text: async () => result.body,
-                  json: async () => JSON.parse(result.body),
-                }),
-              reject,
-            });
+                  cancel: () => {
+                    pending.delete(id);
+                    send("anth:stream-cancel", { id });
+                  },
+                });
+                resolve(
+                  responseLike(meta, stream, async () => {
+                    const reader = stream.getReader();
+                    const decoder = new TextDecoder();
+                    let text = "";
+                    for (;;) {
+                      const { done, value } = await reader.read();
+                      if (done) break;
+                      text += decoder.decode(value, { stream: true });
+                    }
+                    return text + decoder.decode();
+                  }),
+                );
+              },
+              chunk: (data) => {
+                if (controller) controller.enqueue(new Uint8Array(data));
+              },
+              end: (error) => {
+                pending.delete(id);
+                if (!controller) return;
+                if (error) controller.error(new Error(error));
+                else controller.close();
+              },
+            };
+            pending.set(id, call);
             send("anth:fetch", {
               id,
               url,
@@ -134,9 +187,20 @@
           } else if (message.type === "anth:fetch-result") {
             const call = pending.get(message.id);
             if (!call) return;
-            pending.delete(message.id);
-            if (message.result?.error) call.reject(new Error(message.result.error));
-            else call.resolve(message.result);
+            if (message.result?.error) {
+              call.reject(new Error(message.result.error));
+            } else {
+              call.buffered(message.result);
+            }
+          } else if (message.type === "anth:stream-head") {
+            const call = pending.get(message.id);
+            if (call) call.head(message);
+          } else if (message.type === "anth:stream-chunk") {
+            const call = pending.get(message.id);
+            if (call) call.chunk(message.data);
+          } else if (message.type === "anth:stream-end") {
+            const call = pending.get(message.id);
+            if (call) call.end(message.error);
           } else if (message.type === "anth:open-view-result") {
             const resolve = pendingViews.get(message.requestId);
             if (!resolve) return;

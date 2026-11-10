@@ -6,6 +6,8 @@
 // proxied through a scoped RPC that only accepts the app's own
 // `/api/apps/{id}/` prefix.
 
+import { isStreamingContentType } from "./stream";
+
 export type FrameContext = {
   app: { id: string; version: string; risk: string };
   contribution: {
@@ -136,6 +138,9 @@ export async function mountFrame(
   >();
   let snapshotSequence = 0;
   const snapshotPending = new Map<string, (value: unknown) => void>();
+  /// In-flight streaming fetches, so a cancel or an unmount closes the engine
+  /// response instead of leaving a producer running.
+  const streams = new Map<string, AbortController>();
 
   const update = (params: unknown): void => {
     iframe.contentWindow?.postMessage(
@@ -324,29 +329,100 @@ export async function mountFrame(
           return;
         }
         const request = options.request ?? fetch;
+        const controller = new AbortController();
+        streams.set(id, controller);
         void request(target, {
           method: init.method ?? "GET",
           headers: new Headers(init.headers ?? []),
           body: init.body ?? null,
+          signal: controller.signal,
         })
           .then(async (response) => {
             const headers: Record<string, string> = {};
             response.headers.forEach((value, name) => {
               headers[name.toLowerCase()] = value;
             });
-            postFetch(iframe, token, id, {
-              ok: response.ok,
-              status: response.status,
-              statusText: response.statusText,
-              headers,
-              body: await response.text(),
-            } as RpcResult);
+            const streaming =
+              response.body != null &&
+              isStreamingContentType(headers["content-type"]);
+            if (!streaming) {
+              const body = await response.text();
+              streams.delete(id);
+              postFetch(iframe, token, id, {
+                ok: response.ok,
+                status: response.status,
+                statusText: response.statusText,
+                headers,
+                body,
+              } as RpcResult);
+              return;
+            }
+            // The head resolves the frame's `Response`; the chunks feed its
+            // `ReadableStream` until the producer ends or fails.
+            iframe.contentWindow?.postMessage(
+              {
+                type: "anth:stream-head",
+                token,
+                id,
+                ok: response.ok,
+                status: response.status,
+                statusText: response.statusText,
+                headers,
+              },
+              "*",
+            );
+            const reader = response.body!.getReader();
+            try {
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const copy = new Uint8Array(value);
+                iframe.contentWindow?.postMessage(
+                  { type: "anth:stream-chunk", token, id, data: copy.buffer },
+                  "*",
+                  [copy.buffer],
+                );
+              }
+              iframe.contentWindow?.postMessage(
+                { type: "anth:stream-end", token, id },
+                "*",
+              );
+            } catch (error) {
+              iframe.contentWindow?.postMessage(
+                {
+                  type: "anth:stream-end",
+                  token,
+                  id,
+                  ...(controller.signal.aborted
+                    ? {}
+                    : {
+                        error:
+                          error instanceof Error ? error.message : String(error),
+                      }),
+                },
+                "*",
+              );
+            } finally {
+              streams.delete(id);
+            }
           })
           .catch((error: unknown) => {
+            streams.delete(id);
+            if (controller.signal.aborted) return;
             postFetch(iframe, token, id, {
               error: error instanceof Error ? error.message : String(error),
             } as RpcResult);
           });
+        return;
+      }
+      if (message.type === "anth:stream-cancel") {
+        const id = String(message.id ?? "");
+        const controller = streams.get(id);
+        if (controller) {
+          streams.delete(id);
+          controller.abort();
+        }
+        return;
       }
     };
 
@@ -360,6 +436,8 @@ export async function mountFrame(
       closePending.clear();
       for (const resolve of snapshotPending.values()) resolve(null);
       snapshotPending.clear();
+      for (const controller of streams.values()) controller.abort();
+      streams.clear();
       iframe.contentWindow?.postMessage({ type: "anth:unmount", token }, "*");
       iframe.remove();
     };
