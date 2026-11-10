@@ -366,7 +366,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
       if (disposed) return;
       const text = error instanceof Error ? error.message : String(error);
       if (text.startsWith("not-found:")) {
+        const ended = session?.id;
         session = null;
+        if (ended) {
+          void call(context, `/session?id=${encodeURIComponent(ended)}`, {
+            method: "DELETE",
+          }).catch(() => {});
+        }
         setSessionControls(false);
         state.textContent = "ended";
         setStatus("Session ended. Reconnect to start a new one.", true);
