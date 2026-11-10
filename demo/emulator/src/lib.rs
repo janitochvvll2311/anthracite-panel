@@ -8,10 +8,13 @@
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 
 use anth_contract::Error;
-use anth_service::Handler;
+use anth_service::{ChunkStream, Handler};
+use futures_core::Stream;
 use serde_json::{json, Value};
 
 mod accounts;
@@ -23,6 +26,7 @@ mod storage;
 const FS_READ: &str = "anthracite:fs/read@1.2.0";
 const FS_WRITE: &str = "anthracite:fs/write@1.2.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
+const STREAM: &str = "anthracite:terminal/subscription@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
 const NET: &str = "anthracite:net/net@1.1.0";
 const STORAGE: &str = "anthracite:storage/storage@1.1.0";
@@ -39,7 +43,7 @@ const HELP: &str = "help: ls, cat, echo, help, exit\r\n";
 /// The service handler: persistent host state plus runtime processes/sessions.
 pub struct Emulator {
     fs: Mutex<Fs>,
-    terminals: Mutex<Terminals>,
+    terminals: Arc<Mutex<Terminals>>,
     procs: Mutex<proc::ProcFixture>,
     net: Mutex<net::NetFixture>,
     storage: Mutex<storage::StorageFixture>,
@@ -75,7 +79,7 @@ impl Emulator {
     pub fn new() -> Self {
         Self {
             fs: Mutex::new(Fs::demo()),
-            terminals: Mutex::new(Terminals::default()),
+            terminals: Arc::new(Mutex::new(Terminals::default())),
             procs: Mutex::new(proc::ProcFixture::demo()),
             net: Mutex::new(net::NetFixture::new()),
             storage: Mutex::new(storage::StorageFixture::new()),
@@ -190,6 +194,38 @@ impl Handler for Emulator {
             self.persist()?;
         }
         result
+    }
+
+    fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
+        if interface != STREAM {
+            return Err(Error::not_found(format!(
+                "`{interface}` is not exported by the emulator"
+            )));
+        }
+        match function {
+            "follow" => {
+                let id = text(&input, "id")?;
+                let cursor = number(&input, "seq").unwrap_or(0);
+                {
+                    let terminals = self
+                        .terminals
+                        .lock()
+                        .expect("the fixture mutex is not poisoned");
+                    if !terminals.sessions.contains_key(&id) {
+                        return Err(Error::not_found(format!("session `{id}` does not exist")));
+                    }
+                }
+                Ok(Box::pin(DemoStream {
+                    terminals: Arc::clone(&self.terminals),
+                    id,
+                    cursor,
+                    done: false,
+                }))
+            }
+            other => Err(Error::not_found(format!(
+                "`anthracite:terminal/stream#{other}` is not implemented"
+            ))),
+        }
     }
 }
 
@@ -463,6 +499,8 @@ struct Term {
     next_seq: u64,
     /// Set by `exit`: the shell ended, but the queued output is still readable.
     closed: bool,
+    /// Streams parked until this session produces output or ends.
+    waiters: Vec<Waker>,
 }
 
 impl Term {
@@ -470,6 +508,14 @@ impl Term {
         let seq = self.next_seq;
         self.next_seq += 1;
         self.chunks.push((seq, bytes));
+        self.wake();
+    }
+
+    fn wake(&mut self) {
+        let waiters = std::mem::take(&mut self.waiters);
+        for waker in waiters {
+            waker.wake();
+        }
     }
 
     fn view(&self, id: &str) -> Value {
@@ -481,6 +527,53 @@ impl Term {
             // advances by one per chunk it consumes.
             "seq": self.next_seq.saturating_sub(1),
         })
+    }
+}
+
+/// One live follower of a scripted terminal. It replays retained chunks from its
+/// cursor and then parks until `push` wakes it.
+struct DemoStream {
+    terminals: Arc<Mutex<Terminals>>,
+    id: String,
+    cursor: u64,
+    done: bool,
+}
+
+impl Stream for DemoStream {
+    type Item = Result<Vec<u8>, Error>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        let mut terminals = this
+            .terminals
+            .lock()
+            .expect("the fixture mutex is not poisoned");
+        let Some(term) = terminals.sessions.get_mut(&this.id) else {
+            this.done = true;
+            return Poll::Ready(Some(Err(Error::not_found(format!(
+                "session `{}` does not exist",
+                this.id
+            )))));
+        };
+        if let Some((seq, data)) = term.chunks.iter().find(|(seq, _)| *seq >= this.cursor) {
+            this.cursor = seq + 1;
+            return Poll::Ready(Some(Ok(data.clone())));
+        }
+        if term.closed {
+            this.done = true;
+            return Poll::Ready(None);
+        }
+        if !term
+            .waiters
+            .iter()
+            .any(|waker| waker.will_wake(context.waker()))
+        {
+            term.waiters.push(context.waker().clone());
+        }
+        Poll::Pending
     }
 }
 
@@ -781,6 +874,7 @@ impl Emulator {
                     chunks: Vec::new(),
                     next_seq: 0,
                     closed: false,
+                    waiters: Vec::new(),
                 };
                 term.push(PROMPT.as_bytes().to_vec());
                 let view = term.view(&id);
@@ -838,6 +932,7 @@ impl Emulator {
                     if trimmed == "exit" {
                         term.push(b"logout\r\n".to_vec());
                         term.closed = true;
+                        term.wake();
                         return Ok(Value::Null);
                     }
                     let response = match trimmed {
@@ -893,10 +988,12 @@ impl Emulator {
                     "HUP" | "TERM" => {
                         term.push(b"Session terminated\r\n".to_vec());
                         term.closed = true;
+                        term.wake();
                     }
                     "KILL" => {
                         term.push(b"Killed\r\n".to_vec());
                         term.closed = true;
+                        term.wake();
                     }
                     // WINCH only asks the shell to reflow; the fixture has no
                     // pixel grid, so the resize itself is the observable effect.
@@ -906,10 +1003,11 @@ impl Emulator {
             }
             "close" => {
                 let id = text(input, "id")?;
-                terminals
+                let mut term = terminals
                     .sessions
                     .remove(&id)
                     .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
+                term.wake();
                 Ok(Value::Null)
             }
             other => Err(Error::not_found(format!(
@@ -923,6 +1021,7 @@ impl Emulator {
 mod tests {
     use super::*;
     use anth_contract::ErrorKind;
+    use std::time::Duration;
 
     fn call(emulator: &Emulator, function: &str, input: Value) -> Value {
         emulator
@@ -1214,6 +1313,54 @@ mod tests {
         let error = emulator
             .call(TERMINAL, "read", json!({"id": id, "seq": 0}))
             .expect_err("closed");
+        assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    #[tokio::test]
+    async fn a_stream_replays_and_follows_the_scripted_terminal() {
+        use futures_util::StreamExt;
+
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id").to_string();
+        let mut stream = emulator
+            .stream(STREAM, "follow", json!({"id": id, "seq": 0}))
+            .expect("follow");
+        let first = stream.next().await.expect("chunk").expect("ok");
+        assert_eq!(first[0], 111, "the prompt starts with `o`");
+
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [104, 101, 108, 112, 10]}),
+            )
+            .expect("write");
+        let mut output = Vec::new();
+        while let Ok(Some(Ok(chunk))) =
+            tokio::time::timeout(Duration::from_millis(200), stream.next()).await
+        {
+            output.extend_from_slice(&chunk);
+            if String::from_utf8_lossy(&output).contains("help: ls") {
+                break;
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&output).contains("help: ls"),
+            "{}",
+            String::from_utf8_lossy(&output)
+        );
+
+        emulator
+            .call(TERMINAL, "close", json!({"id": id}))
+            .expect("close");
+        let error = stream.next().await.expect("item").expect_err("closed");
         assert_eq!(error.kind(), ErrorKind::NotFound);
     }
 

@@ -13729,6 +13729,23 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+async function openStream(context, route, signal) {
+  const response = await context.fetch(`/api/apps/${encodeURIComponent(context.app.id)}${route}`, { headers: { accept: "application/octet-stream" }, signal });
+  if (!response.ok) {
+    const body = await response.text();
+    let message = `HTTP ${response.status}`;
+    try {
+      const value = body ? JSON.parse(body) : null;
+      if (value && typeof value === "object" && value.error) {
+        message = `${value.error.code}: ${value.error.message}`;
+      }
+    } catch {}
+    throw new Error(message);
+  }
+  if (!response.body)
+    throw new Error("the stream has no body");
+  return response.body.getReader();
+}
 
 // src/gestures.ts
 function bindTerminalGestures(screen, handlers) {
@@ -14008,7 +14025,6 @@ var styles = `
 `;
 
 // src/main.ts
-var decoder = new TextDecoder;
 function mount(root, context) {
   if (typeof context.fill === "function") {
     context.fill();
@@ -14060,8 +14076,8 @@ function mount(root, context) {
   const altButton = box.querySelector('[data-mod="alt"]');
   const keyboardButton = box.querySelector("[data-keyboard]");
   let session = null;
-  let cursor = 0;
-  let timer;
+  let streamAbort;
+  let decoder = new TextDecoder;
   let disposed = false;
   let ctrlArmed = false;
   let altArmed = false;
@@ -14328,63 +14344,59 @@ function mount(root, context) {
       focusInput();
     }
   });
-  const append = (bytes, done) => {
-    const text = decoder.decode(Uint8Array.from(bytes), { stream: true });
+  const append = (bytes) => new Promise((resolve) => {
+    const text = decoder.decode(bytes, { stream: true });
     if (!text) {
-      done();
+      resolve();
       return;
     }
-    term.write(text, done);
-  };
-  const poll = async () => {
+    term.write(text, resolve);
+  });
+  const follow = async () => {
     if (disposed || !session)
       return;
+    const controller = new AbortController;
+    streamAbort = controller;
     try {
-      const output = await call(context, `/read?id=${encodeURIComponent(session.id)}&seq=${cursor}&wait-ms=500`);
-      if (disposed)
-        return;
-      if (output) {
-        const next = output.seq + 1;
-        append(output.data, () => {
-          if (disposed)
-            return;
-          cursor = next;
-          timer = window.setTimeout(poll, 20);
-        });
-      } else {
-        timer = window.setTimeout(poll, 200);
+      const reader = await openStream(context, `/stream?id=${encodeURIComponent(session.id)}&seq=0`, controller.signal);
+      for (;; ) {
+        const { done, value } = await reader.read();
+        if (disposed)
+          return;
+        if (done)
+          break;
+        if (value)
+          await append(value);
       }
-    } catch (error) {
-      if (disposed)
+      if (disposed || controller.signal.aborted)
         return;
-      const text = error instanceof Error ? error.message : String(error);
-      if (text.startsWith("not-found:")) {
-        const ended = session?.id;
-        session = null;
-        if (ended) {
-          call(context, `/session?id=${encodeURIComponent(ended)}`, {
-            method: "DELETE"
-          }).catch(() => {});
-        }
-        setSessionControls(false);
-        state.textContent = "ended";
-        setStatus("Session ended. Reconnect to start a new one.", true);
-        term.write(`\r
+      const ended = session?.id;
+      session = null;
+      if (ended) {
+        call(context, `/session?id=${encodeURIComponent(ended)}`, {
+          method: "DELETE"
+        }).catch(() => {});
+      }
+      setSessionControls(false);
+      state.textContent = "ended";
+      setStatus("Session ended. Reconnect to start a new one.", true);
+      term.write(`\r
 [session ended]\r
 `);
+    } catch (error) {
+      if (disposed || controller.signal.aborted)
         return;
-      }
       state.textContent = "degraded";
-      setStatus(text, true);
-      timer = window.setTimeout(poll, 500);
+      setStatus(error instanceof Error ? error.message : String(error), true);
+    } finally {
+      if (streamAbort === controller)
+        streamAbort = undefined;
     }
   };
   async function open(reset = false) {
     if (reset) {
-      if (timer !== undefined) {
-        window.clearTimeout(timer);
-        timer = undefined;
-      }
+      streamAbort?.abort();
+      streamAbort = undefined;
       const previous = session?.id;
       session = null;
       if (previous) {
@@ -14392,6 +14404,7 @@ function mount(root, context) {
           method: "DELETE"
         }).catch(() => {});
       }
+      decoder = new TextDecoder;
       term.reset();
     }
     setInputEnabled(false);
@@ -14408,7 +14421,6 @@ function mount(root, context) {
       });
       if (disposed)
         return;
-      cursor = 0;
       lastSize = `${cols}x${rows}`;
       setInputEnabled(true);
       setSessionControls(true);
@@ -14416,7 +14428,7 @@ function mount(root, context) {
       who.textContent = `${session.owner} · ${session.shell}`;
       setStatus("Connected.");
       sendResize(term.cols, term.rows);
-      poll();
+      follow();
       focusInput();
     } catch (error) {
       session = null;
@@ -14593,8 +14605,8 @@ function mount(root, context) {
   open();
   return () => {
     disposed = true;
-    if (timer !== undefined)
-      window.clearTimeout(timer);
+    streamAbort?.abort();
+    streamAbort = undefined;
     unbindGestures();
     window.visualViewport?.removeEventListener("resize", onViewport);
     window.removeEventListener("resize", onResize);

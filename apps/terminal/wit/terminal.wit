@@ -27,6 +27,17 @@ interface terminal {
     close: func(id: string) -> result<_, error>;
 }
 
+/// A live follower of one session, independent of `terminal.read` (§20). The
+/// package stays at 1.0.0 so the existing `terminal` export is unchanged.
+interface subscription {
+    use anth:error/kinds@1.0.0.{error};
+
+    /// Starts at `seq`; ends cleanly when the shell ends. A cursor older than
+    /// the retained buffer fails with `exhausted`.
+    follow: func(id: string, seq: u64) -> result<stream<list<u8>>, error>;
+}
+
 world app {
     export terminal;
+    export subscription;
 }

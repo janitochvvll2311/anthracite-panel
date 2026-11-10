@@ -3,7 +3,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import xtermCss from "@xterm/xterm/css/xterm.css" with { type: "text" };
 
-import { call } from "./api";
+import { call, openStream } from "./api";
 import { bindTerminalGestures } from "./gestures";
 import {
   BAR_SYMBOLS,
@@ -14,8 +14,6 @@ import {
 } from "./keys";
 import { styles } from "./styles";
 import type { FrameContext } from "./types";
-
-const decoder = new TextDecoder();
 
 // The Terminal view renders the service's raw PTY stream with xterm.js. The
 // panel owns the frame; this module only knows its own routes.
@@ -74,8 +72,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const keyboardButton = box.querySelector("[data-keyboard]") as HTMLButtonElement;
 
   let session: any = null;
-  let cursor = 0;
-  let timer: number | undefined;
+  let streamAbort: AbortController | undefined;
+  let decoder = new TextDecoder();
   let disposed = false;
   let ctrlArmed = false;
   let altArmed = false;
@@ -362,62 +360,59 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   });
 
-  const append = (bytes: number[], done: () => void): void => {
-    const text = decoder.decode(Uint8Array.from(bytes), { stream: true });
-    if (!text) {
-      done();
-      return;
-    }
-    term.write(text, done);
-  };
-
-  const poll = async (): Promise<void> => {
-    if (disposed || !session) return;
-    try {
-      const output = await call(
-        context,
-        `/read?id=${encodeURIComponent(session.id)}&seq=${cursor}&wait-ms=500`,
-      );
-      if (disposed) return;
-      if (output) {
-        const next = output.seq + 1;
-        append(output.data, () => {
-          if (disposed) return;
-          cursor = next;
-          timer = window.setTimeout(poll, 20);
-        });
-      } else {
-        timer = window.setTimeout(poll, 200);
-      }
-    } catch (error) {
-      if (disposed) return;
-      const text = error instanceof Error ? error.message : String(error);
-      if (text.startsWith("not-found:")) {
-        const ended = session?.id;
-        session = null;
-        if (ended) {
-          void call(context, `/session?id=${encodeURIComponent(ended)}`, {
-            method: "DELETE",
-          }).catch(() => {});
-        }
-        setSessionControls(false);
-        state.textContent = "ended";
-        setStatus("Session ended. Reconnect to start a new one.", true);
-        term.write("\r\n[session ended]\r\n");
+  const append = (bytes: Uint8Array): Promise<void> =>
+    new Promise((resolve) => {
+      const text = decoder.decode(bytes, { stream: true });
+      if (!text) {
+        resolve();
         return;
       }
+      term.write(text, resolve);
+    });
+
+  // One live follower per session. Waiting for xterm to parse each chunk before
+  // reading the next keeps the frame's stream queue bounded.
+  const follow = async (): Promise<void> => {
+    if (disposed || !session) return;
+    const controller = new AbortController();
+    streamAbort = controller;
+    try {
+      const reader = await openStream(
+        context,
+        `/stream?id=${encodeURIComponent(session.id)}&seq=0`,
+        controller.signal,
+      );
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (disposed) return;
+        if (done) break;
+        if (value) await append(value);
+      }
+      if (disposed || controller.signal.aborted) return;
+      const ended = session?.id;
+      session = null;
+      if (ended) {
+        void call(context, `/session?id=${encodeURIComponent(ended)}`, {
+          method: "DELETE",
+        }).catch(() => {});
+      }
+      setSessionControls(false);
+      state.textContent = "ended";
+      setStatus("Session ended. Reconnect to start a new one.", true);
+      term.write("\r\n[session ended]\r\n");
+    } catch (error) {
+      if (disposed || controller.signal.aborted) return;
       state.textContent = "degraded";
-      setStatus(text, true);
-      timer = window.setTimeout(poll, 500);
+      setStatus(error instanceof Error ? error.message : String(error), true);
+    } finally {
+      if (streamAbort === controller) streamAbort = undefined;
     }
   };
 
   async function open(reset = false) {
     if (reset) {
-      if (timer !== undefined) {
-        window.clearTimeout(timer);
-        timer = undefined;
-      }
+      streamAbort?.abort();
+      streamAbort = undefined;
       const previous = session?.id;
       session = null;
       if (previous) {
@@ -425,6 +420,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
           method: "DELETE",
         }).catch(() => {});
       }
+      decoder = new TextDecoder();
       term.reset();
     }
     setInputEnabled(false);
@@ -440,7 +436,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
         body: JSON.stringify({ shell: "/bin/sh", cols, rows }),
       });
       if (disposed) return;
-      cursor = 0;
       lastSize = `${cols}x${rows}`;
       setInputEnabled(true);
       setSessionControls(true);
@@ -448,7 +443,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       who.textContent = `${session.owner} · ${session.shell}`;
       setStatus("Connected.");
       sendResize(term.cols, term.rows);
-      void poll();
+      void follow();
       focusInput();
     } catch (error) {
       session = null;
@@ -638,7 +633,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
-    if (timer !== undefined) window.clearTimeout(timer);
+    streamAbort?.abort();
+    streamAbort = undefined;
     unbindGestures();
     window.visualViewport?.removeEventListener("resize", onViewport);
     window.removeEventListener("resize", onResize);

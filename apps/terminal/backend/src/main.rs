@@ -8,15 +8,19 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use anth_contract::Error;
-use anth_service::Handler;
+use anth_service::{ChunkStream, Handler};
+use futures_core::Stream;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
 
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
+const STREAM: &str = "anthracite:terminal/subscription@1.0.0";
 const MAX_DIMENSION: u32 = 500;
 const MAX_WAIT_MS: u64 = 30_000;
 const MAX_BUFFER: usize = 4 * 1024 * 1024;
@@ -49,8 +53,35 @@ struct Output {
 struct OutputState {
     chunks: Vec<(u64, Vec<u8>)>,
     next_seq: u64,
+    /// The sequence of the oldest chunk still retained. A reader behind it has
+    /// lost output because the buffer is bounded.
+    first_seq: u64,
     eof: bool,
     bytes: usize,
+    waiters: Vec<Waker>,
+}
+
+enum Next {
+    Chunk(u64, Vec<u8>),
+    Wait,
+    End,
+    Lost,
+}
+
+impl OutputState {
+    fn next(&self, cursor: u64) -> Next {
+        if let Some((seq, data)) = self.chunks.iter().find(|(seq, _)| *seq >= cursor) {
+            return Next::Chunk(*seq, data.clone());
+        }
+        if cursor < self.first_seq {
+            return Next::Lost;
+        }
+        if self.eof {
+            Next::End
+        } else {
+            Next::Wait
+        }
+    }
 }
 
 impl Output {
@@ -59,8 +90,10 @@ impl Output {
             state: Mutex::new(OutputState {
                 chunks: Vec::new(),
                 next_seq: 0,
+                first_seq: 0,
                 eof: false,
                 bytes: 0,
+                waiters: Vec::new(),
             }),
             ready: Condvar::new(),
         }
@@ -70,11 +103,20 @@ impl Output {
         let mut state = self.state.lock().expect("terminal output mutex");
         let seq = state.next_seq;
         state.next_seq += 1;
+        if state.chunks.is_empty() {
+            state.first_seq = seq;
+        }
         state.bytes += data.len();
         state.chunks.push((seq, data));
         while state.bytes > MAX_BUFFER && !state.chunks.is_empty() {
-            let (_, dropped) = state.chunks.remove(0);
+            let (dropped_seq, dropped) = state.chunks.remove(0);
+            state.first_seq = dropped_seq + 1;
             state.bytes = state.bytes.saturating_sub(dropped.len());
+        }
+        let waiters = std::mem::take(&mut state.waiters);
+        drop(state);
+        for waker in waiters {
+            waker.wake();
         }
         self.ready.notify_all();
     }
@@ -82,6 +124,11 @@ impl Output {
     fn finish(&self) {
         let mut state = self.state.lock().expect("terminal output mutex");
         state.eof = true;
+        let waiters = std::mem::take(&mut state.waiters);
+        drop(state);
+        for waker in waiters {
+            waker.wake();
+        }
         self.ready.notify_all();
     }
 
@@ -90,32 +137,88 @@ impl Output {
         state.next_seq.saturating_sub(1)
     }
 
+    /// Blocking cursor read used by `/read`. Chunks are retained, so a polling
+    /// reader and a stream see the same sequence; the buffer bound is the limit.
     fn read(&self, id: &str, cursor: u64, wait_ms: u64) -> Result<Option<Value>, Error> {
         let mut state = self.state.lock().expect("terminal output mutex");
         let deadline = wait_ms.min(MAX_WAIT_MS);
         loop {
-            if let Some(index) = state.chunks.iter().position(|(seq, _)| *seq >= cursor) {
-                let (seq, data) = state.chunks.remove(index);
-                state.chunks.retain(|(candidate, _)| *candidate > seq);
-                state.bytes = state.chunks.iter().map(|(_, data)| data.len()).sum();
-                return Ok(Some(json!({
-                    "seq": seq,
-                    "data": data,
-                })));
+            match state.next(cursor) {
+                Next::Chunk(seq, data) => {
+                    return Ok(Some(json!({
+                        "seq": seq,
+                        "data": data,
+                    })));
+                }
+                Next::End => {
+                    return Err(Error::not_found(format!("session `{id}` has ended")));
+                }
+                Next::Lost => {
+                    return Err(Error::exhausted(format!(
+                        "session `{id}` dropped output before sequence {cursor}"
+                    )));
+                }
+                Next::Wait => {
+                    if deadline == 0 {
+                        return Ok(None);
+                    }
+                    let (next, timed_out) = self
+                        .ready
+                        .wait_timeout(state, Duration::from_millis(deadline))
+                        .map_err(|_| Error::internal("terminal output wait was poisoned"))?;
+                    state = next;
+                    if timed_out.timed_out() {
+                        return Ok(None);
+                    }
+                }
             }
-            if state.eof {
-                return Err(Error::not_found(format!("session `{id}` has ended")));
+        }
+    }
+}
+
+/// One live follower of a session's output. It never blocks in `poll_next`: it
+/// either takes a retained chunk or parks its waker until the PTY pushes more.
+struct OutputStream {
+    id: String,
+    output: Arc<Output>,
+    cursor: u64,
+    done: bool,
+}
+
+impl Stream for OutputStream {
+    type Item = Result<Vec<u8>, Error>;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        let mut state = this.output.state.lock().expect("terminal output mutex");
+        match state.next(this.cursor) {
+            Next::Chunk(seq, data) => {
+                this.cursor = seq + 1;
+                Poll::Ready(Some(Ok(data)))
             }
-            if deadline == 0 {
-                return Ok(None);
+            Next::End => {
+                this.done = true;
+                Poll::Ready(None)
             }
-            let (next, timed_out) = self
-                .ready
-                .wait_timeout(state, Duration::from_millis(deadline))
-                .map_err(|_| Error::internal("terminal output wait was poisoned"))?;
-            state = next;
-            if timed_out.timed_out() {
-                return Ok(None);
+            Next::Lost => {
+                this.done = true;
+                Poll::Ready(Some(Err(Error::exhausted(format!(
+                    "session `{}` dropped output before sequence {}",
+                    this.id, this.cursor
+                )))))
+            }
+            Next::Wait => {
+                if !state
+                    .waiters
+                    .iter()
+                    .any(|waker| waker.will_wake(context.waker()))
+                {
+                    state.waiters.push(context.waker().clone());
+                }
+                Poll::Pending
             }
         }
     }
@@ -254,6 +357,26 @@ impl Service {
         Ok(output.read(&id, cursor, wait)?.unwrap_or(Value::Null))
     }
 
+    /// Follows a session from `seq` without blocking the service runtime.
+    fn follow(&self, input: &Value) -> Result<ChunkStream, Error> {
+        let id = text(input, "id")?;
+        let cursor = number(input, "seq").unwrap_or(0);
+        let output = {
+            let inner = self.inner.lock().expect("terminal sessions mutex");
+            let session = inner
+                .sessions
+                .get(&id)
+                .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
+            Arc::clone(&session.output)
+        };
+        Ok(Box::pin(OutputStream {
+            id,
+            output,
+            cursor,
+            done: false,
+        }))
+    }
+
     fn write(&self, input: &Value) -> Result<Value, Error> {
         let id = text(input, "id")?;
         let data = bytes(input.get("data").unwrap_or(&Value::Null))?;
@@ -344,6 +467,20 @@ impl Handler for Service {
             "close" => self.close(&input),
             other => Err(Error::not_found(format!(
                 "`anthracite:terminal/terminal#{other}` is not implemented"
+            ))),
+        }
+    }
+
+    fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
+        if interface != STREAM {
+            return Err(Error::not_found(format!(
+                "`{interface}` is not exported by the terminal service"
+            )));
+        }
+        match function {
+            "follow" => self.follow(&input),
+            other => Err(Error::not_found(format!(
+                "`anthracite:terminal/stream#{other}` is not implemented"
             ))),
         }
     }
@@ -494,17 +631,21 @@ mod tests {
             json!({"id": id, "data": b"echo terminal-native\r".to_vec()}),
         );
         let mut output = Vec::new();
+        let mut cursor = 0;
         for _ in 0..20 {
             let value = call(
                 &service,
                 "read",
-                json!({"id": id, "seq": 0, "wait-ms": 200}),
+                json!({"id": id, "seq": cursor, "wait-ms": 200}),
             );
             if value.is_null() {
                 continue;
             }
             if let Some(data) = value.get("data").and_then(Value::as_array) {
                 output.extend(data.iter().filter_map(Value::as_u64).map(|byte| byte as u8));
+            }
+            if let Some(seq) = value.get("seq").and_then(Value::as_u64) {
+                cursor = seq + 1;
             }
             if String::from_utf8_lossy(&output).contains("terminal-native") {
                 break;
@@ -516,6 +657,97 @@ mod tests {
             .call(TERMINAL, "read", json!({"id": id, "seq": 0, "wait-ms": 0}))
             .expect_err("closed");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+    }
+
+    #[tokio::test]
+    async fn a_stream_follows_a_session_and_ends_with_it() {
+        use futures_util::StreamExt;
+
+        let service = Service::new();
+        let session = call(
+            &service,
+            "open",
+            json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+        );
+        let id = session["id"].as_str().expect("id").to_string();
+        let mut stream = service
+            .stream(STREAM, "follow", json!({"id": id, "seq": 0}))
+            .expect("follow");
+        call(
+            &service,
+            "write",
+            json!({"id": id, "data": b"echo terminal-stream\r".to_vec()}),
+        );
+
+        let mut output = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    output.extend_from_slice(&chunk);
+                    if String::from_utf8_lossy(&output).contains("terminal-stream") {
+                        break;
+                    }
+                }
+                Ok(Some(Err(error))) => panic!("{error}"),
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&output).contains("terminal-stream"),
+            "{}",
+            String::from_utf8_lossy(&output)
+        );
+
+        call(&service, "close", json!({"id": id}));
+        let end = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(chunk) = stream.next().await {
+                chunk.expect("chunk");
+            }
+        })
+        .await;
+        assert!(end.is_ok(), "the stream ends after the PTY closes");
+    }
+
+    #[tokio::test]
+    async fn a_stream_can_replay_from_an_older_cursor() {
+        use futures_util::StreamExt;
+
+        let service = Service::new();
+        let session = call(
+            &service,
+            "open",
+            json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+        );
+        let id = session["id"].as_str().expect("id").to_string();
+        call(
+            &service,
+            "write",
+            json!({"id": id, "data": b"echo replay-me\r".to_vec()}),
+        );
+        std::thread::sleep(Duration::from_millis(300));
+        let mut first = service
+            .stream(STREAM, "follow", json!({"id": id, "seq": 0}))
+            .expect("first");
+        let mut first_output = Vec::new();
+        while let Ok(Some(Ok(chunk))) =
+            tokio::time::timeout(Duration::from_millis(500), first.next()).await
+        {
+            first_output.extend_from_slice(&chunk);
+        }
+        let mut second = service
+            .stream(STREAM, "follow", json!({"id": id, "seq": 0}))
+            .expect("second");
+        let mut second_output = Vec::new();
+        while let Ok(Some(Ok(chunk))) =
+            tokio::time::timeout(Duration::from_millis(500), second.next()).await
+        {
+            second_output.extend_from_slice(&chunk);
+        }
+        assert!(!first_output.is_empty());
+        assert_eq!(first_output, second_output);
+        call(&service, "close", json!({"id": id}));
     }
 
     #[test]

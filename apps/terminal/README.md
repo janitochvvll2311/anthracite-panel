@@ -4,14 +4,16 @@ Terminal is a native PTY service plus the sandboxed panel view. The demo
 instance still uses the shared scripted fixture from `demo/emulator`; this
 directory builds the real app.
 
-- `backend/` starts the requested shell in a pseudo-terminal, streams its output
-  in chunks, resizes the PTY, forwards allowlisted signals to the process group
-  and closes the session by killing that group.
+- `backend/` starts the requested shell in a pseudo-terminal, follows its output
+  as a live stream (`subscription.follow`), resizes the PTY, forwards allowlisted
+  signals to the process group and closes the session by killing that group. The
+  old `read` call stays for the CLI and older clients.
 - `frontend/` is the panel module. It renders the PTY stream with xterm.js, so
-  ANSI colors, cursor movement, alternate screens and clear sequences work. Direct
-  typing goes through an invisible `contenteditable` capture (which avoids
-  form autofill) and the mobile key bar adds sticky Ctrl/Alt, special keys,
-  symbols, Enter, font controls and touch gestures.
+  ANSI colors, cursor movement, alternate screens and clear sequences work. It
+  consumes `/stream` through `fetch(...).body.getReader()`; direct typing goes
+  through an invisible `contenteditable` capture (which avoids form autofill) and
+  the mobile key bar adds sticky Ctrl/Alt, special keys, symbols, Enter, font
+  controls and touch gestures.
 
 ## Build
 

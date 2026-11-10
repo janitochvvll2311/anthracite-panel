@@ -17,6 +17,9 @@ argv = {{service_argv}}
 [[export]]
 interface = "anthracite:terminal/terminal@1.0.0"
 
+[[export]]
+interface = "anthracite:terminal/subscription@1.0.0"
+
 [[route]]
 method = "POST"
 path = "/open"
@@ -31,6 +34,12 @@ call = "anthracite:terminal/terminal@1.0.0#list"
 method = "GET"
 path = "/read"
 call = "anthracite:terminal/terminal@1.0.0#read"
+
+[[route]]
+method = "GET"
+path = "/stream"
+call = "anthracite:terminal/subscription@1.0.0#follow"
+stream = true
 
 [[route]]
 method = "POST"
