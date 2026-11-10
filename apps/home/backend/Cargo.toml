@@ -1,0 +1,26 @@
+[package]
+name = "home-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Host information provider for the Home panel app"
+
+[lib]
+name = "home_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "home-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "home-demo"
+path = "src/bin/demo.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
+anth-service = { path = "../../../sdk/rust/service" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+
+[workspace]

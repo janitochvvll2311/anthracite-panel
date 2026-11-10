@@ -1,0 +1,12 @@
+{
+  "name": "anth-home-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/main.ts --outfile dist/home.js --target browser --format esm",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

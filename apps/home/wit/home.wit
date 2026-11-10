@@ -1,0 +1,61 @@
+package anthracite:home@1.0.0;
+
+interface host {
+    use anth:error/kinds@1.0.0.{error};
+
+    record cpu {
+        model: string,
+        cores: u32,
+        usage-percent: f32,
+        load-1: f32,
+        load-5: f32,
+        load-15: f32,
+    }
+
+    record memory {
+        total: u64,
+        used: u64,
+        available: u64,
+        swap-total: u64,
+        swap-used: u64,
+    }
+
+    record disk {
+        name: string,
+        mount: string,
+        file-system: string,
+        total: u64,
+        used: u64,
+        available: u64,
+    }
+
+    record network-interface {
+        name: string,
+        mac: option<string>,
+        addresses: list<string>,
+        state: string,
+        received: u64,
+        transmitted: u64,
+        packets-received: u64,
+        packets-transmitted: u64,
+        errors: u64,
+    }
+
+    record host-info {
+        hostname: string,
+        os: string,
+        kernel: string,
+        arch: string,
+        uptime-seconds: u64,
+        cpu: cpu,
+        memory: memory,
+        disks: list<disk>,
+        networks: list<network-interface>,
+    }
+
+    info: func() -> result<host-info, error>;
+}
+
+world app {
+    export host;
+}

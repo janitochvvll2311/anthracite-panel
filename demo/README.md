@@ -3,7 +3,10 @@
 The v0.6.0 demo runs the deterministic host emulator as six service apps:
 `org.anthracite.fs`, `terminal`, `proc`, `net`, `storage` and `accounts`. Each
 bundle carries the future real app's WIT package and id, and all six share one
-native binary.
+native binary. A seventh app, `org.anthracite.home`, renders the host overview
+and replaces Hello in the composed profile; it ships its own demo backend so the
+demo never reads the real machine's facts. `apps/hello` stays in the tree as the
+minimal developer example and remains installable.
 
 The engine is a debug build here, so `[services] allow-third-party` defaults on
 and the unsigned bundles are accepted. A release build keeps both closed.
@@ -22,11 +25,16 @@ apps/fs/build-web.sh
 cargo build --manifest-path demo/emulator/Cargo.toml --release
 cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulator -- \
     --binary target/release/host-emulator --out demo/dist
+
+# Home ships a native backend; --demo packages fixed host facts instead of
+# reading /proc, df and ip from the machine running the demo.
+apps/home/build.sh --demo --out demo/dist/home.anth
 ```
 
 `demo/dist/{fs,terminal,proc,net,storage,accounts}.anth` are the installable zips.
-The app sources (manifest, WIT and web UI) live in `apps/<name>/`; the demo
-builder packages them with the shared `demo/emulator` service binary.
+Home adds `demo/dist/home.anth`. The app sources (manifest, WIT and web UI) live
+in `apps/<name>/`; the demo builder packages the six emulator apps with the
+shared `demo/emulator` service binary.
 
 ## Run
 
@@ -46,9 +54,12 @@ for app in fs terminal proc net storage accounts; do
     $ANTH app install demo/dist/$app.anth
     $ANTH app approve org.anthracite.$app --accept-write --accept-admin
 done
+$ANTH app install demo/dist/home.anth
+$ANTH app approve org.anthracite.home --accept-write --accept-admin --accept-host
 $ANTH compose --add org.anthracite.fs --add org.anthracite.terminal \
     --add org.anthracite.proc --add org.anthracite.net \
-    --add org.anthracite.storage --add org.anthracite.accounts --now
+    --add org.anthracite.storage --add org.anthracite.accounts \
+    --add org.anthracite.home --remove org.anthracite.hello --now
 ```
 
 A v0.5 engine recomposes on the next restart; restart the panel after `compose`.
@@ -61,6 +72,7 @@ curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthraci
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.net/interfaces
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.storage/mounts
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.accounts/users
+curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.home/info
 ```
 
 CLI verbs:
@@ -71,13 +83,13 @@ CLI verbs:
 - `net interfaces`, `net routes`, `net interface-up`, `net route-add`, `net route-remove`
 - `storage devices`, `storage mounts`, `storage mount`, `storage unmount`
 - `accounts users`, `accounts groups`, `accounts user-create`, `accounts user-delete`, `accounts user-lock`
+- `home info`
 
 ## Views
 
 The app source lives under `apps/<name>/` (`manifest.toml.in`, `wit/` and
 `web/`); the demo builder packages each one with the shared emulator service.
 Every bundle carries a `panel.view` module:
-
 - `web/fs.js` — Files plus a hidden `panel.view` called Editor, both from the
   same module. Files has an editable address bar, tree navigation, a formatted
   read-only preview (highlight.js for code, marked for Markdown, images via a
@@ -106,6 +118,10 @@ Every bundle carries a `panel.view` module:
 - `web/net.js` — interfaces with up/down, addresses/counters and route add/remove.
 - `web/storage.js` — mount usage bars, unmount and mount.
 - `web/accounts.js` — users and groups with create, delete and lock/unlock.
+- `apps/home/frontend/dist/home.js` — Host Info cards (system, CPU, memory,
+  disks and network). The demo bundle uses the `home-demo` Rust backend, so the
+  values are simulated and move over time; `apps/home/build.sh` without `--demo`
+  packages the real `/proc` reader.
 
 The panel mounts them like any other slot; the modules only see their own app's
 routes.

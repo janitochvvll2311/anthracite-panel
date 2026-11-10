@@ -1,0 +1,36 @@
+manifest_version = 3
+
+[app]
+id = "org.anthracite.home"
+namespace = "anthracite:home"
+name = "Home"
+version = "0.1.0"
+summary = "Host overview: system, CPU, memory, disks and network."
+license = "Apache-2.0"
+
+[service]
+path = "bin/home-service"
+sha256 = "{{sha256}}"
+class = "host"
+argv = ["--socket", "{socket}"]
+
+[[export]]
+interface = "anthracite:home/host@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/info"
+call = "anthracite:home/host@1.0.0#info"
+
+[[cli]]
+call = "anthracite:home/host@1.0.0#info"
+verb = "info"
+
+[[slot]]
+id = "panel.view"
+label = "Home"
+icon = "home"
+order = 1
+tag = "home"
+module = "web/home.js"
+sha256 = "{{module_sha256}}"
