@@ -43,7 +43,7 @@ dependency that should not exist becomes unrepresentable instead of discouraged.
 - `panel/backend/` — the official panel binary; links the SDK, mounts the engine
   router, wires the CLI and embeds `panel/frontend/dist`.
 - `apps/` — app bundles. Its own workspace; never built for the host.
-- Bun: `sdk/ts/`, `panel/frontend/`, `apps/*/web/`.
+- Bun: `sdk/ts/`, `panel/frontend/`, `apps/*/frontend/`.
 
 The forbidden edges are listed in `docs/design/10-workspace.md` and checked in CI with
 `cargo metadata`. `panel/backend` must not depend on `engine/*` directly, and apps

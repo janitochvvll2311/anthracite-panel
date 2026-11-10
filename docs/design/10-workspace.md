@@ -36,9 +36,11 @@ panel/                     the official implementation
 apps/                      backend-frontend app catalogue
   hello/                   the smallest component: one export, one import, one route
   fs/ terminal/ proc/ net/ storage/ accounts/ manager/     (v0.6.0)
+                           each: backend/ (Rust service) or the shared demo fixture,
+                           frontend/ (Bun workspace), wit/ and manifest
 
 demo/                      (v0.6.0) a demo instance: config, composition and demo apps
-  emulator/                shared native service fixture; app manifests/WIT/web live in apps/
+  emulator/                shared native service fixture; manifests/WIT/frontends live in apps/
 
 tests/
   e2e/                     Playwright against a running panel
@@ -64,7 +66,7 @@ truth.
 engine/*        <-  sdk/rust/panel  <-  panel/backend
 engine/*        <-  sdk/rust/guest  <-  apps/*
 engine/*        <-  sdk/rust/cli
-sdk/ts/panel    <-  panel/frontend,  apps/*/web
+sdk/ts/panel    <-  panel/frontend,  apps/*/frontend
 
 forbidden:  panel/backend -> engine/*        (only through the SDK)
 forbidden:  engine/*      -> sdk, panel, apps

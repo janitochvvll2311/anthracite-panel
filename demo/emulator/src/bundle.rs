@@ -1,9 +1,9 @@
 //! Builds the demo's app bundles: one zip per app, one shared emulator binary.
 //!
-//! App manifests, WIT and web modules come from `apps/<name>`; the binary is
-//! the deterministic emulator service. The binary is hashed into each manifest
-//! and the bundle carries exactly one WIT package, which is what the engine's
-//! validator requires.
+//! App manifests, WIT and frontend modules come from `apps/<name>`; the binary
+//! is the deterministic emulator service. The binary is hashed into each
+//! manifest and the bundle carries exactly one WIT package, which is what the
+//! engine's validator requires.
 
 use std::error::Error;
 use std::fs;
@@ -42,19 +42,18 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
     for (name, app) in BUNDLES {
         let dir = root.join(name);
         let template = fs::read_to_string(dir.join("manifest.toml.in"))?;
-        let mut web: Vec<PathBuf> = fs::read_dir(dir.join("web"))?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<Result<_, _>>()?;
-        web.sort();
-        if web.len() != 1 {
-            return Err(format!(
-                "`{}` needs exactly one module under `web/`, it has {}",
-                dir.display(),
-                web.len()
+        let module_path = dir.join("frontend").join("dist").join(format!("{name}.js"));
+        let module = fs::read(&module_path).map_err(|error| {
+            format!(
+                "{} is missing: {error}; run apps/build-frontends.sh",
+                module_path.display()
             )
-            .into());
-        }
-        let module = fs::read(&web[0])?;
+        })?;
+        let module_name = module_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{} is not UTF-8", module_path.display()))?
+            .to_string();
         let module_hash: String = Sha256::digest(&module)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -78,10 +77,6 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             writer.start_file(format!("wit/{file}"), options)?;
             writer.write_all(&fs::read(&path)?)?;
         }
-        let module_name = web[0]
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| format!("{} is not UTF-8", web[0].display()))?;
         writer.start_file(format!("web/{module_name}"), options)?;
         writer.write_all(&module)?;
         writer.start_file("bin/host-emulator", options)?;
