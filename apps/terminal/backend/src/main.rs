@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const MAX_DIMENSION: u32 = 500;
 const MAX_WAIT_MS: u64 = 30_000;
+const MAX_BUFFER: usize = 4 * 1024 * 1024;
 
 struct Service {
     inner: Mutex<Inner>,
@@ -33,7 +34,7 @@ struct Session {
     shell: String,
     owner: String,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     output: Arc<Output>,
     cols: u16,
@@ -49,6 +50,7 @@ struct OutputState {
     chunks: Vec<(u64, Vec<u8>)>,
     next_seq: u64,
     eof: bool,
+    bytes: usize,
 }
 
 impl Output {
@@ -58,6 +60,7 @@ impl Output {
                 chunks: Vec::new(),
                 next_seq: 0,
                 eof: false,
+                bytes: 0,
             }),
             ready: Condvar::new(),
         }
@@ -67,7 +70,12 @@ impl Output {
         let mut state = self.state.lock().expect("terminal output mutex");
         let seq = state.next_seq;
         state.next_seq += 1;
+        state.bytes += data.len();
         state.chunks.push((seq, data));
+        while state.bytes > MAX_BUFFER && !state.chunks.is_empty() {
+            let (_, dropped) = state.chunks.remove(0);
+            state.bytes = state.bytes.saturating_sub(dropped.len());
+        }
         self.ready.notify_all();
     }
 
@@ -89,6 +97,7 @@ impl Output {
             if let Some(index) = state.chunks.iter().position(|(seq, _)| *seq >= cursor) {
                 let (seq, data) = state.chunks.remove(index);
                 state.chunks.retain(|(candidate, _)| *candidate > seq);
+                state.bytes = state.chunks.iter().map(|(_, data)| data.len()).sum();
                 return Ok(Some(json!({
                     "seq": seq,
                     "data": data,
@@ -196,7 +205,7 @@ impl Service {
             shell: shell.clone(),
             owner: owner.clone(),
             master,
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             child,
             output: Arc::clone(&output),
             cols,
@@ -248,15 +257,20 @@ impl Service {
     fn write(&self, input: &Value) -> Result<Value, Error> {
         let id = text(input, "id")?;
         let data = bytes(input.get("data").unwrap_or(&Value::Null))?;
-        let mut inner = self.inner.lock().expect("terminal sessions mutex");
-        let session = inner
-            .sessions
-            .get_mut(&id)
-            .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
-        session
-            .writer
+        let writer = {
+            let inner = self.inner.lock().expect("terminal sessions mutex");
+            let session = inner
+                .sessions
+                .get(&id)
+                .ok_or_else(|| Error::not_found(format!("session `{id}` does not exist")))?;
+            Arc::clone(&session.writer)
+        };
+        let mut writer = writer
+            .lock()
+            .map_err(|_| Error::internal("the terminal writer lock was poisoned"))?;
+        writer
             .write_all(&data)
-            .and_then(|_| session.writer.flush())
+            .and_then(|_| writer.flush())
             .map_err(|error| Error::unavailable(format!("writing to `{id}`: {error}")))?;
         Ok(Value::Null)
     }

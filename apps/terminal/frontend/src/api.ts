@@ -6,10 +6,17 @@ export async function call(
   init: RequestInit = {},
 ): Promise<any> {
   const { headers, ...rest } = init;
+  const timeout =
+    !rest.signal &&
+    typeof AbortSignal !== "undefined" &&
+    "timeout" in AbortSignal
+      ? AbortSignal.timeout(8_000)
+      : undefined;
   const response = await context.fetch(
     `/api/apps/${encodeURIComponent(context.app.id)}${route}`,
     {
       ...rest,
+      ...(timeout ? { signal: timeout } : {}),
       headers: { accept: "application/json", ...(headers ?? {}) },
     },
   );

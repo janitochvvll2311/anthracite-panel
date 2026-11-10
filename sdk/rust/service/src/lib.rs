@@ -72,7 +72,21 @@ pub fn socket_argument() -> Result<PathBuf, Error> {
 async fn answer(mut stream: UnixStream, handler: Arc<dyn Handler>) -> Result<(), Error> {
     match request(&mut stream).await {
         Ok((method, path, body)) => {
-            let (status, payload) = route(&method, &path, &body, handler.as_ref());
+            // Native handlers may block (a PTY read waits for output); keep them
+            // on the blocking pool so one call cannot stall the runtime.
+            let handler = Arc::clone(&handler);
+            let result =
+                tokio::task::spawn_blocking(move || route(&method, &path, &body, handler.as_ref()))
+                    .await;
+            let (status, payload) = match result {
+                Ok(pair) => pair,
+                Err(error) => (
+                    500,
+                    envelope(&Error::internal(format!(
+                        "the service handler did not complete: {error}"
+                    ))),
+                ),
+            };
             respond(&mut stream, status, &payload).await
         }
         Err(error) => {

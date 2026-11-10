@@ -7,10 +7,11 @@ directory builds the real app.
 - `backend/` starts the requested shell in a pseudo-terminal, streams its output
   in chunks, resizes the PTY, forwards allowlisted signals to the process group
   and closes the session by killing that group.
-- `frontend/` is the panel module. It renders output in a plain surface (ANSI
-  control sequences are stripped, since this is not an xterm emulator), keeps a
-  local line draft and implements the mobile key bar, sticky Ctrl/Alt and touch
-  gestures.
+- `frontend/` is the panel module. It renders the PTY stream with xterm.js, so
+  ANSI colors, cursor movement, alternate screens and clear sequences work. Direct
+  typing goes through an invisible `contenteditable` capture (which avoids
+  form autofill) and the mobile key bar adds sticky Ctrl/Alt, special keys,
+  symbols, Enter, font controls and touch gestures.
 
 ## Build
 
