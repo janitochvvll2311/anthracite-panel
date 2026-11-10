@@ -1,13 +1,20 @@
 import { call } from "./api";
 import { cell, memory, reason } from "./format";
 import { styles } from "./styles";
+import {
+  filterProcesses,
+  orderProcesses,
+  type Filters,
+  type Process,
+  type TreeRow,
+} from "./tree";
 import type { FrameContext } from "./types";
 
-// The demo Processes view: a deterministic /proc snapshot with a tree.
-//
-// Every call goes through the frame's scoped fetch, so the module only ever
-// reaches its own app prefix.
+type SortKey = "pid" | "ppid" | "name" | "user" | "state" | "cpu" | "memory";
 
+// The Processes view reads the real /proc snapshot. Desktop has a flat list and
+// a tree with continuous guides; the layout is chosen by the component width.
+// Phones keep the list only, with the filters in their own bar.
 export function mount(root: HTMLElement, context: FrameContext) {
   const style = document.createElement("style");
   style.textContent = styles;
@@ -18,8 +25,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
   box.innerHTML = `
     <div class="proc-bar">
       <span class="proc-count">…</span>
-      <label class="proc-check"><input type="checkbox" data-tree /> Tree</label>
+      <div class="proc-tabs" role="group" aria-label="Layout">
+        <button type="button" data-mode="flat" aria-pressed="true">List</button>
+        <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
+      </div>
       <label class="proc-check"><input type="checkbox" data-live /> Live</label>
+      <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
         <option value="TERM">TERM</option>
@@ -31,134 +42,443 @@ export function mount(root: HTMLElement, context: FrameContext) {
       </select>
       <button type="button" data-refresh>Refresh</button>
     </div>
+    <div class="proc-mobile-tools">
+      <input type="search" data-mobile-filter placeholder="Filter processes" aria-label="Filter processes" />
+      <select data-mobile-sort aria-label="Sort by">
+        <option value="pid">PID</option>
+        <option value="ppid">PPID</option>
+        <option value="name">Name</option>
+        <option value="user">User</option>
+        <option value="state">State</option>
+        <option value="cpu">CPU</option>
+        <option value="memory">Memory</option>
+      </select>
+      <button type="button" class="proc-direction" data-mobile-direction aria-label="Sort direction">Asc</button>
+    </div>
     <form class="proc-spawn">
       <input name="command" aria-label="Detached command" placeholder="sleep 30" autocomplete="off" />
       <button type="submit">Spawn</button>
     </form>
-    <div class="proc-table" role="table" aria-label="Processes"></div>
+    <div class="proc-table" role="table" aria-label="Processes">
+      <div class="proc-head" data-head></div>
+      <div class="proc-body" data-body role="rowgroup"></div>
+    </div>
     <div class="proc-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
 
-  const table = box.querySelector(".proc-table") as any;
-  const count = box.querySelector(".proc-count") as any;
-  const status = box.querySelector(".proc-status") as any;
-  const signal = box.querySelector(".proc-pick") as any;
-  const more = box.querySelector("[data-more]") as any;
-  const treeToggle = box.querySelector("[data-tree]") as any;
-  const liveToggle = box.querySelector("[data-live]") as any;
-  const spawnForm = box.querySelector(".proc-spawn") as any;
-  const spawnInput = spawnForm.querySelector("input") as any;
-  let processes = [];
-  let nextCursor = null;
+  const headRoot = box.querySelector("[data-head]") as HTMLElement;
+  const bodyRoot = box.querySelector("[data-body]") as HTMLElement;
+  const count = box.querySelector(".proc-count") as HTMLElement;
+  const status = box.querySelector(".proc-status") as HTMLElement;
+  const signal = box.querySelector(".proc-pick") as HTMLSelectElement | null;
+  const mobileFilter = box.querySelector("[data-mobile-filter]") as HTMLInputElement;
+  const mobileSort = box.querySelector("[data-mobile-sort]") as HTMLSelectElement;
+  const mobileDirection = box.querySelector("[data-mobile-direction]") as HTMLButtonElement;
+  const more = box.querySelector("[data-more]") as HTMLButtonElement;
+  const fold = box.querySelector("[data-fold]") as HTMLButtonElement;
+  const modeButtons = [...box.querySelectorAll("[data-mode]")] as HTMLButtonElement[];
+  const liveToggle = box.querySelector("[data-live]") as HTMLInputElement;
+  const spawnForm = box.querySelector(".proc-spawn") as HTMLFormElement;
+  const spawnInput = spawnForm.querySelector("input") as HTMLInputElement;
+
+  const MAX_FLAT = 5000;
+  const MAX_TREE = 1000;
+  const COMPACT_WIDTH = 820;
+  let processes: Process[] = [];
+  let nextCursor: string | null = null;
   let tree = false;
-  let live = null;
+  let compact = false;
+  let live: number | null = null;
+  let collapsed = new Set<number>();
+  let allCollapsed = false;
+  let sortKey: SortKey = "pid";
+  let sortAsc = true;
+  const filters: Filters = {};
+  let loading = false;
+  let pending = false;
   let disposed = false;
 
-  const setStatus = (message, bad = false) => {
+  const setStatus = (message: string, bad = false): void => {
     status.textContent = message ?? "";
     status.className = bad ? "proc-status bad" : "proc-status";
   };
 
-  function ordered() {
-    if (!tree) return processes.map((process) => [process, 0]);
-    const byPid = new Map(processes.map((process) => [process.pid, process]));
-    const children = new Map();
-    const roots = [];
-    for (const process of processes) {
-      const parent = byPid.get(process.ppid);
-      if (parent && process.ppid !== process.pid) {
-        children.set(process.ppid, [...(children.get(process.ppid) ?? []), process]);
-      } else {
-        roots.push(process);
-      }
+  const updateDirection = (): void => {
+    mobileDirection.textContent = sortAsc ? "Asc" : "Desc";
+    mobileDirection.setAttribute(
+      "aria-label",
+      sortAsc ? "Sort ascending" : "Sort descending",
+    );
+    mobileSort.value = sortKey;
+  };
+
+  const compareBy = (left: Process, right: Process): number => {
+    let value = 0;
+    switch (sortKey) {
+      case "cpu":
+        value = left["cpu-percent"] - right["cpu-percent"];
+        break;
+      case "memory":
+        value = left["memory-bytes"] - right["memory-bytes"];
+        break;
+      case "name":
+        value = left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+        break;
+      case "user":
+        value = left.user < right.user ? -1 : left.user > right.user ? 1 : 0;
+        break;
+      case "state":
+        value = left.state < right.state ? -1 : left.state > right.state ? 1 : 0;
+        break;
+      case "ppid":
+        value = left.ppid - right.ppid;
+        break;
+      default:
+        value = left.pid - right.pid;
     }
-    const out = [];
-    const walk = (process, depth) => {
-      out.push([process, depth]);
-      const nested = (children.get(process.pid) ?? []).sort((a, b) => a.pid - b.pid);
-      for (const child of nested) walk(child, depth + 1);
-    };
-    for (const process of roots.sort((a, b) => a.pid - b.pid)) walk(process, 0);
-    return out;
+    if (value === 0) value = left.pid - right.pid;
+    return sortAsc ? value : -value;
+  };
+
+  const sortable = (key: SortKey | ""): key is SortKey => {
+    if (!key) return false;
+    if (!tree) return true;
+    return key === "user" || key === "state" || key === "cpu" || key === "memory";
+  };
+
+  const syncModeButtons = (): void => {
+    for (const button of modeButtons) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.mode === (tree ? "tree" : "flat")),
+      );
+    }
+  };
+
+  const filterCell = (key: keyof Filters, placeholder: string): HTMLSpanElement => {
+    const wrapper = cell("proc-filter-cell", "");
+    const input = document.createElement("input");
+    input.type = "search";
+    input.placeholder = placeholder;
+    input.value = filters[key] ?? "";
+    input.setAttribute("aria-label", `Filter by ${placeholder.toLowerCase()}`);
+    input.addEventListener("input", () => {
+      filters[key] = input.value;
+      renderRows();
+    });
+    wrapper.append(input);
+    return wrapper;
+  };
+
+  function renderHead(): void {
+    headRoot.replaceChildren();
+    const head = document.createElement("div");
+    head.className = `proc-row head ${tree ? "tree" : "flat"}`;
+    const labels: Array<[string, SortKey | ""]> = tree
+      ? [
+          ["PROCESS", ""],
+          ["USER", "user"],
+          ["STATE", "state"],
+          ["CPU", "cpu"],
+          ["MEMORY", "memory"],
+          ["", ""],
+        ]
+      : [
+          ["PID", "pid"],
+          ["PPID", "ppid"],
+          ["NAME", "name"],
+          ["USER", "user"],
+          ["STATE", "state"],
+          ["CPU", "cpu"],
+          ["MEMORY", "memory"],
+          ["", ""],
+        ];
+    for (const [label, key] of labels) {
+      const node = cell("", label);
+      if (sortable(key)) {
+        node.classList.add("sortable");
+        if (sortKey === key) {
+          node.classList.add("sorted");
+          node.textContent = `${label} ${sortAsc ? "▲" : "▼"}`;
+        }
+        node.title = `Sort by ${label.toLowerCase()}`;
+        node.addEventListener("click", () => setSort(key));
+      }
+      head.append(node);
+    }
+    headRoot.append(head);
+
+    const row = document.createElement("div");
+    row.className = `proc-row filters ${tree ? "tree" : "flat"}`;
+    if (tree) {
+      row.append(
+        filterCell("query", "PID or name"),
+        filterCell("user", "User"),
+        filterCell("state", "State"),
+        cell("proc-filter-cell", ""),
+        cell("proc-filter-cell", ""),
+        cell("proc-filter-cell", ""),
+      );
+    } else {
+      row.append(
+        filterCell("pid", "PID"),
+        filterCell("ppid", "PPID"),
+        filterCell("name", "Name"),
+        filterCell("user", "User"),
+        filterCell("state", "State"),
+        cell("proc-filter-cell", ""),
+        cell("proc-filter-cell", ""),
+        cell("proc-filter-cell", ""),
+      );
+    }
+    headRoot.append(row);
   }
 
-  function renderRows() {
-    table.replaceChildren();
-    const head = document.createElement("div");
-    head.className = "proc-row head";
-    for (const label of ["PID", "PPID", "NAME", "USER", "STATE", "CPU", "MEMORY", ""]) {
-      head.append(cell("", label));
+  function setSort(key: SortKey): void {
+    if (key === sortKey) sortAsc = !sortAsc;
+    else {
+      sortKey = key;
+      sortAsc =
+        key === "pid" ||
+        key === "ppid" ||
+        key === "name" ||
+        key === "user" ||
+        key === "state";
     }
-    table.append(head);
-    for (const [process, depth] of ordered()) {
+    updateDirection();
+    renderHead();
+    scheduleLive();
+    if (!tree && !compact && key !== "pid") {
+      // Metric and string sorts need the whole table, not just the current page.
+      void load(null, false, true);
+    } else {
+      renderRows();
+    }
+  }
+
+  const metaCell = (className: string, label: string, text: string): HTMLSpanElement => {
+    const node = cell(`proc-cell ${className}`, text);
+    node.dataset.label = label;
+    return node;
+  };
+
+  const cpuCell = (process: Process): HTMLSpanElement => {
+    const cpu = document.createElement("span");
+    cpu.className = "proc-cell cpu";
+    cpu.dataset.label = "CPU";
+    const track = document.createElement("span");
+    track.className = "proc-bar-track";
+    const fill = document.createElement("span");
+    fill.className = "proc-bar-fill";
+    fill.style.width = `${Math.min(100, Math.max(0, process["cpu-percent"]))}%`;
+    track.append(fill);
+    cpu.append(track, cell("percent", `${process["cpu-percent"].toFixed(1)}%`));
+    cpu.title = `${process["cpu-percent"].toFixed(1)}% CPU`;
+    return cpu;
+  };
+
+  const identityCell = (process: Process, row: TreeRow | null): HTMLSpanElement => {
+    const identity = document.createElement("span");
+    identity.className = "proc-cell identity";
+    if (row) {
+      const gutter = document.createElement("span");
+      gutter.className = "proc-gutter";
+      for (const line of row.guides) {
+        const guide = document.createElement("span");
+        guide.className = line ? "proc-guide" : "proc-guide blank";
+        guide.setAttribute("aria-hidden", "true");
+        gutter.append(guide);
+      }
+      if (row.depth > 0) {
+        const connector = document.createElement("span");
+        connector.className = row.isLast
+          ? "proc-connector last"
+          : "proc-connector";
+        connector.setAttribute("aria-hidden", "true");
+        gutter.append(connector);
+      }
+      identity.append(gutter);
+
+      const twisty = document.createElement("button");
+      twisty.type = "button";
+      twisty.className = row.hasChildren ? "proc-twisty" : "proc-twisty empty";
+      twisty.disabled = !row.hasChildren;
+      twisty.tabIndex = row.hasChildren ? 0 : -1;
+      twisty.textContent = collapsed.has(process.pid) ? "▸" : "▾";
+      twisty.setAttribute(
+        "aria-label",
+        collapsed.has(process.pid) ? "Expand children" : "Collapse children",
+      );
+      twisty.setAttribute("aria-expanded", String(!collapsed.has(process.pid)));
+      if (row.hasChildren) {
+        twisty.addEventListener("click", () => {
+          if (collapsed.has(process.pid)) collapsed.delete(process.pid);
+          else collapsed.add(process.pid);
+          renderRows();
+        });
+      }
+      identity.append(twisty);
+    }
+
+    const pid = cell("proc-pid", String(process.pid));
+    pid.dataset.label = "PID";
+    identity.append(pid);
+    if (!row) {
+      const ppid = cell("proc-ppid", String(process.ppid));
+      ppid.dataset.label = "PPID";
+      identity.append(ppid);
+    }
+    const name = cell("proc-name", process.name);
+    name.title = process.name;
+    identity.append(name);
+    return identity;
+  };
+
+  function renderRows(): void {
+    const visible = filterProcesses(processes, filters, tree);
+    const rows = orderProcesses(visible, tree, collapsed, compareBy);
+    bodyRoot.replaceChildren();
+
+    for (const rowData of rows) {
+      const process = rowData.process;
       const row = document.createElement("div");
-      row.className = "proc-row";
-      row.append(
-        cell("proc-mono", String(process.pid)),
-        cell("proc-mono", String(process.ppid)),
-      );
-      const name = cell(
-        "proc-name",
-        `${"> ".repeat(depth)}${process.name}`,
-      );
-      name.title = process.name;
-      row.append(
-        name,
-        cell("proc-user", process.user),
-        cell(`proc-state ${process.state}`, process.state),
-      );
+      row.className = `proc-row ${tree ? "tree" : "flat"}`;
+      row.append(identityCell(process, tree ? rowData : null));
 
-      const cpu = document.createElement("span");
-      cpu.className = "proc-cpu";
-      const track = document.createElement("span");
-      track.className = "proc-bar-track";
-      const fill = document.createElement("span");
-      fill.className = "proc-bar-fill";
-      fill.style.width = `${Math.min(100, Math.max(0, process["cpu-percent"]))}%`;
-      track.append(fill);
-      cpu.append(track, cell("percent", `${process["cpu-percent"].toFixed(1)}%`));
-      cpu.title = `${process["cpu-percent"].toFixed(1)}% CPU`;
-      row.append(cpu);
+      const meta = document.createElement("span");
+      meta.className = "proc-meta";
+      const state = cell(`proc-cell state ${process.state}`, process.state);
+      state.dataset.label = "State";
+      meta.append(
+        metaCell("user", "User", process.user),
+        state,
+        cpuCell(process),
+        metaCell("memory", "Memory", memory(process["memory-bytes"])),
+      );
+      row.append(meta);
 
-      row.append(cell("proc-mono", memory(process["memory-bytes"])));
-
+      const action = document.createElement("span");
+      action.className = "proc-cell action";
       const send = document.createElement("button");
       send.type = "button";
       send.className = "proc-signal";
       send.textContent = "Send";
-      send.title = `Send ${signal.value} to ${process.name} (${process.pid})`;
+      send.setAttribute(
+        "aria-label",
+        `Send signal to ${process.name} (${process.pid})`,
+      );
       send.addEventListener("click", () => {
         void signalProcess(process.pid, process["start-ticks"]);
       });
-      const action = document.createElement("span");
       action.append(send);
       row.append(action);
-      table.append(row);
+      bodyRoot.append(row);
     }
-    count.textContent = `${processes.length} process${processes.length === 1 ? "" : "es"}${nextCursor ? " · more available" : ""}`;
+
+    if (rows.length === 0) {
+      bodyRoot.append(
+        cell(
+          "proc-empty",
+          Object.values(filters).some((value) => value && value.trim())
+            ? "No process matches the filters."
+            : "No processes.",
+        ),
+      );
+    }
+
+    const active = Object.values(filters).some((value) => value && value.trim());
+    const countText = active
+      ? `${rows.length} / ${processes.length}`
+      : `${processes.length}`;
+    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${
+      tree ? " · tree" : nextCursor ? " · more available" : ""
+    }${tree && processes.length >= MAX_TREE ? " · first 1000" : ""}`;
   }
 
-  async function load(cursor = null, append = false) {
+  async function loadTree(): Promise<void> {
+    const all: Process[] = [];
+    let cursor: string | null = null;
+    for (let pages = 0; pages < 20; pages += 1) {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const page = await call(context, `/processes?limit=500${suffix}`);
+      if (disposed) return;
+      all.push(...page.processes);
+      if (page.done || !page.cursor || all.length >= MAX_TREE) break;
+      cursor = page.cursor;
+    }
+    processes = all.slice(0, MAX_TREE);
+    nextCursor = null;
+    more.hidden = true;
+    fold.hidden = false;
+    renderRows();
+    setStatus(`Tree snapshot · ${processes.length} processes`);
+  }
+
+  async function load(
+    cursor: string | null = null,
+    append = false,
+    fetchAll = false,
+  ): Promise<void> {
+    if (loading) {
+      pending = true;
+      return;
+    }
+    loading = true;
+    if (!tree && !compact && sortKey !== "pid" && cursor === null && !append) {
+      // A desktop metric sort needs the whole table; mobile keeps the loaded
+      // page so a phone does not render thousands of cards on every refresh.
+      fetchAll = true;
+    }
     setStatus(append ? "Loading more processes…" : "Reading the process table…");
     try {
-      const limit = tree ? 500 : 200;
+      if (tree) {
+        await loadTree();
+        return;
+      }
+      if (fetchAll) {
+        const all: Process[] = [];
+        let next: string | null = null;
+        for (let pages = 0; pages < 20; pages += 1) {
+          const suffix = next ? `&cursor=${encodeURIComponent(next)}` : "";
+          const page = await call(context, `/processes?limit=500${suffix}`);
+          if (disposed) return;
+          all.push(...page.processes);
+          if (page.done || !page.cursor || all.length >= MAX_FLAT) break;
+          next = page.cursor;
+        }
+        processes = all.slice(0, MAX_FLAT);
+        nextCursor = null;
+        more.hidden = true;
+        fold.hidden = true;
+        renderRows();
+        setStatus(`Sorted snapshot · ${processes.length} processes`);
+        return;
+      }
       const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-      const page = await call(context, `/processes?limit=${limit}${suffix}`);
+      const page = await call(context, `/processes?limit=200${suffix}`);
       if (disposed) return;
       if (!append) processes = [];
       processes.push(...page.processes);
-      nextCursor = tree ? null : page.cursor;
-      more.hidden = tree || Boolean(page.done) || !page.cursor;
+      nextCursor = page.cursor ?? null;
+      more.hidden = Boolean(page.done) || !page.cursor;
+      fold.hidden = true;
       renderRows();
       setStatus(`Snapshot updated · ${processes.length} processes`);
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
+    } finally {
+      loading = false;
+      if (pending) {
+        pending = false;
+        void load();
+      }
     }
   }
 
-  async function signalProcess(pid, startTicks) {
+  async function signalProcess(pid: number, startTicks: number): Promise<void> {
+    if (!signal) return;
     const chosen = signal.value;
     setStatus(`Sending ${chosen} to ${pid}…`);
     try {
@@ -174,6 +494,89 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
+  function scheduleLive(): void {
+    if (live !== null) window.clearInterval(live);
+    live = null;
+    if (!liveToggle.checked) return;
+    live = window.setInterval(
+      () => {
+        if (!document.hidden) void load();
+      },
+      tree || (!compact && sortKey !== "pid") ? 5000 : 2000,
+    );
+  }
+
+  function setMode(next: boolean): void {
+    if (next && compact) return;
+    tree = next;
+    syncModeButtons();
+    fold.hidden = !tree;
+    allCollapsed = false;
+    fold.textContent = "Collapse all";
+    renderHead();
+    scheduleLive();
+    void load();
+  }
+
+  function applyCompact(): void {
+    const next = box.clientWidth < COMPACT_WIDTH;
+    if (next === compact) return;
+    compact = next;
+    box.classList.toggle("compact", compact);
+    if (compact) {
+      filters.pid = "";
+      filters.ppid = "";
+      filters.name = "";
+      filters.user = "";
+      filters.state = "";
+      mobileFilter.value = filters.query ?? "";
+      if (tree) {
+        tree = false;
+        syncModeButtons();
+        fold.hidden = true;
+      }
+    } else {
+      filters.query = "";
+      mobileFilter.value = "";
+    }
+    renderHead();
+    scheduleLive();
+    void load();
+  }
+
+  for (const button of modeButtons) {
+    button.addEventListener("click", () => setMode(button.dataset.mode === "tree"));
+  }
+  fold.addEventListener("click", () => {
+    allCollapsed = !allCollapsed;
+    collapsed = new Set();
+    if (allCollapsed) {
+      const parents = new Set(processes.map((process) => process.ppid));
+      for (const process of processes) {
+        if (parents.has(process.pid)) collapsed.add(process.pid);
+      }
+    }
+    fold.textContent = allCollapsed ? "Expand all" : "Collapse all";
+    renderRows();
+  });
+  liveToggle.addEventListener("change", scheduleLive);
+  mobileFilter.addEventListener("input", () => {
+    filters.query = mobileFilter.value;
+    renderRows();
+  });
+  mobileSort.addEventListener("change", () => {
+    setSort(mobileSort.value as SortKey);
+  });
+  mobileDirection.addEventListener("click", () => {
+    sortAsc = !sortAsc;
+    updateDirection();
+    renderHead();
+    renderRows();
+  });
+  box.querySelector("[data-refresh]")!.addEventListener("click", () => void load());
+  more.addEventListener("click", () => {
+    if (nextCursor && !tree) void load(nextCursor, true);
+  });
   spawnForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const command = spawnInput.value.trim();
@@ -197,30 +600,17 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   });
 
-  treeToggle.addEventListener("change", () => {
-    tree = treeToggle.checked;
-    void load();
-  });
-  liveToggle.addEventListener("change", () => {
-    if (live) {
-      clearInterval(live);
-      live = null;
-    }
-    if (liveToggle.checked) {
-      live = setInterval(() => {
-        if (!document.hidden) void load();
-      }, 2000);
-    }
-  });
-  box.querySelector("[data-refresh]").addEventListener("click", () => void load());
-  more.addEventListener("click", () => {
-    if (nextCursor && !tree) void load(nextCursor, true);
-  });
+  const resize = new ResizeObserver(applyCompact);
+  resize.observe(box);
+  applyCompact();
+  renderHead();
+  updateDirection();
   void load();
 
   return () => {
     disposed = true;
-    if (live) clearInterval(live);
+    if (live !== null) window.clearInterval(live);
+    resize.disconnect();
     root.replaceChildren();
   };
 }

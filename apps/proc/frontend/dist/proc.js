@@ -42,40 +42,106 @@ var styles = `
   .proc-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .proc-count { color: #667087; font-size: 12px; }
   .proc-bar .grow { flex: 1; }
-  .proc-bar button, .proc-bar select, .proc-spawn button {
-    padding: 6px 10px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
-    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  .proc-bar button, .proc-bar select, .proc-spawn button, .proc-mobile-tools button, .proc-mobile-tools select {
+    padding: 6px 10px; min-height: 34px; border-radius: 7px; border: 1px solid #2a3142;
+    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
   }
   .proc-bar button:hover, .proc-spawn button:hover { border-color: #3a4560; color: #fff; }
+  .proc-tabs { display: inline-flex; border: 1px solid #2a3142; border-radius: 8px; overflow: hidden; }
+  .proc-tabs button { border: 0; border-radius: 0; background: transparent; }
+  .proc-tabs button[aria-pressed="true"] { background: #1f2940; color: #fff; }
+  .proc-fold { font-size: 11px !important; }
   .proc-check { display: flex; align-items: center; gap: 5px; color: #8f98ab; font-size: 12px; }
+  .proc-check input { accent-color: #7aa2ff; }
   .proc-spawn { display: flex; gap: 6px; }
   .proc-spawn input {
-    flex: 1; min-width: 160px; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
+    flex: 1; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
     background: #0f1219; color: #e8ebf2; font: 12px ui-monospace, monospace;
   }
-  .proc-table { border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016; }
-  .proc-row {
-    display: grid; grid-template-columns: 64px 64px minmax(160px, 1.4fr) 90px 90px 90px 90px 66px;
-    gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid #171c26;
-    font-size: 12px; min-width: 820px;
+  .proc-mobile-tools { display: none; }
+
+  .proc-table {
+    border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016;
+    max-height: min(70vh, 760px);
   }
+  .proc-head { position: sticky; top: 0; z-index: 2; background: #0d1016; }
+  .proc-body { min-width: 0; }
+  .proc-row {
+    display: grid; gap: 8px; align-items: center; padding: 7px 10px;
+    border-bottom: 1px solid #171c26; font-size: 12px;
+  }
+  .proc-row.flat { grid-template-columns: 64px 64px minmax(160px, 1.4fr) 90px 90px 100px 80px 66px; }
+  .proc-row.tree { grid-template-columns: minmax(220px, 1fr) 90px 90px 100px 80px 66px; }
   .proc-row:last-child { border-bottom: 0; }
   .proc-row.head {
-    position: sticky; top: 0; z-index: 1; background: #11151e; color: #667087;
+    background: #11151e; color: #667087;
     text-transform: uppercase; letter-spacing: .06em; font-size: 10px;
   }
-  .proc-row:hover:not(.head) { background: #151a24; }
-  .proc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e8ebf2; }
-  .proc-user, .proc-mono { color: #8f98ab; font-family: ui-monospace, monospace; font-size: 11px; }
-  .proc-state { text-transform: capitalize; }
-  .proc-state.running { color: #52d1a4; }
-  .proc-state.sleeping { color: #8f98ab; }
-  .proc-state.stopped { color: #f3c969; }
-  .proc-state.zombie { color: #ff7d8a; }
+  .proc-row.head .sortable { cursor: pointer; user-select: none; }
+  .proc-row.head .sortable:hover { color: #c8d0df; }
+  .proc-row.head .sorted { color: #e8ebf2; }
+  .proc-row.filters { padding: 4px 10px; background: #10141c; border-bottom: 1px solid #202632; }
+  .proc-filter-cell { min-width: 0; }
+  .proc-filter-cell input {
+    width: 100%; min-width: 0; padding: 3px 6px; border-radius: 5px; border: 1px solid #2a3142;
+    background: #0b0e14; color: #e8ebf2; font: 11px ui-monospace, monospace;
+  }
+  .proc-filter-cell input::placeholder { color: #4d5668; }
+  .proc-row:hover:not(.head):not(.filters) { background: #151a24; }
+  .proc-row.flat .identity { display: contents; }
+  .proc-row.tree .identity { display: flex; align-items: center; min-width: 0; }
+  .proc-row .proc-meta { display: contents; }
+  .proc-cell { min-width: 0; }
+  .proc-pid, .proc-ppid {
+    color: #8f98ab; font-family: ui-monospace, monospace; font-size: 11px;
+  }
+  .proc-row.tree .proc-pid { margin-left: 3px; margin-right: 8px; min-width: 3ch; }
+  .proc-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e8ebf2;
+    min-width: 0; flex: 1;
+  }
+  .proc-gutter { display: flex; flex: none; align-self: stretch; }
+  .proc-guide {
+    position: relative; width: 16px; flex: none; align-self: stretch;
+    margin-top: -7px; margin-bottom: -8px;
+  }
+  .proc-guide::before {
+    content: ""; position: absolute; left: 7px; top: 0; bottom: 0;
+    border-left: 1px solid #2a3142;
+  }
+  .proc-guide.blank::before { display: none; }
+  .proc-connector {
+    position: relative; width: 16px; flex: none; align-self: stretch;
+    margin-top: -7px; margin-bottom: -8px;
+  }
+  .proc-connector::before {
+    content: ""; position: absolute; left: 7px; top: 0; bottom: 0;
+    border-left: 1px solid #2a3142;
+  }
+  .proc-connector.last::before { bottom: 50%; }
+  .proc-connector::after {
+    content: ""; position: absolute; left: 7px; top: 50%; width: 8px;
+    border-top: 1px solid #2a3142;
+  }
+  .proc-twisty {
+    width: 20px; height: 20px; padding: 0; flex: none; border: 0; background: transparent;
+    color: #8f98ab; font: 11px/1 ui-monospace, monospace; cursor: pointer;
+  }
+  .proc-twisty:hover { color: #e8ebf2; }
+  .proc-twisty.empty { visibility: hidden; }
+  .proc-cell.user, .proc-cell.memory {
+    color: #8f98ab; font-family: ui-monospace, monospace; font-size: 11px;
+  }
+  .proc-cell.state { text-transform: capitalize; }
+  .proc-cell.state.running { color: #52d1a4; }
+  .proc-cell.state.sleeping { color: #8f98ab; }
+  .proc-cell.state.stopped { color: #f3c969; }
+  .proc-cell.state.zombie { color: #ff7d8a; }
   .proc-bar-track { height: 5px; border-radius: 999px; background: #202634; overflow: hidden; flex: 1; }
-  .proc-bar-fill { height: 100%; background: linear-gradient(90deg, #7aa2ff, #9d7bff); }
-  .proc-cpu { display: flex; align-items: center; gap: 6px; }
-  .proc-cpu .percent { width: 38px; text-align: right; color: #8f98ab; font: 11px ui-monospace, monospace; }
+  .proc-bar-fill { height: 100%; display: block; background: linear-gradient(90deg, #7aa2ff, #9d7bff); }
+  .proc-cell.cpu { display: flex; align-items: center; gap: 6px; }
+  .proc-cell.cpu .percent { width: 38px; text-align: right; color: #8f98ab; font: 11px ui-monospace, monospace; }
+  .proc-cell[data-label]::before { content: none; }
   .proc-signal {
     padding: 4px 7px; border-radius: 6px; border: 1px solid #2a3142; background: #151a24;
     color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
@@ -83,12 +149,161 @@ var styles = `
   .proc-signal:hover { border-color: #ff7d8a88; color: #ffb3ba; }
   .proc-more { display: flex; justify-content: center; }
   .proc-more button {
-    padding: 6px 12px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
-    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+    padding: 6px 12px; min-height: 34px; border-radius: 7px; border: 1px solid #2a3142;
+    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
   }
   .proc-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .proc-status.bad { color: #ffb3ba; }
+  .proc-empty { padding: 18px; color: #667087; text-align: center; font-size: 12px; }
+
+  .proc.compact .proc-bar { gap: 8px; }
+  .proc.compact .proc-count { flex: 1 0 100%; }
+  .proc.compact .proc-bar .grow { display: none; }
+  .proc.compact .proc-tabs { order: 1; }
+  .proc.compact .proc-check { order: 2; min-height: 34px; }
+  .proc.compact .proc-fold { order: 3; }
+  .proc.compact .proc-pick { order: 4; }
+  .proc.compact [data-refresh] { order: 5; }
+  .proc.compact [data-mode="tree"] { display: none; }
+  .proc.compact .proc-mobile-tools {
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  }
+  .proc.compact .proc-mobile-tools input {
+    flex: 1 1 140px; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
+    background: #0f1219; color: #e8ebf2; font: 12px ui-monospace, monospace;
+  }
+  .proc.compact .proc-mobile-tools select { flex: 0 0 auto; }
+  .proc.compact .proc-direction { min-width: 54px; }
+  .proc.compact .proc-spawn { width: 100%; }
+  .proc.compact .proc-table { max-height: none; border: 0; background: transparent; overflow: visible; }
+  .proc.compact .proc-head { display: none; }
+  .proc.compact .proc-row.flat,
+  .proc.compact .proc-row.tree {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "identity action" "meta action";
+    gap: 6px 10px; margin-bottom: 8px; padding: 10px 12px;
+    border: 1px solid #202632; border-radius: 10px; background: #0d1016;
+  }
+  .proc.compact .proc-row .identity {
+    display: flex; grid-area: identity; min-width: 0; align-items: center;
+    justify-content: flex-start; gap: 6px;
+  }
+  .proc.compact .proc-row .proc-pid::before { content: "PID "; color: #667087; }
+  .proc.compact .proc-row .proc-ppid::before { content: "PPID "; color: #667087; }
+  .proc.compact .proc-row .proc-name { margin-left: 2px; }
+  .proc.compact .proc-row .proc-meta {
+    display: flex; grid-area: meta; flex-wrap: wrap; align-items: center; gap: 2px 10px;
+  }
+  .proc.compact .proc-row .action { grid-area: action; align-self: start; }
+  .proc.compact .proc-cell[data-label]::before {
+    content: attr(data-label) " "; color: #667087; font-family: inherit;
+    text-transform: none; letter-spacing: 0;
+  }
+  .proc.compact .proc-meta .ppid,
+  .proc.compact .proc-meta .user,
+  .proc.compact .proc-meta .state {
+    border-left: 1px solid #202632; padding-left: 8px;
+  }
+  .proc.compact .proc-cell.cpu { flex: 1 0 100%; max-width: 240px; }
+  .proc.compact .proc-name {
+    white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .proc.compact .proc-cell.action .proc-signal { min-height: 40px; padding: 8px 12px; font-size: 12px; }
 `;
+
+// src/tree.ts
+function filterProcesses(processes, filters, tree) {
+  const has = (value) => Boolean(value && value.trim());
+  const match = (value, needle) => value.toLowerCase().includes(needle.trim().toLowerCase());
+  const matches = processes.filter((process) => {
+    if (has(filters.pid) && !String(process.pid).includes(filters.pid.trim()))
+      return false;
+    if (has(filters.ppid) && !String(process.ppid).includes(filters.ppid.trim()))
+      return false;
+    if (has(filters.name) && !match(process.name, filters.name))
+      return false;
+    if (has(filters.user) && !match(process.user, filters.user))
+      return false;
+    if (has(filters.state) && !match(process.state, filters.state))
+      return false;
+    if (has(filters.query) && ![String(process.pid), String(process.ppid), process.name, process.user, process.state].some((value) => match(value, filters.query))) {
+      return false;
+    }
+    return true;
+  });
+  if (!tree)
+    return matches;
+  const byPid = new Map(processes.map((process) => [process.pid, process]));
+  const keep = new Set;
+  for (const found of matches) {
+    let current = found;
+    while (current && !keep.has(current.pid)) {
+      keep.add(current.pid);
+      current = byPid.get(current.ppid);
+    }
+  }
+  return processes.filter((process) => keep.has(process.pid));
+}
+function orderProcesses(processes, tree, collapsed, compareBy = (left, right) => left.pid - right.pid) {
+  if (!tree) {
+    return [...processes].sort(compareBy).map((process) => ({
+      process,
+      depth: 0,
+      hasChildren: false,
+      guides: [],
+      isLast: true
+    }));
+  }
+  const byPid = new Map(processes.map((process) => [process.pid, process]));
+  const children = new Map;
+  const roots = [];
+  for (const process of processes) {
+    const parent = byPid.get(process.ppid);
+    if (parent && process.ppid !== process.pid) {
+      const siblings = children.get(process.ppid) ?? [];
+      siblings.push(process);
+      children.set(process.ppid, siblings);
+    } else {
+      roots.push(process);
+    }
+  }
+  const out = [];
+  const seen = new Set;
+  const reachable = new Set;
+  const mark = (process) => {
+    if (reachable.has(process.pid))
+      return;
+    reachable.add(process.pid);
+    for (const child of children.get(process.pid) ?? [])
+      mark(child);
+  };
+  for (const root of roots)
+    mark(root);
+  const walk = (process, depth, guides, isLast) => {
+    if (seen.has(process.pid))
+      return;
+    seen.add(process.pid);
+    const nested = [...children.get(process.pid) ?? []].sort(compareBy);
+    out.push({
+      process,
+      depth,
+      hasChildren: nested.length > 0,
+      guides,
+      isLast
+    });
+    if (collapsed.has(process.pid))
+      return;
+    nested.forEach((child, index) => {
+      walk(child, depth + 1, [...guides, !isLast], index === nested.length - 1);
+    });
+  };
+  roots.sort(compareBy).forEach((root, index) => walk(root, 0, [], index === roots.length - 1));
+  for (const process of processes) {
+    if (!reachable.has(process.pid))
+      walk(process, 0, [], true);
+  }
+  return out;
+}
 
 // src/main.ts
 function mount(root, context) {
@@ -100,8 +315,12 @@ function mount(root, context) {
   box.innerHTML = `
     <div class="proc-bar">
       <span class="proc-count">…</span>
-      <label class="proc-check"><input type="checkbox" data-tree /> Tree</label>
+      <div class="proc-tabs" role="group" aria-label="Layout">
+        <button type="button" data-mode="flat" aria-pressed="true">List</button>
+        <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
+      </div>
       <label class="proc-check"><input type="checkbox" data-live /> Live</label>
+      <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
         <option value="TERM">TERM</option>
@@ -113,121 +332,372 @@ function mount(root, context) {
       </select>
       <button type="button" data-refresh>Refresh</button>
     </div>
+    <div class="proc-mobile-tools">
+      <input type="search" data-mobile-filter placeholder="Filter processes" aria-label="Filter processes" />
+      <select data-mobile-sort aria-label="Sort by">
+        <option value="pid">PID</option>
+        <option value="ppid">PPID</option>
+        <option value="name">Name</option>
+        <option value="user">User</option>
+        <option value="state">State</option>
+        <option value="cpu">CPU</option>
+        <option value="memory">Memory</option>
+      </select>
+      <button type="button" class="proc-direction" data-mobile-direction aria-label="Sort direction">Asc</button>
+    </div>
     <form class="proc-spawn">
       <input name="command" aria-label="Detached command" placeholder="sleep 30" autocomplete="off" />
       <button type="submit">Spawn</button>
     </form>
-    <div class="proc-table" role="table" aria-label="Processes"></div>
+    <div class="proc-table" role="table" aria-label="Processes">
+      <div class="proc-head" data-head></div>
+      <div class="proc-body" data-body role="rowgroup"></div>
+    </div>
     <div class="proc-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
-  const table = box.querySelector(".proc-table");
+  const headRoot = box.querySelector("[data-head]");
+  const bodyRoot = box.querySelector("[data-body]");
   const count = box.querySelector(".proc-count");
   const status = box.querySelector(".proc-status");
   const signal = box.querySelector(".proc-pick");
+  const mobileFilter = box.querySelector("[data-mobile-filter]");
+  const mobileSort = box.querySelector("[data-mobile-sort]");
+  const mobileDirection = box.querySelector("[data-mobile-direction]");
   const more = box.querySelector("[data-more]");
-  const treeToggle = box.querySelector("[data-tree]");
+  const fold = box.querySelector("[data-fold]");
+  const modeButtons = [...box.querySelectorAll("[data-mode]")];
   const liveToggle = box.querySelector("[data-live]");
   const spawnForm = box.querySelector(".proc-spawn");
   const spawnInput = spawnForm.querySelector("input");
+  const MAX_FLAT = 5000;
+  const MAX_TREE = 1000;
+  const COMPACT_WIDTH = 820;
   let processes = [];
   let nextCursor = null;
   let tree = false;
+  let compact = false;
   let live = null;
+  let collapsed = new Set;
+  let allCollapsed = false;
+  let sortKey = "pid";
+  let sortAsc = true;
+  const filters = {};
+  let loading = false;
+  let pending = false;
   let disposed = false;
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "proc-status bad" : "proc-status";
   };
-  function ordered() {
+  const updateDirection = () => {
+    mobileDirection.textContent = sortAsc ? "Asc" : "Desc";
+    mobileDirection.setAttribute("aria-label", sortAsc ? "Sort ascending" : "Sort descending");
+    mobileSort.value = sortKey;
+  };
+  const compareBy = (left, right) => {
+    let value = 0;
+    switch (sortKey) {
+      case "cpu":
+        value = left["cpu-percent"] - right["cpu-percent"];
+        break;
+      case "memory":
+        value = left["memory-bytes"] - right["memory-bytes"];
+        break;
+      case "name":
+        value = left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+        break;
+      case "user":
+        value = left.user < right.user ? -1 : left.user > right.user ? 1 : 0;
+        break;
+      case "state":
+        value = left.state < right.state ? -1 : left.state > right.state ? 1 : 0;
+        break;
+      case "ppid":
+        value = left.ppid - right.ppid;
+        break;
+      default:
+        value = left.pid - right.pid;
+    }
+    if (value === 0)
+      value = left.pid - right.pid;
+    return sortAsc ? value : -value;
+  };
+  const sortable = (key) => {
+    if (!key)
+      return false;
     if (!tree)
-      return processes.map((process) => [process, 0]);
-    const byPid = new Map(processes.map((process) => [process.pid, process]));
-    const children = new Map;
-    const roots = [];
-    for (const process of processes) {
-      const parent = byPid.get(process.ppid);
-      if (parent && process.ppid !== process.pid) {
-        children.set(process.ppid, [...children.get(process.ppid) ?? [], process]);
-      } else {
-        roots.push(process);
-      }
+      return true;
+    return key === "user" || key === "state" || key === "cpu" || key === "memory";
+  };
+  const syncModeButtons = () => {
+    for (const button of modeButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.mode === (tree ? "tree" : "flat")));
     }
-    const out = [];
-    const walk = (process, depth) => {
-      out.push([process, depth]);
-      const nested = (children.get(process.pid) ?? []).sort((a, b) => a.pid - b.pid);
-      for (const child of nested)
-        walk(child, depth + 1);
-    };
-    for (const process of roots.sort((a, b) => a.pid - b.pid))
-      walk(process, 0);
-    return out;
-  }
-  function renderRows() {
-    table.replaceChildren();
+  };
+  const filterCell = (key, placeholder) => {
+    const wrapper = cell("proc-filter-cell", "");
+    const input = document.createElement("input");
+    input.type = "search";
+    input.placeholder = placeholder;
+    input.value = filters[key] ?? "";
+    input.setAttribute("aria-label", `Filter by ${placeholder.toLowerCase()}`);
+    input.addEventListener("input", () => {
+      filters[key] = input.value;
+      renderRows();
+    });
+    wrapper.append(input);
+    return wrapper;
+  };
+  function renderHead() {
+    headRoot.replaceChildren();
     const head = document.createElement("div");
-    head.className = "proc-row head";
-    for (const label of ["PID", "PPID", "NAME", "USER", "STATE", "CPU", "MEMORY", ""]) {
-      head.append(cell("", label));
+    head.className = `proc-row head ${tree ? "tree" : "flat"}`;
+    const labels = tree ? [
+      ["PROCESS", ""],
+      ["USER", "user"],
+      ["STATE", "state"],
+      ["CPU", "cpu"],
+      ["MEMORY", "memory"],
+      ["", ""]
+    ] : [
+      ["PID", "pid"],
+      ["PPID", "ppid"],
+      ["NAME", "name"],
+      ["USER", "user"],
+      ["STATE", "state"],
+      ["CPU", "cpu"],
+      ["MEMORY", "memory"],
+      ["", ""]
+    ];
+    for (const [label, key] of labels) {
+      const node = cell("", label);
+      if (sortable(key)) {
+        node.classList.add("sortable");
+        if (sortKey === key) {
+          node.classList.add("sorted");
+          node.textContent = `${label} ${sortAsc ? "▲" : "▼"}`;
+        }
+        node.title = `Sort by ${label.toLowerCase()}`;
+        node.addEventListener("click", () => setSort(key));
+      }
+      head.append(node);
     }
-    table.append(head);
-    for (const [process, depth] of ordered()) {
+    headRoot.append(head);
+    const row = document.createElement("div");
+    row.className = `proc-row filters ${tree ? "tree" : "flat"}`;
+    if (tree) {
+      row.append(filterCell("query", "PID or name"), filterCell("user", "User"), filterCell("state", "State"), cell("proc-filter-cell", ""), cell("proc-filter-cell", ""), cell("proc-filter-cell", ""));
+    } else {
+      row.append(filterCell("pid", "PID"), filterCell("ppid", "PPID"), filterCell("name", "Name"), filterCell("user", "User"), filterCell("state", "State"), cell("proc-filter-cell", ""), cell("proc-filter-cell", ""), cell("proc-filter-cell", ""));
+    }
+    headRoot.append(row);
+  }
+  function setSort(key) {
+    if (key === sortKey)
+      sortAsc = !sortAsc;
+    else {
+      sortKey = key;
+      sortAsc = key === "pid" || key === "ppid" || key === "name" || key === "user" || key === "state";
+    }
+    updateDirection();
+    renderHead();
+    scheduleLive();
+    if (!tree && !compact && key !== "pid") {
+      load(null, false, true);
+    } else {
+      renderRows();
+    }
+  }
+  const metaCell = (className, label, text) => {
+    const node = cell(`proc-cell ${className}`, text);
+    node.dataset.label = label;
+    return node;
+  };
+  const cpuCell = (process) => {
+    const cpu = document.createElement("span");
+    cpu.className = "proc-cell cpu";
+    cpu.dataset.label = "CPU";
+    const track = document.createElement("span");
+    track.className = "proc-bar-track";
+    const fill = document.createElement("span");
+    fill.className = "proc-bar-fill";
+    fill.style.width = `${Math.min(100, Math.max(0, process["cpu-percent"]))}%`;
+    track.append(fill);
+    cpu.append(track, cell("percent", `${process["cpu-percent"].toFixed(1)}%`));
+    cpu.title = `${process["cpu-percent"].toFixed(1)}% CPU`;
+    return cpu;
+  };
+  const identityCell = (process, row) => {
+    const identity = document.createElement("span");
+    identity.className = "proc-cell identity";
+    if (row) {
+      const gutter = document.createElement("span");
+      gutter.className = "proc-gutter";
+      for (const line of row.guides) {
+        const guide = document.createElement("span");
+        guide.className = line ? "proc-guide" : "proc-guide blank";
+        guide.setAttribute("aria-hidden", "true");
+        gutter.append(guide);
+      }
+      if (row.depth > 0) {
+        const connector = document.createElement("span");
+        connector.className = row.isLast ? "proc-connector last" : "proc-connector";
+        connector.setAttribute("aria-hidden", "true");
+        gutter.append(connector);
+      }
+      identity.append(gutter);
+      const twisty = document.createElement("button");
+      twisty.type = "button";
+      twisty.className = row.hasChildren ? "proc-twisty" : "proc-twisty empty";
+      twisty.disabled = !row.hasChildren;
+      twisty.tabIndex = row.hasChildren ? 0 : -1;
+      twisty.textContent = collapsed.has(process.pid) ? "▸" : "▾";
+      twisty.setAttribute("aria-label", collapsed.has(process.pid) ? "Expand children" : "Collapse children");
+      twisty.setAttribute("aria-expanded", String(!collapsed.has(process.pid)));
+      if (row.hasChildren) {
+        twisty.addEventListener("click", () => {
+          if (collapsed.has(process.pid))
+            collapsed.delete(process.pid);
+          else
+            collapsed.add(process.pid);
+          renderRows();
+        });
+      }
+      identity.append(twisty);
+    }
+    const pid = cell("proc-pid", String(process.pid));
+    pid.dataset.label = "PID";
+    identity.append(pid);
+    if (!row) {
+      const ppid = cell("proc-ppid", String(process.ppid));
+      ppid.dataset.label = "PPID";
+      identity.append(ppid);
+    }
+    const name = cell("proc-name", process.name);
+    name.title = process.name;
+    identity.append(name);
+    return identity;
+  };
+  function renderRows() {
+    const visible = filterProcesses(processes, filters, tree);
+    const rows = orderProcesses(visible, tree, collapsed, compareBy);
+    bodyRoot.replaceChildren();
+    for (const rowData of rows) {
+      const process = rowData.process;
       const row = document.createElement("div");
-      row.className = "proc-row";
-      row.append(cell("proc-mono", String(process.pid)), cell("proc-mono", String(process.ppid)));
-      const name = cell("proc-name", `${"> ".repeat(depth)}${process.name}`);
-      name.title = process.name;
-      row.append(name, cell("proc-user", process.user), cell(`proc-state ${process.state}`, process.state));
-      const cpu = document.createElement("span");
-      cpu.className = "proc-cpu";
-      const track = document.createElement("span");
-      track.className = "proc-bar-track";
-      const fill = document.createElement("span");
-      fill.className = "proc-bar-fill";
-      fill.style.width = `${Math.min(100, Math.max(0, process["cpu-percent"]))}%`;
-      track.append(fill);
-      cpu.append(track, cell("percent", `${process["cpu-percent"].toFixed(1)}%`));
-      cpu.title = `${process["cpu-percent"].toFixed(1)}% CPU`;
-      row.append(cpu);
-      row.append(cell("proc-mono", memory(process["memory-bytes"])));
+      row.className = `proc-row ${tree ? "tree" : "flat"}`;
+      row.append(identityCell(process, tree ? rowData : null));
+      const meta = document.createElement("span");
+      meta.className = "proc-meta";
+      const state = cell(`proc-cell state ${process.state}`, process.state);
+      state.dataset.label = "State";
+      meta.append(metaCell("user", "User", process.user), state, cpuCell(process), metaCell("memory", "Memory", memory(process["memory-bytes"])));
+      row.append(meta);
+      const action = document.createElement("span");
+      action.className = "proc-cell action";
       const send = document.createElement("button");
       send.type = "button";
       send.className = "proc-signal";
       send.textContent = "Send";
-      send.title = `Send ${signal.value} to ${process.name} (${process.pid})`;
+      send.setAttribute("aria-label", `Send signal to ${process.name} (${process.pid})`);
       send.addEventListener("click", () => {
         signalProcess(process.pid, process["start-ticks"]);
       });
-      const action = document.createElement("span");
       action.append(send);
       row.append(action);
-      table.append(row);
+      bodyRoot.append(row);
     }
-    count.textContent = `${processes.length} process${processes.length === 1 ? "" : "es"}${nextCursor ? " · more available" : ""}`;
+    if (rows.length === 0) {
+      bodyRoot.append(cell("proc-empty", Object.values(filters).some((value) => value && value.trim()) ? "No process matches the filters." : "No processes."));
+    }
+    const active = Object.values(filters).some((value) => value && value.trim());
+    const countText = active ? `${rows.length} / ${processes.length}` : `${processes.length}`;
+    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : nextCursor ? " · more available" : ""}${tree && processes.length >= MAX_TREE ? " · first 1000" : ""}`;
   }
-  async function load(cursor = null, append = false) {
+  async function loadTree() {
+    const all = [];
+    let cursor = null;
+    for (let pages = 0;pages < 20; pages += 1) {
+      const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+      const page = await call(context, `/processes?limit=500${suffix}`);
+      if (disposed)
+        return;
+      all.push(...page.processes);
+      if (page.done || !page.cursor || all.length >= MAX_TREE)
+        break;
+      cursor = page.cursor;
+    }
+    processes = all.slice(0, MAX_TREE);
+    nextCursor = null;
+    more.hidden = true;
+    fold.hidden = false;
+    renderRows();
+    setStatus(`Tree snapshot · ${processes.length} processes`);
+  }
+  async function load(cursor = null, append = false, fetchAll = false) {
+    if (loading) {
+      pending = true;
+      return;
+    }
+    loading = true;
+    if (!tree && !compact && sortKey !== "pid" && cursor === null && !append) {
+      fetchAll = true;
+    }
     setStatus(append ? "Loading more processes…" : "Reading the process table…");
     try {
-      const limit = tree ? 500 : 200;
+      if (tree) {
+        await loadTree();
+        return;
+      }
+      if (fetchAll) {
+        const all = [];
+        let next = null;
+        for (let pages = 0;pages < 20; pages += 1) {
+          const suffix = next ? `&cursor=${encodeURIComponent(next)}` : "";
+          const page = await call(context, `/processes?limit=500${suffix}`);
+          if (disposed)
+            return;
+          all.push(...page.processes);
+          if (page.done || !page.cursor || all.length >= MAX_FLAT)
+            break;
+          next = page.cursor;
+        }
+        processes = all.slice(0, MAX_FLAT);
+        nextCursor = null;
+        more.hidden = true;
+        fold.hidden = true;
+        renderRows();
+        setStatus(`Sorted snapshot · ${processes.length} processes`);
+        return;
+      }
       const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-      const page = await call(context, `/processes?limit=${limit}${suffix}`);
+      const page = await call(context, `/processes?limit=200${suffix}`);
       if (disposed)
         return;
       if (!append)
         processes = [];
       processes.push(...page.processes);
-      nextCursor = tree ? null : page.cursor;
-      more.hidden = tree || Boolean(page.done) || !page.cursor;
+      nextCursor = page.cursor ?? null;
+      more.hidden = Boolean(page.done) || !page.cursor;
+      fold.hidden = true;
       renderRows();
       setStatus(`Snapshot updated · ${processes.length} processes`);
     } catch (error) {
       if (!disposed)
         setStatus(reason(error), true);
+    } finally {
+      loading = false;
+      if (pending) {
+        pending = false;
+        load();
+      }
     }
   }
   async function signalProcess(pid, startTicks) {
+    if (!signal)
+      return;
     const chosen = signal.value;
     setStatus(`Sending ${chosen} to ${pid}…`);
     try {
@@ -243,6 +713,90 @@ function mount(root, context) {
         setStatus(reason(error), true);
     }
   }
+  function scheduleLive() {
+    if (live !== null)
+      window.clearInterval(live);
+    live = null;
+    if (!liveToggle.checked)
+      return;
+    live = window.setInterval(() => {
+      if (!document.hidden)
+        load();
+    }, tree || !compact && sortKey !== "pid" ? 5000 : 2000);
+  }
+  function setMode(next) {
+    if (next && compact)
+      return;
+    tree = next;
+    syncModeButtons();
+    fold.hidden = !tree;
+    allCollapsed = false;
+    fold.textContent = "Collapse all";
+    renderHead();
+    scheduleLive();
+    load();
+  }
+  function applyCompact() {
+    const next = box.clientWidth < COMPACT_WIDTH;
+    if (next === compact)
+      return;
+    compact = next;
+    box.classList.toggle("compact", compact);
+    if (compact) {
+      filters.pid = "";
+      filters.ppid = "";
+      filters.name = "";
+      filters.user = "";
+      filters.state = "";
+      mobileFilter.value = filters.query ?? "";
+      if (tree) {
+        tree = false;
+        syncModeButtons();
+        fold.hidden = true;
+      }
+    } else {
+      filters.query = "";
+      mobileFilter.value = "";
+    }
+    renderHead();
+    scheduleLive();
+    load();
+  }
+  for (const button of modeButtons) {
+    button.addEventListener("click", () => setMode(button.dataset.mode === "tree"));
+  }
+  fold.addEventListener("click", () => {
+    allCollapsed = !allCollapsed;
+    collapsed = new Set;
+    if (allCollapsed) {
+      const parents = new Set(processes.map((process) => process.ppid));
+      for (const process of processes) {
+        if (parents.has(process.pid))
+          collapsed.add(process.pid);
+      }
+    }
+    fold.textContent = allCollapsed ? "Expand all" : "Collapse all";
+    renderRows();
+  });
+  liveToggle.addEventListener("change", scheduleLive);
+  mobileFilter.addEventListener("input", () => {
+    filters.query = mobileFilter.value;
+    renderRows();
+  });
+  mobileSort.addEventListener("change", () => {
+    setSort(mobileSort.value);
+  });
+  mobileDirection.addEventListener("click", () => {
+    sortAsc = !sortAsc;
+    updateDirection();
+    renderHead();
+    renderRows();
+  });
+  box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  more.addEventListener("click", () => {
+    if (nextCursor && !tree)
+      load(nextCursor, true);
+  });
   spawnForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const command = spawnInput.value.trim();
@@ -266,32 +820,17 @@ function mount(root, context) {
         setStatus(reason(error), true);
     }
   });
-  treeToggle.addEventListener("change", () => {
-    tree = treeToggle.checked;
-    load();
-  });
-  liveToggle.addEventListener("change", () => {
-    if (live) {
-      clearInterval(live);
-      live = null;
-    }
-    if (liveToggle.checked) {
-      live = setInterval(() => {
-        if (!document.hidden)
-          load();
-      }, 2000);
-    }
-  });
-  box.querySelector("[data-refresh]").addEventListener("click", () => void load());
-  more.addEventListener("click", () => {
-    if (nextCursor && !tree)
-      load(nextCursor, true);
-  });
+  const resize = new ResizeObserver(applyCompact);
+  resize.observe(box);
+  applyCompact();
+  renderHead();
+  updateDirection();
   load();
   return () => {
     disposed = true;
-    if (live)
-      clearInterval(live);
+    if (live !== null)
+      window.clearInterval(live);
+    resize.disconnect();
     root.replaceChildren();
   };
 }

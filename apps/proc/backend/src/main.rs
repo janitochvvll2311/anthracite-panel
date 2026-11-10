@@ -10,7 +10,7 @@ use std::fs;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anth_contract::Error;
 use anth_service::Handler;
@@ -33,6 +33,17 @@ const SIGNALS: &[(&str, i32)] = &[
 
 struct Service {
     sample: Mutex<Sample>,
+    /// Pagination asks for several pages of the same table; one scan per page
+    /// would read every `/proc/<pid>` entry eight times. A short cache makes a
+    /// tree refresh one snapshot instead.
+    cache: Mutex<Option<Cached>>,
+}
+
+struct Cached {
+    at: Instant,
+    stats: Vec<Stat>,
+    percents: BTreeMap<u32, f64>,
+    users: BTreeMap<u32, String>,
 }
 
 #[derive(Default)]
@@ -64,6 +75,7 @@ impl Service {
     fn new() -> Self {
         Self {
             sample: Mutex::new(Sample::default()),
+            cache: Mutex::new(None),
         }
     }
 
@@ -78,10 +90,7 @@ impl Service {
             .unwrap_or(u64::from(DEFAULT_PAGE))
             .clamp(1, u64::from(MAX_PAGE)) as usize;
 
-        let mut stats = snapshot();
-        stats.sort_by_key(|process| process.pid);
-        let percents = self.sample(&stats);
-        let users = users();
+        let (stats, percents, users) = self.snapshot();
 
         let remaining: Vec<&Stat> = stats
             .iter()
@@ -112,6 +121,31 @@ impl Service {
             "cursor": next,
             "done": done,
         }))
+    }
+
+    fn snapshot(&self) -> (Vec<Stat>, BTreeMap<u32, f64>, BTreeMap<u32, String>) {
+        const TTL: Duration = Duration::from_secs(2);
+        let mut cache = self.cache.lock().expect("the snapshot cache is poisoned");
+        if let Some(cached) = cache.as_ref() {
+            if cached.at.elapsed() < TTL {
+                return (
+                    cached.stats.clone(),
+                    cached.percents.clone(),
+                    cached.users.clone(),
+                );
+            }
+        }
+        let mut stats = snapshot();
+        stats.sort_by_key(|process| process.pid);
+        let percents = self.sample(&stats);
+        let users = users();
+        *cache = Some(Cached {
+            at: Instant::now(),
+            stats: stats.clone(),
+            percents: percents.clone(),
+            users: users.clone(),
+        });
+        (stats, percents, users)
     }
 
     fn sample(&self, stats: &[Stat]) -> BTreeMap<u32, f64> {
@@ -175,6 +209,7 @@ impl Service {
         // SAFETY: `kill` has no memory preconditions; the pid and signal are
         // validated above.
         if unsafe { libc::kill(pid as i32, signo) } == 0 {
+            *self.cache.lock().expect("the snapshot cache is poisoned") = None;
             Ok(Value::Null)
         } else {
             let error = std::io::Error::last_os_error();
@@ -240,6 +275,7 @@ impl Service {
         std::thread::spawn(move || {
             let _ = child.wait();
         });
+        *self.cache.lock().expect("the snapshot cache is poisoned") = None;
         Ok(Value::from(pid))
     }
 }
