@@ -103,6 +103,33 @@ apps export the real interfaces with generated data.
 must be deterministic, and per-browser isolation still waits on per-user profiles
 (§3.4).
 
+### 2.3 The panel web CLI
+
+A panel view that runs the same verbs as `anth` — engine commands and the
+`[[cli]]` verbs of installed apps — and renders the transcript in the browser. It
+is an app, not a hidden panel feature: a service parses the verb and runs it under
+the caller's grants, a `stream<list<u8>>` carries the output, and a slot module
+renders it.
+
+**Status: post-v0.6.0 backlog.** The CLI surface is still moving with the app
+catalogue, and a web CLI needs a command runner that asks the engine instead of
+shelling out to `anth` with ambient credentials. The Terminal already owns the
+hard rendering and gesture work, so the first version should reuse that layer
+rather than duplicate it.
+
+**Ready when** the generated CLI verbs are stable and the Terminal's key bar and
+gesture layer are available to other slot modules. Acceptance:
+
+- runs engine and app verbs with the caller's grants and audit, with no shell
+  escape by default;
+- streams output through the same WebSocket/HTTP transport as the Terminal,
+  including the HTTP fallback and byte budgets;
+- offers the same gestures as the Terminal: mobile key bar, sticky Ctrl/Alt,
+  special keys, symbols, Enter, font controls, double-tap Tab, pinch-to-zoom and
+  press-and-drag arrows;
+- keeps history, completion and copy/paste at the panel level, not inside each
+  app.
+
 ---
 
 ## 3. Platform capabilities
