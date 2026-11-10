@@ -61,6 +61,9 @@ fn main() {
 
 fn handle(mut stream: UnixStream) -> std::io::Result<()> {
     let (method, path, body) = request(&mut stream)?;
+    if method == "POST" && path == "/__anth/stream" {
+        return stream_response(&mut stream, &body);
+    }
     let (status, payload) = if method == "GET" && path == "/health" {
         (200, b"{\"ok\":true}".to_vec())
     } else if method == "POST" && path == "/__anth/call" {
@@ -68,12 +71,70 @@ fn handle(mut stream: UnixStream) -> std::io::Result<()> {
     } else {
         (404, envelope("not-found", "no such endpoint"))
     };
+    write_json(&mut stream, status, &payload)
+}
+
+fn write_json(stream: &mut UnixStream, status: u16, payload: &[u8]) -> std::io::Result<()> {
     let response = format!(
         "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
     );
     stream.write_all(response.as_bytes())?;
-    stream.write_all(&payload)?;
+    stream.write_all(payload)?;
+    stream.flush()
+}
+
+/// A deterministic stream: `chunks` ends cleanly, `break` closes after one chunk
+/// so the caller must see a truncated body, and `fail` never sends a byte.
+fn stream_response(stream: &mut UnixStream, body: &[u8]) -> std::io::Result<()> {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return write_json(
+            stream,
+            400,
+            &envelope("invalid", "the call body is not JSON"),
+        );
+    };
+    let function = value
+        .get("function")
+        .and_then(|function| function.as_str())
+        .unwrap_or_default();
+    let chunks: &[Option<&[u8]>] = match function {
+        "chunks" => &[Some(b"one"), Some(b"two"), Some(b"three")],
+        "break" => &[Some(b"head"), None],
+        "fail" => {
+            return write_json(
+                stream,
+                400,
+                &envelope("invalid", "the fixture refused to stream"),
+            );
+        }
+        _ => {
+            return write_json(
+                stream,
+                404,
+                &envelope("not-found", "unknown stream function"),
+            )
+        }
+    };
+    stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+          Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+    )?;
+    for chunk in chunks {
+        match chunk {
+            Some(bytes) => {
+                write!(stream, "{:x}\r\n", bytes.len())?;
+                stream.write_all(bytes)?;
+                stream.write_all(b"\r\n")?;
+            }
+            None => {
+                // No terminator: the reader observes a failed producer.
+                stream.flush()?;
+                return Ok(());
+            }
+        }
+    }
+    stream.write_all(b"0\r\n\r\n")?;
     stream.flush()
 }
 

@@ -8,6 +8,7 @@ use std::time::Duration;
 use anth_compose::audit::AuditLog;
 use anth_contract::{AppId, AuditAction, ExportTarget};
 use anth_engine::service::{ServiceLaunch, ServiceSupervisor};
+use futures_util::StreamExt;
 use serde_json::json;
 
 const APP: &str = "org.example.notes";
@@ -150,6 +151,99 @@ async fn the_engine_caller_routes_a_service_export() {
         .await
         .expect("routed");
     assert_eq!(output, json!({"routed": true}));
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_service_stream_yields_chunks_in_order() {
+    let state = scratch("stream");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services
+        .start(launch(&state, &[], Duration::from_millis(500)))
+        .await
+        .expect("start");
+    let mut stream = services
+        .stream(APP, INTERFACE, "chunks", json!({}))
+        .await
+        .expect("stream");
+    let mut collected = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        collected.extend_from_slice(&chunk.expect("chunk"));
+    }
+    assert_eq!(collected, b"onetwothree");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_service_stream_error_before_the_first_byte_is_an_error() {
+    let state = scratch("stream-error");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services
+        .start(launch(&state, &[], Duration::from_millis(500)))
+        .await
+        .expect("start");
+    let error = match services.stream(APP, INTERFACE, "fail", json!({})).await {
+        Ok(_) => panic!("the fixture should refuse"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+    assert!(error.message().contains("refused to stream"), "{error}");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_service_stream_that_ends_early_is_truncated_not_clean() {
+    let state = scratch("stream-break");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services
+        .start(launch(&state, &[], Duration::from_millis(500)))
+        .await
+        .expect("start");
+    let mut stream = services
+        .stream(APP, INTERFACE, "break", json!({}))
+        .await
+        .expect("stream");
+    let first = stream.next().await.expect("one chunk").expect("chunk");
+    assert_eq!(first, b"head");
+    let error = stream
+        .next()
+        .await
+        .expect("the stream ends")
+        .expect_err("not a clean EOF");
+    assert!(error.message().contains("before its terminator"), "{error}");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn the_engine_caller_routes_a_service_stream() {
+    use anth_api::AppCaller;
+
+    let state = scratch("stream-caller");
+    let services =
+        std::sync::Arc::new(ServiceSupervisor::for_state(&state, Duration::from_secs(2)));
+    services
+        .start(launch(&state, &[], Duration::from_millis(500)))
+        .await
+        .expect("start");
+    let wasm = anth_engine::supervisor::SupervisorCaller::new(std::sync::Arc::new(
+        anth_engine::supervisor::Supervisor::new(std::sync::Arc::new(
+            anth_runtime::FakeRuntime::new(),
+        )),
+    ));
+    let caller = anth_engine::service::EngineCaller::new(wasm, services.clone());
+    let mut stream = caller
+        .stream(APP, INTERFACE, "chunks", json!({}))
+        .await
+        .expect("routed");
+    let mut collected = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        collected.extend_from_slice(&chunk.expect("chunk"));
+    }
+    assert_eq!(collected, b"onetwothree");
     services.stop(APP).await;
     let _ = std::fs::remove_dir_all(&state);
 }
