@@ -1,8 +1,8 @@
 # 20. Streams
 
-> Part of the [design index](../../DESIGN.md). Status: M5/Phase 8 implementation
-> plan. The checkpoint before this work is `checkpoint/pre-streams`; the Terminal
-> is the first real consumer.
+> Part of the [design index](../../DESIGN.md). Status: implemented in v0.6.0
+> (PRs #133–#138). The checkpoint before this work is `checkpoint/pre-streams`;
+> the Terminal is the first real consumer.
 
 ## 1. Shape
 
@@ -143,7 +143,7 @@ same version. It is named `subscription` because `stream` is a WIT keyword.
 
 ## 7. Phases
 
-Each phase is a separate PR against `v0.6.0`:
+Each phase landed as a separate PR against `v0.6.0`:
 
 1. **Contract and engine plumbing.** `stream = true`, `AppCaller::stream`, the
    chunked API response and a fake streaming app in engine tests.
