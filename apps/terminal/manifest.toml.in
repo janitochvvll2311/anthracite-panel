@@ -42,6 +42,14 @@ call = "anthracite:terminal/subscription@1.0.0#follow"
 stream = true
 
 [[route]]
+method = "GET"
+path = "/socket"
+call = "anthracite:terminal/subscription@1.0.0#follow"
+stream = true
+transport = "websocket"
+write = "anthracite:terminal/terminal@1.0.0#write"
+
+[[route]]
 method = "POST"
 path = "/write"
 call = "anthracite:terminal/terminal@1.0.0#write"

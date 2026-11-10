@@ -35,6 +35,7 @@
       (() => {
         const pending = new Map();
         const pendingViews = new Map();
+        const sockets = new Map();
         let token = "";
         let dispose = null;
         let moduleApi = null;
@@ -152,6 +153,27 @@
           });
         };
 
+        const sendBytes = (type, id, data) => {
+          parent.postMessage({ type, token, id, data }, "*", [data]);
+        };
+
+        /// Opens one of the app's WebSocket routes through the panel. The frame
+        /// has an opaque origin and no cookie, so the panel owns the socket.
+        const openSocket = (route, handlers = {}) => {
+          const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+          const entry = { handlers, open: false, queue: [] };
+          sockets.set(id, entry);
+          send("anth:ws-open", { id, url: route });
+          return {
+            send: (data) => {
+              const buffer = data instanceof ArrayBuffer ? data : data.buffer;
+              if (entry.open) sendBytes("anth:ws-send", id, buffer);
+              else entry.queue.push(buffer);
+            },
+            close: () => send("anth:ws-close", { id }),
+          };
+        };
+
         const report = () => {
           const height = Math.ceil(document.documentElement.scrollHeight);
           if (height > 0) send("anth:resize", { height });
@@ -190,6 +212,7 @@
               const context = {
                 ...message.context,
                 fetch: request,
+                socket: openSocket,
                 close: () => send("anth:close"),
                 openView,
                 updateParams: (params) => send("anth:params", { params }),
@@ -221,6 +244,50 @@
           } else if (message.type === "anth:stream-end") {
             const call = pending.get(message.id);
             if (call) call.end(message.error);
+          } else if (message.type === "anth:ws-open-result") {
+            const entry = sockets.get(message.id);
+            if (!entry) return;
+            if (message.ok) {
+              entry.open = true;
+              for (const buffer of entry.queue.splice(0)) {
+                sendBytes("anth:ws-send", message.id, buffer);
+              }
+              if (typeof entry.handlers.onOpen === "function") {
+                entry.handlers.onOpen();
+              }
+            } else {
+              sockets.delete(message.id);
+              if (typeof entry.handlers.onClose === "function") {
+                entry.handlers.onClose(
+                  message.error || "the socket could not open",
+                  1006,
+                );
+              }
+            }
+          } else if (message.type === "anth:ws-message") {
+            const entry = sockets.get(message.id);
+            if (!entry) return;
+            let consumed = null;
+            if (message.data && typeof entry.handlers.onMessage === "function") {
+              consumed = entry.handlers.onMessage(message.data);
+            } else if (
+              typeof message.text === "string" &&
+              typeof entry.handlers.onText === "function"
+            ) {
+              consumed = entry.handlers.onText(message.text);
+            }
+            // The acknowledgement is what lets the panel release the next
+            // frame; a handler that throws must still not stall the socket.
+            Promise.resolve(consumed).finally(() => {
+              send("anth:ws-ack", { id: message.id });
+            });
+          } else if (message.type === "anth:ws-close") {
+            const entry = sockets.get(message.id);
+            if (!entry) return;
+            sockets.delete(message.id);
+            if (typeof entry.handlers.onClose === "function") {
+              entry.handlers.onClose(message.reason || undefined, message.code);
+            }
           } else if (message.type === "anth:open-view-result") {
             const resolve = pendingViews.get(message.requestId);
             if (!resolve) return;
@@ -261,6 +328,8 @@
             });
           } else if (message.type === "anth:unmount") {
             try {
+              for (const id of sockets.keys()) send("anth:ws-close", { id });
+              sockets.clear();
               if (typeof dispose === "function") await dispose();
             } finally {
               dispose = null;

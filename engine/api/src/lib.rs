@@ -24,7 +24,7 @@ use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::risk::{approve, Approval};
 use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
-use anth_contract::manifest::parse_call;
+use anth_contract::manifest::{parse_call, RouteTransport};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
     Error, ErrorKind, FatalView, GrantState, GrantView, InterfaceId, KeyAlgorithm, KeyView,
@@ -33,8 +33,8 @@ use anth_contract::{
 };
 use axum::body::Bytes;
 use axum::extract::{
-    connect_info::Connected, ConnectInfo, DefaultBodyLimit, Extension, Path, RawQuery, Request,
-    State,
+    connect_info::Connected, ws::Message, ws::WebSocket, ws::WebSocketUpgrade, ConnectInfo,
+    DefaultBodyLimit, Extension, FromRequestParts, Path, RawQuery, Request, State,
 };
 use axum::http::header::{
     ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION,
@@ -45,6 +45,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get};
 use axum::{Json, Router};
 use futures_core::Stream;
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::UnixListener;
@@ -247,6 +248,102 @@ pub type StreamFuture<'a> = Pin<Box<dyn Future<Output = Result<ChunkStream, Erro
 /// The per-stream budget from §7.7, used when the manifest omits it.
 const STREAM_BYTES_TOTAL: u64 = 8 * 1024 * 1024;
 const STREAM_BYTES_PER_SEC: u64 = 1024 * 1024;
+
+/// Wraps a stream in the manifest's byte budget (§7.7, §20).
+fn limited_stream(chunks: ChunkStream, installed: &InstalledApp) -> ChunkStream {
+    Box::pin(LimitedStream {
+        inner: chunks,
+        budget: StreamBudget {
+            total: installed
+                .manifest
+                .limits
+                .bytes_total
+                .unwrap_or(STREAM_BYTES_TOTAL),
+            per_sec: installed
+                .manifest
+                .limits
+                .bytes_per_sec
+                .unwrap_or(STREAM_BYTES_PER_SEC),
+        },
+        total: 0,
+        window_start: Instant::now(),
+        window_bytes: 0,
+        done: false,
+    })
+}
+
+/// The route dispatcher's caller is a trait object; the socket task owns its
+/// clone so the engine can drop the request future safely.
+type SharedCaller = Arc<dyn AppCaller>;
+
+/// Drives one WebSocket route: downstream chunks become binary messages and, if
+/// the route names a `write` call, client binary frames become its `data` input.
+async fn socket_route(
+    socket: WebSocket,
+    mut chunks: ChunkStream,
+    caller: SharedCaller,
+    app: String,
+    write: Option<(String, String)>,
+    input: Value,
+) {
+    let (mut sender, mut receiver) = socket.split();
+    loop {
+        tokio::select! {
+            chunk = chunks.next() => {
+                match chunk {
+                    Some(Ok(bytes)) => {
+                        if sender.send(Message::Binary(bytes.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Err(_)) => {
+                        // The body failed; a non-normal close tells the client
+                        // this was not a clean end of the stream.
+                        let _ = sender
+                            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                                code: 1011,
+                                reason: axum::extract::ws::Utf8Bytes::from_static(
+                                    "stream failed",
+                                ),
+                            })))
+                            .await;
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            message = receiver.next() => {
+                match message {
+                    Some(Ok(Message::Binary(bytes))) => {
+                        if let Some((interface, function)) = &write {
+                            let mut call_input = input.clone();
+                            if let Value::Object(map) = &mut call_input {
+                                map.insert(
+                                    "data".to_string(),
+                                    Value::Array(
+                                        bytes
+                                            .iter()
+                                            .map(|byte| Value::from(*byte))
+                                            .collect(),
+                                    ),
+                                );
+                            }
+                            // A refused write leaves the output side alive; the
+                            // caller sees the refusal on its next control call.
+                            let _ = caller
+                                .call(&app, interface, function, call_input)
+                                .await;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+        }
+    }
+    let _ = sender.close().await;
+}
 
 struct StreamBudget {
     total: u64,
@@ -868,6 +965,30 @@ async fn app_route(
         ))));
     }
     let (interface, function) = parse_call(&route.call)?;
+    let caller = state
+        .caller
+        .as_ref()
+        .ok_or_else(|| ApiError(Error::unavailable("this router does not run apps")))?;
+    if route.transport == RouteTransport::Websocket {
+        let input = query_input(query.as_deref());
+        let chunks = caller
+            .stream(app.as_str(), &interface, &function, input.clone())
+            .await?;
+        let chunks = limited_stream(chunks, found);
+        let write = route
+            .write
+            .as_ref()
+            .map(|write| parse_call(write))
+            .transpose()?;
+        let (mut parts, _) = request.into_parts();
+        let upgrade = WebSocketUpgrade::from_request_parts(&mut parts, &state)
+            .await
+            .map_err(|_| ApiError(Error::invalid("this route needs a WebSocket upgrade")))?;
+        let caller = Arc::clone(caller);
+        let app = app.to_string();
+        return Ok(upgrade
+            .on_upgrade(move |socket| socket_route(socket, chunks, caller, app, write, input)));
+    }
     let no_body = matches!(method, Method::GET | Method::HEAD | Method::DELETE);
     let body = read_body(request, 1 << 20).await?;
     if no_body && !body.is_empty() {
@@ -889,10 +1010,6 @@ async fn app_route(
         }
         value
     };
-    let caller = state
-        .caller
-        .as_ref()
-        .ok_or_else(|| ApiError(Error::unavailable("this router does not run apps")))?;
     if route.stream {
         if method == Method::HEAD {
             return Err(ApiError(Error::method_not_allowed(
@@ -902,25 +1019,7 @@ async fn app_route(
         let chunks = caller
             .stream(app.as_str(), &interface, &function, input)
             .await?;
-        let chunks: ChunkStream = Box::pin(LimitedStream {
-            inner: chunks,
-            budget: StreamBudget {
-                total: found
-                    .manifest
-                    .limits
-                    .bytes_total
-                    .unwrap_or(STREAM_BYTES_TOTAL),
-                per_sec: found
-                    .manifest
-                    .limits
-                    .bytes_per_sec
-                    .unwrap_or(STREAM_BYTES_PER_SEC),
-            },
-            total: 0,
-            window_start: Instant::now(),
-            window_bytes: 0,
-            done: false,
-        });
+        let chunks = limited_stream(chunks, found);
         return Response::builder()
             .status(StatusCode::OK)
             .header(CONTENT_TYPE, "application/octet-stream")

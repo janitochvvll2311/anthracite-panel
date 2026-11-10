@@ -147,6 +147,28 @@ export async function mountFrame(
     reading: boolean;
   };
   const streams = new Map<string, LiveStream>();
+  /// WebSocket routes opened for this frame. The frame never opens a socket
+  /// directly: it has an opaque origin and no cookie. One frame is in flight at
+  /// a time and the frame acknowledges it after xterm consumes it, which is how
+  /// backpressure reaches the engine.
+  type LiveSocket = {
+    socket: WebSocket;
+    queue: ArrayBuffer[];
+    inFlight: boolean;
+  };
+  const sockets = new Map<string, LiveSocket>();
+
+  const flushSocket = (id: string): void => {
+    const live = sockets.get(id);
+    if (!live || live.inFlight || live.queue.length === 0) return;
+    const data = live.queue.shift()!;
+    live.inFlight = true;
+    iframe.contentWindow?.postMessage(
+      { type: "anth:ws-message", token, id, data },
+      "*",
+      [data],
+    );
+  };
 
   const update = (params: unknown): void => {
     iframe.contentWindow?.postMessage(
@@ -454,6 +476,108 @@ export async function mountFrame(
         }
         return;
       }
+      if (message.type === "anth:ws-open") {
+        const id = String(message.id ?? "");
+        const url = String(message.url ?? "");
+        let target: URL;
+        try {
+          target = new URL(url, location.origin);
+        } catch {
+          iframe.contentWindow?.postMessage(
+            {
+              type: "anth:ws-open-result",
+              token,
+              id,
+              ok: false,
+              error: "invalid URL",
+            },
+            "*",
+          );
+          return;
+        }
+        if (
+          target.origin !== location.origin ||
+          !target.pathname.startsWith(allow)
+        ) {
+          iframe.contentWindow?.postMessage(
+            {
+              type: "anth:ws-open-result",
+              token,
+              id,
+              ok: false,
+              error: "this module may only open its own app routes",
+            },
+            "*",
+          );
+          return;
+        }
+        const scheme = target.protocol === "https:" ? "wss" : "ws";
+        const socket = new WebSocket(
+          `${scheme}://${target.host}${target.pathname}${target.search}`,
+        );
+        socket.binaryType = "arraybuffer";
+        const live: LiveSocket = { socket, queue: [], inFlight: false };
+        sockets.set(id, live);
+        socket.onopen = () => {
+          iframe.contentWindow?.postMessage(
+            { type: "anth:ws-open-result", token, id, ok: true },
+            "*",
+          );
+        };
+        socket.onmessage = (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            const entry = sockets.get(id);
+            if (!entry) return;
+            entry.queue.push(event.data);
+            flushSocket(id);
+          } else if (typeof event.data === "string") {
+            iframe.contentWindow?.postMessage(
+              { type: "anth:ws-message", token, id, text: event.data },
+              "*",
+            );
+          }
+        };
+        socket.onclose = (event) => {
+          sockets.delete(id);
+          iframe.contentWindow?.postMessage(
+            {
+              type: "anth:ws-close",
+              token,
+              id,
+              code: event.code,
+              reason: event.reason,
+            },
+            "*",
+          );
+        };
+        return;
+      }
+      if (message.type === "anth:ws-ack") {
+        const live = sockets.get(String(message.id ?? ""));
+        if (live) {
+          live.inFlight = false;
+          flushSocket(String(message.id ?? ""));
+        }
+        return;
+      }
+      if (message.type === "anth:ws-send") {
+        const id = String(message.id ?? "");
+        const live = sockets.get(id);
+        const data = message.data;
+        if (live && live.socket.readyState === WebSocket.OPEN && data) {
+          live.socket.send(data as ArrayBuffer);
+        }
+        return;
+      }
+      if (message.type === "anth:ws-close") {
+        const id = String(message.id ?? "");
+        const live = sockets.get(id);
+        if (live) {
+          sockets.delete(id);
+          live.socket.close();
+        }
+        return;
+      }
     };
 
     cleanup = () => {
@@ -468,6 +592,8 @@ export async function mountFrame(
       snapshotPending.clear();
       for (const live of streams.values()) live.controller.abort();
       streams.clear();
+      for (const live of sockets.values()) live.socket.close();
+      sockets.clear();
       iframe.contentWindow?.postMessage({ type: "anth:unmount", token }, "*");
       iframe.remove();
     };
