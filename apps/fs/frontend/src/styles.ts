@@ -422,6 +422,7 @@ export const styles = `
     }
     .editor-tree-backdrop { display: block; }
   }
+  .fs-empty { padding: 14px 16px; color: #667087; font-size: 12px; }
   .fs-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .fs-status.bad { color: #ffb3ba; }
 `;

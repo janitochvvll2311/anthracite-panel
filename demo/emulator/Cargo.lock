@@ -27,6 +27,7 @@ dependencies = [
  "anth-service",
  "futures-core",
  "futures-util",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

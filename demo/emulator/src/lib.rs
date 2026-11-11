@@ -2,10 +2,14 @@
 //!
 //! One binary backs one bundle per app: the bundles carry the real app's WIT
 //! package and manifest id, and only the binary is shared. Host state (files,
-//! accounts, network and storage) is a JSON snapshot under the per-app `{data}`
-//! directory; runtime state (processes and terminal sessions) resets on restart.
+//! accounts, network and storage) is one JSON snapshot all demo bundles point
+//! at (`state/shared/emulator/host.json`), read and written under a cross-process
+//! lock so a mutation in one app is visible in the rest; runtime state
+//! (processes and terminal sessions) resets on restart.
 
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -23,6 +27,7 @@ mod home;
 mod net;
 mod proc;
 mod storage;
+mod world;
 
 const FS_READ: &str = "anthracite:fs/read@1.2.0";
 const FS_WRITE: &str = "anthracite:fs/write@1.2.0";
@@ -31,7 +36,7 @@ const STREAM: &str = "anthracite:terminal/subscription@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
 const HOME: &str = "anthracite:home/host@1.0.0";
 const NET: &str = "anthracite:net/net@1.2.0";
-const STORAGE: &str = "anthracite:storage/storage@1.1.0";
+const STORAGE: &str = "anthracite:storage/storage@1.2.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.
@@ -51,6 +56,7 @@ pub struct Emulator {
     storage: Mutex<storage::StorageFixture>,
     accounts: Mutex<accounts::AccountsFixture>,
     state_path: Option<PathBuf>,
+    state_lock: Mutex<()>,
 }
 
 impl Default for Emulator {
@@ -77,16 +83,40 @@ struct StateRef<'a> {
     storage: &'a storage::StorageFixture,
 }
 
+/// Releases the cross-process `flock` when the call finishes.
+struct StateGuard {
+    file: std::fs::File,
+}
+
+impl Drop for StateGuard {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor is valid until the guard drops.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 impl Emulator {
     pub fn new() -> Self {
+        let storage = storage::StorageFixture::new();
+        let mut fs = Fs::demo();
+        for (device, mountpoint) in storage.mounted_devices() {
+            if mountpoint == "/" {
+                continue;
+            }
+            fs.mount(&mountpoint, &storage.files_for(&device))
+                .expect("the seed mountpoints are valid");
+        }
         Self {
-            fs: Mutex::new(Fs::demo()),
+            fs: Mutex::new(fs),
             terminals: Arc::new(Mutex::new(Terminals::default())),
             procs: Mutex::new(proc::ProcFixture::demo()),
             net: Arc::new(Mutex::new(net::NetFixture::new())),
-            storage: Mutex::new(storage::StorageFixture::new()),
+            storage: Mutex::new(storage),
             accounts: Mutex::new(accounts::AccountsFixture::new()),
             state_path: None,
+            state_lock: Mutex::new(()),
         }
     }
 
@@ -112,6 +142,122 @@ impl Emulator {
         }
         emulator.state_path = state;
         Ok(emulator)
+    }
+
+    /// Serializes one call across processes that share the same state file.
+    fn lock_state(&self) -> Result<Option<StateGuard>, Error> {
+        let Some(path) = &self.state_path else {
+            return Ok(None);
+        };
+        let lock_path = path.with_extension("lock");
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Error::internal(format!("creating {}: {error}", parent.display()))
+            })?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|error| {
+                Error::internal(format!("opening {}: {error}", lock_path.display()))
+            })?;
+        // SAFETY: `file` is open for the lifetime of the guard; `flock` has no
+        // memory preconditions and the descriptor is valid.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(Error::internal(format!(
+                "locking {}: {}",
+                lock_path.display(),
+                std::io::Error::last_os_error()
+            )));
+        }
+        Ok(Some(StateGuard { file }))
+    }
+
+    /// Reloads the shared snapshot before a call so another app's mutation is
+    /// visible. The caller holds the cross-process lock.
+    fn reload(&self) -> Result<(), Error> {
+        let Some(path) = &self.state_path else {
+            return Ok(());
+        };
+        if !path.exists() {
+            return Ok(());
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|error| Error::internal(format!("reading {}: {error}", path.display())))?;
+        let loaded: State = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::internal(format!(
+                "{} is not a valid state snapshot: {error}",
+                path.display()
+            ))
+        })?;
+        *self.fs.lock().expect("the fixture mutex is not poisoned") = loaded.fs;
+        *self
+            .accounts
+            .lock()
+            .expect("the fixture mutex is not poisoned") = loaded.accounts;
+        *self.net.lock().expect("the fixture mutex is not poisoned") = loaded.net;
+        *self
+            .storage
+            .lock()
+            .expect("the fixture mutex is not poisoned") = loaded.storage;
+        Ok(())
+    }
+
+    /// A mountpoint becomes a directory in the shared files tree; a new user's
+    /// home is created too, so Files sees what Storage and Accounts did.
+    fn apply_cross_domain(
+        &self,
+        interface: &str,
+        function: &str,
+        input: &Value,
+        detached_device: Option<&str>,
+    ) -> Result<(), Error> {
+        if interface == STORAGE {
+            let mountpoint = input.get("mountpoint").and_then(Value::as_str);
+            if function == "attach" {
+                let device = input.get("device").and_then(Value::as_str).unwrap_or("");
+                let files = self
+                    .storage
+                    .lock()
+                    .expect("the fixture mutex is not poisoned")
+                    .files_for(device);
+                if let Some(mountpoint) = mountpoint {
+                    self.fs
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .mount(mountpoint, &files)?;
+                }
+            } else if function == "detach" {
+                if let Some(mountpoint) = mountpoint {
+                    let files = self
+                        .fs
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .unmount(mountpoint);
+                    // A mountpoint hidden by another mount has no overlay of
+                    // its own; keep its device files instead of overwriting
+                    // them with what the outer volume shows there.
+                    if let (Some(device), Some(files)) = (detached_device, files) {
+                        self.storage
+                            .lock()
+                            .expect("the fixture mutex is not poisoned")
+                            .set_files(device, files);
+                    }
+                }
+            }
+        }
+        if interface == ACCOUNTS && function == "create-user" {
+            if let Some(home) = input.get("home").and_then(Value::as_str) {
+                self.fs
+                    .lock()
+                    .expect("the fixture mutex is not poisoned")
+                    .ensure_dir(home)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn trashed(&self) -> Vec<String> {
@@ -143,6 +289,11 @@ impl Emulator {
             storage: &storage,
         })
         .map_err(|error| Error::internal(format!("encoding host state: {error}")))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Error::internal(format!("creating {}: {error}", parent.display()))
+            })?;
+        }
         let temporary = path.with_extension("json.tmp");
         std::fs::write(&temporary, &bytes).map_err(|error| {
             Error::internal(format!("writing {}: {error}", temporary.display()))
@@ -157,6 +308,25 @@ impl Emulator {
 
 impl Handler for Emulator {
     fn call(&self, interface: &str, function: &str, input: Value) -> Result<Value, Error> {
+        let _serial = self
+            .state_lock
+            .lock()
+            .expect("the state lock is not poisoned");
+        let _guard = self.lock_state()?;
+        self.reload()?;
+        let detached_device = if interface == STORAGE && function == "detach" {
+            input
+                .get("mountpoint")
+                .and_then(Value::as_str)
+                .and_then(|mountpoint| {
+                    self.storage
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .device_for(mountpoint)
+                })
+        } else {
+            None
+        };
         let mutating = match interface {
             FS_WRITE => true,
             NET => !matches!(function, "interfaces" | "routes"),
@@ -173,7 +343,7 @@ impl Handler for Emulator {
                 .lock()
                 .expect("the fixture mutex is not poisoned")
                 .handle(function, &input),
-            HOME => home::handle(function, &input),
+            HOME => home::handle(function, &input, self.state_path.as_deref()),
             NET => self
                 .net
                 .lock()
@@ -194,6 +364,7 @@ impl Handler for Emulator {
             ))),
         };
         if mutating && result.is_ok() {
+            self.apply_cross_domain(interface, function, &input, detached_device.as_deref())?;
             self.persist()?;
         }
         result
@@ -202,7 +373,7 @@ impl Handler for Emulator {
     fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
         if interface == HOME {
             return match function {
-                "watch" => home::watch(&input),
+                "watch" => home::watch(&input, self.state_path.clone()),
                 other => Err(Error::not_found(format!(
                     "`anthracite:home/host#{other}` is not implemented"
                 ))),
@@ -248,7 +419,7 @@ impl Handler for Emulator {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 enum Node {
     Dir,
     File(Vec<u8>),
@@ -256,11 +427,52 @@ enum Node {
     Link(String),
 }
 
+/// One entry on a block device. Directories are captured too so an empty
+/// directory created while a volume is mounted survives a remount.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(from = "FsEntrySnapshot")]
+pub(crate) enum FsEntry {
+    Dir,
+    File(Vec<u8>),
+    Link(String),
+}
+
+/// Reads the current tagged entries and the plain arrays written before
+/// directories and links were captured, so an older snapshot still boots.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum FsEntrySnapshot {
+    Legacy(Vec<u8>),
+    Current(FsEntryTag),
+}
+
+#[derive(serde::Deserialize)]
+enum FsEntryTag {
+    Dir,
+    File(Vec<u8>),
+    Link(String),
+}
+
+impl From<FsEntrySnapshot> for FsEntry {
+    fn from(snapshot: FsEntrySnapshot) -> Self {
+        match snapshot {
+            FsEntrySnapshot::Legacy(bytes) => Self::File(bytes),
+            FsEntrySnapshot::Current(FsEntryTag::Dir) => Self::Dir,
+            FsEntrySnapshot::Current(FsEntryTag::File(bytes)) => Self::File(bytes),
+            FsEntrySnapshot::Current(FsEntryTag::Link(target)) => Self::Link(target),
+        }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Fs {
     nodes: BTreeMap<String, Node>,
     /// Subtrees removed with `trash = true`, kept for listing and restore.
     trash: Vec<Trashed>,
+    /// What a mountpoint hid when a device was mounted over it. Restored on
+    /// unmount, so mounting never destroys the underlying tree.
+    #[serde(default)]
+    hidden: BTreeMap<String, BTreeMap<String, Node>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -275,6 +487,7 @@ impl Fs {
         let mut fs = Self {
             nodes: BTreeMap::new(),
             trash: Vec::new(),
+            hidden: BTreeMap::new(),
         };
         for dir in [
             "/",
@@ -285,11 +498,13 @@ impl Fs {
             "/tmp",
             "/var",
             "/var/log",
-        ] {
+        ]
+        .into_iter()
+        .chain(world::directories().iter().copied())
+        {
             fs.nodes.insert(dir.to_string(), Node::Dir);
         }
         for (path, text) in [
-            ("/etc/hostname", "anthracite-demo\n"),
             (
                 "/home/operator/notes.txt",
                 "The emulator resets on restart.\n",
@@ -305,6 +520,10 @@ impl Fs {
             fs.nodes
                 .insert(path.to_string(), Node::File(text.as_bytes().to_vec()));
         }
+        fs.nodes.insert(
+            "/etc/hostname".to_string(),
+            Node::File(format!("{}\n", world::HOSTNAME).into_bytes()),
+        );
         fs
     }
 
@@ -488,6 +707,122 @@ impl Fs {
         for (old, node) in moved {
             let destination = format!("{to}{}", &old[from.len()..]);
             self.nodes.insert(destination, node);
+        }
+        Ok(())
+    }
+
+    /// Overlays a device filesystem at a mountpoint. The subtree that was
+    /// underneath is saved and restored on unmount; mounting never destroys it.
+    pub fn mount(
+        &mut self,
+        mountpoint: &str,
+        files: &BTreeMap<String, FsEntry>,
+    ) -> Result<(), Error> {
+        let root = mountpoint.trim_end_matches('/').to_string();
+        self.ensure_dir(mountpoint)?;
+        let hidden = self.subtree(mountpoint);
+        self.hidden.insert(root, hidden);
+        self.clear_subtree(mountpoint);
+        for (relative, entry) in files {
+            let relative = relative.trim_matches('/');
+            if relative.is_empty() || relative.contains("..") {
+                continue;
+            }
+            let path = format!("{}/{}", mountpoint.trim_end_matches('/'), relative);
+            if let Some((parent, _)) = path.rsplit_once('/') {
+                self.ensure_dir(parent)?;
+            }
+            match entry {
+                FsEntry::Dir => {
+                    self.ensure_dir(&path)?;
+                }
+                FsEntry::File(bytes) => {
+                    self.nodes.insert(path, Node::File(bytes.clone()));
+                }
+                FsEntry::Link(target) => {
+                    self.nodes.insert(path, Node::Link(target.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Captures the volume contents and restores what the mount hid. Returns
+    /// `None` when the path has no overlay of its own, for example because a
+    /// mount further up hides it; the caller must not overwrite a device then.
+    pub fn unmount(&mut self, mountpoint: &str) -> Option<BTreeMap<String, FsEntry>> {
+        let root = mountpoint.trim_end_matches('/').to_string();
+        // An overlay further up covers this mountpoint, so its own files are
+        // not the visible tree; leave the device and the outer volume alone.
+        if self.hidden.keys().any(|ancestor| {
+            !ancestor.is_empty() && ancestor != &root && root.starts_with(&format!("{ancestor}/"))
+        }) {
+            return None;
+        }
+        let hidden = self.hidden.remove(&root);
+        let entries = self.collect_entries(mountpoint);
+        self.clear_subtree(mountpoint);
+        // A snapshot written before `hidden` existed has no underlay to
+        // restore, but the volume itself must still stop being visible.
+        if let Some(hidden) = hidden {
+            self.nodes.extend(hidden);
+        }
+        let _ = self.ensure_dir(mountpoint);
+        Some(entries)
+    }
+
+    /// Everything a mountpoint currently hides, captured before the overlay.
+    fn subtree(&self, mountpoint: &str) -> BTreeMap<String, Node> {
+        let prefix = format!("{}/", mountpoint.trim_end_matches('/'));
+        self.nodes
+            .iter()
+            .filter_map(|(path, node)| {
+                path.strip_prefix(&prefix)?;
+                Some((path.clone(), node.clone()))
+            })
+            .collect()
+    }
+
+    /// The visible entries under a mountpoint, relative to it, directories
+    /// included so empty directories survive a remount.
+    fn collect_entries(&self, mountpoint: &str) -> BTreeMap<String, FsEntry> {
+        let prefix = format!("{}/", mountpoint.trim_end_matches('/'));
+        self.nodes
+            .iter()
+            .filter_map(|(path, node)| {
+                let relative = path.strip_prefix(&prefix)?;
+                let entry = match node {
+                    Node::Dir => FsEntry::Dir,
+                    Node::File(bytes) => FsEntry::File(bytes.clone()),
+                    Node::Link(target) => FsEntry::Link(target.clone()),
+                };
+                Some((relative.to_string(), entry))
+            })
+            .collect()
+    }
+
+    /// Removes everything under a mountpoint but keeps the directory itself.
+    pub fn clear_subtree(&mut self, mountpoint: &str) {
+        let prefix = format!("{}/", mountpoint.trim_end_matches('/'));
+        self.nodes.retain(|path, _| !path.starts_with(&prefix));
+        let _ = self.ensure_dir(mountpoint);
+    }
+
+    pub fn ensure_dir(&mut self, path: &str) -> Result<(), Error> {
+        if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
+            return Err(Error::invalid("`path` must be an absolute path"));
+        }
+        let mut current = String::new();
+        for part in path.split('/').filter(|part| !part.is_empty()) {
+            current.push('/');
+            current.push_str(part);
+            match self.nodes.get(&current) {
+                Some(Node::Dir) => {}
+                Some(_) => return Err(Error::conflict(format!("`{current}` is not a directory"))),
+                None => {
+                    self.nodes.insert(current.clone(), Node::Dir);
+                }
+            }
         }
         Ok(())
     }
@@ -1052,9 +1387,9 @@ mod tests {
     fn the_tree_is_sorted_and_paginates() {
         let emulator = Emulator::new();
         let page = call(&emulator, "list", json!({"path": "/", "limit": 3}));
-        assert_eq!(page["entries"][0]["name"], "etc");
-        assert_eq!(page["entries"][1]["name"], "home");
-        assert_eq!(page["entries"][2]["name"], "tmp");
+        assert_eq!(page["entries"][0]["name"], "boot");
+        assert_eq!(page["entries"][1]["name"], "etc");
+        assert_eq!(page["entries"][2]["name"], "home");
         assert_eq!(page["done"], false);
         let cursor = page["cursor"].as_str().expect("cursor");
         let next = call(
@@ -1062,8 +1397,17 @@ mod tests {
             "list",
             json!({"path": "/", "cursor": cursor, "limit": 3}),
         );
-        assert_eq!(next["entries"][0]["name"], "var");
-        assert_eq!(next["done"], true);
+        assert_eq!(next["entries"][0]["name"], "media");
+        assert_eq!(next["done"], false);
+        let cursor = next["cursor"].as_str().expect("cursor");
+        let last = call(
+            &emulator,
+            "list",
+            json!({"path": "/", "cursor": cursor, "limit": 3}),
+        );
+        assert_eq!(last["entries"][0]["name"], "usr");
+        assert_eq!(last["entries"][1]["name"], "var");
+        assert_eq!(last["done"], true);
     }
 
     #[test]
@@ -1507,6 +1851,298 @@ mod tests {
             .expect("mounts")
             .iter()
             .any(|mount| mount["mountpoint"] == "/media/sd"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_fixtures_describe_one_host() {
+        let emulator = Emulator::new();
+        for mount in world::mounts() {
+            emulator
+                .call(FS_READ, "stat", json!({"path": mount.mountpoint}))
+                .expect("mountpoint in the files tree");
+        }
+        for user in world::users() {
+            emulator
+                .call(FS_READ, "stat", json!({"path": user.home}))
+                .expect("user home in the files tree");
+        }
+        let net = emulator
+            .call(NET, "interfaces", json!({}))
+            .expect("net interfaces");
+        let net_names: Vec<&str> = net
+            .as_array()
+            .expect("interfaces")
+            .iter()
+            .filter_map(|interface| interface["name"].as_str())
+            .collect();
+        let home = emulator.call(HOME, "info", json!({})).expect("home info");
+        let home_names: Vec<&str> = home["networks"]
+            .as_array()
+            .expect("home networks")
+            .iter()
+            .filter_map(|interface| interface["name"].as_str())
+            .collect();
+        assert_eq!(net_names, home_names);
+
+        let storage = emulator
+            .call(STORAGE, "mounts", json!({}))
+            .expect("storage mounts");
+        let storage_mounts: Vec<&str> = storage
+            .as_array()
+            .expect("mounts")
+            .iter()
+            .filter_map(|mount| mount["mountpoint"].as_str())
+            .collect();
+        let home_mounts: Vec<&str> = home["disks"]
+            .as_array()
+            .expect("home disks")
+            .iter()
+            .filter_map(|disk| disk["mount"].as_str())
+            .collect();
+        assert_eq!(storage_mounts, home_mounts);
+
+        let accounts = emulator
+            .call(ACCOUNTS, "users", json!({}))
+            .expect("accounts users");
+        let names: Vec<&str> = accounts
+            .as_array()
+            .expect("users")
+            .iter()
+            .filter_map(|user| user["name"].as_str())
+            .collect();
+        for user in world::users() {
+            assert!(names.contains(&user.name), "{}", user.name);
+        }
+    }
+
+    #[test]
+    fn a_mount_may_not_hide_another_mountpoint() {
+        let emulator = Emulator::new();
+        let error = emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdc", "mountpoint": "/media", "filesystem": "exfat"}),
+            )
+            .expect_err("overlaps the /media/demo mount");
+        assert_eq!(error.kind(), ErrorKind::Conflict);
+        // The volume under the rejected mount keeps its own files.
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/media/demo"}))
+            .expect("unmount");
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdb1", "mountpoint": "/media/demo", "filesystem": "exfat"}),
+            )
+            .expect("remount");
+        call(&emulator, "stat", json!({"path": "/media/demo/README.txt"}));
+    }
+
+    #[test]
+    fn volume_entries_read_old_arrays_and_current_tags() {
+        let legacy: FsEntry =
+            serde_json::from_value(json!([104, 105])).expect("a pre-FsEntry array");
+        assert!(matches!(legacy, FsEntry::File(bytes) if bytes == b"hi"));
+        let dir: FsEntry = serde_json::from_value(json!("Dir")).expect("a directory");
+        assert!(matches!(dir, FsEntry::Dir));
+        let link: FsEntry = serde_json::from_value(json!({"Link": "/target"})).expect("a symlink");
+        assert!(matches!(link, FsEntry::Link(target) if target == "/target"));
+    }
+
+    #[test]
+    fn a_mountpoint_hidden_by_an_outer_mount_is_not_captured() {
+        let mut fs = Fs::demo();
+        fs.mount("/home/operator/deep", &BTreeMap::new())
+            .expect("inner mount");
+        fs.mount("/home/operator", &BTreeMap::new())
+            .expect("outer mount");
+        assert!(fs.unmount("/home/operator/deep").is_none());
+        assert!(fs.unmount("/home/operator").is_some());
+    }
+
+    #[test]
+    fn unmounting_without_a_saved_underlay_still_hides_the_volume() {
+        let mut fs = Fs::demo();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "README.txt".to_string(),
+            FsEntry::File(b"legacy\n".to_vec()),
+        );
+        fs.mount("/media/demo", &files).expect("mount");
+        // A 490ae03 snapshot has no `hidden` map to restore.
+        fs.hidden.clear();
+        let entries = fs.unmount("/media/demo").expect("active mount");
+        assert!(entries.contains_key("README.txt"));
+        assert!(!fs.nodes.keys().any(|path| path.starts_with("/media/demo/")));
+    }
+
+    #[test]
+    fn mounting_over_content_hides_it_and_unmounting_restores_it() {
+        let emulator = Emulator::new();
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdc", "mountpoint": "/home", "filesystem": "exfat"}),
+            )
+            .expect("mount over /home");
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/home/operator/notes.txt"}))
+                .expect_err("hidden by the mount")
+                .kind(),
+            ErrorKind::NotFound
+        );
+        emulator
+            .call(FS_READ, "stat", json!({"path": "/home/notes.txt"}))
+            .expect("the volume is visible");
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/home"}))
+            .expect("unmount");
+        call(
+            &emulator,
+            "stat",
+            json!({"path": "/home/operator/notes.txt"}),
+        );
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/home/notes.txt"}))
+                .expect_err("the volume is hidden")
+                .kind(),
+            ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn empty_directories_on_a_volume_survive_remount() {
+        let emulator = Emulator::new();
+        emulator
+            .call(FS_WRITE, "mkdir", json!({"path": "/media/demo/empty"}))
+            .expect("mkdir on the volume");
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/media/demo"}))
+            .expect("unmount");
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdb1", "mountpoint": "/media/demo", "filesystem": "exfat"}),
+            )
+            .expect("remount");
+        call(&emulator, "stat", json!({"path": "/media/demo/empty"}));
+    }
+
+    #[test]
+    fn unmounting_hides_and_remounting_restores_device_files() {
+        let emulator = Emulator::new();
+        let readme = call(
+            &emulator,
+            "read-file",
+            json!({"path": "/media/demo/README.txt"}),
+        );
+        emulator
+            .call(
+                FS_WRITE,
+                "write-file",
+                json!({"path": "/media/demo/new.txt", "bytes": [104, 105]}),
+            )
+            .expect("write on the mounted volume");
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/media/demo"}))
+            .expect("unmount");
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/media/demo/README.txt"}))
+                .expect_err("hidden")
+                .kind(),
+            ErrorKind::NotFound
+        );
+        call(&emulator, "stat", json!({"path": "/media/demo"}));
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdb1", "mountpoint": "/media/demo", "filesystem": "exfat"}),
+            )
+            .expect("remount");
+        assert_eq!(
+            call(
+                &emulator,
+                "read-file",
+                json!({"path": "/media/demo/README.txt"}),
+            ),
+            readme
+        );
+        assert_eq!(
+            call(
+                &emulator,
+                "read-file",
+                json!({"path": "/media/demo/new.txt"}),
+            ),
+            json!([104, 105])
+        );
+    }
+
+    #[test]
+    fn shared_state_is_visible_across_apps() {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("shared-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("host.json");
+        let first = Emulator::open(Some(path.clone())).expect("first");
+        let second = Emulator::open(Some(path)).expect("second");
+
+        first
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdc", "mountpoint": "/media/sd", "filesystem": "exfat"}),
+            )
+            .expect("attach");
+        let mounts = second
+            .call(STORAGE, "mounts", json!({}))
+            .expect("second sees the mount");
+        assert!(mounts
+            .as_array()
+            .expect("mounts")
+            .iter()
+            .any(|mount| mount["mountpoint"] == "/media/sd"));
+        second
+            .call(FS_READ, "stat", json!({"path": "/media/sd"}))
+            .expect("mountpoint is a directory in the files tree");
+        let notes = second
+            .call(FS_READ, "read-file", json!({"path": "/media/sd/notes.txt"}))
+            .expect("the device files are visible");
+        assert!(!notes.as_array().expect("bytes").is_empty());
+
+        second
+            .call(NET, "set-up", json!({"name": "wlan0", "up": true}))
+            .expect("interface up");
+        let info = first.call(HOME, "info", json!({})).expect("home");
+        let wlan = info["networks"]
+            .as_array()
+            .expect("networks")
+            .iter()
+            .find(|network| network["name"] == "wlan0")
+            .expect("wlan0");
+        assert_eq!(wlan["state"], "up");
+
+        second
+            .call(
+                ACCOUNTS,
+                "create-user",
+                json!({"name": "demo", "uid": 1500, "gid": 1500, "home": "/home/demo", "shell": "/bin/sh", "system": false}),
+            )
+            .expect("create user");
+        first
+            .call(FS_READ, "stat", json!({"path": "/home/demo"}))
+            .expect("home directory is visible");
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -361,11 +361,13 @@ state/
   credentials.txt           operator name and password, written once (§6.5)
   keys/<fingerprint>.toml   trusted third-party keys (§9.1)
   data/<app-id>/kv.json     the app's `anth:store/kv` namespace (host-written)
+  shared/                   files services opt into via `{shared}` (0700)
   audit.jsonl               append-only audit
 ```
 
 Directories are `0700` and files `0600`. The engine creates the tree on first boot,
-and refuses to start if one of these paths is a symlink.
+and refuses to start if one of these paths is a symlink. `shared/` is optional in
+a tree created before v0.6.0 until the next boot creates it.
 
 **Audit entries.** One JSON object per line, append-only, never rewritten:
 

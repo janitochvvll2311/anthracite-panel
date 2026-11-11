@@ -2,7 +2,7 @@
 //!
 //! The supervisor passes `--socket` and `--state`; `anth-service` owns the
 //! socket, `/health` and `/__anth/call`, and this binary supplies the handlers
-//! and the per-app JSON snapshot.
+//! and the shared host snapshot.
 
 use std::path::PathBuf;
 use std::sync::Arc;

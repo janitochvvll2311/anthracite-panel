@@ -64,7 +64,7 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                 "Files (emulator)",
                 "Deterministic filesystem fixture for the demo; replaced by the real fs app.",
                 "socket",
-                r#"["--socket", "{socket}", "--state", "{data}/state.json"]"#,
+                r#"["--socket", "{socket}", "--state", "{shared}/emulator/host.json"]"#,
             ),
             "terminal" => (
                 "Terminal (emulator)",
@@ -82,13 +82,19 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                 "Network (emulator)",
                 "Deterministic interface and route fixture for the demo; replaced by the real net app.",
                 "socket",
-                r#"["--socket", "{socket}", "--state", "{data}/state.json"]"#,
+                r#"["--socket", "{socket}", "--state", "{shared}/emulator/host.json"]"#,
+            ),
+            "storage" => (
+                "Storage (emulator)",
+                "Deterministic block-device and mount fixture for the demo; replaced by the real storage app.",
+                "socket",
+                r#"["--socket", "{socket}", "--state", "{shared}/emulator/host.json"]"#,
             ),
             "home" => (
                 "Home (emulator)",
                 "Deterministic host overview fixture for the demo; replaced by the real home app.",
                 "host",
-                r#"["--socket", "{socket}"]"#,
+                r#"["--socket", "{socket}", "--state", "{shared}/emulator/host.json"]"#,
             ),
             _ => ("", "", "", ""),
         };

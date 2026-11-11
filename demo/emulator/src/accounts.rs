@@ -32,80 +32,30 @@ pub struct AccountsFixture {
 impl AccountsFixture {
     pub fn new() -> Self {
         Self {
-            users: vec![
-                User {
-                    name: "root".to_string(),
-                    uid: 0,
-                    gid: 0,
-                    home: "/root".to_string(),
-                    shell: "/bin/sh".to_string(),
-                    system: true,
-                    locked: false,
-                },
-                User {
-                    name: "daemon".to_string(),
-                    uid: 1,
-                    gid: 1,
-                    home: "/usr/sbin".to_string(),
-                    shell: "/usr/sbin/nologin".to_string(),
-                    system: true,
-                    locked: true,
-                },
-                User {
-                    name: "operator".to_string(),
-                    uid: 1000,
-                    gid: 1000,
-                    home: "/home/operator".to_string(),
-                    shell: "/bin/sh".to_string(),
-                    system: false,
-                    locked: false,
-                },
-                User {
-                    name: "backup".to_string(),
-                    uid: 34,
-                    gid: 34,
-                    home: "/var/backups".to_string(),
-                    shell: "/usr/sbin/nologin".to_string(),
-                    system: true,
-                    locked: true,
-                },
-                User {
-                    name: "postgres".to_string(),
-                    uid: 999,
-                    gid: 999,
-                    home: "/var/lib/postgresql".to_string(),
-                    shell: "/bin/sh".to_string(),
-                    system: false,
-                    locked: false,
-                },
-            ],
-            groups: vec![
-                Group {
-                    name: "root".to_string(),
-                    gid: 0,
-                    members: vec![],
-                },
-                Group {
-                    name: "operator".to_string(),
-                    gid: 1000,
-                    members: vec!["operator".to_string()],
-                },
-                Group {
-                    name: "sudo".to_string(),
-                    gid: 27,
-                    members: vec!["operator".to_string()],
-                },
-                Group {
-                    name: "docker".to_string(),
-                    gid: 998,
-                    members: vec!["operator".to_string()],
-                },
-                Group {
-                    name: "postgres".to_string(),
-                    gid: 999,
-                    members: vec!["postgres".to_string()],
-                },
-            ],
+            users: crate::world::users()
+                .iter()
+                .map(|user| User {
+                    name: user.name.to_string(),
+                    uid: user.uid,
+                    gid: user.gid,
+                    home: user.home.to_string(),
+                    shell: user.shell.to_string(),
+                    system: user.system,
+                    locked: user.locked,
+                })
+                .collect(),
+            groups: crate::world::groups()
+                .iter()
+                .map(|group| Group {
+                    name: group.name.to_string(),
+                    gid: group.gid,
+                    members: group
+                        .members
+                        .iter()
+                        .map(|member| member.to_string())
+                        .collect(),
+                })
+                .collect(),
         }
     }
 

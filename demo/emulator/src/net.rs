@@ -51,61 +51,26 @@ pub struct NetFixture {
 impl NetFixture {
     pub fn new() -> Self {
         Self {
-            interfaces: vec![
-                Interface {
-                    name: "lo".to_string(),
-                    up: true,
-                    mac: "00:00:00:00:00:00".to_string(),
-                    mtu: 65536,
-                    addresses: vec![
-                        Address {
-                            family: "ipv4".to_string(),
-                            address: "127.0.0.1".to_string(),
-                            prefix: 8,
-                        },
-                        Address {
-                            family: "ipv6".to_string(),
-                            address: "::1".to_string(),
-                            prefix: 128,
-                        },
-                    ],
-                    rx_bytes: 1_048_576,
-                    tx_bytes: 1_048_576,
-                },
-                Interface {
-                    name: "eth0".to_string(),
-                    up: true,
-                    mac: "02:42:ac:11:00:02".to_string(),
-                    mtu: 1500,
-                    addresses: vec![
-                        Address {
-                            family: "ipv4".to_string(),
-                            address: "10.0.0.2".to_string(),
-                            prefix: 24,
-                        },
-                        Address {
-                            family: "ipv6".to_string(),
-                            address: "fe80::42:acff:fe11:2".to_string(),
-                            prefix: 64,
-                        },
-                    ],
-                    rx_bytes: 12_582_912,
-                    tx_bytes: 3_145_728,
-                },
-                Interface {
-                    name: "wlan0".to_string(),
-                    up: false,
-                    mac: "02:42:ac:11:00:03".to_string(),
-                    mtu: 1500,
-                    addresses: vec![Address {
-                        family: "ipv4".to_string(),
-                        address: "192.168.1.40".to_string(),
-                        prefix: 24,
-                    }],
-                    rx_bytes: 0,
-                    tx_bytes: 0,
-                },
-            ],
+            interfaces: crate::world::interfaces()
+                .iter()
+                .map(|interface| Interface {
+                    name: interface.name.to_string(),
+                    up: interface.up,
+                    mac: interface.mac.to_string(),
+                    mtu: interface.mtu,
+                    addresses: interface
+                        .addresses
+                        .iter()
+                        .map(|(family, address, prefix)| Address {
+                            family: family.to_string(),
+                            address: address.to_string(),
+                            prefix: *prefix,
+                        })
+                        .collect(),
+                    rx_bytes: interface.rx_bytes,
+                    tx_bytes: interface.tx_bytes,
+                })
+                .collect(),
             routes: vec![
                 Route {
                     family: "ipv4".to_string(),

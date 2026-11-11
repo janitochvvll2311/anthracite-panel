@@ -3,4 +3,5 @@ export type FrameContext = {
   app: { id: string };
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   fill?: () => void;
+  onVisibility?: (handler: (visible: boolean) => void) => () => void;
 };

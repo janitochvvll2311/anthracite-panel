@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use anth_contract::{Composition, Error};
 
 /// The directories the tree owns, relative to its root.
-pub const DIRS: &[&str] = &["apps", "grants", "keys", "data"];
+pub const DIRS: &[&str] = &["apps", "grants", "keys", "data", "shared"];
+/// Directories added after the first tree shipped: a v0.5 tree may lack them
+/// until the next boot creates them.
+const OPTIONAL_DIRS: &[&str] = &["shared"];
 /// The files the tree owns, relative to its root.
 pub const FILES: &[&str] = &[COMPOSITION, AUDIT, anth_auth::CREDENTIALS];
 
@@ -108,7 +111,19 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
 
     for name in DIRS {
         let path = root.join(name);
-        let metadata = inspect(&path)?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if OPTIONAL_DIRS.contains(name) {
+                    continue;
+                }
+                return Err(Error::not_found(format!(
+                    "{} is missing; start the engine once to create it",
+                    path.display()
+                )));
+            }
+            Err(error) => return Err(inspect_error(&path, error)),
+        };
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(Error::invalid(format!(
                 "{} is not a real directory",
@@ -339,6 +354,22 @@ mod tests {
         let root = scratch("check");
         ensure(&root).expect("ensure");
         assert_eq!(check(&root).expect("check"), StateStatus::Ready);
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_missing_required_directory_is_not_found_but_shared_is_optional() {
+        let root = scratch("check-dirs");
+        ensure(&root).expect("ensure");
+        fs::remove_dir_all(root.join("shared")).expect("remove shared");
+        assert_eq!(
+            check(&root).expect("shared is optional"),
+            StateStatus::Ready
+        );
+        fs::remove_dir_all(root.join("keys")).expect("remove keys");
+        let error = check(&root).expect_err("keys is required");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert!(error.message().contains("is missing"), "{error}");
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
