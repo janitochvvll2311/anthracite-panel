@@ -993,10 +993,21 @@ export function mount(root: HTMLElement, context: FrameContext) {
   });
 
   renderPaths();
+  let visible = true;
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible) return;
+    visible = next;
+    if (!next || disposed) return;
+    // Storage may have mounted or unmounted something while this view was in
+    // another tab; re-read the current directory so Files follows it.
+    if (view === "trash") void loadTrash();
+    else void load(current);
+  });
   void load("/");
 
   return () => {
     disposed = true;
+    offVisibility?.();
     if (previewState?.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
     root.replaceChildren();
   };

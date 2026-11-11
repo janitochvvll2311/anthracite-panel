@@ -37830,9 +37830,22 @@ function mount(root, context) {
     hideDrop();
   });
   renderPaths();
+  let visible = true;
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible)
+      return;
+    visible = next;
+    if (!next || disposed)
+      return;
+    if (view === "trash")
+      loadTrash();
+    else
+      load(current);
+  });
   load("/");
   return () => {
     disposed = true;
+    offVisibility?.();
     if (previewState?.objectUrl)
       URL.revokeObjectURL(previewState.objectUrl);
     root.replaceChildren();

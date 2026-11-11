@@ -7,4 +7,5 @@ export type FrameContext = {
   params?: any;
   updateParams?: (params: any) => void;
   openView?: (view: any) => void;
+  onVisibility?: (handler: (visible: boolean) => void) => () => void;
 };
