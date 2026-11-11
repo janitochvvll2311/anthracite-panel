@@ -46,7 +46,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
   };
 
   const systemMount = (mountpoint: string): boolean =>
-    mountpoint === "/" || mountpoint === "/boot" || mountpoint === "/boot/efi";
+    ["/", "/boot", "/boot/efi", "/proc", "/sys", "/dev", "/run"].some(
+      (prefix) =>
+        mountpoint === prefix || mountpoint.startsWith(`${prefix}/`),
+    );
 
   async function load() {
     setStatus("Reading mounts and devices…");

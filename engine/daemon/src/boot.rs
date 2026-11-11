@@ -257,6 +257,9 @@ fn service_launch(
     let data_text = data_dir
         .to_str()
         .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
+    let state_text = state
+        .to_str()
+        .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
     let argv = service
         .argv
         .iter()
@@ -264,6 +267,7 @@ fn service_launch(
             argument
                 .replace("{socket}", socket_text)
                 .replace("{data}", data_text)
+                .replace("{state}", state_text)
         })
         .collect();
     let exports = app

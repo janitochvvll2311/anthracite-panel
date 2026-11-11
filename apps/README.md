@@ -28,7 +28,7 @@ apps/fs/build.sh            # host filesystem rooted at --root (default /)
 apps/terminal/build.sh      # native PTY shell
 apps/proc/build.sh          # real /proc reader, signal and spawn
 apps/net/build.sh           # host interfaces, routes and apply
-apps/storage/build.sh       # read-only host block devices and mounts
+apps/storage/build.sh       # host block devices, mounts and guarded mount/unmount
 ```
 
 The native Files, Terminal, Processes, Network and Storage bundles replace the

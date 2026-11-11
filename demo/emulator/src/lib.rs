@@ -232,10 +232,11 @@ impl Emulator {
                 }
             } else if function == "detach" {
                 if let Some(mountpoint) = mountpoint {
-                    let mut fs = self.fs.lock().expect("the fixture mutex is not poisoned");
-                    let files = fs.collect_files(mountpoint);
-                    fs.clear_subtree(mountpoint);
-                    drop(fs);
+                    let files = self
+                        .fs
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .unmount(mountpoint);
                     if let Some(device) = detached_device {
                         self.storage
                             .lock()
@@ -415,11 +416,20 @@ impl Handler for Emulator {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 enum Node {
     Dir,
     File(Vec<u8>),
     /// A symbolic link stored as an absolute target inside the fixture root.
+    Link(String),
+}
+
+/// One entry on a block device. Directories are captured too so an empty
+/// directory created while a volume is mounted survives a remount.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) enum FsEntry {
+    Dir,
+    File(Vec<u8>),
     Link(String),
 }
 
@@ -428,6 +438,10 @@ struct Fs {
     nodes: BTreeMap<String, Node>,
     /// Subtrees removed with `trash = true`, kept for listing and restore.
     trash: Vec<Trashed>,
+    /// What a mountpoint hid when a device was mounted over it. Restored on
+    /// unmount, so mounting never destroys the underlying tree.
+    #[serde(default)]
+    hidden: BTreeMap<String, BTreeMap<String, Node>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -442,6 +456,7 @@ impl Fs {
         let mut fs = Self {
             nodes: BTreeMap::new(),
             trash: Vec::new(),
+            hidden: BTreeMap::new(),
         };
         for dir in [
             "/",
@@ -665,41 +680,80 @@ impl Fs {
         Ok(())
     }
 
-    /// Creates a directory and its parents inside the fixture root. Used when a
-    /// mountpoint or a new user's home appears through another app.
-    /// Overlays a device filesystem at a mountpoint, hiding whatever was
-    /// underneath and restoring the files from the shared storage fixture.
+    /// Overlays a device filesystem at a mountpoint. The subtree that was
+    /// underneath is saved and restored on unmount; mounting never destroys it.
     pub fn mount(
         &mut self,
         mountpoint: &str,
-        files: &BTreeMap<String, Vec<u8>>,
+        files: &BTreeMap<String, FsEntry>,
     ) -> Result<(), Error> {
+        let root = mountpoint.trim_end_matches('/').to_string();
         self.ensure_dir(mountpoint)?;
+        let hidden = self.subtree(mountpoint);
+        self.hidden.insert(root, hidden);
         self.clear_subtree(mountpoint);
-        for (relative, bytes) in files {
-            if relative.is_empty() || relative.starts_with('/') || relative.contains("..") {
+        for (relative, entry) in files {
+            let relative = relative.trim_matches('/');
+            if relative.is_empty() || relative.contains("..") {
                 continue;
             }
             let path = format!("{}/{}", mountpoint.trim_end_matches('/'), relative);
             if let Some((parent, _)) = path.rsplit_once('/') {
                 self.ensure_dir(parent)?;
             }
-            self.nodes.insert(path, Node::File(bytes.clone()));
+            match entry {
+                FsEntry::Dir => {
+                    self.ensure_dir(&path)?;
+                }
+                FsEntry::File(bytes) => {
+                    self.nodes.insert(path, Node::File(bytes.clone()));
+                }
+                FsEntry::Link(target) => {
+                    self.nodes.insert(path, Node::Link(target.clone()));
+                }
+            }
         }
         Ok(())
     }
 
-    /// Reads the files currently under a mountpoint, relative to it.
-    pub fn collect_files(&self, mountpoint: &str) -> BTreeMap<String, Vec<u8>> {
+    /// Captures the volume contents and restores what the mount hid.
+    pub fn unmount(&mut self, mountpoint: &str) -> BTreeMap<String, FsEntry> {
+        let root = mountpoint.trim_end_matches('/').to_string();
+        let entries = self.collect_entries(mountpoint);
+        self.clear_subtree(mountpoint);
+        if let Some(hidden) = self.hidden.remove(&root) {
+            self.nodes.extend(hidden);
+        }
+        let _ = self.ensure_dir(mountpoint);
+        entries
+    }
+
+    /// Everything a mountpoint currently hides, captured before the overlay.
+    fn subtree(&self, mountpoint: &str) -> BTreeMap<String, Node> {
+        let prefix = format!("{}/", mountpoint.trim_end_matches('/'));
+        self.nodes
+            .iter()
+            .filter_map(|(path, node)| {
+                path.strip_prefix(&prefix)?;
+                Some((path.clone(), node.clone()))
+            })
+            .collect()
+    }
+
+    /// The visible entries under a mountpoint, relative to it, directories
+    /// included so empty directories survive a remount.
+    fn collect_entries(&self, mountpoint: &str) -> BTreeMap<String, FsEntry> {
         let prefix = format!("{}/", mountpoint.trim_end_matches('/'));
         self.nodes
             .iter()
             .filter_map(|(path, node)| {
                 let relative = path.strip_prefix(&prefix)?;
-                let Node::File(bytes) = node else {
-                    return None;
+                let entry = match node {
+                    Node::Dir => FsEntry::Dir,
+                    Node::File(bytes) => FsEntry::File(bytes.clone()),
+                    Node::Link(target) => FsEntry::Link(target.clone()),
                 };
-                Some((relative.to_string(), bytes.clone()))
+                Some((relative.to_string(), entry))
             })
             .collect()
     }
@@ -1817,6 +1871,62 @@ mod tests {
         for user in world::users() {
             assert!(names.contains(&user.name), "{}", user.name);
         }
+    }
+
+    #[test]
+    fn mounting_over_content_hides_it_and_unmounting_restores_it() {
+        let emulator = Emulator::new();
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdc", "mountpoint": "/home", "filesystem": "exfat"}),
+            )
+            .expect("mount over /home");
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/home/operator/notes.txt"}))
+                .expect_err("hidden by the mount")
+                .kind(),
+            ErrorKind::NotFound
+        );
+        emulator
+            .call(FS_READ, "stat", json!({"path": "/home/notes.txt"}))
+            .expect("the volume is visible");
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/home"}))
+            .expect("unmount");
+        call(
+            &emulator,
+            "stat",
+            json!({"path": "/home/operator/notes.txt"}),
+        );
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/home/notes.txt"}))
+                .expect_err("the volume is hidden")
+                .kind(),
+            ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn empty_directories_on_a_volume_survive_remount() {
+        let emulator = Emulator::new();
+        emulator
+            .call(FS_WRITE, "mkdir", json!({"path": "/media/demo/empty"}))
+            .expect("mkdir on the volume");
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/media/demo"}))
+            .expect("unmount");
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdb1", "mountpoint": "/media/demo", "filesystem": "exfat"}),
+            )
+            .expect("remount");
+        call(&emulator, "stat", json!({"path": "/media/demo/empty"}));
     }
 
     #[test]

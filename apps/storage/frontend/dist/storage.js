@@ -196,7 +196,7 @@ function mount(root, context) {
     status.textContent = message ?? "";
     status.className = bad ? "st-status bad" : "st-status";
   };
-  const systemMount = (mountpoint) => mountpoint === "/" || mountpoint === "/boot" || mountpoint === "/boot/efi";
+  const systemMount = (mountpoint) => ["/", "/boot", "/boot/efi", "/proc", "/sys", "/dev", "/run"].some((prefix) => mountpoint === prefix || mountpoint.startsWith(`${prefix}/`));
   async function load() {
     setStatus("Reading mounts and devices…");
     try {

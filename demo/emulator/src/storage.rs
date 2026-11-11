@@ -6,6 +6,7 @@ use anth_contract::Error;
 use serde_json::{json, Value};
 
 use crate::text;
+use crate::FsEntry;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Device {
@@ -33,7 +34,7 @@ pub struct StorageFixture {
     /// The files on each block device, as paths relative to its root. Mounting
     /// overlays this into the shared files tree; unmounting captures it back.
     #[serde(default)]
-    device_files: BTreeMap<String, BTreeMap<String, Vec<u8>>>,
+    device_files: BTreeMap<String, BTreeMap<String, FsEntry>>,
 }
 
 impl StorageFixture {
@@ -71,11 +72,11 @@ impl StorageFixture {
             .collect()
     }
 
-    pub(crate) fn files_for(&self, device: &str) -> BTreeMap<String, Vec<u8>> {
+    pub(crate) fn files_for(&self, device: &str) -> BTreeMap<String, FsEntry> {
         self.device_files.get(device).cloned().unwrap_or_default()
     }
 
-    pub(crate) fn set_files(&mut self, device: &str, files: BTreeMap<String, Vec<u8>>) {
+    pub(crate) fn set_files(&mut self, device: &str, files: BTreeMap<String, FsEntry>) {
         self.device_files.insert(device.to_string(), files);
     }
 
@@ -192,7 +193,7 @@ impl StorageFixture {
     }
 }
 
-fn seed_files() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
+fn seed_files() -> BTreeMap<String, BTreeMap<String, FsEntry>> {
     let mut files = BTreeMap::new();
     files.insert(
         "/dev/nvme0n1p1".to_string(),
@@ -216,10 +217,10 @@ fn seed_files() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
     files
 }
 
-fn entries(items: &[(&str, &str)]) -> BTreeMap<String, Vec<u8>> {
+fn entries(items: &[(&str, &str)]) -> BTreeMap<String, FsEntry> {
     items
         .iter()
-        .map(|(path, text)| (path.to_string(), text.as_bytes().to_vec()))
+        .map(|(path, text)| (path.to_string(), FsEntry::File(text.as_bytes().to_vec())))
         .collect()
 }
 

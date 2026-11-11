@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::CString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anth_contract::Error;
@@ -15,7 +15,9 @@ use serde_json::{json, Value};
 
 const STORAGE: &str = "anthracite:storage/storage@1.2.0";
 
-struct Service;
+struct Service {
+    mount_root: PathBuf,
+}
 
 impl Handler for Service {
     fn call(&self, interface: &str, function: &str, input: Value) -> Result<Value, Error> {
@@ -27,8 +29,8 @@ impl Handler for Service {
         match function {
             "devices" => Ok(Value::Array(devices())),
             "mounts" => Ok(Value::Array(mounts())),
-            "attach" => attach(&input),
-            "detach" => detach(&input),
+            "attach" => self.attach(&input),
+            "detach" => self.detach(&input),
             other => Err(Error::not_found(format!(
                 "`anthracite:storage/storage#{other}` is not implemented"
             ))),
@@ -45,9 +47,117 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(error) = anth_service::serve(&socket, std::sync::Arc::new(Service)).await {
+    let root = match mount_root_argument() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    let service = Service::new(root);
+    if let Err(error) = anth_service::serve(&socket, std::sync::Arc::new(service)).await {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+fn mount_root_argument() -> Result<PathBuf, Error> {
+    let mut args = std::env::args().skip(1);
+    let mut root = PathBuf::from("/media");
+    while let Some(argument) = args.next() {
+        if argument == "--mount-root" {
+            root = args
+                .next()
+                .map(PathBuf::from)
+                .ok_or_else(|| Error::invalid("`--mount-root` needs a path"))?;
+        } else if argument == "--socket" {
+            args.next();
+        }
+    }
+    std::fs::create_dir_all(&root).map_err(|error| {
+        Error::unavailable(format!("creating mount root {}: {error}", root.display()))
+    })?;
+    std::fs::canonicalize(&root).map_err(|error| {
+        Error::unavailable(format!("resolving mount root {}: {error}", root.display()))
+    })
+}
+
+impl Service {
+    fn new(mount_root: PathBuf) -> Self {
+        Self { mount_root }
+    }
+
+    fn attach(&self, input: &Value) -> Result<Value, Error> {
+        let device = text(input, "device")?;
+        let mountpoint = self.validate_mountpoint(&text(input, "mountpoint")?, true)?;
+        let filesystem = text(input, "filesystem")?;
+        if filesystem.is_empty()
+            || !filesystem.chars().all(|character| {
+                character.is_ascii_alphanumeric() || character == '_' || character == '-'
+            })
+        {
+            return Err(Error::invalid("`filesystem` is not a filesystem name"));
+        }
+        if !known_device(&device) {
+            return Err(Error::not_found(format!(
+                "`{device}` is not a block device"
+            )));
+        }
+        if device_mounted(&device) {
+            return Err(Error::conflict(format!("`{device}` is already mounted")));
+        }
+        if mount_entries()
+            .iter()
+            .any(|mount| mount.mountpoint == mountpoint)
+        {
+            return Err(Error::conflict(format!(
+                "`{mountpoint}` is already a mountpoint"
+            )));
+        }
+        run("mount", &mount_args(&filesystem, &device, &mountpoint))?;
+        Ok(Value::Null)
+    }
+
+    fn detach(&self, input: &Value) -> Result<Value, Error> {
+        let mountpoint = self.validate_mountpoint(&text(input, "mountpoint")?, false)?;
+        if system_mount(&mountpoint) {
+            return Err(Error::denied(format!(
+                "`{mountpoint}` is a system mount and cannot be unmounted"
+            )));
+        }
+        if !mount_entries()
+            .iter()
+            .any(|mount| mount.mountpoint == mountpoint)
+        {
+            return Err(Error::not_found(format!(
+                "`{mountpoint}` is not a mountpoint"
+            )));
+        }
+        run("umount", &umount_args(&mountpoint))?;
+        Ok(Value::Null)
+    }
+
+    /// The mountpoint must resolve inside the operator-approved mount root.
+    fn validate_mountpoint(&self, mountpoint: &str, must_exist: bool) -> Result<String, Error> {
+        if !mountpoint.starts_with('/') || mountpoint.contains('\0') {
+            return Err(Error::invalid("`mountpoint` must be an absolute path"));
+        }
+        let canonical = std::fs::canonicalize(mountpoint)
+            .map_err(|_| Error::invalid("`mountpoint` must be an existing directory"))?;
+        if !canonical.starts_with(&self.mount_root) {
+            return Err(Error::denied(format!(
+                "`{}` is outside the mount root {}",
+                canonical.display(),
+                self.mount_root.display()
+            )));
+        }
+        if canonical == Path::new("/") {
+            return Err(Error::denied("the root filesystem cannot be changed"));
+        }
+        if must_exist && !canonical.is_dir() {
+            return Err(Error::invalid("`mountpoint` must be a directory"));
+        }
+        Ok(canonical.to_string_lossy().into_owned())
     }
 }
 
@@ -57,71 +167,6 @@ struct MountEntry {
     filesystem: String,
     used_bytes: u64,
     total_bytes: u64,
-}
-
-fn attach(input: &Value) -> Result<Value, Error> {
-    let device = text(input, "device")?;
-    let mountpoint = text(input, "mountpoint")?;
-    let filesystem = text(input, "filesystem")?;
-    validate_mountpoint(&mountpoint, true)?;
-    if filesystem.is_empty()
-        || !filesystem.chars().all(|character| {
-            character.is_ascii_alphanumeric() || character == '_' || character == '-'
-        })
-    {
-        return Err(Error::invalid("`filesystem` is not a filesystem name"));
-    }
-    if !known_device(&device) {
-        return Err(Error::not_found(format!(
-            "`{device}` is not a block device"
-        )));
-    }
-    if device_mounted(&device) {
-        return Err(Error::conflict(format!("`{device}` is already mounted")));
-    }
-    if mount_entries()
-        .iter()
-        .any(|mount| mount.mountpoint == mountpoint)
-    {
-        return Err(Error::conflict(format!(
-            "`{mountpoint}` is already a mountpoint"
-        )));
-    }
-    run("mount", &mount_args(&filesystem, &device, &mountpoint))?;
-    Ok(Value::Null)
-}
-
-fn detach(input: &Value) -> Result<Value, Error> {
-    let mountpoint = text(input, "mountpoint")?;
-    validate_mountpoint(&mountpoint, false)?;
-    if system_mount(&mountpoint) {
-        return Err(Error::denied(format!(
-            "`{mountpoint}` is a system mount and cannot be unmounted"
-        )));
-    }
-    if !mount_entries()
-        .iter()
-        .any(|mount| mount.mountpoint == mountpoint)
-    {
-        return Err(Error::not_found(format!(
-            "`{mountpoint}` is not a mountpoint"
-        )));
-    }
-    run("umount", &umount_args(&mountpoint))?;
-    Ok(Value::Null)
-}
-
-fn validate_mountpoint(mountpoint: &str, must_exist: bool) -> Result<(), Error> {
-    if !mountpoint.starts_with('/') || mountpoint.contains("..") || mountpoint.contains('\0') {
-        return Err(Error::invalid("`mountpoint` must be an absolute path"));
-    }
-    if mountpoint == "/" {
-        return Err(Error::denied("the root filesystem cannot be changed"));
-    }
-    if must_exist && !Path::new(mountpoint).is_dir() {
-        return Err(Error::invalid("`mountpoint` must be an existing directory"));
-    }
-    Ok(())
 }
 
 fn system_mount(mountpoint: &str) -> bool {
@@ -240,21 +285,23 @@ fn mount_entries() -> Vec<MountEntry> {
 
 /// `/proc/self/mounts` escapes spaces and backslashes in the first two fields.
 fn unescape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
+    let mut out = Vec::with_capacity(value.len());
     let bytes = value.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'\\' && index + 3 < bytes.len() {
-            if let Ok(octal) = u8::from_str_radix(&value[index + 1..index + 4], 8) {
-                out.push(octal as char);
+        if bytes[index] == b'\\' && index + 4 <= bytes.len() {
+            let digits = &bytes[index + 1..index + 4];
+            if digits.iter().all(|byte| (b'0'..=b'7').contains(byte)) {
+                let octal = (digits[0] - b'0') * 64 + (digits[1] - b'0') * 8 + (digits[2] - b'0');
+                out.push(octal);
                 index += 4;
                 continue;
             }
         }
-        out.push(bytes[index] as char);
+        out.push(bytes[index]);
         index += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn is_storage_mount(device: &str, mountpoint: &str, filesystem: &str) -> bool {
@@ -411,6 +458,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mountpoint_escapes_keep_utf8_and_spaces() {
+        assert_eq!(unescape("/media/datos/ñandú\\040x"), "/media/datos/ñandú x");
+        assert_eq!(unescape("/media/plain"), "/media/plain");
+    }
+
+    #[test]
     fn mounts_parse_and_skip_pseudo_filesystems() {
         let text = "\
 /dev/sda1 / ext4 rw 0 0
@@ -454,12 +507,19 @@ tmpfs /run tmpfs rw 0 0
             vec!["-t", "ext4", "/dev/sda1", "/mnt/x"]
         );
         assert_eq!(umount_args("/mnt/x"), vec!["/mnt/x"]);
-        let service = Service;
+        let root = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("storage-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("mnt")).expect("mount root");
+        let canonical = std::fs::canonicalize(&root).expect("canonical root");
+        let inside = canonical.join("mnt").to_string_lossy().into_owned();
+        let service = Service::new(canonical);
         let error = service
             .call(
                 STORAGE,
                 "attach",
-                json!({"device": "/dev/nope", "mountpoint": "/tmp", "filesystem": "ext4"}),
+                json!({"device": "/dev/nope", "mountpoint": inside, "filesystem": "ext4"}),
             )
             .expect_err("unknown device");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
@@ -472,10 +532,19 @@ tmpfs /run tmpfs rw 0 0
             .expect_err("relative mountpoint");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
         let error = service
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/nope", "mountpoint": "/tmp", "filesystem": "ext4"}),
+            )
+            .expect_err("outside the mount root");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        let error = service
             .call(STORAGE, "detach", json!({"mountpoint": "/"}))
             .expect_err("root");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
         assert!(system_mount("/boot/efi"));
         assert!(!system_mount("/media/sd"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

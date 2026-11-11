@@ -623,6 +623,7 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
     }
     let mut sockets = 0usize;
     let mut data = 0usize;
+    let mut states = 0usize;
     for arg in &service.argv {
         if arg.len() > 4096 {
             return Err(Error::invalid("a service argv entry is longer than 4 KiB"));
@@ -630,9 +631,21 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
         if arg.contains('\0') {
             return Err(Error::invalid("a service argv entry contains a NUL byte"));
         }
+        if arg
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+        {
+            return Err(Error::invalid(
+                "a service argv entry may not contain `.` or `..` segments",
+            ));
+        }
         sockets += arg.matches("{socket}").count();
         data += arg.matches("{data}").count();
-        let rest = arg.replace("{socket}", "").replace("{data}", "");
+        states += arg.matches("{state}").count();
+        let rest = arg
+            .replace("{socket}", "")
+            .replace("{data}", "")
+            .replace("{state}", "");
         if rest.contains('{') || rest.contains('}') {
             return Err(Error::invalid(
                 "a service argv entry has an unknown placeholder",
@@ -647,6 +660,11 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
     if data > 1 {
         return Err(Error::invalid(
             "service argv may contain at most one `{data}`",
+        ));
+    }
+    if states > 1 {
+        return Err(Error::invalid(
+            "service argv may contain at most one `{state}`",
         ));
     }
     Ok(())
@@ -987,6 +1005,48 @@ target = "wasm"
         ];
         let error = manifest.validate().expect_err("two data dirs");
         assert!(error.message().contains("at most one `{data}`"), "{error}");
+    }
+
+    #[test]
+    fn a_service_argv_may_name_the_engine_state_once() {
+        let mut manifest = Manifest::parse(SERVICE).expect("parse");
+        manifest.service.as_mut().expect("service").argv = vec![
+            "--socket".to_string(),
+            "{socket}".to_string(),
+            "--state".to_string(),
+            "{state}/emulator/host.json".to_string(),
+        ];
+        manifest.validate().expect("state dir");
+
+        manifest.service.as_mut().expect("service").argv = vec![
+            "--socket".to_string(),
+            "{socket}".to_string(),
+            "{state}".to_string(),
+            "{state}".to_string(),
+        ];
+        let error = manifest.validate().expect_err("two state dirs");
+        assert!(error.message().contains("at most one `{state}`"), "{error}");
+    }
+
+    #[test]
+    fn a_service_argv_may_not_traverse_with_dots() {
+        for argv in [
+            vec![
+                "--socket".to_string(),
+                "{socket}".to_string(),
+                "{state}/../x".to_string(),
+            ],
+            vec![
+                "--socket".to_string(),
+                "{socket}".to_string(),
+                "./bin".to_string(),
+            ],
+        ] {
+            let mut manifest = Manifest::parse(SERVICE).expect("parse");
+            manifest.service.as_mut().expect("service").argv = argv.clone();
+            let error = manifest.validate().expect_err("traversal");
+            assert!(error.message().contains("`..`"), "{argv:?}: {error}");
+        }
     }
 
     #[test]

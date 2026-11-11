@@ -53,7 +53,7 @@ sed \
     -e "s/{{app_summary}}/Host block devices, mounts and usage./g" \
     -e "s|{{service_path}}|bin/storage-service|g" \
     -e "s/{{service_class}}/host/g" \
-    -e "s|{{service_argv}}|[\"--socket\", \"{socket}\"]|g" \
+    -e "s|{{service_argv}}|[\"--socket\", \"{socket}\", \"--mount-root\", \"/media\"]|g" \
     "$app/manifest.toml.in" > "$tmp/manifest.toml"
 
 mkdir -p "$(dirname "$out")"
