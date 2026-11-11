@@ -78,8 +78,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
     <div class="proc-table" role="table" aria-label="Processes">
       <div class="proc-head" data-head></div>
       <div class="proc-body" data-body role="rowgroup"></div>
+      <div class="proc-sentinel" data-sentinel aria-hidden="true"></div>
     </div>
-    <div class="proc-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
@@ -93,8 +93,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const mobileFilter = box.querySelector("[data-mobile-filter]") as HTMLInputElement;
   const mobileSort = box.querySelector("[data-mobile-sort]") as HTMLSelectElement;
   const mobileDirection = box.querySelector("[data-mobile-direction]") as HTMLButtonElement;
-  const more = box.querySelector("[data-more]") as HTMLButtonElement;
-  const fold = box.querySelector("[data-fold]") as HTMLButtonElement;
+  const sentinel = box.querySelector("[data-sentinel]") as HTMLElement;  const fold = box.querySelector("[data-fold]") as HTMLButtonElement;
   const modeButtons = [...box.querySelectorAll("[data-mode]")] as HTMLButtonElement[];
   const interval = box.querySelector("[data-interval]") as HTMLSelectElement;
   const spawnForm = box.querySelector(".proc-spawn") as HTMLFormElement;
@@ -114,6 +113,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const COMPACT_WIDTH = 820;
   let processes: Process[] = [];
   let nextCursor: string | null = null;
+  let sentinelVisible = false;
   let tree = false;
   let compact = false;
   let live: number | null = null;
@@ -483,7 +483,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       ? `${currentRows.length} / ${processes.length}`
       : `${processes.length}`;
     count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${
-      tree ? " · tree" : nextCursor ? " · more available" : ""
+      tree ? " · tree" : ""
     }`;
   }
 
@@ -507,7 +507,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
     if (disposed) return;
     processes = all;
     nextCursor = null;
-    more.hidden = true;
     fold.hidden = false;
     renderRows(true);
     setStatus(`Tree snapshot · ${processes.length} processes`);
@@ -527,7 +526,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       }
       if (compact) {
         // Live refreshes every loaded page: asking for the first page again
-        // would discard what Load more appended two seconds earlier.
+        // would discard the rows loaded by scrolling to the end.
         const limit = append
           ? MOBILE_PAGE
           : Math.max(MOBILE_PAGE, processes.length);
@@ -540,12 +539,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
         if (append) processes.push(...page.processes);
         else processes = page.processes;
         nextCursor = page.cursor ?? null;
-        more.hidden = Boolean(page.done) || !page.cursor;
       } else {
         processes = await loadAll();
         if (disposed) return;
         nextCursor = null;
-        more.hidden = true;
       }
       fold.hidden = true;
       renderRows(false);
@@ -559,6 +556,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
         void load();
       }
     }
+  }
+
+  /// Phones load the next page when the end of the list scrolls into view; the
+  /// desktop snapshot already has every row.
+  function moreIfNeeded(): void {
+    if (!compact || tree || loading || !nextCursor) return;
+    void load(nextCursor, true);
   }
 
   async function signalProcess(
@@ -692,9 +696,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
     renderRows(true);
   });
   box.querySelector("[data-refresh]")!.addEventListener("click", () => void load());
-  more.addEventListener("click", () => {
-    if (nextCursor && !tree) void load(nextCursor, true);
-  });
   spawnForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const command = spawnInput.value.trim();
@@ -728,6 +729,14 @@ export function mount(root: HTMLElement, context: FrameContext) {
   resize.observe(box);
   const tableResize = new ResizeObserver(() => renderWindow(false));
   tableResize.observe(table);
+  const sentinelObserver = new IntersectionObserver(
+    ([entry]) => {
+      sentinelVisible = entry.isIntersecting;
+      if (sentinelVisible) moreIfNeeded();
+    },
+    { rootMargin: "160px" },
+  );
+  sentinelObserver.observe(sentinel);
   applyCompact();
   renderHead();
   updateDirection();
@@ -748,6 +757,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
     if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();
     tableResize.disconnect();
+    sentinelObserver.disconnect();
     root.replaceChildren();
   };
 }

@@ -193,11 +193,7 @@ var styles = `
     color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
   }
   .proc-signal:hover { border-color: #ff7d8a88; color: #ffb3ba; }
-  .proc-more { display: flex; justify-content: center; }
-  .proc-more button {
-    padding: 6px 12px; min-height: 34px; border-radius: 7px; border: 1px solid #2a3142;
-    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
-  }
+  .proc-sentinel { height: 1px; }
   .proc-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .proc-status.bad { color: #ffb3ba; }
   .proc-empty { padding: 18px; color: #667087; text-align: center; font-size: 12px; }
@@ -431,8 +427,8 @@ function mount(root, context) {
     <div class="proc-table" role="table" aria-label="Processes">
       <div class="proc-head" data-head></div>
       <div class="proc-body" data-body role="rowgroup"></div>
+      <div class="proc-sentinel" data-sentinel aria-hidden="true"></div>
     </div>
-    <div class="proc-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
@@ -445,7 +441,7 @@ function mount(root, context) {
   const mobileFilter = box.querySelector("[data-mobile-filter]");
   const mobileSort = box.querySelector("[data-mobile-sort]");
   const mobileDirection = box.querySelector("[data-mobile-direction]");
-  const more = box.querySelector("[data-more]");
+  const sentinel = box.querySelector("[data-sentinel]");
   const fold = box.querySelector("[data-fold]");
   const modeButtons = [...box.querySelectorAll("[data-mode]")];
   const interval = box.querySelector("[data-interval]");
@@ -462,6 +458,7 @@ function mount(root, context) {
   const COMPACT_WIDTH = 820;
   let processes = [];
   let nextCursor = null;
+  let sentinelVisible = false;
   let tree = false;
   let compact = false;
   let live = null;
@@ -759,7 +756,7 @@ function mount(root, context) {
     renderWindow(true);
     const active = Object.values(filters).some((value) => value && value.trim());
     const countText = active ? `${currentRows.length} / ${processes.length}` : `${processes.length}`;
-    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : nextCursor ? " · more available" : ""}`;
+    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : ""}`;
   }
   async function loadAll() {
     const all = [];
@@ -782,7 +779,6 @@ function mount(root, context) {
       return;
     processes = all;
     nextCursor = null;
-    more.hidden = true;
     fold.hidden = false;
     renderRows(true);
     setStatus(`Tree snapshot · ${processes.length} processes`);
@@ -810,13 +806,11 @@ function mount(root, context) {
         else
           processes = page.processes;
         nextCursor = page.cursor ?? null;
-        more.hidden = Boolean(page.done) || !page.cursor;
       } else {
         processes = await loadAll();
         if (disposed)
           return;
         nextCursor = null;
-        more.hidden = true;
       }
       fold.hidden = true;
       renderRows(false);
@@ -831,6 +825,11 @@ function mount(root, context) {
         load();
       }
     }
+  }
+  function moreIfNeeded() {
+    if (!compact || tree || loading || !nextCursor)
+      return;
+    load(nextCursor, true);
   }
   async function signalProcess(pid, startTicks, name) {
     if (!signal)
@@ -959,10 +958,6 @@ function mount(root, context) {
     renderRows(true);
   });
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
-  more.addEventListener("click", () => {
-    if (nextCursor && !tree)
-      load(nextCursor, true);
-  });
   spawnForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const command = spawnInput.value.trim();
@@ -997,6 +992,12 @@ function mount(root, context) {
   resize.observe(box);
   const tableResize = new ResizeObserver(() => renderWindow(false));
   tableResize.observe(table);
+  const sentinelObserver = new IntersectionObserver(([entry]) => {
+    sentinelVisible = entry.isIntersecting;
+    if (sentinelVisible)
+      moreIfNeeded();
+  }, { rootMargin: "160px" });
+  sentinelObserver.observe(sentinel);
   applyCompact();
   renderHead();
   updateDirection();
@@ -1019,6 +1020,7 @@ function mount(root, context) {
       window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();
     tableResize.disconnect();
+    sentinelObserver.disconnect();
     root.replaceChildren();
   };
 }

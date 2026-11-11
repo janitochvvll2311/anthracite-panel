@@ -113,11 +113,7 @@ export const styles = `
     color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
   }
   .proc-signal:hover { border-color: #ff7d8a88; color: #ffb3ba; }
-  .proc-more { display: flex; justify-content: center; }
-  .proc-more button {
-    padding: 6px 12px; min-height: 34px; border-radius: 7px; border: 1px solid #2a3142;
-    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
-  }
+  .proc-sentinel { height: 1px; }
   .proc-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .proc-status.bad { color: #ffb3ba; }
   .proc-empty { padding: 18px; color: #667087; text-align: center; font-size: 12px; }
