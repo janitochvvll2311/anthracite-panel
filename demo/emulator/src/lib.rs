@@ -37,7 +37,7 @@ const PROC: &str = "anthracite:proc/proc@1.1.0";
 const HOME: &str = "anthracite:home/host@1.0.0";
 const NET: &str = "anthracite:net/net@1.2.0";
 const STORAGE: &str = "anthracite:storage/storage@1.2.0";
-const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
+const ACCOUNTS: &str = "anthracite:accounts/accounts@1.2.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.
 const MODIFIED_MS: u64 = 1_760_000_000_000;
@@ -327,11 +327,23 @@ impl Handler for Emulator {
         } else {
             None
         };
+        let deleted_home =
+            if interface == ACCOUNTS && function == "delete-user" && boolean(&input, "remove-home")
+            {
+                input.get("name").and_then(Value::as_str).and_then(|name| {
+                    self.accounts
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .home_for(name)
+                })
+            } else {
+                None
+            };
         let mutating = match interface {
             FS_WRITE => true,
             NET => !matches!(function, "interfaces" | "routes"),
             STORAGE => !matches!(function, "devices" | "mounts"),
-            ACCOUNTS => !matches!(function, "users" | "groups"),
+            ACCOUNTS => !matches!(function, "users" | "groups" | "policy"),
             _ => false,
         };
         let result = match interface {
@@ -365,6 +377,15 @@ impl Handler for Emulator {
         };
         if mutating && result.is_ok() {
             self.apply_cross_domain(interface, function, &input, detached_device.as_deref())?;
+            if let Some(home) = deleted_home {
+                let path = normalize(&home)?;
+                let mut fs = self.fs.lock().expect("the fixture mutex is not poisoned");
+                match fs.remove(&path, false) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == anth_contract::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
             self.persist()?;
         }
         result
@@ -1813,7 +1834,7 @@ mod tests {
             .call(
                 ACCOUNTS,
                 "create-user",
-                json!({"name": "persisted", "uid": 1500, "gid": 1500, "home": "/home/persisted", "shell": "/bin/sh", "system": false}),
+                json!({"name": "persisted", "uid": 1500, "gid": null, "home": "/home/persisted", "shell": "/bin/sh", "system": false}),
             )
             .expect("user");
         emulator
@@ -2136,7 +2157,7 @@ mod tests {
             .call(
                 ACCOUNTS,
                 "create-user",
-                json!({"name": "demo", "uid": 1500, "gid": 1500, "home": "/home/demo", "shell": "/bin/sh", "system": false}),
+                json!({"name": "demo", "uid": 1500, "gid": null, "home": "/home/demo", "shell": "/bin/sh", "system": false}),
             )
             .expect("create user");
         first

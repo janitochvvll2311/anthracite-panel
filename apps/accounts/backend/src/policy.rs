@@ -13,6 +13,7 @@ const BUILTIN_SHELLS: &[&str] = &["/bin/sh", "/bin/bash", "/bin/ash", "/bin/zsh"
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub control: bool,
+    pub passwords: bool,
     pub allow_system: bool,
     pub allow_privileged_groups: bool,
     pub home_root: PathBuf,
@@ -24,6 +25,7 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             control: false,
+            passwords: false,
             allow_system: false,
             allow_privileged_groups: false,
             home_root: PathBuf::from("/home"),
@@ -47,6 +49,7 @@ impl Policy {
                         .ok_or_else(|| Error::invalid("`--socket` needs a path"))?;
                 }
                 "--control" => policy.control = true,
+                "--passwords" => policy.passwords = true,
                 "--allow-system" => policy.allow_system = true,
                 "--allow-privileged-groups" => policy.allow_privileged_groups = true,
                 "--home-root" => {
@@ -118,6 +121,7 @@ mod tests {
     fn policy_flags_are_explicit_and_default_to_read_only() {
         let policy = Policy::from_args(args(&["--socket", "/run/a.sock"])).expect("parse");
         assert!(!policy.control);
+        assert!(!policy.passwords);
         assert!(!policy.allow_system);
         assert!(!policy.allow_privileged_groups);
         assert_eq!(policy.home_root, PathBuf::from("/home"));
@@ -128,6 +132,7 @@ mod tests {
             "--socket",
             "/run/a.sock",
             "--control",
+            "--passwords",
             "--allow-system",
             "--allow-privileged-groups",
             "--home-root",
@@ -139,6 +144,7 @@ mod tests {
         ]))
         .expect("parse");
         assert!(policy.control);
+        assert!(policy.passwords);
         assert!(policy.allow_system);
         assert!(policy.allow_privileged_groups);
         assert_eq!(policy.home_root, PathBuf::from("/srv/home"));
