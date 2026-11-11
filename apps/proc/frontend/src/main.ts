@@ -1,4 +1,5 @@
 import { call } from "./api";
+import { confirmAction } from "./confirm";
 import { cell, memory, reason } from "./format";
 import { styles } from "./styles";
 import {
@@ -411,7 +412,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       `Send signal to ${process.name} (${process.pid})`,
     );
     send.addEventListener("click", () => {
-      void signalProcess(process.pid, process["start-ticks"]);
+      void signalProcess(process.pid, process["start-ticks"], process.name);
     });
     action.append(send);
     row.append(action);
@@ -560,9 +561,23 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  async function signalProcess(pid: number, startTicks: number): Promise<void> {
+  async function signalProcess(
+    pid: number,
+    startTicks: number,
+    name: string,
+  ): Promise<void> {
     if (!signal) return;
     const chosen = signal.value;
+    const dangerous = chosen === "TERM" || chosen === "KILL" || chosen === "STOP";
+    const ok = await confirmAction({
+      title: `Send ${chosen} to ${name} (${pid})?`,
+      message: dangerous
+        ? "The process may stop and unsaved work can be lost."
+        : "The process will receive the signal.",
+      confirmLabel: `Send ${chosen}`,
+      danger: dangerous,
+    });
+    if (!ok) return;
     setStatus(`Sending ${chosen} to ${pid}…`);
     try {
       await call(context, "/signal", {

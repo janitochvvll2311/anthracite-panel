@@ -11,7 +11,8 @@ builds the real app.
 - `frontend/` is the existing process view: paginated table or tree, CPU and
   memory, allowlisted signal actions and the detached-spawn form. An interval
   selector drives the refresh; `Manual (0s)` stops the timer and leaves Refresh
-  as the only update.
+  as the only update. Signals ask for confirmation in a modal before they are
+  sent.
 
 ## Build
 
