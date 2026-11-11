@@ -13,8 +13,8 @@ export const styles = `
   .proc-tabs button { border: 0; border-radius: 0; background: transparent; }
   .proc-tabs button[aria-pressed="true"] { background: #1f2940; color: #fff; }
   .proc-fold { font-size: 11px !important; }
-  .proc-check { display: flex; align-items: center; gap: 5px; color: #8f98ab; font-size: 12px; }
-  .proc-check input { accent-color: #7aa2ff; }
+  .proc-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .proc-interval select { padding: 5px 8px; min-height: 34px; }
   .proc-spawn { display: flex; gap: 6px; }
   .proc-spawn input {
     flex: 1; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
@@ -125,12 +125,11 @@ export const styles = `
   .proc.compact .proc-bar { gap: 8px; }
   .proc.compact .proc-count { flex: 1 0 100%; }
   .proc.compact .proc-bar .grow { display: none; }
-  .proc.compact .proc-tabs { order: 1; }
-  .proc.compact .proc-check { order: 2; min-height: 34px; }
-  .proc.compact .proc-fold { order: 3; }
-  .proc.compact .proc-pick { order: 4; }
-  .proc.compact [data-refresh] { order: 5; }
-  .proc.compact [data-mode="tree"] { display: none; }
+  .proc.compact .proc-tabs { display: none; }
+  .proc.compact .proc-interval { order: 1; }
+  .proc.compact .proc-pick { order: 2; }
+  .proc.compact [data-refresh] { order: 3; }
+  .proc.compact .proc-fold { display: none; }
   .proc.compact .proc-mobile-tools {
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
   }

@@ -52,8 +52,8 @@ var styles = `
   .proc-tabs button { border: 0; border-radius: 0; background: transparent; }
   .proc-tabs button[aria-pressed="true"] { background: #1f2940; color: #fff; }
   .proc-fold { font-size: 11px !important; }
-  .proc-check { display: flex; align-items: center; gap: 5px; color: #8f98ab; font-size: 12px; }
-  .proc-check input { accent-color: #7aa2ff; }
+  .proc-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .proc-interval select { padding: 5px 8px; min-height: 34px; }
   .proc-spawn { display: flex; gap: 6px; }
   .proc-spawn input {
     flex: 1; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
@@ -164,12 +164,11 @@ var styles = `
   .proc.compact .proc-bar { gap: 8px; }
   .proc.compact .proc-count { flex: 1 0 100%; }
   .proc.compact .proc-bar .grow { display: none; }
-  .proc.compact .proc-tabs { order: 1; }
-  .proc.compact .proc-check { order: 2; min-height: 34px; }
-  .proc.compact .proc-fold { order: 3; }
-  .proc.compact .proc-pick { order: 4; }
-  .proc.compact [data-refresh] { order: 5; }
-  .proc.compact [data-mode="tree"] { display: none; }
+  .proc.compact .proc-tabs { display: none; }
+  .proc.compact .proc-interval { order: 1; }
+  .proc.compact .proc-pick { order: 2; }
+  .proc.compact [data-refresh] { order: 3; }
+  .proc.compact .proc-fold { display: none; }
   .proc.compact .proc-mobile-tools {
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
   }
@@ -333,7 +332,15 @@ function mount(root, context) {
         <button type="button" data-mode="flat" aria-pressed="true">List</button>
         <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
       </div>
-      <label class="proc-check"><input type="checkbox" data-live checked /> Live</label>
+      <label class="proc-interval"><span class="proc-interval-label">Interval</span>
+        <select data-interval aria-label="Refresh interval">
+          <option value="0">Manual (0s)</option>
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+      </label>
       <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
@@ -383,7 +390,7 @@ function mount(root, context) {
   const more = box.querySelector("[data-more]");
   const fold = box.querySelector("[data-fold]");
   const modeButtons = [...box.querySelectorAll("[data-mode]")];
-  const liveToggle = box.querySelector("[data-live]");
+  const interval = box.querySelector("[data-interval]");
   const spawnForm = box.querySelector(".proc-spawn");
   const spawnInput = spawnForm.querySelector("input");
   const MOBILE_PAGE = 200;
@@ -400,6 +407,7 @@ function mount(root, context) {
   let tree = false;
   let compact = false;
   let live = null;
+  let intervalMs = 2000;
   let visible = true;
   let collapsed = new Set;
   let allCollapsed = false;
@@ -788,12 +796,12 @@ function mount(root, context) {
     if (live !== null)
       window.clearInterval(live);
     live = null;
-    if (!liveToggle.checked || !visible)
+    if (!visible || intervalMs === 0)
       return;
     live = window.setInterval(() => {
       if (!document.hidden)
         load();
-    }, tree || !compact ? 5000 : 2000);
+    }, intervalMs);
   }
   function setMode(next) {
     if (next && compact)
@@ -865,7 +873,11 @@ function mount(root, context) {
     fold.textContent = allCollapsed ? "Expand all" : "Collapse all";
     renderRows(true);
   });
-  liveToggle.addEventListener("change", scheduleLive);
+  interval.addEventListener("change", () => {
+    intervalMs = Number(interval.value) || 0;
+    scheduleLive();
+    load();
+  });
   mobileFilter.addEventListener("input", () => {
     filters.query = mobileFilter.value;
     renderRows(true);
