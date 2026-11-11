@@ -135,7 +135,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
         row.append(action);
         routes.append(row);
       }
-      setStatus(`${interfaces.length} interfaces · ${table.length} routes`);
+      setStatus(
+        `${interfaces.length} interfaces · ${table.length} routes · updated ${new Date().toLocaleTimeString()}`,
+      );
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
     }
