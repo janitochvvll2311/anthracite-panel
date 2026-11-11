@@ -759,10 +759,14 @@ impl Fs {
         }) {
             return None;
         }
-        let hidden = self.hidden.remove(&root)?;
+        let hidden = self.hidden.remove(&root);
         let entries = self.collect_entries(mountpoint);
         self.clear_subtree(mountpoint);
-        self.nodes.extend(hidden);
+        // A snapshot written before `hidden` existed has no underlay to
+        // restore, but the volume itself must still stop being visible.
+        if let Some(hidden) = hidden {
+            self.nodes.extend(hidden);
+        }
         let _ = self.ensure_dir(mountpoint);
         Some(entries)
     }
@@ -1957,6 +1961,22 @@ mod tests {
             .expect("outer mount");
         assert!(fs.unmount("/home/operator/deep").is_none());
         assert!(fs.unmount("/home/operator").is_some());
+    }
+
+    #[test]
+    fn unmounting_without_a_saved_underlay_still_hides_the_volume() {
+        let mut fs = Fs::demo();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "README.txt".to_string(),
+            FsEntry::File(b"legacy\n".to_vec()),
+        );
+        fs.mount("/media/demo", &files).expect("mount");
+        // A 490ae03 snapshot has no `hidden` map to restore.
+        fs.hidden.clear();
+        let entries = fs.unmount("/media/demo").expect("active mount");
+        assert!(entries.contains_key("README.txt"));
+        assert!(!fs.nodes.keys().any(|path| path.starts_with("/media/demo/")));
     }
 
     #[test]

@@ -202,10 +202,19 @@ export function mount(root: HTMLElement, context: FrameContext) {
   });
 
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  let visible = true;
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible) return;
+    visible = next;
+    if (!next || disposed) return;
+    // A mount or unmount from the CLI or another tab left this view stale.
+    void load();
+  });
   void load();
 
   return () => {
     disposed = true;
+    offVisibility?.();
     root.replaceChildren();
   };
 }

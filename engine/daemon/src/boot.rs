@@ -258,11 +258,6 @@ fn service_launch(
         .to_str()
         .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
     let shared_dir = state.join("shared");
-    std::fs::create_dir_all(&shared_dir)
-        .map_err(|error| Error::internal(format!("creating {}: {error}", shared_dir.display())))?;
-    std::fs::set_permissions(&shared_dir, std::fs::Permissions::from_mode(0o700)).map_err(
-        |error| Error::internal(format!("setting {} to 0700: {error}", shared_dir.display())),
-    )?;
     let shared_text = shared_dir
         .to_str()
         .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;

@@ -106,12 +106,10 @@ impl Service {
         if device_mounted(&device) {
             return Err(Error::conflict(format!("`{device}` is already mounted")));
         }
-        if mount_entries()
-            .iter()
-            .any(|mount| mount.mountpoint == mountpoint)
-        {
+        if let Some(other) = overlapping_mount(&mountpoint, &mount_entries()) {
             return Err(Error::conflict(format!(
-                "`{mountpoint}` is already a mountpoint"
+                "`{mountpoint}` overlaps the mountpoint `{}`",
+                other.mountpoint
             )));
         }
         run("mount", &mount_args(&filesystem, &device, &mountpoint))?;
@@ -125,12 +123,16 @@ impl Service {
                 "`{mountpoint}` is a system mount and cannot be unmounted"
             )));
         }
-        if !mount_entries()
-            .iter()
-            .any(|mount| mount.mountpoint == mountpoint)
-        {
+        let mounts = mount_entries();
+        if !mounts.iter().any(|mount| mount.mountpoint == mountpoint) {
             return Err(Error::not_found(format!(
                 "`{mountpoint}` is not a mountpoint"
+            )));
+        }
+        if let Some(inner) = inner_mount(&mountpoint, &mounts) {
+            return Err(Error::conflict(format!(
+                "`{mountpoint}` contains the mountpoint `{}`; unmount it first",
+                inner.mountpoint
             )));
         }
         run("umount", &umount_args(&mountpoint))?;
@@ -173,6 +175,28 @@ fn system_mount(mountpoint: &str) -> bool {
     ["/", "/boot", "/boot/efi", "/proc", "/sys", "/dev", "/run"]
         .iter()
         .any(|prefix| mountpoint == *prefix || mountpoint.starts_with(&format!("{prefix}/")))
+}
+
+/// The mount that shares a path with `mountpoint`, either above or below it.
+/// The root mount is the base tree, not an overlay, so it never conflicts.
+fn overlapping_mount<'a>(mountpoint: &str, mounts: &'a [MountEntry]) -> Option<&'a MountEntry> {
+    let root = mountpoint.trim_end_matches('/');
+    mounts.iter().find(|mount| {
+        let existing = mount.mountpoint.trim_end_matches('/');
+        !existing.is_empty()
+            && (existing == root
+                || existing.starts_with(&format!("{root}/"))
+                || root.starts_with(&format!("{existing}/")))
+    })
+}
+
+/// A mount below `mountpoint`; unmounting the parent first would hide it.
+fn inner_mount<'a>(mountpoint: &str, mounts: &'a [MountEntry]) -> Option<&'a MountEntry> {
+    let root = mountpoint.trim_end_matches('/');
+    mounts.iter().find(|mount| {
+        let existing = mount.mountpoint.trim_end_matches('/');
+        !existing.is_empty() && existing != root && existing.starts_with(&format!("{root}/"))
+    })
 }
 
 fn known_device(device: &str) -> bool {
@@ -546,5 +570,43 @@ tmpfs /run tmpfs rw 0 0
         assert!(system_mount("/boot/efi"));
         assert!(!system_mount("/media/sd"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overlapping_mounts_are_rejected() {
+        let mounts = vec![
+            MountEntry {
+                device: "/dev/sda1".to_string(),
+                mountpoint: "/".to_string(),
+                filesystem: "ext4".to_string(),
+                used_bytes: 0,
+                total_bytes: 1,
+            },
+            MountEntry {
+                device: "/dev/sdb1".to_string(),
+                mountpoint: "/media/demo".to_string(),
+                filesystem: "exfat".to_string(),
+                used_bytes: 0,
+                total_bytes: 1,
+            },
+        ];
+        assert_eq!(
+            overlapping_mount("/media", &mounts).map(|mount| mount.mountpoint.as_str()),
+            Some("/media/demo")
+        );
+        assert_eq!(
+            overlapping_mount("/media/demo/sub", &mounts).map(|mount| mount.mountpoint.as_str()),
+            Some("/media/demo")
+        );
+        assert_eq!(
+            overlapping_mount("/media/demo", &mounts).map(|mount| mount.mountpoint.as_str()),
+            Some("/media/demo")
+        );
+        assert!(overlapping_mount("/home", &mounts).is_none());
+        assert_eq!(
+            inner_mount("/media", &mounts).map(|mount| mount.mountpoint.as_str()),
+            Some("/media/demo")
+        );
+        assert!(inner_mount("/media/demo", &mounts).is_none());
     }
 }

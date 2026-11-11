@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use anth_contract::{Composition, Error};
 
 /// The directories the tree owns, relative to its root.
-pub const DIRS: &[&str] = &["apps", "grants", "keys", "data"];
+pub const DIRS: &[&str] = &["apps", "grants", "keys", "data", "shared"];
+/// Directories added after the first tree shipped: a v0.5 tree may lack them
+/// until the next boot creates them.
+const OPTIONAL_DIRS: &[&str] = &["shared"];
 /// The files the tree owns, relative to its root.
 pub const FILES: &[&str] = &[COMPOSITION, AUDIT, anth_auth::CREDENTIALS];
 
@@ -108,7 +111,15 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
 
     for name in DIRS {
         let path = root.join(name);
-        let metadata = inspect(&path)?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && OPTIONAL_DIRS.contains(name) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(inspect_error(&path, error)),
+        };
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(Error::invalid(format!(
                 "{} is not a real directory",
