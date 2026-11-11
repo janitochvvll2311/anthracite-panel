@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 
 mod accounts;
 pub mod bundle;
+mod home;
 mod net;
 mod proc;
 mod storage;
@@ -28,6 +29,7 @@ const FS_WRITE: &str = "anthracite:fs/write@1.2.0";
 const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const STREAM: &str = "anthracite:terminal/subscription@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
+const HOME: &str = "anthracite:home/host@1.0.0";
 const NET: &str = "anthracite:net/net@1.1.0";
 const STORAGE: &str = "anthracite:storage/storage@1.1.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
@@ -171,6 +173,7 @@ impl Handler for Emulator {
                 .lock()
                 .expect("the fixture mutex is not poisoned")
                 .handle(function, &input),
+            HOME => home::handle(function, &input),
             NET => self
                 .net
                 .lock()
@@ -197,6 +200,14 @@ impl Handler for Emulator {
     }
 
     fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
+        if interface == HOME {
+            return match function {
+                "watch" => home::watch(&input),
+                other => Err(Error::not_found(format!(
+                    "`anthracite:home/host#{other}` is not implemented"
+                ))),
+            };
+        }
         if interface != STREAM {
             return Err(Error::not_found(format!(
                 "`{interface}` is not exported by the emulator"
@@ -1489,5 +1500,23 @@ mod tests {
             .iter()
             .any(|mount| mount["mountpoint"] == "/media/sd"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_home_fixture_answers_info_and_watch_through_the_handler() {
+        use futures_util::StreamExt;
+
+        let emulator = Emulator::new();
+        let info = emulator.call(HOME, "info", json!({})).expect("info");
+        assert_eq!(info["hostname"], "anthracite-demo");
+        assert_eq!(info["cpu"]["cores"], 8);
+
+        let mut stream = emulator
+            .stream(HOME, "watch", json!({"interval-ms": 1000}))
+            .expect("watch");
+        let chunk = stream.next().await.expect("chunk").expect("ok");
+        let snapshot: Value = serde_json::from_slice(&chunk).expect("json");
+        assert_eq!(snapshot["hostname"], "anthracite-demo");
+        assert!(snapshot["uptime-seconds"].as_u64().expect("uptime") >= 273_720);
     }
 }

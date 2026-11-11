@@ -9,10 +9,10 @@ summary = "Host overview: system, CPU, memory, disks and network."
 license = "Apache-2.0"
 
 [service]
-path = "bin/home-service"
+path = "{{service_path}}"
 sha256 = "{{sha256}}"
-class = "host"
-argv = ["--socket", "{socket}"]
+class = "{{service_class}}"
+argv = {{service_argv}}
 
 [[export]]
 interface = "anthracite:home/host@1.0.0"

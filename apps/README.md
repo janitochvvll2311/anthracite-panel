@@ -16,7 +16,7 @@ apps/<app>/
 
 `apps/hello` is the minimal component and keeps `src/`, `wit/`, `web/` and a
 final `manifest.toml` because its `wasm/app.wasm` is committed. `apps/home`,
-`apps/fs` and `apps/terminal` have real Rust backends; the six demo bundles use
+`apps/fs` and `apps/terminal` have real Rust backends; the seven demo bundles use
 the shared fixture in `demo/emulator` as their backend, and their `frontend/`
 modules are what the demo bundles carry.
 
@@ -24,7 +24,6 @@ modules are what the demo bundles carry.
 
 ```bash
 apps/home/build.sh          # real host facts
-apps/home/build.sh --demo   # simulated host facts
 apps/fs/build.sh            # host filesystem rooted at --root (default /)
 apps/terminal/build.sh      # native PTY shell
 ```

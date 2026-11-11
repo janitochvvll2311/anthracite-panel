@@ -1,12 +1,12 @@
 # Demo instance
 
-The v0.6.0 demo runs the deterministic host emulator as six service apps:
-`org.anthracite.fs`, `terminal`, `proc`, `net`, `storage` and `accounts`. Each
-bundle carries the future real app's WIT package and id, and all six share one
-native binary. A seventh app, `org.anthracite.home`, renders the host overview
-and replaces Hello in the composed profile; it ships its own demo backend so the
-demo never reads the real machine's facts. `apps/hello` stays in the tree as the
-minimal developer example and remains installable.
+The v0.6.0 demo runs the deterministic host emulator as seven service apps:
+`org.anthracite.fs`, `terminal`, `proc`, `net`, `storage`, `accounts` and
+`home`. Each bundle carries the future real app's WIT package and id, and all
+seven share one native binary. Home renders the host overview and replaces Hello
+in the composed profile, so the demo never reads the real machine's facts.
+`apps/hello` stays in the tree as the minimal developer example and remains
+installable.
 
 The engine is a debug build here, so `[services] allow-third-party` defaults on
 and the unsigned bundles are accepted. A release build keeps both closed.
@@ -25,16 +25,13 @@ apps/build-frontends.sh
 cargo build --manifest-path demo/emulator/Cargo.toml --release
 cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulator -- \
     --binary target/release/host-emulator --out demo/dist
-
-# Home ships a native backend; --demo packages simulated host facts instead of
-# reading /proc, df and ip from the machine running the demo.
-apps/home/build.sh --demo --out demo/dist/home.anth
 ```
 
-`demo/dist/{fs,terminal,proc,net,storage,accounts}.anth` are the installable zips.
-Home adds `demo/dist/home.anth`. The app sources (manifest, WIT and frontend)
-live in `apps/<name>/`; the demo builder packages the six emulator apps with the
-shared `demo/emulator` service binary.
+`demo/dist/{fs,terminal,proc,net,storage,accounts,home}.anth` are the installable
+zips. The app sources (manifest, WIT and frontend) live in `apps/<name>/`; the
+demo builder packages all seven apps with the shared `demo/emulator` service
+binary. Home's real backend stays in `apps/home/backend`; `apps/home/build.sh`
+packages it for a machine that should show its own host facts.
 
 ## Run
 
@@ -126,8 +123,8 @@ shared emulator service. Every bundle carries a `panel.view` module:
 - `apps/storage/frontend/` — mount usage bars, unmount and mount.
 - `apps/accounts/frontend/` — users and groups with create, delete and lock/unlock.
 - `apps/home/frontend/dist/home.js` — Host Info cards (system, CPU, memory,
-  disks and network). The demo bundle uses the `home-demo` Rust backend, so the
-  values are simulated and move over time; `apps/home/build.sh` without `--demo`
+  disks and network). The demo bundle answers from the shared emulator's host
+  fixture, so the values are simulated and move over time; `apps/home/build.sh`
   packages the real `/proc` reader.
 
 The panel mounts them like any other slot; the modules only see their own app's
@@ -141,11 +138,12 @@ each of those bundles writes a plain JSON snapshot to
 `{data}` argv. They survive a panel/service restart. Delete an app’s
 `state.json` to reseed that domain.
 
-The process table and terminal sessions are runtime state and reset on restart.
-Removing an app from the composition degrades only that view.
+The process table, terminal sessions and Home's metrics are runtime state and
+reset on restart. Removing an app from the composition degrades only that view.
 
 The emulator is not engine code. It lives outside the wasm `apps/` workspace, is
-unsigned, class `socket`, and never receives the host root.
+unsigned, declares `socket` for the six service apps and `host` for Home, and
+never receives the host root.
 
 ## Not in the simulator
 

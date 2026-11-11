@@ -36,6 +36,7 @@
         const pending = new Map();
         const pendingViews = new Map();
         const sockets = new Map();
+        const visibilityHandlers = new Set();
         let token = "";
         let dispose = null;
         let moduleApi = null;
@@ -217,6 +218,10 @@
                 openView,
                 updateParams: (params) => send("anth:params", { params }),
                 fill: () => send("anth:fill"),
+                onVisibility: (handler) => {
+                  visibilityHandlers.add(handler);
+                  return () => visibilityHandlers.delete(handler);
+                },
               };
               dispose = await module.mount(document.body, context);
               send("anth:mounted");
@@ -226,6 +231,10 @@
                 message:
                   error instanceof Error ? error.message : String(error),
               });
+            }
+          } else if (message.type === "anth:visibility") {
+            for (const handler of visibilityHandlers) {
+              handler(message.visible === true);
             }
           } else if (message.type === "anth:fetch-result") {
             const call = pending.get(message.id);

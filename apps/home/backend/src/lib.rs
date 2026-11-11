@@ -1,8 +1,8 @@
-//! Shared boot for the Home service binaries.
+//! Shared boot for the Home service binary.
 //!
-//! `home-service` answers with real host facts; `home-demo` answers with the
-//! deterministic fixture the demo instance installs. The wire contract and the
-//! frontend are identical, so only the packaged binary changes.
+//! `home-service` answers with real host facts. The demo instance answers the
+//! same contract from the shared `demo/emulator` fixture, so only the packaged
+//! binary changes; the wire contract and the frontend are identical.
 
 use std::sync::Arc;
 use std::time::Duration;

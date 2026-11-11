@@ -13,25 +13,25 @@ The view is deliberately split:
   `watch` returns a `stream<host-info>`; the engine frames each snapshot as one
   `text/event-stream` event. It declares `class = "host"`, so approval needs
   `--accept-write --accept-admin --accept-host` (the engine requires every level
-  up to the declared risk). `home-demo` answers the same contract with fixtures
-  and is what `--demo` packages.
+  up to the declared risk).
+
+The demo does not use this backend. `demo/emulator` answers the same contract
+with deterministic fixtures, so a demo instance never exposes the machine's real
+hostname, addresses or disks. Screenshots and recordings use that bundle.
 
 ## Build
 
 ```bash
 apps/home/build.sh           # real host reader, writes apps/home/dist/home.anth
-apps/home/build.sh --demo    # deterministic fixture, same bundle layout
 ```
 
 The script builds the Bun/TypeScript frontend, runs `tsc --noEmit`, builds the
 backend, hashes both, and packages `manifest.toml`, `wit/home.wit`,
 `web/home.js` and `bin/home-service`.
 
-`--demo` swaps `bin/home-service` for the `home-demo` binary: same WIT contract
-and same frontend, simulated host facts that move over time (CPU, load, memory,
-disk usage, network counters and uptime). The demo instance uses it so
-screenshots and recordings never expose the machine's real hostname, addresses
-or disks.
+The demo bundle is built by `demo/emulator` from the same manifest, WIT and
+frontend; only the packaged binary changes. The frontend values move over time
+(CPU, load, memory, disk usage, network counters and uptime).
 
 ## Install and compose
 

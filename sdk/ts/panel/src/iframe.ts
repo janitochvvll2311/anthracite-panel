@@ -44,6 +44,8 @@ export type FrameHandle = {
   requestClose: () => Promise<boolean>;
   /// Reads the current opaque view state, e.g. before a float/dock remount.
   snapshot: () => Promise<unknown>;
+  /// Tells the module whether its pane is on screen, so it can pause polling.
+  setVisible: (visible: boolean) => void;
 };
 
 export type FrameOptions = {
@@ -177,6 +179,13 @@ export async function mountFrame(
     );
   };
 
+  const setVisible = (visible: boolean): void => {
+    iframe.contentWindow?.postMessage(
+      { type: "anth:visibility", token, visible },
+      "*",
+    );
+  };
+
   const requestClose = (): Promise<boolean> =>
     new Promise((resolve) => {
       const requestId = `${token}-close-${++closeSequence}`;
@@ -253,7 +262,12 @@ export async function mountFrame(
       if (message.token !== token) return;
 
       if (message.type === "anth:mounted") {
-        options.onReady?.({ update, requestClose, snapshot: requestSnapshot });
+        options.onReady?.({
+          update,
+          requestClose,
+          snapshot: requestSnapshot,
+          setVisible,
+        });
         finish();
         return;
       }
