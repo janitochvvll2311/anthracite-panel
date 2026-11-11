@@ -38,6 +38,10 @@ struct Route {
 pub struct NetFixture {
     interfaces: Vec<Interface>,
     routes: Vec<Route>,
+    /// Advanced once per snapshot so the demo counters move when the view is
+    /// refreshed, without ever reading the host.
+    #[serde(default)]
+    tick: u64,
 }
 
 impl NetFixture {
@@ -81,8 +85,8 @@ impl NetFixture {
                             prefix: 64,
                         },
                     ],
-                    rx_bytes: 8_589_934_592,
-                    tx_bytes: 2_147_483_648,
+                    rx_bytes: 12_582_912,
+                    tx_bytes: 3_145_728,
                 },
                 Interface {
                     name: "wlan0".to_string(),
@@ -128,31 +132,37 @@ impl NetFixture {
                     metric: 100,
                 },
             ],
+            tick: 0,
         }
     }
 
     pub fn handle(&mut self, function: &str, input: &Value) -> Result<Value, Error> {
         match function {
-            "interfaces" => Ok(Value::Array(
-                self.interfaces
-                    .iter()
-                    .map(|interface| {
-                        json!({
-                            "name": interface.name,
-                            "up": interface.up,
-                            "mac": interface.mac,
-                            "mtu": interface.mtu,
-                            "addresses": interface.addresses.iter().map(|address| json!({
-                                "family": address.family,
-                                "address": address.address,
-                                "prefix": address.prefix,
-                            })).collect::<Vec<_>>(),
-                            "rx-bytes": interface.rx_bytes,
-                            "tx-bytes": interface.tx_bytes,
+            "interfaces" => {
+                self.tick = self.tick.saturating_add(1);
+                let tick = self.tick;
+                Ok(Value::Array(
+                    self.interfaces
+                        .iter()
+                        .map(|interface| {
+                            let (rx_rate, tx_rate) = rates(&interface.name, interface.up);
+                            json!({
+                                "name": interface.name,
+                                "up": interface.up,
+                                "mac": interface.mac,
+                                "mtu": interface.mtu,
+                                "addresses": interface.addresses.iter().map(|address| json!({
+                                    "family": address.family,
+                                    "address": address.address,
+                                    "prefix": address.prefix,
+                                })).collect::<Vec<_>>(),
+                                "rx-bytes": interface.rx_bytes.saturating_add(tick.saturating_mul(rx_rate)),
+                                "tx-bytes": interface.tx_bytes.saturating_add(tick.saturating_mul(tx_rate)),
+                            })
                         })
-                    })
-                    .collect(),
-            )),
+                        .collect(),
+                ))
+            }
             "routes" => Ok(Value::Array(
                 self.routes
                     .iter()
@@ -243,6 +253,17 @@ impl NetFixture {
     }
 }
 
+/// Bytes added to the counters on every snapshot, per interface. The demo is
+/// deterministic; it only needs the numbers to move when the view refreshes.
+fn rates(name: &str, up: bool) -> (u64, u64) {
+    match name {
+        "eth0" => (1_572_864, 524_288),
+        "lo" => (131_072, 131_072),
+        "wlan0" if up => (393_216, 131_072),
+        _ => (0, 0),
+    }
+}
+
 /// Normalizes a route destination to `address/prefix`, checking the family and
 /// the prefix range. A bare address is a host route.
 fn normalize_destination(family: &str, destination: &str) -> Result<String, Error> {
@@ -313,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn interfaces_and_routes_are_stable() {
+    fn interfaces_and_routes_have_the_seeded_shape() {
         let mut fixture = NetFixture::new();
         let interfaces = call(&mut fixture, "interfaces", Value::Null);
         assert_eq!(interfaces[1]["name"], "eth0");
@@ -333,6 +354,28 @@ mod tests {
             .handle("set-up", &json!({"name": "nope", "up": true}))
             .expect_err("missing");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn the_interface_counters_move_on_each_snapshot() {
+        let mut fixture = NetFixture::new();
+        let first = call(&mut fixture, "interfaces", Value::Null);
+        let second = call(&mut fixture, "interfaces", Value::Null);
+        assert!(
+            second[1]["rx-bytes"].as_u64().expect("rx")
+                > first[1]["rx-bytes"].as_u64().expect("rx")
+        );
+        assert_eq!(
+            first[2]["rx-bytes"], second[2]["rx-bytes"],
+            "the down interface stays idle"
+        );
+        call(&mut fixture, "set-up", json!({"name": "wlan0", "up": true}));
+        let third = call(&mut fixture, "interfaces", Value::Null);
+        let fourth = call(&mut fixture, "interfaces", Value::Null);
+        assert!(
+            fourth[2]["rx-bytes"].as_u64().expect("rx")
+                > third[2]["rx-bytes"].as_u64().expect("rx")
+        );
     }
 
     #[test]
