@@ -139,6 +139,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
     status.className = bad ? "proc-status bad" : "proc-status";
   };
 
+  const stampStatus = (): void => {
+    setStatus(
+      `${intervalMs > 0 ? "Live" : "Updated"} · ${new Date().toLocaleTimeString()}`,
+    );
+  };
+
   const updateDirection = (): void => {
     mobileDirection.textContent = sortAsc ? "Asc" : "Desc";
     mobileDirection.setAttribute(
@@ -509,7 +515,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
     nextCursor = null;
     fold.hidden = false;
     renderRows(true);
-    setStatus(`Tree snapshot · ${processes.length} processes`);
+    stampStatus();
   }
 
   async function load(cursor: string | null = null, append = false): Promise<void> {
@@ -546,7 +552,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       }
       fold.hidden = true;
       renderRows(false);
-      setStatus(`Snapshot updated · ${processes.length} processes`);
+      stampStatus();
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
     } finally {

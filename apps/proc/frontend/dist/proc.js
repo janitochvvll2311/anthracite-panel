@@ -482,6 +482,9 @@ function mount(root, context) {
     status.textContent = message ?? "";
     status.className = bad ? "proc-status bad" : "proc-status";
   };
+  const stampStatus = () => {
+    setStatus(`${intervalMs > 0 ? "Live" : "Updated"} · ${new Date().toLocaleTimeString()}`);
+  };
   const updateDirection = () => {
     mobileDirection.textContent = sortAsc ? "Asc" : "Desc";
     mobileDirection.setAttribute("aria-label", sortAsc ? "Sort ascending" : "Sort descending");
@@ -781,7 +784,7 @@ function mount(root, context) {
     nextCursor = null;
     fold.hidden = false;
     renderRows(true);
-    setStatus(`Tree snapshot · ${processes.length} processes`);
+    stampStatus();
   }
   async function load(cursor = null, append = false) {
     if (loading) {
@@ -814,7 +817,7 @@ function mount(root, context) {
       }
       fold.hidden = true;
       renderRows(false);
-      setStatus(`Snapshot updated · ${processes.length} processes`);
+      stampStatus();
     } catch (error) {
       if (!disposed)
         setStatus(reason(error), true);
