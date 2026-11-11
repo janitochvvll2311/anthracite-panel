@@ -33,63 +33,27 @@ pub struct StorageFixture {
 impl StorageFixture {
     pub fn new() -> Self {
         Self {
-            devices: vec![
-                Device {
-                    name: "nvme0n1p1".to_string(),
-                    path: "/dev/nvme0n1p1".to_string(),
-                    size_bytes: 536_870_912,
-                    model: "Demo NVMe".to_string(),
-                    removable: false,
-                    mounted: true,
-                },
-                Device {
-                    name: "nvme0n1p2".to_string(),
-                    path: "/dev/nvme0n1p2".to_string(),
-                    size_bytes: 51_539_607_552,
-                    model: "Demo NVMe".to_string(),
-                    removable: false,
-                    mounted: true,
-                },
-                Device {
-                    name: "sdb1".to_string(),
-                    path: "/dev/sdb1".to_string(),
-                    size_bytes: 68_719_476_736,
-                    model: "Demo USB".to_string(),
-                    removable: true,
-                    mounted: true,
-                },
-                Device {
-                    name: "sdc".to_string(),
-                    path: "/dev/sdc".to_string(),
-                    size_bytes: 15_931_064_320,
-                    model: "Demo SD".to_string(),
-                    removable: true,
-                    mounted: false,
-                },
-            ],
-            mounts: vec![
-                Mount {
-                    device: "/dev/nvme0n1p1".to_string(),
-                    mountpoint: "/boot/efi".to_string(),
-                    filesystem: "vfat".to_string(),
-                    used_bytes: 67_108_864,
-                    total_bytes: 536_870_912,
-                },
-                Mount {
-                    device: "/dev/nvme0n1p2".to_string(),
-                    mountpoint: "/".to_string(),
-                    filesystem: "ext4".to_string(),
-                    used_bytes: 19_327_352_832,
-                    total_bytes: 51_539_607_552,
-                },
-                Mount {
-                    device: "/dev/sdb1".to_string(),
-                    mountpoint: "/media/demo".to_string(),
-                    filesystem: "exfat".to_string(),
-                    used_bytes: 12_884_901_888,
-                    total_bytes: 68_719_476_736,
-                },
-            ],
+            devices: crate::world::devices()
+                .iter()
+                .map(|device| Device {
+                    name: device.name.to_string(),
+                    path: device.path.to_string(),
+                    size_bytes: device.size_bytes,
+                    model: device.model.to_string(),
+                    removable: device.removable,
+                    mounted: device.mounted,
+                })
+                .collect(),
+            mounts: crate::world::mounts()
+                .iter()
+                .map(|mount| Mount {
+                    device: mount.device.to_string(),
+                    mountpoint: mount.mountpoint.to_string(),
+                    filesystem: mount.filesystem.to_string(),
+                    used_bytes: mount.used_bytes,
+                    total_bytes: mount.total_bytes,
+                })
+                .collect(),
         }
     }
 

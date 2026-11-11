@@ -2,10 +2,14 @@
 //!
 //! One binary backs one bundle per app: the bundles carry the real app's WIT
 //! package and manifest id, and only the binary is shared. Host state (files,
-//! accounts, network and storage) is a JSON snapshot under the per-app `{data}`
-//! directory; runtime state (processes and terminal sessions) resets on restart.
+//! accounts, network and storage) is one JSON snapshot all demo bundles point
+//! at (`state/data/host.json`), read and written under a cross-process lock so
+//! a mutation in one app is visible in the rest; runtime state (processes and
+//! terminal sessions) resets on restart.
 
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -23,6 +27,7 @@ mod home;
 mod net;
 mod proc;
 mod storage;
+mod world;
 
 const FS_READ: &str = "anthracite:fs/read@1.2.0";
 const FS_WRITE: &str = "anthracite:fs/write@1.2.0";
@@ -51,6 +56,7 @@ pub struct Emulator {
     storage: Mutex<storage::StorageFixture>,
     accounts: Mutex<accounts::AccountsFixture>,
     state_path: Option<PathBuf>,
+    state_lock: Mutex<()>,
 }
 
 impl Default for Emulator {
@@ -77,6 +83,20 @@ struct StateRef<'a> {
     storage: &'a storage::StorageFixture,
 }
 
+/// Releases the cross-process `flock` when the call finishes.
+struct StateGuard {
+    file: std::fs::File,
+}
+
+impl Drop for StateGuard {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor is valid until the guard drops.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
 impl Emulator {
     pub fn new() -> Self {
         Self {
@@ -87,6 +107,7 @@ impl Emulator {
             storage: Mutex::new(storage::StorageFixture::new()),
             accounts: Mutex::new(accounts::AccountsFixture::new()),
             state_path: None,
+            state_lock: Mutex::new(()),
         }
     }
 
@@ -112,6 +133,85 @@ impl Emulator {
         }
         emulator.state_path = state;
         Ok(emulator)
+    }
+
+    /// Serializes one call across processes that share the same state file.
+    fn lock_state(&self) -> Result<Option<StateGuard>, Error> {
+        let Some(path) = &self.state_path else {
+            return Ok(None);
+        };
+        let lock_path = path.with_extension("lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|error| {
+                Error::internal(format!("opening {}: {error}", lock_path.display()))
+            })?;
+        // SAFETY: `file` is open for the lifetime of the guard; `flock` has no
+        // memory preconditions and the descriptor is valid.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(Error::internal(format!(
+                "locking {}: {}",
+                lock_path.display(),
+                std::io::Error::last_os_error()
+            )));
+        }
+        Ok(Some(StateGuard { file }))
+    }
+
+    /// Reloads the shared snapshot before a call so another app's mutation is
+    /// visible. The caller holds the cross-process lock.
+    fn reload(&self) -> Result<(), Error> {
+        let Some(path) = &self.state_path else {
+            return Ok(());
+        };
+        if !path.exists() {
+            return Ok(());
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|error| Error::internal(format!("reading {}: {error}", path.display())))?;
+        let loaded: State = serde_json::from_slice(&bytes).map_err(|error| {
+            Error::internal(format!(
+                "{} is not a valid state snapshot: {error}",
+                path.display()
+            ))
+        })?;
+        *self.fs.lock().expect("the fixture mutex is not poisoned") = loaded.fs;
+        *self
+            .accounts
+            .lock()
+            .expect("the fixture mutex is not poisoned") = loaded.accounts;
+        *self.net.lock().expect("the fixture mutex is not poisoned") = loaded.net;
+        *self
+            .storage
+            .lock()
+            .expect("the fixture mutex is not poisoned") = loaded.storage;
+        Ok(())
+    }
+
+    /// A mountpoint becomes a directory in the shared files tree; a new user's
+    /// home is created too, so Files sees what Storage and Accounts did.
+    fn apply_cross_domain(
+        &self,
+        interface: &str,
+        function: &str,
+        input: &Value,
+    ) -> Result<(), Error> {
+        let mut fs = self.fs.lock().expect("the fixture mutex is not poisoned");
+        if interface == STORAGE && function == "attach" {
+            if let Some(mountpoint) = input.get("mountpoint").and_then(Value::as_str) {
+                fs.ensure_dir(mountpoint)?;
+            }
+        }
+        if interface == ACCOUNTS && function == "create-user" {
+            if let Some(home) = input.get("home").and_then(Value::as_str) {
+                fs.ensure_dir(home)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn trashed(&self) -> Vec<String> {
@@ -157,6 +257,12 @@ impl Emulator {
 
 impl Handler for Emulator {
     fn call(&self, interface: &str, function: &str, input: Value) -> Result<Value, Error> {
+        let _serial = self
+            .state_lock
+            .lock()
+            .expect("the state lock is not poisoned");
+        let _guard = self.lock_state()?;
+        self.reload()?;
         let mutating = match interface {
             FS_WRITE => true,
             NET => !matches!(function, "interfaces" | "routes"),
@@ -173,7 +279,7 @@ impl Handler for Emulator {
                 .lock()
                 .expect("the fixture mutex is not poisoned")
                 .handle(function, &input),
-            HOME => home::handle(function, &input),
+            HOME => home::handle(function, &input, self.state_path.as_deref()),
             NET => self
                 .net
                 .lock()
@@ -194,6 +300,7 @@ impl Handler for Emulator {
             ))),
         };
         if mutating && result.is_ok() {
+            self.apply_cross_domain(interface, function, &input)?;
             self.persist()?;
         }
         result
@@ -202,7 +309,7 @@ impl Handler for Emulator {
     fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
         if interface == HOME {
             return match function {
-                "watch" => home::watch(&input),
+                "watch" => home::watch(&input, self.state_path.clone()),
                 other => Err(Error::not_found(format!(
                     "`anthracite:home/host#{other}` is not implemented"
                 ))),
@@ -285,11 +392,13 @@ impl Fs {
             "/tmp",
             "/var",
             "/var/log",
-        ] {
+        ]
+        .into_iter()
+        .chain(world::directories().iter().copied())
+        {
             fs.nodes.insert(dir.to_string(), Node::Dir);
         }
         for (path, text) in [
-            ("/etc/hostname", "anthracite-demo\n"),
             (
                 "/home/operator/notes.txt",
                 "The emulator resets on restart.\n",
@@ -301,10 +410,15 @@ impl Fs {
             ("/home/operator/deep/answer.txt", "42\n"),
             ("/var/log/emulator.log", "started\n"),
             ("/tmp/scratch.txt", "temporary\n"),
+            ("/media/demo/README.txt", "Mounted demo volume.\n"),
         ] {
             fs.nodes
                 .insert(path.to_string(), Node::File(text.as_bytes().to_vec()));
         }
+        fs.nodes.insert(
+            "/etc/hostname".to_string(),
+            Node::File(format!("{}\n", world::HOSTNAME).into_bytes()),
+        );
         fs
     }
 
@@ -488,6 +602,27 @@ impl Fs {
         for (old, node) in moved {
             let destination = format!("{to}{}", &old[from.len()..]);
             self.nodes.insert(destination, node);
+        }
+        Ok(())
+    }
+
+    /// Creates a directory and its parents inside the fixture root. Used when a
+    /// mountpoint or a new user's home appears through another app.
+    pub fn ensure_dir(&mut self, path: &str) -> Result<(), Error> {
+        if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
+            return Err(Error::invalid("`path` must be an absolute path"));
+        }
+        let mut current = String::new();
+        for part in path.split('/').filter(|part| !part.is_empty()) {
+            current.push('/');
+            current.push_str(part);
+            match self.nodes.get(&current) {
+                Some(Node::Dir) => {}
+                Some(_) => return Err(Error::conflict(format!("`{current}` is not a directory"))),
+                None => {
+                    self.nodes.insert(current.clone(), Node::Dir);
+                }
+            }
         }
         Ok(())
     }
@@ -1052,9 +1187,9 @@ mod tests {
     fn the_tree_is_sorted_and_paginates() {
         let emulator = Emulator::new();
         let page = call(&emulator, "list", json!({"path": "/", "limit": 3}));
-        assert_eq!(page["entries"][0]["name"], "etc");
-        assert_eq!(page["entries"][1]["name"], "home");
-        assert_eq!(page["entries"][2]["name"], "tmp");
+        assert_eq!(page["entries"][0]["name"], "boot");
+        assert_eq!(page["entries"][1]["name"], "etc");
+        assert_eq!(page["entries"][2]["name"], "home");
         assert_eq!(page["done"], false);
         let cursor = page["cursor"].as_str().expect("cursor");
         let next = call(
@@ -1062,8 +1197,17 @@ mod tests {
             "list",
             json!({"path": "/", "cursor": cursor, "limit": 3}),
         );
-        assert_eq!(next["entries"][0]["name"], "var");
-        assert_eq!(next["done"], true);
+        assert_eq!(next["entries"][0]["name"], "media");
+        assert_eq!(next["done"], false);
+        let cursor = next["cursor"].as_str().expect("cursor");
+        let last = call(
+            &emulator,
+            "list",
+            json!({"path": "/", "cursor": cursor, "limit": 3}),
+        );
+        assert_eq!(last["entries"][0]["name"], "usr");
+        assert_eq!(last["entries"][1]["name"], "var");
+        assert_eq!(last["done"], true);
     }
 
     #[test]
@@ -1507,6 +1651,124 @@ mod tests {
             .expect("mounts")
             .iter()
             .any(|mount| mount["mountpoint"] == "/media/sd"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_fixtures_describe_one_host() {
+        let emulator = Emulator::new();
+        for mount in world::mounts() {
+            emulator
+                .call(FS_READ, "stat", json!({"path": mount.mountpoint}))
+                .expect("mountpoint in the files tree");
+        }
+        for user in world::users() {
+            emulator
+                .call(FS_READ, "stat", json!({"path": user.home}))
+                .expect("user home in the files tree");
+        }
+        let net = emulator
+            .call(NET, "interfaces", json!({}))
+            .expect("net interfaces");
+        let net_names: Vec<&str> = net
+            .as_array()
+            .expect("interfaces")
+            .iter()
+            .filter_map(|interface| interface["name"].as_str())
+            .collect();
+        let home = emulator.call(HOME, "info", json!({})).expect("home info");
+        let home_names: Vec<&str> = home["networks"]
+            .as_array()
+            .expect("home networks")
+            .iter()
+            .filter_map(|interface| interface["name"].as_str())
+            .collect();
+        assert_eq!(net_names, home_names);
+
+        let storage = emulator
+            .call(STORAGE, "mounts", json!({}))
+            .expect("storage mounts");
+        let storage_mounts: Vec<&str> = storage
+            .as_array()
+            .expect("mounts")
+            .iter()
+            .filter_map(|mount| mount["mountpoint"].as_str())
+            .collect();
+        let home_mounts: Vec<&str> = home["disks"]
+            .as_array()
+            .expect("home disks")
+            .iter()
+            .filter_map(|disk| disk["mount"].as_str())
+            .collect();
+        assert_eq!(storage_mounts, home_mounts);
+
+        let accounts = emulator
+            .call(ACCOUNTS, "users", json!({}))
+            .expect("accounts users");
+        let names: Vec<&str> = accounts
+            .as_array()
+            .expect("users")
+            .iter()
+            .filter_map(|user| user["name"].as_str())
+            .collect();
+        for user in world::users() {
+            assert!(names.contains(&user.name), "{}", user.name);
+        }
+    }
+
+    #[test]
+    fn shared_state_is_visible_across_apps() {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("shared-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("host.json");
+        let first = Emulator::open(Some(path.clone())).expect("first");
+        let second = Emulator::open(Some(path)).expect("second");
+
+        first
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdc", "mountpoint": "/media/sd", "filesystem": "exfat"}),
+            )
+            .expect("attach");
+        let mounts = second
+            .call(STORAGE, "mounts", json!({}))
+            .expect("second sees the mount");
+        assert!(mounts
+            .as_array()
+            .expect("mounts")
+            .iter()
+            .any(|mount| mount["mountpoint"] == "/media/sd"));
+        second
+            .call(FS_READ, "stat", json!({"path": "/media/sd"}))
+            .expect("mountpoint is a directory in the files tree");
+
+        second
+            .call(NET, "set-up", json!({"name": "wlan0", "up": true}))
+            .expect("interface up");
+        let info = first.call(HOME, "info", json!({})).expect("home");
+        let wlan = info["networks"]
+            .as_array()
+            .expect("networks")
+            .iter()
+            .find(|network| network["name"] == "wlan0")
+            .expect("wlan0");
+        assert_eq!(wlan["state"], "up");
+
+        second
+            .call(
+                ACCOUNTS,
+                "create-user",
+                json!({"name": "demo", "uid": 1500, "gid": 1500, "home": "/home/demo", "shell": "/bin/sh", "system": false}),
+            )
+            .expect("create user");
+        first
+            .call(FS_READ, "stat", json!({"path": "/home/demo"}))
+            .expect("home directory is visible");
+
         let _ = std::fs::remove_dir_all(dir);
     }
 

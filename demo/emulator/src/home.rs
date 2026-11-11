@@ -9,6 +9,7 @@
 //! of the host clock: metrics rise and fall on a fixed curve, and the counters
 //! only ever grow.
 
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -21,9 +22,9 @@ const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 const MIB: f64 = 1024.0 * 1024.0;
 const KIB: f64 = 1024.0;
 
-pub fn handle(function: &str, _input: &Value) -> Result<Value, Error> {
+pub fn handle(function: &str, _input: &Value, state: Option<&Path>) -> Result<Value, Error> {
     match function {
-        "info" => Ok(info()),
+        "info" => Ok(info(state)),
         other => Err(Error::not_found(format!(
             "`anthracite:home/host#{other}` is not implemented"
         ))),
@@ -32,7 +33,7 @@ pub fn handle(function: &str, _input: &Value) -> Result<Value, Error> {
 
 /// One snapshot every `interval-ms` (clamped to 1–60 s), encoded as the JSON
 /// chunks the engine frames as SSE.
-pub fn watch(input: &Value) -> Result<ChunkStream, Error> {
+pub fn watch(input: &Value, state: Option<PathBuf>) -> Result<ChunkStream, Error> {
     let milliseconds = match input.get("interval-ms") {
         Some(Value::Number(value)) => value.as_u64(),
         Some(Value::String(value)) => value.parse::<u64>().ok(),
@@ -42,14 +43,14 @@ pub fn watch(input: &Value) -> Result<ChunkStream, Error> {
     .clamp(1_000, 60_000);
     let interval = Duration::from_millis(milliseconds);
     Ok(Box::pin(unfold(
-        (true, interval),
-        |(first, interval)| async move {
+        (true, interval, state),
+        |(first, interval, state)| async move {
             if !first {
                 tokio::time::sleep(interval).await;
             }
-            let result = serde_json::to_vec(&info())
+            let result = serde_json::to_vec(&info(state.as_deref()))
                 .map_err(|error| Error::internal(format!("encoding host info: {error}")));
-            Some((result, (false, interval)))
+            Some((result, (false, interval, state)))
         },
     )))
 }
@@ -60,14 +61,15 @@ fn elapsed() -> f64 {
     START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
-fn info() -> Value {
-    info_at(elapsed())
+fn info(state: Option<&Path>) -> Value {
+    info_at(elapsed(), state)
 }
 
-fn info_at(t: f64) -> Value {
+fn info_at(t: f64, state: Option<&Path>) -> Value {
+    let (interfaces, mounts) = views(state);
     let memory = memory_info(t);
     json!({
-        "hostname": "anthracite-demo",
+        "hostname": crate::world::HOSTNAME,
         "os": "Anthracite Demo 1.0",
         "kernel": "6.6.0-demo",
         "arch": "x86_64",
@@ -75,8 +77,8 @@ fn info_at(t: f64) -> Value {
         "uptime-seconds": 273_720u64 + t as u64,
         "cpu": cpu_info(t),
         "memory": memory,
-        "disks": disks(t),
-        "networks": networks(t),
+        "disks": disks(t, &mounts),
+        "networks": networks(t, &interfaces),
     })
 }
 
@@ -108,71 +110,139 @@ fn memory_info(t: f64) -> Value {
     })
 }
 
-fn disks(t: f64) -> Vec<Value> {
-    [
-        (
-            "/dev/vda1",
-            "/",
-            "ext4",
-            256.0 * GIB,
-            96.0 * GIB,
-            32.0 * MIB,
-        ),
-        (
-            "/dev/vdb1",
-            "/data",
-            "ext4",
-            512.0 * GIB,
-            220.0 * GIB,
-            20.0 * MIB,
-        ),
-    ]
-    .into_iter()
-    .map(|(name, mount, file_system, total, base, growth)| {
-        // The filesystems fill slowly but never cross 90%.
-        let total = total as u64;
-        let used = ((base + growth * t).min(total as f64 * 0.9)) as u64;
-        json!({
-            "name": name,
-            "mount": mount,
-            "file-system": file_system,
-            "total": total,
-            "used": used,
-            "available": total - used,
-        })
-    })
-    .collect()
+struct NetworkView {
+    name: String,
+    mac: Option<String>,
+    addresses: Vec<String>,
+    up: bool,
+    rx_bytes: u64,
+    tx_bytes: u64,
 }
 
-fn networks(t: f64) -> Vec<Value> {
-    // Counters only grow: a base plus a fixed rate since start.
-    let eth_rx = 1_200.0 * MIB + 240.0 * KIB * t;
-    let eth_tx = 300.0 * MIB + 60.0 * KIB * t;
-    let lo = 1.0 * MIB + 2.0 * KIB * t;
-    vec![
-        json!({
-            "name": "eth0",
-            "mac": "02:00:00:00:00:10",
-            "addresses": ["10.0.0.10/24"],
-            "state": "up",
-            "received": eth_rx as u64,
-            "transmitted": eth_tx as u64,
-            "packets-received": (460_000.0 + 45.0 * t) as u64,
-            "packets-transmitted": (112_000.0 + 12.0 * t) as u64,
-            "errors": 0,
-        }),
-        json!({
-            "name": "lo",
-            "mac": Value::Null,
-            "addresses": ["127.0.0.1/8"],
-            "state": "unknown",
-            "received": lo as u64,
-            "transmitted": lo as u64,
-            "packets-received": (1_200.0 + 3.0 * t) as u64,
-            "packets-transmitted": (1_200.0 + 3.0 * t) as u64,
-            "errors": 0,
-        }),
-    ]
+struct MountView {
+    device: String,
+    mountpoint: String,
+    filesystem: String,
+    used_bytes: u64,
+    total_bytes: u64,
+}
+
+/// The shared emulator state wins; before any state file exists the fixtures
+/// fall back to the same world description.
+fn views(state: Option<&Path>) -> (Vec<NetworkView>, Vec<MountView>) {
+    state_view(state).unwrap_or_else(world_views)
+}
+
+fn state_view(state: Option<&Path>) -> Option<(Vec<NetworkView>, Vec<MountView>)> {
+    let path = state?;
+    let bytes = std::fs::read(path).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    let interfaces = value["net"]["interfaces"]
+        .as_array()?
+        .iter()
+        .filter_map(|interface| {
+            Some(NetworkView {
+                name: interface["name"].as_str()?.to_string(),
+                mac: interface["mac"].as_str().map(str::to_string),
+                addresses: interface["addresses"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|address| {
+                        Some(format!(
+                            "{}/{}",
+                            address["address"].as_str()?,
+                            address["prefix"].as_u64()?
+                        ))
+                    })
+                    .collect(),
+                up: interface["up"].as_bool().unwrap_or(false),
+                rx_bytes: interface["rx_bytes"].as_u64().unwrap_or(0),
+                tx_bytes: interface["tx_bytes"].as_u64().unwrap_or(0),
+            })
+        })
+        .collect();
+    let mounts = value["storage"]["mounts"]
+        .as_array()?
+        .iter()
+        .filter_map(|mount| {
+            Some(MountView {
+                device: mount["device"].as_str()?.to_string(),
+                mountpoint: mount["mountpoint"].as_str()?.to_string(),
+                filesystem: mount["filesystem"].as_str()?.to_string(),
+                used_bytes: mount["used_bytes"].as_u64().unwrap_or(0),
+                total_bytes: mount["total_bytes"].as_u64().unwrap_or(0),
+            })
+        })
+        .collect();
+    Some((interfaces, mounts))
+}
+
+fn world_views() -> (Vec<NetworkView>, Vec<MountView>) {
+    let interfaces = crate::world::interfaces()
+        .iter()
+        .map(|interface| NetworkView {
+            name: interface.name.to_string(),
+            mac: Some(interface.mac.to_string()),
+            addresses: interface
+                .addresses
+                .iter()
+                .map(|(_, address, prefix)| format!("{address}/{prefix}"))
+                .collect(),
+            up: interface.up,
+            rx_bytes: interface.rx_bytes,
+            tx_bytes: interface.tx_bytes,
+        })
+        .collect();
+    let mounts = crate::world::mounts()
+        .iter()
+        .map(|mount| MountView {
+            device: mount.device.to_string(),
+            mountpoint: mount.mountpoint.to_string(),
+            filesystem: mount.filesystem.to_string(),
+            used_bytes: mount.used_bytes,
+            total_bytes: mount.total_bytes,
+        })
+        .collect();
+    (interfaces, mounts)
+}
+
+fn disks(t: f64, mounts: &[MountView]) -> Vec<Value> {
+    mounts
+        .iter()
+        .map(|mount| {
+            let total = mount.total_bytes;
+            let growth = (total as f64 / 200_000.0) * t;
+            let used = ((mount.used_bytes as f64 + growth).min(total as f64 * 0.9)) as u64;
+            json!({
+                "name": mount.device,
+                "mount": mount.mountpoint,
+                "file-system": mount.filesystem,
+                "total": total,
+                "used": used,
+                "available": total.saturating_sub(used),
+            })
+        })
+        .collect()
+}
+
+fn networks(t: f64, interfaces: &[NetworkView]) -> Vec<Value> {
+    interfaces
+        .iter()
+        .map(|interface| {
+            let rate = if interface.up { 64.0 * KIB } else { 0.0 };
+            json!({
+                "name": interface.name,
+                "mac": interface.mac,
+                "addresses": interface.addresses,
+                "state": if interface.up { "up" } else { "down" },
+                "received": interface.rx_bytes.saturating_add((rate * t) as u64),
+                "transmitted": interface.tx_bytes.saturating_add((rate * t) as u64),
+                "packets-received": (interface.rx_bytes / 128).saturating_add((2.0 * t) as u64),
+                "packets-transmitted": (interface.tx_bytes / 128).saturating_add((2.0 * t) as u64),
+                "errors": 0,
+            })
+        })
+        .collect()
 }
 
 /// Rounds to `places` decimals without pulling a float formatting dependency
@@ -188,8 +258,8 @@ mod tests {
 
     #[test]
     fn the_fixture_moves_without_reading_the_host() {
-        let first = info_at(0.0);
-        let second = info_at(10.0);
+        let first = info_at(0.0, None);
+        let second = info_at(10.0, None);
         assert!(
             second["uptime-seconds"].as_u64() > first["uptime-seconds"].as_u64(),
             "uptime must advance"
@@ -222,9 +292,9 @@ mod tests {
 
     #[test]
     fn the_contract_answers_info_and_refuses_unknown_functions() {
-        let info = handle("info", &json!({})).expect("info");
+        let info = handle("info", &json!({}), None).expect("info");
         assert_eq!(info["cpu"]["cores"], 8);
-        let error = handle("reboot", &json!({})).expect_err("unknown");
+        let error = handle("reboot", &json!({}), None).expect_err("unknown");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
     }
 }

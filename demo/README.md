@@ -133,11 +133,12 @@ routes.
 
 ## State
 
-The fixtures are deterministic. Files, accounts, network and storage are durable:
-each of those bundles writes a plain JSON snapshot to
-`state/data/<app-id>/state.json` (`0600`, atomic write) through the approved
-`{data}` argv. They survive a panel/service restart. Delete an app’s
-`state.json` to reseed that domain.
+The fixtures are deterministic. Files, accounts, network and storage are durable
+and **shared**: every stateful bundle reads and writes one JSON snapshot at
+`state/data/host.json` (`0600`, atomic write, cross-process locked). A mountpoint
+created by Storage appears in Files, a new account's home is created in Files,
+and Home reads the same network/mount state, so the apps describe one host. It
+survives a panel/service restart. Delete `host.json` to reseed the whole demo.
 
 The process table, terminal sessions and Home's metrics are runtime state and
 reset on restart. Removing an app from the composition degrades only that view.
