@@ -113,10 +113,14 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
         let path = root.join(name);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
-            Err(error)
-                if error.kind() == std::io::ErrorKind::NotFound && OPTIONAL_DIRS.contains(name) =>
-            {
-                continue;
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if OPTIONAL_DIRS.contains(name) {
+                    continue;
+                }
+                return Err(Error::not_found(format!(
+                    "{} is missing; start the engine once to create it",
+                    path.display()
+                )));
             }
             Err(error) => return Err(inspect_error(&path, error)),
         };
@@ -350,6 +354,22 @@ mod tests {
         let root = scratch("check");
         ensure(&root).expect("ensure");
         assert_eq!(check(&root).expect("check"), StateStatus::Ready);
+        fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn a_missing_required_directory_is_not_found_but_shared_is_optional() {
+        let root = scratch("check-dirs");
+        ensure(&root).expect("ensure");
+        fs::remove_dir_all(root.join("shared")).expect("remove shared");
+        assert_eq!(
+            check(&root).expect("shared is optional"),
+            StateStatus::Ready
+        );
+        fs::remove_dir_all(root.join("keys")).expect("remove keys");
+        let error = check(&root).expect_err("keys is required");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        assert!(error.message().contains("is missing"), "{error}");
         fs::remove_dir_all(&root).expect("cleanup");
     }
 
