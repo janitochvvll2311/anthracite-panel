@@ -52,4 +52,5 @@ export type HostInfo = {
 export type FrameContext = {
   app: { id: string };
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  onVisibility?: (handler: (visible: boolean) => void) => () => void;
 };

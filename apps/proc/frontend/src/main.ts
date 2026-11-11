@@ -1,4 +1,5 @@
 import { call } from "./api";
+import { confirmAction } from "./confirm";
 import { cell, memory, reason } from "./format";
 import { styles } from "./styles";
 import {
@@ -36,7 +37,15 @@ export function mount(root: HTMLElement, context: FrameContext) {
         <button type="button" data-mode="flat" aria-pressed="true">List</button>
         <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
       </div>
-      <label class="proc-check"><input type="checkbox" data-live checked /> Live</label>
+      <label class="proc-interval"><span class="proc-interval-label">Interval</span>
+        <select data-interval aria-label="Refresh interval">
+          <option value="0">Manual (0s)</option>
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+      </label>
       <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
@@ -69,8 +78,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
     <div class="proc-table" role="table" aria-label="Processes">
       <div class="proc-head" data-head></div>
       <div class="proc-body" data-body role="rowgroup"></div>
+      <div class="proc-sentinel" data-sentinel aria-hidden="true"></div>
     </div>
-    <div class="proc-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
@@ -84,10 +93,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const mobileFilter = box.querySelector("[data-mobile-filter]") as HTMLInputElement;
   const mobileSort = box.querySelector("[data-mobile-sort]") as HTMLSelectElement;
   const mobileDirection = box.querySelector("[data-mobile-direction]") as HTMLButtonElement;
-  const more = box.querySelector("[data-more]") as HTMLButtonElement;
-  const fold = box.querySelector("[data-fold]") as HTMLButtonElement;
+  const sentinel = box.querySelector("[data-sentinel]") as HTMLElement;  const fold = box.querySelector("[data-fold]") as HTMLButtonElement;
   const modeButtons = [...box.querySelectorAll("[data-mode]")] as HTMLButtonElement[];
-  const liveToggle = box.querySelector("[data-live]") as HTMLInputElement;
+  const interval = box.querySelector("[data-interval]") as HTMLSelectElement;
   const spawnForm = box.querySelector(".proc-spawn") as HTMLFormElement;
   const spawnInput = spawnForm.querySelector("input") as HTMLInputElement;
 
@@ -105,9 +113,11 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const COMPACT_WIDTH = 820;
   let processes: Process[] = [];
   let nextCursor: string | null = null;
+  let sentinelVisible = false;
   let tree = false;
   let compact = false;
   let live: number | null = null;
+  let intervalMs = 2000;
   let visible = true;
   let collapsed = new Set<number>();
   let allCollapsed = false;
@@ -121,12 +131,18 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const offVisibility = context.onVisibility?.((next) => {
     visible = next;
     scheduleLive();
-    if (next) void load();
+    if (next && intervalMs > 0) void load();
   });
 
   const setStatus = (message: string, bad = false): void => {
     status.textContent = message ?? "";
     status.className = bad ? "proc-status bad" : "proc-status";
+  };
+
+  const stampStatus = (): void => {
+    setStatus(
+      `${intervalMs > 0 ? "Live" : "Updated"} · ${new Date().toLocaleTimeString()}`,
+    );
   };
 
   const updateDirection = (): void => {
@@ -402,7 +418,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       `Send signal to ${process.name} (${process.pid})`,
     );
     send.addEventListener("click", () => {
-      void signalProcess(process.pid, process["start-ticks"]);
+      void signalProcess(process.pid, process["start-ticks"], process.name);
     });
     action.append(send);
     row.append(action);
@@ -473,7 +489,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       ? `${currentRows.length} / ${processes.length}`
       : `${processes.length}`;
     count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${
-      tree ? " · tree" : nextCursor ? " · more available" : ""
+      tree ? " · tree" : ""
     }`;
   }
 
@@ -497,10 +513,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
     if (disposed) return;
     processes = all;
     nextCursor = null;
-    more.hidden = true;
     fold.hidden = false;
     renderRows(true);
-    setStatus(`Tree snapshot · ${processes.length} processes`);
+    stampStatus();
   }
 
   async function load(cursor: string | null = null, append = false): Promise<void> {
@@ -517,7 +532,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       }
       if (compact) {
         // Live refreshes every loaded page: asking for the first page again
-        // would discard what Load more appended two seconds earlier.
+        // would discard the rows loaded by scrolling to the end.
         const limit = append
           ? MOBILE_PAGE
           : Math.max(MOBILE_PAGE, processes.length);
@@ -530,16 +545,14 @@ export function mount(root: HTMLElement, context: FrameContext) {
         if (append) processes.push(...page.processes);
         else processes = page.processes;
         nextCursor = page.cursor ?? null;
-        more.hidden = Boolean(page.done) || !page.cursor;
       } else {
         processes = await loadAll();
         if (disposed) return;
         nextCursor = null;
-        more.hidden = true;
       }
       fold.hidden = true;
       renderRows(false);
-      setStatus(`Snapshot updated · ${processes.length} processes`);
+      stampStatus();
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
     } finally {
@@ -551,9 +564,30 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  async function signalProcess(pid: number, startTicks: number): Promise<void> {
+  /// Phones load the next page when the end of the list scrolls into view; the
+  /// desktop snapshot already has every row.
+  function moreIfNeeded(): void {
+    if (!compact || tree || loading || !nextCursor) return;
+    void load(nextCursor, true);
+  }
+
+  async function signalProcess(
+    pid: number,
+    startTicks: number,
+    name: string,
+  ): Promise<void> {
     if (!signal) return;
     const chosen = signal.value;
+    const dangerous = chosen === "TERM" || chosen === "KILL" || chosen === "STOP";
+    const ok = await confirmAction({
+      title: `Send ${chosen} to ${name} (${pid})?`,
+      message: dangerous
+        ? "The process may stop and unsaved work can be lost."
+        : "The process will receive the signal.",
+      confirmLabel: `Send ${chosen}`,
+      danger: dangerous,
+    });
+    if (!ok) return;
     setStatus(`Sending ${chosen} to ${pid}…`);
     try {
       await call(context, "/signal", {
@@ -571,12 +605,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
   function scheduleLive(): void {
     if (live !== null) window.clearInterval(live);
     live = null;
-    if (!liveToggle.checked || !visible) return;
+    if (!visible || intervalMs === 0) return;
     live = window.setInterval(
       () => {
         if (!document.hidden) void load();
       },
-      tree || !compact ? 5000 : 2000,
+      intervalMs,
     );
   }
 
@@ -649,7 +683,11 @@ export function mount(root: HTMLElement, context: FrameContext) {
     fold.textContent = allCollapsed ? "Expand all" : "Collapse all";
     renderRows(true);
   });
-  liveToggle.addEventListener("change", scheduleLive);
+  interval.addEventListener("change", () => {
+    intervalMs = Number(interval.value) || 0;
+    scheduleLive();
+    void load();
+  });
   mobileFilter.addEventListener("input", () => {
     filters.query = mobileFilter.value;
     renderRows(true);
@@ -664,9 +702,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
     renderRows(true);
   });
   box.querySelector("[data-refresh]")!.addEventListener("click", () => void load());
-  more.addEventListener("click", () => {
-    if (nextCursor && !tree) void load(nextCursor, true);
-  });
   spawnForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const command = spawnInput.value.trim();
@@ -675,6 +710,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
       return;
     }
     const argv = command.split(/\s+/);
+    const ok = await confirmAction({
+      title: "Spawn this command?",
+      message: `\`${command}\` will run detached from the process service.`,
+      confirmLabel: "Spawn",
+    });
+    if (!ok) return;
     setStatus("Spawning…");
     try {
       const pid = await call(context, "/spawn", {
@@ -694,6 +735,14 @@ export function mount(root: HTMLElement, context: FrameContext) {
   resize.observe(box);
   const tableResize = new ResizeObserver(() => renderWindow(false));
   tableResize.observe(table);
+  const sentinelObserver = new IntersectionObserver(
+    ([entry]) => {
+      sentinelVisible = entry.isIntersecting;
+      if (sentinelVisible) moreIfNeeded();
+    },
+    { rootMargin: "160px" },
+  );
+  sentinelObserver.observe(sentinel);
   applyCompact();
   renderHead();
   updateDirection();
@@ -714,6 +763,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
     if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();
     tableResize.disconnect();
+    sentinelObserver.disconnect();
     root.replaceChildren();
   };
 }

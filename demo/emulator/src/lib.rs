@@ -30,7 +30,7 @@ const TERMINAL: &str = "anthracite:terminal/terminal@1.0.0";
 const STREAM: &str = "anthracite:terminal/subscription@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
 const HOME: &str = "anthracite:home/host@1.0.0";
-const NET: &str = "anthracite:net/net@1.1.0";
+const NET: &str = "anthracite:net/net@1.2.0";
 const STORAGE: &str = "anthracite:storage/storage@1.1.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
 
@@ -47,7 +47,7 @@ pub struct Emulator {
     fs: Mutex<Fs>,
     terminals: Arc<Mutex<Terminals>>,
     procs: Mutex<proc::ProcFixture>,
-    net: Mutex<net::NetFixture>,
+    net: Arc<Mutex<net::NetFixture>>,
     storage: Mutex<storage::StorageFixture>,
     accounts: Mutex<accounts::AccountsFixture>,
     state_path: Option<PathBuf>,
@@ -83,7 +83,7 @@ impl Emulator {
             fs: Mutex::new(Fs::demo()),
             terminals: Arc::new(Mutex::new(Terminals::default())),
             procs: Mutex::new(proc::ProcFixture::demo()),
-            net: Mutex::new(net::NetFixture::new()),
+            net: Arc::new(Mutex::new(net::NetFixture::new())),
             storage: Mutex::new(storage::StorageFixture::new()),
             accounts: Mutex::new(accounts::AccountsFixture::new()),
             state_path: None,
@@ -106,7 +106,7 @@ impl Emulator {
                 })?;
                 emulator.fs = Mutex::new(loaded.fs);
                 emulator.accounts = Mutex::new(loaded.accounts);
-                emulator.net = Mutex::new(loaded.net);
+                emulator.net = Arc::new(Mutex::new(loaded.net));
                 emulator.storage = Mutex::new(loaded.storage);
             }
         }
@@ -205,6 +205,14 @@ impl Handler for Emulator {
                 "watch" => home::watch(&input),
                 other => Err(Error::not_found(format!(
                     "`anthracite:home/host#{other}` is not implemented"
+                ))),
+            };
+        }
+        if interface == NET {
+            return match function {
+                "watch" => net::watch(&input, Arc::clone(&self.net)),
+                other => Err(Error::not_found(format!(
+                    "`anthracite:net/net#{other}` is not implemented"
                 ))),
             };
         }
@@ -1500,6 +1508,28 @@ mod tests {
             .iter()
             .any(|mount| mount["mountpoint"] == "/media/sd"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_net_fixture_streams_moving_snapshots() {
+        use futures_util::StreamExt;
+
+        let emulator = Emulator::new();
+        let mut stream = emulator
+            .stream(NET, "watch", json!({"interval-ms": 1000}))
+            .expect("watch");
+        let first: Value =
+            serde_json::from_slice(&stream.next().await.expect("chunk").expect("ok"))
+                .expect("json");
+        let second: Value =
+            serde_json::from_slice(&stream.next().await.expect("chunk").expect("ok"))
+                .expect("json");
+        assert!(first["interfaces"].is_array());
+        assert!(first["routes"].is_array());
+        assert!(
+            second["interfaces"][1]["rx-bytes"].as_u64().expect("rx")
+                > first["interfaces"][1]["rx-bytes"].as_u64().expect("rx")
+        );
     }
 
     #[tokio::test]

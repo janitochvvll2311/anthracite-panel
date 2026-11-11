@@ -2,6 +2,11 @@ export const styles = `
   .net { display: flex; flex-direction: column; gap: 14px; min-height: 400px; }
   .net-bar { display: flex; align-items: center; gap: 10px; }
   .net-bar .grow { flex: 1; }
+  .net-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .net-interval select {
+    padding: 5px 8px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
   .net-bar button, .net-add button {
     padding: 6px 10px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
@@ -55,4 +60,44 @@ export const styles = `
   .net-add .hint { color: #667087; font-size: 11px; }
   .net-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .net-status.bad { color: #ffb3ba; }
+
+  @media (max-width: 640px) {
+    .net-bar { flex-wrap: wrap; }
+    .net-bar .net-mono { flex: 1 0 100%; }
+    .net-bar .grow { display: none; }
+    .net-interval { margin-left: auto; }
+    .net-routes { overflow: visible; border: 0; background: transparent; }
+    .net-route.head { display: none; }
+    .net-route {
+      display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+      position: relative; padding: 10px 40px 10px 12px; margin-bottom: 8px;
+      border: 1px solid #202632; border-radius: 9px; background: #0d1016;
+    }
+    .net-route:last-child { margin-bottom: 0; }
+    .net-route > span { display: inline-flex; gap: 4px; align-items: baseline; }
+    .net-route > span[data-label]::before {
+      content: attr(data-label); color: #667087; font-size: 9px;
+      text-transform: uppercase; letter-spacing: .06em;
+    }
+    .net-route > :nth-child(2) { order: -1; flex: 1 0 100%; color: #e8ebf2; font-weight: 600; }
+    .net-route > :nth-child(2)::before { content: none; }
+    .net-route > :nth-child(6) { position: absolute; top: 6px; right: 6px; margin: 0; }
+  }
+
+  .confirm-dialog { border: 0; padding: 0; background: transparent; color: #e8ebf2; }
+  .confirm-dialog::backdrop { background: rgba(5, 7, 11, .72); backdrop-filter: blur(2px); }
+  .confirm-card {
+    width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px;
+    padding: 16px; border: 1px solid #2a3142; border-radius: 12px; background: #11151e;
+    box-shadow: 0 20px 60px #0008;
+  }
+  .confirm-card h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .confirm-card p { margin: 0; color: #9aa4b8; font-size: 12.5px; line-height: 1.5; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .confirm-actions button {
+    padding: 7px 12px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .confirm-actions .confirm-ok { border-color: #3a6ea5; background: #1d2b40; color: #dce9ff; }
+  .confirm-actions .confirm-ok.danger { border-color: #7a3a44; background: #3a1c22; color: #ffb3ba; }
 `;

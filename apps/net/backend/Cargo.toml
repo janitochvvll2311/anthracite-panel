@@ -1,0 +1,20 @@
+[package]
+name = "net-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Read-only host interfaces, addresses and routes for the Network app"
+
+[[bin]]
+name = "net-service"
+path = "src/main.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
+anth-service = { path = "../../../sdk/rust/service" }
+futures-util = "0.3"
+libc = "0.2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+
+[workspace]

@@ -1,6 +1,12 @@
 //! Deterministic interface and route fixture for the demo (§19 §2, `net`).
 
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
 use anth_contract::Error;
+use anth_service::ChunkStream;
+use futures_util::stream::unfold;
 use serde_json::{json, Value};
 
 use crate::{boolean, number, optional_text, text};
@@ -36,6 +42,10 @@ struct Route {
 pub struct NetFixture {
     interfaces: Vec<Interface>,
     routes: Vec<Route>,
+    /// Advanced once per snapshot so the demo counters move when the view is
+    /// refreshed, without ever reading the host.
+    #[serde(default)]
+    tick: u64,
 }
 
 impl NetFixture {
@@ -79,8 +89,8 @@ impl NetFixture {
                             prefix: 64,
                         },
                     ],
-                    rx_bytes: 8_589_934_592,
-                    tx_bytes: 2_147_483_648,
+                    rx_bytes: 12_582_912,
+                    tx_bytes: 3_145_728,
                 },
                 Interface {
                     name: "wlan0".to_string(),
@@ -126,45 +136,14 @@ impl NetFixture {
                     metric: 100,
                 },
             ],
+            tick: 0,
         }
     }
 
     pub fn handle(&mut self, function: &str, input: &Value) -> Result<Value, Error> {
         match function {
-            "interfaces" => Ok(Value::Array(
-                self.interfaces
-                    .iter()
-                    .map(|interface| {
-                        json!({
-                            "name": interface.name,
-                            "up": interface.up,
-                            "mac": interface.mac,
-                            "mtu": interface.mtu,
-                            "addresses": interface.addresses.iter().map(|address| json!({
-                                "family": address.family,
-                                "address": address.address,
-                                "prefix": address.prefix,
-                            })).collect::<Vec<_>>(),
-                            "rx-bytes": interface.rx_bytes,
-                            "tx-bytes": interface.tx_bytes,
-                        })
-                    })
-                    .collect(),
-            )),
-            "routes" => Ok(Value::Array(
-                self.routes
-                    .iter()
-                    .map(|route| {
-                        json!({
-                            "family": route.family,
-                            "destination": route.destination,
-                            "gateway": route.gateway,
-                            "device": route.device,
-                            "metric": route.metric,
-                        })
-                    })
-                    .collect(),
-            )),
+            "interfaces" => Ok(self.interfaces_value()),
+            "routes" => Ok(self.routes_value()),
             "set-up" => {
                 let name = text(input, "name")?;
                 let up = boolean(input, "up");
@@ -180,13 +159,8 @@ impl NetFixture {
             }
             "add-route" => {
                 let family = text(input, "family")?;
-                if !matches!(family.as_str(), "ipv4" | "ipv6") {
-                    return Err(Error::invalid("`family` is `ipv4` or `ipv6`"));
-                }
-                let destination = text(input, "destination")?;
-                if destination.trim().is_empty() {
-                    return Err(Error::invalid("`destination` cannot be empty"));
-                }
+                let destination =
+                    normalize_destination(&family, text(input, "destination")?.trim())?;
                 let device = text(input, "device")?;
                 if !self
                     .interfaces
@@ -197,6 +171,12 @@ impl NetFixture {
                         "interface `{device}` does not exist"
                     )));
                 }
+                let gateway = match optional_text(input, "gateway") {
+                    Some(value) if !value.trim().is_empty() => {
+                        Some(normalize_gateway(&family, value.trim())?)
+                    }
+                    _ => None,
+                };
                 if self
                     .routes
                     .iter()
@@ -209,7 +189,7 @@ impl NetFixture {
                 self.routes.push(Route {
                     family,
                     destination,
-                    gateway: optional_text(input, "gateway"),
+                    gateway,
                     device,
                     metric: number(input, "metric")
                         .unwrap_or(100)
@@ -219,6 +199,7 @@ impl NetFixture {
             }
             "remove-route" => {
                 let destination = text(input, "destination")?;
+                let (_, destination) = normalize_any_destination(destination.trim())?;
                 let device = text(input, "device")?;
                 let index = self
                     .routes
@@ -237,6 +218,156 @@ impl NetFixture {
             ))),
         }
     }
+
+    fn interfaces_value(&mut self) -> Value {
+        self.tick = self.tick.saturating_add(1);
+        let tick = self.tick;
+        Value::Array(
+            self.interfaces
+                .iter()
+                .map(|interface| {
+                    let (rx_rate, tx_rate) = rates(&interface.name, interface.up);
+                    json!({
+                        "name": interface.name,
+                        "up": interface.up,
+                        "mac": interface.mac,
+                        "mtu": interface.mtu,
+                        "addresses": interface.addresses.iter().map(|address| json!({
+                            "family": address.family,
+                            "address": address.address,
+                            "prefix": address.prefix,
+                        })).collect::<Vec<_>>(),
+                        "rx-bytes": interface.rx_bytes.saturating_add(tick.saturating_mul(rx_rate)),
+                        "tx-bytes": interface.tx_bytes.saturating_add(tick.saturating_mul(tx_rate)),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn routes_value(&self) -> Value {
+        Value::Array(
+            self.routes
+                .iter()
+                .map(|route| {
+                    json!({
+                        "family": route.family,
+                        "destination": route.destination,
+                        "gateway": route.gateway,
+                        "device": route.device,
+                        "metric": route.metric,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub fn snapshot(&mut self) -> Value {
+        json!({
+            "interfaces": self.interfaces_value(),
+            "routes": self.routes_value(),
+        })
+    }
+}
+
+/// One snapshot every `interval-ms` (clamped to 1–60 s), encoded as the JSON
+/// chunks the engine frames as SSE. The fixture advances its counters per
+/// snapshot, so the stream always moves.
+pub fn watch(input: &Value, fixture: Arc<Mutex<NetFixture>>) -> Result<ChunkStream, Error> {
+    let milliseconds = match input.get("interval-ms") {
+        Some(Value::Number(value)) => value.as_u64(),
+        Some(Value::String(value)) => value.parse::<u64>().ok(),
+        _ => None,
+    }
+    .unwrap_or(2_000)
+    .clamp(1_000, 60_000);
+    let interval = Duration::from_millis(milliseconds);
+    Ok(Box::pin(unfold(
+        (true, interval, fixture),
+        |(first, interval, fixture)| async move {
+            if !first {
+                tokio::time::sleep(interval).await;
+            }
+            let value = {
+                let mut fixture = fixture.lock().expect("the fixture mutex is not poisoned");
+                fixture.snapshot()
+            };
+            let result = serde_json::to_vec(&value).map_err(|error| {
+                Error::internal(format!("encoding the network snapshot: {error}"))
+            });
+            Some((result, (false, interval, fixture)))
+        },
+    )))
+}
+
+/// Bytes added to the counters on every snapshot, per interface. The demo is
+/// deterministic; it only needs the numbers to move when the view refreshes.
+fn rates(name: &str, up: bool) -> (u64, u64) {
+    match name {
+        "eth0" => (1_572_864, 524_288),
+        "lo" => (131_072, 131_072),
+        "wlan0" if up => (393_216, 131_072),
+        _ => (0, 0),
+    }
+}
+
+/// Normalizes a route destination to `address/prefix`, checking the family and
+/// the prefix range. A bare address is a host route.
+fn normalize_destination(family: &str, destination: &str) -> Result<String, Error> {
+    let max = match family {
+        "ipv4" => 32,
+        "ipv6" => 128,
+        _ => return Err(Error::invalid("`family` is `ipv4` or `ipv6`")),
+    };
+    if destination.is_empty() {
+        return Err(Error::invalid("`destination` cannot be empty"));
+    }
+    let (address, prefix) = match destination.split_once('/') {
+        Some((address, prefix)) => {
+            let prefix = prefix
+                .parse::<u8>()
+                .map_err(|_| Error::invalid("`destination` has an invalid prefix"))?;
+            (address, prefix)
+        }
+        None => (destination, max),
+    };
+    let address: IpAddr = address
+        .parse()
+        .map_err(|_| Error::invalid("`destination` is not an IP address"))?;
+    let matches =
+        (family == "ipv4" && address.is_ipv4()) || (family == "ipv6" && address.is_ipv6());
+    if !matches {
+        return Err(Error::invalid("`destination` does not match `family`"));
+    }
+    if prefix > max {
+        return Err(Error::invalid("`destination` prefix is out of range"));
+    }
+    Ok(format!("{address}/{prefix}"))
+}
+
+fn normalize_any_destination(destination: &str) -> Result<(String, String), Error> {
+    let address = destination
+        .split_once('/')
+        .map(|(address, _)| address)
+        .unwrap_or(destination);
+    let address: IpAddr = address
+        .parse()
+        .map_err(|_| Error::invalid("`destination` is not an IP address"))?;
+    let family = if address.is_ipv4() { "ipv4" } else { "ipv6" };
+    Ok((
+        family.to_string(),
+        normalize_destination(family, destination)?,
+    ))
+}
+
+fn normalize_gateway(family: &str, gateway: &str) -> Result<String, Error> {
+    let address: IpAddr = gateway
+        .parse()
+        .map_err(|_| Error::invalid("`gateway` is not an IP address"))?;
+    if (family == "ipv4") != address.is_ipv4() {
+        return Err(Error::invalid("`gateway` does not match `family`"));
+    }
+    Ok(address.to_string())
 }
 
 #[cfg(test)]
@@ -250,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn interfaces_and_routes_are_stable() {
+    fn interfaces_and_routes_have_the_seeded_shape() {
         let mut fixture = NetFixture::new();
         let interfaces = call(&mut fixture, "interfaces", Value::Null);
         assert_eq!(interfaces[1]["name"], "eth0");
@@ -270,6 +401,28 @@ mod tests {
             .handle("set-up", &json!({"name": "nope", "up": true}))
             .expect_err("missing");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn the_interface_counters_move_on_each_snapshot() {
+        let mut fixture = NetFixture::new();
+        let first = call(&mut fixture, "interfaces", Value::Null);
+        let second = call(&mut fixture, "interfaces", Value::Null);
+        assert!(
+            second[1]["rx-bytes"].as_u64().expect("rx")
+                > first[1]["rx-bytes"].as_u64().expect("rx")
+        );
+        assert_eq!(
+            first[2]["rx-bytes"], second[2]["rx-bytes"],
+            "the down interface stays idle"
+        );
+        call(&mut fixture, "set-up", json!({"name": "wlan0", "up": true}));
+        let third = call(&mut fixture, "interfaces", Value::Null);
+        let fourth = call(&mut fixture, "interfaces", Value::Null);
+        assert!(
+            fourth[2]["rx-bytes"].as_u64().expect("rx")
+                > third[2]["rx-bytes"].as_u64().expect("rx")
+        );
     }
 
     #[test]
@@ -305,5 +458,31 @@ mod tests {
             )
             .expect_err("missing device");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn routes_validate_family_prefix_and_gateway() {
+        let mut fixture = NetFixture::new();
+        for input in [
+            json!({"family": "ipv4", "destination": "::/0", "device": "eth0"}),
+            json!({"family": "ipv4", "destination": "10.0.0.0/33", "device": "eth0"}),
+            json!({"family": "ipv4", "destination": "10.0.0.0/24", "gateway": "fe80::1", "device": "eth0"}),
+        ] {
+            let error = fixture
+                .handle("add-route", &input)
+                .expect_err("invalid route");
+            assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        }
+        call(
+            &mut fixture,
+            "add-route",
+            json!({"family": "ipv4", "destination": "10.2.0.1", "device": "eth0"}),
+        );
+        let routes = call(&mut fixture, "routes", Value::Null);
+        assert!(routes
+            .as_array()
+            .expect("routes")
+            .iter()
+            .any(|route| route["destination"] == "10.2.0.1/32"));
     }
 }

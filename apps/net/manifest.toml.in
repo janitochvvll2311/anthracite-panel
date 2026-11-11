@@ -3,44 +3,51 @@ manifest_version = 3
 [app]
 id = "org.anthracite.net"
 namespace = "anthracite:net"
-name = "Network (emulator)"
-version = "0.2.0"
-summary = "Deterministic interface and route fixture for the demo; replaced by the real net app."
+name = "{{app_name}}"
+version = "0.6.0"
+summary = "{{app_summary}}"
 license = "Apache-2.0"
 
 [service]
-path = "bin/host-emulator"
+path = "{{service_path}}"
 sha256 = "{{sha256}}"
-class = "socket"
-argv = ["--socket", "{socket}", "--state", "{data}/state.json"]
+class = "{{service_class}}"
+argv = {{service_argv}}
 
 [[export]]
-interface = "anthracite:net/net@1.1.0"
+interface = "anthracite:net/net@1.2.0"
 
 [[route]]
 method = "GET"
 path = "/interfaces"
-call = "anthracite:net/net@1.1.0#interfaces"
+call = "anthracite:net/net@1.2.0#interfaces"
 
 [[route]]
 method = "GET"
 path = "/routes"
-call = "anthracite:net/net@1.1.0#routes"
+call = "anthracite:net/net@1.2.0#routes"
+
+[[route]]
+method = "GET"
+path = "/watch"
+call = "anthracite:net/net@1.2.0#watch"
+stream = true
+events = true
 
 [[route]]
 method = "POST"
 path = "/up"
-call = "anthracite:net/net@1.1.0#set-up"
+call = "anthracite:net/net@1.2.0#set-up"
 
 [[route]]
 method = "POST"
 path = "/route"
-call = "anthracite:net/net@1.1.0#add-route"
+call = "anthracite:net/net@1.2.0#add-route"
 
 [[route]]
 method = "DELETE"
 path = "/route"
-call = "anthracite:net/net@1.1.0#remove-route"
+call = "anthracite:net/net@1.2.0#remove-route"
 
 [[slot]]
 id = "panel.view"
@@ -52,21 +59,21 @@ module = "web/net.js"
 sha256 = "{{module_sha256}}"
 
 [[cli]]
-call = "anthracite:net/net@1.1.0#interfaces"
+call = "anthracite:net/net@1.2.0#interfaces"
 verb = "interfaces"
 
 [[cli]]
-call = "anthracite:net/net@1.1.0#routes"
+call = "anthracite:net/net@1.2.0#routes"
 verb = "routes"
 
 [[cli]]
-call = "anthracite:net/net@1.1.0#set-up"
+call = "anthracite:net/net@1.2.0#set-up"
 verb = "interface-up"
 
 [[cli]]
-call = "anthracite:net/net@1.1.0#add-route"
+call = "anthracite:net/net@1.2.0#add-route"
 verb = "route-add"
 
 [[cli]]
-call = "anthracite:net/net@1.1.0#remove-route"
+call = "anthracite:net/net@1.2.0#remove-route"
 verb = "route-remove"

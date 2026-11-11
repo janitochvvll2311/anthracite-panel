@@ -16,6 +16,47 @@ async function call(context, route, init = {}) {
   return value;
 }
 
+// src/confirm.ts
+function confirmAction(options) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm-dialog";
+    const form = document.createElement("form");
+    form.method = "dialog";
+    form.className = "confirm-card";
+    const title = document.createElement("h3");
+    title.textContent = options.title;
+    const message = document.createElement("p");
+    message.textContent = options.message;
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "submit";
+    cancel.value = "cancel";
+    cancel.className = "confirm-cancel";
+    cancel.textContent = "Cancel";
+    const confirm = document.createElement("button");
+    confirm.type = "submit";
+    confirm.value = "confirm";
+    confirm.className = options.danger ? "confirm-ok danger" : "confirm-ok";
+    confirm.textContent = options.confirmLabel ?? "Confirm";
+    actions.append(cancel, confirm);
+    form.append(title, message, actions);
+    dialog.append(form);
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      resolve(dialog.returnValue === "confirm");
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog)
+        dialog.close("cancel");
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    cancel.focus();
+  });
+}
+
 // src/format.ts
 function memory(bytes) {
   if (bytes >= 1024 * 1024 * 1024)
@@ -52,8 +93,8 @@ var styles = `
   .proc-tabs button { border: 0; border-radius: 0; background: transparent; }
   .proc-tabs button[aria-pressed="true"] { background: #1f2940; color: #fff; }
   .proc-fold { font-size: 11px !important; }
-  .proc-check { display: flex; align-items: center; gap: 5px; color: #8f98ab; font-size: 12px; }
-  .proc-check input { accent-color: #7aa2ff; }
+  .proc-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .proc-interval select { padding: 5px 8px; min-height: 34px; }
   .proc-spawn { display: flex; gap: 6px; }
   .proc-spawn input {
     flex: 1; min-width: 0; padding: 6px 9px; border-radius: 7px; border: 1px solid #2a3142;
@@ -152,11 +193,7 @@ var styles = `
     color: #c8d0df; font: inherit; font-size: 11px; cursor: pointer;
   }
   .proc-signal:hover { border-color: #ff7d8a88; color: #ffb3ba; }
-  .proc-more { display: flex; justify-content: center; }
-  .proc-more button {
-    padding: 6px 12px; min-height: 34px; border-radius: 7px; border: 1px solid #2a3142;
-    background: #151a24; color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
-  }
+  .proc-sentinel { height: 1px; }
   .proc-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .proc-status.bad { color: #ffb3ba; }
   .proc-empty { padding: 18px; color: #667087; text-align: center; font-size: 12px; }
@@ -164,12 +201,11 @@ var styles = `
   .proc.compact .proc-bar { gap: 8px; }
   .proc.compact .proc-count { flex: 1 0 100%; }
   .proc.compact .proc-bar .grow { display: none; }
-  .proc.compact .proc-tabs { order: 1; }
-  .proc.compact .proc-check { order: 2; min-height: 34px; }
-  .proc.compact .proc-fold { order: 3; }
-  .proc.compact .proc-pick { order: 4; }
-  .proc.compact [data-refresh] { order: 5; }
-  .proc.compact [data-mode="tree"] { display: none; }
+  .proc.compact .proc-tabs { display: none; }
+  .proc.compact .proc-interval { order: 1; }
+  .proc.compact .proc-pick { order: 2; }
+  .proc.compact [data-refresh] { order: 3; }
+  .proc.compact .proc-fold { display: none; }
   .proc.compact .proc-mobile-tools {
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
   }
@@ -217,6 +253,23 @@ var styles = `
     white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   }
   .proc.compact .proc-cell.action .proc-signal { min-height: 40px; padding: 8px 12px; font-size: 12px; }
+
+  .confirm-dialog { border: 0; padding: 0; background: transparent; color: #e8ebf2; }
+  .confirm-dialog::backdrop { background: rgba(5, 7, 11, .72); backdrop-filter: blur(2px); }
+  .confirm-card {
+    width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px;
+    padding: 16px; border: 1px solid #2a3142; border-radius: 12px; background: #11151e;
+    box-shadow: 0 20px 60px #0008;
+  }
+  .confirm-card h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .confirm-card p { margin: 0; color: #9aa4b8; font-size: 12.5px; line-height: 1.5; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .confirm-actions button {
+    padding: 7px 12px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .confirm-actions .confirm-ok { border-color: #3a6ea5; background: #1d2b40; color: #dce9ff; }
+  .confirm-actions .confirm-ok.danger { border-color: #7a3a44; background: #3a1c22; color: #ffb3ba; }
 `;
 
 // src/tree.ts
@@ -333,7 +386,15 @@ function mount(root, context) {
         <button type="button" data-mode="flat" aria-pressed="true">List</button>
         <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
       </div>
-      <label class="proc-check"><input type="checkbox" data-live checked /> Live</label>
+      <label class="proc-interval"><span class="proc-interval-label">Interval</span>
+        <select data-interval aria-label="Refresh interval">
+          <option value="0">Manual (0s)</option>
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+      </label>
       <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
@@ -366,8 +427,8 @@ function mount(root, context) {
     <div class="proc-table" role="table" aria-label="Processes">
       <div class="proc-head" data-head></div>
       <div class="proc-body" data-body role="rowgroup"></div>
+      <div class="proc-sentinel" data-sentinel aria-hidden="true"></div>
     </div>
-    <div class="proc-more"><button type="button" data-more hidden>Load more</button></div>
     <p class="proc-status" role="status"></p>
   `;
   root.append(box);
@@ -380,10 +441,10 @@ function mount(root, context) {
   const mobileFilter = box.querySelector("[data-mobile-filter]");
   const mobileSort = box.querySelector("[data-mobile-sort]");
   const mobileDirection = box.querySelector("[data-mobile-direction]");
-  const more = box.querySelector("[data-more]");
+  const sentinel = box.querySelector("[data-sentinel]");
   const fold = box.querySelector("[data-fold]");
   const modeButtons = [...box.querySelectorAll("[data-mode]")];
-  const liveToggle = box.querySelector("[data-live]");
+  const interval = box.querySelector("[data-interval]");
   const spawnForm = box.querySelector(".proc-spawn");
   const spawnInput = spawnForm.querySelector("input");
   const MOBILE_PAGE = 200;
@@ -397,9 +458,11 @@ function mount(root, context) {
   const COMPACT_WIDTH = 820;
   let processes = [];
   let nextCursor = null;
+  let sentinelVisible = false;
   let tree = false;
   let compact = false;
   let live = null;
+  let intervalMs = 2000;
   let visible = true;
   let collapsed = new Set;
   let allCollapsed = false;
@@ -412,12 +475,15 @@ function mount(root, context) {
   const offVisibility = context.onVisibility?.((next) => {
     visible = next;
     scheduleLive();
-    if (next)
+    if (next && intervalMs > 0)
       load();
   });
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "proc-status bad" : "proc-status";
+  };
+  const stampStatus = () => {
+    setStatus(`${intervalMs > 0 ? "Live" : "Updated"} · ${new Date().toLocaleTimeString()}`);
   };
   const updateDirection = () => {
     mobileDirection.textContent = sortAsc ? "Asc" : "Desc";
@@ -634,7 +700,7 @@ function mount(root, context) {
     send.textContent = "Send";
     send.setAttribute("aria-label", `Send signal to ${process.name} (${process.pid})`);
     send.addEventListener("click", () => {
-      signalProcess(process.pid, process["start-ticks"]);
+      signalProcess(process.pid, process["start-ticks"], process.name);
     });
     action.append(send);
     row.append(action);
@@ -693,7 +759,7 @@ function mount(root, context) {
     renderWindow(true);
     const active = Object.values(filters).some((value) => value && value.trim());
     const countText = active ? `${currentRows.length} / ${processes.length}` : `${processes.length}`;
-    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : nextCursor ? " · more available" : ""}`;
+    count.textContent = `${countText} process${processes.length === 1 ? "" : "es"}${tree ? " · tree" : ""}`;
   }
   async function loadAll() {
     const all = [];
@@ -716,10 +782,9 @@ function mount(root, context) {
       return;
     processes = all;
     nextCursor = null;
-    more.hidden = true;
     fold.hidden = false;
     renderRows(true);
-    setStatus(`Tree snapshot · ${processes.length} processes`);
+    stampStatus();
   }
   async function load(cursor = null, append = false) {
     if (loading) {
@@ -744,17 +809,15 @@ function mount(root, context) {
         else
           processes = page.processes;
         nextCursor = page.cursor ?? null;
-        more.hidden = Boolean(page.done) || !page.cursor;
       } else {
         processes = await loadAll();
         if (disposed)
           return;
         nextCursor = null;
-        more.hidden = true;
       }
       fold.hidden = true;
       renderRows(false);
-      setStatus(`Snapshot updated · ${processes.length} processes`);
+      stampStatus();
     } catch (error) {
       if (!disposed)
         setStatus(reason(error), true);
@@ -766,10 +829,24 @@ function mount(root, context) {
       }
     }
   }
-  async function signalProcess(pid, startTicks) {
+  function moreIfNeeded() {
+    if (!compact || tree || loading || !nextCursor)
+      return;
+    load(nextCursor, true);
+  }
+  async function signalProcess(pid, startTicks, name) {
     if (!signal)
       return;
     const chosen = signal.value;
+    const dangerous = chosen === "TERM" || chosen === "KILL" || chosen === "STOP";
+    const ok = await confirmAction({
+      title: `Send ${chosen} to ${name} (${pid})?`,
+      message: dangerous ? "The process may stop and unsaved work can be lost." : "The process will receive the signal.",
+      confirmLabel: `Send ${chosen}`,
+      danger: dangerous
+    });
+    if (!ok)
+      return;
     setStatus(`Sending ${chosen} to ${pid}…`);
     try {
       await call(context, "/signal", {
@@ -788,12 +865,12 @@ function mount(root, context) {
     if (live !== null)
       window.clearInterval(live);
     live = null;
-    if (!liveToggle.checked || !visible)
+    if (!visible || intervalMs === 0)
       return;
     live = window.setInterval(() => {
       if (!document.hidden)
         load();
-    }, tree || !compact ? 5000 : 2000);
+    }, intervalMs);
   }
   function setMode(next) {
     if (next && compact)
@@ -865,7 +942,11 @@ function mount(root, context) {
     fold.textContent = allCollapsed ? "Expand all" : "Collapse all";
     renderRows(true);
   });
-  liveToggle.addEventListener("change", scheduleLive);
+  interval.addEventListener("change", () => {
+    intervalMs = Number(interval.value) || 0;
+    scheduleLive();
+    load();
+  });
   mobileFilter.addEventListener("input", () => {
     filters.query = mobileFilter.value;
     renderRows(true);
@@ -880,10 +961,6 @@ function mount(root, context) {
     renderRows(true);
   });
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
-  more.addEventListener("click", () => {
-    if (nextCursor && !tree)
-      load(nextCursor, true);
-  });
   spawnForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const command = spawnInput.value.trim();
@@ -892,6 +969,13 @@ function mount(root, context) {
       return;
     }
     const argv = command.split(/\s+/);
+    const ok = await confirmAction({
+      title: "Spawn this command?",
+      message: `\`${command}\` will run detached from the process service.`,
+      confirmLabel: "Spawn"
+    });
+    if (!ok)
+      return;
     setStatus("Spawning…");
     try {
       const pid = await call(context, "/spawn", {
@@ -911,6 +995,12 @@ function mount(root, context) {
   resize.observe(box);
   const tableResize = new ResizeObserver(() => renderWindow(false));
   tableResize.observe(table);
+  const sentinelObserver = new IntersectionObserver(([entry]) => {
+    sentinelVisible = entry.isIntersecting;
+    if (sentinelVisible)
+      moreIfNeeded();
+  }, { rootMargin: "160px" });
+  sentinelObserver.observe(sentinel);
   applyCompact();
   renderHead();
   updateDirection();
@@ -933,6 +1023,7 @@ function mount(root, context) {
       window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();
     tableResize.disconnect();
+    sentinelObserver.disconnect();
     root.replaceChildren();
   };
 }
