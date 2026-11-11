@@ -82,6 +82,7 @@ var styles = `
     text-transform: uppercase; letter-spacing: .06em; font-size: 10px;
   }
   .proc-row.head .sortable { cursor: pointer; user-select: none; }
+  .proc-row.head .sortable:focus-visible { outline: 2px solid #7aa2ff; outline-offset: 2px; border-radius: 3px; }
   .proc-row.head .sortable:hover { color: #c8d0df; }
   .proc-row.head .sorted { color: #e8ebf2; }
   .proc-row.filters { padding: 4px 10px; background: #10141c; border-bottom: 1px solid #202632; }
@@ -399,6 +400,7 @@ function mount(root, context) {
   let tree = false;
   let compact = false;
   let live = null;
+  let visible = true;
   let collapsed = new Set;
   let allCollapsed = false;
   let sortKey = "pid";
@@ -407,6 +409,12 @@ function mount(root, context) {
   let loading = false;
   let pending = false;
   let disposed = false;
+  const offVisibility = context.onVisibility?.((next) => {
+    visible = next;
+    scheduleLive();
+    if (next)
+      load();
+  });
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "proc-status bad" : "proc-status";
@@ -500,7 +508,16 @@ function mount(root, context) {
           node.textContent = `${label} ${sortAsc ? "▲" : "▼"}`;
         }
         node.title = `Sort by ${label.toLowerCase()}`;
+        node.tabIndex = 0;
+        node.setAttribute("role", "button");
+        node.setAttribute("aria-label", `Sort by ${label.toLowerCase()}${sortKey === key ? sortAsc ? ", ascending" : ", descending" : ""}`);
         node.addEventListener("click", () => setSort(key));
+        node.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setSort(key);
+          }
+        });
       }
       head.append(node);
     }
@@ -769,7 +786,7 @@ function mount(root, context) {
     if (live !== null)
       window.clearInterval(live);
     live = null;
-    if (!liveToggle.checked)
+    if (!liveToggle.checked || !visible)
       return;
     live = window.setInterval(() => {
       if (!document.hidden)
@@ -907,6 +924,7 @@ function mount(root, context) {
   load();
   return () => {
     disposed = true;
+    offVisibility?.();
     if (live !== null)
       window.clearInterval(live);
     if (scrollFrame)

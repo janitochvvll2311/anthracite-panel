@@ -79,6 +79,8 @@ type Mounted = {
   requestClose?: () => Promise<boolean>;
   /// Reads the current view state before moving it (float/dock).
   snapshot?: () => Promise<unknown>;
+  /// Pauses app polling while the pane is not the active tab.
+  setVisible?: (visible: boolean) => void;
   /// Set when the host closes or replaces the mount; a late module must not
   /// attach to a detached root.
   cancelled: boolean;
@@ -496,6 +498,9 @@ function trackMount(
       state.update = frame.update;
       state.requestClose = frame.requestClose;
       state.snapshot = frame.snapshot;
+      state.setVisible = frame.setVisible;
+      const pane = state.root.closest(".pane");
+      frame.setVisible(!pane || pane.classList.contains("active"));
     },
   ).then((dispose) => {
     if (state.cancelled || current() !== state) {
@@ -637,6 +642,7 @@ function renderPanes(): void {
     const pane = state.root.parentElement;
     if (!pane) continue;
     pane.classList.toggle("active", key === activeKey);
+    state.setVisible?.(key === activeKey);
   }
   empty.classList.toggle("hidden", tabs.size > 0);
 }

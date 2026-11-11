@@ -108,6 +108,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let tree = false;
   let compact = false;
   let live: number | null = null;
+  let visible = true;
   let collapsed = new Set<number>();
   let allCollapsed = false;
   let sortKey: SortKey = "pid";
@@ -116,6 +117,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let loading = false;
   let pending = false;
   let disposed = false;
+
+  const offVisibility = context.onVisibility?.((next) => {
+    visible = next;
+    scheduleLive();
+    if (next) void load();
+  });
 
   const setStatus = (message: string, bad = false): void => {
     status.textContent = message ?? "";
@@ -221,7 +228,21 @@ export function mount(root: HTMLElement, context: FrameContext) {
           node.textContent = `${label} ${sortAsc ? "▲" : "▼"}`;
         }
         node.title = `Sort by ${label.toLowerCase()}`;
+        node.tabIndex = 0;
+        node.setAttribute("role", "button");
+        node.setAttribute(
+          "aria-label",
+          `Sort by ${label.toLowerCase()}${
+            sortKey === key ? (sortAsc ? ", ascending" : ", descending") : ""
+          }`,
+        );
         node.addEventListener("click", () => setSort(key));
+        node.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            setSort(key);
+          }
+        });
       }
       head.append(node);
     }
@@ -546,7 +567,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   function scheduleLive(): void {
     if (live !== null) window.clearInterval(live);
     live = null;
-    if (!liveToggle.checked) return;
+    if (!liveToggle.checked || !visible) return;
     live = window.setInterval(
       () => {
         if (!document.hidden) void load();
@@ -684,6 +705,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
+    offVisibility?.();
     if (live !== null) window.clearInterval(live);
     if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
     resize.disconnect();

@@ -43,6 +43,7 @@ export const styles = `
     text-transform: uppercase; letter-spacing: .06em; font-size: 10px;
   }
   .proc-row.head .sortable { cursor: pointer; user-select: none; }
+  .proc-row.head .sortable:focus-visible { outline: 2px solid #7aa2ff; outline-offset: 2px; border-radius: 3px; }
   .proc-row.head .sortable:hover { color: #c8d0df; }
   .proc-row.head .sorted { color: #e8ebf2; }
   .proc-row.filters { padding: 4px 10px; background: #10141c; border-bottom: 1px solid #202632; }

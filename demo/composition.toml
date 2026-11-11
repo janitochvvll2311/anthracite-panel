@@ -11,4 +11,5 @@ apps = [
     "org.anthracite.net",
     "org.anthracite.storage",
     "org.anthracite.accounts",
+    "org.anthracite.home",
 ]
