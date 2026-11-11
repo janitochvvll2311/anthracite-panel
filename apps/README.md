@@ -16,9 +16,10 @@ apps/<app>/
 
 `apps/hello` is the minimal component and keeps `src/`, `wit/`, `web/` and a
 final `manifest.toml` because its `wasm/app.wasm` is committed. `apps/home`,
-`apps/fs`, `apps/terminal`, `apps/proc`, `apps/net` and `apps/storage` have real
-Rust backends; the seven demo bundles use the shared fixture in `demo/emulator`
-as their backend, and their `frontend/` modules are what the demo bundles carry.
+`apps/fs`, `apps/terminal`, `apps/proc`, `apps/net`, `apps/storage` and
+`apps/accounts` have real Rust backends; the seven demo bundles use the shared
+fixture in `demo/emulator` as their backend, and their `frontend/` modules are
+what the demo bundles carry.
 
 ## Build the native apps
 
@@ -29,11 +30,13 @@ apps/terminal/build.sh      # native PTY shell
 apps/proc/build.sh          # real /proc reader, signal and spawn
 apps/net/build.sh           # host interfaces, routes and apply
 apps/storage/build.sh       # host block devices, mounts and guarded mount/unmount
+apps/accounts/build.sh      # local users, groups and guarded account changes
 ```
 
-The native Files, Terminal, Processes, Network and Storage bundles replace the
-emulator bundle under the same app id. They declare `host`, `exec` and `admin`
-service classes, so approval needs `--accept-write --accept-admin --accept-host`.
+The native Files, Terminal, Processes, Network, Storage and Accounts bundles
+replace the emulator bundle under the same app id. They declare `host`, `exec`
+and `admin` service classes, so approval needs
+`--accept-write --accept-admin --accept-host`.
 Their `manifest.toml.in` uses
 `{{app_name}}`, `{{app_summary}}`, `{{service_path}}`, `{{service_class}}` and
 `{{service_argv}}`; the emulator builder and the native build scripts fill them

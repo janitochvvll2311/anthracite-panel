@@ -253,9 +253,19 @@ function mount(root, context) {
     }
   });
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  let visible = true;
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible)
+      return;
+    visible = next;
+    if (!next || disposed)
+      return;
+    load();
+  });
   load();
   return () => {
     disposed = true;
+    offVisibility?.();
     root.replaceChildren();
   };
 }
