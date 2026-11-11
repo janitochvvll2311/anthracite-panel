@@ -30444,6 +30444,7 @@ var styles = `
     }
     .editor-tree-backdrop { display: block; }
   }
+  .fs-empty { padding: 14px 16px; color: #667087; font-size: 12px; }
   .fs-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .fs-status.bad { color: #ffb3ba; }
 `;
@@ -37128,7 +37129,7 @@ function mount(root, context) {
       more.hidden = Boolean(page.done) || !page.cursor;
       if (rows() === 0) {
         const empty = document.createElement("li");
-        empty.className = "fs-status";
+        empty.className = "fs-empty";
         empty.textContent = "This directory is empty.";
         list.append(empty);
       }
