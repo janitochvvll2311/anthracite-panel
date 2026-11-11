@@ -78,6 +78,12 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                 "socket",
                 r#"["--socket", "{socket}"]"#,
             ),
+            "net" => (
+                "Network (emulator)",
+                "Deterministic interface and route fixture for the demo; replaced by the real net app.",
+                "socket",
+                r#"["--socket", "{socket}", "--state", "{data}/state.json"]"#,
+            ),
             "home" => (
                 "Home (emulator)",
                 "Deterministic host overview fixture for the demo; replaced by the real home app.",
