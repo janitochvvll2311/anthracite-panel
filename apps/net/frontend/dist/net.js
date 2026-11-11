@@ -71,6 +71,47 @@ async function watchNetwork(context, signal, intervalMs, onSnapshot) {
   }
 }
 
+// src/confirm.ts
+function confirmAction(options) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm-dialog";
+    const form = document.createElement("form");
+    form.method = "dialog";
+    form.className = "confirm-card";
+    const title = document.createElement("h3");
+    title.textContent = options.title;
+    const message = document.createElement("p");
+    message.textContent = options.message;
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "submit";
+    cancel.value = "cancel";
+    cancel.className = "confirm-cancel";
+    cancel.textContent = "Cancel";
+    const confirm = document.createElement("button");
+    confirm.type = "submit";
+    confirm.value = "confirm";
+    confirm.className = options.danger ? "confirm-ok danger" : "confirm-ok";
+    confirm.textContent = options.confirmLabel ?? "Confirm";
+    actions.append(cancel, confirm);
+    form.append(title, message, actions);
+    dialog.append(form);
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      resolve(dialog.returnValue === "confirm");
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog)
+        dialog.close("cancel");
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    cancel.focus();
+  });
+}
+
 // src/format.ts
 function count(bytes) {
   if (bytes >= 1024 ** 3)
@@ -177,6 +218,23 @@ var styles = `
     .net-route > :nth-child(2)::before { content: none; }
     .net-route > :nth-child(6) { position: absolute; top: 6px; right: 6px; margin: 0; }
   }
+
+  .confirm-dialog { border: 0; padding: 0; background: transparent; color: #e8ebf2; }
+  .confirm-dialog::backdrop { background: rgba(5, 7, 11, .72); backdrop-filter: blur(2px); }
+  .confirm-card {
+    width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px;
+    padding: 16px; border: 1px solid #2a3142; border-radius: 12px; background: #11151e;
+    box-shadow: 0 20px 60px #0008;
+  }
+  .confirm-card h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .confirm-card p { margin: 0; color: #9aa4b8; font-size: 12.5px; line-height: 1.5; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .confirm-actions button {
+    padding: 7px 12px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .confirm-actions .confirm-ok { border-color: #3a6ea5; background: #1d2b40; color: #dce9ff; }
+  .confirm-actions .confirm-ok.danger { border-color: #7a3a44; background: #3a1c22; color: #ffb3ba; }
 `;
 
 // src/main.ts
@@ -357,6 +415,14 @@ function mount(root, context) {
       load();
   }
   async function setUp(name, up) {
+    const ok = await confirmAction({
+      title: up ? `Bring up ${name}?` : `Bring down ${name}?`,
+      message: up ? "The interface will start forwarding traffic again." : "Traffic on this interface will stop until it is brought back up.",
+      confirmLabel: up ? "Bring up" : "Bring down",
+      danger: !up
+    });
+    if (!ok)
+      return;
     setStatus(`${up ? "Bringing up" : "Bringing down"} ${name}…`);
     try {
       await call(context, "/up", {
@@ -372,6 +438,14 @@ function mount(root, context) {
     }
   }
   async function removeRoute(route) {
+    const ok = await confirmAction({
+      title: `Remove ${route.destination}?`,
+      message: `Traffic routed through ${route.device} will stop using this entry.`,
+      confirmLabel: "Remove route",
+      danger: true
+    });
+    if (!ok)
+      return;
     setStatus(`Removing ${route.destination}…`);
     try {
       await call(context, `/route?destination=${encodeURIComponent(route.destination)}&device=${encodeURIComponent(route.device)}`, { method: "DELETE" });
@@ -389,6 +463,15 @@ function mount(root, context) {
       setStatus("Write a destination first.", true);
       return;
     }
+    const via = device.value;
+    const through = gateway.value.trim();
+    const ok = await confirmAction({
+      title: "Add this route?",
+      message: `${path} via ${via}${through ? ` through ${through}` : ""}. A wrong route can interrupt connectivity.`,
+      confirmLabel: "Add route"
+    });
+    if (!ok)
+      return;
     setStatus("Adding the route…");
     try {
       await call(context, "/route", {

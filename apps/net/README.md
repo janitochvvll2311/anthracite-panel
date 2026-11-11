@@ -13,7 +13,8 @@ builds the real app.
   returns a typed `denied` error.
 - `frontend/` is the network view: interface cards, the route table and the
   up/down and route controls. It follows `/watch` over SSE and offers a
-  `Manual (0s)` interval for a static view refreshed by hand.
+  `Manual (0s)` interval for a static view refreshed by hand. Up/down and route
+  changes ask for confirmation in a modal first.
 
 ## Build
 

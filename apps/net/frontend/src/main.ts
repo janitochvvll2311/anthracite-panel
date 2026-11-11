@@ -1,4 +1,5 @@
 import { call, watchNetwork } from "./api";
+import { confirmAction } from "./confirm";
 import { cell, count, reason } from "./format";
 import { styles } from "./styles";
 import type { FrameContext, Interface, Route, Snapshot } from "./types";
@@ -193,6 +194,15 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   async function setUp(name: string, up: boolean): Promise<void> {
+    const ok = await confirmAction({
+      title: up ? `Bring up ${name}?` : `Bring down ${name}?`,
+      message: up
+        ? "The interface will start forwarding traffic again."
+        : "Traffic on this interface will stop until it is brought back up.",
+      confirmLabel: up ? "Bring up" : "Bring down",
+      danger: !up,
+    });
+    if (!ok) return;
     setStatus(`${up ? "Bringing up" : "Bringing down"} ${name}…`);
     try {
       await call(context, "/up", {
@@ -208,6 +218,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   async function removeRoute(route: Route): Promise<void> {
+    const ok = await confirmAction({
+      title: `Remove ${route.destination}?`,
+      message: `Traffic routed through ${route.device} will stop using this entry.`,
+      confirmLabel: "Remove route",
+      danger: true,
+    });
+    if (!ok) return;
     setStatus(`Removing ${route.destination}…`);
     try {
       await call(
@@ -229,6 +246,14 @@ export function mount(root: HTMLElement, context: FrameContext) {
       setStatus("Write a destination first.", true);
       return;
     }
+    const via = device.value;
+    const through = gateway.value.trim();
+    const ok = await confirmAction({
+      title: "Add this route?",
+      message: `${path} via ${via}${through ? ` through ${through}` : ""}. A wrong route can interrupt connectivity.`,
+      confirmLabel: "Add route",
+    });
+    if (!ok) return;
     setStatus("Adding the route…");
     try {
       await call(context, "/route", {

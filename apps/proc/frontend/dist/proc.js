@@ -16,6 +16,47 @@ async function call(context, route, init = {}) {
   return value;
 }
 
+// src/confirm.ts
+function confirmAction(options) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "confirm-dialog";
+    const form = document.createElement("form");
+    form.method = "dialog";
+    form.className = "confirm-card";
+    const title = document.createElement("h3");
+    title.textContent = options.title;
+    const message = document.createElement("p");
+    message.textContent = options.message;
+    const actions = document.createElement("div");
+    actions.className = "confirm-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "submit";
+    cancel.value = "cancel";
+    cancel.className = "confirm-cancel";
+    cancel.textContent = "Cancel";
+    const confirm = document.createElement("button");
+    confirm.type = "submit";
+    confirm.value = "confirm";
+    confirm.className = options.danger ? "confirm-ok danger" : "confirm-ok";
+    confirm.textContent = options.confirmLabel ?? "Confirm";
+    actions.append(cancel, confirm);
+    form.append(title, message, actions);
+    dialog.append(form);
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      resolve(dialog.returnValue === "confirm");
+    });
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog)
+        dialog.close("cancel");
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+    cancel.focus();
+  });
+}
+
 // src/format.ts
 function memory(bytes) {
   if (bytes >= 1024 * 1024 * 1024)
@@ -216,6 +257,23 @@ var styles = `
     white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   }
   .proc.compact .proc-cell.action .proc-signal { min-height: 40px; padding: 8px 12px; font-size: 12px; }
+
+  .confirm-dialog { border: 0; padding: 0; background: transparent; color: #e8ebf2; }
+  .confirm-dialog::backdrop { background: rgba(5, 7, 11, .72); backdrop-filter: blur(2px); }
+  .confirm-card {
+    width: min(360px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px;
+    padding: 16px; border: 1px solid #2a3142; border-radius: 12px; background: #11151e;
+    box-shadow: 0 20px 60px #0008;
+  }
+  .confirm-card h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .confirm-card p { margin: 0; color: #9aa4b8; font-size: 12.5px; line-height: 1.5; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .confirm-actions button {
+    padding: 7px 12px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .confirm-actions .confirm-ok { border-color: #3a6ea5; background: #1d2b40; color: #dce9ff; }
+  .confirm-actions .confirm-ok.danger { border-color: #7a3a44; background: #3a1c22; color: #ffb3ba; }
 `;
 
 // src/tree.ts
@@ -642,7 +700,7 @@ function mount(root, context) {
     send.textContent = "Send";
     send.setAttribute("aria-label", `Send signal to ${process.name} (${process.pid})`);
     send.addEventListener("click", () => {
-      signalProcess(process.pid, process["start-ticks"]);
+      signalProcess(process.pid, process["start-ticks"], process.name);
     });
     action.append(send);
     row.append(action);
@@ -774,10 +832,19 @@ function mount(root, context) {
       }
     }
   }
-  async function signalProcess(pid, startTicks) {
+  async function signalProcess(pid, startTicks, name) {
     if (!signal)
       return;
     const chosen = signal.value;
+    const dangerous = chosen === "TERM" || chosen === "KILL" || chosen === "STOP";
+    const ok = await confirmAction({
+      title: `Send ${chosen} to ${name} (${pid})?`,
+      message: dangerous ? "The process may stop and unsaved work can be lost." : "The process will receive the signal.",
+      confirmLabel: `Send ${chosen}`,
+      danger: dangerous
+    });
+    if (!ok)
+      return;
     setStatus(`Sending ${chosen} to ${pid}…`);
     try {
       await call(context, "/signal", {
