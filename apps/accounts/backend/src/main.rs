@@ -1,9 +1,8 @@
 //! Host accounts service for the Accounts app.
 //!
-//! The inventory comes from local `/etc` files; mutations run `useradd`,
-//! `userdel` and `usermod` by argv. The engine and the sandboxed view never read
-//! `/etc` or spawn a process. Directory accounts and the 1.2.0 contract arrive
-//! in the next phase.
+//! The inventory comes from local `/etc` files plus `getent`; mutations run
+//! `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel` and `chpasswd` by
+//! argv. The engine and the sandboxed view never read `/etc` or spawn a process.
 
 mod inventory;
 mod mutate;
@@ -13,13 +12,13 @@ use std::sync::{Arc, Mutex};
 
 use anth_contract::Error;
 use anth_service::Handler;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use inventory::{HostProbe, SystemProbe};
 use mutate::{AccountRunner, SystemAccountRunner};
 use policy::Policy;
 
-const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
+const ACCOUNTS: &str = "anthracite:accounts/accounts@1.2.0";
 
 struct Service {
     policy: Policy,
@@ -51,6 +50,18 @@ impl Service {
         inventory::read(&self.probe.read())
     }
 
+    fn policy_json(&self) -> Value {
+        json!({
+            "control": self.policy.control,
+            "passwords": self.policy.passwords,
+            "allow-system": self.policy.allow_system,
+            "allow-privileged-groups": self.policy.allow_privileged_groups,
+            "home-root": self.policy.home_root.to_string_lossy(),
+            "shells": self.policy.allowed_shells(),
+            "default-shell": self.policy.default_shell,
+        })
+    }
+
     fn serial(&self) -> Result<std::sync::MutexGuard<'_, ()>, Error> {
         self.mutation_lock
             .lock()
@@ -66,8 +77,9 @@ impl Handler for Service {
             )));
         }
         match function {
-            "users" => inventory::users_json(&self.inventory()),
+            "users" => Ok(inventory::users_json(&self.inventory())),
             "groups" => Ok(inventory::groups_json(&self.inventory())),
+            "policy" => Ok(self.policy_json()),
             "create-user" => {
                 let _serial = self.serial()?;
                 let inventory = self.inventory();
@@ -132,6 +144,42 @@ impl Handler for Service {
                         }
                     }
                 }
+                Ok(Value::Null)
+            }
+            "set-password" => {
+                let _serial = self.serial()?;
+                let inventory = self.inventory();
+                let guard = mutate::Guard {
+                    inventory: &inventory,
+                    policy: &self.policy,
+                    self_name: &self.self_name,
+                };
+                let call = mutate::plan_set_password(&guard, &input)?;
+                mutate::run_planned(self.runner.as_ref(), &call)?;
+                Ok(Value::Null)
+            }
+            "create-group" => {
+                let _serial = self.serial()?;
+                let inventory = self.inventory();
+                let guard = mutate::Guard {
+                    inventory: &inventory,
+                    policy: &self.policy,
+                    self_name: &self.self_name,
+                };
+                let call = mutate::plan_create_group(&guard, &input)?;
+                mutate::run_planned(self.runner.as_ref(), &call)?;
+                Ok(Value::Null)
+            }
+            "delete-group" => {
+                let _serial = self.serial()?;
+                let inventory = self.inventory();
+                let guard = mutate::Guard {
+                    inventory: &inventory,
+                    policy: &self.policy,
+                    self_name: &self.self_name,
+                };
+                let call = mutate::plan_delete_group(&guard, &input)?;
+                mutate::run_planned(self.runner.as_ref(), &call)?;
                 Ok(Value::Null)
             }
             other => Err(Error::not_found(format!(
@@ -207,6 +255,9 @@ mod tests {
                     "useradd" => "useradd",
                     "userdel" => "userdel",
                     "usermod" => "usermod",
+                    "chpasswd" => "chpasswd",
+                    "groupadd" => "groupadd",
+                    "groupdel" => "groupdel",
                     other => panic!("unexpected program {other}"),
                 },
                 args: args.to_vec(),
@@ -226,6 +277,8 @@ mod tests {
             shadow: Some("root:!:19000:0:99999:7:::\ndaemon:*:19000:0:99999:7:::\noperator:$6$hash:19000:0:99999:7:::\nalice:$6$hash:19000:0:99999:7:::\nlocked:!:19000:0:99999:7:::\n".to_string()),
             gshadow: Some("sudo:!::operator\n".to_string()),
             login_defs: Some("UID_MIN 1000\nGID_MIN 1000\n".to_string()),
+            nss_passwd: None,
+            nss_group: None,
         }
     }
 
@@ -233,6 +286,7 @@ mod tests {
         let runner = Arc::new(RecordingRunner::default());
         let policy = Policy {
             control: true,
+            passwords: true,
             allow_system: false,
             allow_privileged_groups: false,
             home_root: std::path::PathBuf::from("/home"),
@@ -254,12 +308,32 @@ mod tests {
         let users = service.call(ACCOUNTS, "users", Value::Null).expect("users");
         assert_eq!(users[2]["name"], "operator");
         assert_eq!(users[2]["locked"], false);
+        assert_eq!(users[2]["source"], "local");
+        assert_eq!(users[2]["group"], "operator");
+        assert_eq!(users[2]["groups"][0], "sudo");
         assert_eq!(users[3]["system"], false);
         let groups = service
             .call(ACCOUNTS, "groups", Value::Null)
             .expect("groups");
         assert_eq!(groups[4]["name"], "sudo");
         assert_eq!(groups[4]["members"][0], "operator");
+        assert_eq!(groups[4]["source"], "local");
+    }
+
+    #[test]
+    fn the_policy_is_exposed_to_the_view() {
+        let (service, _) = service();
+        let policy = service
+            .call(ACCOUNTS, "policy", Value::Null)
+            .expect("policy");
+        assert_eq!(policy["control"], true);
+        assert_eq!(policy["passwords"], true);
+        assert_eq!(policy["allow-system"], false);
+        assert_eq!(policy["home-root"], "/home");
+        assert!(policy["shells"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("/bin/sh")));
     }
 
     #[test]
@@ -269,7 +343,7 @@ mod tests {
             .call(
                 ACCOUNTS,
                 "create-user",
-                json!({"name": "review", "uid": 1501, "gid": 1001, "home": "/home/review", "shell": "/bin/sh", "system": false}),
+                json!({"name": "review", "uid": 1501, "gid": 1001, "gecos": "Review", "home": "/home/review", "shell": "/bin/sh", "system": false}),
             )
             .expect("create");
         service
@@ -280,7 +354,11 @@ mod tests {
             )
             .expect("lock");
         service
-            .call(ACCOUNTS, "delete-user", json!({"name": "alice"}))
+            .call(
+                ACCOUNTS,
+                "delete-user",
+                json!({"name": "alice", "remove-home": false}),
+            )
             .expect("delete");
         let calls = runner.calls.lock().expect("calls");
         assert_eq!(calls.len(), 3);
@@ -291,6 +369,32 @@ mod tests {
         assert_eq!(calls[1].args, vec!["--lock", "alice"]);
         assert_eq!(calls[2].program, "userdel");
         assert_eq!(calls[2].args, vec!["alice"]);
+    }
+
+    #[test]
+    fn password_and_group_mutations_reach_the_runner() {
+        let (service, runner) = service();
+        service
+            .call(
+                ACCOUNTS,
+                "set-password",
+                json!({"name": "alice", "password": "longpassword"}),
+            )
+            .expect("password");
+        service
+            .call(
+                ACCOUNTS,
+                "create-group",
+                json!({"name": "builders", "gid": 1600, "system": false}),
+            )
+            .expect("group");
+        let calls = runner.calls.lock().expect("calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].program, "chpasswd");
+        assert!(calls[0].args.is_empty());
+        assert_eq!(calls[0].stdin.as_deref(), Some("alice:longpassword\n"));
+        assert_eq!(calls[1].program, "groupadd");
+        assert_eq!(calls[1].args, vec!["--gid", "1600", "builders"]);
     }
 
     #[test]

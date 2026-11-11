@@ -11,12 +11,12 @@ export const styles = `
   .acc-title { color: #667087; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
   .acc-table { border: 1px solid #202632; border-radius: 9px; overflow: auto; background: #0d1016; }
   .acc-row {
-    display: grid; grid-template-columns: minmax(160px, 1.2fr) 70px 60px minmax(140px, 1fr) minmax(110px, 1fr) minmax(110px, auto);
+    display: grid; grid-template-columns: minmax(150px, 1.3fr) 55px 55px minmax(80px, .8fr) minmax(80px, .8fr) minmax(120px, 1fr) 90px minmax(190px, auto);
     gap: 10px; padding: 7px 10px; border-bottom: 1px solid #171c26; font-size: 12px; align-items: center;
   }
   .acc-row:last-child { border-bottom: 0; }
   .acc-row.head { background: #11151e; color: #667087; text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
-  .acc-row.group { grid-template-columns: minmax(140px, 1fr) 70px minmax(200px, 3fr); }
+  .acc-row.group { grid-template-columns: minmax(150px, 1fr) 70px minmax(200px, 3fr) minmax(80px, auto); }
   .acc-name { color: #e8ebf2; display: flex; align-items: center; gap: 7px; }
   .acc-mono { font-family: ui-monospace, monospace; color: #8f98ab; font-size: 11px; }
   .acc-badge {
@@ -25,6 +25,11 @@ export const styles = `
   }
   .acc-badge.system { border-color: #7aa2ff44; color: #9ab8ff; }
   .acc-badge.locked { border-color: #ff7d8a44; color: #ffb3ba; }
+  .acc-badge.nss { border-color: #d8b45a44; color: #e5ca83; }
+  .acc-badge.unknown { border-color: #8f98ab44; color: #b7bfce; }
+  .acc-badge.policy.on { border-color: #6fcf9744; color: #9fe0b8; }
+  .acc-badge.policy.off { border-color: #ff7d8a44; color: #ffb3ba; }
+  .acc-policy { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .acc-members { color: #8f98ab; font-size: 11.5px; }
   .acc-actions { display: flex; gap: 4px; flex-wrap: wrap; }
   .acc-btn {
@@ -41,6 +46,8 @@ export const styles = `
   .acc-add input[data-name] { width: 120px; }
   .acc-add input[data-uid], .acc-add input[data-gid] { width: 76px; }
   .acc-add input[data-home] { flex: 1; min-width: 140px; }
+  .acc-add input[data-gecos] { width: 140px; }
+  .acc-add input[data-group-name] { width: 140px; }
   .acc-add input[data-shell] { width: 110px; }
   .acc-add button { background: #151a24; cursor: pointer; }
   .acc-add button:hover { border-color: #3a4560; color: #fff; }

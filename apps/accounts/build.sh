@@ -53,7 +53,7 @@ sed \
     -e "s/{{app_summary}}/Host users, groups and guarded account changes./g" \
     -e "s|{{service_path}}|bin/accounts-service|g" \
     -e "s/{{service_class}}/host/g" \
-    -e "s|{{service_argv}}|[\"--socket\", \"{socket}\", \"--control\", \"--home-root\", \"/home\", \"--default-shell\", \"/bin/sh\"]|g" \
+    -e "s|{{service_argv}}|[\"--socket\", \"{socket}\", \"--control\", \"--passwords\", \"--home-root\", \"/home\", \"--default-shell\", \"/bin/sh\"]|g" \
     "$app/manifest.toml.in" > "$tmp/manifest.toml"
 
 mkdir -p "$(dirname "$out")"

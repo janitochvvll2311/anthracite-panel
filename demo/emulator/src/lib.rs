@@ -37,7 +37,7 @@ const PROC: &str = "anthracite:proc/proc@1.1.0";
 const HOME: &str = "anthracite:home/host@1.0.0";
 const NET: &str = "anthracite:net/net@1.2.0";
 const STORAGE: &str = "anthracite:storage/storage@1.2.0";
-const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
+const ACCOUNTS: &str = "anthracite:accounts/accounts@1.2.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.
 const MODIFIED_MS: u64 = 1_760_000_000_000;
@@ -327,11 +327,23 @@ impl Handler for Emulator {
         } else {
             None
         };
+        let deleted_home =
+            if interface == ACCOUNTS && function == "delete-user" && boolean(&input, "remove-home")
+            {
+                input.get("name").and_then(Value::as_str).and_then(|name| {
+                    self.accounts
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .home_for(name)
+                })
+            } else {
+                None
+            };
         let mutating = match interface {
             FS_WRITE => true,
             NET => !matches!(function, "interfaces" | "routes"),
             STORAGE => !matches!(function, "devices" | "mounts"),
-            ACCOUNTS => !matches!(function, "users" | "groups"),
+            ACCOUNTS => !matches!(function, "users" | "groups" | "policy"),
             _ => false,
         };
         let result = match interface {
@@ -365,6 +377,15 @@ impl Handler for Emulator {
         };
         if mutating && result.is_ok() {
             self.apply_cross_domain(interface, function, &input, detached_device.as_deref())?;
+            if let Some(home) = deleted_home {
+                let path = normalize(&home)?;
+                let mut fs = self.fs.lock().expect("the fixture mutex is not poisoned");
+                match fs.remove(&path, false) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == anth_contract::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
             self.persist()?;
         }
         result
@@ -1813,7 +1834,7 @@ mod tests {
             .call(
                 ACCOUNTS,
                 "create-user",
-                json!({"name": "persisted", "uid": 1500, "gid": 1500, "home": "/home/persisted", "shell": "/bin/sh", "system": false}),
+                json!({"name": "persisted", "uid": 1500, "gid": null, "home": "/home/persisted", "shell": "/bin/sh", "system": false}),
             )
             .expect("user");
         emulator
@@ -2087,6 +2108,62 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_user_can_remove_its_home() {
+        let emulator = Emulator::new();
+        for (name, uid) in [("keeper", 1500), ("gone", 1501)] {
+            emulator
+                .call(
+                    ACCOUNTS,
+                    "create-user",
+                    json!({
+                        "name": name,
+                        "uid": uid,
+                        "gid": null,
+                        "gecos": "",
+                        "home": format!("/home/{name}"),
+                        "shell": "/bin/sh",
+                        "system": false
+                    }),
+                )
+                .expect("create user");
+            emulator
+                .call(
+                    FS_WRITE,
+                    "write-file",
+                    json!({"path": format!("/home/{name}/file.txt"), "bytes": [104, 105]}),
+                )
+                .expect("write a file in the home");
+        }
+
+        emulator
+            .call(
+                ACCOUNTS,
+                "delete-user",
+                json!({"name": "keeper", "remove-home": false}),
+            )
+            .expect("keep the home");
+        assert_eq!(
+            call(&emulator, "stat", json!({"path": "/home/keeper/file.txt"}))["kind"],
+            "file"
+        );
+
+        emulator
+            .call(
+                ACCOUNTS,
+                "delete-user",
+                json!({"name": "gone", "remove-home": true}),
+            )
+            .expect("remove the home");
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/home/gone/file.txt"}))
+                .expect_err("the home is gone")
+                .kind(),
+            ErrorKind::NotFound
+        );
+    }
+
+    #[test]
     fn shared_state_is_visible_across_apps() {
         let dir = std::env::temp_dir()
             .join("anthracite-panel")
@@ -2136,7 +2213,7 @@ mod tests {
             .call(
                 ACCOUNTS,
                 "create-user",
-                json!({"name": "demo", "uid": 1500, "gid": 1500, "home": "/home/demo", "shell": "/bin/sh", "system": false}),
+                json!({"name": "demo", "uid": 1500, "gid": null, "home": "/home/demo", "shell": "/bin/sh", "system": false}),
             )
             .expect("create user");
         first

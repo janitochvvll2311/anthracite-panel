@@ -1,25 +1,33 @@
-//! Local account inventory: `/etc/passwd`, `/etc/group`, `/etc/shadow`,
-//! `/etc/gshadow` and the id ranges in `/etc/login.defs`.
+//! Account inventory: local `/etc` files merged with what NSS resolves.
 //!
-//! The service reads the files through a `HostProbe` so tests can script the
-//! host without touching `/etc`. Directory accounts (`getent`/NSS) are the
-//! next contract phase; this phase lists local entries only.
+//! Local entries are what the service can change. `getent` answers what the
+//! host resolves (LDAP, Active Directory, SSSD); those entries are read-only
+//! and are marked with `source = nss`. A local entry always wins when both
+//! sources know the same name.
 
 use std::collections::HashMap;
+use std::io::Read;
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
-use anth_contract::Error;
 use serde_json::{json, Value};
+
+/// `getent` talks to NSS; a hung LDAP/SSSD backend must not hang the service.
+const GETENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// What the read path needs from the host.
 #[derive(Clone, Debug, Default)]
 pub struct LocalFiles {
     pub passwd: String,
     pub group: String,
-    /// `None` when `/etc/shadow` cannot be read; lock state is then unknown
-    /// instead of guessed.
+    /// `None` when `/etc/shadow` cannot be read; lock state is then unknown.
     pub shadow: Option<String>,
     pub gshadow: Option<String>,
     pub login_defs: Option<String>,
+    /// Output of `getent passwd`, or `None` when the tool is missing.
+    pub nss_passwd: Option<String>,
+    /// Output of `getent group`, or `None` when the tool is missing.
+    pub nss_group: Option<String>,
 }
 
 pub trait HostProbe: Send + Sync {
@@ -36,6 +44,69 @@ impl HostProbe for SystemProbe {
             shadow: std::fs::read_to_string("/etc/shadow").ok(),
             gshadow: std::fs::read_to_string("/etc/gshadow").ok(),
             login_defs: std::fs::read_to_string("/etc/login.defs").ok(),
+            nss_passwd: getent("passwd"),
+            nss_group: getent("group"),
+        }
+    }
+}
+
+fn getent(database: &str) -> Option<String> {
+    let child = Command::new("getent")
+        .arg(database)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    collect_output(child, GETENT_TIMEOUT)
+}
+
+/// Waits for the child while a reader thread drains stdout, so a response
+/// larger than the pipe buffer (a big LDAP directory) does not deadlock.
+fn collect_output(mut child: Child, timeout: Duration) -> Option<String> {
+    let mut pipe = child.stdout.take()?;
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = pipe
+            .read_to_end(&mut bytes)
+            .map(|_| String::from_utf8_lossy(&bytes).into_owned());
+        let _ = send.send(result);
+    });
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let remaining = timeout
+                    .saturating_sub(started.elapsed())
+                    .max(Duration::from_millis(50));
+                return receive.recv_timeout(remaining).ok()?.ok();
+            }
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Local,
+    Nss,
+}
+
+impl Source {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Nss => "nss",
         }
     }
 }
@@ -45,11 +116,16 @@ pub struct User {
     pub name: String,
     pub uid: u32,
     pub gid: u32,
+    pub group: String,
+    pub gecos: String,
     pub home: String,
     pub shell: String,
     pub system: bool,
-    /// `None` when `/etc/shadow` is unreadable.
+    /// `None` when the lock state cannot be read (NSS entries, or an
+    /// unreadable `/etc/shadow`).
     pub locked: Option<bool>,
+    pub source: Source,
+    pub groups: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,6 +134,7 @@ pub struct Group {
     pub gid: u32,
     pub members: Vec<String>,
     pub system: bool,
+    pub source: Source,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +179,7 @@ pub struct PasswdEntry {
     pub name: String,
     pub uid: u32,
     pub gid: u32,
+    pub gecos: String,
     pub home: String,
     pub shell: String,
 }
@@ -119,11 +197,10 @@ pub struct ShadowEntry {
     pub locked: bool,
 }
 
-/// Reads one consistent inventory. Malformed lines are skipped, not fatal:
-/// a snapshot taken while a tool rewrites a file should still list what parsed.
+/// Reads one consistent inventory. Malformed lines are skipped, not fatal.
 pub fn read(files: &LocalFiles) -> Inventory {
     let passwd = parse_passwd(&files.passwd);
-    let groups = parse_group(&files.group);
+    let local_groups = parse_group(&files.group);
     let shadow = files.shadow.as_deref().map(parse_shadow);
     let gshadow = files.gshadow.as_deref().map(parse_gshadow_members);
     let id_ranges = files
@@ -132,7 +209,7 @@ pub fn read(files: &LocalFiles) -> Inventory {
         .map(parse_login_defs)
         .unwrap_or_default();
 
-    let groups: Vec<Group> = groups
+    let mut groups: Vec<Group> = local_groups
         .entries
         .into_iter()
         .map(|entry| {
@@ -149,34 +226,91 @@ pub fn read(files: &LocalFiles) -> Inventory {
                 gid: entry.gid,
                 members,
                 system: entry.gid < id_ranges.gid_min,
+                source: Source::Local,
             }
         })
         .collect();
 
-    let users: Vec<User> = passwd
+    if let Some(nss_group) = files.nss_group.as_deref() {
+        for entry in parse_group(nss_group).entries {
+            if groups.iter().any(|group| group.name == entry.name) {
+                continue;
+            }
+            groups.push(Group {
+                name: entry.name,
+                gid: entry.gid,
+                members: entry.members,
+                system: entry.gid < id_ranges.gid_min,
+                source: Source::Nss,
+            });
+        }
+    }
+
+    let shadow_map: Option<HashMap<String, bool>> = shadow.map(|entries| {
+        entries
+            .into_iter()
+            .map(|entry| (entry.name, entry.locked))
+            .collect()
+    });
+
+    let mut users: Vec<User> = passwd
         .entries
         .into_iter()
         .map(|entry| {
-            let locked = shadow.as_ref().map(|entries| {
-                entries
-                    .iter()
-                    .find(|shadow| shadow.name == entry.name)
-                    .map(|shadow| shadow.locked)
-                    // A passwd entry without a shadow record has no password
-                    // to match; the safe reading is "not usable for login".
-                    .unwrap_or(true)
+            let locked = shadow_map.as_ref().map(|entries| {
+                // A passwd entry without a shadow record has no password to
+                // match; the safe reading is "not usable for login".
+                entries.get(&entry.name).copied().unwrap_or(true)
             });
             User {
                 name: entry.name,
                 uid: entry.uid,
                 gid: entry.gid,
+                group: String::new(),
+                gecos: entry.gecos,
                 home: entry.home,
                 shell: entry.shell,
                 system: entry.uid < id_ranges.uid_min,
                 locked,
+                source: Source::Local,
+                groups: Vec::new(),
             }
         })
         .collect();
+
+    if let Some(nss_passwd) = files.nss_passwd.as_deref() {
+        for entry in parse_passwd(nss_passwd).entries {
+            if users.iter().any(|user| user.name == entry.name) {
+                continue;
+            }
+            users.push(User {
+                name: entry.name,
+                uid: entry.uid,
+                gid: entry.gid,
+                group: String::new(),
+                gecos: entry.gecos,
+                home: entry.home,
+                shell: entry.shell,
+                system: entry.uid < id_ranges.uid_min,
+                locked: None,
+                source: Source::Nss,
+                groups: Vec::new(),
+            });
+        }
+    }
+
+    for user in &mut users {
+        user.group = groups
+            .iter()
+            .find(|group| group.gid == user.gid)
+            .map(|group| group.name.clone())
+            .unwrap_or_else(|| user.gid.to_string());
+        user.groups = groups
+            .iter()
+            .filter(|group| group.members.iter().any(|member| member == &user.name))
+            .map(|group| group.name.clone())
+            .collect();
+    }
 
     Inventory {
         users,
@@ -185,15 +319,8 @@ pub fn read(files: &LocalFiles) -> Inventory {
     }
 }
 
-/// The contract's user list. `locked` is not optional in 1.1.0, so an
-/// unreadable shadow file is refused rather than reported as unlocked.
-pub fn users_json(inventory: &Inventory) -> Result<Value, Error> {
-    if inventory.users.iter().any(|user| user.locked.is_none()) {
-        return Err(Error::denied(
-            "cannot read `/etc/shadow`; the accounts service needs root to report the lock state",
-        ));
-    }
-    Ok(Value::Array(
+pub fn users_json(inventory: &Inventory) -> Value {
+    Value::Array(
         inventory
             .users
             .iter()
@@ -202,14 +329,18 @@ pub fn users_json(inventory: &Inventory) -> Result<Value, Error> {
                     "name": user.name,
                     "uid": user.uid,
                     "gid": user.gid,
+                    "group": user.group,
+                    "gecos": user.gecos,
                     "home": user.home,
                     "shell": user.shell,
                     "system": user.system,
-                    "locked": user.locked.unwrap_or(false),
+                    "locked": user.locked,
+                    "source": user.source.as_str(),
+                    "groups": user.groups,
                 })
             })
             .collect(),
-    ))
+    )
 }
 
 pub fn groups_json(inventory: &Inventory) -> Value {
@@ -222,6 +353,8 @@ pub fn groups_json(inventory: &Inventory) -> Value {
                     "name": group.name,
                     "gid": group.gid,
                     "members": group.members,
+                    "system": group.system,
+                    "source": group.source.as_str(),
                 })
             })
             .collect(),
@@ -276,6 +409,7 @@ fn parse_passwd(text: &str) -> Parsed<PasswdEntry> {
                 name: parts[0].trim().to_string(),
                 uid: parts[2].trim().parse().ok()?,
                 gid: parts[3].trim().parse().ok()?,
+                gecos: parts[4].to_string(),
                 home: parts[5].to_string(),
                 shell: parts[6].to_string(),
             })
@@ -415,6 +549,8 @@ GID_MIN 1000
             shadow: Some(SHADOW.to_string()),
             gshadow: Some(GSHADOW.to_string()),
             login_defs: Some(LOGIN_DEFS.to_string()),
+            nss_passwd: None,
+            nss_group: None,
         }
     }
 
@@ -428,6 +564,8 @@ GID_MIN 1000
             .find(|user| user.name == "operator")
             .expect("operator");
         assert_eq!(operator.locked, Some(false));
+        assert_eq!(operator.group, "operator");
+        assert_eq!(operator.groups, vec!["sudo"]);
         assert!(!operator.system);
         let daemon = inventory
             .users
@@ -460,11 +598,11 @@ GID_MIN 1000
     }
 
     #[test]
-    fn an_unreadable_shadow_makes_users_unavailable_but_groups_work() {
+    fn an_unreadable_shadow_reports_unknown_lock_but_groups_work() {
         let mut files = files();
         files.shadow = None;
         let inventory = read(&files);
-        assert!(users_json(&inventory).is_err());
+        assert!(users_json(&inventory)[0]["locked"].is_null());
         assert!(!groups_json(&inventory).as_array().unwrap().is_empty());
     }
 
@@ -479,5 +617,60 @@ GID_MIN 1000
             .find(|user| user.name == "alice")
             .expect("alice");
         assert_eq!(alice.locked, Some(true));
+    }
+
+    #[test]
+    fn local_entries_win_and_nss_entries_are_read_only() {
+        let mut files = files();
+        files.nss_passwd = Some(
+            "operator:x:1000:1000:Operator:/home/operator:/bin/bash\nana:x:2000:2000:Ana:/home/ana:/bin/bash\n"
+                .to_string(),
+        );
+        files.nss_group = Some("sudo:x:27:operator\nldap:x:2000:ana\n".to_string());
+        let inventory = read(&files);
+        let operator = inventory
+            .users
+            .iter()
+            .find(|user| user.name == "operator")
+            .expect("operator");
+        assert_eq!(operator.source, Source::Local);
+        let ana = inventory
+            .users
+            .iter()
+            .find(|user| user.name == "ana")
+            .expect("ana");
+        assert_eq!(ana.source, Source::Nss);
+        assert_eq!(ana.locked, None);
+        assert_eq!(ana.group, "ldap");
+        let ldap = inventory
+            .groups
+            .iter()
+            .find(|group| group.name == "ldap")
+            .expect("ldap");
+        assert_eq!(ldap.source, Source::Nss);
+    }
+
+    fn shell(script: &str) -> Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the fixture command")
+    }
+
+    #[test]
+    fn getent_output_larger_than_the_pipe_buffer_is_drained() {
+        let child = shell("head -c 131072 /dev/zero | tr '\\0' 'a'");
+        let output = collect_output(child, Duration::from_secs(5)).expect("output");
+        assert_eq!(output.len(), 131_072);
+    }
+
+    #[test]
+    fn getent_output_is_decoded_lossily() {
+        let child = shell("printf '\\377ok'");
+        let output = collect_output(child, Duration::from_secs(5)).expect("output");
+        assert!(output.ends_with("ok"), "{output:?}");
     }
 }

@@ -15,32 +15,52 @@ class = "{{service_class}}"
 argv = {{service_argv}}
 
 [[export]]
-interface = "anthracite:accounts/accounts@1.1.0"
+interface = "anthracite:accounts/accounts@1.2.0"
 
 [[route]]
 method = "GET"
 path = "/users"
-call = "anthracite:accounts/accounts@1.1.0#users"
+call = "anthracite:accounts/accounts@1.2.0#users"
 
 [[route]]
 method = "GET"
 path = "/groups"
-call = "anthracite:accounts/accounts@1.1.0#groups"
+call = "anthracite:accounts/accounts@1.2.0#groups"
 
 [[route]]
 method = "POST"
 path = "/user"
-call = "anthracite:accounts/accounts@1.1.0#create-user"
+call = "anthracite:accounts/accounts@1.2.0#create-user"
 
 [[route]]
 method = "DELETE"
 path = "/user"
-call = "anthracite:accounts/accounts@1.1.0#delete-user"
+call = "anthracite:accounts/accounts@1.2.0#delete-user"
 
 [[route]]
 method = "POST"
 path = "/lock"
-call = "anthracite:accounts/accounts@1.1.0#set-lock"
+call = "anthracite:accounts/accounts@1.2.0#set-lock"
+
+[[route]]
+method = "GET"
+path = "/policy"
+call = "anthracite:accounts/accounts@1.2.0#policy"
+
+[[route]]
+method = "POST"
+path = "/password"
+call = "anthracite:accounts/accounts@1.2.0#set-password"
+
+[[route]]
+method = "POST"
+path = "/group"
+call = "anthracite:accounts/accounts@1.2.0#create-group"
+
+[[route]]
+method = "DELETE"
+path = "/group"
+call = "anthracite:accounts/accounts@1.2.0#delete-group"
 
 [[slot]]
 id = "panel.view"
@@ -52,21 +72,33 @@ module = "web/accounts.js"
 sha256 = "{{module_sha256}}"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.1.0#users"
+call = "anthracite:accounts/accounts@1.2.0#users"
 verb = "users"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.1.0#groups"
+call = "anthracite:accounts/accounts@1.2.0#groups"
 verb = "groups"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.1.0#create-user"
+call = "anthracite:accounts/accounts@1.2.0#create-user"
 verb = "user-create"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.1.0#delete-user"
+call = "anthracite:accounts/accounts@1.2.0#delete-user"
 verb = "user-delete"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.1.0#set-lock"
+call = "anthracite:accounts/accounts@1.2.0#set-lock"
 verb = "user-lock"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.2.0#policy"
+verb = "policy"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.2.0#create-group"
+verb = "group-create"
+
+[[cli]]
+call = "anthracite:accounts/accounts@1.2.0#delete-group"
+verb = "group-delete"

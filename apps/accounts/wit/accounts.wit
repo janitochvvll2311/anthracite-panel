@@ -1,29 +1,54 @@
-package anthracite:accounts@1.1.0;
+package anthracite:accounts@1.2.0;
 
 interface accounts {
     use anth:error/kinds@1.0.0.{error};
+
+    enum source {
+        local,
+        nss,
+    }
 
     record user {
         name: string,
         uid: u32,
         gid: u32,
+        group: string,
+        gecos: string,
         home: string,
         shell: string,
         system: bool,
-        locked: bool,
+        locked: option<bool>,
+        source: source,
+        groups: list<string>,
     }
 
     record group {
         name: string,
         gid: u32,
         members: list<string>,
+        system: bool,
+        source: source,
+    }
+
+    record settings {
+        control: bool,
+        passwords: bool,
+        allow-system: bool,
+        allow-privileged-groups: bool,
+        home-root: string,
+        shells: list<string>,
+        default-shell: string,
     }
 
     users: func() -> result<list<user>, error>;
     groups: func() -> result<list<group>, error>;
-    create-user: func(name: string, uid: u32, gid: u32, home: string, shell: string, system: bool) -> result<_, error>;
-    delete-user: func(name: string) -> result<_, error>;
+    policy: func() -> result<settings, error>;
+    create-user: func(name: string, uid: option<u32>, gid: option<u32>, gecos: string, home: string, shell: string, system: bool) -> result<_, error>;
+    delete-user: func(name: string, remove-home: bool) -> result<_, error>;
     set-lock: func(name: string, locked: bool) -> result<_, error>;
+    set-password: func(name: string, password: string) -> result<_, error>;
+    create-group: func(name: string, gid: option<u32>, system: bool) -> result<_, error>;
+    delete-group: func(name: string) -> result<_, error>;
 }
 
 world app {
