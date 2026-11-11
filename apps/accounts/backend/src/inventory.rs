@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -51,12 +51,27 @@ impl HostProbe for SystemProbe {
 }
 
 fn getent(database: &str) -> Option<String> {
-    let mut child = Command::new("getent")
+    let child = Command::new("getent")
         .arg(database)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+    collect_output(child, GETENT_TIMEOUT)
+}
+
+/// Waits for the child while a reader thread drains stdout, so a response
+/// larger than the pipe buffer (a big LDAP directory) does not deadlock.
+fn collect_output(mut child: Child, timeout: Duration) -> Option<String> {
+    let mut pipe = child.stdout.take()?;
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = pipe
+            .read_to_end(&mut bytes)
+            .map(|_| String::from_utf8_lossy(&bytes).into_owned());
+        let _ = send.send(result);
+    });
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -64,16 +79,15 @@ fn getent(database: &str) -> Option<String> {
                 if !status.success() {
                     return None;
                 }
-                let mut output = String::new();
-                if let Some(mut pipe) = child.stdout.take() {
-                    pipe.read_to_string(&mut output).ok()?;
-                }
-                return Some(output);
+                let remaining = timeout
+                    .saturating_sub(started.elapsed())
+                    .max(Duration::from_millis(50));
+                return receive.recv_timeout(remaining).ok()?.ok();
             }
             Ok(None) => {}
             Err(_) => return None,
         }
-        if started.elapsed() >= GETENT_TIMEOUT {
+        if started.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
             return None;
@@ -634,5 +648,29 @@ GID_MIN 1000
             .find(|group| group.name == "ldap")
             .expect("ldap");
         assert_eq!(ldap.source, Source::Nss);
+    }
+
+    fn shell(script: &str) -> Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the fixture command")
+    }
+
+    #[test]
+    fn getent_output_larger_than_the_pipe_buffer_is_drained() {
+        let child = shell("head -c 131072 /dev/zero | tr '\\0' 'a'");
+        let output = collect_output(child, Duration::from_secs(5)).expect("output");
+        assert_eq!(output.len(), 131_072);
+    }
+
+    #[test]
+    fn getent_output_is_decoded_lossily() {
+        let child = shell("printf '\\377ok'");
+        let output = collect_output(child, Duration::from_secs(5)).expect("output");
+        assert!(output.ends_with("ok"), "{output:?}");
     }
 }

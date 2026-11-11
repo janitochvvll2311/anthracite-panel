@@ -221,7 +221,7 @@ function mount(root, context) {
         password.type = "button";
         password.className = "acc-btn";
         password.textContent = "Password";
-        password.disabled = !local || user.name === "root" || !policy.passwords;
+        password.disabled = protectedAccount || !policy.passwords;
         password.title = password.disabled ? "password changes are disabled for this account" : `Set a password for ${user.name}`;
         password.addEventListener("click", () => openPassword(user));
         const remove = document.createElement("button");
