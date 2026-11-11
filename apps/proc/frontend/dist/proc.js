@@ -475,7 +475,7 @@ function mount(root, context) {
   const offVisibility = context.onVisibility?.((next) => {
     visible = next;
     scheduleLive();
-    if (next)
+    if (next && intervalMs > 0)
       load();
   });
   const setStatus = (message, bad = false) => {

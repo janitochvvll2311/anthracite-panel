@@ -88,13 +88,21 @@ fn watch(input: &Value) -> Result<ChunkStream, Error> {
             if !first {
                 tokio::time::sleep(interval).await;
             }
-            let snapshot = json!({
-                "interfaces": interfaces(),
-                "routes": routes(),
-            });
-            let result = serde_json::to_vec(&snapshot).map_err(|error| {
-                Error::internal(format!("encoding the network snapshot: {error}"))
-            });
+            let snapshot = tokio::task::spawn_blocking(|| {
+                json!({
+                    "interfaces": interfaces(),
+                    "routes": routes(),
+                })
+            })
+            .await;
+            let result = match snapshot {
+                Ok(snapshot) => serde_json::to_vec(&snapshot).map_err(|error| {
+                    Error::internal(format!("encoding the network snapshot: {error}"))
+                }),
+                Err(error) => Err(Error::internal(format!(
+                    "the network snapshot task failed: {error}"
+                ))),
+            };
             Some((result, (false, interval)))
         },
     )))

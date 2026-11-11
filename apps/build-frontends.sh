@@ -27,6 +27,9 @@ for dir in apps/*/frontend; do
         cd "$dir"
         "$bun_bin" install
         "$bun_bin" run typecheck
+        if grep -q '"test"' package.json; then
+            "$bun_bin" run test
+        fi
         "$bun_bin" run build
     )
 done

@@ -131,7 +131,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const offVisibility = context.onVisibility?.((next) => {
     visible = next;
     scheduleLive();
-    if (next) void load();
+    if (next && intervalMs > 0) void load();
   });
 
   const setStatus = (message: string, bad = false): void => {

@@ -289,11 +289,16 @@ function mount(root, context) {
   let controller;
   let visible = true;
   let disposed = false;
+  let deviceNames = "";
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "net-status bad" : "net-status";
   };
   function render(interfaces, table) {
+    const active = document.activeElement;
+    const focusKey = active?.dataset.key;
+    const deviceFocused = active === device;
+    const routesScroll = routes.scrollTop;
     grid.replaceChildren();
     for (const iface of interfaces) {
       const card = document.createElement("section");
@@ -303,6 +308,7 @@ function mount(root, context) {
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "net-toggle";
+      toggle.dataset.key = `iface:${iface.name}`;
       toggle.textContent = iface.up ? "Down" : "Up";
       toggle.title = `${iface.up ? "Bring down" : "Bring up"} ${iface.name}`;
       toggle.addEventListener("click", () => void setUp(iface.name, !iface.up));
@@ -321,16 +327,22 @@ function mount(root, context) {
       card.append(head, meta, addrs, counters);
       grid.append(card);
     }
-    const selected = device.value;
-    device.replaceChildren();
-    for (const iface of interfaces) {
-      const option = document.createElement("option");
-      option.value = iface.name;
-      option.textContent = iface.name;
-      device.append(option);
+    const names = interfaces.map((iface) => iface.name);
+    if (names.join(`
+`) !== deviceNames) {
+      const selected = device.value;
+      device.replaceChildren();
+      for (const iface of interfaces) {
+        const option = document.createElement("option");
+        option.value = iface.name;
+        option.textContent = iface.name;
+        device.append(option);
+      }
+      if (names.includes(selected))
+        device.value = selected;
+      deviceNames = names.join(`
+`);
     }
-    if (interfaces.some((iface) => iface.name === selected))
-      device.value = selected;
     routes.replaceChildren();
     const head = document.createElement("div");
     head.className = "net-route head";
@@ -355,6 +367,7 @@ function mount(root, context) {
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "net-remove";
+      remove.dataset.key = `route:${route.destination}:${route.device}`;
       remove.title = `Remove ${route.destination} via ${route.device}`;
       remove.textContent = "×";
       remove.addEventListener("click", () => void removeRoute(route));
@@ -362,6 +375,13 @@ function mount(root, context) {
       action.append(remove);
       row.append(action);
       routes.append(row);
+    }
+    routes.scrollTop = routesScroll;
+    if (focusKey) {
+      const escaped = CSS.escape(focusKey);
+      (grid.querySelector(`[data-key="${escaped}"]`) ?? routes.querySelector(`[data-key="${escaped}"]`))?.focus();
+    } else if (deviceFocused) {
+      device.focus();
     }
   }
   async function load() {

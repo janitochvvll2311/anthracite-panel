@@ -340,6 +340,7 @@ function mount(root, context) {
   let disposed = false;
   let loading = false;
   let intervalMs = 2000;
+  let visible = true;
   let controller;
   function setStatus(message, bad = false) {
     status.textContent = message;
@@ -369,7 +370,7 @@ function mount(root, context) {
     }
   }
   async function watch() {
-    if (disposed || intervalMs === 0)
+    if (disposed || intervalMs === 0 || !visible)
       return;
     const abort = new AbortController;
     controller = abort;
@@ -408,9 +409,21 @@ function mount(root, context) {
     intervalMs = Number(interval.value) || 0;
     restart();
   });
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible)
+      return;
+    visible = next;
+    if (!visible) {
+      controller?.abort();
+      controller = undefined;
+    } else if (intervalMs > 0) {
+      watch();
+    }
+  });
   intervalMs > 0 ? watch() : load();
   return () => {
     disposed = true;
+    offVisibility?.();
     controller?.abort();
     controller = undefined;
     root.replaceChildren();

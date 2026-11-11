@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "bun build src/main.ts --outfile dist/net.js --format esm --target browser",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

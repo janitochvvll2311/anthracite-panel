@@ -54,6 +54,7 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   let disposed = false;
   let loading = false;
   let intervalMs = 2000;
+  let visible = true;
   let controller: AbortController | undefined;
 
   function setStatus(message: string, bad = false): void {
@@ -90,7 +91,7 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   // The engine frames each host snapshot as an SSE event, so the view follows a
   // single response instead of polling `/info` every few seconds.
   async function watch(): Promise<void> {
-    if (disposed || intervalMs === 0) return;
+    if (disposed || intervalMs === 0 || !visible) return;
     const abort = new AbortController();
     controller = abort;
     setStatus("Watching host information…");
@@ -131,10 +132,21 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     intervalMs = Number(interval.value) || 0;
     restart();
   });
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible) return;
+    visible = next;
+    if (!visible) {
+      controller?.abort();
+      controller = undefined;
+    } else if (intervalMs > 0) {
+      void watch();
+    }
+  });
   void (intervalMs > 0 ? watch() : load());
 
   return () => {
     disposed = true;
+    offVisibility?.();
     controller?.abort();
     controller = undefined;
     root.replaceChildren();
