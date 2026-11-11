@@ -119,7 +119,7 @@ shared emulator service. Every bundle carries a `panel.view` module:
   keyboard.
 - `apps/proc/frontend/` — flat/tree process table, live refresh, allowlisted signals and
   detached spawn.
-- `apps/net/frontend/` — interfaces with up/down, addresses/counters and route add/remove.
+- `apps/net/frontend/` — live interfaces and routes over SSE, addresses/counters, up/down, route add/remove and an interval selector with a manual `0s` mode.
 - `apps/storage/frontend/` — mount usage bars, unmount and mount.
 - `apps/accounts/frontend/` — users and groups with create, delete and lock/unlock.
 - `apps/home/frontend/dist/home.js` — Host Info cards (system, CPU, memory,

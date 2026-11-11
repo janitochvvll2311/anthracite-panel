@@ -2,6 +2,11 @@ export const styles = `
   .net { display: flex; flex-direction: column; gap: 14px; min-height: 400px; }
   .net-bar { display: flex; align-items: center; gap: 10px; }
   .net-bar .grow { flex: 1; }
+  .net-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .net-interval select {
+    padding: 5px 8px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
   .net-bar button, .net-add button {
     padding: 6px 10px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;

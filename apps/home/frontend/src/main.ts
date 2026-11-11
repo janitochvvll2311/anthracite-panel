@@ -11,6 +11,15 @@ const TEMPLATE = `
       <p class="home-sub" data-subtitle>Reading host information…</p>
     </div>
     <div class="home-actions">
+      <label class="home-interval">Interval
+        <select data-interval aria-label="Watch interval">
+          <option value="0">Manual (0s)</option>
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+      </label>
       <button class="home-refresh" type="button" data-refresh>Refresh</button>
     </div>
   </header>
@@ -37,12 +46,14 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   const subtitle = query<HTMLElement>(box, "[data-subtitle]");
   const status = query<HTMLElement>(box, "[data-status]");
   const refresh = query<HTMLButtonElement>(box, "[data-refresh]");
-  if (!subtitle || !status || !refresh) {
+  const interval = query<HTMLSelectElement>(box, "[data-interval]");
+  if (!subtitle || !status || !refresh || !interval) {
     return () => root.replaceChildren();
   }
 
   let disposed = false;
   let loading = false;
+  let intervalMs = 2000;
   let controller: AbortController | undefined;
 
   function setStatus(message: string, bad = false): void {
@@ -79,12 +90,12 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   // The engine frames each host snapshot as an SSE event, so the view follows a
   // single response instead of polling `/info` every few seconds.
   async function watch(): Promise<void> {
-    if (disposed) return;
+    if (disposed || intervalMs === 0) return;
     const abort = new AbortController();
     controller = abort;
     setStatus("Watching host information…");
     try {
-      await watchHostInfo(context, abort.signal, (info) => {
+      await watchHostInfo(context, abort.signal, intervalMs, (info) => {
         if (disposed) return;
         subtitle!.textContent = `${info.hostname} · ${info.os}`;
         renderHost(box, info);
@@ -108,11 +119,19 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     }
   }
 
-  refresh.addEventListener("click", () => {
+  function restart(): void {
     controller?.abort();
-    void watch();
+    controller = undefined;
+    if (intervalMs > 0) void watch();
+    else void load();
+  }
+
+  refresh.addEventListener("click", restart);
+  interval.addEventListener("change", () => {
+    intervalMs = Number(interval.value) || 0;
+    restart();
   });
-  void watch();
+  void (intervalMs > 0 ? watch() : load());
 
   return () => {
     disposed = true;

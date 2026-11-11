@@ -41,10 +41,11 @@ export function createSseParser(
 export async function watchHostInfo(
   context: FrameContext,
   signal: AbortSignal,
+  intervalMs: number,
   onInfo: (info: HostInfo) => void,
 ): Promise<void> {
   const response = await context.fetch(
-    `/api/apps/${encodeURIComponent(context.app.id)}/watch?interval-ms=2000`,
+    `/api/apps/${encodeURIComponent(context.app.id)}/watch?interval-ms=${intervalMs}`,
     { headers: { accept: "text/event-stream" }, signal },
   );
   if (!response.ok) {
@@ -55,16 +56,29 @@ export async function watchHostInfo(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const feed = createSseParser((data) => {
+    if (signal.aborted) return;
     try {
       onInfo(JSON.parse(data) as HostInfo);
     } catch {
       // A malformed event is skipped; the next snapshot still renders.
     }
   });
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    feed(decoder.decode(value, { stream: true }));
+  // The frame bridge ignores the fetch signal, so cancel the reader itself;
+  // its `cancel` hook is what tells the engine to stop the service stream.
+  const cancel = () => void reader.cancel();
+  if (signal.aborted) {
+    void reader.cancel();
+    return;
   }
-  feed(decoder.decode());
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      feed(decoder.decode(value, { stream: true }));
+    }
+    feed(decoder.decode());
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
 }

@@ -3,12 +3,18 @@ export const styles = `
   .home-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .home h3 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
   .home-sub { margin: 2px 0 0; color: #8f98ab; font-size: 12.5px; }
+  .home-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .home-actions button, .home-refresh {
     padding: 7px 11px; border-radius: 7px; border: 1px solid #2a3142; cursor: pointer;
     background: #151a24; color: #c8d0df; font: inherit; font-size: 12px;
   }
   .home-actions button:hover, .home-refresh:hover { border-color: #3a4560; color: #fff; }
   .home-refresh:disabled { opacity: .5; cursor: default; }
+  .home-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .home-interval select {
+    padding: 6px 8px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
   .home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .home-card {
     border: 1px solid #202632; border-radius: 10px; background: #0f1219;
