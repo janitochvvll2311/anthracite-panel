@@ -122,13 +122,17 @@ export function mount(root: HTMLElement, context: FrameContext) {
     for (const route of table) {
       const row = document.createElement("div");
       row.className = "net-route";
-      row.append(
-        cell("net-mono", route.family),
-        cell("net-mono", route.destination),
-        cell("net-mono", route.gateway ?? "—"),
-        cell("", route.device),
-        cell("net-mono", String(route.metric)),
-      );
+      const familyCell = cell("net-mono", route.family);
+      familyCell.dataset.label = "Family";
+      const destinationCell = cell("net-mono", route.destination);
+      destinationCell.dataset.label = "Destination";
+      const gatewayCell = cell("net-mono", route.gateway ?? "—");
+      gatewayCell.dataset.label = "Gateway";
+      const deviceCell = cell("", route.device);
+      deviceCell.dataset.label = "Device";
+      const metricCell = cell("net-mono", String(route.metric));
+      metricCell.dataset.label = "Metric";
+      row.append(familyCell, destinationCell, gatewayCell, deviceCell, metricCell);
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "net-remove";

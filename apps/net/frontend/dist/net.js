@@ -154,6 +154,29 @@ var styles = `
   .net-add .hint { color: #667087; font-size: 11px; }
   .net-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .net-status.bad { color: #ffb3ba; }
+
+  @media (max-width: 640px) {
+    .net-bar { flex-wrap: wrap; }
+    .net-bar .net-mono { flex: 1 0 100%; }
+    .net-bar .grow { display: none; }
+    .net-interval { margin-left: auto; }
+    .net-routes { overflow: visible; border: 0; background: transparent; }
+    .net-route.head { display: none; }
+    .net-route {
+      display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center;
+      position: relative; padding: 10px 40px 10px 12px; margin-bottom: 8px;
+      border: 1px solid #202632; border-radius: 9px; background: #0d1016;
+    }
+    .net-route:last-child { margin-bottom: 0; }
+    .net-route > span { display: inline-flex; gap: 4px; align-items: baseline; }
+    .net-route > span[data-label]::before {
+      content: attr(data-label); color: #667087; font-size: 9px;
+      text-transform: uppercase; letter-spacing: .06em;
+    }
+    .net-route > :nth-child(2) { order: -1; flex: 1 0 100%; color: #e8ebf2; font-weight: 600; }
+    .net-route > :nth-child(2)::before { content: none; }
+    .net-route > :nth-child(6) { position: absolute; top: 6px; right: 6px; margin: 0; }
+  }
 `;
 
 // src/main.ts
@@ -260,7 +283,17 @@ function mount(root, context) {
     for (const route of table) {
       const row = document.createElement("div");
       row.className = "net-route";
-      row.append(cell("net-mono", route.family), cell("net-mono", route.destination), cell("net-mono", route.gateway ?? "—"), cell("", route.device), cell("net-mono", String(route.metric)));
+      const familyCell = cell("net-mono", route.family);
+      familyCell.dataset.label = "Family";
+      const destinationCell = cell("net-mono", route.destination);
+      destinationCell.dataset.label = "Destination";
+      const gatewayCell = cell("net-mono", route.gateway ?? "—");
+      gatewayCell.dataset.label = "Gateway";
+      const deviceCell = cell("", route.device);
+      deviceCell.dataset.label = "Device";
+      const metricCell = cell("net-mono", String(route.metric));
+      metricCell.dataset.label = "Metric";
+      row.append(familyCell, destinationCell, gatewayCell, deviceCell, metricCell);
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "net-remove";

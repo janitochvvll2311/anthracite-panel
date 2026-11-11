@@ -286,6 +286,8 @@ var styles = `
   .home-status { min-height: 16px; color: #667087; font-size: 11.5px; }
   .home-status.bad { color: #ffb3ba; }
   @media (max-width: 720px) {
+    .home-head { flex-direction: column; align-items: stretch; gap: 10px; }
+    .home-actions { justify-content: flex-end; }
     .home-grid { grid-template-columns: 1fr; }
     .home-card.wide { grid-column: auto; }
   }

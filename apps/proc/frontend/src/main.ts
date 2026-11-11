@@ -36,7 +36,15 @@ export function mount(root: HTMLElement, context: FrameContext) {
         <button type="button" data-mode="flat" aria-pressed="true">List</button>
         <button type="button" data-mode="tree" aria-pressed="false">Tree</button>
       </div>
-      <label class="proc-check"><input type="checkbox" data-live checked /> Live</label>
+      <label class="proc-interval"><span class="proc-interval-label">Interval</span>
+        <select data-interval aria-label="Refresh interval">
+          <option value="0">Manual (0s)</option>
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+      </label>
       <button type="button" class="proc-fold" data-fold hidden>Collapse all</button>
       <span class="grow"></span>
       <select class="proc-pick" aria-label="Signal">
@@ -87,7 +95,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const more = box.querySelector("[data-more]") as HTMLButtonElement;
   const fold = box.querySelector("[data-fold]") as HTMLButtonElement;
   const modeButtons = [...box.querySelectorAll("[data-mode]")] as HTMLButtonElement[];
-  const liveToggle = box.querySelector("[data-live]") as HTMLInputElement;
+  const interval = box.querySelector("[data-interval]") as HTMLSelectElement;
   const spawnForm = box.querySelector(".proc-spawn") as HTMLFormElement;
   const spawnInput = spawnForm.querySelector("input") as HTMLInputElement;
 
@@ -108,6 +116,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let tree = false;
   let compact = false;
   let live: number | null = null;
+  let intervalMs = 2000;
   let visible = true;
   let collapsed = new Set<number>();
   let allCollapsed = false;
@@ -571,12 +580,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
   function scheduleLive(): void {
     if (live !== null) window.clearInterval(live);
     live = null;
-    if (!liveToggle.checked || !visible) return;
+    if (!visible || intervalMs === 0) return;
     live = window.setInterval(
       () => {
         if (!document.hidden) void load();
       },
-      tree || !compact ? 5000 : 2000,
+      intervalMs,
     );
   }
 
@@ -649,7 +658,11 @@ export function mount(root: HTMLElement, context: FrameContext) {
     fold.textContent = allCollapsed ? "Expand all" : "Collapse all";
     renderRows(true);
   });
-  liveToggle.addEventListener("change", scheduleLive);
+  interval.addEventListener("change", () => {
+    intervalMs = Number(interval.value) || 0;
+    scheduleLive();
+    void load();
+  });
   mobileFilter.addEventListener("input", () => {
     filters.query = mobileFilter.value;
     renderRows(true);

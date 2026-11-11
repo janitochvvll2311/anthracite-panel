@@ -117,7 +117,8 @@ shared emulator service. Every bundle carries a `panel.view` module:
   plus drag sends arrow keys; a long press without movement keeps native text
   selection. `interactive-widget=resizes-content` keeps the bar above the soft
   keyboard.
-- `apps/proc/frontend/` — flat/tree process table, live refresh, allowlisted signals and
+- `apps/proc/frontend/` — flat/tree process table, interval refresh with a manual `0s`
+  mode, allowlisted signals and
   detached spawn.
 - `apps/net/frontend/` — live interfaces and routes over SSE, addresses/counters, up/down, route add/remove and an interval selector with a manual `0s` mode.
 - `apps/storage/frontend/` — mount usage bars, unmount and mount.
