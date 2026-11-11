@@ -1,16 +1,17 @@
 # Network
 
-Network is a native read-only host network service plus the sandboxed panel
-view. The demo instance uses the shared scripted fixture from `demo/emulator`;
-this directory builds the real app.
+Network is a native host network service plus the sandboxed panel view. The demo
+instance uses the shared scripted fixture from `demo/emulator`; this directory
+builds the real app.
 
 - `backend/` reads `/sys/class/net`, `getifaddrs(3)`, `/proc/net/route` and
   `/proc/net/ipv6_route`. It reports interfaces (up flag, MAC, MTU, addresses,
   counters) and the IPv4/IPv6 routing tables.
-- `frontend/` is the network view: interface cards and the route table.
-- `set-up`, `add-route` and `remove-route` are refused with a typed `denied`
-  error. Applying configuration is the separate approved flow (decision P4); the
-  read-only slice never mutates the host.
+- `set-up`, `add-route` and `remove-route` validate the interface, family, CIDR
+  and gateway, then run `ip`. They need `CAP_NET_ADMIN`; without it the call
+  returns a typed `denied` error.
+- `frontend/` is the network view: interface cards, the route table and the
+  up/down and route controls.
 
 ## Build
 
@@ -38,3 +39,11 @@ ANTH_SOCKET=/path/to/engine.sock
 
 It replaces the emulator bundle under the same app id. Restart the panel after
 the upgrade so the new service starts.
+
+## Testing the apply flow
+
+A normal process cannot change interfaces or routes, so the privileged apply
+test is deferred in unprivileged environments. `demo/emulator` implements the
+same read/apply surface over its fixture: the demo Network view exercises
+up/down, add-route and remove-route, and the validation rules match this
+service.

@@ -10,7 +10,8 @@
 //! view never read `/sys` or `/proc/net`.
 
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::process::Command;
 
 use anth_contract::Error;
 use anth_service::Handler;
@@ -21,7 +22,7 @@ const NET: &str = "anthracite:net/net@1.1.0";
 struct Service;
 
 impl Handler for Service {
-    fn call(&self, interface: &str, function: &str, _input: Value) -> Result<Value, Error> {
+    fn call(&self, interface: &str, function: &str, input: Value) -> Result<Value, Error> {
         if interface != NET {
             return Err(Error::not_found(format!(
                 "`{interface}` is not exported by the network service"
@@ -30,9 +31,9 @@ impl Handler for Service {
         match function {
             "interfaces" => Ok(Value::Array(interfaces())),
             "routes" => Ok(Value::Array(routes())),
-            "set-up" | "add-route" | "remove-route" => Err(Error::denied(format!(
-                "`{function}` needs the approved network apply flow; this service is read-only"
-            ))),
+            "set-up" => set_up(&input),
+            "add-route" => add_route(&input),
+            "remove-route" => remove_route(&input),
             other => Err(Error::not_found(format!(
                 "`anthracite:net/net#{other}` is not implemented"
             ))),
@@ -53,6 +54,239 @@ async fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Family {
+    V4,
+    V6,
+}
+
+impl Family {
+    fn matches(self, address: IpAddr) -> bool {
+        matches!(
+            (self, address),
+            (Self::V4, IpAddr::V4(_)) | (Self::V6, IpAddr::V6(_))
+        )
+    }
+
+    fn max_prefix(self) -> u8 {
+        match self {
+            Self::V4 => 32,
+            Self::V6 => 128,
+        }
+    }
+}
+
+fn set_up(input: &Value) -> Result<Value, Error> {
+    let name = text(input, "name")?;
+    let up = boolean(input, "up")?;
+    ensure_interface(&name)?;
+    run_ip(&link_args(&name, up))?;
+    Ok(Value::Null)
+}
+
+fn add_route(input: &Value) -> Result<Value, Error> {
+    let family = family(text(input, "family")?.as_str())?;
+    let (destination, _) = parse_destination(family, text(input, "destination")?.trim())?;
+    let device = text(input, "device")?;
+    ensure_interface(&device)?;
+    let gateway = match optional_text(input, "gateway") {
+        Some(value) if !value.trim().is_empty() => Some(parse_gateway(family, value.trim())?),
+        _ => None,
+    };
+    let metric = number(input, "metric")
+        .unwrap_or(0)
+        .min(u64::from(u32::MAX)) as u32;
+    run_ip(&route_args(
+        family,
+        true,
+        &destination,
+        gateway.as_deref(),
+        &device,
+        metric,
+    ))?;
+    Ok(Value::Null)
+}
+
+fn remove_route(input: &Value) -> Result<Value, Error> {
+    let destination = text(input, "destination")?;
+    let (family, destination) = parse_any_destination(destination.trim())?;
+    let device = text(input, "device")?;
+    ensure_interface(&device)?;
+    run_ip(&route_args(family, false, &destination, None, &device, 0))?;
+    Ok(Value::Null)
+}
+
+fn family(name: &str) -> Result<Family, Error> {
+    match name {
+        "ipv4" => Ok(Family::V4),
+        "ipv6" => Ok(Family::V6),
+        _ => Err(Error::invalid("`family` is `ipv4` or `ipv6`")),
+    }
+}
+
+/// Only an interface the kernel reports can be touched. This also rejects path
+/// tricks such as `..`, because the name is compared with the `/sys/class/net`
+/// entries instead of being joined to a path unchecked.
+fn ensure_interface(name: &str) -> Result<(), Error> {
+    if name.is_empty() || name.contains('/') || name.contains('\0') {
+        return Err(Error::invalid("`name` is not an interface name"));
+    }
+    let known = std::fs::read_dir("/sys/class/net")
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy() == name)
+        })
+        .unwrap_or(false);
+    if known {
+        Ok(())
+    } else {
+        Err(Error::not_found(format!(
+            "interface `{name}` does not exist"
+        )))
+    }
+}
+
+fn parse_destination(family: Family, destination: &str) -> Result<(String, IpAddr), Error> {
+    if destination.is_empty() {
+        return Err(Error::invalid("`destination` cannot be empty"));
+    }
+    let (address, prefix) = match destination.split_once('/') {
+        Some((address, prefix)) => {
+            let prefix = prefix
+                .parse::<u8>()
+                .map_err(|_| Error::invalid("`destination` has an invalid prefix"))?;
+            (address, prefix)
+        }
+        None => (destination, family.max_prefix()),
+    };
+    let address: IpAddr = address
+        .parse()
+        .map_err(|_| Error::invalid("`destination` is not an IP address"))?;
+    if !family.matches(address) {
+        return Err(Error::invalid("`destination` does not match `family`"));
+    }
+    if prefix > family.max_prefix() {
+        return Err(Error::invalid("`destination` prefix is out of range"));
+    }
+    Ok((format!("{address}/{prefix}"), address))
+}
+
+fn parse_any_destination(destination: &str) -> Result<(Family, String), Error> {
+    let address = destination
+        .split_once('/')
+        .map(|(address, _)| address)
+        .unwrap_or(destination);
+    let address: IpAddr = address
+        .parse()
+        .map_err(|_| Error::invalid("`destination` is not an IP address"))?;
+    let family = match address {
+        IpAddr::V4(_) => Family::V4,
+        IpAddr::V6(_) => Family::V6,
+    };
+    let (destination, _) = parse_destination(family, destination)?;
+    Ok((family, destination))
+}
+
+fn parse_gateway(family: Family, gateway: &str) -> Result<String, Error> {
+    let address: IpAddr = gateway
+        .parse()
+        .map_err(|_| Error::invalid("`gateway` is not an IP address"))?;
+    if !family.matches(address) {
+        return Err(Error::invalid("`gateway` does not match `family`"));
+    }
+    Ok(address.to_string())
+}
+
+fn route_args(
+    family: Family,
+    add: bool,
+    destination: &str,
+    gateway: Option<&str>,
+    device: &str,
+    metric: u32,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if family == Family::V6 {
+        args.push("-6".to_string());
+    }
+    args.push("route".to_string());
+    args.push(if add { "add" } else { "del" }.to_string());
+    args.push(destination.to_string());
+    if add {
+        if let Some(gateway) = gateway {
+            args.push("via".to_string());
+            args.push(gateway.to_string());
+        }
+        args.push("dev".to_string());
+        args.push(device.to_string());
+        args.push("metric".to_string());
+        args.push(metric.to_string());
+    } else {
+        args.push("dev".to_string());
+        args.push(device.to_string());
+    }
+    args
+}
+
+fn link_args(name: &str, up: bool) -> Vec<String> {
+    vec![
+        "link".to_string(),
+        "set".to_string(),
+        "dev".to_string(),
+        name.to_string(),
+        if up { "up" } else { "down" }.to_string(),
+    ]
+}
+
+fn run_ip(args: &[String]) -> Result<(), Error> {
+    let output = Command::new("ip")
+        .args(args)
+        .output()
+        .map_err(|error| Error::unavailable(format!("running `ip`: {error}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let message = if stderr.is_empty() {
+        format!("`ip` exited with {}", output.status)
+    } else {
+        stderr
+    };
+    if message.contains("Operation not permitted") || message.contains("Permission denied") {
+        return Err(Error::denied(format!(
+            "the network apply flow needs CAP_NET_ADMIN: {message}"
+        )));
+    }
+    Err(Error::unavailable(format!(
+        "`ip {}` failed: {message}",
+        args.join(" ")
+    )))
+}
+
+fn text(input: &Value, key: &str) -> Result<String, Error> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| Error::invalid(format!("`{key}` is required")))
+}
+
+fn boolean(input: &Value, key: &str) -> Result<bool, Error> {
+    input
+        .get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| Error::invalid(format!("`{key}` must be a boolean")))
+}
+
+fn optional_text(input: &Value, key: &str) -> Option<String> {
+    input.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn number(input: &Value, key: &str) -> Option<u64> {
+    input.get(key).and_then(Value::as_u64)
 }
 
 #[derive(Debug, Clone)]
@@ -337,13 +571,80 @@ fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000
     }
 
     #[test]
-    fn mutations_are_refused_until_the_apply_flow_exists() {
-        let service = Service;
-        for function in ["set-up", "add-route", "remove-route"] {
-            let error = service
-                .call(NET, function, json!({}))
-                .expect_err("read-only");
-            assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+    fn destinations_are_validated_against_the_family() {
+        assert_eq!(
+            parse_destination(Family::V4, "10.1.0.0/24")
+                .expect("ipv4")
+                .0,
+            "10.1.0.0/24"
+        );
+        assert_eq!(
+            parse_destination(Family::V4, "10.1.0.1")
+                .expect("host prefix")
+                .0,
+            "10.1.0.1/32"
+        );
+        assert!(parse_destination(Family::V4, "::/0").is_err());
+        assert!(parse_destination(Family::V4, "10.0.0.0/33").is_err());
+        assert!(parse_destination(Family::V6, "fe80::/64").is_ok());
+        assert!(parse_gateway(Family::V6, "192.168.1.1").is_err());
+        assert_eq!(parse_gateway(Family::V4, "10.0.0.1").unwrap(), "10.0.0.1");
+    }
+
+    #[test]
+    fn route_and_link_arguments_match_iproute2() {
+        assert_eq!(
+            link_args("eth0", true),
+            vec!["link", "set", "dev", "eth0", "up"]
+        );
+        assert_eq!(
+            route_args(Family::V4, true, "0.0.0.0/0", Some("10.0.0.1"), "eth0", 100,),
+            vec![
+                "route",
+                "add",
+                "0.0.0.0/0",
+                "via",
+                "10.0.0.1",
+                "dev",
+                "eth0",
+                "metric",
+                "100",
+            ]
+        );
+        assert_eq!(
+            route_args(Family::V6, false, "::/0", None, "eth0", 0),
+            vec!["-6", "route", "del", "::/0", "dev", "eth0"]
+        );
+    }
+
+    #[test]
+    fn only_kernel_interfaces_are_accepted() {
+        if std::path::Path::new("/sys/class/net/lo").exists() {
+            ensure_interface("lo").expect("loopback");
         }
+        assert!(ensure_interface("..").is_err());
+        assert!(ensure_interface("../lo").is_err());
+        assert!(ensure_interface("").is_err());
+    }
+
+    #[test]
+    fn the_handler_validates_before_touching_the_host() {
+        let service = Service;
+        let error = service
+            .call(
+                NET,
+                "add-route",
+                json!({"family": "ipv4", "destination": "::/0", "device": "eth0"}),
+            )
+            .expect_err("family mismatch");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        let error = service
+            .call(
+                NET,
+                "set-up",
+                json!({"name": "this-is-not-an-interface", "up": true}),
+            )
+            .expect_err("missing interface");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
     }
 }

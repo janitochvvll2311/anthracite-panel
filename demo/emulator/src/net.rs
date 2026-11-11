@@ -1,5 +1,7 @@
 //! Deterministic interface and route fixture for the demo (§19 §2, `net`).
 
+use std::net::IpAddr;
+
 use anth_contract::Error;
 use serde_json::{json, Value};
 
@@ -180,13 +182,8 @@ impl NetFixture {
             }
             "add-route" => {
                 let family = text(input, "family")?;
-                if !matches!(family.as_str(), "ipv4" | "ipv6") {
-                    return Err(Error::invalid("`family` is `ipv4` or `ipv6`"));
-                }
-                let destination = text(input, "destination")?;
-                if destination.trim().is_empty() {
-                    return Err(Error::invalid("`destination` cannot be empty"));
-                }
+                let destination =
+                    normalize_destination(&family, text(input, "destination")?.trim())?;
                 let device = text(input, "device")?;
                 if !self
                     .interfaces
@@ -197,6 +194,12 @@ impl NetFixture {
                         "interface `{device}` does not exist"
                     )));
                 }
+                let gateway = match optional_text(input, "gateway") {
+                    Some(value) if !value.trim().is_empty() => {
+                        Some(normalize_gateway(&family, value.trim())?)
+                    }
+                    _ => None,
+                };
                 if self
                     .routes
                     .iter()
@@ -209,7 +212,7 @@ impl NetFixture {
                 self.routes.push(Route {
                     family,
                     destination,
-                    gateway: optional_text(input, "gateway"),
+                    gateway,
                     device,
                     metric: number(input, "metric")
                         .unwrap_or(100)
@@ -219,6 +222,7 @@ impl NetFixture {
             }
             "remove-route" => {
                 let destination = text(input, "destination")?;
+                let (_, destination) = normalize_any_destination(destination.trim())?;
                 let device = text(input, "device")?;
                 let index = self
                     .routes
@@ -237,6 +241,65 @@ impl NetFixture {
             ))),
         }
     }
+}
+
+/// Normalizes a route destination to `address/prefix`, checking the family and
+/// the prefix range. A bare address is a host route.
+fn normalize_destination(family: &str, destination: &str) -> Result<String, Error> {
+    let max = match family {
+        "ipv4" => 32,
+        "ipv6" => 128,
+        _ => return Err(Error::invalid("`family` is `ipv4` or `ipv6`")),
+    };
+    if destination.is_empty() {
+        return Err(Error::invalid("`destination` cannot be empty"));
+    }
+    let (address, prefix) = match destination.split_once('/') {
+        Some((address, prefix)) => {
+            let prefix = prefix
+                .parse::<u8>()
+                .map_err(|_| Error::invalid("`destination` has an invalid prefix"))?;
+            (address, prefix)
+        }
+        None => (destination, max),
+    };
+    let address: IpAddr = address
+        .parse()
+        .map_err(|_| Error::invalid("`destination` is not an IP address"))?;
+    let matches =
+        (family == "ipv4" && address.is_ipv4()) || (family == "ipv6" && address.is_ipv6());
+    if !matches {
+        return Err(Error::invalid("`destination` does not match `family`"));
+    }
+    if prefix > max {
+        return Err(Error::invalid("`destination` prefix is out of range"));
+    }
+    Ok(format!("{address}/{prefix}"))
+}
+
+fn normalize_any_destination(destination: &str) -> Result<(String, String), Error> {
+    let address = destination
+        .split_once('/')
+        .map(|(address, _)| address)
+        .unwrap_or(destination);
+    let address: IpAddr = address
+        .parse()
+        .map_err(|_| Error::invalid("`destination` is not an IP address"))?;
+    let family = if address.is_ipv4() { "ipv4" } else { "ipv6" };
+    Ok((
+        family.to_string(),
+        normalize_destination(family, destination)?,
+    ))
+}
+
+fn normalize_gateway(family: &str, gateway: &str) -> Result<String, Error> {
+    let address: IpAddr = gateway
+        .parse()
+        .map_err(|_| Error::invalid("`gateway` is not an IP address"))?;
+    if (family == "ipv4") != address.is_ipv4() {
+        return Err(Error::invalid("`gateway` does not match `family`"));
+    }
+    Ok(address.to_string())
 }
 
 #[cfg(test)]
@@ -305,5 +368,31 @@ mod tests {
             )
             .expect_err("missing device");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn routes_validate_family_prefix_and_gateway() {
+        let mut fixture = NetFixture::new();
+        for input in [
+            json!({"family": "ipv4", "destination": "::/0", "device": "eth0"}),
+            json!({"family": "ipv4", "destination": "10.0.0.0/33", "device": "eth0"}),
+            json!({"family": "ipv4", "destination": "10.0.0.0/24", "gateway": "fe80::1", "device": "eth0"}),
+        ] {
+            let error = fixture
+                .handle("add-route", &input)
+                .expect_err("invalid route");
+            assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        }
+        call(
+            &mut fixture,
+            "add-route",
+            json!({"family": "ipv4", "destination": "10.2.0.1", "device": "eth0"}),
+        );
+        let routes = call(&mut fixture, "routes", Value::Null);
+        assert!(routes
+            .as_array()
+            .expect("routes")
+            .iter()
+            .any(|route| route["destination"] == "10.2.0.1/32"));
     }
 }
