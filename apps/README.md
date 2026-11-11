@@ -27,7 +27,7 @@ apps/home/build.sh          # real host facts
 apps/fs/build.sh            # host filesystem rooted at --root (default /)
 apps/terminal/build.sh      # native PTY shell
 apps/proc/build.sh          # real /proc reader, signal and spawn
-apps/net/build.sh           # read-only host interfaces and routes
+apps/net/build.sh           # host interfaces, routes and apply
 ```
 
 The native Files, Terminal, Processes and Network bundles replace the emulator
