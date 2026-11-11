@@ -3,7 +3,7 @@
 //! One binary backs one bundle per app: the bundles carry the real app's WIT
 //! package and manifest id, and only the binary is shared. Host state (files,
 //! accounts, network and storage) is one JSON snapshot all demo bundles point
-//! at (`state/data/host.json`), read and written under a cross-process lock so
+//! at (`state/emulator/host.json`), read and written under a cross-process lock so
 //! a mutation in one app is visible in the rest; runtime state (processes and
 //! terminal sessions) resets on restart.
 
@@ -150,6 +150,11 @@ impl Emulator {
             return Ok(None);
         };
         let lock_path = path.with_extension("lock");
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Error::internal(format!("creating {}: {error}", parent.display()))
+            })?;
+        }
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -280,6 +285,11 @@ impl Emulator {
             storage: &storage,
         })
         .map_err(|error| Error::internal(format!("encoding host state: {error}")))?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                Error::internal(format!("creating {}: {error}", parent.display()))
+            })?;
+        }
         let temporary = path.with_extension("json.tmp");
         std::fs::write(&temporary, &bytes).map_err(|error| {
             Error::internal(format!("writing {}: {error}", temporary.display()))

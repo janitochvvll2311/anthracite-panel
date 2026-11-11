@@ -135,7 +135,7 @@ routes.
 
 The fixtures are deterministic. Files, accounts, network and storage are durable
 and **shared**: every stateful bundle reads and writes one JSON snapshot at
-`state/data/host.json` (`0600`, atomic write, cross-process locked). A mountpoint
+`state/emulator/host.json` (`0600`, atomic write, cross-process locked). A mountpoint
 created by Storage appears in Files, a new account's home is created in Files,
 and Home reads the same network/mount state, so the apps describe one host. It
 survives a panel/service restart. Delete `host.json` to reseed the whole demo.
