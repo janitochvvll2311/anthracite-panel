@@ -1,23 +1,24 @@
-//! Host storage status for the Storage app.
+//! Host storage service for the Storage app.
 //!
 //! The read half lists block devices from `/sys/block` and the mounts from
-//! `/proc/self/mounts`, with usage from `statvfs(3)`. Attaching and detaching
-//! need `CAP_SYS_ADMIN`; that approved apply flow is the next slice, so those
-//! functions answer with a typed refusal for now.
+//! `/proc/self/mounts`, with usage from `statvfs(3)`. `attach` and `detach`
+//! validate the inputs and run `mount`/`umount`; they need `CAP_SYS_ADMIN`.
 
 use std::collections::BTreeMap;
 use std::ffi::CString;
+use std::path::Path;
+use std::process::Command;
 
 use anth_contract::Error;
 use anth_service::Handler;
 use serde_json::{json, Value};
 
-const STORAGE: &str = "anthracite:storage/storage@1.1.0";
+const STORAGE: &str = "anthracite:storage/storage@1.2.0";
 
 struct Service;
 
 impl Handler for Service {
-    fn call(&self, interface: &str, function: &str, _input: Value) -> Result<Value, Error> {
+    fn call(&self, interface: &str, function: &str, input: Value) -> Result<Value, Error> {
         if interface != STORAGE {
             return Err(Error::not_found(format!(
                 "`{interface}` is not exported by the storage service"
@@ -26,9 +27,8 @@ impl Handler for Service {
         match function {
             "devices" => Ok(Value::Array(devices())),
             "mounts" => Ok(Value::Array(mounts())),
-            "attach" | "detach" => Err(Error::denied(
-                "mounting and unmounting need the approved storage apply flow",
-            )),
+            "attach" => attach(&input),
+            "detach" => detach(&input),
             other => Err(Error::not_found(format!(
                 "`anthracite:storage/storage#{other}` is not implemented"
             ))),
@@ -57,6 +57,137 @@ struct MountEntry {
     filesystem: String,
     used_bytes: u64,
     total_bytes: u64,
+}
+
+fn attach(input: &Value) -> Result<Value, Error> {
+    let device = text(input, "device")?;
+    let mountpoint = text(input, "mountpoint")?;
+    let filesystem = text(input, "filesystem")?;
+    validate_mountpoint(&mountpoint, true)?;
+    if filesystem.is_empty()
+        || !filesystem.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        })
+    {
+        return Err(Error::invalid("`filesystem` is not a filesystem name"));
+    }
+    if !known_device(&device) {
+        return Err(Error::not_found(format!(
+            "`{device}` is not a block device"
+        )));
+    }
+    if device_mounted(&device) {
+        return Err(Error::conflict(format!("`{device}` is already mounted")));
+    }
+    if mount_entries()
+        .iter()
+        .any(|mount| mount.mountpoint == mountpoint)
+    {
+        return Err(Error::conflict(format!(
+            "`{mountpoint}` is already a mountpoint"
+        )));
+    }
+    run("mount", &mount_args(&filesystem, &device, &mountpoint))?;
+    Ok(Value::Null)
+}
+
+fn detach(input: &Value) -> Result<Value, Error> {
+    let mountpoint = text(input, "mountpoint")?;
+    validate_mountpoint(&mountpoint, false)?;
+    if system_mount(&mountpoint) {
+        return Err(Error::denied(format!(
+            "`{mountpoint}` is a system mount and cannot be unmounted"
+        )));
+    }
+    if !mount_entries()
+        .iter()
+        .any(|mount| mount.mountpoint == mountpoint)
+    {
+        return Err(Error::not_found(format!(
+            "`{mountpoint}` is not a mountpoint"
+        )));
+    }
+    run("umount", &umount_args(&mountpoint))?;
+    Ok(Value::Null)
+}
+
+fn validate_mountpoint(mountpoint: &str, must_exist: bool) -> Result<(), Error> {
+    if !mountpoint.starts_with('/') || mountpoint.contains("..") || mountpoint.contains('\0') {
+        return Err(Error::invalid("`mountpoint` must be an absolute path"));
+    }
+    if mountpoint == "/" {
+        return Err(Error::denied("the root filesystem cannot be changed"));
+    }
+    if must_exist && !Path::new(mountpoint).is_dir() {
+        return Err(Error::invalid("`mountpoint` must be an existing directory"));
+    }
+    Ok(())
+}
+
+fn system_mount(mountpoint: &str) -> bool {
+    ["/", "/boot", "/boot/efi", "/proc", "/sys", "/dev", "/run"]
+        .iter()
+        .any(|prefix| mountpoint == *prefix || mountpoint.starts_with(&format!("{prefix}/")))
+}
+
+fn known_device(device: &str) -> bool {
+    devices()
+        .iter()
+        .any(|candidate| candidate["path"].as_str() == Some(device))
+}
+
+fn device_mounted(device: &str) -> bool {
+    devices()
+        .iter()
+        .any(|candidate| candidate["path"].as_str() == Some(device) && candidate["mounted"] == true)
+}
+
+fn mount_args(filesystem: &str, device: &str, mountpoint: &str) -> Vec<String> {
+    vec![
+        "-t".to_string(),
+        filesystem.to_string(),
+        device.to_string(),
+        mountpoint.to_string(),
+    ]
+}
+
+fn umount_args(mountpoint: &str) -> Vec<String> {
+    vec![mountpoint.to_string()]
+}
+
+fn run(program: &str, args: &[String]) -> Result<(), Error> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|error| Error::unavailable(format!("running `{program}`: {error}")))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let message = if stderr.is_empty() {
+        format!("`{program}` exited with {}", output.status)
+    } else {
+        stderr
+    };
+    if message.contains("Operation not permitted")
+        || message.to_ascii_lowercase().contains("permission denied")
+    {
+        return Err(Error::denied(format!(
+            "the storage apply flow needs CAP_SYS_ADMIN: {message}"
+        )));
+    }
+    Err(Error::unavailable(format!(
+        "`{program} {}` failed: {message}",
+        args.join(" ")
+    )))
+}
+
+fn text(input: &Value, key: &str) -> Result<String, Error> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| Error::invalid(format!("`{key}` is required")))
 }
 
 fn read(path: &str) -> String {
@@ -317,13 +448,34 @@ tmpfs /run tmpfs rw 0 0
     }
 
     #[test]
-    fn attach_and_detach_are_refused_until_the_apply_flow_exists() {
+    fn mount_arguments_and_validation() {
+        assert_eq!(
+            mount_args("ext4", "/dev/sda1", "/mnt/x"),
+            vec!["-t", "ext4", "/dev/sda1", "/mnt/x"]
+        );
+        assert_eq!(umount_args("/mnt/x"), vec!["/mnt/x"]);
         let service = Service;
-        for function in ["attach", "detach"] {
-            let error = service
-                .call(STORAGE, function, json!({}))
-                .expect_err("read-only");
-            assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
-        }
+        let error = service
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/nope", "mountpoint": "/tmp", "filesystem": "ext4"}),
+            )
+            .expect_err("unknown device");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        let error = service
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/nope", "mountpoint": "relative", "filesystem": "ext4"}),
+            )
+            .expect_err("relative mountpoint");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid);
+        let error = service
+            .call(STORAGE, "detach", json!({"mountpoint": "/"}))
+            .expect_err("root");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        assert!(system_mount("/boot/efi"));
+        assert!(!system_mount("/media/sd"));
     }
 }

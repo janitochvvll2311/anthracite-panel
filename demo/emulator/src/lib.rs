@@ -31,7 +31,7 @@ const STREAM: &str = "anthracite:terminal/subscription@1.0.0";
 const PROC: &str = "anthracite:proc/proc@1.1.0";
 const HOME: &str = "anthracite:home/host@1.0.0";
 const NET: &str = "anthracite:net/net@1.2.0";
-const STORAGE: &str = "anthracite:storage/storage@1.1.0";
+const STORAGE: &str = "anthracite:storage/storage@1.2.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.1.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.

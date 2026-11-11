@@ -165,19 +165,27 @@ impl StorageFixture {
                 Ok(Value::Null)
             }
             "detach" => {
-                let device = text(input, "device")?;
+                let mountpoint = text(input, "mountpoint")?;
                 let index = self
                     .mounts
                     .iter()
-                    .position(|mount| mount.device == device)
-                    .ok_or_else(|| Error::not_found(format!("`{device}` is not mounted")))?;
-                self.mounts.remove(index);
-                if let Some(device) = self
-                    .devices
-                    .iter_mut()
-                    .find(|candidate| candidate.path == device)
+                    .position(|mount| mount.mountpoint == mountpoint)
+                    .ok_or_else(|| {
+                        Error::not_found(format!("`{mountpoint}` is not a mountpoint"))
+                    })?;
+                let removed = self.mounts.remove(index);
+                if !self
+                    .mounts
+                    .iter()
+                    .any(|mount| mount.device == removed.device)
                 {
-                    device.mounted = false;
+                    if let Some(device) = self
+                        .devices
+                        .iter_mut()
+                        .find(|candidate| candidate.path == removed.device)
+                    {
+                        device.mounted = false;
+                    }
                 }
                 Ok(Value::Null)
             }
@@ -228,7 +236,7 @@ mod tests {
         let devices = call(&mut fixture, "devices", Value::Null);
         assert_eq!(devices[3]["mounted"], true);
 
-        call(&mut fixture, "detach", json!({"device": "/dev/sdc"}));
+        call(&mut fixture, "detach", json!({"mountpoint": "/media/sd"}));
         let mounts = call(&mut fixture, "mounts", Value::Null);
         assert!(!mounts
             .as_array()
@@ -241,6 +249,10 @@ mod tests {
                 &json!({"device": "/dev/nope", "mountpoint": "/x", "filesystem": "ext4"}),
             )
             .expect_err("missing device");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
+        let error = fixture
+            .handle("detach", &json!({"mountpoint": "/nope"}))
+            .expect_err("missing mountpoint");
         assert_eq!(error.kind(), anth_contract::ErrorKind::NotFound);
     }
 }

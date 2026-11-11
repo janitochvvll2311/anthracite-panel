@@ -1,14 +1,19 @@
 # Storage
 
-Storage is a native read-only host storage service plus the sandboxed panel
-view. The demo instance uses the shared scripted fixture from `demo/emulator`;
-this directory builds the real app.
+Storage is a native host storage service plus the sandboxed panel view. The demo
+instance uses the shared scripted fixture from `demo/emulator`; this directory
+builds the real app.
 
 - `backend/` lists block devices from `/sys/block` (including partitions) and
   mounts from `/proc/self/mounts`, with usage from `statvfs(3)`. Pseudo
   filesystems and file bind mounts are skipped.
-- `attach` and `detach` are refused with a typed `denied` error. Mounting and
-  unmounting need `CAP_SYS_ADMIN` and are the next approved slice.
+- `attach` validates the block device, an existing mountpoint and the filesystem,
+  then runs `mount`. `detach` takes the **mountpoint** (a device can be mounted
+  more than once) and runs `umount`; system mounts such as `/`, `/boot` and
+  `/boot/efi` are refused.
+- Both need `CAP_SYS_ADMIN`; without it the call returns a typed `denied`. The
+  privileged host test is deferred in unprivileged environments and the flow is
+  exercised through `demo/emulator`.
 - `frontend/` is the storage view: mount usage bars and the block-device table.
 
 ## Build

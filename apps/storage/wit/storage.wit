@@ -1,4 +1,4 @@
-package anthracite:storage@1.1.0;
+package anthracite:storage@1.2.0;
 
 interface storage {
     use anth:error/kinds@1.0.0.{error};
@@ -23,7 +23,7 @@ interface storage {
     devices: func() -> result<list<device>, error>;
     mounts: func() -> result<list<mount>, error>;
     attach: func(device: string, mountpoint: string, filesystem: string) -> result<_, error>;
-    detach: func(device: string) -> result<_, error>;
+    detach: func(mountpoint: string) -> result<_, error>;
 }
 
 world app {

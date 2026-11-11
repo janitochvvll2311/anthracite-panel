@@ -15,27 +15,27 @@ class = "{{service_class}}"
 argv = {{service_argv}}
 
 [[export]]
-interface = "anthracite:storage/storage@1.1.0"
+interface = "anthracite:storage/storage@1.2.0"
 
 [[route]]
 method = "GET"
 path = "/devices"
-call = "anthracite:storage/storage@1.1.0#devices"
+call = "anthracite:storage/storage@1.2.0#devices"
 
 [[route]]
 method = "GET"
 path = "/mounts"
-call = "anthracite:storage/storage@1.1.0#mounts"
+call = "anthracite:storage/storage@1.2.0#mounts"
 
 [[route]]
 method = "POST"
 path = "/mount"
-call = "anthracite:storage/storage@1.1.0#attach"
+call = "anthracite:storage/storage@1.2.0#attach"
 
 [[route]]
 method = "POST"
 path = "/unmount"
-call = "anthracite:storage/storage@1.1.0#detach"
+call = "anthracite:storage/storage@1.2.0#detach"
 
 [[slot]]
 id = "panel.view"
@@ -47,17 +47,17 @@ module = "web/storage.js"
 sha256 = "{{module_sha256}}"
 
 [[cli]]
-call = "anthracite:storage/storage@1.1.0#devices"
+call = "anthracite:storage/storage@1.2.0#devices"
 verb = "devices"
 
 [[cli]]
-call = "anthracite:storage/storage@1.1.0#mounts"
+call = "anthracite:storage/storage@1.2.0#mounts"
 verb = "mounts"
 
 [[cli]]
-call = "anthracite:storage/storage@1.1.0#attach"
+call = "anthracite:storage/storage@1.2.0#attach"
 verb = "mount"
 
 [[cli]]
-call = "anthracite:storage/storage@1.1.0#detach"
+call = "anthracite:storage/storage@1.2.0#detach"
 verb = "unmount"

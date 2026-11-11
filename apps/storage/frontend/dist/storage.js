@@ -221,7 +221,7 @@ function mount(root, context) {
           unmount.className = "st-unmount";
           unmount.textContent = "Unmount";
           unmount.title = `Unmount ${mount.device}`;
-          unmount.addEventListener("click", () => void detach(mount.device));
+          unmount.addEventListener("click", () => void detach(mount));
           head.append(unmount);
         }
         const deviceLine = cell("st-device", mount.device);
@@ -279,24 +279,24 @@ function mount(root, context) {
         setStatus(String(error), true);
     }
   }
-  async function detach(path) {
+  async function detach(mount) {
     const ok = await confirmAction({
-      title: `Unmount ${path}?`,
-      message: "Anything still using this mountpoint will lose access to it.",
+      title: `Unmount ${mount.mountpoint}?`,
+      message: `${mount.device} will no longer be available at this mountpoint.`,
       confirmLabel: "Unmount",
       danger: true
     });
     if (!ok)
       return;
-    setStatus(`Unmounting ${path}…`);
+    setStatus(`Unmounting ${mount.mountpoint}…`);
     try {
       await call(context, "/unmount", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ device: path })
+        body: JSON.stringify({ mountpoint: mount.mountpoint })
       });
       await load();
-      setStatus(`Unmounted ${path}`);
+      setStatus(`Unmounted ${mount.mountpoint}`);
     } catch (error) {
       if (!disposed)
         setStatus(String(error), true);
