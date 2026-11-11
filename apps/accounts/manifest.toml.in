@@ -3,16 +3,16 @@ manifest_version = 3
 [app]
 id = "org.anthracite.accounts"
 namespace = "anthracite:accounts"
-name = "Accounts (emulator)"
-version = "0.2.0"
-summary = "Deterministic users and groups fixture for the demo; replaced by the real accounts app."
+name = "{{app_name}}"
+version = "0.6.0"
+summary = "{{app_summary}}"
 license = "Apache-2.0"
 
 [service]
-path = "bin/host-emulator"
+path = "{{service_path}}"
 sha256 = "{{sha256}}"
-class = "socket"
-argv = ["--socket", "{socket}", "--state", "{shared}/emulator/host.json"]
+class = "{{service_class}}"
+argv = {{service_argv}}
 
 [[export]]
 interface = "anthracite:accounts/accounts@1.1.0"

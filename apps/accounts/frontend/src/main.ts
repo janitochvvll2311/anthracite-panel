@@ -190,10 +190,20 @@ export function mount(root: HTMLElement, context: FrameContext) {
   });
 
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  let visible = true;
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible) return;
+    visible = next;
+    if (!next || disposed) return;
+    // A CLI or another tab may have changed an account while this view was
+    // hidden.
+    void load();
+  });
   void load();
 
   return () => {
     disposed = true;
+    offVisibility?.();
     root.replaceChildren();
   };
 }
