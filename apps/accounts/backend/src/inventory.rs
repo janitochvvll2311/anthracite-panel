@@ -6,8 +6,14 @@
 //! sources know the same name.
 
 use std::collections::HashMap;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+/// `getent` talks to NSS; a hung LDAP/SSSD backend must not hang the service.
+const GETENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// What the read path needs from the host.
 #[derive(Clone, Debug, Default)]
@@ -45,14 +51,35 @@ impl HostProbe for SystemProbe {
 }
 
 fn getent(database: &str) -> Option<String> {
-    let output = std::process::Command::new("getent")
+    let mut child = Command::new("getent")
         .arg(database)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut output = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    pipe.read_to_string(&mut output).ok()?;
+                }
+                return Some(output);
+            }
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if started.elapsed() >= GETENT_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

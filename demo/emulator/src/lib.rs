@@ -2108,6 +2108,62 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_user_can_remove_its_home() {
+        let emulator = Emulator::new();
+        for (name, uid) in [("keeper", 1500), ("gone", 1501)] {
+            emulator
+                .call(
+                    ACCOUNTS,
+                    "create-user",
+                    json!({
+                        "name": name,
+                        "uid": uid,
+                        "gid": null,
+                        "gecos": "",
+                        "home": format!("/home/{name}"),
+                        "shell": "/bin/sh",
+                        "system": false
+                    }),
+                )
+                .expect("create user");
+            emulator
+                .call(
+                    FS_WRITE,
+                    "write-file",
+                    json!({"path": format!("/home/{name}/file.txt"), "bytes": [104, 105]}),
+                )
+                .expect("write a file in the home");
+        }
+
+        emulator
+            .call(
+                ACCOUNTS,
+                "delete-user",
+                json!({"name": "keeper", "remove-home": false}),
+            )
+            .expect("keep the home");
+        assert_eq!(
+            call(&emulator, "stat", json!({"path": "/home/keeper/file.txt"}))["kind"],
+            "file"
+        );
+
+        emulator
+            .call(
+                ACCOUNTS,
+                "delete-user",
+                json!({"name": "gone", "remove-home": true}),
+            )
+            .expect("remove the home");
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/home/gone/file.txt"}))
+                .expect_err("the home is gone")
+                .kind(),
+            ErrorKind::NotFound
+        );
+    }
+
+    #[test]
     fn shared_state_is_visible_across_apps() {
         let dir = std::env::temp_dir()
             .join("anthracite-panel")

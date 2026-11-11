@@ -177,10 +177,13 @@ impl AccountsFixture {
                 if !home.starts_with('/') || home.contains("..") {
                     return Err(Error::invalid("`home` must be an absolute path"));
                 }
-                let shell = text(input, "shell")?;
-                if shell.trim().is_empty() {
-                    return Err(Error::invalid("`shell` cannot be empty"));
-                }
+                let shell = input
+                    .get("shell")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|shell| !shell.is_empty())
+                    .unwrap_or("/bin/sh")
+                    .to_string();
                 let system = boolean(input, "system");
                 self.users.push(User {
                     name,
@@ -232,6 +235,11 @@ impl AccountsFixture {
             }
             "set-password" => {
                 let name = text(input, "name")?;
+                if name == "root" || name == "operator" {
+                    return Err(Error::denied(
+                        "the root and the operator accounts are protected",
+                    ));
+                }
                 let password = text(input, "password")?;
                 if password.chars().count() < 8
                     || password.chars().count() > 256
@@ -466,5 +474,14 @@ mod tests {
             .handle("set-lock", &json!({"name": "root", "locked": true}))
             .expect_err("root lock");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        for name in ["root", "operator"] {
+            let error = fixture
+                .handle(
+                    "set-password",
+                    &json!({"name": name, "password": "longpassword"}),
+                )
+                .expect_err("protected password");
+            assert_eq!(error.kind(), anth_contract::ErrorKind::Denied, "{name}");
+        }
     }
 }

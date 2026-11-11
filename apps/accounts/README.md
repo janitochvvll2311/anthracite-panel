@@ -11,7 +11,9 @@ builds the real app.
 - `create-user`, `delete-user`, `set-lock`, `create-group`, `delete-group` and
   `set-password` run `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel` and
   `chpasswd` by direct argv. A password only travels on `chpasswd`'s stdin; it
-  never reaches argv or a log line.
+  never reaches argv or a log line. Password changes are not exposed as a CLI
+  verb: the CLI would put the secret in its own argv, so use the Accounts view
+  or the service route.
 - The policy travels in the bundle argv, which is frozen in the grant and shown
   at approval:
   - `--control` enables user/group create, delete and lock; without it those

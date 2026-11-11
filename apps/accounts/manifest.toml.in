@@ -96,10 +96,6 @@ call = "anthracite:accounts/accounts@1.2.0#policy"
 verb = "policy"
 
 [[cli]]
-call = "anthracite:accounts/accounts@1.2.0#set-password"
-verb = "user-password"
-
-[[cli]]
 call = "anthracite:accounts/accounts@1.2.0#create-group"
 verb = "group-create"
 

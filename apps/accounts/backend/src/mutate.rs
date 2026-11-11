@@ -290,7 +290,13 @@ pub fn plan_create_user(guard: &Guard<'_>, input: &Value) -> Result<PlannedCall,
     let gecos = optional_text(input, "gecos");
     validate_gecos(&gecos)?;
     let home = text(input, "home")?;
-    let shell = text(input, "shell")?;
+    let shell = input
+        .get("shell")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|shell| !shell.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| guard.policy.default_shell.clone());
     let system = boolean(input, "system");
     if system && !guard.policy.allow_system {
         return Err(Error::denied(
@@ -377,6 +383,7 @@ pub fn plan_set_password(guard: &Guard<'_>, input: &Value) -> Result<PlannedCall
     let name = text(input, "name")?;
     let password = text(input, "password")?;
     guard.writable_user(&name)?;
+    guard.not_self(&name)?;
     let length = password.chars().count();
     if length < 8 {
         return Err(Error::invalid("a password must be at least 8 characters"));
@@ -844,6 +851,29 @@ mod tests {
     }
 
     #[test]
+    fn missing_shell_uses_the_approved_default() {
+        let inventory = inventory();
+        let policy = policy();
+        let guard = guard_for(&inventory, &policy);
+        let plan = plan_create_user(
+            &guard,
+            &serde_json::json!({
+                "name": "review",
+                "uid": 1500,
+                "gid": 1001,
+                "gecos": "Review",
+                "home": "/home/review",
+                "system": false
+            }),
+        )
+        .expect("default shell");
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--shell" && pair[1] == "/bin/sh"));
+    }
+
+    #[test]
     fn read_only_policy_blocks_every_mutation() {
         let inventory = inventory();
         let mut policy = policy();
@@ -919,6 +949,15 @@ mod tests {
                 "{password}"
             );
         }
+        assert_eq!(
+            plan_set_password(
+                &guard,
+                &serde_json::json!({"name": "operator", "password": "longpassword"})
+            )
+            .expect_err("self")
+            .kind(),
+            anth_contract::ErrorKind::Denied
+        );
     }
 
     #[test]

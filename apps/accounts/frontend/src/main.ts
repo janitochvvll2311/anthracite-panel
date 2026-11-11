@@ -67,6 +67,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const groupSystem = box.querySelector("[data-group-system]") as any;
   let disposed = false;
   let policy: any = {};
+  let shellInitialized = false;
 
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
@@ -88,6 +89,11 @@ export function mount(root: HTMLElement, context: FrameContext) {
       cell("acc-mono", `home ${policy["home-root"] ?? "/home"}`),
     );
     const canControl = policy.control === true;
+    formHome.placeholder = `${policy["home-root"] ?? "/home"}/name`;
+    if (!shellInitialized) {
+      formShell.value = policy["default-shell"] ?? "/bin/sh";
+      shellInitialized = true;
+    }
     userForm.querySelector("button").disabled = !canControl;
     groupForm.querySelector("button").disabled = !canControl;
     formSystem.disabled = policy["allow-system"] !== true;
@@ -309,7 +315,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
   userForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = formName.value.trim();
-    const home = formHome.value.trim() || `/home/${name}`;
+    const home =
+      formHome.value.trim() || `${policy["home-root"] ?? "/home"}/${name}`;
     if (!name) {
       setStatus("Write a user name first.", true);
       return;
@@ -325,7 +332,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
           gid: formGid.value.trim() ? Number(formGid.value) : null,
           gecos: formGecos.value.trim(),
           home,
-          shell: formShell.value.trim() || "/bin/sh",
+          shell: formShell.value.trim() || policy["default-shell"] || "/bin/sh",
           system: formSystem.checked,
         }),
       });

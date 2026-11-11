@@ -156,6 +156,7 @@ function mount(root, context) {
   const groupSystem = box.querySelector("[data-group-system]");
   let disposed = false;
   let policy = {};
+  let shellInitialized = false;
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "acc-status bad" : "acc-status";
@@ -168,6 +169,11 @@ function mount(root, context) {
   function renderPolicy() {
     policyRoot.replaceChildren(policyBadge("control", policy.control), policyBadge("passwords", policy.passwords), policyBadge("system ids", policy["allow-system"]), policyBadge("privileged groups", policy["allow-privileged-groups"]), cell("acc-mono", `home ${policy["home-root"] ?? "/home"}`));
     const canControl = policy.control === true;
+    formHome.placeholder = `${policy["home-root"] ?? "/home"}/name`;
+    if (!shellInitialized) {
+      formShell.value = policy["default-shell"] ?? "/bin/sh";
+      shellInitialized = true;
+    }
     userForm.querySelector("button").disabled = !canControl;
     groupForm.querySelector("button").disabled = !canControl;
     formSystem.disabled = policy["allow-system"] !== true;
@@ -352,7 +358,7 @@ function mount(root, context) {
   userForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const name = formName.value.trim();
-    const home = formHome.value.trim() || `/home/${name}`;
+    const home = formHome.value.trim() || `${policy["home-root"] ?? "/home"}/${name}`;
     if (!name) {
       setStatus("Write a user name first.", true);
       return;
@@ -368,7 +374,7 @@ function mount(root, context) {
           gid: formGid.value.trim() ? Number(formGid.value) : null,
           gecos: formGecos.value.trim(),
           home,
-          shell: formShell.value.trim() || "/bin/sh",
+          shell: formShell.value.trim() || policy["default-shell"] || "/bin/sh",
           system: formSystem.checked
         })
       });
