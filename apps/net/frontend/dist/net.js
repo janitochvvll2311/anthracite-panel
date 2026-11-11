@@ -15,6 +15,61 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function createSseParser(onEvent) {
+  let buffer = "";
+  return (chunk) => {
+    buffer += chunk.replace(/\r/g, "");
+    for (;; ) {
+      const end = buffer.indexOf(`
+
+`);
+      if (end < 0)
+        break;
+      const block = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      const data = block.split(`
+`).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, "")).join(`
+`);
+      if (data)
+        onEvent(data);
+    }
+  };
+}
+async function watchNetwork(context, signal, intervalMs, onSnapshot) {
+  const response = await context.fetch(`/api/apps/${encodeURIComponent(context.app.id)}/watch?interval-ms=${intervalMs}`, { headers: { accept: "text/event-stream" }, signal });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+  if (!response.body)
+    throw new Error("the network watch has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder;
+  const feed = createSseParser((data) => {
+    if (signal.aborted)
+      return;
+    try {
+      onSnapshot(JSON.parse(data));
+    } catch {}
+  });
+  const cancel = () => void reader.cancel();
+  if (signal.aborted) {
+    reader.cancel();
+    return;
+  }
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    for (;; ) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      feed(decoder.decode(value, { stream: true }));
+    }
+    feed(decoder.decode());
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+}
 
 // src/format.ts
 function count(bytes) {
@@ -41,6 +96,11 @@ var styles = `
   .net { display: flex; flex-direction: column; gap: 14px; min-height: 400px; }
   .net-bar { display: flex; align-items: center; gap: 10px; }
   .net-bar .grow { flex: 1; }
+  .net-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .net-interval select {
+    padding: 5px 8px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
   .net-bar button, .net-add button {
     padding: 6px 10px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
     color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
@@ -107,6 +167,15 @@ function mount(root, context) {
     <div class="net-bar">
       <span class="net-mono">interfaces and routes</span>
       <span class="grow"></span>
+      <label class="net-interval">Interval
+        <select data-interval aria-label="Watch interval">
+          <option value="0">Manual (0s)</option>
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+      </label>
       <button type="button" data-refresh>Refresh</button>
     </div>
     <div class="net-grid"></div>
@@ -134,11 +203,76 @@ function mount(root, context) {
   const gateway = box.querySelector("[data-gateway]");
   const device = box.querySelector("[data-device]");
   const metric = box.querySelector("[data-metric]");
+  const interval = box.querySelector("[data-interval]");
+  let intervalMs = 2000;
+  let controller;
+  let visible = true;
   let disposed = false;
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "net-status bad" : "net-status";
   };
+  function render(interfaces, table) {
+    grid.replaceChildren();
+    for (const iface of interfaces) {
+      const card = document.createElement("section");
+      card.className = "net-card";
+      const head = document.createElement("div");
+      head.className = "net-card-head";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "net-toggle";
+      toggle.textContent = iface.up ? "Down" : "Up";
+      toggle.title = `${iface.up ? "Bring down" : "Bring up"} ${iface.name}`;
+      toggle.addEventListener("click", () => void setUp(iface.name, !iface.up));
+      head.append(cell("net-name", iface.name), cell(`net-state ${iface.up ? "up" : "down"}`, iface.up ? "up" : "down"), toggle);
+      const meta = document.createElement("div");
+      meta.className = "net-meta";
+      meta.append(cell("", `mac ${iface.mac}`), cell("", `mtu ${iface.mtu}`));
+      const addrs = document.createElement("div");
+      addrs.className = "net-addrs";
+      for (const address of iface.addresses) {
+        addrs.append(cell(`net-chip ${address.family}`, `${address.address}/${address.prefix}`));
+      }
+      const counters = document.createElement("div");
+      counters.className = "net-counters";
+      counters.innerHTML = `<span>rx <b>${count(iface["rx-bytes"])}</b></span><span>tx <b>${count(iface["tx-bytes"])}</b></span>`;
+      card.append(head, meta, addrs, counters);
+      grid.append(card);
+    }
+    const selected = device.value;
+    device.replaceChildren();
+    for (const iface of interfaces) {
+      const option = document.createElement("option");
+      option.value = iface.name;
+      option.textContent = iface.name;
+      device.append(option);
+    }
+    if (interfaces.some((iface) => iface.name === selected))
+      device.value = selected;
+    routes.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "net-route head";
+    for (const label of ["FAMILY", "DESTINATION", "GATEWAY", "DEVICE", "METRIC", ""]) {
+      head.append(cell("", label));
+    }
+    routes.append(head);
+    for (const route of table) {
+      const row = document.createElement("div");
+      row.className = "net-route";
+      row.append(cell("net-mono", route.family), cell("net-mono", route.destination), cell("net-mono", route.gateway ?? "—"), cell("", route.device), cell("net-mono", String(route.metric)));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "net-remove";
+      remove.title = `Remove ${route.destination} via ${route.device}`;
+      remove.textContent = "×";
+      remove.addEventListener("click", () => void removeRoute(route));
+      const action = document.createElement("span");
+      action.append(remove);
+      row.append(action);
+      routes.append(row);
+    }
+  }
   async function load() {
     setStatus("Reading the network…");
     try {
@@ -148,70 +282,46 @@ function mount(root, context) {
       ]);
       if (disposed)
         return;
-      grid.replaceChildren();
-      for (const iface of interfaces) {
-        const card = document.createElement("section");
-        card.className = "net-card";
-        const head = document.createElement("div");
-        head.className = "net-card-head";
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "net-toggle";
-        toggle.textContent = iface.up ? "Down" : "Up";
-        toggle.title = `${iface.up ? "Bring down" : "Bring up"} ${iface.name}`;
-        toggle.addEventListener("click", () => void setUp(iface.name, !iface.up));
-        head.append(cell("net-name", iface.name), cell(`net-state ${iface.up ? "up" : "down"}`, iface.up ? "up" : "down"), toggle);
-        const meta = document.createElement("div");
-        meta.className = "net-meta";
-        meta.append(cell("", `mac ${iface.mac}`), cell("", `mtu ${iface.mtu}`));
-        const addrs = document.createElement("div");
-        addrs.className = "net-addrs";
-        for (const address of iface.addresses) {
-          addrs.append(cell(`net-chip ${address.family}`, `${address.address}/${address.prefix}`));
-        }
-        const counters = document.createElement("div");
-        counters.className = "net-counters";
-        counters.innerHTML = `<span>rx <b>${count(iface["rx-bytes"])}</b></span><span>tx <b>${count(iface["tx-bytes"])}</b></span>`;
-        card.append(head, meta, addrs, counters);
-        grid.append(card);
-      }
-      const selected = device.value;
-      device.replaceChildren();
-      for (const iface of interfaces) {
-        const option = document.createElement("option");
-        option.value = iface.name;
-        option.textContent = iface.name;
-        device.append(option);
-      }
-      if (interfaces.some((iface) => iface.name === selected))
-        device.value = selected;
-      routes.replaceChildren();
-      const head = document.createElement("div");
-      head.className = "net-route head";
-      for (const label of ["FAMILY", "DESTINATION", "GATEWAY", "DEVICE", "METRIC", ""]) {
-        head.append(cell("", label));
-      }
-      routes.append(head);
-      for (const route of table) {
-        const row = document.createElement("div");
-        row.className = "net-route";
-        row.append(cell("net-mono", route.family), cell("net-mono", route.destination), cell("net-mono", route.gateway ?? "—"), cell("", route.device), cell("net-mono", String(route.metric)));
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "net-remove";
-        remove.title = `Remove ${route.destination} via ${route.device}`;
-        remove.textContent = "×";
-        remove.addEventListener("click", () => void removeRoute(route));
-        const action = document.createElement("span");
-        action.append(remove);
-        row.append(action);
-        routes.append(row);
-      }
-      setStatus(`${interfaces.length} interfaces · ${table.length} routes · updated ${new Date().toLocaleTimeString()}`);
+      render(interfaces, table);
+      setStatus(`Updated ${new Date().toLocaleTimeString()}`);
     } catch (error) {
       if (!disposed)
         setStatus(reason(error), true);
     }
+  }
+  async function watch() {
+    if (disposed || intervalMs === 0)
+      return;
+    const abort = new AbortController;
+    controller = abort;
+    setStatus("Watching the network…");
+    try {
+      await watchNetwork(context, abort.signal, intervalMs, (snapshot) => {
+        if (disposed)
+          return;
+        render(snapshot.interfaces, snapshot.routes);
+        setStatus(`Live · ${new Date().toLocaleTimeString()}`);
+      });
+      if (!disposed && !abort.signal.aborted) {
+        setStatus("The network watch ended.", true);
+      }
+    } catch (error) {
+      if (disposed || abort.signal.aborted)
+        return;
+      setStatus(`Could not watch the network: ${reason(error)}`, true);
+      load();
+    } finally {
+      if (controller === abort)
+        controller = undefined;
+    }
+  }
+  function restart() {
+    controller?.abort();
+    controller = undefined;
+    if (intervalMs > 0)
+      watch();
+    else
+      load();
   }
   async function setUp(name, up) {
     setStatus(`${up ? "Bringing up" : "Bringing down"} ${name}…`);
@@ -268,10 +378,28 @@ function mount(root, context) {
         setStatus(reason(error), true);
     }
   });
-  box.querySelector("[data-refresh]").addEventListener("click", () => void load());
-  load();
+  interval.addEventListener("change", () => {
+    intervalMs = Number(interval.value) || 0;
+    restart();
+  });
+  box.querySelector("[data-refresh]").addEventListener("click", restart);
+  const offVisibility = context.onVisibility?.((next) => {
+    if (next === visible)
+      return;
+    visible = next;
+    if (!visible) {
+      controller?.abort();
+      controller = undefined;
+    } else if (intervalMs > 0) {
+      watch();
+    }
+  });
+  intervalMs > 0 ? watch() : load();
   return () => {
     disposed = true;
+    offVisibility?.();
+    controller?.abort();
+    controller = undefined;
     root.replaceChildren();
   };
 }

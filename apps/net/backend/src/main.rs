@@ -1,10 +1,9 @@
-//! Host network status for the Network app.
+//! Host network service for the Network app.
 //!
-//! This is the read-only half of `anthracite:net/net@1.1.0`: interfaces,
-//! addresses, counters and the kernel routing tables. Applying configuration
-//! (bring an interface up/down, add or remove a route) is the separate approved
-//! flow, so those functions answer with a typed refusal instead of silently
-//! changing the host.
+//! The read half reports interfaces, addresses, counters and the kernel routing
+//! tables; `watch` streams the same snapshot as SSE. Applying configuration
+//! (bring an interface up/down, add or remove a route) runs through `ip` after
+//! strict validation.
 //!
 //! Everything lives in this native service: the engine and the sandboxed panel
 //! view never read `/sys` or `/proc/net`.
@@ -12,12 +11,14 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::process::Command;
+use std::time::Duration;
 
 use anth_contract::Error;
-use anth_service::Handler;
+use anth_service::{ChunkStream, Handler};
+use futures_util::stream::unfold;
 use serde_json::{json, Value};
 
-const NET: &str = "anthracite:net/net@1.1.0";
+const NET: &str = "anthracite:net/net@1.2.0";
 
 struct Service;
 
@@ -34,6 +35,20 @@ impl Handler for Service {
             "set-up" => set_up(&input),
             "add-route" => add_route(&input),
             "remove-route" => remove_route(&input),
+            other => Err(Error::not_found(format!(
+                "`anthracite:net/net#{other}` is not implemented"
+            ))),
+        }
+    }
+
+    fn stream(&self, interface: &str, function: &str, input: Value) -> Result<ChunkStream, Error> {
+        if interface != NET {
+            return Err(Error::not_found(format!(
+                "`{interface}` is not exported by the network service"
+            )));
+        }
+        match function {
+            "watch" => watch(&input),
             other => Err(Error::not_found(format!(
                 "`anthracite:net/net#{other}` is not implemented"
             ))),
@@ -56,12 +71,40 @@ async fn main() {
     }
 }
 
+/// One snapshot every `interval-ms` (clamped to 1–60 s), encoded as the JSON
+/// chunks the engine frames as SSE.
+fn watch(input: &Value) -> Result<ChunkStream, Error> {
+    let milliseconds = match input.get("interval-ms") {
+        Some(Value::Number(value)) => value.as_u64(),
+        Some(Value::String(value)) => value.parse::<u64>().ok(),
+        _ => None,
+    }
+    .unwrap_or(2_000)
+    .clamp(1_000, 60_000);
+    let interval = Duration::from_millis(milliseconds);
+    Ok(Box::pin(unfold(
+        (true, interval),
+        |(first, interval)| async move {
+            if !first {
+                tokio::time::sleep(interval).await;
+            }
+            let snapshot = json!({
+                "interfaces": interfaces(),
+                "routes": routes(),
+            });
+            let result = serde_json::to_vec(&snapshot).map_err(|error| {
+                Error::internal(format!("encoding the network snapshot: {error}"))
+            });
+            Some((result, (false, interval)))
+        },
+    )))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Family {
     V4,
     V6,
 }
-
 impl Family {
     fn matches(self, address: IpAddr) -> bool {
         matches!(
@@ -625,6 +668,20 @@ fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000
         assert!(ensure_interface("..").is_err());
         assert!(ensure_interface("../lo").is_err());
         assert!(ensure_interface("").is_err());
+    }
+
+    #[tokio::test]
+    async fn the_watch_stream_emits_a_snapshot() {
+        use futures_util::StreamExt;
+
+        let service = Service;
+        let mut stream = service
+            .stream(NET, "watch", json!({"interval-ms": 1000}))
+            .expect("watch");
+        let chunk = stream.next().await.expect("chunk").expect("ok");
+        let snapshot: Value = serde_json::from_slice(&chunk).expect("json");
+        assert!(snapshot["interfaces"].is_array());
+        assert!(snapshot["routes"].is_array());
     }
 
     #[test]

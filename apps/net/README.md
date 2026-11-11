@@ -6,12 +6,14 @@ builds the real app.
 
 - `backend/` reads `/sys/class/net`, `getifaddrs(3)`, `/proc/net/route` and
   `/proc/net/ipv6_route`. It reports interfaces (up flag, MAC, MTU, addresses,
-  counters) and the IPv4/IPv6 routing tables.
+  counters) and the IPv4/IPv6 routing tables. `watch` streams the same snapshot
+  as SSE; the engine frames each event.
 - `set-up`, `add-route` and `remove-route` validate the interface, family, CIDR
   and gateway, then run `ip`. They need `CAP_NET_ADMIN`; without it the call
   returns a typed `denied` error.
 - `frontend/` is the network view: interface cards, the route table and the
-  up/down and route controls.
+  up/down and route controls. It follows `/watch` over SSE and offers a
+  `Manual (0s)` interval for a static view refreshed by hand.
 
 ## Build
 

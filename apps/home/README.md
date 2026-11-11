@@ -13,7 +13,8 @@ The view is deliberately split:
   `watch` returns a `stream<host-info>`; the engine frames each snapshot as one
   `text/event-stream` event. It declares `class = "host"`, so approval needs
   `--accept-write --accept-admin --accept-host` (the engine requires every level
-  up to the declared risk).
+  up to the declared risk). The view has an interval selector; `Manual (0s)`
+  stops the stream and leaves Refresh as the only update.
 
 The demo does not use this backend. `demo/emulator` answers the same contract
 with deterministic fixtures, so a demo instance never exposes the machine's real

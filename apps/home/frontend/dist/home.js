@@ -27,8 +27,8 @@ function createSseParser(onEvent) {
     }
   };
 }
-async function watchHostInfo(context, signal, onInfo) {
-  const response = await context.fetch(`/api/apps/${encodeURIComponent(context.app.id)}/watch?interval-ms=2000`, { headers: { accept: "text/event-stream" }, signal });
+async function watchHostInfo(context, signal, intervalMs, onInfo) {
+  const response = await context.fetch(`/api/apps/${encodeURIComponent(context.app.id)}/watch?interval-ms=${intervalMs}`, { headers: { accept: "text/event-stream" }, signal });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `HTTP ${response.status}`);
@@ -38,17 +38,29 @@ async function watchHostInfo(context, signal, onInfo) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder;
   const feed = createSseParser((data) => {
+    if (signal.aborted)
+      return;
     try {
       onInfo(JSON.parse(data));
     } catch {}
   });
-  for (;; ) {
-    const { done, value } = await reader.read();
-    if (done)
-      break;
-    feed(decoder.decode(value, { stream: true }));
+  const cancel = () => void reader.cancel();
+  if (signal.aborted) {
+    reader.cancel();
+    return;
   }
-  feed(decoder.decode());
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    for (;; ) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      feed(decoder.decode(value, { stream: true }));
+    }
+    feed(decoder.decode());
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
 }
 
 // src/format.ts
@@ -228,12 +240,18 @@ var styles = `
   .home-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .home h3 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
   .home-sub { margin: 2px 0 0; color: #8f98ab; font-size: 12.5px; }
+  .home-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .home-actions button, .home-refresh {
     padding: 7px 11px; border-radius: 7px; border: 1px solid #2a3142; cursor: pointer;
     background: #151a24; color: #c8d0df; font: inherit; font-size: 12px;
   }
   .home-actions button:hover, .home-refresh:hover { border-color: #3a4560; color: #fff; }
   .home-refresh:disabled { opacity: .5; cursor: default; }
+  .home-interval { display: flex; align-items: center; gap: 6px; color: #8f98ab; font-size: 12px; }
+  .home-interval select {
+    padding: 6px 8px; border-radius: 7px; border: 1px solid #2a3142; background: #151a24;
+    color: #c8d0df; font: inherit; font-size: 12px; cursor: pointer;
+  }
   .home-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .home-card {
     border: 1px solid #202632; border-radius: 10px; background: #0f1219;
@@ -281,6 +299,15 @@ var TEMPLATE = `
       <p class="home-sub" data-subtitle>Reading host information…</p>
     </div>
     <div class="home-actions">
+      <label class="home-interval">Interval
+        <select data-interval aria-label="Watch interval">
+          <option value="0">Manual (0s)</option>
+          <option value="1000">1s</option>
+          <option value="2000" selected>2s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+      </label>
       <button class="home-refresh" type="button" data-refresh>Refresh</button>
     </div>
   </header>
@@ -304,11 +331,13 @@ function mount(root, context) {
   const subtitle = query(box, "[data-subtitle]");
   const status = query(box, "[data-status]");
   const refresh = query(box, "[data-refresh]");
-  if (!subtitle || !status || !refresh) {
+  const interval = query(box, "[data-interval]");
+  if (!subtitle || !status || !refresh || !interval) {
     return () => root.replaceChildren();
   }
   let disposed = false;
   let loading = false;
+  let intervalMs = 2000;
   let controller;
   function setStatus(message, bad = false) {
     status.textContent = message;
@@ -338,13 +367,13 @@ function mount(root, context) {
     }
   }
   async function watch() {
-    if (disposed)
+    if (disposed || intervalMs === 0)
       return;
     const abort = new AbortController;
     controller = abort;
     setStatus("Watching host information…");
     try {
-      await watchHostInfo(context, abort.signal, (info) => {
+      await watchHostInfo(context, abort.signal, intervalMs, (info) => {
         if (disposed)
           return;
         subtitle.textContent = `${info.hostname} · ${info.os}`;
@@ -364,11 +393,20 @@ function mount(root, context) {
         controller = undefined;
     }
   }
-  refresh.addEventListener("click", () => {
+  function restart() {
     controller?.abort();
-    watch();
+    controller = undefined;
+    if (intervalMs > 0)
+      watch();
+    else
+      load();
+  }
+  refresh.addEventListener("click", restart);
+  interval.addEventListener("change", () => {
+    intervalMs = Number(interval.value) || 0;
+    restart();
   });
-  watch();
+  intervalMs > 0 ? watch() : load();
   return () => {
     disposed = true;
     controller?.abort();

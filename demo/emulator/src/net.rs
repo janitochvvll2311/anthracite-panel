@@ -1,8 +1,12 @@
 //! Deterministic interface and route fixture for the demo (§19 §2, `net`).
 
 use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anth_contract::Error;
+use anth_service::ChunkStream;
+use futures_util::stream::unfold;
 use serde_json::{json, Value};
 
 use crate::{boolean, number, optional_text, text};
@@ -138,45 +142,8 @@ impl NetFixture {
 
     pub fn handle(&mut self, function: &str, input: &Value) -> Result<Value, Error> {
         match function {
-            "interfaces" => {
-                self.tick = self.tick.saturating_add(1);
-                let tick = self.tick;
-                Ok(Value::Array(
-                    self.interfaces
-                        .iter()
-                        .map(|interface| {
-                            let (rx_rate, tx_rate) = rates(&interface.name, interface.up);
-                            json!({
-                                "name": interface.name,
-                                "up": interface.up,
-                                "mac": interface.mac,
-                                "mtu": interface.mtu,
-                                "addresses": interface.addresses.iter().map(|address| json!({
-                                    "family": address.family,
-                                    "address": address.address,
-                                    "prefix": address.prefix,
-                                })).collect::<Vec<_>>(),
-                                "rx-bytes": interface.rx_bytes.saturating_add(tick.saturating_mul(rx_rate)),
-                                "tx-bytes": interface.tx_bytes.saturating_add(tick.saturating_mul(tx_rate)),
-                            })
-                        })
-                        .collect(),
-                ))
-            }
-            "routes" => Ok(Value::Array(
-                self.routes
-                    .iter()
-                    .map(|route| {
-                        json!({
-                            "family": route.family,
-                            "destination": route.destination,
-                            "gateway": route.gateway,
-                            "device": route.device,
-                            "metric": route.metric,
-                        })
-                    })
-                    .collect(),
-            )),
+            "interfaces" => Ok(self.interfaces_value()),
+            "routes" => Ok(self.routes_value()),
             "set-up" => {
                 let name = text(input, "name")?;
                 let up = boolean(input, "up");
@@ -251,6 +218,86 @@ impl NetFixture {
             ))),
         }
     }
+
+    fn interfaces_value(&mut self) -> Value {
+        self.tick = self.tick.saturating_add(1);
+        let tick = self.tick;
+        Value::Array(
+            self.interfaces
+                .iter()
+                .map(|interface| {
+                    let (rx_rate, tx_rate) = rates(&interface.name, interface.up);
+                    json!({
+                        "name": interface.name,
+                        "up": interface.up,
+                        "mac": interface.mac,
+                        "mtu": interface.mtu,
+                        "addresses": interface.addresses.iter().map(|address| json!({
+                            "family": address.family,
+                            "address": address.address,
+                            "prefix": address.prefix,
+                        })).collect::<Vec<_>>(),
+                        "rx-bytes": interface.rx_bytes.saturating_add(tick.saturating_mul(rx_rate)),
+                        "tx-bytes": interface.tx_bytes.saturating_add(tick.saturating_mul(tx_rate)),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn routes_value(&self) -> Value {
+        Value::Array(
+            self.routes
+                .iter()
+                .map(|route| {
+                    json!({
+                        "family": route.family,
+                        "destination": route.destination,
+                        "gateway": route.gateway,
+                        "device": route.device,
+                        "metric": route.metric,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub fn snapshot(&mut self) -> Value {
+        json!({
+            "interfaces": self.interfaces_value(),
+            "routes": self.routes_value(),
+        })
+    }
+}
+
+/// One snapshot every `interval-ms` (clamped to 1–60 s), encoded as the JSON
+/// chunks the engine frames as SSE. The fixture advances its counters per
+/// snapshot, so the stream always moves.
+pub fn watch(input: &Value, fixture: Arc<Mutex<NetFixture>>) -> Result<ChunkStream, Error> {
+    let milliseconds = match input.get("interval-ms") {
+        Some(Value::Number(value)) => value.as_u64(),
+        Some(Value::String(value)) => value.parse::<u64>().ok(),
+        _ => None,
+    }
+    .unwrap_or(2_000)
+    .clamp(1_000, 60_000);
+    let interval = Duration::from_millis(milliseconds);
+    Ok(Box::pin(unfold(
+        (true, interval, fixture),
+        |(first, interval, fixture)| async move {
+            if !first {
+                tokio::time::sleep(interval).await;
+            }
+            let value = {
+                let mut fixture = fixture.lock().expect("the fixture mutex is not poisoned");
+                fixture.snapshot()
+            };
+            let result = serde_json::to_vec(&value).map_err(|error| {
+                Error::internal(format!("encoding the network snapshot: {error}"))
+            });
+            Some((result, (false, interval, fixture)))
+        },
+    )))
 }
 
 /// Bytes added to the counters on every snapshot, per interface. The demo is
