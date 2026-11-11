@@ -509,6 +509,7 @@ function mount(root, context) {
         }
         node.title = `Sort by ${label.toLowerCase()}`;
         node.tabIndex = 0;
+        node.dataset.sort = key;
         node.setAttribute("role", "button");
         node.setAttribute("aria-label", `Sort by ${label.toLowerCase()}${sortKey === key ? sortAsc ? ", ascending" : ", descending" : ""}`);
         node.addEventListener("click", () => setSort(key));
@@ -516,6 +517,7 @@ function mount(root, context) {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             setSort(key);
+            headRoot.querySelector(`[data-sort="${key}"]`)?.focus();
           }
         });
       }

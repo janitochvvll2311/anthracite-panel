@@ -229,6 +229,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
         }
         node.title = `Sort by ${label.toLowerCase()}`;
         node.tabIndex = 0;
+        node.dataset.sort = key;
         node.setAttribute("role", "button");
         node.setAttribute(
           "aria-label",
@@ -241,6 +242,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             setSort(key);
+            headRoot
+              .querySelector<HTMLElement>(`[data-sort="${key}"]`)
+              ?.focus();
           }
         });
       }
