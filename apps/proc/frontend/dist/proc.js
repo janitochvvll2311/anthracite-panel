@@ -971,6 +971,13 @@ function mount(root, context) {
       return;
     }
     const argv = command.split(/\s+/);
+    const ok = await confirmAction({
+      title: "Spawn this command?",
+      message: `\`${command}\` will run detached from the process service.`,
+      confirmLabel: "Spawn"
+    });
+    if (!ok)
+      return;
     setStatus("Spawning…");
     try {
       const pid = await call(context, "/spawn", {
