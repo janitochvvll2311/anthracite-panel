@@ -151,8 +151,8 @@ A bundle may carry `bin/`, `wasm/`, `web/` and `wit/` together. In a **hybrid**
 manifest every `[[export]]` names its half with `target = "wasm" | "service"` and
 the two sets must be disjoint. The service binary is hashed like the component and
 made owner-executable after verification; `argv` has exactly one `{socket}`, at
-most one `{data}` and at most one `{state}`, no `.` or `..` segments and is frozen
-in the grant along with the class.
+most one `{data}` and at most one `{shared}`, no `.` or `..` segments and is
+frozen in the grant along with the class.
 
 ### 7.3 WIT as the contract
 

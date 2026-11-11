@@ -623,7 +623,7 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
     }
     let mut sockets = 0usize;
     let mut data = 0usize;
-    let mut states = 0usize;
+    let mut shared = 0usize;
     for arg in &service.argv {
         if arg.len() > 4096 {
             return Err(Error::invalid("a service argv entry is longer than 4 KiB"));
@@ -641,11 +641,11 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
         }
         sockets += arg.matches("{socket}").count();
         data += arg.matches("{data}").count();
-        states += arg.matches("{state}").count();
+        shared += arg.matches("{shared}").count();
         let rest = arg
             .replace("{socket}", "")
             .replace("{data}", "")
-            .replace("{state}", "");
+            .replace("{shared}", "");
         if rest.contains('{') || rest.contains('}') {
             return Err(Error::invalid(
                 "a service argv entry has an unknown placeholder",
@@ -662,9 +662,9 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
             "service argv may contain at most one `{data}`",
         ));
     }
-    if states > 1 {
+    if shared > 1 {
         return Err(Error::invalid(
-            "service argv may contain at most one `{state}`",
+            "service argv may contain at most one `{shared}`",
         ));
     }
     Ok(())
@@ -1008,24 +1008,27 @@ target = "wasm"
     }
 
     #[test]
-    fn a_service_argv_may_name_the_engine_state_once() {
+    fn a_service_argv_may_name_the_engine_shared_state_once() {
         let mut manifest = Manifest::parse(SERVICE).expect("parse");
         manifest.service.as_mut().expect("service").argv = vec![
             "--socket".to_string(),
             "{socket}".to_string(),
             "--state".to_string(),
-            "{state}/emulator/host.json".to_string(),
+            "{shared}/emulator/host.json".to_string(),
         ];
-        manifest.validate().expect("state dir");
+        manifest.validate().expect("shared state");
 
         manifest.service.as_mut().expect("service").argv = vec![
             "--socket".to_string(),
             "{socket}".to_string(),
-            "{state}".to_string(),
-            "{state}".to_string(),
+            "{shared}".to_string(),
+            "{shared}".to_string(),
         ];
-        let error = manifest.validate().expect_err("two state dirs");
-        assert!(error.message().contains("at most one `{state}`"), "{error}");
+        let error = manifest.validate().expect_err("two shared dirs");
+        assert!(
+            error.message().contains("at most one `{shared}`"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1034,7 +1037,7 @@ target = "wasm"
             vec![
                 "--socket".to_string(),
                 "{socket}".to_string(),
-                "{state}/../x".to_string(),
+                "{shared}/../x".to_string(),
             ],
             vec![
                 "--socket".to_string(),

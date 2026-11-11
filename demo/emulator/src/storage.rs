@@ -137,6 +137,18 @@ impl StorageFixture {
                         "`{mountpoint}` is already a mountpoint"
                     )));
                 }
+                let root = mountpoint.trim_end_matches('/');
+                if let Some(other) = self.mounts.iter().find(|mount| {
+                    let existing = mount.mountpoint.trim_end_matches('/');
+                    !existing.is_empty()
+                        && (existing.starts_with(&format!("{root}/"))
+                            || root.starts_with(&format!("{existing}/")))
+                }) {
+                    return Err(Error::conflict(format!(
+                        "`{mountpoint}` overlaps the mountpoint `{}`",
+                        other.mountpoint
+                    )));
+                }
                 let size = {
                     let found = self
                         .devices
@@ -170,6 +182,16 @@ impl StorageFixture {
                     .ok_or_else(|| {
                         Error::not_found(format!("`{mountpoint}` is not a mountpoint"))
                     })?;
+                let root = mountpoint.trim_end_matches('/');
+                if let Some(inner) = self.mounts.iter().find(|mount| {
+                    mount.mountpoint != mountpoint
+                        && mount.mountpoint.starts_with(&format!("{root}/"))
+                }) {
+                    return Err(Error::conflict(format!(
+                        "`{mountpoint}` contains the mountpoint `{}`; unmount it first",
+                        inner.mountpoint
+                    )));
+                }
                 let removed = self.mounts.remove(index);
                 if !self
                     .mounts
@@ -245,6 +267,39 @@ mod tests {
         assert!(
             mounts[1]["used-bytes"].as_u64().unwrap() < mounts[1]["total-bytes"].as_u64().unwrap()
         );
+    }
+
+    #[test]
+    fn mounting_over_another_mountpoint_is_rejected() {
+        let mut fixture = StorageFixture::new();
+        let error = fixture
+            .handle(
+                "attach",
+                &json!({"device": "/dev/sdc", "mountpoint": "/media", "filesystem": "exfat"}),
+            )
+            .expect_err("overlaps /media/demo");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        let mounts = call(&mut fixture, "mounts", Value::Null);
+        assert!(mounts
+            .as_array()
+            .expect("mounts")
+            .iter()
+            .any(|mount| mount["mountpoint"] == "/media/demo"));
+
+        call(&mut fixture, "detach", json!({"mountpoint": "/media/demo"}));
+        call(
+            &mut fixture,
+            "attach",
+            json!({"device": "/dev/sdc", "mountpoint": "/media", "filesystem": "exfat"}),
+        );
+        let error = fixture
+            .handle(
+                "attach",
+                &json!({"device": "/dev/sdb1", "mountpoint": "/media/demo", "filesystem": "exfat"}),
+            )
+            .expect_err("nested inside /media");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        call(&mut fixture, "detach", json!({"mountpoint": "/media"}));
     }
 
     #[test]

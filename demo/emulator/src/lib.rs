@@ -3,9 +3,9 @@
 //! One binary backs one bundle per app: the bundles carry the real app's WIT
 //! package and manifest id, and only the binary is shared. Host state (files,
 //! accounts, network and storage) is one JSON snapshot all demo bundles point
-//! at (`state/emulator/host.json`), read and written under a cross-process lock so
-//! a mutation in one app is visible in the rest; runtime state (processes and
-//! terminal sessions) resets on restart.
+//! at (`state/shared/emulator/host.json`), read and written under a cross-process
+//! lock so a mutation in one app is visible in the rest; runtime state
+//! (processes and terminal sessions) resets on restart.
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -237,7 +237,10 @@ impl Emulator {
                         .lock()
                         .expect("the fixture mutex is not poisoned")
                         .unmount(mountpoint);
-                    if let Some(device) = detached_device {
+                    // A mountpoint hidden by another mount has no overlay of
+                    // its own; keep its device files instead of overwriting
+                    // them with what the outer volume shows there.
+                    if let (Some(device), Some(files)) = (detached_device, files) {
                         self.storage
                             .lock()
                             .expect("the fixture mutex is not poisoned")
@@ -427,10 +430,38 @@ enum Node {
 /// One entry on a block device. Directories are captured too so an empty
 /// directory created while a volume is mounted survives a remount.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(from = "FsEntrySnapshot")]
 pub(crate) enum FsEntry {
     Dir,
     File(Vec<u8>),
     Link(String),
+}
+
+/// Reads the current tagged entries and the plain arrays written before
+/// directories and links were captured, so an older snapshot still boots.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum FsEntrySnapshot {
+    Legacy(Vec<u8>),
+    Current(FsEntryTag),
+}
+
+#[derive(serde::Deserialize)]
+enum FsEntryTag {
+    Dir,
+    File(Vec<u8>),
+    Link(String),
+}
+
+impl From<FsEntrySnapshot> for FsEntry {
+    fn from(snapshot: FsEntrySnapshot) -> Self {
+        match snapshot {
+            FsEntrySnapshot::Legacy(bytes) => Self::File(bytes),
+            FsEntrySnapshot::Current(FsEntryTag::Dir) => Self::Dir,
+            FsEntrySnapshot::Current(FsEntryTag::File(bytes)) => Self::File(bytes),
+            FsEntrySnapshot::Current(FsEntryTag::Link(target)) => Self::Link(target),
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -716,16 +747,24 @@ impl Fs {
         Ok(())
     }
 
-    /// Captures the volume contents and restores what the mount hid.
-    pub fn unmount(&mut self, mountpoint: &str) -> BTreeMap<String, FsEntry> {
+    /// Captures the volume contents and restores what the mount hid. Returns
+    /// `None` when the path has no overlay of its own, for example because a
+    /// mount further up hides it; the caller must not overwrite a device then.
+    pub fn unmount(&mut self, mountpoint: &str) -> Option<BTreeMap<String, FsEntry>> {
         let root = mountpoint.trim_end_matches('/').to_string();
+        // An overlay further up covers this mountpoint, so its own files are
+        // not the visible tree; leave the device and the outer volume alone.
+        if self.hidden.keys().any(|ancestor| {
+            !ancestor.is_empty() && ancestor != &root && root.starts_with(&format!("{ancestor}/"))
+        }) {
+            return None;
+        }
+        let hidden = self.hidden.remove(&root)?;
         let entries = self.collect_entries(mountpoint);
         self.clear_subtree(mountpoint);
-        if let Some(hidden) = self.hidden.remove(&root) {
-            self.nodes.extend(hidden);
-        }
+        self.nodes.extend(hidden);
         let _ = self.ensure_dir(mountpoint);
-        entries
+        Some(entries)
     }
 
     /// Everything a mountpoint currently hides, captured before the overlay.
@@ -1871,6 +1910,53 @@ mod tests {
         for user in world::users() {
             assert!(names.contains(&user.name), "{}", user.name);
         }
+    }
+
+    #[test]
+    fn a_mount_may_not_hide_another_mountpoint() {
+        let emulator = Emulator::new();
+        let error = emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdc", "mountpoint": "/media", "filesystem": "exfat"}),
+            )
+            .expect_err("overlaps the /media/demo mount");
+        assert_eq!(error.kind(), ErrorKind::Conflict);
+        // The volume under the rejected mount keeps its own files.
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/media/demo"}))
+            .expect("unmount");
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdb1", "mountpoint": "/media/demo", "filesystem": "exfat"}),
+            )
+            .expect("remount");
+        call(&emulator, "stat", json!({"path": "/media/demo/README.txt"}));
+    }
+
+    #[test]
+    fn volume_entries_read_old_arrays_and_current_tags() {
+        let legacy: FsEntry =
+            serde_json::from_value(json!([104, 105])).expect("a pre-FsEntry array");
+        assert!(matches!(legacy, FsEntry::File(bytes) if bytes == b"hi"));
+        let dir: FsEntry = serde_json::from_value(json!("Dir")).expect("a directory");
+        assert!(matches!(dir, FsEntry::Dir));
+        let link: FsEntry = serde_json::from_value(json!({"Link": "/target"})).expect("a symlink");
+        assert!(matches!(link, FsEntry::Link(target) if target == "/target"));
+    }
+
+    #[test]
+    fn a_mountpoint_hidden_by_an_outer_mount_is_not_captured() {
+        let mut fs = Fs::demo();
+        fs.mount("/home/operator/deep", &BTreeMap::new())
+            .expect("inner mount");
+        fs.mount("/home/operator", &BTreeMap::new())
+            .expect("outer mount");
+        assert!(fs.unmount("/home/operator/deep").is_none());
+        assert!(fs.unmount("/home/operator").is_some());
     }
 
     #[test]
