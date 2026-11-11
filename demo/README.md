@@ -140,6 +140,10 @@ created by Storage appears in Files, a new account's home is created in Files,
 and Home reads the same network/mount state, so the apps describe one host. It
 survives a panel/service restart. Delete `host.json` to reseed the whole demo.
 
+Files also follows Storage: mounting a device overlays its files at the
+mountpoint, unmounting hides them, and changes made while mounted are kept on
+the device and restored on the next mount.
+
 The process table, terminal sessions and Home's metrics are runtime state and
 reset on restart. Removing an app from the composition degrades only that view.
 

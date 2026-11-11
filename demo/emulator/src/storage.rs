@@ -1,5 +1,7 @@
 //! Deterministic block-device and mount fixture for the demo (§19 §2, `storage`).
 
+use std::collections::BTreeMap;
+
 use anth_contract::Error;
 use serde_json::{json, Value};
 
@@ -28,6 +30,10 @@ struct Mount {
 pub struct StorageFixture {
     devices: Vec<Device>,
     mounts: Vec<Mount>,
+    /// The files on each block device, as paths relative to its root. Mounting
+    /// overlays this into the shared files tree; unmounting captures it back.
+    #[serde(default)]
+    device_files: BTreeMap<String, BTreeMap<String, Vec<u8>>>,
 }
 
 impl StorageFixture {
@@ -54,7 +60,30 @@ impl StorageFixture {
                     total_bytes: mount.total_bytes,
                 })
                 .collect(),
+            device_files: seed_files(),
         }
+    }
+
+    pub(crate) fn mounted_devices(&self) -> Vec<(String, String)> {
+        self.mounts
+            .iter()
+            .map(|mount| (mount.device.clone(), mount.mountpoint.clone()))
+            .collect()
+    }
+
+    pub(crate) fn files_for(&self, device: &str) -> BTreeMap<String, Vec<u8>> {
+        self.device_files.get(device).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn set_files(&mut self, device: &str, files: BTreeMap<String, Vec<u8>>) {
+        self.device_files.insert(device.to_string(), files);
+    }
+
+    pub(crate) fn device_for(&self, mountpoint: &str) -> Option<String> {
+        self.mounts
+            .iter()
+            .find(|mount| mount.mountpoint == mountpoint)
+            .map(|mount| mount.device.clone())
     }
 
     pub fn handle(&mut self, function: &str, input: &Value) -> Result<Value, Error> {
@@ -130,6 +159,9 @@ impl StorageFixture {
             }
             "detach" => {
                 let mountpoint = text(input, "mountpoint")?;
+                if ["/", "/boot", "/boot/efi"].contains(&mountpoint.as_str()) {
+                    return Err(Error::denied(format!("`{mountpoint}` is a system mount")));
+                }
                 let index = self
                     .mounts
                     .iter()
@@ -158,6 +190,37 @@ impl StorageFixture {
             ))),
         }
     }
+}
+
+fn seed_files() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
+    let mut files = BTreeMap::new();
+    files.insert(
+        "/dev/nvme0n1p1".to_string(),
+        entries(&[("EFI/BOOT/BOOTX64.EFI", "boot\n")]),
+    );
+    files.insert(
+        "/dev/sdb1".to_string(),
+        entries(&[
+            ("README.txt", "Mounted demo volume.\n"),
+            ("photos/beach.txt", "waves\n"),
+            ("photos/forest.txt", "trees\n"),
+        ]),
+    );
+    files.insert(
+        "/dev/sdc".to_string(),
+        entries(&[
+            ("notes.txt", "SD card notes.\n"),
+            ("DCIM/IMG_0001.txt", "photo\n"),
+        ]),
+    );
+    files
+}
+
+fn entries(items: &[(&str, &str)]) -> BTreeMap<String, Vec<u8>> {
+    items
+        .iter()
+        .map(|(path, text)| (path.to_string(), text.as_bytes().to_vec()))
+        .collect()
 }
 
 #[cfg(test)]

@@ -99,12 +99,21 @@ impl Drop for StateGuard {
 
 impl Emulator {
     pub fn new() -> Self {
+        let storage = storage::StorageFixture::new();
+        let mut fs = Fs::demo();
+        for (device, mountpoint) in storage.mounted_devices() {
+            if mountpoint == "/" {
+                continue;
+            }
+            fs.mount(&mountpoint, &storage.files_for(&device))
+                .expect("the seed mountpoints are valid");
+        }
         Self {
-            fs: Mutex::new(Fs::demo()),
+            fs: Mutex::new(fs),
             terminals: Arc::new(Mutex::new(Terminals::default())),
             procs: Mutex::new(proc::ProcFixture::demo()),
             net: Arc::new(Mutex::new(net::NetFixture::new())),
-            storage: Mutex::new(storage::StorageFixture::new()),
+            storage: Mutex::new(storage),
             accounts: Mutex::new(accounts::AccountsFixture::new()),
             state_path: None,
             state_lock: Mutex::new(()),
@@ -199,16 +208,44 @@ impl Emulator {
         interface: &str,
         function: &str,
         input: &Value,
+        detached_device: Option<&str>,
     ) -> Result<(), Error> {
-        let mut fs = self.fs.lock().expect("the fixture mutex is not poisoned");
-        if interface == STORAGE && function == "attach" {
-            if let Some(mountpoint) = input.get("mountpoint").and_then(Value::as_str) {
-                fs.ensure_dir(mountpoint)?;
+        if interface == STORAGE {
+            let mountpoint = input.get("mountpoint").and_then(Value::as_str);
+            if function == "attach" {
+                let device = input.get("device").and_then(Value::as_str).unwrap_or("");
+                let files = self
+                    .storage
+                    .lock()
+                    .expect("the fixture mutex is not poisoned")
+                    .files_for(device);
+                if let Some(mountpoint) = mountpoint {
+                    self.fs
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .mount(mountpoint, &files)?;
+                }
+            } else if function == "detach" {
+                if let Some(mountpoint) = mountpoint {
+                    let mut fs = self.fs.lock().expect("the fixture mutex is not poisoned");
+                    let files = fs.collect_files(mountpoint);
+                    fs.clear_subtree(mountpoint);
+                    drop(fs);
+                    if let Some(device) = detached_device {
+                        self.storage
+                            .lock()
+                            .expect("the fixture mutex is not poisoned")
+                            .set_files(device, files);
+                    }
+                }
             }
         }
         if interface == ACCOUNTS && function == "create-user" {
             if let Some(home) = input.get("home").and_then(Value::as_str) {
-                fs.ensure_dir(home)?;
+                self.fs
+                    .lock()
+                    .expect("the fixture mutex is not poisoned")
+                    .ensure_dir(home)?;
             }
         }
         Ok(())
@@ -263,6 +300,19 @@ impl Handler for Emulator {
             .expect("the state lock is not poisoned");
         let _guard = self.lock_state()?;
         self.reload()?;
+        let detached_device = if interface == STORAGE && function == "detach" {
+            input
+                .get("mountpoint")
+                .and_then(Value::as_str)
+                .and_then(|mountpoint| {
+                    self.storage
+                        .lock()
+                        .expect("the fixture mutex is not poisoned")
+                        .device_for(mountpoint)
+                })
+        } else {
+            None
+        };
         let mutating = match interface {
             FS_WRITE => true,
             NET => !matches!(function, "interfaces" | "routes"),
@@ -300,7 +350,7 @@ impl Handler for Emulator {
             ))),
         };
         if mutating && result.is_ok() {
-            self.apply_cross_domain(interface, function, &input)?;
+            self.apply_cross_domain(interface, function, &input, detached_device.as_deref())?;
             self.persist()?;
         }
         result
@@ -410,7 +460,6 @@ impl Fs {
             ("/home/operator/deep/answer.txt", "42\n"),
             ("/var/log/emulator.log", "started\n"),
             ("/tmp/scratch.txt", "temporary\n"),
-            ("/media/demo/README.txt", "Mounted demo volume.\n"),
         ] {
             fs.nodes
                 .insert(path.to_string(), Node::File(text.as_bytes().to_vec()));
@@ -608,6 +657,50 @@ impl Fs {
 
     /// Creates a directory and its parents inside the fixture root. Used when a
     /// mountpoint or a new user's home appears through another app.
+    /// Overlays a device filesystem at a mountpoint, hiding whatever was
+    /// underneath and restoring the files from the shared storage fixture.
+    pub fn mount(
+        &mut self,
+        mountpoint: &str,
+        files: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<(), Error> {
+        self.ensure_dir(mountpoint)?;
+        self.clear_subtree(mountpoint);
+        for (relative, bytes) in files {
+            if relative.is_empty() || relative.starts_with('/') || relative.contains("..") {
+                continue;
+            }
+            let path = format!("{}/{}", mountpoint.trim_end_matches('/'), relative);
+            if let Some((parent, _)) = path.rsplit_once('/') {
+                self.ensure_dir(parent)?;
+            }
+            self.nodes.insert(path, Node::File(bytes.clone()));
+        }
+        Ok(())
+    }
+
+    /// Reads the files currently under a mountpoint, relative to it.
+    pub fn collect_files(&self, mountpoint: &str) -> BTreeMap<String, Vec<u8>> {
+        let prefix = format!("{}/", mountpoint.trim_end_matches('/'));
+        self.nodes
+            .iter()
+            .filter_map(|(path, node)| {
+                let relative = path.strip_prefix(&prefix)?;
+                let Node::File(bytes) = node else {
+                    return None;
+                };
+                Some((relative.to_string(), bytes.clone()))
+            })
+            .collect()
+    }
+
+    /// Removes everything under a mountpoint but keeps the directory itself.
+    pub fn clear_subtree(&mut self, mountpoint: &str) {
+        let prefix = format!("{}/", mountpoint.trim_end_matches('/'));
+        self.nodes.retain(|path, _| !path.starts_with(&prefix));
+        let _ = self.ensure_dir(mountpoint);
+    }
+
     pub fn ensure_dir(&mut self, path: &str) -> Result<(), Error> {
         if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
             return Err(Error::invalid("`path` must be an absolute path"));
@@ -1717,6 +1810,57 @@ mod tests {
     }
 
     #[test]
+    fn unmounting_hides_and_remounting_restores_device_files() {
+        let emulator = Emulator::new();
+        let readme = call(
+            &emulator,
+            "read-file",
+            json!({"path": "/media/demo/README.txt"}),
+        );
+        emulator
+            .call(
+                FS_WRITE,
+                "write-file",
+                json!({"path": "/media/demo/new.txt", "bytes": [104, 105]}),
+            )
+            .expect("write on the mounted volume");
+        emulator
+            .call(STORAGE, "detach", json!({"mountpoint": "/media/demo"}))
+            .expect("unmount");
+        assert_eq!(
+            emulator
+                .call(FS_READ, "stat", json!({"path": "/media/demo/README.txt"}))
+                .expect_err("hidden")
+                .kind(),
+            ErrorKind::NotFound
+        );
+        call(&emulator, "stat", json!({"path": "/media/demo"}));
+        emulator
+            .call(
+                STORAGE,
+                "attach",
+                json!({"device": "/dev/sdb1", "mountpoint": "/media/demo", "filesystem": "exfat"}),
+            )
+            .expect("remount");
+        assert_eq!(
+            call(
+                &emulator,
+                "read-file",
+                json!({"path": "/media/demo/README.txt"}),
+            ),
+            readme
+        );
+        assert_eq!(
+            call(
+                &emulator,
+                "read-file",
+                json!({"path": "/media/demo/new.txt"}),
+            ),
+            json!([104, 105])
+        );
+    }
+
+    #[test]
     fn shared_state_is_visible_across_apps() {
         let dir = std::env::temp_dir()
             .join("anthracite-panel")
@@ -1745,6 +1889,10 @@ mod tests {
         second
             .call(FS_READ, "stat", json!({"path": "/media/sd"}))
             .expect("mountpoint is a directory in the files tree");
+        let notes = second
+            .call(FS_READ, "read-file", json!({"path": "/media/sd/notes.txt"}))
+            .expect("the device files are visible");
+        assert!(!notes.as_array().expect("bytes").is_empty());
 
         second
             .call(NET, "set-up", json!({"name": "wlan0", "up": true}))
