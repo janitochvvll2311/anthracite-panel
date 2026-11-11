@@ -141,43 +141,44 @@ impl<'a> Guard<'a> {
         Ok(())
     }
 
-    /// Administrators by either provisioning style: a supplementary member of
-    /// an administrative group, or a user whose primary gid is that group.
-    fn administrator_names(&self) -> HashSet<&str> {
-        let mut names = HashSet::new();
+    /// Refuses a delete or lock that would leave any administrative group
+    /// with no other member. The check is per group: emptying `sudo` is not
+    /// excused by `wheel` having another member.
+    fn not_last_administrator(&self, name: &str) -> Result<(), Error> {
         for group in self
             .inventory
             .groups
             .iter()
             .filter(|group| ADMIN_GROUPS.contains(&group.name.as_str()))
         {
-            names.extend(group.members.iter().map(String::as_str));
-            names.extend(
+            let is_member = group.members.iter().any(|member| member == name)
+                || self
+                    .inventory
+                    .users
+                    .iter()
+                    .any(|user| user.name == name && user.gid == group.gid);
+            if !is_member {
+                continue;
+            }
+            let mut remaining: HashSet<&str> = group
+                .members
+                .iter()
+                .filter(|member| member.as_str() != name)
+                .map(String::as_str)
+                .collect();
+            remaining.extend(
                 self.inventory
                     .users
                     .iter()
-                    .filter(|user| user.gid == group.gid)
+                    .filter(|user| user.name != name && user.gid == group.gid)
                     .map(|user| user.name.as_str()),
             );
-        }
-        names
-    }
-
-    /// Refuses a delete or lock that would leave `sudo`/`wheel`/`admin` with no
-    /// other member. uid 0 is deliberately not an escape hatch.
-    fn not_last_administrator(&self, name: &str) -> Result<(), Error> {
-        let administrators = self.administrator_names();
-        if !administrators.contains(name) {
-            return Ok(());
-        }
-        let remaining = administrators
-            .iter()
-            .filter(|administrator| **administrator != name)
-            .count();
-        if remaining == 0 {
-            return Err(Error::denied(format!(
-                "refusing to change `{name}`: it is the last member of an administrative group"
-            )));
+            if remaining.is_empty() {
+                return Err(Error::denied(format!(
+                    "refusing to change `{name}`: it is the last member of `{}`",
+                    group.name
+                )));
+            }
         }
         Ok(())
     }
@@ -212,16 +213,6 @@ pub fn plan_create_user(guard: &Guard<'_>, input: &Value) -> Result<PlannedCall,
     validate_name(&name)?;
     if guard.inventory.users.iter().any(|user| user.name == name) {
         return Err(Error::conflict(format!("user `{name}` already exists")));
-    }
-    if guard
-        .inventory
-        .groups
-        .iter()
-        .any(|group| group.name == name)
-    {
-        return Err(Error::conflict(format!(
-            "group `{name}` already exists; `useradd` would refuse the user"
-        )));
     }
     let uid = number(input, "uid")?;
     let gid = number(input, "gid")?;
@@ -608,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn root_self_and_the_last_administrator_are_protected() {
+    fn root_and_self_are_protected() {
         let inventory = inventory();
         let policy = policy();
         let guard = guard_for(&inventory, &policy);
@@ -624,13 +615,33 @@ mod tests {
                 .kind(),
             anth_contract::ErrorKind::Denied
         );
-        // With operator gone and sudo's only member being alice, deleting
-        // alice would leave no administrator.
-        let mut inventory = inventory;
-        inventory.users.retain(|user| user.name != "operator");
+    }
+
+    #[test]
+    fn every_administrative_group_must_keep_a_member() {
+        let mut inventory = inventory();
+        inventory.groups.push(Group {
+            name: "wheel".to_string(),
+            gid: 10,
+            members: vec!["alice".to_string()],
+            system: true,
+        });
+        let policy = policy();
+        let guard = Guard {
+            inventory: &inventory,
+            policy: &policy,
+            self_name: "root",
+        };
+        // operator is the only member of sudo; wheel having alice must not
+        // excuse emptying sudo.
+        let error = plan_delete_user(&guard, &serde_json::json!({"name": "operator"}))
+            .expect_err("sudo's last member");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        assert!(error.message().contains("sudo"), "{error}");
+
         for group in &mut inventory.groups {
             if group.name == "sudo" {
-                group.members = vec!["alice".to_string()];
+                group.members.push("bob".to_string());
             }
         }
         let guard = Guard {
@@ -638,9 +649,34 @@ mod tests {
             policy: &policy,
             self_name: "root",
         };
-        let error = plan_delete_user(&guard, &serde_json::json!({"name": "alice"}))
-            .expect_err("last administrator");
-        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        plan_delete_user(&guard, &serde_json::json!({"name": "operator"}))
+            .expect("another sudo member remains");
+    }
+
+    #[test]
+    fn a_group_with_the_same_name_does_not_block_a_user() {
+        let mut inventory = inventory();
+        inventory.groups.push(Group {
+            name: "review".to_string(),
+            gid: 1500,
+            members: Vec::new(),
+            system: false,
+        });
+        let policy = policy();
+        let guard = guard_for(&inventory, &policy);
+        let plan = plan_create_user(
+            &guard,
+            &serde_json::json!({
+                "name": "review",
+                "uid": 1500,
+                "gid": 1500,
+                "home": "/home/review",
+                "shell": "/bin/sh",
+                "system": false
+            }),
+        )
+        .expect("user shares the group name");
+        assert_eq!(plan.args.last().map(String::as_str), Some("review"));
     }
 
     #[test]

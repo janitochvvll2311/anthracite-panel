@@ -9,7 +9,7 @@ mod inventory;
 mod mutate;
 mod policy;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anth_contract::Error;
 use anth_service::Handler;
@@ -26,6 +26,9 @@ struct Service {
     probe: Arc<dyn HostProbe>,
     runner: Arc<dyn AccountRunner>,
     self_name: String,
+    /// Serializes snapshot, guard and command so two requests cannot both see
+    /// the same "last administrator" and proceed.
+    mutation_lock: Mutex<()>,
 }
 
 impl Service {
@@ -40,11 +43,18 @@ impl Service {
             probe,
             runner,
             self_name,
+            mutation_lock: Mutex::new(()),
         }
     }
 
     fn inventory(&self) -> inventory::Inventory {
         inventory::read(&self.probe.read())
+    }
+
+    fn serial(&self) -> Result<std::sync::MutexGuard<'_, ()>, Error> {
+        self.mutation_lock
+            .lock()
+            .map_err(|_| Error::internal("the accounts mutation lock is poisoned"))
     }
 }
 
@@ -59,6 +69,7 @@ impl Handler for Service {
             "users" => inventory::users_json(&self.inventory()),
             "groups" => Ok(inventory::groups_json(&self.inventory())),
             "create-user" => {
+                let _serial = self.serial()?;
                 let inventory = self.inventory();
                 let guard = mutate::Guard {
                     inventory: &inventory,
@@ -70,6 +81,7 @@ impl Handler for Service {
                 Ok(Value::Null)
             }
             "delete-user" => {
+                let _serial = self.serial()?;
                 let inventory = self.inventory();
                 let guard = mutate::Guard {
                     inventory: &inventory,
@@ -81,6 +93,7 @@ impl Handler for Service {
                 Ok(Value::Null)
             }
             "set-lock" => {
+                let _serial = self.serial()?;
                 let inventory = self.inventory();
                 let guard = mutate::Guard {
                     inventory: &inventory,
@@ -89,6 +102,36 @@ impl Handler for Service {
                 };
                 let call = mutate::plan_set_lock(&guard, &input)?;
                 mutate::run_planned(self.runner.as_ref(), &call)?;
+                // `usermod --unlock` exits successfully while leaving `!`,
+                // `!!` or `*` in place. Re-read the shadow bit so the answer
+                // does not lie about an account that is still locked.
+                if !input
+                    .get("locked")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    let name = input
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let after = self.inventory();
+                    let Some(user) = after.users.iter().find(|user| user.name == name) else {
+                        return Err(Error::not_found(format!("`{name}` does not exist")));
+                    };
+                    match user.locked {
+                        Some(false) => {}
+                        Some(true) => {
+                            return Err(Error::conflict(format!(
+                                "`{name}` is still locked; `usermod --unlock` left the shadow field unchanged"
+                            )));
+                        }
+                        None => {
+                            return Err(Error::unavailable(
+                                "cannot verify the lock state: `/etc/shadow` is unreadable",
+                            ));
+                        }
+                    }
+                }
                 Ok(Value::Null)
             }
             other => Err(Error::not_found(format!(
@@ -178,9 +221,9 @@ mod tests {
 
     fn files() -> LocalFiles {
         LocalFiles {
-            passwd: "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\noperator:x:1000:1000:Operator:/home/operator:/bin/bash\nalice:x:1001:1001:Alice:/home/alice:/bin/bash\n".to_string(),
-            group: "root:x:0:\ndaemon:x:1:\noperator:x:1000:\nalice:x:1001:\nsudo:x:27:operator\n".to_string(),
-            shadow: Some("root:!:19000:0:99999:7:::\ndaemon:*:19000:0:99999:7:::\noperator:$6$hash:19000:0:99999:7:::\nalice:$6$hash:19000:0:99999:7:::\n".to_string()),
+            passwd: "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\noperator:x:1000:1000:Operator:/home/operator:/bin/bash\nalice:x:1001:1001:Alice:/home/alice:/bin/bash\nlocked:x:1500:1500:Locked:/home/locked:/bin/bash\n".to_string(),
+            group: "root:x:0:\ndaemon:x:1:\noperator:x:1000:\nalice:x:1001:\nsudo:x:27:operator\nlocked:x:1500:\n".to_string(),
+            shadow: Some("root:!:19000:0:99999:7:::\ndaemon:*:19000:0:99999:7:::\noperator:$6$hash:19000:0:99999:7:::\nalice:$6$hash:19000:0:99999:7:::\nlocked:!:19000:0:99999:7:::\n".to_string()),
             gshadow: Some("sudo:!::operator\n".to_string()),
             login_defs: Some("UID_MIN 1000\nGID_MIN 1000\n".to_string()),
         }
@@ -226,7 +269,7 @@ mod tests {
             .call(
                 ACCOUNTS,
                 "create-user",
-                json!({"name": "review", "uid": 1500, "gid": 1001, "home": "/home/review", "shell": "/bin/sh", "system": false}),
+                json!({"name": "review", "uid": 1501, "gid": 1001, "home": "/home/review", "shell": "/bin/sh", "system": false}),
             )
             .expect("create");
         service
@@ -248,6 +291,20 @@ mod tests {
         assert_eq!(calls[1].args, vec!["--lock", "alice"]);
         assert_eq!(calls[2].program, "userdel");
         assert_eq!(calls[2].args, vec!["alice"]);
+    }
+
+    #[test]
+    fn unlocking_an_account_without_a_password_reports_conflict() {
+        let (service, _) = service();
+        let error = service
+            .call(
+                ACCOUNTS,
+                "set-lock",
+                json!({"name": "locked", "locked": false}),
+            )
+            .expect_err("the shadow field stays locked");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Conflict);
+        assert!(error.message().contains("still locked"), "{error}");
     }
 
     #[test]
