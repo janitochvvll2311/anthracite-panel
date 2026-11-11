@@ -1,4 +1,5 @@
 import { call } from "./api";
+import { confirmAction } from "./confirm";
 import { cell, size } from "./format";
 import { styles } from "./styles";
 import type { FrameContext } from "./types";
@@ -44,6 +45,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
     status.className = bad ? "st-status bad" : "st-status";
   };
 
+  const systemMount = (mountpoint: string): boolean =>
+    mountpoint === "/" || mountpoint === "/boot" || mountpoint === "/boot/efi";
+
   async function load() {
     setStatus("Reading mounts and devices…");
     try {
@@ -62,13 +66,17 @@ export function mount(root: HTMLElement, context: FrameContext) {
           cell("st-mountpoint", mount.mountpoint),
           cell("st-fs", mount.filesystem),
         );
-        const unmount = document.createElement("button");
-        unmount.type = "button";
-        unmount.className = "st-unmount";
-        unmount.textContent = "Unmount";
-        unmount.title = `Unmount ${mount.device}`;
-        unmount.addEventListener("click", () => void detach(mount.device));
-        head.append(unmount);
+        if (systemMount(mount.mountpoint)) {
+          head.append(cell("st-badge no", "system"));
+        } else {
+          const unmount = document.createElement("button");
+          unmount.type = "button";
+          unmount.className = "st-unmount";
+          unmount.textContent = "Unmount";
+          unmount.title = `Unmount ${mount.device}`;
+          unmount.addEventListener("click", () => void detach(mount.device));
+          head.append(unmount);
+        }
         const deviceLine = cell("st-device", mount.device);
         const ratio = mount["total-bytes"]
           ? mount["used-bytes"] / mount["total-bytes"]
@@ -96,13 +104,23 @@ export function mount(root: HTMLElement, context: FrameContext) {
       for (const device of devices) {
         const row = document.createElement("div");
         row.className = "st-row";
-        row.append(
-          cell("st-mono", device.path),
-          cell("st-mono", size(device["size-bytes"])),
-          cell("", device.model),
-          cell(`st-badge ${device.removable ? "yes" : "no"}`, device.removable ? "yes" : "no"),
-          cell(`st-badge ${device.mounted ? "yes" : "no"}`, device.mounted ? "mounted" : "—"),
+        const pathCell = cell("st-mono", device.path);
+        pathCell.dataset.label = "Device";
+        const sizeCell = cell("st-mono", size(device["size-bytes"]));
+        sizeCell.dataset.label = "Size";
+        const modelCell = cell("", device.model);
+        modelCell.dataset.label = "Model";
+        const removableCell = cell(
+          `st-badge ${device.removable ? "yes" : "no"}`,
+          device.removable ? "yes" : "no",
         );
+        removableCell.dataset.label = "Removable";
+        const mountedCell = cell(
+          `st-badge ${device.mounted ? "yes" : "no"}`,
+          device.mounted ? "mounted" : "—",
+        );
+        mountedCell.dataset.label = "Mounted";
+        row.append(pathCell, sizeCell, modelCell, removableCell, mountedCell);
         table.append(row);
       }
 
@@ -125,6 +143,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   async function detach(path) {
+    const ok = await confirmAction({
+      title: `Unmount ${path}?`,
+      message: "Anything still using this mountpoint will lose access to it.",
+      confirmLabel: "Unmount",
+      danger: true,
+    });
+    if (!ok) return;
     setStatus(`Unmounting ${path}…`);
     try {
       await call(context, "/unmount", {
@@ -141,12 +166,19 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const attached = device.value;
     const target = mountpoint.value.trim();
-    if (!device.value || !target) {
+    if (!attached || !target) {
       setStatus("Pick a device and write a mountpoint.", true);
       return;
     }
-    const attached = device.value;
+    const type = filesystem.value.trim() || "ext4";
+    const ok = await confirmAction({
+      title: "Mount this device?",
+      message: `${attached} will be mounted at ${target} as ${type}.`,
+      confirmLabel: "Mount",
+    });
+    if (!ok) return;
     setStatus(`Mounting ${attached}…`);
     try {
       await call(context, "/mount", {
@@ -155,7 +187,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
         body: JSON.stringify({
           device: attached,
           mountpoint: target,
-          filesystem: filesystem.value.trim() || "ext4",
+          filesystem: type,
         }),
       });
       mountpoint.value = "";
