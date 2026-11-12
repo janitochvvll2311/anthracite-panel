@@ -10,6 +10,7 @@ import {
   FAB,
   MODAL,
   PORTABLE,
+  REFRESH,
   SETTINGS,
   VIEW,
   assetUrl,
@@ -183,6 +184,7 @@ let retryTimer: number | undefined;
 let zIndex = 10;
 const panelVersionElement = document.getElementById("panel-version");
 let settingsSignature = "";
+let fabsSignature = "";
 let managerDispose: (() => void) | null = null;
 
 const tabs = new Map<string, Tab>();
@@ -677,21 +679,53 @@ function renderFab(source: Contribution, fab: Contribution): HTMLElement {
 
 /// FABs belong to the app and optionally to one of its views. The active tab
 /// decides which ones are on screen; a floating view does not carry a FAB.
+///
+/// The composition is polled every few seconds, so this must not rebuild the
+/// DOM when nothing changed: a `replaceChildren` would close an open menu and
+/// drop keyboard focus while the operator is using it.
 function renderFabs(): void {
-  fabsElement.replaceChildren();
   const active = activeKey ? tabs.get(activeKey)?.contribution : undefined;
-  if (!active || !implemented.includes(FAB)) {
+  const enabled = Boolean(active) && implemented.includes(FAB);
+  const fabs =
+    enabled && active
+      ? ordered(FAB).filter(
+          (candidate) =>
+            implementedByPanel(candidate) &&
+            !candidate.slot.hidden &&
+            candidate.app.id === active.app.id &&
+            (!candidate.slot.view || candidate.slot.view === active.slot.tag),
+        )
+      : [];
+  const signature = JSON.stringify([
+    active ? contributionKey(active) : null,
+    enabled,
+    fabs.map((fab) => [
+      fab.slot.tag,
+      fab.slot.label,
+      fab.slot.icon ?? null,
+      fab.slot.order,
+      fab.slot.hidden === true,
+      fab.slot.view ?? null,
+      (fab.slot.actions ?? []).map((action) => [
+        action.label,
+        action.icon ?? null,
+        action.tag,
+        action.target ?? null,
+        action.action ?? null,
+      ]),
+    ]),
+  ]);
+  if (signature === fabsSignature) return;
+  fabsSignature = signature;
+
+  fabsElement.replaceChildren();
+  if (!enabled || !active) {
     fabsElement.hidden = true;
     return;
   }
-  const fabs = ordered(FAB).filter(
-    (candidate) =>
-      implementedByPanel(candidate) &&
-      candidate.app.id === active.app.id &&
-      (!candidate.slot.view || candidate.slot.view === active.slot.tag),
-  );
   fabsElement.hidden = fabs.length === 0;
   for (const fab of fabs) fabsElement.append(renderFab(active, fab));
+  closeFabMenus();
 }
 
 /// Opens one of the app's modals in the panel-level dialog. Only one modal is
@@ -753,7 +787,7 @@ function closeModal(refresh = true): void {
   if (modalElement.open) modalElement.close();
   modalTitle.textContent = "";
   modalApp.textContent = "";
-  if (refresh) sendAction(state.originKey, "refresh");
+  if (refresh) sendAction(state.originKey, REFRESH);
   if (state.trigger?.isConnected) state.trigger.focus();
 }
 

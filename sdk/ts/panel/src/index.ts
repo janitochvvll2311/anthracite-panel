@@ -15,6 +15,8 @@ export const ACTION = "panel.action";
 export const SETTINGS = "panel.settings";
 export const FAB = "panel.fab";
 export const MODAL = "panel.modal";
+/// Local action tag the panel sends to a view after one of its modals closes.
+export const REFRESH = "refresh";
 export const PORTABLE = [VIEW, ACTION, SETTINGS, FAB, MODAL] as const;
 
 /// Stable identity for a mounted pane or window.

@@ -571,6 +571,9 @@ impl Manifest {
                 if slot.actions.is_empty() {
                     return Err(Error::invalid("a `panel.fab` needs at least one action"));
                 }
+                if slot.actions.len() > 1 {
+                    check_action_label(&slot.label)?;
+                }
                 if slot.parent.is_some() || slot.tab.is_some() {
                     return Err(Error::invalid(
                         "a `panel.fab` cannot be grouped or declare a tab label",
@@ -1254,6 +1257,32 @@ target = "wasm"
         action.action = Some("refresh".to_string());
         manifest.slot.push(fab_slot(vec![action]));
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn a_multi_action_fab_needs_a_trigger_label() {
+        let first = {
+            let mut action = fab_action("First", "first");
+            action.action = Some("refresh".to_string());
+            action
+        };
+        let second = {
+            let mut action = fab_action("Second", "second");
+            action.action = Some("refresh".to_string());
+            action
+        };
+        let mut manifest = valid();
+        let mut fab = fab_slot(vec![first.clone(), second]);
+        fab.label = String::new();
+        manifest.slot.push(fab);
+        assert!(manifest.validate().is_err());
+
+        // A single-action FAB uses the action label, so its own label is unused.
+        let mut manifest = valid();
+        let mut fab = fab_slot(vec![first]);
+        fab.label = String::new();
+        manifest.slot.push(fab);
+        manifest.validate().expect("single action");
     }
 
     #[test]

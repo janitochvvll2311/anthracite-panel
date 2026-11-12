@@ -5,6 +5,7 @@ import {
   FAB,
   MODAL,
   PORTABLE,
+  REFRESH,
   VIEW,
   assetUrl,
   contributionKey,
@@ -85,6 +86,7 @@ test("ignored contributions target slots the panel does not implement", () => {
 test("fab and modal are part of the portable vocabulary", () => {
   expect(FAB).toBe("panel.fab");
   expect(MODAL).toBe("panel.modal");
+  expect(REFRESH).toBe("refresh");
   expect([...PORTABLE]).toEqual([VIEW, ACTION, "panel.settings", FAB, MODAL]);
 });
 

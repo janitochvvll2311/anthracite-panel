@@ -162,7 +162,7 @@ pub struct SurfaceSlot {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SurfaceFabAction {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
