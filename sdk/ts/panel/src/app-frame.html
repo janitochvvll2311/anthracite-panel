@@ -17,7 +17,7 @@
       }
       * { box-sizing: border-box; }
       html { background: transparent; }
-      html, body { margin: 0; padding: 0; background: transparent; }
+      html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
       html { background: transparent; }
       body {
         background: transparent;
@@ -40,6 +40,7 @@
         const sockets = new Map();
         const visibilityHandlers = new Set();
         let token = "";
+        let lastFocused = null;
         let dispose = null;
         let moduleApi = null;
 
@@ -202,6 +203,16 @@
             }, 1200);
           });
 
+        document.addEventListener("focusin", (event) => {
+          if (
+            event.target instanceof HTMLElement &&
+            event.target !== document.body &&
+            event.target !== document.documentElement
+          ) {
+            lastFocused = event.target;
+          }
+        });
+
         window.addEventListener("keydown", (event) => {
           if (event.key === "Escape") send("anth:escape");
         });
@@ -328,10 +339,18 @@
             if (!resolve) return;
             pendingModals.delete(message.requestId);
             resolve(message.ok === true);
+          } else if (message.type === "anth:focus") {
+            const target = lastFocused;
+            window.focus();
+            // The panel has just handed focus back to the frame; wait for that
+            // focus transfer before focusing the inner control.
+            window.setTimeout(() => {
+              if (target?.isConnected) target.focus();
+            }, 0);
           } else if (message.type === "anth:action") {
             for (const handler of actionHandlers) {
               try {
-                handler(message.tag);
+                handler(message.tag, message.payload);
               } catch {
                 // One view listener must not break the others.
               }

@@ -1,4 +1,4 @@
-import { call, watchNetwork } from "./api";
+import { addRoute, call, watchNetwork } from "./api";
 import { confirmAction } from "./confirm";
 import { cell, count, reason } from "./format";
 import { styles } from "./styles";
@@ -284,16 +284,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
       if (!ok) return;
       setStatus("Adding the route…");
       try {
-        await call(context, "/route", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            family: family.value,
-            destination: path,
-            gateway: gateway.value.trim() || null,
-            device: device.value,
-            metric: Number(metric.value) || 100,
-          }),
+        await addRoute(context, {
+          family: family.value,
+          destination: path,
+          gateway: gateway.value.trim() || null,
+          device: device.value,
+          metric: Number(metric.value) || 100,
         });
         destination.value = "";
         gateway.value = "";

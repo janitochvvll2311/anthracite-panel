@@ -15,6 +15,13 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function spawnProcess(context, argv) {
+  return call(context, "/spawn", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ argv })
+  });
+}
 
 // src/confirm.ts
 function confirmAction(options) {
@@ -986,11 +993,7 @@ function mount(root, context) {
         return;
       setStatus("Spawning…");
       try {
-        const pid = await call(context, "/spawn", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ argv })
-        });
+        const pid = await spawnProcess(context, argv);
         spawnInput.value = "";
         await load();
         setStatus(`Spawned ${argv[0]} as pid ${pid}`);

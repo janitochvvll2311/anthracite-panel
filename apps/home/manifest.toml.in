@@ -7,6 +7,8 @@ name = "Home"
 version = "0.1.0"
 summary = "Host overview: system, CPU, memory, disks and network."
 license = "Apache-2.0"
+icon = "web/icon.svg"
+icon-sha256 = "{{icon_sha256}}"
 
 [service]
 path = "{{service_path}}"
@@ -45,7 +47,8 @@ sha256 = "{{module_sha256}}"
 [[slot]]
 id = "panel.fab"
 label = "Refresh"
-icon = "refresh"
+icon = "web/refresh.svg"
+icon-sha256 = "{{refresh_sha256}}"
 order = 30
 tag = "refresh"
 view = "home"
@@ -54,5 +57,7 @@ sha256 = ""
 
 [[slot.actions]]
 label = "Refresh"
+icon = "web/refresh.svg"
+icon-sha256 = "{{refresh_sha256}}"
 tag = "refresh"
 action = "refresh"

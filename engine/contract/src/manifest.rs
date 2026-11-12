@@ -66,6 +66,12 @@ pub struct AppSection {
     pub summary: Option<String>,
     #[serde(default)]
     pub license: Option<String>,
+    /// A representative icon: a name from the panel's set, or an asset path
+    /// paired with `icon-sha256`.
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default, rename = "icon-sha256")]
+    pub icon_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,6 +201,9 @@ pub struct SlotSection {
     pub label: String,
     #[serde(default)]
     pub icon: Option<String>,
+    /// Hash when `icon` is an asset path instead of a name.
+    #[serde(default, rename = "icon-sha256")]
+    pub icon_sha256: Option<String>,
     #[serde(default)]
     pub order: i64,
     /// Hidden contributions can still be opened by other views of the same app,
@@ -230,6 +239,9 @@ pub struct FabAction {
     pub label: String,
     #[serde(default)]
     pub icon: Option<String>,
+    /// Hash when `icon` is an asset path instead of a name.
+    #[serde(default, rename = "icon-sha256")]
+    pub icon_sha256: Option<String>,
     pub tag: String,
     /// Modal tag of the same app.
     #[serde(default)]
@@ -237,6 +249,10 @@ pub struct FabAction {
     /// Local action tag delivered to the active view.
     #[serde(default)]
     pub action: Option<String>,
+    /// The panel opens a file picker and delivers the selected files with the
+    /// local action. Only valid with `action`.
+    #[serde(default)]
+    pub files: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -262,6 +278,39 @@ pub struct LimitsSection {
 }
 
 impl Manifest {
+    /// Every icon asset declared by the app, its slots or its FAB actions,
+    /// with the pinned hash. Names are not assets and are skipped.
+    pub fn icon_assets(&self) -> Vec<(&str, &str)> {
+        let mut assets = Vec::new();
+        if let (Some(icon), Some(hash)) = (&self.app.icon, &self.app.icon_sha256) {
+            assets.push((icon.as_str(), hash.as_str()));
+        }
+        for slot in &self.slot {
+            if let (Some(icon), Some(hash)) = (&slot.icon, &slot.icon_sha256) {
+                assets.push((icon.as_str(), hash.as_str()));
+            }
+            for action in &slot.actions {
+                if let (Some(icon), Some(hash)) = (&action.icon, &action.icon_sha256) {
+                    assets.push((icon.as_str(), hash.as_str()));
+                }
+            }
+        }
+        assets
+    }
+
+    /// The hash of any path the bundle may serve: a UI module or an icon asset.
+    pub fn asset_sha256(&self, path: &str) -> Option<&str> {
+        self.slot
+            .iter()
+            .find(|slot| slot.module == path)
+            .map(|slot| slot.sha256.as_str())
+            .or_else(|| {
+                self.icon_assets()
+                    .into_iter()
+                    .find_map(|(icon, hash)| (icon == path).then_some(hash))
+            })
+    }
+
     /// Parses a manifest from TOML. Unknown keys are errors, not warnings.
     #[cfg(feature = "parse")]
     pub fn parse(text: &str) -> Result<Self, Error> {
@@ -341,6 +390,11 @@ impl Manifest {
 
         AppId::parse(&self.app.id)?;
         parse_version(&self.app.version)?;
+        check_icon(
+            self.app.icon.as_deref(),
+            self.app.icon_sha256.as_deref(),
+            "app icon",
+        )?;
         if let Some(alias) = &self.app.alias {
             if !is_kebab(alias) {
                 return Err(Error::invalid(format!(
@@ -560,6 +614,11 @@ impl Manifest {
             if !is_kebab(&slot.tag) {
                 return Err(Error::invalid(format!("`{}` is not a valid tag", slot.tag)));
             }
+            check_icon(
+                slot.icon.as_deref(),
+                slot.icon_sha256.as_deref(),
+                "slot icon",
+            )?;
             let is_fab = slot.id == "panel.fab";
             let is_modal = slot.id == "panel.modal";
             if is_fab {
@@ -602,6 +661,11 @@ impl Manifest {
                         )));
                     }
                     check_action_label(&action.label)?;
+                    check_icon(
+                        action.icon.as_deref(),
+                        action.icon_sha256.as_deref(),
+                        "FAB action icon",
+                    )?;
                     match (action.target.as_deref(), action.action.as_deref()) {
                         (Some(target), None) => {
                             if !is_kebab(target) {
@@ -623,6 +687,11 @@ impl Manifest {
                                 "a FAB action declares exactly one of `target` or `action`",
                             ));
                         }
+                    }
+                    if action.files && action.action.is_none() {
+                        return Err(Error::invalid(
+                            "a FAB action with `files` needs a local `action`",
+                        ));
                     }
                 }
                 fabs.push((slot.view.clone(), targets));
@@ -865,6 +934,42 @@ fn check_route_path(path: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// An icon is either a name from the panel's vocabulary or an asset path with
+/// a pinned hash. Names never contain `/`; assets never carry a bare name.
+fn check_icon(icon: Option<&str>, hash: Option<&str>, what: &str) -> Result<(), Error> {
+    match (icon, hash) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(Error::invalid(format!("{what} hash requires an icon"))),
+        (Some(name), None) => {
+            if !is_kebab(name) {
+                return Err(Error::invalid(format!(
+                    "{what} `{name}` is not a name or an asset with a hash"
+                )));
+            }
+            Ok(())
+        }
+        (Some(asset), Some(hash)) => {
+            check_relative(asset, "icon asset")?;
+            if !asset.starts_with("web/") {
+                return Err(Error::invalid(format!(
+                    "the icon asset `{asset}` must live under `web/`"
+                )));
+            }
+            if !(asset.ends_with(".svg") || asset.ends_with(".png") || asset.ends_with(".webp")) {
+                return Err(Error::invalid(format!(
+                    "the icon asset `{asset}` is not a .svg, .png or .webp file"
+                )));
+            }
+            if !is_sha256(hash) {
+                return Err(Error::invalid(
+                    "the icon asset `sha256` is not 64 lowercase hex",
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// A UI module path. Only files a browser can load.
 fn check_module(module: &str) -> Result<(), Error> {
     check_relative(module, "UI module")?;
@@ -1040,6 +1145,36 @@ target = "wasm"
 "#;
 
     #[test]
+    fn icons_are_names_or_pinned_assets() {
+        let mut manifest = valid();
+        manifest.app.icon = Some("notes".to_string());
+        manifest.validate().expect("icon name");
+
+        let mut manifest = valid();
+        manifest.app.icon = Some("web/icon.svg".to_string());
+        manifest.app.icon_sha256 = Some("d".repeat(64));
+        manifest.validate().expect("icon asset");
+
+        let mut manifest = valid();
+        manifest.app.icon = Some("web/icon.svg".to_string());
+        let error = manifest.validate().expect_err("asset without hash");
+        assert!(error.message().contains("not a name"), "{error}");
+
+        let mut manifest = valid();
+        manifest.app.icon_sha256 = Some("d".repeat(64));
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid();
+        manifest.slot[0].icon = Some("web/icon.svg".to_string());
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid();
+        manifest.slot[0].icon = Some("web/icon.svg".to_string());
+        manifest.slot[0].icon_sha256 = Some("e".repeat(64));
+        manifest.validate().expect("slot icon asset");
+    }
+
+    #[test]
     fn a_complete_manifest_validates() {
         let manifest = valid();
         manifest.validate().expect("validate");
@@ -1107,6 +1242,7 @@ target = "wasm"
             id: id.to_string(),
             label: tag.to_string(),
             icon: None,
+            icon_sha256: None,
             order: 10,
             hidden: false,
             parent: None,
@@ -1140,9 +1276,11 @@ target = "wasm"
         FabAction {
             label: label.to_string(),
             icon: None,
+            icon_sha256: None,
             tag: tag.to_string(),
             target: None,
             action: None,
+            files: false,
         }
     }
 
@@ -1257,6 +1395,25 @@ target = "wasm"
         action.action = Some("refresh".to_string());
         manifest.slot.push(fab_slot(vec![action]));
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn a_file_picker_action_needs_a_local_action() {
+        let mut manifest = valid();
+        let mut action = fab_action("Upload", "upload");
+        action.action = Some("upload".to_string());
+        action.files = true;
+        manifest.slot.push(fab_slot(vec![action]));
+        manifest.validate().expect("file picker");
+
+        let mut manifest = valid();
+        manifest.slot.push(modal_slot());
+        let mut action = fab_action("Pick", "pick");
+        action.target = Some("edit-note".to_string());
+        action.files = true;
+        manifest.slot.push(fab_slot(vec![action]));
+        let error = manifest.validate().expect_err("target with files");
+        assert!(error.message().contains("local `action`"), "{error}");
     }
 
     #[test]

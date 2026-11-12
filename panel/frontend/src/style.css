@@ -378,6 +378,37 @@ button.drawer-close {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+.view-glyph {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.view-glyph svg,
+.fab-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.icon-asset {
+  display: inline-block;
+  background: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.view-glyph.icon-asset,
+.fab-icon.icon-asset {
+  width: 16px;
+  height: 16px;
+}
+
 .view-icon {
   display: grid;
   place-items: center;
@@ -566,6 +597,9 @@ button.drawer-close {
 }
 
 .sub-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
   padding: 4px 10px;
   border: 1px solid transparent;
@@ -581,6 +615,25 @@ button.drawer-close {
 .sub-tab:hover {
   color: var(--text);
   background: #171c274f;
+}
+
+.sub-tab-icon {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.sub-tab-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.sub-tab-icon.icon-asset {
+  width: 14px;
+  height: 14px;
 }
 
 .sub-tab.active {
@@ -629,8 +682,9 @@ button.drawer-close {
 .pane-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 22px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 18px 20px;
 }
 
 .pane-body.app-fill,
@@ -750,6 +804,14 @@ button.drawer-close {
   white-space: nowrap;
 }
 
+.fab-button.fab-icon-only {
+  width: 48px;
+  min-height: 48px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+}
+
 .fab-button {
   min-height: 46px;
   padding: 0 18px;
@@ -856,8 +918,9 @@ button.drawer-close {
 
 .modal-body {
   min-height: 0;
-  overflow: auto;
-  padding: 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 14px 16px;
   background: var(--bg-soft);
 }
 
@@ -992,8 +1055,9 @@ button.drawer-close {
 }
 
 .window-body {
-  overflow: auto;
-  padding: 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 14px 16px;
 }
 
 /* Minimized stack -------------------------------------------------------- */
@@ -1775,6 +1839,12 @@ html[data-viewport="mobile"] .window-fabs {
 html[data-viewport="mobile"] .fab-button {
   min-height: 44px;
   padding: 0 15px;
+}
+
+html[data-viewport="mobile"] .fab-button.fab-icon-only {
+  width: 46px;
+  min-height: 46px;
+  padding: 0;
 }
 
 html[data-viewport="mobile"] .modal {

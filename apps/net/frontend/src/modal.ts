@@ -1,4 +1,4 @@
-import { call } from "./api";
+import { addRoute, call } from "./api";
 import type { Interface, ModalContext } from "./types";
 
 const STYLES = `
@@ -121,16 +121,12 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
     submit.disabled = true;
     setStatus("Adding the route…");
     try {
-      await call(context, "/route", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          family: family.value,
-          destination: path,
-          gateway: gateway.value.trim() || null,
-          device: device.value,
-          metric: Number(metric.value) || 100,
-        }),
+      await addRoute(context, {
+        family: family.value,
+        destination: path,
+        gateway: gateway.value.trim() || null,
+        device: device.value,
+        metric: Number(metric.value) || 100,
       });
       if (!disposed) context.close();
     } catch (error) {

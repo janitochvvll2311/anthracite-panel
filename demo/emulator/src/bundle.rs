@@ -13,6 +13,13 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 
+fn asset_key(file: &str) -> String {
+    file.rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(file)
+        .replace(['-', '.'], "_")
+}
+
 /// One bundle template and the app id its manifest declares.
 pub const BUNDLES: &[(&str, &str)] = &[
     ("fs", "org.anthracite.fs"),
@@ -78,6 +85,28 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                     .collect()
             })
             .unwrap_or_default();
+        // Every file under apps/<name>/web is a bundle asset. Its manifest
+        // placeholder is {{<stem>_sha256}}, so a slot or action can point at
+        // any icon asset without a builder change.
+        let web_dir = dir.join("web");
+        let mut web_assets: Vec<(String, Vec<u8>)> = Vec::new();
+        if web_dir.is_dir() {
+            let mut paths = fs::read_dir(&web_dir)?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<Result<Vec<_>, _>>()?;
+            paths.sort();
+            for path in paths {
+                if !path.is_file() {
+                    continue;
+                }
+                let file = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| format!("{} is not UTF-8", path.display()))?
+                    .to_string();
+                web_assets.push((file, fs::read(&path)?));
+            }
+        }
         let (app_name, summary, service_class, service_argv) = match *name {
             "fs" => (
                 "Files (emulator)",
@@ -129,7 +158,7 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             ),
             _ => ("", "", "", ""),
         };
-        let manifest = template
+        let mut manifest = template
             .replace("{{sha256}}", &hash)
             .replace("{{module_sha256}}", &module_hash)
             .replace("{{modal_sha256}}", &modal_hash)
@@ -138,6 +167,14 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             .replace("{{service_path}}", "bin/host-emulator")
             .replace("{{service_class}}", service_class)
             .replace("{{service_argv}}", service_argv);
+        for (file, bytes) in &web_assets {
+            let key = asset_key(file);
+            let asset_hash: String = Sha256::digest(bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            manifest = manifest.replace(&format!("{{{{{key}_sha256}}}}"), &asset_hash);
+        }
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default();
         writer.start_file("manifest.toml", options)?;
@@ -159,6 +196,10 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
         if let Some(modal) = &modal {
             writer.start_file(format!("web/{name}-modal.js"), options)?;
             writer.write_all(modal)?;
+        }
+        for (file, bytes) in &web_assets {
+            writer.start_file(format!("web/{file}"), options)?;
+            writer.write_all(bytes)?;
         }
         writer.start_file("bin/host-emulator", options)?;
         writer.write_all(&bytes)?;
@@ -233,6 +274,33 @@ mod tests {
                     .map(|byte| format!("{byte:02x}"))
                     .collect();
                 assert_eq!(hash, slot.sha256, "{}", slot.module);
+            }
+            let mut icon_assets = Vec::new();
+            if let (Some(icon), Some(hash)) = (&manifest.app.icon, &manifest.app.icon_sha256) {
+                icon_assets.push((icon.clone(), hash.clone()));
+            }
+            for slot in &manifest.slot {
+                if let (Some(icon), Some(hash)) = (&slot.icon, &slot.icon_sha256) {
+                    icon_assets.push((icon.clone(), hash.clone()));
+                }
+                for action in &slot.actions {
+                    if let (Some(icon), Some(hash)) = (&action.icon, &action.icon_sha256) {
+                        icon_assets.push((icon.clone(), hash.clone()));
+                    }
+                }
+            }
+            for (icon, expected) in icon_assets {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(
+                    &mut archive.by_name(&icon).expect("icon asset"),
+                    &mut bytes,
+                )
+                .expect("read icon");
+                let hash: String = Sha256::digest(&bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                assert_eq!(hash, expected, "{icon}");
             }
             let wit_name = names
                 .iter()

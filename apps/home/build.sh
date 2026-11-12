@@ -58,15 +58,26 @@ module_sha=$(sha256sum "$module" | cut -d' ' -f1)
 
 mkdir -p /tmp/anthracite-panel
 tmp=$(mktemp -d /tmp/anthracite-panel/home-build.XXXXXX)
-trap 'rm -rf "$tmp"' EXIT
+web_sed=$(mktemp /tmp/anthracite-panel/home-sed.XXXXXX)
+trap 'rm -rf "$tmp" "$web_sed"' EXIT
 
 mkdir -p "$tmp/bin" "$tmp/web" "$tmp/wit"
 cp "$binary" "$tmp/bin/home-service"
 cp "$module" "$tmp/web/home.js"
 cp "$app/wit/home.wit" "$tmp/wit/home.wit"
+for asset in "$app"/web/*; do
+    [ -f "$asset" ] || continue
+    file=$(basename "$asset")
+    stem=${file%.*}
+    key=$(printf '%s' "$stem" | tr '.-' '__')
+    hash=$(sha256sum "$asset" | cut -d' ' -f1)
+    cp "$asset" "$tmp/web/$file"
+    printf 's/{{%s_sha256}}/%s/g\n' "$key" "$hash" >> "$web_sed"
+done
 sed \
     -e "s/{{sha256}}/$sha/g" \
     -e "s/{{module_sha256}}/$module_sha/g" \
+    -f "$web_sed" \
     -e "s|{{service_path}}|bin/home-service|g" \
     -e "s/{{service_class}}/host/g" \
     -e "s|{{service_argv}}|[\"--socket\", \"{socket}\"]|g" \

@@ -1,4 +1,4 @@
-import { call } from "./api";
+import { spawnProcess } from "./api";
 import type { ModalContext } from "./types";
 
 const STYLES = `
@@ -72,11 +72,7 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
     submit.disabled = true;
     setStatus("Spawning…");
     try {
-      await call(context, "/spawn", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ argv }),
-      });
+      await spawnProcess(context, argv);
       if (!disposed) context.close();
     } catch (error) {
       submit.disabled = false;

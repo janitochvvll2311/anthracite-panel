@@ -6,6 +6,7 @@ alias = "hello"
 namespace = "anthracite:hello"
 name = "Hello"
 version = "0.1.0"
+icon = "hello"
 
 [wasm]
 path = "wasm/app.wasm"

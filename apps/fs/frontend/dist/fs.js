@@ -37851,12 +37851,17 @@ function mount(root, context) {
       event.preventDefault();
     hideDrop();
   });
-  const offAction = context.onAction?.((tag) => {
+  const offAction = context.onAction?.((tag, payload) => {
     if (tag === "new")
       openNew();
-    else if (tag === "upload")
-      uploadInput.click();
-    else if (tag === "refresh") {
+    else if (tag === "upload") {
+      const files = payload?.files;
+      if (Array.isArray(files) && files.length > 0) {
+        enqueueUploads(files, current);
+      } else {
+        uploadInput.click();
+      }
+    } else if (tag === "refresh") {
       resetPreview();
       if (view === "trash")
         loadTrash();

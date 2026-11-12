@@ -14560,7 +14560,7 @@ function mount(root, context) {
     }
   });
   box.querySelector("[data-clear]").addEventListener("click", () => {
-    term.clear();
+    term.write("\x1B[2J\x1B[3J\x1B[H");
     setStatus("Screen cleared");
   });
   for (const control of box.querySelectorAll("[data-signal]")) {

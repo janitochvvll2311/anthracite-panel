@@ -7,6 +7,7 @@ name = "{{app_name}}"
 version = "0.6.0"
 summary = "{{app_summary}}"
 license = "Apache-2.0"
+icon = "disk"
 
 [service]
 path = "{{service_path}}"
@@ -49,7 +50,7 @@ sha256 = "{{module_sha256}}"
 [[slot]]
 id = "panel.fab"
 label = "Mount"
-icon = "disk"
+icon = "plus"
 order = 30
 tag = "storage-mount"
 view = "anth-storage"
@@ -58,6 +59,7 @@ sha256 = ""
 
 [[slot.actions]]
 label = "Mount"
+icon = "plus"
 tag = "mount"
 target = "storage-mount-modal"
 

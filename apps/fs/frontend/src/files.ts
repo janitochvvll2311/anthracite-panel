@@ -1017,9 +1017,16 @@ export function mount(root: HTMLElement, context: FrameContext) {
     hideDrop();
   });
 
-  const offAction = context.onAction?.((tag) => {
+  const offAction = context.onAction?.((tag, payload) => {
     if (tag === "new") openNew();
-    else if (tag === "upload") uploadInput.click();
+    else if (tag === "upload") {
+      const files = (payload as { files?: File[] } | undefined)?.files;
+      if (Array.isArray(files) && files.length > 0) {
+        enqueueUploads(files, current);
+      } else {
+        uploadInput.click();
+      }
+    }
     else if (tag === "refresh") {
       resetPreview();
       if (view === "trash") void loadTrash();

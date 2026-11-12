@@ -26,3 +26,24 @@ export async function call(
   }
   return value;
 }
+
+export type RuleRequest = {
+  handle?: number;
+  chain: string;
+  action: string;
+  protocol: string;
+  port: number;
+  comment: string | null;
+};
+
+export function saveRule(
+  context: Caller,
+  request: RuleRequest,
+  editing: boolean,
+): Promise<any> {
+  return call(context, editing ? "/update" : "/rule", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}

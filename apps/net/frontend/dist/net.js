@@ -70,6 +70,13 @@ async function watchNetwork(context, signal, intervalMs, onSnapshot) {
     signal.removeEventListener("abort", cancel);
   }
 }
+function addRoute(context, route) {
+  return call(context, "/route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(route)
+  });
+}
 
 // src/confirm.ts
 function confirmAction(options) {
@@ -500,16 +507,12 @@ function mount(root, context) {
         return;
       setStatus("Adding the route…");
       try {
-        await call(context, "/route", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            family: family.value,
-            destination: path,
-            gateway: gateway.value.trim() || null,
-            device: device.value,
-            metric: Number(metric.value) || 100
-          })
+        await addRoute(context, {
+          family: family.value,
+          destination: path,
+          gateway: gateway.value.trim() || null,
+          device: device.value,
+          metric: Number(metric.value) || 100
         });
         destination.value = "";
         gateway.value = "";

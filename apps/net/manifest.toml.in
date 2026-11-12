@@ -7,6 +7,7 @@ name = "{{app_name}}"
 version = "0.6.0"
 summary = "{{app_summary}}"
 license = "Apache-2.0"
+icon = "network"
 
 [service]
 path = "{{service_path}}"
@@ -62,7 +63,7 @@ sha256 = "{{module_sha256}}"
 [[slot]]
 id = "panel.fab"
 label = "Add route"
-icon = "network"
+icon = "plus"
 order = 30
 tag = "net-route"
 view = "anth-net"
@@ -71,6 +72,7 @@ sha256 = ""
 
 [[slot.actions]]
 label = "Add route"
+icon = "plus"
 tag = "add-route"
 target = "net-route-modal"
 

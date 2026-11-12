@@ -47,7 +47,7 @@ const MAX_FILE: usize = 1 << 20;
 const MAX_PAGE: u32 = 500;
 const DEFAULT_PAGE: u32 = 50;
 const PROMPT: &str = "operator@anthracite:~$ ";
-const HELP: &str = "help: ls, cat, echo, help, exit\r\n";
+const HELP: &str = "help: ls, cat, echo, pwd, whoami, uname, clear, help, exit\r\n";
 
 /// The service handler: persistent host state plus runtime processes/sessions.
 pub struct Emulator {
@@ -882,6 +882,15 @@ struct Term {
     /// Output chunks, each with the sequence a reader uses as its cursor.
     chunks: Vec<(u64, Vec<u8>)>,
     next_seq: u64,
+    /// Input on the current line. A line editor needs it to apply backspace
+    /// and to run the command that was typed across several writes.
+    line: Vec<u8>,
+    /// Submitted command lines, oldest first, for the demo history.
+    history: Vec<String>,
+    /// Where Up/Down is in `history`; equal to its length while composing.
+    history_pos: usize,
+    /// The line that was being composed before the first Up, restored on Down.
+    draft: Vec<u8>,
     /// Set by `exit`: the shell ended, but the queued output is still readable.
     closed: bool,
     /// Streams parked until this session produces output or ends.
@@ -1258,6 +1267,10 @@ impl Emulator {
                     rows: number(input, "rows").unwrap_or(24).max(1) as u32,
                     chunks: Vec::new(),
                     next_seq: 0,
+                    line: Vec::new(),
+                    history: Vec::new(),
+                    history_pos: 0,
+                    draft: Vec::new(),
                     closed: false,
                     waiters: Vec::new(),
                 };
@@ -1302,35 +1315,123 @@ impl Emulator {
                     return Err(Error::not_found(format!("session `{id}` has ended")));
                 }
                 let data = bytes(input.get("data").unwrap_or(&Value::Null))?;
-                let line = String::from_utf8_lossy(&data).to_string();
-                let newline = line.ends_with('\n') || line.ends_with('\r');
-                // The fixture only echoes visible text (and newlines). Control
-                // bytes and escape sequences are consumed silently, like a
-                // line editor that has no matching binding.
-                let escape = data.contains(&0x1b);
-                let visible = data.iter().any(|byte| *byte >= 0x20 && *byte != 0x7f);
-                if !escape && (visible || newline) {
-                    term.push(data);
+                let mut output = Vec::new();
+                let mut line = std::mem::take(&mut term.line);
+                let mut history = std::mem::take(&mut term.history);
+                let mut history_pos = term.history_pos;
+                let mut draft = std::mem::take(&mut term.draft);
+                let mut index = 0;
+                while index < data.len() {
+                    let byte = data[index];
+                    if byte == 0x1b {
+                        if data.get(index + 1) == Some(&b'[') {
+                            // Consume the whole CSI sequence up to its final byte.
+                            // Stopping after the third byte leaves the `~` of
+                            // Delete/PgUp/PgDn to be typed into the line.
+                            let mut end = index + 2;
+                            while end < data.len() && !(0x40..=0x7e).contains(&data[end]) {
+                                end += 1;
+                            }
+                            let plain = end == index + 2;
+                            match data.get(end) {
+                                Some(b'A') if plain && !history.is_empty() => {
+                                    if history_pos == history.len() {
+                                        draft = line.clone();
+                                    }
+                                    history_pos = history_pos.saturating_sub(1);
+                                    line = history[history_pos].as_bytes().to_vec();
+                                    output.extend_from_slice(b"\r\x1b[2K");
+                                    output.extend_from_slice(PROMPT.as_bytes());
+                                    output.extend_from_slice(&line);
+                                }
+                                Some(b'B') if plain && history_pos < history.len() => {
+                                    history_pos += 1;
+                                    line = if history_pos < history.len() {
+                                        history[history_pos].as_bytes().to_vec()
+                                    } else {
+                                        std::mem::take(&mut draft)
+                                    };
+                                    output.extend_from_slice(b"\r\x1b[2K");
+                                    output.extend_from_slice(PROMPT.as_bytes());
+                                    output.extend_from_slice(&line);
+                                }
+                                _ => {}
+                            }
+                            index = end.saturating_add(1);
+                            continue;
+                        }
+                        index += 1;
+                        continue;
+                    }
+                    match byte {
+                        0x7f | 0x08 => {
+                            if line.pop().is_some() {
+                                output.extend_from_slice(b"\x08 \x08");
+                            }
+                        }
+                        0x03 => {
+                            line.clear();
+                            draft.clear();
+                            history_pos = history.len();
+                            output.extend_from_slice(b"^C\r\n");
+                            output.extend_from_slice(PROMPT.as_bytes());
+                        }
+                        0x0c => {
+                            output.extend_from_slice(b"\x1b[2J\x1b[H");
+                            output.extend_from_slice(PROMPT.as_bytes());
+                            output.extend_from_slice(&line);
+                        }
+                        b'\r' | b'\n' => {
+                            output.extend_from_slice(b"\r\n");
+                            let trimmed = String::from_utf8_lossy(&line).trim().to_string();
+                            line.clear();
+                            draft.clear();
+                            if !trimmed.is_empty() {
+                                history.push(trimmed.clone());
+                            }
+                            history_pos = history.len();
+                            if trimmed == "exit" {
+                                term.line = line;
+                                term.history = history;
+                                term.history_pos = history_pos;
+                                term.draft = draft;
+                                term.push(output);
+                                term.push(b"logout\r\n".to_vec());
+                                term.closed = true;
+                                term.wake();
+                                return Ok(Value::Null);
+                            }
+                            let response = match trimmed.as_str() {
+                                "help" => HELP.to_string(),
+                                "ls" => "deep  notes.txt  readme.md\r\n".to_string(),
+                                "cat" => "usage: cat <file>\r\n".to_string(),
+                                "pwd" => "/home/operator\r\n".to_string(),
+                                "whoami" => "operator\r\n".to_string(),
+                                "uname" => "Anthracite demo\r\n".to_string(),
+                                "clear" => "\x1b[2J\x1b[H".to_string(),
+                                "" => String::new(),
+                                other if other.starts_with("echo ") => {
+                                    format!("{}\r\n", &other[5..])
+                                }
+                                other => format!("{other}: command not found\r\n"),
+                            };
+                            output.extend_from_slice(response.as_bytes());
+                            output.extend_from_slice(PROMPT.as_bytes());
+                        }
+                        byte if byte >= 0x20 => {
+                            line.push(byte);
+                            output.push(byte);
+                        }
+                        _ => {}
+                    }
+                    index += 1;
                 }
-                if newline {
-                    let trimmed = line.trim();
-                    if trimmed == "exit" {
-                        term.push(b"logout\r\n".to_vec());
-                        term.closed = true;
-                        term.wake();
-                        return Ok(Value::Null);
-                    }
-                    let response = match trimmed {
-                        "help" => HELP.to_string(),
-                        "ls" => "deep  notes.txt  readme.md\r\n".to_string(),
-                        "cat" => "usage: cat <file>\r\n".to_string(),
-                        "" => String::new(),
-                        other => format!("{other}: command not found\r\n"),
-                    };
-                    if !response.is_empty() {
-                        term.push(response.into_bytes());
-                    }
-                    term.push(PROMPT.as_bytes().to_vec());
+                term.line = line;
+                term.history = history;
+                term.history_pos = history_pos;
+                term.draft = draft;
+                if !output.is_empty() {
+                    term.push(output);
                 }
                 Ok(Value::Null)
             }
@@ -1708,6 +1809,203 @@ mod tests {
             .call(TERMINAL, "read", json!({"id": id, "seq": 0}))
             .expect_err("closed");
         assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn the_terminal_line_editor_applies_backspace_and_accumulates() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [104, 101, 108, 112]}),
+            )
+            .expect("type");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [127]}))
+            .expect("backspace");
+        let erased = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 2}))
+            .expect("erase chunk");
+        assert_eq!(erased["data"], json!([8, 32, 8]));
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let reply = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 3}))
+            .expect("reply");
+        let bytes = reply["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("hel: command not found"), "{text}");
+    }
+
+    #[test]
+    fn the_terminal_line_editor_consumes_csi_sequences_and_keeps_history() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+
+        // Type "ab", then Delete, PgUp and PgDn. A parser that stops after the
+        // third byte leaves their trailing `~` in the line, so the command
+        // below would be `ab~c` instead of `abc`.
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [97, 98]}))
+            .expect("type");
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [27, 91, 51, 126, 27, 91, 53, 126, 27, 91, 54, 126]}),
+            )
+            .expect("csi keys");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [99, 10]}))
+            .expect("enter");
+
+        let reply = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 2}))
+            .expect("reply");
+        let bytes = reply["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc: command not found"), "{text}");
+
+        // Up recalls the command, and Enter runs it again.
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 65]}))
+            .expect("up");
+        let recalled = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 3}))
+            .expect("recall");
+        let bytes = recalled["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc"), "{text}");
+
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let rerun = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 4}))
+            .expect("rerun");
+        let bytes = rerun["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc: command not found"), "{text}");
+    }
+
+    #[test]
+    fn the_terminal_line_editor_keeps_the_draft_around_history() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+
+        // Down with no history must leave the line being edited alone.
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [97, 98, 99]}))
+            .expect("type");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 66]}))
+            .expect("down");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let first = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 2}))
+            .expect("first reply");
+        let bytes = first["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc: command not found"), "{text}");
+
+        // A draft typed before Up comes back on Down, instead of an empty line.
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [97, 108, 112, 104, 97, 10]}),
+            )
+            .expect("alpha");
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [98, 101, 116, 97]}),
+            )
+            .expect("draft");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 65]}))
+            .expect("up");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 66]}))
+            .expect("down");
+        let restored = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 6}))
+            .expect("restored draft");
+        let bytes = restored["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("beta"), "{text}");
+
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let reply = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 7}))
+            .expect("reply");
+        let bytes = reply["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("beta: command not found"), "{text}");
     }
 
     #[tokio::test]

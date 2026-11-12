@@ -75,6 +75,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let disposed = false;
   let policy: any = {};
   let shellInitialized = false;
+  let focusUser: string | null = null;
+
+  const labeled = (className: string, value: string, label: string) => {
+    const node = cell(className, value);
+    node.dataset.label = label;
+    return node;
+  };
 
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
@@ -95,16 +102,18 @@ export function mount(root: HTMLElement, context: FrameContext) {
       policyBadge("privileged groups", policy["allow-privileged-groups"]),
       cell("acc-mono", `home ${policy["home-root"] ?? "/home"}`),
     );
-    const canControl = policy.control === true;
-    formHome.placeholder = `${policy["home-root"] ?? "/home"}/name`;
-    if (!shellInitialized) {
-      formShell.value = policy["default-shell"] ?? "/bin/sh";
-      shellInitialized = true;
+    if (!usePanelForms) {
+      const canControl = policy.control === true;
+      formHome.placeholder = `${policy["home-root"] ?? "/home"}/name`;
+      if (!shellInitialized) {
+        formShell.value = policy["default-shell"] ?? "/bin/sh";
+        shellInitialized = true;
+      }
+      userForm.querySelector("button").disabled = !canControl;
+      groupForm.querySelector("button").disabled = !canControl;
+      formSystem.disabled = policy["allow-system"] !== true;
+      groupSystem.disabled = policy["allow-system"] !== true;
     }
-    userForm.querySelector("button").disabled = !canControl;
-    groupForm.querySelector("button").disabled = !canControl;
-    formSystem.disabled = policy["allow-system"] !== true;
-    groupSystem.disabled = policy["allow-system"] !== true;
   }
 
   async function load() {
@@ -176,12 +185,16 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
         row.append(
           name,
-          cell("acc-mono", String(user.uid)),
-          cell("acc-mono", String(user.gid)),
-          cell("acc-mono", user.group),
-          cell("acc-members", user.groups.length ? user.groups.join(", ") : "—"),
-          cell("acc-mono", user.home),
-          cell("acc-mono", user.shell),
+          labeled("acc-mono", String(user.uid), "UID"),
+          labeled("acc-mono", String(user.gid), "GID"),
+          labeled("acc-mono", user.group, "Group"),
+          labeled(
+            "acc-members",
+            user.groups.length ? user.groups.join(", ") : "—",
+            "Groups",
+          ),
+          labeled("acc-mono", user.home, "Home"),
+          labeled("acc-mono", user.shell, "Shell"),
           actions,
         );
         row.dataset.source = user.source;
@@ -217,8 +230,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
         actions.append(remove);
         row.append(
           name,
-          cell("acc-mono", String(group.gid)),
-          cell("acc-members", group.members.length ? group.members.join(", ") : "—"),
+          labeled("acc-mono", String(group.gid), "GID"),
+          labeled(
+            "acc-members",
+            group.members.length ? group.members.join(", ") : "—",
+            "Members",
+          ),
           actions,
         );
         return row;
@@ -286,6 +303,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   function openPassword(user) {
+    focusUser = user.name;
     if (usePanelForms) {
       void context.openModal?.({
         tag: "accounts-password-modal",
@@ -394,7 +412,18 @@ export function mount(root: HTMLElement, context: FrameContext) {
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
   const offAction = context.onAction?.((tag) => {
     if (tag === "refresh") {
-      void load();
+      const name = focusUser;
+      focusUser = null;
+      void load().then(() => {
+        if (!name) return;
+        const row = [...usersRoot.querySelectorAll(".acc-row")].find((node) =>
+          node.textContent?.includes(name),
+        );
+        const button = [...(row?.querySelectorAll("button") ?? [])].find(
+          (candidate) => candidate.textContent === "Password",
+        );
+        button?.focus();
+      });
       return;
     }
     if (tag === "new-user") {

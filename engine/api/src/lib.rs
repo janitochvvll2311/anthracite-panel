@@ -752,6 +752,8 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
         apps.push(SurfaceApp {
             id: id.clone(),
             version: found.manifest.app.version.clone(),
+            icon: found.manifest.app.icon.clone(),
+            icon_sha256: found.manifest.app.icon_sha256.clone(),
             risk,
             routes,
             slots,
@@ -1124,17 +1126,12 @@ async fn app_asset(
         .iter()
         .find(|installed| installed.manifest.app.id == id)
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
-    let slot = found
-        .manifest
-        .slot
-        .iter()
-        .find(|slot| slot.module == module)
-        .ok_or_else(|| {
-            ApiError(Error::not_found(format!(
-                "`{id}` declares no asset `{module}`"
-            )))
-        })?;
-    let relative = std::path::Path::new(&slot.module);
+    let sha256 = found.manifest.asset_sha256(&module).ok_or_else(|| {
+        ApiError(Error::not_found(format!(
+            "`{id}` declares no asset `{module}`"
+        )))
+    })?;
+    let relative = std::path::Path::new(&module);
     if relative
         .components()
         .any(|component| !matches!(component, std::path::Component::Normal(_)))
@@ -1144,11 +1141,11 @@ async fn app_asset(
         ))));
     }
     let path = apps.registry.app_dir(&app).join(relative);
-    let etag = format!("\"{}\"", slot.sha256);
+    let etag = format!("\"{sha256}\"");
     let cache = "immutable";
     // The manifest hash is the validator: a conditional hit does not read or
     // hash the file (§6.4).
-    if if_none_match(&headers, &slot.sha256) {
+    if if_none_match(&headers, sha256) {
         return Ok((
             StatusCode::NOT_MODIFIED,
             [(ETAG, etag), (CACHE_CONTROL, cache.to_string())],
@@ -1160,7 +1157,7 @@ async fn app_asset(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    if hash != slot.sha256 {
+    if hash != sha256 {
         return Err(ApiError(Error::internal(format!(
             "`{module}` does not match its manifest hash"
         ))));
@@ -1172,6 +1169,7 @@ async fn app_asset(
         Some("json") => "application/json",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("webp") => "image/webp",
         _ => "application/octet-stream",
     };
     let body = if method == Method::HEAD {
@@ -1740,6 +1738,7 @@ fn surface_slot(slot: &SlotSection) -> SurfaceSlot {
         id: slot.id.clone(),
         label: slot.label.clone(),
         icon: slot.icon.clone(),
+        icon_sha256: slot.icon_sha256.clone(),
         order: slot.order,
         hidden: slot.hidden,
         parent: slot.parent.clone(),
@@ -1751,9 +1750,11 @@ fn surface_slot(slot: &SlotSection) -> SurfaceSlot {
             .map(|action| SurfaceFabAction {
                 label: action.label.clone(),
                 icon: action.icon.clone(),
+                icon_sha256: action.icon_sha256.clone(),
                 tag: action.tag.clone(),
                 target: action.target.clone(),
                 action: action.action.clone(),
+                files: action.files,
             })
             .collect(),
         tag: slot.tag.clone(),

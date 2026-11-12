@@ -44,6 +44,7 @@ pub struct Contribution {
     pub id: String,
     pub label: String,
     pub icon: Option<String>,
+    pub icon_sha256: Option<String>,
     pub order: i64,
     pub hidden: bool,
     /// `<app-id>#<slot-tag>` of the view this contribution is grouped under.
@@ -66,6 +67,7 @@ impl Contribution {
             id: slot.id.clone(),
             label: slot.label.clone(),
             icon: slot.icon.clone(),
+            icon_sha256: slot.icon_sha256.clone(),
             order: slot.order,
             hidden: slot.hidden,
             parent: slot.parent.clone(),
@@ -167,6 +169,7 @@ mod tests {
             id: id.to_string(),
             label: tag.to_string(),
             icon: None,
+            icon_sha256: None,
             order,
             hidden: false,
             parent: None,
@@ -217,9 +220,11 @@ mod tests {
         fab.actions = vec![SurfaceFabAction {
             label: "New".to_string(),
             icon: None,
+            icon_sha256: None,
             tag: "new".to_string(),
             target: Some("edit-note".to_string()),
             action: None,
+            files: false,
         }];
         let contribution = Contribution::from_surface(&app("org.example.notes"), &fab);
         assert_eq!(contribution.view.as_deref(), Some("notes"));

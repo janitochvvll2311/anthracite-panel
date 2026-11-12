@@ -12,7 +12,9 @@ export type FrameContext = Caller & {
   openView?: (view: any) => void;
   panel?: { slots: string[] };
   onVisibility?: (handler: (visible: boolean) => void) => () => void;
-  onAction?: (handler: (tag: string) => void) => () => void;
+  onAction?: (
+    handler: (tag: string, payload?: unknown) => void,
+  ) => () => void;
   openModal?: (request: { tag: string; params?: unknown }) => Promise<boolean>;
 };
 

@@ -52,8 +52,10 @@ export type FrameHandle = {
   snapshot: () => Promise<unknown>;
   /// Tells the module whether its pane is on screen, so it can pause polling.
   setVisible: (visible: boolean) => void;
-  /// Sends a local action tag to the module.
-  action: (tag: string) => void;
+  /// Sends a local action tag and an optional payload to the module.
+  action: (tag: string, payload?: unknown) => void;
+  /// Restores the module's last focused control.
+  focus: () => void;
 };
 
 export type FrameOptions = {
@@ -196,8 +198,15 @@ export async function mountFrame(
     );
   };
 
-  const action = (tag: string): void => {
-    iframe.contentWindow?.postMessage({ type: "anth:action", token, tag }, "*");
+  const focus = (): void => {
+    iframe.contentWindow?.postMessage({ type: "anth:focus", token }, "*");
+  };
+
+  const action = (tag: string, payload?: unknown): void => {
+    iframe.contentWindow?.postMessage(
+      { type: "anth:action", token, tag, payload },
+      "*",
+    );
   };
 
   const requestClose = (): Promise<boolean> =>
@@ -282,6 +291,7 @@ export async function mountFrame(
           snapshot: requestSnapshot,
           setVisible,
           action,
+          focus,
         });
         finish();
         return;

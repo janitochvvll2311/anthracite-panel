@@ -11,16 +11,19 @@ upgraded through the engine CLI.
 
 | Case | Result |
 | --- | --- |
-| Single-action FAB (Home Refresh) | Pass — runs the local action and refreshes Home |
-| Multi-action FAB (Accounts Add, Files Add) | Pass — menu opens with every action |
+| Single-action FAB (Home Refresh) | Pass — icon-only refresh trigger, runs the local action and refreshes Home |
+| Multi-action FAB (Accounts Add, Files Add) | Pass — icon-only plus trigger; the menu opens with every labeled action |
 | FAB action `target` (Storage, Network, Processes, Firewall) | Pass — opens the matching modal |
-| FAB local action (Home refresh, Files upload, Accounts user/group) | Pass — reaches the active view; Upload opens the file picker and Accounts opens its modal from the view |
+| FAB local action (Home refresh, Files upload, Accounts user/group) | Pass — reaches the active view; Upload opens the panel picker and the selected file reaches the queue |
 | Modal close (button, Escape) | Pass — dialog closes and the origin view refreshes, including Escape while focus is inside the modal iframe |
 | Modal backdrop | Pass — pointerdown on the dialog closes it |
 | Keyboard menu | Pass — Space on the focused FAB opens the menu; Escape closes it from a tab and from a floating window without closing the window |
-| Focus after modal | Pass at panel level — the panel restores the origin frame; the exact element inside the frame stays app-owned |
+| Focus after modal | Pass — the panel restores the origin frame and Accounts returns focus to the Password button after the refresh |
 | Floating window FAB (Home, Storage) | Pass — the window has its own FAB and opens its modal |
-| Mobile 390×844 | Pass — FAB stays inside the viewport; modal width 356 px |
+| Mobile 390×844 | Pass — FAB stays inside the viewport; Accounts and Firewall rows become labeled cards; modal width 356 px |
+| Iframe box | Pass — app frames own no inner scrollbar; the pane/modal body is the single scroll container |
+| Demo terminal | Pass — backspace, line history, Echo/LS/pwd/whoami/uname/Clear and ANSI clear; the fixture remains a scripted sandbox, not a host shell |
+| Icons | Pass — app icons come from names or assets; sidebar and group sub-tabs show them; FAB triggers are icon-only, with a refresh asset for Home and plus elsewhere |
 | View-only panel | Pass — SDK tests show FAB/MODAL are ignored and `panel.view` still mounts |
 
 ## Flows exercised

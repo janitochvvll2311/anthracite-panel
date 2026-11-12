@@ -26,3 +26,17 @@ export async function call(
   }
   return value;
 }
+
+export type MountRequest = {
+  device: string;
+  mountpoint: string;
+  filesystem: string;
+};
+
+export function mountDevice(context: Caller, request: MountRequest): Promise<any> {
+  return call(context, "/mount", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
