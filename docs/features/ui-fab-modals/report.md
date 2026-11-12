@@ -50,7 +50,7 @@ See [qa.md](qa.md) for the browser matrix.
 - `engine/`: workspace tests, fmt and clippy; declarative FAB bundle test.
 - `sdk/rust/panel`: 7 tests; `sdk/ts/panel`: 13 tests.
 - `demo/emulator`: 47 tests, fmt and clippy.
-- `panel/frontend`: 14 tests, typecheck and build.
+- `panel/frontend`: 14 tests and build.
 - Apps: typecheck/build for Home, Storage, Network, Processes, Firewall,
   Accounts and Files; manifest validation through the demo bundle builder.
 - Headless Chromium QA: desktop, keyboard, Escape/backdrop, floating windows,
