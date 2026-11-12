@@ -35,6 +35,8 @@
       (() => {
         const pending = new Map();
         const pendingViews = new Map();
+        const pendingModals = new Map();
+        const actionHandlers = new Set();
         const sockets = new Map();
         const visibilityHandlers = new Set();
         let token = "";
@@ -190,6 +192,16 @@
             }, 1200);
           });
 
+        const openModal = (request) =>
+          new Promise((resolve) => {
+            const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+            pendingModals.set(id, resolve);
+            send("anth:open-modal", { ...request, requestId: id });
+            setTimeout(() => {
+              if (pendingModals.delete(id)) resolve(false);
+            }, 1200);
+          });
+
         window.addEventListener("message", async (event) => {
           if (event.source !== parent) return;
           const message = event.data;
@@ -216,6 +228,11 @@
                 socket: openSocket,
                 close: () => send("anth:close"),
                 openView,
+                openModal,
+                onAction: (handler) => {
+                  actionHandlers.add(handler);
+                  return () => actionHandlers.delete(handler);
+                },
                 updateParams: (params) => send("anth:params", { params }),
                 fill: () => send("anth:fill"),
                 onVisibility: (handler) => {
@@ -302,6 +319,19 @@
             if (!resolve) return;
             pendingViews.delete(message.requestId);
             resolve(message.ok === true);
+          } else if (message.type === "anth:open-modal-result") {
+            const resolve = pendingModals.get(message.requestId);
+            if (!resolve) return;
+            pendingModals.delete(message.requestId);
+            resolve(message.ok === true);
+          } else if (message.type === "anth:action") {
+            for (const handler of actionHandlers) {
+              try {
+                handler(message.tag);
+              } catch {
+                // One view listener must not break the others.
+              }
+            }
           } else if (message.type === "anth:update-params") {
             if (typeof moduleApi?.onParams === "function") {
               moduleApi.onParams(message.params);
@@ -339,6 +369,7 @@
             try {
               for (const id of sockets.keys()) send("anth:ws-close", { id });
               sockets.clear();
+              actionHandlers.clear();
               if (typeof dispose === "function") await dispose();
             } finally {
               dispose = null;

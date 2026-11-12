@@ -151,9 +151,27 @@ pub struct SurfaceSlot {
     /// Sub-tab label when this contribution is the parent of a group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab: Option<String>,
+    /// View tag this FAB is scoped to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// Actions of a declarative `panel.fab`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<SurfaceFabAction>,
     pub tag: String,
     pub module: String,
     pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceFabAction {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }
 
 /// One CLI verb of a running app.
@@ -352,6 +370,8 @@ mod tests {
                         hidden: false,
                         parent: None,
                         tab: None,
+                        view: None,
+                        actions: Vec::new(),
                         tag: "notes".to_string(),
                         module: "web/notes.js".to_string(),
                         sha256: "c".repeat(64),

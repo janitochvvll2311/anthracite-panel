@@ -91,12 +91,24 @@
             <p>Pick a view from the sidebar. Apps contribute the views; the panel owns the frame.</p>
           </div>
         </div>
+        <div id="fabs" class="fabs" aria-label="App actions" hidden></div>
       </main>
     </div>
 
     <div id="windows" class="windows"></div>
 
     <div id="stack" class="stack" role="toolbar" aria-label="Minimized views" hidden></div>
+
+    <dialog id="modal" class="modal" aria-labelledby="modal-title">
+      <header class="modal-head">
+        <div class="modal-copy">
+          <strong id="modal-title"></strong>
+          <span id="modal-app" class="modal-app"></span>
+        </div>
+        <button id="modal-close" class="ghost" type="button">Close</button>
+      </header>
+      <div id="modal-body" class="modal-body"></div>
+    </dialog>
 
     <div id="settings" class="settings hidden" role="dialog" aria-modal="true" aria-label="Settings">
       <div class="settings-card">

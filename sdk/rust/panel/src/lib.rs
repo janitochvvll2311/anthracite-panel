@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use anth_contract::{AppId, SurfaceSlot};
+use anth_contract::{AppId, SurfaceFabAction, SurfaceSlot};
 
 pub mod host;
 pub use anth_api::{session_token, SessionInfo};
@@ -28,10 +28,14 @@ const SEGMENT: &AsciiSet = &CONTROLS
     .add(b'{')
     .add(b'}');
 
-/// The three portable slots in v0.5.0.
+/// The portable slots.
 pub const VIEW: &str = "panel.view";
 pub const ACTION: &str = "panel.action";
 pub const SETTINGS: &str = "panel.settings";
+pub const FAB: &str = "panel.fab";
+pub const MODAL: &str = "panel.modal";
+/// Local action tag the panel sends to a view after one of its modals closes.
+pub const REFRESH: &str = "refresh";
 
 /// One slot contribution, with the app that owns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +50,10 @@ pub struct Contribution {
     pub parent: Option<String>,
     /// Sub-tab label when this contribution is the parent of a group.
     pub tab: Option<String>,
+    /// View tag this FAB is scoped to.
+    pub view: Option<String>,
+    /// Actions of a declarative `panel.fab`.
+    pub actions: Vec<SurfaceFabAction>,
     pub tag: String,
     pub module: String,
     pub sha256: String,
@@ -62,6 +70,8 @@ impl Contribution {
             hidden: slot.hidden,
             parent: slot.parent.clone(),
             tab: slot.tab.clone(),
+            view: slot.view.clone(),
+            actions: slot.actions.clone(),
             tag: slot.tag.clone(),
             module: slot.module.clone(),
             sha256: slot.sha256.clone(),
@@ -161,6 +171,8 @@ mod tests {
             hidden: false,
             parent: None,
             tab: None,
+            view: None,
+            actions: Vec::new(),
             tag: tag.to_string(),
             module: format!("web/{tag}.js"),
             sha256: "a".repeat(64),
@@ -196,6 +208,24 @@ mod tests {
         parent.tab = Some("Interfaces".to_string());
         let contribution = Contribution::from_surface(&app("org.anthracite.net"), &parent);
         assert_eq!(contribution.tab.as_deref(), Some("Interfaces"));
+    }
+
+    #[test]
+    fn fab_fields_reach_the_contribution() {
+        let mut fab = slot(FAB, "note-actions", 3);
+        fab.view = Some("notes".to_string());
+        fab.actions = vec![SurfaceFabAction {
+            label: "New".to_string(),
+            icon: None,
+            tag: "new".to_string(),
+            target: Some("edit-note".to_string()),
+            action: None,
+        }];
+        let contribution = Contribution::from_surface(&app("org.example.notes"), &fab);
+        assert_eq!(contribution.view.as_deref(), Some("notes"));
+        assert_eq!(contribution.actions.len(), 1);
+        assert_eq!(contribution.actions[0].target.as_deref(), Some("edit-note"));
+        assert_eq!(REFRESH, "refresh");
     }
 
     #[test]

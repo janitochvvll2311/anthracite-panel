@@ -1,13 +1,16 @@
 //! The official panel shell.
 //!
 //! It knows nothing about apps: it reads the composition surface, mounts the
-//! modules an app contributes to the three portable slots, and keeps the layout
+//! modules an app contributes to the portable slots, and keeps the layout
 //! in the panel. The engine serves the modules; the panel never touches the
 //! registry, the grants or the state tree.
 
 import {
   ACTION,
+  FAB,
+  MODAL,
   PORTABLE,
+  REFRESH,
   SETTINGS,
   VIEW,
   assetUrl,
@@ -23,8 +26,10 @@ import {
   safeDispose,
   type App,
   type Contribution,
+  type FabAction,
   type FrameContext,
   type FrameHandle,
+  type OpenModalRequest,
   type OpenViewRequest,
 } from "@anthracite/panel";
 
@@ -84,6 +89,8 @@ type Mounted = {
   snapshot?: () => Promise<unknown>;
   /// Pauses app polling while the pane is not the active tab.
   setVisible?: (visible: boolean) => void;
+  /// Delivers a local action tag, e.g. `refresh` after a modal closes.
+  action?: (tag: string) => void;
   /// Last visibility sent to the frame; a refresh must not resend it.
   visible?: boolean;
   /// Set when the host closes or replaces the mount; a late module must not
@@ -103,6 +110,19 @@ type Floating = Mounted & {
   maximizeButton: HTMLButtonElement;
   stackItem?: HTMLElement;
 };
+
+/// The single panel-level modal. It hosts one `panel.modal` module in a
+/// sandboxed frame and refreshes the view that opened it once it closes.
+type ModalState = {
+  mount: Mounted;
+  /// The tab or window that opened the modal; it receives `refresh` on close.
+  originKey: string | null;
+  contribution: Contribution;
+  /// The element that had focus, restored when the dialog closes.
+  trigger: HTMLElement | null;
+};
+
+let modalState: ModalState | null = null;
 
 /// Every panel request goes through here: an expired session sends the browser
 /// to the login page instead of letting the retry loop spin.
@@ -127,6 +147,12 @@ const panes = byId<HTMLElement>("panes");
 const empty = byId<HTMLElement>("empty");
 const windowsElement = byId<HTMLElement>("windows");
 const stackElement = byId<HTMLElement>("stack");
+const fabsElement = byId<HTMLElement>("fabs");
+const modalElement = byId<HTMLDialogElement>("modal");
+const modalTitle = byId<HTMLElement>("modal-title");
+const modalApp = byId<HTMLElement>("modal-app");
+const modalBody = byId<HTMLElement>("modal-body");
+const modalClose = byId<HTMLButtonElement>("modal-close");
 const settings = byId<HTMLElement>("settings");
 const settingsBody = byId<HTMLElement>("settings-body");
 const settingsButton = byId<HTMLButtonElement>("settings-button");
@@ -158,6 +184,7 @@ let retryTimer: number | undefined;
 let zIndex = 10;
 const panelVersionElement = document.getElementById("panel-version");
 let settingsSignature = "";
+let fabsSignature = "";
 let managerDispose: (() => void) | null = null;
 
 const tabs = new Map<string, Tab>();
@@ -458,6 +485,7 @@ async function mountInto(
   cancelled: () => boolean,
   params?: unknown,
   openView?: (request: OpenViewRequest) => boolean | void,
+  openModal?: (request: OpenModalRequest) => boolean | void,
   onParams?: (params: unknown) => void,
   onReady?: (frame: FrameHandle) => void,
 ): Promise<() => void> {
@@ -482,6 +510,7 @@ async function mountInto(
       ),
       close,
       openView,
+      openModal,
       onParams,
       onReady,
       request: (input, init) => request(input, init),
@@ -520,6 +549,7 @@ function trackMount(
   current: () => Mounted | undefined,
   params?: unknown,
   openView?: (request: OpenViewRequest) => boolean | void,
+  openModal?: (request: OpenModalRequest) => boolean | void,
   onParams?: (params: unknown) => void,
 ): void {
   void mountInto(
@@ -530,12 +560,14 @@ function trackMount(
     () => state.cancelled,
     params,
     openView,
+    openModal,
     onParams,
     (frame) => {
       state.update = frame.update;
       state.requestClose = frame.requestClose;
       state.snapshot = frame.snapshot;
       state.setVisible = frame.setVisible;
+      state.action = frame.action;
       const pane = state.root.closest(".pane");
       const visible = !pane || pane.classList.contains("active");
       state.visible = visible;
@@ -558,6 +590,205 @@ function renderWorkspace(): void {
   renderSidebar();
   renderTabs();
   renderPanes();
+  renderFabs();
+}
+
+/// Sends a local action tag to a live view, whether it is a tab or a window.
+function sendAction(key: string | null, tag: string): void {
+  if (!key) return;
+  const state = mounted.get(key) ?? floating.get(key);
+  state?.action?.(tag);
+}
+
+function closeFabMenus(): void {
+  for (const menu of fabsElement.querySelectorAll<HTMLElement>(".fab-menu")) {
+    menu.hidden = true;
+  }
+  for (const trigger of fabsElement.querySelectorAll<HTMLElement>(
+    ".fab-button[aria-expanded]",
+  )) {
+    trigger.setAttribute("aria-expanded", "false");
+  }
+}
+
+function fabButton(
+  className: string,
+  label: string,
+  iconName?: string,
+): HTMLButtonElement {
+  const node = button(className, "", label);
+  const glyph = icon(iconName, "");
+  if (glyph) node.append(element("span", "fab-icon", glyph));
+  node.append(element("span", "fab-label", label));
+  node.setAttribute("aria-label", label);
+  return node;
+}
+
+function runFabAction(source: Contribution, action: FabAction): void {
+  closeFabMenus();
+  if (action.target) {
+    openModal(source, { tag: action.target });
+    return;
+  }
+  if (action.action) sendAction(activeKey, action.action);
+}
+
+function renderFab(source: Contribution, fab: Contribution): HTMLElement {
+  const actions = fab.slot.actions ?? [];
+  const wrap = element("div", "fab");
+  wrap.dataset.tag = fab.slot.tag;
+  if (actions.length <= 1) {
+    const action = actions[0];
+    if (action) {
+      const node = fabButton(
+        "fab-button",
+        action.label,
+        action.icon ?? fab.slot.icon,
+      );
+      node.addEventListener("click", () => runFabAction(source, action));
+      wrap.append(node);
+    }
+    return wrap;
+  }
+
+  const menu = element("div", "fab-menu");
+  menu.hidden = true;
+  menu.setAttribute("role", "menu");
+  for (const action of actions) {
+    const item = fabButton("fab-menu-item", action.label, action.icon);
+    item.setAttribute("role", "menuitem");
+    item.addEventListener("click", () => runFabAction(source, action));
+    menu.append(item);
+  }
+  const main = fabButton(
+    "fab-button fab-multi",
+    fab.slot.label,
+    fab.slot.icon,
+  );
+  main.setAttribute("aria-haspopup", "menu");
+  main.setAttribute("aria-expanded", "false");
+  main.addEventListener("click", () => {
+    const open = menu.hidden;
+    closeFabMenus();
+    menu.hidden = !open;
+    main.setAttribute("aria-expanded", String(open));
+  });
+  wrap.append(menu, main);
+  return wrap;
+}
+
+/// FABs belong to the app and optionally to one of its views. The active tab
+/// decides which ones are on screen; a floating view does not carry a FAB.
+///
+/// The composition is polled every few seconds, so this must not rebuild the
+/// DOM when nothing changed: a `replaceChildren` would close an open menu and
+/// drop keyboard focus while the operator is using it.
+function renderFabs(): void {
+  const active = activeKey ? tabs.get(activeKey)?.contribution : undefined;
+  const enabled = Boolean(active) && implemented.includes(FAB);
+  const fabs =
+    enabled && active
+      ? ordered(FAB).filter(
+          (candidate) =>
+            implementedByPanel(candidate) &&
+            !candidate.slot.hidden &&
+            candidate.app.id === active.app.id &&
+            (!candidate.slot.view || candidate.slot.view === active.slot.tag),
+        )
+      : [];
+  const signature = JSON.stringify([
+    active ? contributionKey(active) : null,
+    enabled,
+    fabs.map((fab) => [
+      fab.slot.tag,
+      fab.slot.label,
+      fab.slot.icon ?? null,
+      fab.slot.order,
+      fab.slot.hidden === true,
+      fab.slot.view ?? null,
+      (fab.slot.actions ?? []).map((action) => [
+        action.label,
+        action.icon ?? null,
+        action.tag,
+        action.target ?? null,
+        action.action ?? null,
+      ]),
+    ]),
+  ]);
+  if (signature === fabsSignature) return;
+  fabsSignature = signature;
+
+  fabsElement.replaceChildren();
+  if (!enabled || !active) {
+    fabsElement.hidden = true;
+    return;
+  }
+  fabsElement.hidden = fabs.length === 0;
+  for (const fab of fabs) fabsElement.append(renderFab(active, fab));
+  closeFabMenus();
+}
+
+/// Opens one of the app's modals in the panel-level dialog. Only one modal is
+/// open at a time; the view that opened it gets a `refresh` action on close.
+function openModal(
+  source: Contribution,
+  request: OpenModalRequest,
+  originKey: string | null = activeKey,
+): boolean {
+  if (!implemented.includes(MODAL) || modalState) return false;
+  const target = ordered(MODAL).find(
+    (candidate) =>
+      implementedByPanel(candidate) &&
+      candidate.app.id === source.app.id &&
+      candidate.slot.tag === request.tag,
+  );
+  if (!target) return false;
+
+  modalTitle.textContent = target.slot.label;
+  modalApp.textContent = target.app.id;
+  modalBody.replaceChildren(element("div", "loading", "Loading modal…"));
+  const mount: Mounted = {
+    root: modalBody,
+    contribution: target,
+    params: request.params,
+    dispose: () => modalBody.replaceChildren(),
+    cancelled: false,
+  };
+  const active = document.activeElement;
+  const trigger =
+    active instanceof HTMLElement && active !== document.body ? active : null;
+  modalState = { mount, originKey, contribution: target, trigger };
+  modalElement.showModal();
+  trackMount(
+    mount,
+    modalBody,
+    target,
+    "modal",
+    () => closeModal(),
+    () => modalState?.mount,
+    request.params,
+    (open) => openAppView(target, open),
+    (open) => openModal(target, open, originKey),
+    undefined,
+  );
+  return true;
+}
+
+function closeModal(refresh = true): void {
+  const state = modalState;
+  if (!state) {
+    if (modalElement.open) modalElement.close();
+    return;
+  }
+  modalState = null;
+  state.mount.cancelled = true;
+  safeDispose(state.mount.dispose);
+  modalBody.replaceChildren();
+  if (modalElement.open) modalElement.close();
+  modalTitle.textContent = "";
+  modalApp.textContent = "";
+  if (refresh) sendAction(state.originKey, REFRESH);
+  if (state.trigger?.isConnected) state.trigger.focus();
 }
 
 function paramsKey(params: unknown): string {
@@ -694,6 +925,7 @@ function ensurePane(contribution: Contribution, params?: unknown): void {
     () => mounted.get(key),
     params,
     (request) => openAppView(contribution, request),
+    (request) => openModal(contribution, request, key),
     (next) => rememberParams(contribution, next),
   );
 }
@@ -797,6 +1029,7 @@ function activateGroup(group: ViewGroup): void {
 }
 
 function closeTab(key: string, render = true): void {
+  if (modalState?.originKey === key) closeModal(false);
   const state = mounted.get(key);
   if (state) {
     retire(state);
@@ -868,6 +1101,7 @@ function updateStack(): void {
 }
 
 function closeFloating(state: Floating): void {
+  if (modalState?.originKey === state.key) closeModal(false);
   retireFloating(state);
   floating.delete(state.key);
   updateStack();
@@ -1083,6 +1317,9 @@ function openWindow(
     kind === "view"
       ? (request) => openAppView(contribution, request)
       : undefined,
+    kind === "view"
+      ? (request) => openModal(contribution, request, key)
+      : undefined,
     (next) => rememberParams(contribution, next),
   );
 }
@@ -1262,6 +1499,7 @@ function reconcile(): void {
   renderActions();
   renderTabs();
   renderPanes();
+  renderFabs();
   renderWarnings();
   if (!settings.classList.contains("hidden")) renderSettings();
   renderStatus();
@@ -1391,8 +1629,23 @@ managerClose.addEventListener("click", closeManager);
 manager.addEventListener("pointerdown", (event) => {
   if (event.target === manager) closeManager();
 });
+modalClose.addEventListener("click", () => closeModal());
+modalElement.addEventListener("close", () => closeModal());
+modalElement.addEventListener("pointerdown", (event) => {
+  if (event.target === modalElement) closeModal();
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!fabsElement.contains(event.target as Node)) closeFabMenus();
+});
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  // A modal is in the top layer: the dialog handles Escape and its close
+  // event refreshes the view. The shell must not close windows behind it.
+  if (modalElement.open) return;
+  if (fabsElement.querySelector(".fab-menu:not([hidden])")) {
+    closeFabMenus();
+    return;
+  }
   if (!manager.classList.contains("hidden")) {
     closeManager();
     return;

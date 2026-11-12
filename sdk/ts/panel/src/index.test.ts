@@ -2,6 +2,10 @@ import { expect, test } from "bun:test";
 
 import {
   ACTION,
+  FAB,
+  MODAL,
+  PORTABLE,
+  REFRESH,
   VIEW,
   assetUrl,
   contributionKey,
@@ -78,6 +82,41 @@ test("ignored contributions target slots the panel does not implement", () => {
     ACTION,
   ]);
 });
+
+test("fab and modal are part of the portable vocabulary", () => {
+  expect(FAB).toBe("panel.fab");
+  expect(MODAL).toBe("panel.modal");
+  expect(REFRESH).toBe("refresh");
+  expect([...PORTABLE]).toEqual([VIEW, ACTION, "panel.settings", FAB, MODAL]);
+});
+
+test("a fab carries a view and actions, a modal carries a module", () => {
+  const fab: Slot = {
+    id: FAB,
+    label: "Add",
+    order: 1,
+    tag: "note-actions",
+    view: "notes",
+    actions: [
+      { label: "New", tag: "new", target: "edit-note" },
+      { label: "Refresh", tag: "refresh", action: "refresh" },
+    ],
+    module: "",
+    sha256: "",
+  };
+  const modal: Slot = {
+    id: MODAL,
+    label: "Edit note",
+    order: 2,
+    tag: "edit-note",
+    module: "web/edit-note.js",
+    sha256: "b".repeat(64),
+  };
+  const notes = app("org.example.notes", [fab, modal]);
+  expect(ordered([notes], FAB)[0]!.slot.actions).toHaveLength(2);
+  expect(ordered([notes], MODAL)[0]!.slot.view).toBeUndefined();
+});
+
 
 test("frame context copies the panel declaration and the contribution", () => {
   const contribution = {
