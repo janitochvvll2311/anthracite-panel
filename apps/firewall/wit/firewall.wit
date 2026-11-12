@@ -1,0 +1,56 @@
+package anthracite:firewall@1.0.0;
+
+interface firewall {
+    use anth:error/kinds@1.0.0.{error};
+
+    enum chain {
+        input,
+        output,
+    }
+
+    enum verdict {
+        allow,
+        deny,
+    }
+
+    enum protocol {
+        tcp,
+        udp,
+    }
+
+    record rule {
+        handle: u64,
+        chain: chain,
+        /// `none` means a custom rule the panel cannot edit.
+        action: option<verdict>,
+        protocol: option<protocol>,
+        port: option<u16>,
+        comment: option<string>,
+    }
+
+    record chain-state {
+        chain: chain,
+        initialized: bool,
+        policy: verdict,
+    }
+
+    record state {
+        initialized: bool,
+        control: bool,
+        rules: list<rule>,
+        chains: list<chain-state>,
+        ruleset: string,
+        timestamp-ms: u64,
+    }
+
+    snapshot: func() -> result<state, error>;
+    add-rule: func(chain: chain, action: verdict, protocol: protocol, port: u16, comment: option<string>) -> result<_, error>;
+    update-rule: func(handle: u64, chain: chain, action: verdict, protocol: protocol, port: u16, comment: option<string>) -> result<_, error>;
+    delete-rule: func(handle: u64) -> result<_, error>;
+    flush: func(chain: chain) -> result<_, error>;
+    set-policy: func(chain: chain, policy: verdict) -> result<_, error>;
+}
+
+world app {
+    export firewall;
+}

@@ -1,9 +1,9 @@
 # Demo instance
 
-The v0.6.0 demo runs the deterministic host emulator as seven service apps:
-`org.anthracite.fs`, `terminal`, `proc`, `net`, `storage`, `accounts` and
-`home`. Each bundle carries the future real app's WIT package and id, and all
-seven share one native binary. Home renders the host overview and replaces Hello
+The v0.6.0 demo runs the deterministic host emulator as eight service apps:
+`org.anthracite.fs`, `terminal`, `proc`, `net`, `firewall`, `storage`,
+`accounts` and `home`. Each bundle carries the future real app's WIT package
+and id, and all eight share one native binary. Home renders the host overview and replaces Hello
 in the composed profile, so the demo never reads the real machine's facts.
 `apps/hello` stays in the tree as the minimal developer example and remains
 installable.
@@ -27,10 +27,10 @@ cargo run --manifest-path demo/emulator/Cargo.toml --release --bin bundle-emulat
     --binary target/release/host-emulator --out demo/dist
 ```
 
-`demo/dist/{fs,terminal,proc,net,storage,accounts,home}.anth` are the installable
-zips. The app sources (manifest, WIT and frontend) live in `apps/<name>/`; the
-demo builder packages all seven apps with the shared `demo/emulator` service
-binary. Home's real backend stays in `apps/home/backend`; `apps/home/build.sh`
+`demo/dist/{fs,terminal,proc,net,firewall,storage,accounts,home}.anth` are the
+installable zips. The app sources (manifest, WIT and frontend) live in
+`apps/<name>/`; the demo builder packages all eight apps with the shared
+`demo/emulator` service binary. Home's real backend stays in `apps/home/backend`; `apps/home/build.sh`
 packages it for a machine that should show its own host facts.
 
 ## Run
@@ -47,7 +47,7 @@ terminal, using the CLI:
 
 ```bash
 ANTH="cargo run --quiet --manifest-path sdk/rust/Cargo.toml -p anth-cli -- --socket demo/state/engine.sock"
-for app in fs terminal proc net storage accounts; do
+for app in fs terminal proc net firewall storage accounts; do
     $ANTH app install demo/dist/$app.anth
     $ANTH app approve org.anthracite.$app --accept-write --accept-admin
 done
@@ -55,7 +55,8 @@ $ANTH app install demo/dist/home.anth
 $ANTH app approve org.anthracite.home --accept-write --accept-admin --accept-host
 $ANTH compose --add org.anthracite.fs --add org.anthracite.terminal \
     --add org.anthracite.proc --add org.anthracite.net \
-    --add org.anthracite.storage --add org.anthracite.accounts \
+    --add org.anthracite.firewall --add org.anthracite.storage \
+    --add org.anthracite.accounts \
     --add org.anthracite.home --remove org.anthracite.hello --now
 ```
 
@@ -67,6 +68,7 @@ Then, from the panel session (or the CLI), the app routes answer:
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.fs/files?path=/
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.proc/processes
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.net/interfaces
+curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.firewall/snapshot
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.storage/mounts
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.accounts/users
 curl --unix-socket demo/state/engine.sock http://localhost/api/apps/org.anthracite.home/info
@@ -78,6 +80,7 @@ CLI verbs:
 - `terminal sessions`, `terminal session-open`, `terminal session-read`, `terminal session-close`
 - `proc processes`, `proc process-signal`, `proc process-spawn`
 - `net interfaces`, `net routes`, `net interface-up`, `net route-add`, `net route-remove`
+- `firewall status`, `firewall rule-add`, `firewall rule-update`, `firewall rule-delete`, `firewall flush`, `firewall policy`
 - `storage devices`, `storage mounts`, `storage mount`, `storage unmount`
 - `accounts users`, `accounts groups`, `accounts user-create`, `accounts user-delete`, `accounts user-lock`
 - `home info`
@@ -121,6 +124,7 @@ shared emulator service. Every bundle carries a `panel.view` module:
   mode, allowlisted signals and
   detached spawn.
 - `apps/net/frontend/` — live interfaces and routes over SSE, addresses/counters, up/down, route add/remove and an interval selector with a manual `0s` mode.
+- `apps/firewall/frontend/` — the managed nftables table as a sub-tab under Network: chain policies, allow/deny rules, custom rules, add/edit/delete, flush and policy confirmation.
 - `apps/storage/frontend/` — mount usage bars, unmount and mount.
 - `apps/accounts/frontend/` — users and groups with create, delete and lock/unlock.
 - `apps/home/frontend/dist/home.js` — Host Info cards (system, CPU, memory,

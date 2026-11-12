@@ -90,14 +90,14 @@ neither was compiled against it. **That is the v0.5.0 acid test.**
 
 **M4 — System apps**
 
-`fs`, `terminal`, `proc`, `net`, `storage`, `accounts`, `manager`. Each is a
-bundle with a manifest; each is removable; none requires an engine edit. Heavy
-compute (archives, previews, hashing) stays in wasm.
+`fs`, `terminal`, `proc`, `net`, `storage`, `accounts`, `firewall`, `manager`.
+Each is a bundle with a manifest; each is removable; none requires an engine
+edit. Heavy compute (archives, previews, hashing) stays in wasm.
 
-`net` owns both the interface inventory and the firewall: one managed
-`inet anthracite` nftables table with input/output chains, rule CRUD, flush and
-default policy, exposed as a second tab. The firewall is a `net` feature, not an
-engine feature.
+`net` owns the interface inventory. `firewall` is its own app, grouped under
+Network as a sub-tab: one managed `inet anthracite` nftables table with
+input/output chains, rule CRUD, flush and default policy. The grouping is visual;
+the firewall remains a separate bundle and is not an engine feature.
 
 **Done when:** a composition of system apps works on the v0.5.0 contract, the
 v0.4.0 inventory is covered as a scope reference, and removing `net` leaves a

@@ -54,6 +54,7 @@ id = "panel.view"
 label = "Network"
 icon = "network"
 order = 21
+tab = "Interfaces"
 tag = "anth-net"
 module = "web/net.js"
 sha256 = "{{module_sha256}}"

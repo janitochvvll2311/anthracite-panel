@@ -9,6 +9,7 @@ apps = [
     "org.anthracite.terminal",
     "org.anthracite.proc",
     "org.anthracite.net",
+    "org.anthracite.firewall",
     "org.anthracite.storage",
     "org.anthracite.accounts",
     "org.anthracite.home",

@@ -21,6 +21,7 @@ pub const BUNDLES: &[(&str, &str)] = &[
     ("net", "org.anthracite.net"),
     ("storage", "org.anthracite.storage"),
     ("accounts", "org.anthracite.accounts"),
+    ("firewall", "org.anthracite.firewall"),
     ("home", "org.anthracite.home"),
 ];
 
@@ -95,6 +96,12 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                 "Deterministic users and groups fixture for the demo; replaced by the real accounts app.",
                 "socket",
                 r#"["--socket", "{socket}", "--state", "{shared}/emulator/host.json"]"#,
+            ),
+            "firewall" => (
+                "Firewall (emulator)",
+                "Deterministic in-memory nftables fixture for the demo; replaced by the real firewall app.",
+                "socket",
+                r#"["--socket", "{socket}"]"#,
             ),
             "home" => (
                 "Home (emulator)",
