@@ -90,6 +90,34 @@ test("fab and modal are part of the portable vocabulary", () => {
   expect([...PORTABLE]).toEqual([VIEW, ACTION, "panel.settings", FAB, MODAL]);
 });
 
+test("a view-only panel ignores fab and modal without breaking the view list", () => {
+  const notes = app("org.example.notes", [
+    slot(VIEW, "notes", 1),
+    {
+      id: FAB,
+      label: "Add",
+      order: 2,
+      tag: "add",
+      module: "",
+      sha256: "",
+    },
+    {
+      id: MODAL,
+      label: "Edit",
+      order: 3,
+      tag: "edit",
+      module: "web/edit.js",
+      sha256: "b".repeat(64),
+    },
+  ]);
+  expect(ordered([notes], VIEW).map((contribution) => contribution.slot.tag)).toEqual([
+    "notes",
+  ]);
+  expect(
+    ignored([notes], [VIEW]).map((contribution) => contribution.slot.id),
+  ).toEqual([FAB, MODAL]);
+});
+
 test("a fab carries a view and actions, a modal carries a module", () => {
   const fab: Slot = {
     id: FAB,
