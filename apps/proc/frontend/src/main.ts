@@ -71,10 +71,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
       </select>
       <button type="button" class="proc-direction" data-mobile-direction aria-label="Sort direction">Asc</button>
     </div>
-    <form class="proc-spawn">
-      <input name="command" aria-label="Detached command" placeholder="sleep 30" autocomplete="off" />
-      <button type="submit">Spawn</button>
-    </form>
     <div class="proc-table" role="table" aria-label="Processes">
       <div class="proc-head" data-head></div>
       <div class="proc-body" data-body role="rowgroup"></div>
@@ -96,8 +92,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const sentinel = box.querySelector("[data-sentinel]") as HTMLElement;  const fold = box.querySelector("[data-fold]") as HTMLButtonElement;
   const modeButtons = [...box.querySelectorAll("[data-mode]")] as HTMLButtonElement[];
   const interval = box.querySelector("[data-interval]") as HTMLSelectElement;
-  const spawnForm = box.querySelector(".proc-spawn") as HTMLFormElement;
-  const spawnInput = spawnForm.querySelector("input") as HTMLInputElement;
 
   const MOBILE_PAGE = 200;
   // The engine caps one service answer at 4 MiB. Ten thousand rows stay well
@@ -132,6 +126,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
     visible = next;
     scheduleLive();
     if (next && intervalMs > 0) void load();
+  });
+
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh") void load();
   });
 
   const setStatus = (message: string, bad = false): void => {
@@ -702,35 +700,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
     renderRows(true);
   });
   box.querySelector("[data-refresh]")!.addEventListener("click", () => void load());
-  spawnForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const command = spawnInput.value.trim();
-    if (!command) {
-      setStatus("Write a command first, for example `sleep 30`.", true);
-      return;
-    }
-    const argv = command.split(/\s+/);
-    const ok = await confirmAction({
-      title: "Spawn this command?",
-      message: `\`${command}\` will run detached from the process service.`,
-      confirmLabel: "Spawn",
-    });
-    if (!ok) return;
-    setStatus("Spawning…");
-    try {
-      const pid = await call(context, "/spawn", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ argv }),
-      });
-      spawnInput.value = "";
-      await load();
-      setStatus(`Spawned ${argv[0]} as pid ${pid}`);
-    } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
-    }
-  });
-
   const resize = new ResizeObserver(applyCompact);
   resize.observe(box);
   const tableResize = new ResizeObserver(() => renderWindow(false));
@@ -758,6 +727,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     if (live !== null) window.clearInterval(live);
     if (scrollFrame) window.cancelAnimationFrame(scrollFrame);

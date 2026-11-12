@@ -21,12 +21,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
     </div>
     <div class="st-mounts"></div>
     <div class="st-table" role="table" aria-label="Block devices"></div>
-    <form class="st-add">
-      <select data-device aria-label="Device"></select>
-      <input data-mountpoint placeholder="mountpoint, e.g. /media/sd" aria-label="Mountpoint" autocomplete="off" />
-      <input data-filesystem value="ext4" aria-label="Filesystem" autocomplete="off" />
-      <button type="submit">Mount</button>
-    </form>
     <p class="st-status" role="status"></p>
   `;
   root.append(box);
@@ -34,10 +28,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const mounts = box.querySelector(".st-mounts") as any;
   const table = box.querySelector(".st-table") as any;
   const status = box.querySelector(".st-status") as any;
-  const form = box.querySelector(".st-add") as any;
-  const device = box.querySelector("[data-device]") as any;
-  const mountpoint = box.querySelector("[data-mountpoint]") as any;
-  const filesystem = box.querySelector("[data-filesystem]") as any;
   let disposed = false;
 
   const setStatus = (message, bad = false) => {
@@ -127,18 +117,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
         table.append(row);
       }
 
-      const selected = device.value;
-      device.replaceChildren();
-      for (const candidate of devices.filter((candidate) => !candidate.mounted)) {
-        const option = document.createElement("option");
-        option.value = candidate.path;
-        option.textContent = `${candidate.path} · ${candidate.model}`;
-        device.append(option);
-      }
-      if (devices.some((candidate) => candidate.path === selected && !candidate.mounted)) {
-        device.value = selected;
-      }
-      form.querySelector("button").disabled = device.options.length === 0;
       setStatus(`${list.length} mounts · ${devices.length} devices`);
     } catch (error) {
       if (!disposed) setStatus(String(error), true);
@@ -167,41 +145,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const attached = device.value;
-    const target = mountpoint.value.trim();
-    if (!attached || !target) {
-      setStatus("Pick a device and write a mountpoint.", true);
-      return;
-    }
-    const type = filesystem.value.trim() || "ext4";
-    const ok = await confirmAction({
-      title: "Mount this device?",
-      message: `${attached} will be mounted at ${target} as ${type}.`,
-      confirmLabel: "Mount",
-    });
-    if (!ok) return;
-    setStatus(`Mounting ${attached}…`);
-    try {
-      await call(context, "/mount", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          device: attached,
-          mountpoint: target,
-          filesystem: type,
-        }),
-      });
-      mountpoint.value = "";
-      await load();
-      setStatus(`Mounted ${attached} at ${target}`);
-    } catch (error) {
-      if (!disposed) setStatus(String(error), true);
-    }
-  });
-
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh") void load();
+  });
   let visible = true;
   const offVisibility = context.onVisibility?.((next) => {
     if (next === visible) return;
@@ -214,6 +161,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     root.replaceChildren();
   };

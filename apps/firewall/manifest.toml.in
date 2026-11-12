@@ -57,6 +57,29 @@ tag = "anth-firewall"
 module = "web/firewall.js"
 sha256 = "{{module_sha256}}"
 
+[[slot]]
+id = "panel.fab"
+label = "Add rule"
+icon = "shield"
+order = 30
+tag = "firewall-rule"
+view = "anth-firewall"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Add rule"
+tag = "add-rule"
+target = "firewall-rule-modal"
+
+[[slot]]
+id = "panel.modal"
+label = "Firewall rule"
+order = 31
+tag = "firewall-rule-modal"
+module = "web/firewall-modal.js"
+sha256 = "{{modal_sha256}}"
+
 [[cli]]
 call = "anthracite:firewall/firewall@1.0.0#snapshot"
 verb = "status"

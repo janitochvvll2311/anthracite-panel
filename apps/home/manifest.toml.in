@@ -41,3 +41,18 @@ order = 1
 tag = "home"
 module = "web/home.js"
 sha256 = "{{module_sha256}}"
+
+[[slot]]
+id = "panel.fab"
+label = "Refresh"
+icon = "refresh"
+order = 30
+tag = "refresh"
+view = "home"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Refresh"
+tag = "refresh"
+action = "refresh"

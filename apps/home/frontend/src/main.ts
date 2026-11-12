@@ -50,6 +50,12 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   if (!subtitle || !status || !refresh || !interval) {
     return () => root.replaceChildren();
   }
+  const refreshButton = refresh;
+
+  // The FAB is the refresh control in panels that implement it. A panel that
+  // does not implement `panel.fab` keeps the toolbar button, so manual mode
+  // never becomes a dead end.
+  if (context.panel?.slots?.includes("panel.fab")) refreshButton.remove();
 
   let disposed = false;
   let loading = false;
@@ -65,7 +71,7 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
   async function load(): Promise<void> {
     if (loading || disposed) return;
     loading = true;
-    refresh!.disabled = true;
+    refreshButton.disabled = true;
     setStatus("Reading host information…");
     try {
       const info = await fetchHostInfo(context);
@@ -84,7 +90,7 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
       }
     } finally {
       loading = false;
-      if (!disposed) refresh!.disabled = false;
+      if (!disposed) refreshButton.disabled = false;
     }
   }
 
@@ -127,10 +133,13 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
     else void load();
   }
 
-  refresh.addEventListener("click", restart);
   interval.addEventListener("change", () => {
     intervalMs = Number(interval.value) || 0;
     restart();
+  });
+  refreshButton.addEventListener("click", restart);
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh") restart();
   });
   const offVisibility = context.onVisibility?.((next) => {
     if (next === visible) return;
@@ -146,6 +155,7 @@ export function mount(root: HTMLElement, context: FrameContext): () => void {
 
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     controller?.abort();
     controller = undefined;

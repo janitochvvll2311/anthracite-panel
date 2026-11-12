@@ -41,6 +41,29 @@ tag = "anth-proc"
 module = "web/proc.js"
 sha256 = "{{module_sha256}}"
 
+[[slot]]
+id = "panel.fab"
+label = "Spawn"
+icon = "activity"
+order = 30
+tag = "proc-spawn"
+view = "anth-proc"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Spawn"
+tag = "spawn"
+target = "proc-spawn-modal"
+
+[[slot]]
+id = "panel.modal"
+label = "Spawn process"
+order = 31
+tag = "proc-spawn-modal"
+module = "web/proc-modal.js"
+sha256 = "{{modal_sha256}}"
+
 [[cli]]
 call = "anthracite:proc/proc@1.1.0#list"
 verb = "processes"

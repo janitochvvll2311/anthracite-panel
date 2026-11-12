@@ -21,25 +21,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
     <div class="fw-policy" data-policy></div>
     <div class="fw-chains" data-chains></div>
     <div class="fw-table" data-rules></div>
-    <form class="fw-form" data-form>
-      <input type="hidden" data-handle />
-      <select data-chain aria-label="Chain">
-        <option value="input">input</option>
-        <option value="output">output</option>
-      </select>
-      <select data-action aria-label="Action">
-        <option value="allow">allow</option>
-        <option value="deny">deny</option>
-      </select>
-      <select data-protocol aria-label="Protocol">
-        <option value="tcp">tcp</option>
-        <option value="udp">udp</option>
-      </select>
-      <input type="number" min="1" max="65535" data-port placeholder="port" aria-label="Port" />
-      <input data-comment placeholder="comment (optional)" aria-label="Comment" autocomplete="off" />
-      <button type="submit" data-submit>Add rule</button>
-      <button type="button" data-cancel hidden>Cancel</button>
-    </form>
     <p class="fw-status" role="status"></p>
   `;
   root.append(box);
@@ -48,15 +29,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const chainsRoot = box.querySelector("[data-chains]") as HTMLElement;
   const rulesRoot = box.querySelector("[data-rules]") as HTMLElement;
   const status = box.querySelector(".fw-status") as HTMLElement;
-  const form = box.querySelector("[data-form]") as HTMLFormElement;
-  const handle = box.querySelector("[data-handle]") as HTMLInputElement;
-  const chain = box.querySelector("[data-chain]") as HTMLSelectElement;
-  const action = box.querySelector("[data-action]") as HTMLSelectElement;
-  const protocol = box.querySelector("[data-protocol]") as HTMLSelectElement;
-  const port = box.querySelector("[data-port]") as HTMLInputElement;
-  const comment = box.querySelector("[data-comment]") as HTMLInputElement;
-  const submit = box.querySelector("[data-submit]") as HTMLButtonElement;
-  const cancel = box.querySelector("[data-cancel]") as HTMLButtonElement;
   let control = false;
   let disposed = false;
 
@@ -79,27 +51,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
     node.textContent = label;
     return node;
   };
-
-  function resetForm(): void {
-    form.reset();
-    handle.value = "";
-    protocol.value = "tcp";
-    action.value = "allow";
-    submit.textContent = "Add rule";
-    cancel.hidden = true;
-  }
-
-  function editRule(rule: any): void {
-    handle.value = String(rule.handle);
-    chain.value = rule.chain;
-    action.value = rule.action ?? "allow";
-    protocol.value = rule.protocol ?? "tcp";
-    port.value = String(rule.port ?? "");
-    comment.value = rule.comment ?? "";
-    submit.textContent = "Update rule";
-    cancel.hidden = false;
-    port.focus();
-  }
 
   function render(snapshot: any): void {
     control = snapshot.control === true;
@@ -169,7 +120,21 @@ export function mount(root: HTMLElement, context: FrameContext) {
       const edit = button("Edit", "fw-btn");
       edit.disabled = !control || custom;
       edit.title = custom ? "custom rules can only be deleted" : `Edit rule ${rule.handle}`;
-      edit.addEventListener("click", () => editRule(rule));
+      edit.addEventListener("click", () => {
+        void context.openModal?.({
+          tag: "firewall-rule-modal",
+          params: {
+            rule: {
+              handle: rule.handle,
+              chain: rule.chain,
+              action: rule.action,
+              protocol: rule.protocol,
+              port: rule.port,
+              comment: rule.comment,
+            },
+          },
+        });
+      });
       const remove = button("Delete", "fw-btn danger");
       remove.disabled = !control;
       remove.title = remove.disabled ? "read-only" : `Delete rule ${rule.handle}`;
@@ -179,10 +144,6 @@ export function mount(root: HTMLElement, context: FrameContext) {
       rulesRoot.append(row);
     }
 
-    const inputs = form.querySelectorAll("input:not([type=hidden]), select, button");
-    for (const input of inputs) {
-      (input as HTMLInputElement).disabled = !control;
-    }
     if (!snapshot.initialized) {
       setStatus("The managed table does not exist yet. Adding a rule creates it.");
     } else {
@@ -269,39 +230,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const value = Number(port.value);
-    if (!Number.isInteger(value) || value < 1 || value > 65535) {
-      setStatus("Write a port between 1 and 65535.", true);
-      return;
-    }
-    const editing = handle.value !== "";
-    const body = {
-      handle: editing ? Number(handle.value) : undefined,
-      chain: chain.value,
-      action: action.value,
-      protocol: protocol.value,
-      port: value,
-      comment: comment.value.trim() || null,
-    };
-    setStatus(editing ? "Updating the rule…" : "Adding the rule…");
-    try {
-      await call(context, editing ? "/update" : "/rule", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      resetForm();
-      await load();
-      setStatus(editing ? "Rule updated" : "Rule added");
-    } catch (error) {
-      if (!disposed) setStatus(String(error), true);
-    }
-  });
-
-  cancel.addEventListener("click", resetForm);
   box.querySelector("[data-refresh]")!.addEventListener("click", () => void load());
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh") void load();
+  });
   let visible = true;
   const offVisibility = context.onVisibility?.((next) => {
     if (next === visible) return;
@@ -313,6 +245,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     root.replaceChildren();
   };
