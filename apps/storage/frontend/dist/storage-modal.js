@@ -15,6 +15,13 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function mountDevice(context, request) {
+  return call(context, "/mount", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request)
+  });
+}
 
 // src/modal.ts
 var STYLES = `
@@ -112,14 +119,10 @@ function mount(root, context) {
     submit.disabled = true;
     setStatus(`Mounting ${attached}…`);
     try {
-      await call(context, "/mount", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          device: attached,
-          mountpoint: target,
-          filesystem: filesystem.value.trim() || "ext4"
-        })
+      await mountDevice(context, {
+        device: attached,
+        mountpoint: target,
+        filesystem: filesystem.value.trim() || "ext4"
       });
       if (!disposed)
         context.close();

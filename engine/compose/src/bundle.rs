@@ -557,21 +557,7 @@ fn check_hashes(root: &Path, manifest: &Manifest) -> Result<(), Error> {
     }
     // Icon assets are declared by the app, a slot or a FAB action. They share
     // the `web/` delivery route with UI modules.
-    let mut icons: Vec<(&str, &str)> = Vec::new();
-    if let (Some(icon), Some(hash)) = (&manifest.app.icon, &manifest.app.icon_sha256) {
-        icons.push((icon.as_str(), hash.as_str()));
-    }
-    for slot in &manifest.slot {
-        if let (Some(icon), Some(hash)) = (&slot.icon, &slot.icon_sha256) {
-            icons.push((icon.as_str(), hash.as_str()));
-        }
-        for action in &slot.actions {
-            if let (Some(icon), Some(hash)) = (&action.icon, &action.icon_sha256) {
-                icons.push((icon.as_str(), hash.as_str()));
-            }
-        }
-    }
-    for (icon, hash) in icons {
+    for (icon, hash) in manifest.icon_assets() {
         declared.insert(icon.to_string());
         check_hash(root, icon, hash)?;
     }

@@ -1126,41 +1126,11 @@ async fn app_asset(
         .iter()
         .find(|installed| installed.manifest.app.id == id)
         .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
-    let sha256 = found
-        .manifest
-        .slot
-        .iter()
-        .find(|slot| slot.module == module)
-        .map(|slot| slot.sha256.as_str())
-        .or_else(|| {
-            found.manifest.app.icon.as_deref().and_then(|icon| {
-                (icon == module)
-                    .then_some(found.manifest.app.icon_sha256.as_deref())
-                    .flatten()
-            })
-        })
-        .or_else(|| {
-            found.manifest.slot.iter().find_map(|slot| {
-                slot.icon
-                    .as_deref()
-                    .filter(|icon| *icon == module)
-                    .and(slot.icon_sha256.as_deref())
-                    .or_else(|| {
-                        slot.actions.iter().find_map(|action| {
-                            action
-                                .icon
-                                .as_deref()
-                                .filter(|icon| *icon == module)
-                                .and(action.icon_sha256.as_deref())
-                        })
-                    })
-            })
-        })
-        .ok_or_else(|| {
-            ApiError(Error::not_found(format!(
-                "`{id}` declares no asset `{module}`"
-            )))
-        })?;
+    let sha256 = found.manifest.asset_sha256(&module).ok_or_else(|| {
+        ApiError(Error::not_found(format!(
+            "`{id}` declares no asset `{module}`"
+        )))
+    })?;
     let relative = std::path::Path::new(&module);
     if relative
         .components()

@@ -15,6 +15,13 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function mountDevice(context, request) {
+  return call(context, "/mount", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request)
+  });
+}
 
 // src/confirm.ts
 function confirmAction(options) {
@@ -326,14 +333,10 @@ function mount(root, context) {
         return;
       setStatus(`Mounting ${attached}…`);
       try {
-        await call(context, "/mount", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            device: attached,
-            mountpoint: target,
-            filesystem: type
-          })
+        await mountDevice(context, {
+          device: attached,
+          mountpoint: target,
+          filesystem: type
         });
         mountpoint.value = "";
         await load();

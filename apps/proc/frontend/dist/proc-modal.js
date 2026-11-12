@@ -15,6 +15,13 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function spawnProcess(context, argv) {
+  return call(context, "/spawn", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ argv })
+  });
+}
 
 // src/modal.ts
 var STYLES = `
@@ -83,11 +90,7 @@ function mount(root, context) {
     submit.disabled = true;
     setStatus("Spawning…");
     try {
-      await call(context, "/spawn", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ argv })
-      });
+      await spawnProcess(context, argv);
       if (!disposed)
         context.close();
     } catch (error) {

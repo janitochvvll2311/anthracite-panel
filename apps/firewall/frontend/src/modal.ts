@@ -1,4 +1,4 @@
-import { call } from "./api";
+import { call, saveRule } from "./api";
 import type { ModalContext, RuleParams } from "./types";
 
 const STYLES = `
@@ -132,18 +132,18 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
     submit.disabled = true;
     setStatus(editing ? "Updating the rule…" : "Adding the rule…");
     try {
-      await call(context, editing ? "/update" : "/rule", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      await saveRule(
+        context,
+        {
           handle: editing?.handle,
           chain: chain.value,
           action: action.value,
           protocol: protocol.value,
           port: value,
           comment: comment.value.trim() || null,
-        }),
-      });
+        },
+        Boolean(editing),
+      );
       if (!disposed) context.close();
     } catch (error) {
       submit.disabled = false;

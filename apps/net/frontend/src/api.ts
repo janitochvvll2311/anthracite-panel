@@ -95,3 +95,19 @@ export async function watchNetwork(
     signal.removeEventListener("abort", cancel);
   }
 }
+
+export type RouteRequest = {
+  family: string;
+  destination: string;
+  gateway: string | null;
+  device: string;
+  metric: number;
+};
+
+export function addRoute(context: Caller, route: RouteRequest): Promise<any> {
+  return call(context, "/route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(route),
+  });
+}

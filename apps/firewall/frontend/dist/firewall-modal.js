@@ -15,6 +15,13 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function saveRule(context, request, editing) {
+  return call(context, editing ? "/update" : "/rule", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request)
+  });
+}
 
 // src/modal.ts
 var STYLES = `
@@ -143,18 +150,14 @@ function mount(root, context) {
     submit.disabled = true;
     setStatus(editing ? "Updating the rule…" : "Adding the rule…");
     try {
-      await call(context, editing ? "/update" : "/rule", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          handle: editing?.handle,
-          chain: chain.value,
-          action: action.value,
-          protocol: protocol.value,
-          port: value,
-          comment: comment.value.trim() || null
-        })
-      });
+      await saveRule(context, {
+        handle: editing?.handle,
+        chain: chain.value,
+        action: action.value,
+        protocol: protocol.value,
+        port: value,
+        comment: comment.value.trim() || null
+      }, Boolean(editing));
       if (!disposed)
         context.close();
     } catch (error) {

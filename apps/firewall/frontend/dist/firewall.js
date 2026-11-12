@@ -15,6 +15,13 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function saveRule(context, request, editing) {
+  return call(context, editing ? "/update" : "/rule", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request)
+  });
+}
 
 // src/confirm.ts
 function confirmAction(options) {
@@ -431,11 +438,7 @@ function mount(root, context) {
       };
       setStatus(editing ? "Updating the rule…" : "Adding the rule…");
       try {
-        await call(context, editing ? "/update" : "/rule", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body)
-        });
+        await saveRule(context, body, editing);
         resetForm();
         await load();
         setStatus(editing ? "Rule updated" : "Rule added");

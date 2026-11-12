@@ -26,3 +26,11 @@ export async function call(
   }
   return value;
 }
+
+export function spawnProcess(context: Caller, argv: string[]): Promise<any> {
+  return call(context, "/spawn", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ argv }),
+  });
+}

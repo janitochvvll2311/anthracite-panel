@@ -15,6 +15,13 @@ async function call(context, route, init = {}) {
   }
   return value;
 }
+function addRoute(context, route) {
+  return call(context, "/route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(route)
+  });
+}
 
 // src/modal.ts
 var STYLES = `
@@ -128,16 +135,12 @@ function mount(root, context) {
     submit.disabled = true;
     setStatus("Adding the route…");
     try {
-      await call(context, "/route", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          family: family.value,
-          destination: path,
-          gateway: gateway.value.trim() || null,
-          device: device.value,
-          metric: Number(metric.value) || 100
-        })
+      await addRoute(context, {
+        family: family.value,
+        destination: path,
+        gateway: gateway.value.trim() || null,
+        device: device.value,
+        metric: Number(metric.value) || 100
       });
       if (!disposed)
         context.close();

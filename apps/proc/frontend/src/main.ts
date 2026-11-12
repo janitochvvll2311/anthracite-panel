@@ -1,4 +1,4 @@
-import { call } from "./api";
+import { call, spawnProcess } from "./api";
 import { confirmAction } from "./confirm";
 import { cell, memory, reason } from "./format";
 import { styles } from "./styles";
@@ -727,11 +727,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       if (!ok) return;
       setStatus("Spawning…");
       try {
-        const pid = await call(context, "/spawn", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ argv }),
-        });
+        const pid = await spawnProcess(context, argv);
         spawnInput.value = "";
         await load();
         setStatus(`Spawned ${argv[0]} as pid ${pid}`);

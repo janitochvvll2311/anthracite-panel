@@ -101,16 +101,18 @@ export function mount(root: HTMLElement, context: FrameContext) {
       policyBadge("privileged groups", policy["allow-privileged-groups"]),
       cell("acc-mono", `home ${policy["home-root"] ?? "/home"}`),
     );
-    const canControl = policy.control === true;
-    formHome.placeholder = `${policy["home-root"] ?? "/home"}/name`;
-    if (!shellInitialized) {
-      formShell.value = policy["default-shell"] ?? "/bin/sh";
-      shellInitialized = true;
+    if (!usePanelForms) {
+      const canControl = policy.control === true;
+      formHome.placeholder = `${policy["home-root"] ?? "/home"}/name`;
+      if (!shellInitialized) {
+        formShell.value = policy["default-shell"] ?? "/bin/sh";
+        shellInitialized = true;
+      }
+      userForm.querySelector("button").disabled = !canControl;
+      groupForm.querySelector("button").disabled = !canControl;
+      formSystem.disabled = policy["allow-system"] !== true;
+      groupSystem.disabled = policy["allow-system"] !== true;
     }
-    userForm.querySelector("button").disabled = !canControl;
-    groupForm.querySelector("button").disabled = !canControl;
-    formSystem.disabled = policy["allow-system"] !== true;
-    groupSystem.disabled = policy["allow-system"] !== true;
   }
 
   async function load() {

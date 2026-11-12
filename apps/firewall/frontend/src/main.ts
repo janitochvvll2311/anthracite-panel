@@ -1,4 +1,4 @@
-import { call } from "./api";
+import { call, saveRule } from "./api";
 import { confirmAction } from "./confirm";
 import { styles } from "./styles";
 import type { FrameContext } from "./types";
@@ -314,11 +314,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
       };
       setStatus(editing ? "Updating the rule…" : "Adding the rule…");
       try {
-        await call(context, editing ? "/update" : "/rule", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        await saveRule(context, body, editing);
         resetForm();
         await load();
         setStatus(editing ? "Rule updated" : "Rule added");

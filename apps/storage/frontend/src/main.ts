@@ -1,4 +1,4 @@
-import { call } from "./api";
+import { call, mountDevice } from "./api";
 import { confirmAction } from "./confirm";
 import { cell, size } from "./format";
 import { styles } from "./styles";
@@ -191,14 +191,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
       if (!ok) return;
       setStatus(`Mounting ${attached}…`);
       try {
-        await call(context, "/mount", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            device: attached,
-            mountpoint: target,
-            filesystem: type,
-          }),
+        await mountDevice(context, {
+          device: attached,
+          mountpoint: target,
+          filesystem: type,
         });
         mountpoint.value = "";
         await load();

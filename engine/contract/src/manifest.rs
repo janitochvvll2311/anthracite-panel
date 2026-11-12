@@ -278,6 +278,39 @@ pub struct LimitsSection {
 }
 
 impl Manifest {
+    /// Every icon asset declared by the app, its slots or its FAB actions,
+    /// with the pinned hash. Names are not assets and are skipped.
+    pub fn icon_assets(&self) -> Vec<(&str, &str)> {
+        let mut assets = Vec::new();
+        if let (Some(icon), Some(hash)) = (&self.app.icon, &self.app.icon_sha256) {
+            assets.push((icon.as_str(), hash.as_str()));
+        }
+        for slot in &self.slot {
+            if let (Some(icon), Some(hash)) = (&slot.icon, &slot.icon_sha256) {
+                assets.push((icon.as_str(), hash.as_str()));
+            }
+            for action in &slot.actions {
+                if let (Some(icon), Some(hash)) = (&action.icon, &action.icon_sha256) {
+                    assets.push((icon.as_str(), hash.as_str()));
+                }
+            }
+        }
+        assets
+    }
+
+    /// The hash of any path the bundle may serve: a UI module or an icon asset.
+    pub fn asset_sha256(&self, path: &str) -> Option<&str> {
+        self.slot
+            .iter()
+            .find(|slot| slot.module == path)
+            .map(|slot| slot.sha256.as_str())
+            .or_else(|| {
+                self.icon_assets()
+                    .into_iter()
+                    .find_map(|(icon, hash)| (icon == path).then_some(hash))
+            })
+    }
+
     /// Parses a manifest from TOML. Unknown keys are errors, not warnings.
     #[cfg(feature = "parse")]
     pub fn parse(text: &str) -> Result<Self, Error> {

@@ -1,4 +1,4 @@
-import { call } from "./api";
+import { call, mountDevice } from "./api";
 import type { ModalContext } from "./types";
 
 export type Device = {
@@ -113,14 +113,10 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
     submit.disabled = true;
     setStatus(`Mounting ${attached}…`);
     try {
-      await call(context, "/mount", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          device: attached,
-          mountpoint: target,
-          filesystem: filesystem.value.trim() || "ext4",
-        }),
+      await mountDevice(context, {
+        device: attached,
+        mountpoint: target,
+        filesystem: filesystem.value.trim() || "ext4",
       });
       if (!disposed) context.close();
     } catch (error) {
