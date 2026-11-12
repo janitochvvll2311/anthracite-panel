@@ -66,6 +66,7 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
   const mountpoint = box.querySelector("[data-mountpoint]") as HTMLInputElement;
   const filesystem = box.querySelector("[data-filesystem]") as HTMLInputElement;
   const submit = box.querySelector("[data-submit]") as HTMLButtonElement;
+  submit.disabled = true;
   const cancel = box.querySelector("[data-cancel]") as HTMLButtonElement;
   const status = box.querySelector(".st-modal-status") as HTMLElement;
   let disposed = false;
@@ -96,6 +97,7 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
       );
       mountpoint.focus();
     } catch (error) {
+      submit.disabled = true;
       if (!disposed) setStatus(String(error), true);
     }
   }

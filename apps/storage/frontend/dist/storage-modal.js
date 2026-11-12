@@ -71,6 +71,7 @@ function mount(root, context) {
   const mountpoint = box.querySelector("[data-mountpoint]");
   const filesystem = box.querySelector("[data-filesystem]");
   const submit = box.querySelector("[data-submit]");
+  submit.disabled = true;
   const cancel = box.querySelector("[data-cancel]");
   const status = box.querySelector(".st-modal-status");
   let disposed = false;
@@ -95,6 +96,7 @@ function mount(root, context) {
       setStatus(device.options.length === 0 ? "There are no unmounted devices." : `${device.options.length} device(s) ready to mount`, device.options.length === 0);
       mountpoint.focus();
     } catch (error) {
+      submit.disabled = true;
       if (!disposed)
         setStatus(String(error), true);
     }

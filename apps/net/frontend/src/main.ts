@@ -29,6 +29,17 @@ export function mount(root: HTMLElement, context: FrameContext) {
       <button type="button" data-refresh>Refresh</button>
     </div>
     <div class="net-grid"></div>
+    <form class="net-add">
+      <select data-family aria-label="Family">
+        <option value="ipv4">ipv4</option>
+        <option value="ipv6">ipv6</option>
+      </select>
+      <input data-destination placeholder="destination, e.g. 10.1.0.0/24" aria-label="Destination" autocomplete="off" />
+      <input data-gateway placeholder="gateway (optional)" aria-label="Gateway" autocomplete="off" />
+      <select data-device aria-label="Device"></select>
+      <input data-metric type="number" min="0" value="100" aria-label="Metric" />
+      <button type="submit">Add route</button>
+    </form>
     <div class="net-routes" role="table" aria-label="Routes"></div>
     <p class="net-status" role="status"></p>
   `;
@@ -37,11 +48,22 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const grid = box.querySelector(".net-grid") as HTMLElement;
   const routes = box.querySelector(".net-routes") as HTMLElement;
   const status = box.querySelector(".net-status") as HTMLElement;
+  const form = box.querySelector(".net-add") as HTMLFormElement;
+  const family = box.querySelector("[data-family]") as HTMLSelectElement;
+  const destination = box.querySelector("[data-destination]") as HTMLInputElement;
+  const gateway = box.querySelector("[data-gateway]") as HTMLInputElement;
+  const device = box.querySelector("[data-device]") as HTMLSelectElement;
+  const metric = box.querySelector("[data-metric]") as HTMLInputElement;
   const interval = box.querySelector("[data-interval]") as HTMLSelectElement;
+  const usePanelForms =
+    context.panel?.slots?.includes("panel.fab") === true &&
+    context.panel?.slots?.includes("panel.modal") === true;
+  if (usePanelForms) form.remove();
   let intervalMs = 2000;
   let controller: AbortController | undefined;
   let visible = true;
   let disposed = false;
+  let deviceNames = "";
 
   const setStatus = (message: string, bad = false): void => {
     status.textContent = message ?? "";
@@ -51,6 +73,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   function render(interfaces: Interface[], table: Route[]): void {
     const active = document.activeElement as HTMLElement | null;
     const focusKey = active?.dataset.key;
+    const deviceFocused = !usePanelForms && active === device;
     const routesScroll = routes.scrollTop;
     grid.replaceChildren();
     for (const iface of interfaces) {
@@ -88,6 +111,22 @@ export function mount(root: HTMLElement, context: FrameContext) {
       counters.innerHTML = `<span>rx <b>${count(iface["rx-bytes"])}</b></span><span>tx <b>${count(iface["tx-bytes"])}</b></span>`;
       card.append(head, meta, addrs, counters);
       grid.append(card);
+    }
+
+    if (!usePanelForms) {
+      const names = interfaces.map((iface) => iface.name);
+      if (names.join("\n") !== deviceNames) {
+        const selected = device.value;
+        device.replaceChildren();
+        for (const iface of interfaces) {
+          const option = document.createElement("option");
+          option.value = iface.name;
+          option.textContent = iface.name;
+          device.append(option);
+        }
+        if (names.includes(selected)) device.value = selected;
+        deviceNames = names.join("\n");
+      }
     }
 
     routes.replaceChildren();
@@ -130,6 +169,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
         grid.querySelector<HTMLElement>(`[data-key="${escaped}"]`) ??
         routes.querySelector<HTMLElement>(`[data-key="${escaped}"]`)
       )?.focus();
+    } else if (deviceFocused) {
+      device.focus();
     }
   }
 
@@ -223,6 +264,45 @@ export function mount(root: HTMLElement, context: FrameContext) {
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
     }
+  }
+
+  if (!usePanelForms) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const path = destination.value.trim();
+      if (!path) {
+        setStatus("Write a destination first.", true);
+        return;
+      }
+      const via = device.value;
+      const through = gateway.value.trim();
+      const ok = await confirmAction({
+        title: "Add this route?",
+        message: `${path} via ${via}${through ? ` through ${through}` : ""}. A wrong route can interrupt connectivity.`,
+        confirmLabel: "Add route",
+      });
+      if (!ok) return;
+      setStatus("Adding the route…");
+      try {
+        await call(context, "/route", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            family: family.value,
+            destination: path,
+            gateway: gateway.value.trim() || null,
+            device: device.value,
+            metric: Number(metric.value) || 100,
+          }),
+        });
+        destination.value = "";
+        gateway.value = "";
+        await load();
+        setStatus(`Added ${path} via ${device.value}`);
+      } catch (error) {
+        if (!disposed) setStatus(reason(error), true);
+      }
+    });
   }
 
   interval.addEventListener("change", () => {

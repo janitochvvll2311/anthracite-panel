@@ -36,6 +36,8 @@ export type Caller = {
 /// The subset of the panel frame context this view uses.
 export type FrameContext = Caller & {
   fill?: () => void;
+  /// Slots the hosting panel implements.
+  panel?: { slots: string[] };
   onVisibility?: (handler: (visible: boolean) => void) => () => void;
   onAction?: (handler: (tag: string) => void) => () => void;
 };

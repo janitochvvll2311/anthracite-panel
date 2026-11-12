@@ -88,6 +88,7 @@ function mount(root, context) {
   const device = box.querySelector("[data-device]");
   const metric = box.querySelector("[data-metric]");
   const submit = box.querySelector("[data-submit]");
+  submit.disabled = true;
   const cancel = box.querySelector("[data-cancel]");
   const status = box.querySelector(".net-modal-status");
   let disposed = false;
@@ -112,6 +113,7 @@ function mount(root, context) {
       setStatus(device.options.length === 0 ? "There are no interfaces to route through." : "The route is added to the live table.", device.options.length === 0);
       destination.focus();
     } catch (error) {
+      submit.disabled = true;
       if (!disposed)
         setStatus(String(error), true);
     }

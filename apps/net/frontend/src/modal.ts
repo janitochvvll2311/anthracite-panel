@@ -75,6 +75,7 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
   const device = box.querySelector("[data-device]") as HTMLSelectElement;
   const metric = box.querySelector("[data-metric]") as HTMLInputElement;
   const submit = box.querySelector("[data-submit]") as HTMLButtonElement;
+  submit.disabled = true;
   const cancel = box.querySelector("[data-cancel]") as HTMLButtonElement;
   const status = box.querySelector(".net-modal-status") as HTMLElement;
   let disposed = false;
@@ -105,6 +106,7 @@ export function mount(root: HTMLElement, context: ModalContext): () => void {
       );
       destination.focus();
     } catch (error) {
+      submit.disabled = true;
       if (!disposed) setStatus(String(error), true);
     }
   }

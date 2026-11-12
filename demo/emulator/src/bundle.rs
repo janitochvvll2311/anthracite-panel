@@ -55,7 +55,11 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             .join("frontend")
             .join("dist")
             .join(format!("{name}-modal.js"));
-        let modal = fs::read(&modal_path).ok();
+        let modal = match fs::read(&modal_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(Box::new(error)),
+        };
         let module_name = module_path
             .file_name()
             .and_then(|name| name.to_str())

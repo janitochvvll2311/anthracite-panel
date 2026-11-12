@@ -130,6 +130,25 @@ function mount(root, context) {
     <div class="fw-policy" data-policy></div>
     <div class="fw-chains" data-chains></div>
     <div class="fw-table" data-rules></div>
+    <form class="fw-form" data-form>
+      <input type="hidden" data-handle />
+      <select data-chain aria-label="Chain">
+        <option value="input">input</option>
+        <option value="output">output</option>
+      </select>
+      <select data-action aria-label="Action">
+        <option value="allow">allow</option>
+        <option value="deny">deny</option>
+      </select>
+      <select data-protocol aria-label="Protocol">
+        <option value="tcp">tcp</option>
+        <option value="udp">udp</option>
+      </select>
+      <input type="number" min="1" max="65535" data-port placeholder="port" aria-label="Port" />
+      <input data-comment placeholder="comment (optional)" aria-label="Comment" autocomplete="off" />
+      <button type="submit" data-submit>Add rule</button>
+      <button type="button" data-cancel hidden>Cancel</button>
+    </form>
     <p class="fw-status" role="status"></p>
   `;
   root.append(box);
@@ -137,6 +156,18 @@ function mount(root, context) {
   const chainsRoot = box.querySelector("[data-chains]");
   const rulesRoot = box.querySelector("[data-rules]");
   const status = box.querySelector(".fw-status");
+  const form = box.querySelector("[data-form]");
+  const handle = box.querySelector("[data-handle]");
+  const chain = box.querySelector("[data-chain]");
+  const action = box.querySelector("[data-action]");
+  const protocol = box.querySelector("[data-protocol]");
+  const port = box.querySelector("[data-port]");
+  const comment = box.querySelector("[data-comment]");
+  const submit = box.querySelector("[data-submit]");
+  const cancel = box.querySelector("[data-cancel]");
+  const usePanelForms = context.panel?.slots?.includes("panel.fab") === true && context.panel?.slots?.includes("panel.modal") === true;
+  if (usePanelForms)
+    form.remove();
   let control = false;
   let disposed = false;
   const setStatus = (message, bad = false) => {
@@ -156,6 +187,25 @@ function mount(root, context) {
     node.textContent = label;
     return node;
   };
+  function resetForm() {
+    form.reset();
+    handle.value = "";
+    protocol.value = "tcp";
+    action.value = "allow";
+    submit.textContent = "Add rule";
+    cancel.hidden = true;
+  }
+  function editRule(rule) {
+    handle.value = String(rule.handle);
+    chain.value = rule.chain;
+    action.value = rule.action ?? "allow";
+    protocol.value = rule.protocol ?? "tcp";
+    port.value = String(rule.port ?? "");
+    comment.value = rule.comment ?? "";
+    submit.textContent = "Update rule";
+    cancel.hidden = false;
+    port.focus();
+  }
   function render(snapshot) {
     control = snapshot.control === true;
     policyRoot.replaceChildren(badge(snapshot.initialized ? "table ready" : "table missing", snapshot.initialized ? "on" : "off"), badge(control ? "control on" : "read-only", control ? "on" : "off"));
@@ -219,6 +269,10 @@ function mount(root, context) {
       edit.disabled = !control || custom;
       edit.title = custom ? "custom rules can only be deleted" : `Edit rule ${rule.handle}`;
       edit.addEventListener("click", () => {
+        if (!usePanelForms) {
+          editRule(rule);
+          return;
+        }
         context.openModal?.({
           tag: "firewall-rule-modal",
           params: {
@@ -240,6 +294,12 @@ function mount(root, context) {
       actions.append(edit, remove);
       row.append(actions);
       rulesRoot.append(row);
+    }
+    if (!usePanelForms) {
+      const inputs = form.querySelectorAll("input:not([type=hidden]), select, button");
+      for (const input of inputs) {
+        input.disabled = !control;
+      }
     }
     if (!snapshot.initialized) {
       setStatus("The managed table does not exist yet. Adding a rule creates it.");
@@ -326,6 +386,40 @@ function mount(root, context) {
       if (!disposed)
         setStatus(String(error), true);
     }
+  }
+  if (!usePanelForms) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const value = Number(port.value);
+      if (!Number.isInteger(value) || value < 1 || value > 65535) {
+        setStatus("Write a port between 1 and 65535.", true);
+        return;
+      }
+      const editing = handle.value !== "";
+      const body = {
+        handle: editing ? Number(handle.value) : undefined,
+        chain: chain.value,
+        action: action.value,
+        protocol: protocol.value,
+        port: value,
+        comment: comment.value.trim() || null
+      };
+      setStatus(editing ? "Updating the rule…" : "Adding the rule…");
+      try {
+        await call(context, editing ? "/update" : "/rule", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        resetForm();
+        await load();
+        setStatus(editing ? "Rule updated" : "Rule added");
+      } catch (error) {
+        if (!disposed)
+          setStatus(String(error), true);
+      }
+    });
+    cancel.addEventListener("click", resetForm);
   }
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
   const offAction = context.onAction?.((tag) => {
