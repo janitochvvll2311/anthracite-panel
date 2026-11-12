@@ -1,59 +1,89 @@
-# Reporte — Real accounts service
+# Report — Real accounts service
 
-## Resumen
+## Summary
 
-Se sustituyó el fixture del emulador por un servicio nativo de cuentas para `anthracite:accounts`. La entrega cubre la checklist v0.4 en dos fases: inventario y mutaciones básicas sobre 1.1.0, y paridad completa sobre 1.2.0 con `getent`/`source`, contraseñas, grupos, GECOS y borrado opcional del home.
+The emulator fixture was replaced by a native accounts service for
+`anthracite:accounts`. The work covers the v0.4 checklist in two phases:
+inventory and basic mutations on 1.1.0, then full parity on 1.2.0 with
+`getent`/`source`, passwords, groups, GECOS and optional home removal.
 
-## Fases integradas
+## Integrated phases
 
-| Fase | PR | Estado | Merge |
-|------|----|--------|-------|
+| Phase | PR | State | Merge |
+|-------|----|-------|-------|
 | Real accounts service (1.1.0) | #150 | merged | `29effd7` |
 | Accounts 1.2.0 parity | #151 | merged | `4578671` |
 
-## Funcionalidades entregadas
+## Delivered features
 
-- Servicio nativo `accounts-service` con clase `host`, probe de `/etc` y `getent`, y runner de comandos inyectable.
-- Inventario local y NSS: `source` local/nss, lock opcional, GECOS, grupo primario y grupos suplementarios.
-- `create-user`, `delete-user` (con `remove-home`), `set-lock`, `set-password`, `create-group` y `delete-group`.
-- Mutaciones por argv (`useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`), sin shell; contraseña solo por stdin de `chpasswd`.
-- Política por argv: `--control`, `--passwords`, `--allow-system`, `--allow-privileged-groups`, `--home-root`, `--shell`, `--default-shell`.
-- Guards de root, cuenta del servicio, último miembro de cada grupo administrativo, ids de sistema, grupos privilegiados, home, shell y grupo primario.
-- Bundle real, manifiesto y build script; emulador de demo actualizado al mismo contrato.
-- Vista Accounts: tira de política, badges local/directorio/lock, alta de usuarios y grupos, contraseña, borrado con/sin home y refresco por visibilidad.
-- `getent` con timeout de 2 s y drenaje en hilo para directorios grandes o bytes no UTF-8.
+- Native `accounts-service` with class `host`, a probe for `/etc` and
+  `getent`, and an injectable command runner.
+- Local and NSS inventory: `source` local/nss, optional lock state, GECOS,
+  primary group and supplementary groups.
+- `create-user`, `delete-user` (with `remove-home`), `set-lock`,
+  `set-password`, `create-group` and `delete-group`.
+- Mutations through argv (`useradd`, `userdel`, `usermod`, `groupadd`,
+  `groupdel`), never a shell; passwords only on `chpasswd` stdin.
+- Policy through argv: `--control`, `--passwords`, `--allow-system`,
+  `--allow-privileged-groups`, `--home-root`, `--shell`, `--default-shell`.
+- Guards for root, the service account, the last member of each administrative
+  group, system ids, privileged groups, home, shell and primary group.
+- Real bundle, manifest and build script; the demo emulator implements the same
+  contract.
+- Accounts view: policy strip, local/directory/lock badges, user and group
+  forms, password changes, delete with or without the home, and visibility
+  refresh.
+- `getent` with a 2 s timeout and a reader thread for large directories or
+  non-UTF-8 bytes.
 
-## Hallazgos de revisión atendidos
+## Review findings addressed
 
-- Fase 1: guarda del último administrador por grupo, verificación real del unlock, conflicto falso por grupo homónimo y serialización de mutaciones con mutex.
-- Fase 2: defaults de `home-root`/`default-shell` en la vista y el backend, `not_self` en `set-password`, retirada del verbo CLI que exponía la contraseña, protección de root/operator en el fixture, prueba de `remove-home`, timeout/drenaje de `getent` y botón Password deshabilitado para cuentas protegidas.
+- Phase 1: per-group last-administrator guard, real unlock verification, false
+  conflict for a same-name group, and serialized mutations with a mutex.
+- Phase 2: `home-root`/`default-shell` defaults in the view and backend,
+  `not_self` in `set-password`, removal of the CLI verb that exposed the
+  password, root/operator protection in the fixture, a `remove-home` test,
+  `getent` timeout/draining, and the Password button disabled for protected
+  accounts.
 
-## Pruebas
+## Tests
 
-- `apps/accounts/backend`: **37 tests**, `clippy -D warnings` y `fmt --check` limpios.
-- `demo/emulator`: **44 tests**, clippy y fmt limpios.
-- `apps/accounts/frontend`: `tsc --noEmit` y `bun build` limpios.
-- E2E demo por el motor: alta de usuario con ids automáticos, contraseña, grupos, borrado con home y comprobación del subárbol en Files.
-- Smoke real del bundle 1.2.0 contra `/etc` y validación del motor para `policy`, `users` y `groups`.
-- La validación de mutaciones reales no se ejecuta en CI: queda manual en un contenedor desechable con `shadow-utils`.
+- `apps/accounts/backend`: **37 tests**, `clippy -D warnings` and
+  `fmt --check` clean.
+- `demo/emulator`: **44 tests**, clippy and fmt clean.
+- `apps/accounts/frontend`: `tsc --noEmit` and `bun build` clean.
+- Demo e2e through the engine: user creation with automatic ids, password,
+  groups, delete with home, and the Files subtree check.
+- Real smoke test of the 1.2.0 bundle against `/etc`, with engine validation of
+  `policy`, `users` and `groups`.
+- Real mutation validation does not run in CI: it is manual in a disposable
+  container with `shadow-utils`.
 
-## Decisiones registradas
+## Recorded decisions
 
-- Cuentas locales primero; `getent` y `source` en la segunda fase.
-- Permisos multiusuario y roles por usuario se difieren a un feature de plataforma `identity & permissions` para una versión posterior.
-- Política de cuentas por argv congelado en el grant, no configuración editable por app.
-- Un fallo de `getent` o un timeout degradan a inventario local, nunca bloquean el servicio.
-- La contraseña no se expone como verbo CLI porque el CLI la pondría en argv.
+- Local accounts first; `getent` and `source` in the second phase.
+- Multi-user identity and per-user roles are deferred to a platform feature,
+  `identity & permissions`, in a later version.
+- Accounts policy travels in the frozen grant argv, not in app-editable
+  configuration.
+- A `getent` failure or timeout degrades to the local inventory and never blocks
+  the service.
+- The password is not exposed as a CLI verb because the CLI would place it in
+  argv.
 
-## Fuera de alcance
+## Out of scope
 
-- Identidad multiusuario, roles y permisos por usuario.
-- Manager, auditoría y UI de aprobación (M4-close/M5).
-- Paginación o filtrado del inventario grande; el listado devuelve el snapshot completo.
-- Validación automatizada de mutaciones reales en el host.
+- Multi-user identity, roles and per-user permissions.
+- Manager, audit and approval UI (M4-close/M5).
+- Pagination or filtering for large inventories; the list returns the whole
+  snapshot.
+- Automated validation of real host mutations.
 
-## Pendientes y riesgos
+## Pending and risks
 
-- Validar manualmente crear/borrar usuario, contraseña, grupos y home en un contenedor desechable con `shadow-utils`.
-- `getent` puede seguir añadiendo latencia en hosts con directorios muy grandes; valorar caché o paginación en una fase posterior.
-- El servicio necesita root o acceso equivalente para mutar; en CI solo se prueba con fixtures.
+- Manually validate user create/delete, password, groups and home removal in a
+  disposable container with `shadow-utils`.
+- `getent` can still add latency on hosts with very large directories; consider
+  caching or pagination in a later phase.
+- The service needs root or equivalent access to mutate; CI only exercises
+  fixtures.

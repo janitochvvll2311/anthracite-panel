@@ -95,7 +95,7 @@ id     = "panel.view"
 label  = "Notes"
 icon   = "notes"
 order  = 10
-# parent = "org.example.shell"   # group under another app's view
+# parent = "org.example.shell#shell"   # group under another app's view
 # tab    = "Notes"               # sub-tab label when this slot is the parent
 tag    = "anth-notes"
 module = "web/notes.js"
@@ -330,8 +330,9 @@ implements `panel.view` is implementing the contract, not borrowing our name.
 | `panel.action` | `label`, `icon`, `order`, and a `target` — its own view or a `METHOD /path` of the same app | lists it in the action button |
 | `panel.settings` | `label`, `order`, `tag`, `module`, `sha256` | renders it as a section inside settings |
 
-`parent` groups a `panel.view` contribution under another app's view: the
-parent's `label` is the top-level tab, its `tab` (or its `label`) labels its own
+`parent` groups a `panel.view` contribution under another app's view, named as
+`<app-id>#<slot-tag>` so an app with several views is unambiguous. The parent's
+`label` is the top-level tab, its `tab` (or its `label`) labels its own
 sub-tab, and the child's `label` labels its sub-tab. Grouping is visual, one
 level deep, and never a call between apps: each child keeps its own sandbox,
 grant and `app.id`. If the parent is missing, hidden or the graph is not one
