@@ -42,7 +42,9 @@ pub struct Contribution {
     pub icon: Option<String>,
     pub order: i64,
     pub hidden: bool,
+    /// `<app-id>#<slot-tag>` of the view this contribution is grouped under.
     pub parent: Option<String>,
+    /// Sub-tab label when this contribution is the parent of a group.
     pub tab: Option<String>,
     pub tag: String,
     pub module: String,

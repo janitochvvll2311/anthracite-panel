@@ -95,8 +95,7 @@ id     = "panel.view"
 label  = "Notes"
 icon   = "notes"
 order  = 10
-# parent = "org.example.shell#shell"   # group under another app's view
-# tab    = "Notes"               # sub-tab label when this slot is the parent
+# parent = "org.example.shell#shell"   # optional; use `tab` instead for a parent label
 tag    = "anth-notes"
 module = "web/notes.js"
 sha256 = "…"
@@ -335,8 +334,9 @@ implements `panel.view` is implementing the contract, not borrowing our name.
 `label` is the top-level tab, its `tab` (or its `label`) labels its own
 sub-tab, and the child's `label` labels its sub-tab. Grouping is visual, one
 level deep, and never a call between apps: each child keeps its own sandbox,
-grant and `app.id`. If the parent is missing, hidden or the graph is not one
-level, the child falls back to a top-level tab.
+grant and `app.id`. `parent` and `tab` are mutually exclusive: a child uses its
+`label`. If the parent is missing, hidden or the graph is not one level, the
+child falls back to a top-level tab.
 
 A panel may declare slots of its own, but those are not portable: an app targeting
 them will not appear anywhere else.

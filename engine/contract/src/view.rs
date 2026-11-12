@@ -145,7 +145,7 @@ pub struct SurfaceSlot {
     /// The panel renders this contribution only on request, not in navigation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
-    /// App id whose view this contribution is grouped under.
+    /// `<app-id>#<slot-tag>` of the view this contribution is grouped under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// Sub-tab label when this contribution is the parent of a group.

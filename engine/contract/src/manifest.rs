@@ -199,7 +199,8 @@ pub struct SlotSection {
     /// but the panel does not list them in its navigation.
     #[serde(default)]
     pub hidden: bool,
-    /// App id whose view this contribution appears under, as a sub-tab.
+    /// `<app-id>#<slot-tag>` of the view this contribution appears under, as a
+    /// sub-tab.
     #[serde(default)]
     pub parent: Option<String>,
     /// Sub-tab label when this slot is the parent of a group; defaults to
