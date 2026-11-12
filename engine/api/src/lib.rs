@@ -745,6 +745,8 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
                 icon: slot.icon.clone(),
                 order: slot.order,
                 hidden: slot.hidden,
+                parent: slot.parent.clone(),
+                tab: slot.tab.clone(),
                 tag: slot.tag.clone(),
                 module: slot.module.clone(),
                 sha256: slot.sha256.clone(),

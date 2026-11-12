@@ -153,6 +153,8 @@ mod tests {
             icon: None,
             order,
             hidden: false,
+            parent: None,
+            tab: None,
             tag: tag.to_string(),
             module: format!("web/{tag}.js"),
             sha256: "a".repeat(64),
