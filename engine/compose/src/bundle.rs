@@ -544,6 +544,11 @@ fn check_hashes(root: &Path, manifest: &Manifest) -> Result<(), Error> {
         )?;
     }
     for slot in &manifest.slot {
+        // A declarative `panel.fab` names no module; only module-backed slots
+        // carry a file to verify.
+        if slot.module.is_empty() {
+            continue;
+        }
         declared.insert(slot.module.clone());
         check_hash(root, &slot.module, &slot.sha256)?;
     }
@@ -817,6 +822,26 @@ mod tests {
         assert!(root.join("manifest.toml").is_file());
         drop(staged);
         assert!(!root.exists(), "the staging directory is removed");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_declarative_fab_declares_no_module() {
+        let state = scratch("fab");
+        let keyring = Keyring::new(&state);
+        let mut manifest = manifest(WASM);
+        manifest.push_str(
+            "\n[[slot]]\nid = \"panel.fab\"\nlabel = \"Refresh\"\norder = 1\ntag = \"refresh\"\nmodule = \"\"\nsha256 = \"\"\n\n[[slot.actions]]\nlabel = \"Refresh\"\ntag = \"refresh\"\naction = \"refresh\"\n",
+        );
+        let staged = extract(
+            &zip(&entries(&manifest, WIT, WASM)),
+            &state,
+            &options(false),
+            &keyring,
+        )
+        .expect("staged");
+        assert!(staged.manifest().slot[0].module.is_empty());
+        assert_eq!(staged.manifest().slot[0].id, "panel.fab");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 

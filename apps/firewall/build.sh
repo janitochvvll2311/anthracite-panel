@@ -34,9 +34,12 @@ binary="$root/target/release/firewall-service"
 [ -x "$binary" ] || { echo "cargo did not produce $binary" >&2; exit 2; }
 
 module="$app/frontend/dist/firewall.js"
+modal="$app/frontend/dist/firewall-modal.js"
 [ -f "$module" ] || { echo "bun did not produce $module" >&2; exit 2; }
+[ -f "$modal" ] || { echo "bun did not produce $modal" >&2; exit 2; }
 sha=$(sha256sum "$binary" | cut -d' ' -f1)
 module_sha=$(sha256sum "$module" | cut -d' ' -f1)
+modal_sha=$(sha256sum "$modal" | cut -d' ' -f1)
 
 mkdir -p /tmp/anthracite-panel
 tmp=$(mktemp -d /tmp/anthracite-panel/firewall-build.XXXXXX)
@@ -45,10 +48,12 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/web" "$tmp/wit"
 cp "$binary" "$tmp/bin/firewall-service"
 cp "$module" "$tmp/web/firewall.js"
+cp "$modal" "$tmp/web/firewall-modal.js"
 cp "$app/wit/firewall.wit" "$tmp/wit/firewall.wit"
 sed \
     -e "s/{{sha256}}/$sha/g" \
     -e "s/{{module_sha256}}/$module_sha/g" \
+    -e "s/{{modal_sha256}}/$modal_sha/g" \
     -e "s/{{app_name}}/Firewall/g" \
     -e "s/{{app_summary}}/Managed nftables table, rules and default policies./g" \
     -e "s|{{service_path}}|bin/firewall-service|g" \

@@ -34,9 +34,12 @@ binary="$root/target/release/net-service"
 [ -x "$binary" ] || { echo "cargo did not produce $binary" >&2; exit 2; }
 
 module="$app/frontend/dist/net.js"
+modal="$app/frontend/dist/net-modal.js"
 [ -f "$module" ] || { echo "bun did not produce $module" >&2; exit 2; }
+[ -f "$modal" ] || { echo "bun did not produce $modal" >&2; exit 2; }
 sha=$(sha256sum "$binary" | cut -d' ' -f1)
 module_sha=$(sha256sum "$module" | cut -d' ' -f1)
+modal_sha=$(sha256sum "$modal" | cut -d' ' -f1)
 
 mkdir -p /tmp/anthracite-panel
 tmp=$(mktemp -d /tmp/anthracite-panel/net-build.XXXXXX)
@@ -45,10 +48,12 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/web" "$tmp/wit"
 cp "$binary" "$tmp/bin/net-service"
 cp "$module" "$tmp/web/net.js"
+cp "$modal" "$tmp/web/net-modal.js"
 cp "$app/wit/net.wit" "$tmp/wit/net.wit"
 sed \
     -e "s/{{sha256}}/$sha/g" \
     -e "s/{{module_sha256}}/$module_sha/g" \
+    -e "s/{{modal_sha256}}/$modal_sha/g" \
     -e "s/{{app_name}}/Network/g" \
     -e "s/{{app_summary}}/Host interfaces, addresses, routes and counters./g" \
     -e "s|{{service_path}}|bin/net-service|g" \

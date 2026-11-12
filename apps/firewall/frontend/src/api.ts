@@ -1,7 +1,7 @@
-import type { FrameContext } from "./types";
+import type { Caller } from "./types";
 
 export async function call(
-  context: FrameContext,
+  context: Caller,
   route: string,
   init: RequestInit = {},
 ): Promise<any> {

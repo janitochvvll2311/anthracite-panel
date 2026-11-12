@@ -447,6 +447,9 @@ function mount(root, context) {
   const interval = box.querySelector("[data-interval]");
   const spawnForm = box.querySelector(".proc-spawn");
   const spawnInput = spawnForm.querySelector("input");
+  const usePanelForms = context.panel?.slots?.includes("panel.fab") === true && context.panel?.slots?.includes("panel.modal") === true;
+  if (usePanelForms)
+    spawnForm.remove();
   const MOBILE_PAGE = 200;
   const DESKTOP_PAGE = 1e4;
   const ROW_HEIGHT = 40;
@@ -476,6 +479,10 @@ function mount(root, context) {
     visible = next;
     scheduleLive();
     if (next && intervalMs > 0)
+      load();
+  });
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh")
       load();
   });
   const setStatus = (message, bad = false) => {
@@ -961,36 +968,38 @@ function mount(root, context) {
     renderRows(true);
   });
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
-  spawnForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const command = spawnInput.value.trim();
-    if (!command) {
-      setStatus("Write a command first, for example `sleep 30`.", true);
-      return;
-    }
-    const argv = command.split(/\s+/);
-    const ok = await confirmAction({
-      title: "Spawn this command?",
-      message: `\`${command}\` will run detached from the process service.`,
-      confirmLabel: "Spawn"
-    });
-    if (!ok)
-      return;
-    setStatus("Spawning…");
-    try {
-      const pid = await call(context, "/spawn", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ argv })
+  if (!usePanelForms) {
+    spawnForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const command = spawnInput.value.trim();
+      if (!command) {
+        setStatus("Write a command first, for example `sleep 30`.", true);
+        return;
+      }
+      const argv = command.split(/\s+/);
+      const ok = await confirmAction({
+        title: "Spawn this command?",
+        message: `\`${command}\` will run detached from the process service.`,
+        confirmLabel: "Spawn"
       });
-      spawnInput.value = "";
-      await load();
-      setStatus(`Spawned ${argv[0]} as pid ${pid}`);
-    } catch (error) {
-      if (!disposed)
-        setStatus(reason(error), true);
-    }
-  });
+      if (!ok)
+        return;
+      setStatus("Spawning…");
+      try {
+        const pid = await call(context, "/spawn", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ argv })
+        });
+        spawnInput.value = "";
+        await load();
+        setStatus(`Spawned ${argv[0]} as pid ${pid}`);
+      } catch (error) {
+        if (!disposed)
+          setStatus(reason(error), true);
+      }
+    });
+  }
   const resize = new ResizeObserver(applyCompact);
   resize.observe(box);
   const tableResize = new ResizeObserver(() => renderWindow(false));
@@ -1016,6 +1025,7 @@ function mount(root, context) {
   load();
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     if (live !== null)
       window.clearInterval(live);

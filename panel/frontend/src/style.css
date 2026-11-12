@@ -720,6 +720,21 @@ button.drawer-close {
   pointer-events: none;
 }
 
+.window-fabs {
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+}
+
+.window-fabs .fab-button {
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.window-fabs .fab-label {
+  font-size: 12px;
+}
+
 .fab > * {
   pointer-events: auto;
 }
@@ -1750,6 +1765,11 @@ html[data-viewport="mobile"] .fabs {
   right: 14px;
   bottom: 14px;
   gap: 8px;
+}
+
+html[data-viewport="mobile"] .window-fabs {
+  right: 12px;
+  bottom: 12px;
 }
 
 html[data-viewport="mobile"] .fab-button {

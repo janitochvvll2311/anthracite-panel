@@ -165,6 +165,9 @@ function mount(root, context) {
   const comment = box.querySelector("[data-comment]");
   const submit = box.querySelector("[data-submit]");
   const cancel = box.querySelector("[data-cancel]");
+  const usePanelForms = context.panel?.slots?.includes("panel.fab") === true && context.panel?.slots?.includes("panel.modal") === true;
+  if (usePanelForms)
+    form.remove();
   let control = false;
   let disposed = false;
   const setStatus = (message, bad = false) => {
@@ -265,7 +268,25 @@ function mount(root, context) {
       const edit = button("Edit", "fw-btn");
       edit.disabled = !control || custom;
       edit.title = custom ? "custom rules can only be deleted" : `Edit rule ${rule.handle}`;
-      edit.addEventListener("click", () => editRule(rule));
+      edit.addEventListener("click", () => {
+        if (!usePanelForms) {
+          editRule(rule);
+          return;
+        }
+        context.openModal?.({
+          tag: "firewall-rule-modal",
+          params: {
+            rule: {
+              handle: rule.handle,
+              chain: rule.chain,
+              action: rule.action,
+              protocol: rule.protocol,
+              port: rule.port,
+              comment: rule.comment
+            }
+          }
+        });
+      });
       const remove = button("Delete", "fw-btn danger");
       remove.disabled = !control;
       remove.title = remove.disabled ? "read-only" : `Delete rule ${rule.handle}`;
@@ -274,9 +295,11 @@ function mount(root, context) {
       row.append(actions);
       rulesRoot.append(row);
     }
-    const inputs = form.querySelectorAll("input:not([type=hidden]), select, button");
-    for (const input of inputs) {
-      input.disabled = !control;
+    if (!usePanelForms) {
+      const inputs = form.querySelectorAll("input:not([type=hidden]), select, button");
+      for (const input of inputs) {
+        input.disabled = !control;
+      }
     }
     if (!snapshot.initialized) {
       setStatus("The managed table does not exist yet. Adding a rule creates it.");
@@ -364,39 +387,45 @@ function mount(root, context) {
         setStatus(String(error), true);
     }
   }
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const value = Number(port.value);
-    if (!Number.isInteger(value) || value < 1 || value > 65535) {
-      setStatus("Write a port between 1 and 65535.", true);
-      return;
-    }
-    const editing = handle.value !== "";
-    const body = {
-      handle: editing ? Number(handle.value) : undefined,
-      chain: chain.value,
-      action: action.value,
-      protocol: protocol.value,
-      port: value,
-      comment: comment.value.trim() || null
-    };
-    setStatus(editing ? "Updating the rule…" : "Adding the rule…");
-    try {
-      await call(context, editing ? "/update" : "/rule", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      resetForm();
-      await load();
-      setStatus(editing ? "Rule updated" : "Rule added");
-    } catch (error) {
-      if (!disposed)
-        setStatus(String(error), true);
-    }
-  });
-  cancel.addEventListener("click", resetForm);
+  if (!usePanelForms) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const value = Number(port.value);
+      if (!Number.isInteger(value) || value < 1 || value > 65535) {
+        setStatus("Write a port between 1 and 65535.", true);
+        return;
+      }
+      const editing = handle.value !== "";
+      const body = {
+        handle: editing ? Number(handle.value) : undefined,
+        chain: chain.value,
+        action: action.value,
+        protocol: protocol.value,
+        port: value,
+        comment: comment.value.trim() || null
+      };
+      setStatus(editing ? "Updating the rule…" : "Adding the rule…");
+      try {
+        await call(context, editing ? "/update" : "/rule", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        resetForm();
+        await load();
+        setStatus(editing ? "Rule updated" : "Rule added");
+      } catch (error) {
+        if (!disposed)
+          setStatus(String(error), true);
+      }
+    });
+    cancel.addEventListener("click", resetForm);
+  }
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh")
+      load();
+  });
   let visible = true;
   const offVisibility = context.onVisibility?.((next) => {
     if (next === visible)
@@ -409,6 +438,7 @@ function mount(root, context) {
   load();
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     root.replaceChildren();
   };

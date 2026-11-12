@@ -46,6 +46,29 @@ tag = "anth-storage"
 module = "web/storage.js"
 sha256 = "{{module_sha256}}"
 
+[[slot]]
+id = "panel.fab"
+label = "Mount"
+icon = "disk"
+order = 30
+tag = "storage-mount"
+view = "anth-storage"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Mount"
+tag = "mount"
+target = "storage-mount-modal"
+
+[[slot]]
+id = "panel.modal"
+label = "Mount device"
+order = 31
+tag = "storage-mount-modal"
+module = "web/storage-modal.js"
+sha256 = "{{modal_sha256}}"
+
 [[cli]]
 call = "anthracite:storage/storage@1.2.0#devices"
 verb = "devices"

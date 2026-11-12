@@ -55,6 +55,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const device = box.querySelector("[data-device]") as HTMLSelectElement;
   const metric = box.querySelector("[data-metric]") as HTMLInputElement;
   const interval = box.querySelector("[data-interval]") as HTMLSelectElement;
+  const usePanelForms =
+    context.panel?.slots?.includes("panel.fab") === true &&
+    context.panel?.slots?.includes("panel.modal") === true;
+  if (usePanelForms) form.remove();
   let intervalMs = 2000;
   let controller: AbortController | undefined;
   let visible = true;
@@ -69,7 +73,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   function render(interfaces: Interface[], table: Route[]): void {
     const active = document.activeElement as HTMLElement | null;
     const focusKey = active?.dataset.key;
-    const deviceFocused = active === device;
+    const deviceFocused = !usePanelForms && active === device;
     const routesScroll = routes.scrollTop;
     grid.replaceChildren();
     for (const iface of interfaces) {
@@ -109,18 +113,20 @@ export function mount(root: HTMLElement, context: FrameContext) {
       grid.append(card);
     }
 
-    const names = interfaces.map((iface) => iface.name);
-    if (names.join("\n") !== deviceNames) {
-      const selected = device.value;
-      device.replaceChildren();
-      for (const iface of interfaces) {
-        const option = document.createElement("option");
-        option.value = iface.name;
-        option.textContent = iface.name;
-        device.append(option);
+    if (!usePanelForms) {
+      const names = interfaces.map((iface) => iface.name);
+      if (names.join("\n") !== deviceNames) {
+        const selected = device.value;
+        device.replaceChildren();
+        for (const iface of interfaces) {
+          const option = document.createElement("option");
+          option.value = iface.name;
+          option.textContent = iface.name;
+          device.append(option);
+        }
+        if (names.includes(selected)) device.value = selected;
+        deviceNames = names.join("\n");
       }
-      if (names.includes(selected)) device.value = selected;
-      deviceNames = names.join("\n");
     }
 
     routes.replaceChildren();
@@ -260,48 +266,53 @@ export function mount(root: HTMLElement, context: FrameContext) {
     }
   }
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const path = destination.value.trim();
-    if (!path) {
-      setStatus("Write a destination first.", true);
-      return;
-    }
-    const via = device.value;
-    const through = gateway.value.trim();
-    const ok = await confirmAction({
-      title: "Add this route?",
-      message: `${path} via ${via}${through ? ` through ${through}` : ""}. A wrong route can interrupt connectivity.`,
-      confirmLabel: "Add route",
-    });
-    if (!ok) return;
-    setStatus("Adding the route…");
-    try {
-      await call(context, "/route", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          family: family.value,
-          destination: path,
-          gateway: gateway.value.trim() || null,
-          device: device.value,
-          metric: Number(metric.value) || 100,
-        }),
+  if (!usePanelForms) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const path = destination.value.trim();
+      if (!path) {
+        setStatus("Write a destination first.", true);
+        return;
+      }
+      const via = device.value;
+      const through = gateway.value.trim();
+      const ok = await confirmAction({
+        title: "Add this route?",
+        message: `${path} via ${via}${through ? ` through ${through}` : ""}. A wrong route can interrupt connectivity.`,
+        confirmLabel: "Add route",
       });
-      destination.value = "";
-      gateway.value = "";
-      await load();
-      setStatus(`Added ${path} via ${device.value}`);
-    } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
-    }
-  });
+      if (!ok) return;
+      setStatus("Adding the route…");
+      try {
+        await call(context, "/route", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            family: family.value,
+            destination: path,
+            gateway: gateway.value.trim() || null,
+            device: device.value,
+            metric: Number(metric.value) || 100,
+          }),
+        });
+        destination.value = "";
+        gateway.value = "";
+        await load();
+        setStatus(`Added ${path} via ${device.value}`);
+      } catch (error) {
+        if (!disposed) setStatus(reason(error), true);
+      }
+    });
+  }
 
   interval.addEventListener("change", () => {
     intervalMs = Number(interval.value) || 0;
     restart();
   });
   box.querySelector("[data-refresh]")!.addEventListener("click", restart);
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh") void load();
+  });
   const offVisibility = context.onVisibility?.((next) => {
     if (next === visible) return;
     visible = next;
@@ -316,6 +327,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     controller?.abort();
     controller = undefined;

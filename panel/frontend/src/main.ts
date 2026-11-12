@@ -109,6 +109,9 @@ type Floating = Mounted & {
   bounds?: { left: string; top: string; width: string; height: string };
   maximizeButton: HTMLButtonElement;
   stackItem?: HTMLElement;
+  /// FABs live inside the window, not in the workspace overlay.
+  fabs?: HTMLElement;
+  fabsSignature?: string;
 };
 
 /// The single panel-level modal. It hosts one `panel.modal` module in a
@@ -601,10 +604,10 @@ function sendAction(key: string | null, tag: string): void {
 }
 
 function closeFabMenus(): void {
-  for (const menu of fabsElement.querySelectorAll<HTMLElement>(".fab-menu")) {
+  for (const menu of document.querySelectorAll<HTMLElement>(".fab-menu")) {
     menu.hidden = true;
   }
-  for (const trigger of fabsElement.querySelectorAll<HTMLElement>(
+  for (const trigger of document.querySelectorAll<HTMLElement>(
     ".fab-button[aria-expanded]",
   )) {
     trigger.setAttribute("aria-expanded", "false");
@@ -624,16 +627,24 @@ function fabButton(
   return node;
 }
 
-function runFabAction(source: Contribution, action: FabAction): void {
+function runFabAction(
+  source: Contribution,
+  action: FabAction,
+  originKey: string | null,
+): void {
   closeFabMenus();
   if (action.target) {
-    openModal(source, { tag: action.target });
+    openModal(source, { tag: action.target }, originKey);
     return;
   }
-  if (action.action) sendAction(activeKey, action.action);
+  if (action.action) sendAction(originKey, action.action);
 }
 
-function renderFab(source: Contribution, fab: Contribution): HTMLElement {
+function renderFab(
+  source: Contribution,
+  fab: Contribution,
+  originKey: string | null,
+): HTMLElement {
   const actions = fab.slot.actions ?? [];
   const wrap = element("div", "fab");
   wrap.dataset.tag = fab.slot.tag;
@@ -645,7 +656,7 @@ function renderFab(source: Contribution, fab: Contribution): HTMLElement {
         action.label,
         action.icon ?? fab.slot.icon,
       );
-      node.addEventListener("click", () => runFabAction(source, action));
+      node.addEventListener("click", () => runFabAction(source, action, originKey));
       wrap.append(node);
     }
     return wrap;
@@ -657,7 +668,7 @@ function renderFab(source: Contribution, fab: Contribution): HTMLElement {
   for (const action of actions) {
     const item = fabButton("fab-menu-item", action.label, action.icon);
     item.setAttribute("role", "menuitem");
-    item.addEventListener("click", () => runFabAction(source, action));
+    item.addEventListener("click", () => runFabAction(source, action, originKey));
     menu.append(item);
   }
   const main = fabButton(
@@ -677,27 +688,29 @@ function renderFab(source: Contribution, fab: Contribution): HTMLElement {
   return wrap;
 }
 
-/// FABs belong to the app and optionally to one of its views. The active tab
-/// decides which ones are on screen; a floating view does not carry a FAB.
+/// FABs belong to the app and optionally to one of its views. Tabs and
+/// floating windows each carry their own FAB container.
 ///
 /// The composition is polled every few seconds, so this must not rebuild the
 /// DOM when nothing changed: a `replaceChildren` would close an open menu and
 /// drop keyboard focus while the operator is using it.
-function renderFabs(): void {
-  const active = activeKey ? tabs.get(activeKey)?.contribution : undefined;
-  const enabled = Boolean(active) && implemented.includes(FAB);
-  const fabs =
-    enabled && active
-      ? ordered(FAB).filter(
-          (candidate) =>
-            implementedByPanel(candidate) &&
-            !candidate.slot.hidden &&
-            candidate.app.id === active.app.id &&
-            (!candidate.slot.view || candidate.slot.view === active.slot.tag),
-        )
-      : [];
-  const signature = JSON.stringify([
-    active ? contributionKey(active) : null,
+function fabsFor(contribution: Contribution): Contribution[] {
+  return ordered(FAB).filter(
+    (candidate) =>
+      implementedByPanel(candidate) &&
+      !candidate.slot.hidden &&
+      candidate.app.id === contribution.app.id &&
+      (!candidate.slot.view || candidate.slot.view === contribution.slot.tag),
+  );
+}
+
+function fabsSignatureFor(
+  scope: string | null,
+  enabled: boolean,
+  fabs: Contribution[],
+): string {
+  return JSON.stringify([
+    scope,
     enabled,
     fabs.map((fab) => [
       fab.slot.tag,
@@ -715,6 +728,17 @@ function renderFabs(): void {
       ]),
     ]),
   ]);
+}
+
+function renderFabs(): void {
+  const active = activeKey ? tabs.get(activeKey)?.contribution : undefined;
+  const enabled = Boolean(active) && implemented.includes(FAB);
+  const fabs = enabled && active ? fabsFor(active) : [];
+  const signature = fabsSignatureFor(
+    active ? activeKey : null,
+    enabled,
+    fabs,
+  );
   if (signature === fabsSignature) return;
   fabsSignature = signature;
 
@@ -724,7 +748,23 @@ function renderFabs(): void {
     return;
   }
   fabsElement.hidden = fabs.length === 0;
-  for (const fab of fabs) fabsElement.append(renderFab(active, fab));
+  for (const fab of fabs) fabsElement.append(renderFab(active, fab, activeKey));
+  closeFabMenus();
+}
+
+function renderWindowFabs(state: Floating): void {
+  const container = state.fabs;
+  if (!container) return;
+  const enabled = implemented.includes(FAB);
+  const fabs = enabled ? fabsFor(state.contribution) : [];
+  const signature = fabsSignatureFor(state.key, enabled, fabs);
+  if (signature === state.fabsSignature) return;
+  state.fabsSignature = signature;
+  container.replaceChildren();
+  container.hidden = fabs.length === 0;
+  for (const fab of fabs) {
+    container.append(renderFab(state.contribution, fab, state.key));
+  }
   closeFabMenus();
 }
 
@@ -1275,7 +1315,9 @@ function openWindow(
   header.append(copy, tools);
 
   const body = element("div", "window-body");
-  windowElement.append(header, body);
+  const fabs = element("div", "fabs window-fabs");
+  fabs.hidden = true;
+  windowElement.append(header, body, fabs);
   windowsElement.append(windowElement);
 
   const state: Floating = {
@@ -1290,9 +1332,11 @@ function openWindow(
     mode: "normal",
     restoreMode: "normal",
     maximizeButton: maximize,
+    fabs,
   };
   floating.set(key, state);
   focusWindow(state);
+  renderWindowFabs(state);
 
   maximize.addEventListener("click", () =>
     setMaximized(state, toggleMaximized(state.mode) === "maximized"),
@@ -1469,7 +1513,10 @@ function reconcileWindows(): void {
       const params = state.params;
       closeFloating(state);
       openWindow(contribution, kind, params);
+      continue;
     }
+    state.contribution = contribution;
+    renderWindowFabs(state);
   }
 }
 
@@ -1635,7 +1682,10 @@ modalElement.addEventListener("pointerdown", (event) => {
   if (event.target === modalElement) closeModal();
 });
 document.addEventListener("pointerdown", (event) => {
-  if (!fabsElement.contains(event.target as Node)) closeFabMenus();
+  const target = event.target;
+  if (!(target instanceof Element) || !target.closest(".fabs")) {
+    closeFabMenus();
+  }
 });
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;

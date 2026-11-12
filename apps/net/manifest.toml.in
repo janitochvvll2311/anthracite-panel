@@ -59,6 +59,29 @@ tag = "anth-net"
 module = "web/net.js"
 sha256 = "{{module_sha256}}"
 
+[[slot]]
+id = "panel.fab"
+label = "Add route"
+icon = "network"
+order = 30
+tag = "net-route"
+view = "anth-net"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Add route"
+tag = "add-route"
+target = "net-route-modal"
+
+[[slot]]
+id = "panel.modal"
+label = "Add route"
+order = 31
+tag = "net-route-modal"
+module = "web/net-modal.js"
+sha256 = "{{modal_sha256}}"
+
 [[cli]]
 call = "anthracite:net/net@1.2.0#interfaces"
 verb = "interfaces"

@@ -51,6 +51,15 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                 module_path.display()
             )
         })?;
+        let modal_path = dir
+            .join("frontend")
+            .join("dist")
+            .join(format!("{name}-modal.js"));
+        let modal = match fs::read(&modal_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(Box::new(error)),
+        };
         let module_name = module_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -60,6 +69,15 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
+        let modal_hash: String = modal
+            .as_ref()
+            .map(|bytes| {
+                Sha256::digest(bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+            .unwrap_or_default();
         let (app_name, summary, service_class, service_argv) = match *name {
             "fs" => (
                 "Files (emulator)",
@@ -114,6 +132,7 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
         let manifest = template
             .replace("{{sha256}}", &hash)
             .replace("{{module_sha256}}", &module_hash)
+            .replace("{{modal_sha256}}", &modal_hash)
             .replace("{{app_name}}", app_name)
             .replace("{{app_summary}}", summary)
             .replace("{{service_path}}", "bin/host-emulator")
@@ -137,6 +156,10 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
         }
         writer.start_file(format!("web/{module_name}"), options)?;
         writer.write_all(&module)?;
+        if let Some(modal) = &modal {
+            writer.start_file(format!("web/{name}-modal.js"), options)?;
+            writer.write_all(modal)?;
+        }
         writer.start_file("bin/host-emulator", options)?;
         writer.write_all(&bytes)?;
         let path = out.join(format!("{name}.anth"));
@@ -194,19 +217,23 @@ mod tests {
             manifest.validate().expect("validate");
             assert_eq!(manifest.app.id, bundle.app);
             assert!(manifest.service.is_some());
-            let slot = manifest.slot.first().expect("a panel.view slot");
-            assert_eq!(slot.id, "panel.view");
-            let mut module = Vec::new();
-            std::io::Read::read_to_end(
-                &mut archive.by_name(&slot.module).expect("module"),
-                &mut module,
-            )
-            .expect("read module");
-            let hash: String = Sha256::digest(&module)
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect();
-            assert_eq!(hash, slot.sha256);
+            assert!(
+                manifest.slot.iter().any(|slot| slot.id == "panel.view"),
+                "every bundle contributes a view"
+            );
+            for slot in manifest.slot.iter().filter(|slot| !slot.module.is_empty()) {
+                let mut module = Vec::new();
+                std::io::Read::read_to_end(
+                    &mut archive.by_name(&slot.module).expect("module"),
+                    &mut module,
+                )
+                .expect("read module");
+                let hash: String = Sha256::digest(&module)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                assert_eq!(hash, slot.sha256, "{}", slot.module);
+            }
             let wit_name = names
                 .iter()
                 .find(|name| name.starts_with("wit/"))

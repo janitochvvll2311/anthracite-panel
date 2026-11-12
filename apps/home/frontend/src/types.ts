@@ -52,5 +52,10 @@ export type HostInfo = {
 export type FrameContext = {
   app: { id: string };
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  /// Slots the hosting panel implements; a panel without `panel.fab` keeps the
+  /// toolbar refresh button.
+  panel?: { slots: string[] };
   onVisibility?: (handler: (visible: boolean) => void) => () => void;
+  /// Local action tags from the panel, e.g. `refresh` after a modal closes.
+  onAction?: (handler: (tag: string) => void) => () => void;
 };

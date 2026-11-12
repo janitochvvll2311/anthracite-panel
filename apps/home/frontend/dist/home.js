@@ -337,6 +337,9 @@ function mount(root, context) {
   if (!subtitle || !status || !refresh || !interval) {
     return () => root.replaceChildren();
   }
+  const refreshButton = refresh;
+  if (context.panel?.slots?.includes("panel.fab"))
+    refreshButton.remove();
   let disposed = false;
   let loading = false;
   let intervalMs = 2000;
@@ -350,7 +353,7 @@ function mount(root, context) {
     if (loading || disposed)
       return;
     loading = true;
-    refresh.disabled = true;
+    refreshButton.disabled = true;
     setStatus("Reading host information…");
     try {
       const info = await fetchHostInfo(context);
@@ -366,7 +369,7 @@ function mount(root, context) {
     } finally {
       loading = false;
       if (!disposed)
-        refresh.disabled = false;
+        refreshButton.disabled = false;
     }
   }
   async function watch() {
@@ -404,10 +407,14 @@ function mount(root, context) {
     else
       load();
   }
-  refresh.addEventListener("click", restart);
   interval.addEventListener("change", () => {
     intervalMs = Number(interval.value) || 0;
     restart();
+  });
+  refreshButton.addEventListener("click", restart);
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh")
+      restart();
   });
   const offVisibility = context.onVisibility?.((next) => {
     if (next === visible)
@@ -423,6 +430,7 @@ function mount(root, context) {
   intervalMs > 0 ? watch() : load();
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     controller?.abort();
     controller = undefined;

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/main.ts --outfile dist/storage.js --format esm --target browser",
+    "build": "bun build src/main.ts --outfile dist/storage.js --format esm --target browser && bun build src/modal.ts --outfile dist/storage-modal.js --format esm --target browser",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

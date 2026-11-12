@@ -34,9 +34,12 @@ binary="$root/target/release/proc-service"
 [ -x "$binary" ] || { echo "cargo did not produce $binary" >&2; exit 2; }
 
 module="$app/frontend/dist/proc.js"
+modal="$app/frontend/dist/proc-modal.js"
 [ -f "$module" ] || { echo "bun did not produce $module" >&2; exit 2; }
+[ -f "$modal" ] || { echo "bun did not produce $modal" >&2; exit 2; }
 sha=$(sha256sum "$binary" | cut -d' ' -f1)
 module_sha=$(sha256sum "$module" | cut -d' ' -f1)
+modal_sha=$(sha256sum "$modal" | cut -d' ' -f1)
 
 mkdir -p /tmp/anthracite-panel
 tmp=$(mktemp -d /tmp/anthracite-panel/proc-build.XXXXXX)
@@ -45,10 +48,12 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/web" "$tmp/wit"
 cp "$binary" "$tmp/bin/proc-service"
 cp "$module" "$tmp/web/proc.js"
+cp "$modal" "$tmp/web/proc-modal.js"
 cp "$app/wit/proc.wit" "$tmp/wit/proc.wit"
 sed \
     -e "s/{{sha256}}/$sha/g" \
     -e "s/{{module_sha256}}/$module_sha/g" \
+    -e "s/{{modal_sha256}}/$modal_sha/g" \
     -e "s/{{app_name}}/Processes/g" \
     -e "s/{{app_summary}}/Process table, allowlisted signals and detached spawn./g" \
     -e "s|{{service_path}}|bin/proc-service|g" \
