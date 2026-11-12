@@ -202,6 +202,10 @@
             }, 1200);
           });
 
+        window.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") send("anth:escape");
+        });
+
         window.addEventListener("message", async (event) => {
           if (event.source !== parent) return;
           const message = event.data;

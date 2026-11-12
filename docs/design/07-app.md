@@ -343,6 +343,74 @@ from its context. When it closes, the panel sends the portable `refresh` action
 actions with `context.onAction` and reload their data in place. Destructive
 confirmations stay local to the app: they are not composition modals.
 
+A single-action FAB is the read-only case:
+
+```toml
+[[slot]]
+id = "panel.fab"
+label = "Refresh"
+icon = "refresh"
+order = 30
+tag = "refresh"
+view = "home"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Refresh"
+tag = "refresh"
+action = "refresh"
+```
+
+A menu FAB can mix a modal and local actions:
+
+```toml
+[[slot]]
+id = "panel.fab"
+label = "Add"
+order = 31
+tag = "add-note"
+view = "notes"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "New note"
+tag = "new-note"
+target = "edit-note"
+
+[[slot.actions]]
+label = "Refresh"
+tag = "refresh"
+action = "refresh"
+
+[[slot]]
+id = "panel.modal"
+label = "Edit note"
+order = 32
+tag = "edit-note"
+module = "web/edit-note.js"
+sha256 = "…"
+```
+
+The view drives both sides of the bridge:
+
+```ts
+const off = context.onAction?.((tag) => {
+  if (tag === "refresh") void load();
+});
+await context.openModal?.({
+  tag: "edit-note",
+  params: { path: "/notes/today.md" },
+});
+```
+
+The modal calls `context.close()` when it finishes. A panel that does not
+implement `panel.fab` or `panel.modal` simply ignores those contributions; an
+app that wants to stay usable there should keep a local fallback control (the
+official panel's apps do this without showing duplicate controls when the slots
+are implemented).
+
 `parent` groups a `panel.view` contribution under another app's view, named as
 `<app-id>#<slot-tag>` so an app with several views is unambiguous. The parent's
 `label` is the top-level tab, its `tab` (or its `label`) labels its own

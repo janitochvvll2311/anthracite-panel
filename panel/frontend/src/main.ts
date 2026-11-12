@@ -1692,7 +1692,7 @@ document.addEventListener("keydown", (event) => {
   // A modal is in the top layer: the dialog handles Escape and its close
   // event refreshes the view. The shell must not close windows behind it.
   if (modalElement.open) return;
-  if (fabsElement.querySelector(".fab-menu:not([hidden])")) {
+  if (document.querySelector(".fab-menu:not([hidden])")) {
     closeFabMenus();
     return;
   }

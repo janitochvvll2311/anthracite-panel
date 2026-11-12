@@ -262,6 +262,23 @@ mod tests {
     }
 
     #[test]
+    fn a_view_only_panel_ignores_fab_and_modal() {
+        let mut slots = Slots::new([VIEW]);
+        slots.add(
+            &app("org.example.notes"),
+            &[
+                slot(VIEW, "notes", 1),
+                slot(FAB, "add", 2),
+                slot(MODAL, "edit", 3),
+            ],
+        );
+        assert_eq!(slots.mounted(VIEW).len(), 1);
+        let ignored = slots.ignored();
+        assert!(ignored.iter().any(|contribution| contribution.id == FAB));
+        assert!(ignored.iter().any(|contribution| contribution.id == MODAL));
+    }
+
+    #[test]
     fn two_panels_can_declare_different_slots() {
         let mut custom = Slots::new(["my.panel.extra"]);
         custom.add(

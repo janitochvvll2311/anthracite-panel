@@ -53,3 +53,46 @@ The script installs, type-checks and bundles every `apps/*/frontend` into
 `frontend/dist/<app>.js`. The demo apps commit their generated module so
 `demo/emulator/bundle-emulator` can package a bundle without Bun; `apps/home`,
 `apps/fs` and `apps/terminal` rebuild their module in their own build scripts.
+
+## FAB and modal modules
+
+An app that contributes a FAB declares it in `manifest.toml.in`; unlike a view,
+the FAB is declarative and has no module. The `view` tag in this hypothetical
+app must match one of its own `panel.view` tags in a real manifest:
+
+```toml
+[[slot]]
+id = "panel.fab"
+label = "Add"
+order = 30
+tag = "add-entry"
+view = "anth-entry"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "New"
+tag = "new"
+action = "new"
+
+[[slot.actions]]
+label = "Upload"
+tag = "upload"
+action = "upload"
+```
+
+A `target` action points at a `panel.modal` slot of the same app; an `action`
+is a local tag delivered to the active view. The view opens a modal with
+`context.openModal({ tag, params })`, handles local actions with
+`context.onAction`, and the modal closes with `context.close()`. After it
+closes, the panel sends `REFRESH` to the originating view.
+
+Modal forms live in a second frontend entry, usually `src/modal.ts`, and are
+packaged as `web/<app>-modal.js`. Its build script must include the modal in
+the bundle and replace `{{modal_sha256}}`; the demo bundle builder picks up
+`frontend/dist/<app>-modal.js` automatically.
+
+Keep destructive confirmations in the app's own `<dialog>` or inline
+confirmation. A panel that does not implement `panel.fab`/`panel.modal` ignores
+those contributions, so an app that wants to remain usable there should keep a
+local fallback control.
