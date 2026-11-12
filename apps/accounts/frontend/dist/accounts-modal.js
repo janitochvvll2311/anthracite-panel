@@ -100,7 +100,10 @@ function userForm(box, context) {
     if (value.control !== true)
       setStatus(status, "Account control is disabled.", true);
     name.focus();
-  }).catch((error) => setStatus(status, String(error), true));
+  }).catch((error) => {
+    submit.disabled = false;
+    setStatus(status, String(error), true);
+  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const value = name.value.trim();
@@ -161,7 +164,10 @@ function groupForm(box, context) {
     if (value.control !== true)
       setStatus(status, "Account control is disabled.", true);
     name.focus();
-  }).catch((error) => setStatus(status, String(error), true));
+  }).catch((error) => {
+    submit.disabled = false;
+    setStatus(status, String(error), true);
+  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const value = name.value.trim();

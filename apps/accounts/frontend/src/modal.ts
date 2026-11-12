@@ -91,7 +91,10 @@ function userForm(box: HTMLElement, context: ModalContext): () => void {
       if (value.control !== true) setStatus(status, "Account control is disabled.", true);
       name.focus();
     })
-    .catch((error) => setStatus(status, String(error), true));
+    .catch((error) => {
+      submit.disabled = false;
+      setStatus(status, String(error), true);
+    });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -156,7 +159,10 @@ function groupForm(box: HTMLElement, context: ModalContext): () => void {
       if (value.control !== true) setStatus(status, "Account control is disabled.", true);
       name.focus();
     })
-    .catch((error) => setStatus(status, String(error), true));
+    .catch((error) => {
+      submit.disabled = false;
+      setStatus(status, String(error), true);
+    });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();

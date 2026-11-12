@@ -36964,8 +36964,8 @@ function mount(root, context) {
   if (usePanelForms) {
     newForm.hidden = true;
     renameForm.hidden = true;
-    newButton.hidden = true;
-    uploadButton.hidden = true;
+    newButton.remove();
+    uploadButton.remove();
   }
   let current = "/";
   let nextCursor = null;
@@ -37050,6 +37050,10 @@ function mount(root, context) {
     renameInput.select();
   }
   function openNew() {
+    if (view === "trash") {
+      setStatus("Return to Files to create an entry.", true);
+      return;
+    }
     if (usePanelForms) {
       context.openModal?.({ tag: "fs-new-modal", params: { path: current } });
       return;

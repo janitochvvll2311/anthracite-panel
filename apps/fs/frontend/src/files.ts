@@ -98,8 +98,8 @@ export function mount(root: HTMLElement, context: FrameContext) {
   if (usePanelForms) {
     newForm.hidden = true;
     renameForm.hidden = true;
-    newButton.hidden = true;
-    uploadButton.hidden = true;
+    newButton.remove();
+    uploadButton.remove();
   }
 
   let current = "/";
@@ -197,6 +197,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   function openNew() {
+    if (view === "trash") {
+      setStatus("Return to Files to create an entry.", true);
+      return;
+    }
     if (usePanelForms) {
       void context.openModal?.({ tag: "fs-new-modal", params: { path: current } });
       return;
