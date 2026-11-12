@@ -97,7 +97,7 @@ function mount(root, context) {
   const policyRoot = box.querySelector("[data-policy]");
   const chainsRoot = box.querySelector("[data-chains]");
   const rulesRoot = box.querySelector("[data-rules]");
-  const status = box.querySelector("[data-status]");
+  const status = box.querySelector(".fw-status");
   const form = box.querySelector("[data-form]");
   const handle = box.querySelector("[data-handle]");
   const chain = box.querySelector("[data-chain]");

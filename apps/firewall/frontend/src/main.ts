@@ -46,7 +46,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const policyRoot = box.querySelector("[data-policy]") as HTMLElement;
   const chainsRoot = box.querySelector("[data-chains]") as HTMLElement;
   const rulesRoot = box.querySelector("[data-rules]") as HTMLElement;
-  const status = box.querySelector("[data-status]") as HTMLElement;
+  const status = box.querySelector(".fw-status") as HTMLElement;
   const form = box.querySelector("[data-form]") as HTMLFormElement;
   const handle = box.querySelector("[data-handle]") as HTMLInputElement;
   const chain = box.querySelector("[data-chain]") as HTMLSelectElement;

@@ -232,7 +232,11 @@ fn port(input: &Value) -> Result<u16, Error> {
 fn handle(input: &Value) -> Result<u64, Error> {
     input
         .get("handle")
-        .and_then(Value::as_u64)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        })
         .filter(|value| *value > 0)
         .ok_or_else(|| Error::invalid("`handle` must be greater than zero"))
 }
@@ -323,7 +327,7 @@ mod tests {
         call(
             &mut fixture,
             "delete-rule",
-            json!({"handle": rule["handle"]}),
+            json!({"handle": rule["handle"].as_u64().expect("handle").to_string()}),
         );
         call(&mut fixture, "flush", json!({"chain": "input"}));
         let snapshot = call(&mut fixture, "snapshot", Value::Null);

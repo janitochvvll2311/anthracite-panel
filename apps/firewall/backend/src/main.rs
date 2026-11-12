@@ -463,7 +463,7 @@ fn comment_args(
         metadata.push('|');
         metadata.push_str(comment);
     }
-    vec!["comment".to_string(), metadata]
+    vec!["comment".to_string(), format!("\"{metadata}\"")]
 }
 
 fn text(input: &Value, key: &str) -> Result<String, Error> {
@@ -508,7 +508,11 @@ fn port(input: &Value) -> Result<u16, Error> {
 fn handle(input: &Value) -> Result<u64, Error> {
     input
         .get("handle")
-        .and_then(Value::as_u64)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        })
         .filter(|value| *value > 0)
         .ok_or_else(|| Error::invalid("`handle` must be greater than zero"))
 }
@@ -654,7 +658,7 @@ mod tests {
         assert_eq!(last[0], "replace");
         assert!(last.contains(&"handle".to_string()));
         assert!(last.contains(&"7".to_string()));
-        assert!(last.iter().any(|arg| arg == "anth:deny:tcp:23|telnet"));
+        assert!(last.iter().any(|arg| arg == "\"anth:deny:tcp:23|telnet\""));
     }
 
     #[test]
@@ -675,6 +679,20 @@ mod tests {
         assert!(calls
             .iter()
             .any(|args| args[0] == "add" && args[1] == "chain"));
+    }
+
+    #[test]
+    fn a_query_handle_is_accepted() {
+        let (service, runner) = service(&snapshot());
+        service
+            .call(FIREWALL, "delete-rule", json!({"handle": "7"}))
+            .expect("query handle");
+        assert!(runner
+            .calls
+            .lock()
+            .expect("calls")
+            .iter()
+            .any(|args| args[0] == "delete"));
     }
 
     #[test]

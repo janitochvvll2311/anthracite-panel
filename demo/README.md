@@ -153,11 +153,12 @@ The process table, terminal sessions and Home's metrics are runtime state and
 reset on restart. Removing an app from the composition degrades only that view.
 
 The emulator is not engine code. It lives outside the wasm `apps/` workspace, is
-unsigned, declares `socket` for the six service apps and `host` for Home, and
+unsigned, declares `socket` for the seven service apps and `host` for Home, and
 never receives the host root.
 
 ## Not in the simulator
 
-Firewall rules, interface create/rename/delete, format/partition/swap, password
-and group mutations, and a real PTY with ANSI emulation are **real-service
-scope**. The simulator stays focused on the demo UI and the protocol.
+Interface create/rename/delete, format/partition/swap, password and group
+mutations, and a real PTY with ANSI emulation are **real-service scope**. The
+simulator stays focused on the demo UI and the protocol. Firewall rules are
+simulated in memory; the real service applies them with `nft`.
