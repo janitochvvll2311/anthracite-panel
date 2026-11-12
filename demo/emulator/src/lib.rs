@@ -1321,15 +1321,23 @@ impl Emulator {
                     let byte = data[index];
                     if byte == 0x1b {
                         if data.get(index + 1) == Some(&b'[') {
-                            match data.get(index + 2) {
-                                Some(b'A') if !history.is_empty() => {
+                            // Consume the whole CSI sequence up to its final byte.
+                            // Stopping after the third byte leaves the `~` of
+                            // Delete/PgUp/PgDn to be typed into the line.
+                            let mut end = index + 2;
+                            while end < data.len() && !(0x40..=0x7e).contains(&data[end]) {
+                                end += 1;
+                            }
+                            let plain = end == index + 2;
+                            match data.get(end) {
+                                Some(b'A') if plain && !history.is_empty() => {
                                     history_pos = history_pos.saturating_sub(1);
                                     line = history[history_pos].as_bytes().to_vec();
                                     output.extend_from_slice(b"\r\x1b[2K");
                                     output.extend_from_slice(PROMPT.as_bytes());
                                     output.extend_from_slice(&line);
                                 }
-                                Some(b'B') => {
+                                Some(b'B') if plain => {
                                     if history_pos + 1 < history.len() {
                                         history_pos += 1;
                                         line = history[history_pos].as_bytes().to_vec();
@@ -1343,7 +1351,7 @@ impl Emulator {
                                 }
                                 _ => {}
                             }
-                            index += 3;
+                            index = end.saturating_add(1);
                             continue;
                         }
                         index += 1;
@@ -1832,6 +1840,79 @@ mod tests {
             .collect::<Vec<_>>();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("hel: command not found"), "{text}");
+    }
+
+    #[test]
+    fn the_terminal_line_editor_consumes_csi_sequences_and_keeps_history() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+
+        // Type "ab", then Delete, PgUp and PgDn. A parser that stops after the
+        // third byte leaves their trailing `~` in the line, so the command
+        // below would be `ab~c` instead of `abc`.
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [97, 98]}))
+            .expect("type");
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [27, 91, 51, 126, 27, 91, 53, 126, 27, 91, 54, 126]}),
+            )
+            .expect("csi keys");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [99, 10]}))
+            .expect("enter");
+
+        let reply = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 2}))
+            .expect("reply");
+        let bytes = reply["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc: command not found"), "{text}");
+
+        // Up recalls the command, and Enter runs it again.
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 65]}))
+            .expect("up");
+        let recalled = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 3}))
+            .expect("recall");
+        let bytes = recalled["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc"), "{text}");
+
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let rerun = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 4}))
+            .expect("rerun");
+        let bytes = rerun["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc: command not found"), "{text}");
     }
 
     #[tokio::test]

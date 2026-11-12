@@ -58,14 +58,13 @@ module_sha=$(sha256sum "$module" | cut -d' ' -f1)
 
 mkdir -p /tmp/anthracite-panel
 tmp=$(mktemp -d /tmp/anthracite-panel/home-build.XXXXXX)
-trap 'rm -rf "$tmp"' EXIT
+web_sed=$(mktemp /tmp/anthracite-panel/home-sed.XXXXXX)
+trap 'rm -rf "$tmp" "$web_sed"' EXIT
 
 mkdir -p "$tmp/bin" "$tmp/web" "$tmp/wit"
 cp "$binary" "$tmp/bin/home-service"
 cp "$module" "$tmp/web/home.js"
 cp "$app/wit/home.wit" "$tmp/wit/home.wit"
-web_sed="$tmp/web.sed"
-: > "$web_sed"
 for asset in "$app"/web/*; do
     [ -f "$asset" ] || continue
     file=$(basename "$asset")

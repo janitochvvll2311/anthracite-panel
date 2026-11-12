@@ -778,15 +778,18 @@ function fabsSignatureFor(
       fab.slot.tag,
       fab.slot.label,
       fab.slot.icon ?? null,
+      fab.slot.icon_sha256 ?? null,
       fab.slot.order,
       fab.slot.hidden === true,
       fab.slot.view ?? null,
       (fab.slot.actions ?? []).map((action) => [
         action.label,
         action.icon ?? null,
+        action.icon_sha256 ?? null,
         action.tag,
         action.target ?? null,
         action.action ?? null,
+        action.files === true,
       ]),
     ]),
   ]);
