@@ -1589,10 +1589,6 @@ html[data-viewport="mobile"] .tab-float {
   display: none;
 }
 
-html[data-viewport="mobile"] .pane {
-  grid-template-rows: minmax(0, 1fr);
-}
-
 html[data-viewport="mobile"] .pane-head {
   display: none;
 }

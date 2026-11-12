@@ -163,7 +163,6 @@ let managerDispose: (() => void) | null = null;
 const tabs = new Map<string, Tab>();
 const mounted = new Map<string, Mounted>();
 const floating = new Map<string, Floating>();
-const groupActive = new Map<string, string>();
 let settingsMounted: Mounted[] = [];
 
 const requestedViewport = new URLSearchParams(location.search).get("viewport");
@@ -731,10 +730,6 @@ function openTab(
   activateTab = true,
   params?: unknown,
 ): void {
-  const group = groupOf(contribution);
-  if (group && contributionKey(group.parent) !== contributionKey(contribution)) {
-    openSingle(group.parent, false);
-  }
   openSingle(contribution, activateTab, params);
 }
 
@@ -769,42 +764,36 @@ function openSingle(
   closeDrawer();
 }
 
+function preferredChild(group: ViewGroup): Contribution | undefined {
+  const current = activeKey;
+  const active =
+    current === null
+      ? undefined
+      : group.children.find(
+          (child) =>
+            contributionKey(child) === current && tabs.has(current),
+        );
+  return (
+    active ??
+    group.children.find((child) => tabs.has(contributionKey(child)))
+  );
+}
+
 function openGroup(group: ViewGroup): void {
-  const remembered = groupActive.get(group.key);
-  const open = group.children.find(
-    (child) =>
-      remembered !== undefined &&
-      contributionKey(child) === remembered &&
-      tabs.has(remembered),
-  );
-  const firstOpen = group.children.find((child) =>
-    tabs.has(contributionKey(child)),
-  );
-  const firstVisible = visibleChildren(group)[0];
-  openTab(open ?? firstOpen ?? firstVisible ?? group.parent);
+  const child =
+    preferredChild(group) ??
+    visibleChildren(group)[0] ??
+    group.parent;
+  openTab(child);
 }
 
 function activate(key: string): void {
   activeKey = key;
-  const tab = tabs.get(key);
-  const group = tab ? groupFor(allGroups(), tab.contribution) : undefined;
-  if (group) groupActive.set(group.key, key);
   renderWorkspace();
 }
 
 function activateGroup(group: ViewGroup): void {
-  const remembered = groupActive.get(group.key);
-  const child =
-    group.children.find(
-      (candidate) =>
-        contributionKey(candidate) === remembered &&
-        tabs.has(contributionKey(candidate)),
-    ) ??
-    group.children.find((candidate) =>
-      tabs.has(contributionKey(candidate)),
-    ) ??
-    group.parent;
-  openTab(child);
+  openTab(preferredChild(group) ?? group.parent);
 }
 
 function closeTab(key: string, render = true): void {
@@ -816,9 +805,6 @@ function closeTab(key: string, render = true): void {
   tabs.delete(key);
   if (activeKey === key) {
     activeKey = lastTabKey();
-  }
-  for (const [groupKey, childKey] of groupActive) {
-    if (childKey === key) groupActive.delete(groupKey);
   }
   if (render) renderWorkspace();
 }
@@ -855,16 +841,7 @@ async function requestGroupClose(group: ViewGroup): Promise<void> {
 }
 
 function detachGroup(group: ViewGroup): void {
-  const remembered = groupActive.get(group.key);
-  const child =
-    group.children.find(
-      (candidate) =>
-        contributionKey(candidate) === remembered &&
-        tabs.has(contributionKey(candidate)),
-    ) ??
-    group.children.find((candidate) =>
-      tabs.has(contributionKey(candidate)),
-    );
+  const child = preferredChild(group);
   if (child) void detachTab(contributionKey(child));
 }
 
