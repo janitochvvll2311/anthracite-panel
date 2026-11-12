@@ -24,7 +24,7 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "build": "bun build src/main.ts --outfile dist/fs.js --format esm --target browser",
+    "build": "bun build src/main.ts --outfile dist/fs.js --format esm --target browser && bun build src/modal.ts --outfile dist/fs-modal.js --format esm --target browser",
     "typecheck": "tsc --noEmit"
   }
 }

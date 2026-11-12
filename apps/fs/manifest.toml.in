@@ -109,6 +109,42 @@ module = "web/fs.js"
 sha256 = "{{module_sha256}}"
 
 [[slot]]
+id = "panel.fab"
+label = "Add"
+icon = "folder"
+order = 30
+tag = "fs-add"
+view = "anth-fs"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "New"
+tag = "new"
+action = "new"
+
+[[slot.actions]]
+label = "Upload"
+tag = "upload"
+action = "upload"
+
+[[slot]]
+id = "panel.modal"
+label = "New entry"
+order = 31
+tag = "fs-new-modal"
+module = "web/fs-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[slot]]
+id = "panel.modal"
+label = "Rename"
+order = 32
+tag = "fs-rename-modal"
+module = "web/fs-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[slot]]
 id = "panel.view"
 label = "Editor"
 icon = "pen"

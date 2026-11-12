@@ -34,9 +34,12 @@ binary="$root/target/release/files-service"
 [ -x "$binary" ] || { echo "cargo did not produce $binary" >&2; exit 2; }
 
 module="$app/frontend/dist/fs.js"
+modal="$app/frontend/dist/fs-modal.js"
 [ -f "$module" ] || { echo "bun did not produce $module" >&2; exit 2; }
+[ -f "$modal" ] || { echo "bun did not produce $modal" >&2; exit 2; }
 sha=$(sha256sum "$binary" | cut -d' ' -f1)
 module_sha=$(sha256sum "$module" | cut -d' ' -f1)
+modal_sha=$(sha256sum "$modal" | cut -d' ' -f1)
 
 mkdir -p /tmp/anthracite-panel
 tmp=$(mktemp -d /tmp/anthracite-panel/files-build.XXXXXX)
@@ -45,10 +48,12 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/web" "$tmp/wit"
 cp "$binary" "$tmp/bin/fs"
 cp "$module" "$tmp/web/fs.js"
+cp "$modal" "$tmp/web/fs-modal.js"
 cp "$app/wit/fs.wit" "$tmp/wit/fs.wit"
 sed \
     -e "s/{{sha256}}/$sha/g" \
     -e "s/{{module_sha256}}/$module_sha/g" \
+    -e "s/{{modal_sha256}}/$modal_sha/g" \
     -e "s/{{app_name}}/Files/g" \
     -e "s/{{app_summary}}/Filesystem explorer over an operator-approved root./g" \
     -e "s|{{service_path}}|bin/fs|g" \
