@@ -28,10 +28,12 @@ const SEGMENT: &AsciiSet = &CONTROLS
     .add(b'{')
     .add(b'}');
 
-/// The three portable slots in v0.5.0.
+/// The portable slots.
 pub const VIEW: &str = "panel.view";
 pub const ACTION: &str = "panel.action";
 pub const SETTINGS: &str = "panel.settings";
+pub const FAB: &str = "panel.fab";
+pub const MODAL: &str = "panel.modal";
 
 /// One slot contribution, with the app that owns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +163,8 @@ mod tests {
             hidden: false,
             parent: None,
             tab: None,
+            view: None,
+            actions: Vec::new(),
             tag: tag.to_string(),
             module: format!("web/{tag}.js"),
             sha256: "a".repeat(64),

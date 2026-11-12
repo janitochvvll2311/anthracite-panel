@@ -28,8 +28,8 @@ use anth_contract::manifest::{parse_call, RouteTransport, SlotSection};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
     Error, ErrorKind, FatalView, GrantState, GrantView, InterfaceId, KeyAlgorithm, KeyView,
-    Outcome, Risk, SurfaceApp, SurfaceCli, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,
-    TrustedKey, KEY_VERSION,
+    Outcome, Risk, SurfaceApp, SurfaceCli, SurfaceFabAction, SurfaceLink, SurfaceRoute,
+    SurfaceSlot, SurfaceView, TrustedKey, KEY_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::{
@@ -1744,6 +1744,18 @@ fn surface_slot(slot: &SlotSection) -> SurfaceSlot {
         hidden: slot.hidden,
         parent: slot.parent.clone(),
         tab: slot.tab.clone(),
+        view: slot.view.clone(),
+        actions: slot
+            .actions
+            .iter()
+            .map(|action| SurfaceFabAction {
+                label: action.label.clone(),
+                icon: action.icon.clone(),
+                tag: action.tag.clone(),
+                target: action.target.clone(),
+                action: action.action.clone(),
+            })
+            .collect(),
         tag: slot.tag.clone(),
         module: slot.module.clone(),
         sha256: slot.sha256.clone(),

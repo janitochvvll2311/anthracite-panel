@@ -2,6 +2,14 @@
 // `index.ts` so `dom.ts` can type its helpers without a runtime/type cycle.
 
 /// One slot contribution, as `GET /api/engine/composition` reports it.
+export type FabAction = {
+  label: string;
+  icon?: string;
+  tag: string;
+  target?: string;
+  action?: string;
+};
+
 export type Slot = {
   id: string;
   label: string;
@@ -13,6 +21,10 @@ export type Slot = {
   parent?: string;
   /// Sub-tab label when this contribution is the parent of a group.
   tab?: string;
+  /// View tag this FAB is scoped to.
+  view?: string;
+  /// Actions of a declarative `panel.fab`.
+  actions?: FabAction[];
   tag: string;
   module: string;
   sha256: string;

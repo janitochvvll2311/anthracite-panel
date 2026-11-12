@@ -31,6 +31,6 @@ pub use manifest::{
 };
 pub use view::{
     AppProblem, AppView, CompositionView, DegradedApp, FatalView, GrantState, GrantView, KeyView,
-    SurfaceApp, SurfaceCli, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,
+    SurfaceApp, SurfaceCli, SurfaceFabAction, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,
 };
 pub use world::{World, WorldMismatch};

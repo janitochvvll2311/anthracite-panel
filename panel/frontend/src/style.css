@@ -456,6 +456,7 @@ button.drawer-close {
 /* Workspace -------------------------------------------------------------- */
 
 .workspace {
+  position: relative;
   display: grid;
   grid-template-rows: 43px minmax(0, 1fr);
   min-width: 0;
@@ -695,6 +696,154 @@ button.drawer-close {
   margin: 0;
   max-width: 46ch;
   font-size: 13px;
+}
+
+/* FABs and modals ------------------------------------------------------- */
+
+.fabs {
+  position: absolute;
+  right: 22px;
+  bottom: 22px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.fab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.fab > * {
+  pointer-events: auto;
+}
+
+.fab-button,
+.fab-menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #35405a;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fab-button {
+  min-height: 46px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2a3c6d, #223050);
+  font-weight: 600;
+  box-shadow: 0 14px 30px #00000059, 0 0 0 1px #7aa2ff1f inset;
+}
+
+.fab-button:hover,
+.fab-menu-item:hover {
+  background: linear-gradient(135deg, #334980, #283a5f);
+  border-color: #4a5c82;
+}
+
+.fab-button:focus-visible,
+.fab-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fab-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.fab-label {
+  font-size: 13px;
+}
+
+.fab-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.fab-menu[hidden] {
+  display: none;
+}
+
+.fab-menu-item {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  box-shadow: 0 10px 22px #0000004d;
+}
+
+.modal {
+  width: min(680px, calc(100vw - 32px));
+  max-height: min(780px, calc(100vh - 48px));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.modal::backdrop {
+  background: #05070bb3;
+  backdrop-filter: blur(3px);
+}
+
+.modal[open] {
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px 0 18px;
+  border-bottom: 1px solid var(--line-soft);
+  background: #10141bd9;
+}
+
+.modal-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.modal-copy strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.modal-app {
+  color: var(--muted-2);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-head .ghost {
+  margin-left: auto;
+}
+
+.modal-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  background: var(--bg-soft);
 }
 
 /* Floating windows ------------------------------------------------------- */
@@ -1594,6 +1743,31 @@ html[data-viewport="mobile"] .pane-head {
 }
 
 html[data-viewport="mobile"] .pane-body {
+  padding: 10px;
+}
+
+html[data-viewport="mobile"] .fabs {
+  right: 14px;
+  bottom: 14px;
+  gap: 8px;
+}
+
+html[data-viewport="mobile"] .fab-button {
+  min-height: 44px;
+  padding: 0 15px;
+}
+
+html[data-viewport="mobile"] .modal {
+  width: calc(100vw - 12px);
+  max-height: calc(100vh - 16px);
+  border-radius: 12px;
+}
+
+html[data-viewport="mobile"] .modal-head {
+  padding: 0 8px 0 12px;
+}
+
+html[data-viewport="mobile"] .modal-body {
   padding: 10px;
 }
 

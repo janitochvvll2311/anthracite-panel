@@ -21,7 +21,7 @@ export type FrameContext = {
     app: string;
   };
   panel: { slots: string[]; version: string };
-  kind: "view" | "action" | "settings";
+  kind: "view" | "action" | "settings" | "modal";
   /// Opaque data the panel passed when opening this view.
   params?: unknown;
 };
@@ -36,6 +36,12 @@ export type OpenViewRequest = {
   size?: { width?: number; height?: number };
 };
 
+/// A request from an app module to open one of its own modals.
+export type OpenModalRequest = {
+  tag: string;
+  params?: unknown;
+};
+
 /// A live frame the panel can talk to after it mounted.
 export type FrameHandle = {
   /// Delivers a transient open request without remounting the view.
@@ -46,6 +52,8 @@ export type FrameHandle = {
   snapshot: () => Promise<unknown>;
   /// Tells the module whether its pane is on screen, so it can pause polling.
   setVisible: (visible: boolean) => void;
+  /// Sends a local action tag to the module.
+  action: (tag: string) => void;
 };
 
 export type FrameOptions = {
@@ -54,6 +62,8 @@ export type FrameOptions = {
   close?: () => void;
   /// Opens another contribution of the same app at panel level.
   openView?: (request: OpenViewRequest) => boolean | void;
+  /// Opens one of the app's modal contributions.
+  openModal?: (request: OpenModalRequest) => boolean | void;
   /// Records opaque parameters the module wants to keep across float/dock.
   onParams?: (params: unknown) => void;
   /// Called once the module mounted, so the panel can send later requests.
@@ -186,6 +196,10 @@ export async function mountFrame(
     );
   };
 
+  const action = (tag: string): void => {
+    iframe.contentWindow?.postMessage({ type: "anth:action", token, tag }, "*");
+  };
+
   const requestClose = (): Promise<boolean> =>
     new Promise((resolve) => {
       const requestId = `${token}-close-${++closeSequence}`;
@@ -267,6 +281,7 @@ export async function mountFrame(
           requestClose,
           snapshot: requestSnapshot,
           setVisible,
+          action,
         });
         finish();
         return;
@@ -295,6 +310,25 @@ export async function mountFrame(
         if (requestId) {
           iframe.contentWindow?.postMessage(
             { type: "anth:open-view-result", token, requestId, ok },
+            "*",
+          );
+        }
+        return;
+      }
+      if (message.type === "anth:open-modal") {
+        const tag = String(message.tag ?? "");
+        const requestId = String(message.requestId ?? "");
+        let ok = false;
+        if (tag) {
+          ok =
+            options.openModal?.({
+              tag,
+              params: message.params,
+            }) !== false;
+        }
+        if (requestId) {
+          iframe.contentWindow?.postMessage(
+            { type: "anth:open-modal-result", token, requestId, ok },
             "*",
           );
         }

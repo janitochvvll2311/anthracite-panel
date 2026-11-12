@@ -8,12 +8,14 @@ export * from "./dom";
 export * from "./stream";
 
 import type { App, Contribution } from "./model";
-export type { App, Contribution, Slot } from "./model";
+export type { App, Contribution, FabAction, Slot } from "./model";
 
 export const VIEW = "panel.view";
 export const ACTION = "panel.action";
 export const SETTINGS = "panel.settings";
-export const PORTABLE = [VIEW, ACTION, SETTINGS] as const;
+export const FAB = "panel.fab";
+export const MODAL = "panel.modal";
+export const PORTABLE = [VIEW, ACTION, SETTINGS, FAB, MODAL] as const;
 
 /// Stable identity for a mounted pane or window.
 export function contributionKey(contribution: Contribution): string {

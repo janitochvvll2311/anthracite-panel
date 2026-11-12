@@ -5,6 +5,8 @@
 //! is checked here is everything that can be checked without a component: names,
 //! paths, duplicates and the rules that keep a manifest internally consistent.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
@@ -207,9 +209,34 @@ pub struct SlotSection {
     /// `label`.
     #[serde(default)]
     pub tab: Option<String>,
+    /// View tag this FAB is scoped to; absent means every view of the app.
+    #[serde(default)]
+    pub view: Option<String>,
+    /// FAB actions. A FAB has one or more; each opens a modal or sends a local
+    /// action to the active view.
+    #[serde(default)]
+    pub actions: Vec<FabAction>,
     pub tag: String,
+    /// Empty for a declarative `panel.fab`.
+    #[serde(default)]
     pub module: String,
+    #[serde(default)]
     pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FabAction {
+    pub label: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    pub tag: String,
+    /// Modal tag of the same app.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Local action tag delivered to the active view.
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -520,6 +547,9 @@ impl Manifest {
         }
 
         let mut slots = Vec::with_capacity(self.slot.len());
+        let mut view_tags = HashSet::new();
+        let mut modal_tags = HashSet::new();
+        let mut fabs: Vec<(Option<String>, Vec<String>)> = Vec::new();
         for slot in &self.slot {
             if !is_slot_id(&slot.id) {
                 return Err(Error::invalid(format!(
@@ -530,28 +560,110 @@ impl Manifest {
             if !is_kebab(&slot.tag) {
                 return Err(Error::invalid(format!("`{}` is not a valid tag", slot.tag)));
             }
-            check_module(&slot.module)?;
-            if !is_sha256(&slot.sha256) {
-                return Err(Error::invalid(
-                    "the UI module `sha256` is not 64 lowercase hex",
-                ));
-            }
-            if slot.id == "panel.view" {
-                if let Some(parent) = slot.parent.as_deref() {
-                    check_parent_reference(parent, &self.app.id)?;
-                    if slot.tab.is_some() {
-                        return Err(Error::invalid(
-                            "a child slot uses `label` as its tab, not `tab`",
-                        ));
+            let is_fab = slot.id == "panel.fab";
+            let is_modal = slot.id == "panel.modal";
+            if is_fab {
+                if !slot.module.is_empty() || !slot.sha256.is_empty() {
+                    return Err(Error::invalid(
+                        "a `panel.fab` is declarative and has no module",
+                    ));
+                }
+                if slot.actions.is_empty() {
+                    return Err(Error::invalid("a `panel.fab` needs at least one action"));
+                }
+                if slot.parent.is_some() || slot.tab.is_some() {
+                    return Err(Error::invalid(
+                        "a `panel.fab` cannot be grouped or declare a tab label",
+                    ));
+                }
+                if let Some(view) = slot.view.as_deref() {
+                    if !is_kebab(view) {
+                        return Err(Error::invalid(format!(
+                            "`{view}` is not a valid FAB view tag"
+                        )));
                     }
                 }
-                if let Some(tab) = slot.tab.as_deref() {
-                    check_tab_label(tab)?;
+                let mut action_tags = HashSet::new();
+                let mut targets = Vec::new();
+                for action in &slot.actions {
+                    if !is_kebab(&action.tag) {
+                        return Err(Error::invalid(format!(
+                            "`{}` is not a valid FAB action tag",
+                            action.tag
+                        )));
+                    }
+                    if !action_tags.insert(action.tag.clone()) {
+                        return Err(Error::invalid(format!(
+                            "FAB action `{}` is declared twice",
+                            action.tag
+                        )));
+                    }
+                    check_action_label(&action.label)?;
+                    match (action.target.as_deref(), action.action.as_deref()) {
+                        (Some(target), None) => {
+                            if !is_kebab(target) {
+                                return Err(Error::invalid(format!(
+                                    "`{target}` is not a valid modal target"
+                                )));
+                            }
+                            targets.push(target.to_string());
+                        }
+                        (None, Some(action)) => {
+                            if !is_kebab(action) {
+                                return Err(Error::invalid(format!(
+                                    "`{action}` is not a valid local action"
+                                )));
+                            }
+                        }
+                        _ => {
+                            return Err(Error::invalid(
+                                "a FAB action declares exactly one of `target` or `action`",
+                            ));
+                        }
+                    }
                 }
-            } else if slot.parent.is_some() || slot.tab.is_some() {
-                return Err(Error::invalid(
-                    "only `panel.view` slots can be grouped or declare a tab label",
-                ));
+                fabs.push((slot.view.clone(), targets));
+            } else {
+                if !slot.actions.is_empty() || slot.view.is_some() {
+                    return Err(Error::invalid(
+                        "only `panel.fab` slots declare actions or a view",
+                    ));
+                }
+                check_module(&slot.module)?;
+                if !is_sha256(&slot.sha256) {
+                    return Err(Error::invalid(
+                        "the UI module `sha256` is not 64 lowercase hex",
+                    ));
+                }
+                if is_modal {
+                    if slot.parent.is_some() || slot.tab.is_some() {
+                        return Err(Error::invalid(
+                            "a `panel.modal` cannot be grouped or declare a tab label",
+                        ));
+                    }
+                } else if slot.id == "panel.view" {
+                    if let Some(parent) = slot.parent.as_deref() {
+                        check_parent_reference(parent, &self.app.id)?;
+                        if slot.tab.is_some() {
+                            return Err(Error::invalid(
+                                "a child slot uses `label` as its tab, not `tab`",
+                            ));
+                        }
+                    }
+                    if let Some(tab) = slot.tab.as_deref() {
+                        check_tab_label(tab)?;
+                    }
+                } else if slot.parent.is_some() || slot.tab.is_some() {
+                    return Err(Error::invalid(
+                        "only `panel.view` slots can be grouped or declare a tab label",
+                    ));
+                }
+            }
+            if slot.id == "panel.view" {
+                view_tags.insert(slot.tag.clone());
+            }
+            if is_modal {
+                modal_tags.insert(slot.tag.clone());
             }
             let key = (slot.id.clone(), slot.tag.clone());
             if slots.contains(&key) {
@@ -561,6 +673,22 @@ impl Manifest {
                 )));
             }
             slots.push(key);
+        }
+        for (view, targets) in fabs {
+            if let Some(view) = view {
+                if !view_tags.contains(&view) {
+                    return Err(Error::invalid(format!(
+                        "FAB view `{view}` is not a `panel.view` of this app"
+                    )));
+                }
+            }
+            for target in targets {
+                if !modal_tags.contains(&target) {
+                    return Err(Error::invalid(format!(
+                        "FAB target `{target}` is not a `panel.modal` of this app"
+                    )));
+                }
+            }
         }
 
         let mut verbs = Vec::with_capacity(self.cli.len());
@@ -773,6 +901,17 @@ fn check_parent_reference(parent: &str, own_app: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// A FAB action label is display text, not an id.
+fn check_action_label(label: &str) -> Result<(), Error> {
+    if label.trim().is_empty() || label.chars().count() > 64 || label.chars().any(char::is_control)
+    {
+        return Err(Error::invalid(
+            "a FAB action label must be 1-64 printable characters",
+        ));
+    }
+    Ok(())
+}
+
 /// A sub-tab label is text, not an id: keep it short and printable.
 fn check_tab_label(label: &str) -> Result<(), Error> {
     if label.trim().is_empty() || label.chars().count() > 64 || label.chars().any(char::is_control)
@@ -958,6 +1097,163 @@ target = "wasm"
         manifest.slot[0].parent = Some("org.example.parent#notes".to_string());
         let error = manifest.validate().expect_err("action slot");
         assert!(error.message().contains("panel.view"), "{error}");
+    }
+
+    fn extra_slot(id: &str, tag: &str, module: &str, sha256: &str) -> SlotSection {
+        SlotSection {
+            id: id.to_string(),
+            label: tag.to_string(),
+            icon: None,
+            order: 10,
+            hidden: false,
+            parent: None,
+            tab: None,
+            view: None,
+            actions: Vec::new(),
+            tag: tag.to_string(),
+            module: module.to_string(),
+            sha256: sha256.to_string(),
+        }
+    }
+
+    fn modal_slot() -> SlotSection {
+        extra_slot(
+            "panel.modal",
+            "edit-note",
+            "web/edit-note.js",
+            &"c".repeat(64),
+        )
+    }
+
+    fn fab_slot(actions: Vec<FabAction>) -> SlotSection {
+        let mut fab = extra_slot("panel.fab", "note-actions", "", "");
+        fab.label = "Add".to_string();
+        fab.view = Some("anth-notes".to_string());
+        fab.actions = actions;
+        fab
+    }
+
+    fn fab_action(label: &str, tag: &str) -> FabAction {
+        FabAction {
+            label: label.to_string(),
+            icon: None,
+            tag: tag.to_string(),
+            target: None,
+            action: None,
+        }
+    }
+
+    #[test]
+    fn a_fab_opens_a_modal_or_sends_a_local_action() {
+        let mut manifest = valid();
+        manifest.slot.push(modal_slot());
+        let mut open = fab_action("Edit", "edit");
+        open.target = Some("edit-note".to_string());
+        let mut refresh = fab_action("Refresh", "refresh");
+        refresh.action = Some("refresh".to_string());
+        manifest.slot.push(fab_slot(vec![open, refresh]));
+        manifest.validate().expect("fab");
+    }
+
+    #[test]
+    fn a_fab_action_declares_exactly_one_destination() {
+        for (target, action, expected) in [
+            (None, None, "exactly one"),
+            (Some("edit-note"), Some("refresh"), "exactly one"),
+        ] {
+            let mut manifest = valid();
+            manifest.slot.push(modal_slot());
+            let mut candidate = fab_action("Edit", "edit");
+            candidate.target = target.map(str::to_string);
+            candidate.action = action.map(str::to_string);
+            manifest.slot.push(fab_slot(vec![candidate]));
+            let error = manifest.validate().expect_err("destination");
+            assert!(error.message().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_fab_targets_a_modal_of_its_own_app() {
+        let mut manifest = valid();
+        let mut open = fab_action("Edit", "edit");
+        open.target = Some("edit-note".to_string());
+        manifest.slot.push(fab_slot(vec![open]));
+        let error = manifest.validate().expect_err("missing modal");
+        assert!(error.message().contains("panel.modal"), "{error}");
+    }
+
+    #[test]
+    fn a_fab_view_must_exist_in_the_same_app() {
+        let mut manifest = valid();
+        let mut fab = fab_slot(Vec::new());
+        fab.view = Some("missing".to_string());
+        fab.actions = vec![fab_action("Refresh", "refresh")];
+        fab.actions[0].action = Some("refresh".to_string());
+        manifest.slot.push(fab);
+        let error = manifest.validate().expect_err("missing view");
+        assert!(error.message().contains("panel.view"), "{error}");
+    }
+
+    #[test]
+    fn a_fab_is_declarative_and_a_modal_is_a_module() {
+        let mut manifest = valid();
+        let mut fab = fab_slot(Vec::new());
+        fab.actions = vec![fab_action("Refresh", "refresh")];
+        fab.actions[0].action = Some("refresh".to_string());
+        fab.module = "web/fab.js".to_string();
+        manifest.slot.push(fab);
+        let error = manifest.validate().expect_err("fab module");
+        assert!(error.message().contains("declarative"), "{error}");
+
+        let mut manifest = valid();
+        let mut modal = modal_slot();
+        modal.module = String::new();
+        manifest.slot.push(modal);
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn a_fab_needs_at_least_one_action_and_unique_tags() {
+        let mut manifest = valid();
+        manifest.slot.push(fab_slot(Vec::new()));
+        let error = manifest.validate().expect_err("empty fab");
+        assert!(error.message().contains("at least one action"), "{error}");
+
+        let mut manifest = valid();
+        let mut first = fab_action("First", "same");
+        first.action = Some("refresh".to_string());
+        let mut second = fab_action("Second", "same");
+        second.action = Some("refresh".to_string());
+        manifest.slot.push(fab_slot(vec![first, second]));
+        let error = manifest.validate().expect_err("duplicate action");
+        assert!(error.message().contains("declared twice"), "{error}");
+    }
+
+    #[test]
+    fn only_fabs_declare_actions_or_a_view() {
+        let mut manifest = valid();
+        manifest.slot[0].view = Some("anth-notes".to_string());
+        let error = manifest.validate().expect_err("view on a view");
+        assert!(error.message().contains("only `panel.fab`"), "{error}");
+
+        let mut manifest = valid();
+        manifest.slot[0].actions = vec![fab_action("Refresh", "refresh")];
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn a_fab_action_label_is_display_text() {
+        let mut manifest = valid();
+        let mut action = fab_action("", "refresh");
+        action.action = Some("refresh".to_string());
+        manifest.slot.push(fab_slot(vec![action]));
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid();
+        let mut action = fab_action(&"ñ".repeat(65), "refresh");
+        action.action = Some("refresh".to_string());
+        manifest.slot.push(fab_slot(vec![action]));
+        assert!(manifest.validate().is_err());
     }
 
     #[test]

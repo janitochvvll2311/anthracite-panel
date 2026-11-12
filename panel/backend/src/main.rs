@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anth_panel::{Host, Sessions, ACTION, SETTINGS, VIEW};
+use anth_panel::{Host, Sessions, ACTION, FAB, MODAL, SETTINGS, VIEW};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{header, Method, StatusCode};
@@ -25,7 +25,7 @@ use percent_encoding::percent_decode_str;
 use tokio::net::TcpListener;
 
 /// The slots this panel implements, from the SDK rather than a local copy.
-const SLOTS: [&str; 3] = [VIEW, ACTION, SETTINGS];
+const SLOTS: [&str; 5] = [VIEW, ACTION, SETTINGS, FAB, MODAL];
 
 const PANEL_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
      connect-src 'self'; img-src 'self' data:; font-src 'self'; frame-src 'self'; \
@@ -695,7 +695,13 @@ mod tests {
     fn the_slots_come_from_the_sdk() {
         assert_eq!(
             SLOTS,
-            [anth_panel::VIEW, anth_panel::ACTION, anth_panel::SETTINGS]
+            [
+                anth_panel::VIEW,
+                anth_panel::ACTION,
+                anth_panel::SETTINGS,
+                anth_panel::FAB,
+                anth_panel::MODAL,
+            ]
         );
     }
 

@@ -2741,6 +2741,8 @@ fn a_grouped_slot_reaches_the_surface() {
         hidden: false,
         parent: Some("org.anthracite.net#anth-net".to_string()),
         tab: None,
+        view: None,
+        actions: Vec::new(),
         tag: "anth-firewall".to_string(),
         module: "web/firewall.js".to_string(),
         sha256: "a".repeat(64),
@@ -2758,4 +2760,44 @@ fn a_grouped_slot_reaches_the_surface() {
         ..slot
     };
     assert_eq!(surface_slot(&parent).tab.as_deref(), Some("Interfaces"));
+}
+
+#[test]
+fn a_fab_reaches_the_surface_with_its_actions() {
+    use anth_contract::manifest::{FabAction, SlotSection};
+
+    let slot = SlotSection {
+        id: "panel.fab".to_string(),
+        label: "Add".to_string(),
+        icon: Some("+".to_string()),
+        order: 30,
+        hidden: false,
+        parent: None,
+        tab: None,
+        view: Some("anth-notes".to_string()),
+        actions: vec![
+            FabAction {
+                label: "New".to_string(),
+                icon: None,
+                tag: "new".to_string(),
+                target: Some("edit-note".to_string()),
+                action: None,
+            },
+            FabAction {
+                label: "Refresh".to_string(),
+                icon: None,
+                tag: "refresh".to_string(),
+                target: None,
+                action: Some("refresh".to_string()),
+            },
+        ],
+        tag: "note-actions".to_string(),
+        module: String::new(),
+        sha256: String::new(),
+    };
+    let surface = surface_slot(&slot);
+    assert_eq!(surface.view.as_deref(), Some("anth-notes"));
+    assert_eq!(surface.actions.len(), 2);
+    assert_eq!(surface.actions[0].target.as_deref(), Some("edit-note"));
+    assert_eq!(surface.actions[1].action.as_deref(), Some("refresh"));
 }
