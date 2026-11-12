@@ -75,6 +75,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let disposed = false;
   let policy: any = {};
   let shellInitialized = false;
+  let focusUser: string | null = null;
 
   const labeled = (className: string, value: string, label: string) => {
     const node = cell(className, value);
@@ -302,6 +303,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   function openPassword(user) {
+    focusUser = user.name;
     if (usePanelForms) {
       void context.openModal?.({
         tag: "accounts-password-modal",
@@ -410,7 +412,18 @@ export function mount(root: HTMLElement, context: FrameContext) {
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
   const offAction = context.onAction?.((tag) => {
     if (tag === "refresh") {
-      void load();
+      const name = focusUser;
+      focusUser = null;
+      void load().then(() => {
+        if (!name) return;
+        const row = [...usersRoot.querySelectorAll(".acc-row")].find((node) =>
+          node.textContent?.includes(name),
+        );
+        const button = [...(row?.querySelectorAll("button") ?? [])].find(
+          (candidate) => candidate.textContent === "Password",
+        );
+        button?.focus();
+      });
       return;
     }
     if (tag === "new-user") {

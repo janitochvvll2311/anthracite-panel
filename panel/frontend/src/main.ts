@@ -92,6 +92,8 @@ type Mounted = {
   setVisible?: (visible: boolean) => void;
   /// Delivers a local action tag, with an optional file payload.
   action?: (tag: string, payload?: unknown) => void;
+  /// Restores the view's last focused control.
+  focus?: () => void;
   /// Last visibility sent to the frame; a refresh must not resend it.
   visible?: boolean;
   /// Set when the host closes or replaces the mount; a late module must not
@@ -569,6 +571,7 @@ function trackMount(
       state.snapshot = frame.snapshot;
       state.setVisible = frame.setVisible;
       state.action = frame.action;
+      state.focus = frame.focus;
       const pane = state.root.closest(".pane");
       const visible = !pane || pane.classList.contains("active");
       state.visible = visible;
@@ -620,15 +623,7 @@ function pickFiles(originKey: string | null, tag: string): void {
     () => {
       const files = [...(input.files ?? [])];
       input.remove();
-      if (files.length === 0) return;
-      void Promise.all(
-        files.map(async (file) => ({
-          name: file.name,
-          type: file.type,
-          lastModified: file.lastModified,
-          bytes: await file.arrayBuffer(),
-        })),
-      ).then((entries) => sendAction(originKey, tag, { files: entries }));
+      if (files.length > 0) sendAction(originKey, tag, { files });
     },
     { once: true },
   );
@@ -677,10 +672,11 @@ function runFabAction(
   source: Contribution,
   action: FabAction,
   originKey: string | null,
+  trigger?: HTMLElement,
 ): void {
   closeFabMenus();
   if (action.target) {
-    openModal(source, { tag: action.target }, originKey);
+    openModal(source, { tag: action.target }, originKey, trigger);
     return;
   }
   if (!action.action) return;
@@ -707,7 +703,9 @@ function renderFab(
         action.icon ? action.icon_sha256 : fab.slot.icon_sha256,
         true,
       );
-      node.addEventListener("click", () => runFabAction(source, action, originKey));
+      node.addEventListener("click", () =>
+        runFabAction(source, action, originKey, node),
+      );
       wrap.append(node);
     }
     return wrap;
@@ -716,6 +714,7 @@ function renderFab(
   const menu = element("div", "fab-menu");
   menu.hidden = true;
   menu.setAttribute("role", "menu");
+  let trigger: HTMLElement | null = null;
   for (const action of actions) {
     const item = fabButton(
       "fab-menu-item",
@@ -725,7 +724,9 @@ function renderFab(
       action.icon_sha256,
     );
     item.setAttribute("role", "menuitem");
-    item.addEventListener("click", () => runFabAction(source, action, originKey));
+    item.addEventListener("click", () =>
+      runFabAction(source, action, originKey, trigger ?? item),
+    );
     menu.append(item);
   }
   const main = fabButton(
@@ -736,6 +737,7 @@ function renderFab(
     fab.slot.icon_sha256,
     true,
   );
+  trigger = main;
   main.setAttribute("aria-haspopup", "menu");
   main.setAttribute("aria-expanded", "false");
   main.addEventListener("click", () => {
@@ -834,6 +836,7 @@ function openModal(
   source: Contribution,
   request: OpenModalRequest,
   originKey: string | null = activeKey,
+  trigger?: HTMLElement,
 ): boolean {
   if (!implemented.includes(MODAL) || modalState) return false;
   const target = ordered(MODAL).find(
@@ -854,10 +857,10 @@ function openModal(
     dispose: () => modalBody.replaceChildren(),
     cancelled: false,
   };
-  const active = document.activeElement;
-  const trigger =
+  const active = trigger ?? document.activeElement;
+  const origin =
     active instanceof HTMLElement && active !== document.body ? active : null;
-  modalState = { mount, originKey, contribution: target, trigger };
+  modalState = { mount, originKey, contribution: target, trigger: origin };
   modalElement.showModal();
   trackMount(
     mount,
@@ -888,7 +891,18 @@ function closeModal(refresh = true): void {
   modalTitle.textContent = "";
   modalApp.textContent = "";
   if (refresh) sendAction(state.originKey, REFRESH);
-  if (state.trigger?.isConnected) state.trigger.focus();
+  const origin = state.originKey
+    ? mounted.get(state.originKey) ?? floating.get(state.originKey)
+    : undefined;
+  if (state.trigger?.tagName === "IFRAME") {
+    const frame = state.trigger as HTMLIFrameElement;
+    window.setTimeout(() => {
+      frame.focus();
+      origin?.focus?.();
+    }, 0);
+  } else if (state.trigger?.isConnected) {
+    state.trigger.focus();
+  }
 }
 
 function paramsKey(params: unknown): string {
@@ -956,7 +970,19 @@ function renderSubtabs(state: Mounted): void {
   state.subtabs.replaceChildren();
   for (const child of children) {
     const key = contributionKey(child);
-    const node = button("sub-tab", tabLabel(group, child), child.app.id);
+    const node = button("sub-tab", "", child.app.id);
+    const glyph = element("span", "sub-tab-icon");
+    const appIcon = child.app.icon;
+    renderIcon(glyph, {
+      appId: child.app.id,
+      icon: appIcon ?? child.slot.icon,
+      icon_sha256: appIcon ? child.app.icon_sha256 : child.slot.icon_sha256,
+      fallback: child.slot.label,
+    });
+    node.append(
+      glyph,
+      element("span", "sub-tab-label", tabLabel(group, child)),
+    );
     if (key === activeKey) node.classList.add("active");
     node.addEventListener("click", () => openTab(child));
     state.subtabs.append(node);

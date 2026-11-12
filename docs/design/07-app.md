@@ -341,7 +341,7 @@ least one action; the optional `view` scopes it to one of the app's views.
 Each action names exactly one destination: `target` is a `panel.modal` tag of the
 same app, or `action` is a local tag the panel delivers to the active view.
 A local action may set `files = true`; the panel opens a file picker on the user
-gesture and delivers `{ files: [{ name, type, lastModified, bytes }] }` with the
+gesture and delivers `{ files: File[] }` with the
 action.
 A FAB trigger is icon-only when the app provides an icon; its `label` is the
 accessible name and the tooltip. A FAB with several actions uses that trigger to

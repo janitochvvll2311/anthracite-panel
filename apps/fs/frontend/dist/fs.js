@@ -37857,10 +37857,7 @@ function mount(root, context) {
     else if (tag === "upload") {
       const files = payload?.files;
       if (Array.isArray(files) && files.length > 0) {
-        enqueueUploads(files.map((file) => new File([file.bytes], file.name, {
-          type: file.type,
-          lastModified: file.lastModified
-        })), current);
+        enqueueUploads(files, current);
       } else {
         uploadInput.click();
       }

@@ -47,7 +47,7 @@ const MAX_FILE: usize = 1 << 20;
 const MAX_PAGE: u32 = 500;
 const DEFAULT_PAGE: u32 = 50;
 const PROMPT: &str = "operator@anthracite:~$ ";
-const HELP: &str = "help: ls, cat, echo, help, exit\r\n";
+const HELP: &str = "help: ls, cat, echo, pwd, whoami, uname, clear, help, exit\r\n";
 
 /// The service handler: persistent host state plus runtime processes/sessions.
 pub struct Emulator {
@@ -885,6 +885,10 @@ struct Term {
     /// Input on the current line. A line editor needs it to apply backspace
     /// and to run the command that was typed across several writes.
     line: Vec<u8>,
+    /// Submitted command lines, oldest first, for the demo history.
+    history: Vec<String>,
+    /// Where Up/Down is in `history`; equal to its length while composing.
+    history_pos: usize,
     /// Set by `exit`: the shell ended, but the queued output is still readable.
     closed: bool,
     /// Streams parked until this session produces output or ends.
@@ -1262,6 +1266,8 @@ impl Emulator {
                     chunks: Vec::new(),
                     next_seq: 0,
                     line: Vec::new(),
+                    history: Vec::new(),
+                    history_pos: 0,
                     closed: false,
                     waiters: Vec::new(),
                 };
@@ -1306,50 +1312,106 @@ impl Emulator {
                     return Err(Error::not_found(format!("session `{id}` has ended")));
                 }
                 let data = bytes(input.get("data").unwrap_or(&Value::Null))?;
-                let newline = data.iter().any(|byte| *byte == b'\n' || *byte == b'\r');
                 let mut output = Vec::new();
                 let mut line = std::mem::take(&mut term.line);
-                for byte in data {
+                let mut history = std::mem::take(&mut term.history);
+                let mut history_pos = term.history_pos;
+                let mut index = 0;
+                while index < data.len() {
+                    let byte = data[index];
+                    if byte == 0x1b {
+                        if data.get(index + 1) == Some(&b'[') {
+                            match data.get(index + 2) {
+                                Some(b'A') if !history.is_empty() => {
+                                    history_pos = history_pos.saturating_sub(1);
+                                    line = history[history_pos].as_bytes().to_vec();
+                                    output.extend_from_slice(b"\r\x1b[2K");
+                                    output.extend_from_slice(PROMPT.as_bytes());
+                                    output.extend_from_slice(&line);
+                                }
+                                Some(b'B') => {
+                                    if history_pos + 1 < history.len() {
+                                        history_pos += 1;
+                                        line = history[history_pos].as_bytes().to_vec();
+                                    } else {
+                                        history_pos = history.len();
+                                        line.clear();
+                                    }
+                                    output.extend_from_slice(b"\r\x1b[2K");
+                                    output.extend_from_slice(PROMPT.as_bytes());
+                                    output.extend_from_slice(&line);
+                                }
+                                _ => {}
+                            }
+                            index += 3;
+                            continue;
+                        }
+                        index += 1;
+                        continue;
+                    }
                     match byte {
                         0x7f | 0x08 => {
                             if line.pop().is_some() {
                                 output.extend_from_slice(b"\x08 \x08");
                             }
                         }
-                        b'\r' | b'\n' => {}
-                        // The fixture ignores escape sequences; the app already
-                        // sends the matching control sequence.
-                        0x1b => {}
+                        0x03 => {
+                            line.clear();
+                            history_pos = history.len();
+                            output.extend_from_slice(b"^C\r\n");
+                            output.extend_from_slice(PROMPT.as_bytes());
+                        }
+                        0x0c => {
+                            output.extend_from_slice(b"\x1b[2J\x1b[H");
+                            output.extend_from_slice(PROMPT.as_bytes());
+                            output.extend_from_slice(&line);
+                        }
+                        b'\r' | b'\n' => {
+                            output.extend_from_slice(b"\r\n");
+                            let trimmed = String::from_utf8_lossy(&line).trim().to_string();
+                            line.clear();
+                            if !trimmed.is_empty() {
+                                history.push(trimmed.clone());
+                            }
+                            history_pos = history.len();
+                            if trimmed == "exit" {
+                                term.line = line;
+                                term.history = history;
+                                term.history_pos = history_pos;
+                                term.push(output);
+                                term.push(b"logout\r\n".to_vec());
+                                term.closed = true;
+                                term.wake();
+                                return Ok(Value::Null);
+                            }
+                            let response = match trimmed.as_str() {
+                                "help" => HELP.to_string(),
+                                "ls" => "deep  notes.txt  readme.md\r\n".to_string(),
+                                "cat" => "usage: cat <file>\r\n".to_string(),
+                                "pwd" => "/home/operator\r\n".to_string(),
+                                "whoami" => "operator\r\n".to_string(),
+                                "uname" => "Anthracite demo\r\n".to_string(),
+                                "clear" => "\x1b[2J\x1b[H".to_string(),
+                                "" => String::new(),
+                                other if other.starts_with("echo ") => {
+                                    format!("{}\r\n", &other[5..])
+                                }
+                                other => format!("{other}: command not found\r\n"),
+                            };
+                            output.extend_from_slice(response.as_bytes());
+                            output.extend_from_slice(PROMPT.as_bytes());
+                        }
                         byte if byte >= 0x20 => {
                             line.push(byte);
                             output.push(byte);
                         }
                         _ => {}
                     }
-                }
-                if newline {
-                    output.extend_from_slice(b"\r\n");
-                    let trimmed = String::from_utf8_lossy(&line).trim().to_string();
-                    line.clear();
-                    if trimmed == "exit" {
-                        term.line = line;
-                        term.push(output);
-                        term.push(b"logout\r\n".to_vec());
-                        term.closed = true;
-                        term.wake();
-                        return Ok(Value::Null);
-                    }
-                    let response = match trimmed.as_str() {
-                        "help" => HELP.to_string(),
-                        "ls" => "deep  notes.txt  readme.md\r\n".to_string(),
-                        "cat" => "usage: cat <file>\r\n".to_string(),
-                        "" => String::new(),
-                        other => format!("{other}: command not found\r\n"),
-                    };
-                    output.extend_from_slice(response.as_bytes());
-                    output.extend_from_slice(PROMPT.as_bytes());
+                    index += 1;
                 }
                 term.line = line;
+                term.history = history;
+                term.history_pos = history_pos;
                 if !output.is_empty() {
                     term.push(output);
                 }

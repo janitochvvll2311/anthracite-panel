@@ -18,11 +18,12 @@ upgraded through the engine CLI.
 | Modal close (button, Escape) | Pass — dialog closes and the origin view refreshes, including Escape while focus is inside the modal iframe |
 | Modal backdrop | Pass — pointerdown on the dialog closes it |
 | Keyboard menu | Pass — Space on the focused FAB opens the menu; Escape closes it from a tab and from a floating window without closing the window |
-| Focus after modal | Pass at panel level — the panel restores the origin frame; the exact element inside the frame stays app-owned |
+| Focus after modal | Pass — the panel restores the origin frame and Accounts returns focus to the Password button after the refresh |
 | Floating window FAB (Home, Storage) | Pass — the window has its own FAB and opens its modal |
 | Mobile 390×844 | Pass — FAB stays inside the viewport; Accounts and Firewall rows become labeled cards; modal width 356 px |
 | Iframe box | Pass — app frames own no inner scrollbar; the pane/modal body is the single scroll container |
-| Icons | Pass — app icons come from names or assets; FAB triggers are icon-only, with refresh for Home and plus elsewhere |
+| Demo terminal | Pass — backspace, line history, Echo/LS/pwd/whoami/uname/Clear and ANSI clear; the fixture remains a scripted sandbox, not a host shell |
+| Icons | Pass — app icons come from names or assets; sidebar and group sub-tabs show them; FAB triggers are icon-only, with a refresh asset for Home and plus elsewhere |
 | View-only panel | Pass — SDK tests show FAB/MODAL are ignored and `panel.view` still mounts |
 
 ## Flows exercised

@@ -185,6 +185,7 @@ function mount(root, context) {
   let disposed = false;
   let policy = {};
   let shellInitialized = false;
+  let focusUser = null;
   const labeled = (className, value, label) => {
     const node = cell(className, value);
     node.dataset.label = label;
@@ -356,6 +357,7 @@ function mount(root, context) {
     }
   }
   function openPassword(user) {
+    focusUser = user.name;
     if (usePanelForms) {
       context.openModal?.({
         tag: "accounts-password-modal",
@@ -464,7 +466,15 @@ function mount(root, context) {
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
   const offAction = context.onAction?.((tag) => {
     if (tag === "refresh") {
-      load();
+      const name = focusUser;
+      focusUser = null;
+      load().then(() => {
+        if (!name)
+          return;
+        const row = [...usersRoot.querySelectorAll(".acc-row")].find((node) => node.textContent?.includes(name));
+        const button = [...row?.querySelectorAll("button") ?? []].find((candidate) => candidate.textContent === "Password");
+        button?.focus();
+      });
       return;
     }
     if (tag === "new-user") {

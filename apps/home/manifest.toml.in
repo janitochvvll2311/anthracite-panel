@@ -47,7 +47,8 @@ sha256 = "{{module_sha256}}"
 [[slot]]
 id = "panel.fab"
 label = "Refresh"
-icon = "refresh"
+icon = "web/refresh.svg"
+icon-sha256 = "{{refresh_sha256}}"
 order = 30
 tag = "refresh"
 view = "home"
@@ -56,6 +57,7 @@ sha256 = ""
 
 [[slot.actions]]
 label = "Refresh"
-icon = "refresh"
+icon = "web/refresh.svg"
+icon-sha256 = "{{refresh_sha256}}"
 tag = "refresh"
 action = "refresh"

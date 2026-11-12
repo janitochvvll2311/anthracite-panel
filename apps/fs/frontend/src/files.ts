@@ -1020,18 +1020,9 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const offAction = context.onAction?.((tag, payload) => {
     if (tag === "new") openNew();
     else if (tag === "upload") {
-      const files = (payload as { files?: Array<{ name: string; type: string; lastModified: number; bytes: ArrayBuffer }> } | undefined)?.files;
+      const files = (payload as { files?: File[] } | undefined)?.files;
       if (Array.isArray(files) && files.length > 0) {
-        enqueueUploads(
-          files.map(
-            (file) =>
-              new File([file.bytes], file.name, {
-                type: file.type,
-                lastModified: file.lastModified,
-              }),
-          ),
-          current,
-        );
+        enqueueUploads(files, current);
       } else {
         uploadInput.click();
       }

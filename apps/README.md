@@ -88,7 +88,7 @@ an icon is available; its `label` is the accessible name and tooltip. Menu items
 keep their labels. The view opens a modal with
 `context.openModal({ tag, params })`, handles local actions with
 `context.onAction(tag, payload)`, and the modal closes with `context.close()`.
-A `files = true` action delivers `{ files: [{ name, type, lastModified, bytes }] }`
+A `files = true` action delivers `{ files: File[] }`
 to `onAction`; the panel owns the picker so the browser user gesture survives.
 After it closes, the panel sends `REFRESH` to the originating view.
 
@@ -121,3 +121,8 @@ Names include `home`, `folder`, `terminal`, `activity`, `network`, `disk`,
 `file`, `link`, `gear`, `bolt` and `hello`. An asset must live under `web/`, use
 `.svg`, `.png` or `.webp`, and carry its pinned hash. The panel renders names as
 inline SVGs and assets as a CSS mask that inherits the current color.
+
+Every file under `apps/<app>/web/` is packaged. Its hash placeholder is
+`{{<stem>_sha256}}` (`icon.svg` → `{{icon_sha256}}`, `refresh.svg` →
+`{{refresh_sha256}}`); the build script and the demo bundle builder replace
+those placeholders and copy the files.

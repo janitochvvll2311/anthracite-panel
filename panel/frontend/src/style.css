@@ -597,6 +597,9 @@ button.drawer-close {
 }
 
 .sub-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
   padding: 4px 10px;
   border: 1px solid transparent;
@@ -612,6 +615,25 @@ button.drawer-close {
 .sub-tab:hover {
   color: var(--text);
   background: #171c274f;
+}
+
+.sub-tab-icon {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.sub-tab-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.sub-tab-icon.icon-asset {
+  width: 14px;
+  height: 14px;
 }
 
 .sub-tab.active {
