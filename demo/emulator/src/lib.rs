@@ -889,6 +889,8 @@ struct Term {
     history: Vec<String>,
     /// Where Up/Down is in `history`; equal to its length while composing.
     history_pos: usize,
+    /// The line that was being composed before the first Up, restored on Down.
+    draft: Vec<u8>,
     /// Set by `exit`: the shell ended, but the queued output is still readable.
     closed: bool,
     /// Streams parked until this session produces output or ends.
@@ -1268,6 +1270,7 @@ impl Emulator {
                     line: Vec::new(),
                     history: Vec::new(),
                     history_pos: 0,
+                    draft: Vec::new(),
                     closed: false,
                     waiters: Vec::new(),
                 };
@@ -1316,6 +1319,7 @@ impl Emulator {
                 let mut line = std::mem::take(&mut term.line);
                 let mut history = std::mem::take(&mut term.history);
                 let mut history_pos = term.history_pos;
+                let mut draft = std::mem::take(&mut term.draft);
                 let mut index = 0;
                 while index < data.len() {
                     let byte = data[index];
@@ -1331,20 +1335,22 @@ impl Emulator {
                             let plain = end == index + 2;
                             match data.get(end) {
                                 Some(b'A') if plain && !history.is_empty() => {
+                                    if history_pos == history.len() {
+                                        draft = line.clone();
+                                    }
                                     history_pos = history_pos.saturating_sub(1);
                                     line = history[history_pos].as_bytes().to_vec();
                                     output.extend_from_slice(b"\r\x1b[2K");
                                     output.extend_from_slice(PROMPT.as_bytes());
                                     output.extend_from_slice(&line);
                                 }
-                                Some(b'B') if plain => {
-                                    if history_pos + 1 < history.len() {
-                                        history_pos += 1;
-                                        line = history[history_pos].as_bytes().to_vec();
+                                Some(b'B') if plain && history_pos < history.len() => {
+                                    history_pos += 1;
+                                    line = if history_pos < history.len() {
+                                        history[history_pos].as_bytes().to_vec()
                                     } else {
-                                        history_pos = history.len();
-                                        line.clear();
-                                    }
+                                        std::mem::take(&mut draft)
+                                    };
                                     output.extend_from_slice(b"\r\x1b[2K");
                                     output.extend_from_slice(PROMPT.as_bytes());
                                     output.extend_from_slice(&line);
@@ -1365,6 +1371,7 @@ impl Emulator {
                         }
                         0x03 => {
                             line.clear();
+                            draft.clear();
                             history_pos = history.len();
                             output.extend_from_slice(b"^C\r\n");
                             output.extend_from_slice(PROMPT.as_bytes());
@@ -1378,6 +1385,7 @@ impl Emulator {
                             output.extend_from_slice(b"\r\n");
                             let trimmed = String::from_utf8_lossy(&line).trim().to_string();
                             line.clear();
+                            draft.clear();
                             if !trimmed.is_empty() {
                                 history.push(trimmed.clone());
                             }
@@ -1386,6 +1394,7 @@ impl Emulator {
                                 term.line = line;
                                 term.history = history;
                                 term.history_pos = history_pos;
+                                term.draft = draft;
                                 term.push(output);
                                 term.push(b"logout\r\n".to_vec());
                                 term.closed = true;
@@ -1420,6 +1429,7 @@ impl Emulator {
                 term.line = line;
                 term.history = history;
                 term.history_pos = history_pos;
+                term.draft = draft;
                 if !output.is_empty() {
                     term.push(output);
                 }
@@ -1913,6 +1923,89 @@ mod tests {
             .collect::<Vec<_>>();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("abc: command not found"), "{text}");
+    }
+
+    #[test]
+    fn the_terminal_line_editor_keeps_the_draft_around_history() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+
+        // Down with no history must leave the line being edited alone.
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [97, 98, 99]}))
+            .expect("type");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 66]}))
+            .expect("down");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let first = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 2}))
+            .expect("first reply");
+        let bytes = first["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("abc: command not found"), "{text}");
+
+        // A draft typed before Up comes back on Down, instead of an empty line.
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [97, 108, 112, 104, 97, 10]}),
+            )
+            .expect("alpha");
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [98, 101, 116, 97]}),
+            )
+            .expect("draft");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 65]}))
+            .expect("up");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [27, 91, 66]}))
+            .expect("down");
+        let restored = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 6}))
+            .expect("restored draft");
+        let bytes = restored["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("beta"), "{text}");
+
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let reply = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 7}))
+            .expect("reply");
+        let bytes = reply["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("beta: command not found"), "{text}");
     }
 
     #[tokio::test]
