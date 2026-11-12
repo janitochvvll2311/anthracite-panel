@@ -65,6 +65,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const groupName = box.querySelector("[data-group-name]") as any;
   const groupGid = box.querySelector("[data-group-gid]") as any;
   const groupSystem = box.querySelector("[data-group-system]") as any;
+  const usePanelForms =
+    context.panel?.slots?.includes("panel.fab") === true &&
+    context.panel?.slots?.includes("panel.modal") === true;
+  if (usePanelForms) {
+    userForm.remove();
+    groupForm.remove();
+  }
   let disposed = false;
   let policy: any = {};
   let shellInitialized = false;
@@ -279,6 +286,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   function openPassword(user) {
+    if (usePanelForms) {
+      void context.openModal?.({
+        tag: "accounts-password-modal",
+        params: { name: user.name },
+      });
+      return;
+    }
     const form = document.createElement("form");
     form.className = "acc-add";
     const input = document.createElement("input");
@@ -378,6 +392,21 @@ export function mount(root: HTMLElement, context: FrameContext) {
   });
 
   box.querySelector("[data-refresh]").addEventListener("click", () => void load());
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "refresh") {
+      void load();
+      return;
+    }
+    if (tag === "new-user") {
+      if (usePanelForms) void context.openModal?.({ tag: "accounts-user-modal" });
+      else formName.focus();
+      return;
+    }
+    if (tag === "new-group") {
+      if (usePanelForms) void context.openModal?.({ tag: "accounts-group-modal" });
+      else groupName.focus();
+    }
+  });
   let visible = true;
   const offVisibility = context.onVisibility?.((next) => {
     if (next === visible) return;
@@ -391,6 +420,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     root.replaceChildren();
   };

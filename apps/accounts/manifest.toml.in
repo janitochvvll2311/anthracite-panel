@@ -71,6 +71,50 @@ tag = "anth-accounts"
 module = "web/accounts.js"
 sha256 = "{{module_sha256}}"
 
+[[slot]]
+id = "panel.fab"
+label = "Add"
+icon = "users"
+order = 30
+tag = "accounts-add"
+view = "anth-accounts"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Create user"
+tag = "new-user"
+action = "new-user"
+
+[[slot.actions]]
+label = "Create group"
+tag = "new-group"
+action = "new-group"
+
+[[slot]]
+id = "panel.modal"
+label = "Create user"
+order = 31
+tag = "accounts-user-modal"
+module = "web/accounts-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[slot]]
+id = "panel.modal"
+label = "Create group"
+order = 32
+tag = "accounts-group-modal"
+module = "web/accounts-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[slot]]
+id = "panel.modal"
+label = "Set password"
+order = 33
+tag = "accounts-password-modal"
+module = "web/accounts-modal.js"
+sha256 = "{{modal_sha256}}"
+
 [[cli]]
 call = "anthracite:accounts/accounts@1.2.0#users"
 verb = "users"

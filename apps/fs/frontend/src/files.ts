@@ -92,6 +92,15 @@ export function mount(root: HTMLElement, context: FrameContext) {
   const queueList = box.querySelector("[data-queue-list]") as any;
   const queueClear = box.querySelector("[data-queue-clear]") as any;
   const dropOverlay = box.querySelector("[data-drop]") as any;
+  const usePanelForms =
+    context.panel?.slots?.includes("panel.fab") === true &&
+    context.panel?.slots?.includes("panel.modal") === true;
+  if (usePanelForms) {
+    newForm.hidden = true;
+    renameForm.hidden = true;
+    newButton.hidden = true;
+    uploadButton.hidden = true;
+  }
 
   let current = "/";
   let nextCursor = null;
@@ -174,6 +183,10 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   function showRename(path) {
+    if (usePanelForms) {
+      void context.openModal?.({ tag: "fs-rename-modal", params: { path } });
+      return;
+    }
     clearRename();
     newForm.hidden = true;
     renamePath = path;
@@ -181,6 +194,19 @@ export function mount(root: HTMLElement, context: FrameContext) {
     renameForm.hidden = false;
     renameInput.focus();
     renameInput.select();
+  }
+
+  function openNew() {
+    if (usePanelForms) {
+      void context.openModal?.({ tag: "fs-new-modal", params: { path: current } });
+      return;
+    }
+    newForm.hidden = !newForm.hidden;
+    clearRename();
+    if (!newForm.hidden) {
+      syncNewKind();
+      newInput.focus();
+    }
   }
 
   function confirmDelete(row, path, remove) {
@@ -826,87 +852,82 @@ export function mount(root: HTMLElement, context: FrameContext) {
   more.addEventListener("click", () => {
     if (nextCursor && view === "files") void loadPage(current, nextCursor, true);
   });
-  newButton.addEventListener("click", () => {
-    newForm.hidden = !newForm.hidden;
-    clearRename();
-    if (!newForm.hidden) {
-      syncNewKind();
-      newInput.focus();
-    }
-  });
+  newButton.addEventListener("click", openNew);
   newKind.addEventListener("change", syncNewKind);
   box.querySelector("[data-cancel-new]").addEventListener("click", () => {
     newForm.hidden = true;
   });
   box.querySelector("[data-cancel-rename]").addEventListener("click", clearRename);
-  newForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const kind = newKind.value;
-    const name = newInput.value.trim();
-    if (!name || name.includes("/") || name === "." || name === "..") {
-      setStatus("A name cannot be empty or contain `/`.", true);
-      return;
-    }
-    const path = join(current, name);
-    try {
-      if (kind === "dir") {
-        await request("/dir", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path }),
-        });
-      } else if (kind === "link") {
-        const raw = newTarget.value.trim();
-        if (!raw.startsWith("/")) {
-          setStatus("The symlink target must be an absolute path.", true);
-          return;
-        }
-        const target = normalizePath(raw);
-        if (target === null) {
-          setStatus("The path cannot escape the root.", true);
-          return;
-        }
-        await request("/symlink", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path, target }),
-        });
-      } else {
-        try {
-          await request(`/stat?path=${encodeURIComponent(path)}`);
-          setStatus(`${path} already exists.`, true);
-          return;
-        } catch (error) {
-          if (!reason(error).includes("not-found")) {
-            setStatus(reason(error), true);
+  if (!usePanelForms) {
+    newForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const kind = newKind.value;
+      const name = newInput.value.trim();
+      if (!name || name.includes("/") || name === "." || name === "..") {
+        setStatus("A name cannot be empty or contain `/`.", true);
+        return;
+      }
+      const path = join(current, name);
+      try {
+        if (kind === "dir") {
+          await request("/dir", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path }),
+          });
+        } else if (kind === "link") {
+          const raw = newTarget.value.trim();
+          if (!raw.startsWith("/")) {
+            setStatus("The symlink target must be an absolute path.", true);
             return;
           }
+          const target = normalizePath(raw);
+          if (target === null) {
+            setStatus("The path cannot escape the root.", true);
+            return;
+          }
+          await request("/symlink", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path, target }),
+          });
+        } else {
+          try {
+            await request(`/stat?path=${encodeURIComponent(path)}`);
+            setStatus(`${path} already exists.`, true);
+            return;
+          } catch (error) {
+            if (!reason(error).includes("not-found")) {
+              setStatus(reason(error), true);
+              return;
+            }
+          }
+          await request("/file", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path, bytes: [] }),
+          });
         }
-        await request("/file", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path, bytes: [] }),
-        });
+        newForm.hidden = true;
+        newInput.value = "";
+        newTarget.value = "";
+        await load(current);
+        setStatus(`Created ${path}`);
+      } catch (error) {
+        if (!disposed) setStatus(reason(error), true);
       }
-      newForm.hidden = true;
-      newInput.value = "";
-      newTarget.value = "";
-      await load(current);
-      setStatus(`Created ${path}`);
-    } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
-    }
-  });
-  renameForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!renamePath) return;
-    const name = renameInput.value.trim();
-    if (!name || name.includes("/") || name === "." || name === "..") {
-      setStatus("A name cannot be empty or contain `/`.", true);
-      return;
-    }
-    await renameTo(renamePath, join(parent(renamePath), name));
-  });
+    });
+    renameForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!renamePath) return;
+      const name = renameInput.value.trim();
+      if (!name || name.includes("/") || name === "." || name === "..") {
+        setStatus("A name cannot be empty or contain `/`.", true);
+        return;
+      }
+      await renameTo(renamePath, join(parent(renamePath), name));
+    });
+  }
   uploadButton.addEventListener("click", () => uploadInput.click());
   queueClear.addEventListener("click", () => {
     for (let index = queue.length - 1; index >= 0; index -= 1) {
@@ -992,6 +1013,15 @@ export function mount(root: HTMLElement, context: FrameContext) {
     hideDrop();
   });
 
+  const offAction = context.onAction?.((tag) => {
+    if (tag === "new") openNew();
+    else if (tag === "upload") uploadInput.click();
+    else if (tag === "refresh") {
+      resetPreview();
+      if (view === "trash") void loadTrash();
+      else void load(current);
+    }
+  });
   renderPaths();
   let visible = true;
   const offVisibility = context.onVisibility?.((next) => {
@@ -1007,6 +1037,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
   return () => {
     disposed = true;
+    offAction?.();
     offVisibility?.();
     if (previewState?.objectUrl) URL.revokeObjectURL(previewState.objectUrl);
     root.replaceChildren();

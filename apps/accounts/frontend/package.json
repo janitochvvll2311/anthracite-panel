@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/main.ts --outfile dist/accounts.js --format esm --target browser",
+    "build": "bun build src/main.ts --outfile dist/accounts.js --format esm --target browser && bun build src/modal.ts --outfile dist/accounts-modal.js --format esm --target browser",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
