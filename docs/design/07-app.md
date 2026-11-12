@@ -95,6 +95,7 @@ id     = "panel.view"
 label  = "Notes"
 icon   = "notes"
 order  = 10
+# parent = "org.example.shell#shell"   # optional; use `tab` instead for a parent label
 tag    = "anth-notes"
 module = "web/notes.js"
 sha256 = "…"
@@ -324,9 +325,18 @@ implements `panel.view` is implementing the contract, not borrowing our name.
 
 | Slot | The app provides | The panel does |
 | --- | --- | --- |
-| `panel.view` | `label`, `icon`, `order`, `tag`, `module`, `sha256`, optional `hidden` | derives the sidebar entry unless `hidden`, opens the view as a tab, and may detach it to a floating window (maximize, minimize to the bottom stack, dock back to the tabs). Hidden views stay mountable so another view of the same app can open them. |
+| `panel.view` | `label`, `icon`, `order`, `tag`, `module`, `sha256`, optional `hidden`, `parent`, `tab` | derives the sidebar entry unless `hidden`, opens the view as a tab, and may detach it to a floating window (maximize, minimize to the bottom stack, dock back to the tabs). Hidden views stay mountable so another view of the same app can open them. |
 | `panel.action` | `label`, `icon`, `order`, and a `target` — its own view or a `METHOD /path` of the same app | lists it in the action button |
 | `panel.settings` | `label`, `order`, `tag`, `module`, `sha256` | renders it as a section inside settings |
+
+`parent` groups a `panel.view` contribution under another app's view, named as
+`<app-id>#<slot-tag>` so an app with several views is unambiguous. The parent's
+`label` is the top-level tab, its `tab` (or its `label`) labels its own
+sub-tab, and the child's `label` labels its sub-tab. Grouping is visual, one
+level deep, and never a call between apps: each child keeps its own sandbox,
+grant and `app.id`. `parent` and `tab` are mutually exclusive: a child uses its
+`label`. If the parent is missing, hidden or the graph is not one level, the
+child falls back to a top-level tab.
 
 A panel may declare slots of its own, but those are not portable: an app targeting
 them will not appear anywhere else.

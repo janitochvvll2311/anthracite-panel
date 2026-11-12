@@ -2728,3 +2728,34 @@ async fn the_grant_has_its_own_get() {
     assert_eq!(value["error"]["code"], "not-found");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
+
+#[test]
+fn a_grouped_slot_reaches_the_surface() {
+    use anth_contract::manifest::SlotSection;
+
+    let slot = SlotSection {
+        id: "panel.view".to_string(),
+        label: "Firewall".to_string(),
+        icon: None,
+        order: 22,
+        hidden: false,
+        parent: Some("org.anthracite.net#anth-net".to_string()),
+        tab: None,
+        tag: "anth-firewall".to_string(),
+        module: "web/firewall.js".to_string(),
+        sha256: "a".repeat(64),
+    };
+    let surface = surface_slot(&slot);
+    assert_eq!(
+        surface.parent.as_deref(),
+        Some("org.anthracite.net#anth-net")
+    );
+    assert_eq!(surface.tab, None);
+
+    let parent = SlotSection {
+        tab: Some("Interfaces".to_string()),
+        parent: None,
+        ..slot
+    };
+    assert_eq!(surface_slot(&parent).tab.as_deref(), Some("Interfaces"));
+}

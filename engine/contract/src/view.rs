@@ -145,6 +145,12 @@ pub struct SurfaceSlot {
     /// The panel renders this contribution only on request, not in navigation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// `<app-id>#<slot-tag>` of the view this contribution is grouped under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Sub-tab label when this contribution is the parent of a group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
     pub tag: String,
     pub module: String,
     pub sha256: String,
@@ -344,6 +350,8 @@ mod tests {
                         icon: None,
                         order: 1,
                         hidden: false,
+                        parent: None,
+                        tab: None,
                         tag: "notes".to_string(),
                         module: "web/notes.js".to_string(),
                         sha256: "c".repeat(64),

@@ -9,6 +9,10 @@ export type Slot = {
   order: number;
   /// Hidden contributions can be opened by other views, but not listed.
   hidden?: boolean;
+  /// `<app-id>#<slot-tag>` of the view this contribution is grouped under.
+  parent?: string;
+  /// Sub-tab label when this contribution is the parent of a group.
+  tab?: string;
   tag: string;
   module: string;
   sha256: string;

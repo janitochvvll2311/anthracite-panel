@@ -42,6 +42,10 @@ pub struct Contribution {
     pub icon: Option<String>,
     pub order: i64,
     pub hidden: bool,
+    /// `<app-id>#<slot-tag>` of the view this contribution is grouped under.
+    pub parent: Option<String>,
+    /// Sub-tab label when this contribution is the parent of a group.
+    pub tab: Option<String>,
     pub tag: String,
     pub module: String,
     pub sha256: String,
@@ -56,6 +60,8 @@ impl Contribution {
             icon: slot.icon.clone(),
             order: slot.order,
             hidden: slot.hidden,
+            parent: slot.parent.clone(),
+            tab: slot.tab.clone(),
             tag: slot.tag.clone(),
             module: slot.module.clone(),
             sha256: slot.sha256.clone(),
@@ -153,6 +159,8 @@ mod tests {
             icon: None,
             order,
             hidden: false,
+            parent: None,
+            tab: None,
             tag: tag.to_string(),
             module: format!("web/{tag}.js"),
             sha256: "a".repeat(64),
@@ -172,6 +180,22 @@ mod tests {
         assert_eq!(slots.mounted(ACTION).len(), 0);
         assert_eq!(slots.ignored().len(), 1);
         assert_eq!(slots.ignored()[0].id, ACTION);
+    }
+
+    #[test]
+    fn grouping_fields_reach_the_contribution() {
+        let mut grouped = slot(VIEW, "firewall", 2);
+        grouped.parent = Some("org.anthracite.net#anth-net".to_string());
+        let contribution = Contribution::from_surface(&app("org.anthracite.firewall"), &grouped);
+        assert_eq!(
+            contribution.parent.as_deref(),
+            Some("org.anthracite.net#anth-net")
+        );
+
+        let mut parent = slot(VIEW, "net", 1);
+        parent.tab = Some("Interfaces".to_string());
+        let contribution = Contribution::from_surface(&app("org.anthracite.net"), &parent);
+        assert_eq!(contribution.tab.as_deref(), Some("Interfaces"));
     }
 
     #[test]

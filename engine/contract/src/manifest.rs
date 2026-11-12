@@ -199,6 +199,14 @@ pub struct SlotSection {
     /// but the panel does not list them in its navigation.
     #[serde(default)]
     pub hidden: bool,
+    /// `<app-id>#<slot-tag>` of the view this contribution appears under, as a
+    /// sub-tab.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// Sub-tab label when this slot is the parent of a group; defaults to
+    /// `label`.
+    #[serde(default)]
+    pub tab: Option<String>,
     pub tag: String,
     pub module: String,
     pub sha256: String,
@@ -528,6 +536,23 @@ impl Manifest {
                     "the UI module `sha256` is not 64 lowercase hex",
                 ));
             }
+            if slot.id == "panel.view" {
+                if let Some(parent) = slot.parent.as_deref() {
+                    check_parent_reference(parent, &self.app.id)?;
+                    if slot.tab.is_some() {
+                        return Err(Error::invalid(
+                            "a child slot uses `label` as its tab, not `tab`",
+                        ));
+                    }
+                }
+                if let Some(tab) = slot.tab.as_deref() {
+                    check_tab_label(tab)?;
+                }
+            } else if slot.parent.is_some() || slot.tab.is_some() {
+                return Err(Error::invalid(
+                    "only `panel.view` slots can be grouped or declare a tab label",
+                ));
+            }
             let key = (slot.id.clone(), slot.tag.clone());
             if slots.contains(&key) {
                 return Err(Error::invalid(format!(
@@ -728,6 +753,37 @@ fn is_slot_id(input: &str) -> bool {
         && !input.contains("..")
 }
 
+/// A parent is `<app-id>#<slot-tag>`: the tag is what identifies one view of
+/// an app that contributes several.
+fn check_parent_reference(parent: &str, own_app: &str) -> Result<(), Error> {
+    let (app, tag) = parent
+        .split_once('#')
+        .ok_or_else(|| Error::invalid("a slot `parent` must be `<app-id>#<slot-tag>`"))?;
+    if app == own_app {
+        return Err(Error::invalid(
+            "a view slot cannot name its own app as parent",
+        ));
+    }
+    AppId::parse(app)?;
+    if !is_kebab(tag) {
+        return Err(Error::invalid(format!(
+            "`{tag}` is not a valid parent slot tag"
+        )));
+    }
+    Ok(())
+}
+
+/// A sub-tab label is text, not an id: keep it short and printable.
+fn check_tab_label(label: &str) -> Result<(), Error> {
+    if label.trim().is_empty() || label.chars().count() > 64 || label.chars().any(char::is_control)
+    {
+        return Err(Error::invalid(
+            "a slot `tab` must be 1-64 printable characters",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(all(test, feature = "parse"))]
 mod tests {
     use super::*;
@@ -848,6 +904,60 @@ target = "wasm"
         assert_eq!(manifest.app.id, "org.example.notes");
         assert_eq!(manifest.slot[0].order, 10);
         assert!(manifest.slot[0].hidden);
+    }
+
+    #[test]
+    fn a_view_slot_can_be_grouped_and_label_its_tab() {
+        let mut manifest = valid();
+        manifest.slot[0].parent = Some("org.example.parent#notes".to_string());
+        manifest.validate().expect("parent");
+
+        let mut manifest = valid();
+        manifest.slot[0].tab = Some("Overview".to_string());
+        manifest.validate().expect("tab label");
+
+        let mut manifest = valid();
+        manifest.slot[0].parent = Some("org.example.notes#notes".to_string());
+        let error = manifest.validate().expect_err("self parent");
+        assert!(error.message().contains("own app"), "{error}");
+
+        let mut manifest = valid();
+        manifest.slot[0].parent = Some("not-an-app#view".to_string());
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid();
+        manifest.slot[0].parent = Some("org.example.parent#notes".to_string());
+        manifest.slot[0].tab = Some("Child tab".to_string());
+        let error = manifest.validate().expect_err("child tab");
+        assert!(error.message().contains("`label`"), "{error}");
+
+        let mut manifest = valid();
+        manifest.slot[0].tab = Some("  ".to_string());
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid();
+        manifest.slot[0].tab = Some("ñ".repeat(64));
+        manifest.validate().expect("64 characters");
+        manifest.slot[0].tab = Some("ñ".repeat(65));
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn a_parent_needs_an_app_and_a_slot_tag() {
+        for parent in ["org.example.parent", "org.example.parent#not a tag"] {
+            let mut manifest = valid();
+            manifest.slot[0].parent = Some(parent.to_string());
+            assert!(manifest.validate().is_err(), "{parent}");
+        }
+    }
+
+    #[test]
+    fn only_view_slots_can_be_grouped() {
+        let mut manifest = valid();
+        manifest.slot[0].id = "panel.action".to_string();
+        manifest.slot[0].parent = Some("org.example.parent#notes".to_string());
+        let error = manifest.validate().expect_err("action slot");
+        assert!(error.message().contains("panel.view"), "{error}");
     }
 
     #[test]

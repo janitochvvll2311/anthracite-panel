@@ -24,7 +24,7 @@ use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::risk::{approve, Approval};
 use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
-use anth_contract::manifest::{parse_call, RouteTransport};
+use anth_contract::manifest::{parse_call, RouteTransport, SlotSection};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
     Error, ErrorKind, FatalView, GrantState, GrantView, InterfaceId, KeyAlgorithm, KeyView,
@@ -735,21 +735,7 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        let slots = found
-            .manifest
-            .slot
-            .iter()
-            .map(|slot| SurfaceSlot {
-                id: slot.id.clone(),
-                label: slot.label.clone(),
-                icon: slot.icon.clone(),
-                order: slot.order,
-                hidden: slot.hidden,
-                tag: slot.tag.clone(),
-                module: slot.module.clone(),
-                sha256: slot.sha256.clone(),
-            })
-            .collect();
+        let slots = found.manifest.slot.iter().map(surface_slot).collect();
         let cli = found
             .manifest
             .cli
@@ -1745,6 +1731,23 @@ fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppV
         grant_state,
         grant_problem,
     })
+}
+
+/// The manifest-to-surface bridge for a UI slot. Kept as a function so the
+/// grouping fields have a direct test.
+fn surface_slot(slot: &SlotSection) -> SurfaceSlot {
+    SurfaceSlot {
+        id: slot.id.clone(),
+        label: slot.label.clone(),
+        icon: slot.icon.clone(),
+        order: slot.order,
+        hidden: slot.hidden,
+        parent: slot.parent.clone(),
+        tab: slot.tab.clone(),
+        tag: slot.tag.clone(),
+        module: slot.module.clone(),
+        sha256: slot.sha256.clone(),
+    }
 }
 
 mod error;
