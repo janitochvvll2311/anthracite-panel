@@ -79,13 +79,18 @@ action = "new"
 label = "Upload"
 tag = "upload"
 action = "upload"
+files = true
 ```
 
 A `target` action points at a `panel.modal` slot of the same app; an `action`
-is a local tag delivered to the active view. The view opens a modal with
+is a local tag delivered to the active view. The FAB trigger is icon-only when
+an icon is available; its `label` is the accessible name and tooltip. Menu items
+keep their labels. The view opens a modal with
 `context.openModal({ tag, params })`, handles local actions with
-`context.onAction`, and the modal closes with `context.close()`. After it
-closes, the panel sends `REFRESH` to the originating view.
+`context.onAction(tag, payload)`, and the modal closes with `context.close()`.
+A `files = true` action delivers `{ files: [{ name, type, lastModified, bytes }] }`
+to `onAction`; the panel owns the picker so the browser user gesture survives.
+After it closes, the panel sends `REFRESH` to the originating view.
 
 Modal forms live in a second frontend entry, usually `src/modal.ts`, and are
 packaged as `web/<app>-modal.js`. Its build script must include the modal in
@@ -96,3 +101,23 @@ Keep destructive confirmations in the app's own `<dialog>` or inline
 confirmation. A panel that does not implement `panel.fab`/`panel.modal` ignores
 those contributions, so an app that wants to remain usable there should keep a
 local fallback control.
+
+## Icons
+
+An app declares its sidebar identity in `[app]`; a slot or FAB action can
+override it:
+
+```toml
+[app]
+icon = "home"                    # a name from the panel's set
+
+# or an app-provided asset:
+# icon = "web/icon.svg"
+# icon-sha256 = "…"
+```
+
+Names include `home`, `folder`, `terminal`, `activity`, `network`, `disk`,
+`users`, `shield`, `refresh`, `plus`, `upload`, `download`, `user`, `group`,
+`file`, `link`, `gear`, `bolt` and `hello`. An asset must live under `web/`, use
+`.svg`, `.png` or `.webp`, and carry its pinned hash. The panel renders names as
+inline SVGs and assets as a CSS mask that inherits the current color.

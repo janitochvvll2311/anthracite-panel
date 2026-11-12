@@ -93,6 +93,29 @@ var styles = `
   .acc-add .check { display: flex; align-items: center; gap: 5px; color: #8f98ab; font-size: 11px; }
   .acc-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .acc-status.bad { color: #ffb3ba; }
+  @media (max-width: 900px) {
+    .acc-bar { flex-wrap: wrap; }
+    .acc-table { border: 0; background: transparent; overflow: visible; }
+    .acc-row.head { display: none; }
+    .acc-row:not(.head) {
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px;
+      padding: 10px 12px; margin-bottom: 8px; border: 1px solid #202632;
+      border-radius: 9px; background: #0f1219;
+    }
+    .acc-row.group { grid-template-columns: minmax(0, 1fr); }
+    .acc-row:not(.head) > span:not(.acc-name):not(.acc-actions) {
+      display: flex; justify-content: space-between; gap: 12px; font-size: 11.5px;
+    }
+    .acc-row:not(.head) > span[data-label]::before {
+      content: attr(data-label); color: #667087; font-size: 9.5px;
+      text-transform: uppercase; letter-spacing: .06em;
+    }
+    .acc-name { font-size: 13.5px; }
+    .acc-actions { margin-top: 6px; padding-top: 6px; border-top: 1px solid #171c26; }
+    .acc-add { align-items: stretch; }
+    .acc-add input { width: 100% !important; }
+    .acc-add button { width: 100%; }
+  }
 `;
 
 // src/main.ts
@@ -162,6 +185,11 @@ function mount(root, context) {
   let disposed = false;
   let policy = {};
   let shellInitialized = false;
+  const labeled = (className, value, label) => {
+    const node = cell(className, value);
+    node.dataset.label = label;
+    return node;
+  };
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "acc-status bad" : "acc-status";
@@ -244,7 +272,7 @@ function mount(root, context) {
         removeHome.title = removeHome.disabled ? "this account is protected" : `Delete ${user.name} and remove ${user.home}`;
         removeHome.addEventListener("click", () => void deleteUser(user, true));
         actions.append(lock, password, remove, removeHome);
-        row.append(name, cell("acc-mono", String(user.uid)), cell("acc-mono", String(user.gid)), cell("acc-mono", user.group), cell("acc-members", user.groups.length ? user.groups.join(", ") : "—"), cell("acc-mono", user.home), cell("acc-mono", user.shell), actions);
+        row.append(name, labeled("acc-mono", String(user.uid), "UID"), labeled("acc-mono", String(user.gid), "GID"), labeled("acc-mono", user.group, "Group"), labeled("acc-members", user.groups.length ? user.groups.join(", ") : "—", "Groups"), labeled("acc-mono", user.home, "Home"), labeled("acc-mono", user.shell, "Shell"), actions);
         row.dataset.source = user.source;
         return row;
       });
@@ -269,7 +297,7 @@ function mount(root, context) {
         remove.title = remove.disabled ? "this group cannot be deleted from the panel" : `Delete ${group.name}`;
         remove.addEventListener("click", () => void deleteGroup(group.name));
         actions.append(remove);
-        row.append(name, cell("acc-mono", String(group.gid)), cell("acc-members", group.members.length ? group.members.join(", ") : "—"), actions);
+        row.append(name, labeled("acc-mono", String(group.gid), "GID"), labeled("acc-members", group.members.length ? group.members.join(", ") : "—", "Members"), actions);
         return row;
       });
       groupsRoot.replaceChildren(table(["GROUP", "GID", "MEMBERS", "ACTIONS"], groupRows, "group"));

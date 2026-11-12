@@ -592,7 +592,7 @@ export function mount(root: HTMLElement, context: FrameContext) {
   });
 
   box.querySelector("[data-clear]")!.addEventListener("click", () => {
-    term.clear();
+    term.write("\x1b[2J\x1b[3J\x1b[H");
     setStatus("Screen cleared");
   });
   for (const control of box.querySelectorAll("[data-signal]")) {

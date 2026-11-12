@@ -161,12 +161,14 @@ export function mount(root: HTMLElement, context: FrameContext) {
         target,
         rule.comment ?? "—",
       ];
-      for (const value of cells) {
+      const labels = ["Handle", "Chain", "Action", "Target", "Comment"];
+      cells.forEach((value, index) => {
         const cell = document.createElement("span");
         cell.className = value === String(rule.handle) || value === target ? "fw-mono" : "";
+        cell.dataset.label = labels[index];
         cell.textContent = value;
         row.append(cell);
-      }
+      });
       if (custom) row.querySelectorAll("span")[2]?.replaceChildren(badge("custom", "custom"));
       const actions = document.createElement("span");
       actions.className = "fw-actions";

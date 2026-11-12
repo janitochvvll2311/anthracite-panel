@@ -76,6 +76,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
   let policy: any = {};
   let shellInitialized = false;
 
+  const labeled = (className: string, value: string, label: string) => {
+    const node = cell(className, value);
+    node.dataset.label = label;
+    return node;
+  };
+
   const setStatus = (message, bad = false) => {
     status.textContent = message ?? "";
     status.className = bad ? "acc-status bad" : "acc-status";
@@ -176,12 +182,16 @@ export function mount(root: HTMLElement, context: FrameContext) {
 
         row.append(
           name,
-          cell("acc-mono", String(user.uid)),
-          cell("acc-mono", String(user.gid)),
-          cell("acc-mono", user.group),
-          cell("acc-members", user.groups.length ? user.groups.join(", ") : "—"),
-          cell("acc-mono", user.home),
-          cell("acc-mono", user.shell),
+          labeled("acc-mono", String(user.uid), "UID"),
+          labeled("acc-mono", String(user.gid), "GID"),
+          labeled("acc-mono", user.group, "Group"),
+          labeled(
+            "acc-members",
+            user.groups.length ? user.groups.join(", ") : "—",
+            "Groups",
+          ),
+          labeled("acc-mono", user.home, "Home"),
+          labeled("acc-mono", user.shell, "Shell"),
           actions,
         );
         row.dataset.source = user.source;
@@ -217,8 +227,12 @@ export function mount(root: HTMLElement, context: FrameContext) {
         actions.append(remove);
         row.append(
           name,
-          cell("acc-mono", String(group.gid)),
-          cell("acc-members", group.members.length ? group.members.join(", ") : "—"),
+          labeled("acc-mono", String(group.gid), "GID"),
+          labeled(
+            "acc-members",
+            group.members.length ? group.members.join(", ") : "—",
+            "Members",
+          ),
           actions,
         );
         return row;

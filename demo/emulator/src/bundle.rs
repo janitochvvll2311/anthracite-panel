@@ -78,6 +78,21 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
                     .collect()
             })
             .unwrap_or_default();
+        let icon_path = dir.join("web").join("icon.svg");
+        let icon = match fs::read(&icon_path) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(Box::new(error)),
+        };
+        let icon_hash: String = icon
+            .as_ref()
+            .map(|bytes| {
+                Sha256::digest(bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            })
+            .unwrap_or_default();
         let (app_name, summary, service_class, service_argv) = match *name {
             "fs" => (
                 "Files (emulator)",
@@ -133,6 +148,7 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
             .replace("{{sha256}}", &hash)
             .replace("{{module_sha256}}", &module_hash)
             .replace("{{modal_sha256}}", &modal_hash)
+            .replace("{{icon_sha256}}", &icon_hash)
             .replace("{{app_name}}", app_name)
             .replace("{{app_summary}}", summary)
             .replace("{{service_path}}", "bin/host-emulator")
@@ -159,6 +175,10 @@ pub fn build(binary: &Path, out: &Path) -> Result<Vec<Built>, Box<dyn Error>> {
         if let Some(modal) = &modal {
             writer.start_file(format!("web/{name}-modal.js"), options)?;
             writer.write_all(modal)?;
+        }
+        if let Some(icon) = &icon {
+            writer.start_file("web/icon.svg", options)?;
+            writer.write_all(icon)?;
         }
         writer.start_file("bin/host-emulator", options)?;
         writer.write_all(&bytes)?;
@@ -233,6 +253,33 @@ mod tests {
                     .map(|byte| format!("{byte:02x}"))
                     .collect();
                 assert_eq!(hash, slot.sha256, "{}", slot.module);
+            }
+            let mut icon_assets = Vec::new();
+            if let (Some(icon), Some(hash)) = (&manifest.app.icon, &manifest.app.icon_sha256) {
+                icon_assets.push((icon.clone(), hash.clone()));
+            }
+            for slot in &manifest.slot {
+                if let (Some(icon), Some(hash)) = (&slot.icon, &slot.icon_sha256) {
+                    icon_assets.push((icon.clone(), hash.clone()));
+                }
+                for action in &slot.actions {
+                    if let (Some(icon), Some(hash)) = (&action.icon, &action.icon_sha256) {
+                        icon_assets.push((icon.clone(), hash.clone()));
+                    }
+                }
+            }
+            for (icon, expected) in icon_assets {
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(
+                    &mut archive.by_name(&icon).expect("icon asset"),
+                    &mut bytes,
+                )
+                .expect("read icon");
+                let hash: String = Sha256::digest(&bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                assert_eq!(hash, expected, "{icon}");
             }
             let wit_name = names
                 .iter()

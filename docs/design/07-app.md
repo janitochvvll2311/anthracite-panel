@@ -331,11 +331,21 @@ implements `panel.view` is implementing the contract, not borrowing our name.
 | `panel.fab` | `label`, optional `icon`, `order`, `tag`, optional `view` and `actions` | renders a FAB on the matching view: one action runs directly, several open a menu |
 | `panel.modal` | `label`, `order`, `tag`, `module`, `sha256` | mounts it in a panel-level dialog with a sandboxed frame |
 
+`icon` is either a name from the panel's vocabulary (`home`, `folder`, `refresh`, …)
+or a `web/` asset path paired with `icon-sha256`. The app-level `[app] icon` is
+the sidebar identity; a slot or FAB action may override it with its own icon.
+Icon assets are served by the same hash-pinned asset route as UI modules.
+
 A `panel.fab` is declarative: it carries no `module` or `sha256`. A FAB has at
 least one action; the optional `view` scopes it to one of the app's views.
 Each action names exactly one destination: `target` is a `panel.modal` tag of the
 same app, or `action` is a local tag the panel delivers to the active view.
-A FAB with several actions uses its own `label` as the menu trigger.
+A local action may set `files = true`; the panel opens a file picker on the user
+gesture and delivers `{ files: [{ name, type, lastModified, bytes }] }` with the
+action.
+A FAB trigger is icon-only when the app provides an icon; its `label` is the
+accessible name and the tooltip. A FAB with several actions uses that trigger to
+open the menu.
 
 A modal receives the `params` supplied by whoever opened it and can read them
 from its context. When it closes, the panel sends the portable `refresh` action

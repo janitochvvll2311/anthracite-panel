@@ -285,7 +285,10 @@ fn check_layout(root: &Path) -> Result<(), Error> {
                 && !relative["web/".len()..].contains('/')
                 && (relative.ends_with(".js")
                     || relative.ends_with(".mjs")
-                    || relative.ends_with(".css")));
+                    || relative.ends_with(".css")
+                    || relative.ends_with(".svg")
+                    || relative.ends_with(".png")
+                    || relative.ends_with(".webp")));
         if !ok {
             return Err(Error::invalid(format!(
                 "`{relative}` is not part of the bundle layout"
@@ -551,6 +554,26 @@ fn check_hashes(root: &Path, manifest: &Manifest) -> Result<(), Error> {
         }
         declared.insert(slot.module.clone());
         check_hash(root, &slot.module, &slot.sha256)?;
+    }
+    // Icon assets are declared by the app, a slot or a FAB action. They share
+    // the `web/` delivery route with UI modules.
+    let mut icons: Vec<(&str, &str)> = Vec::new();
+    if let (Some(icon), Some(hash)) = (&manifest.app.icon, &manifest.app.icon_sha256) {
+        icons.push((icon.as_str(), hash.as_str()));
+    }
+    for slot in &manifest.slot {
+        if let (Some(icon), Some(hash)) = (&slot.icon, &slot.icon_sha256) {
+            icons.push((icon.as_str(), hash.as_str()));
+        }
+        for action in &slot.actions {
+            if let (Some(icon), Some(hash)) = (&action.icon, &action.icon_sha256) {
+                icons.push((icon.as_str(), hash.as_str()));
+            }
+        }
+    }
+    for (icon, hash) in icons {
+        declared.insert(icon.to_string());
+        check_hash(root, icon, hash)?;
     }
     for (relative, is_file) in walk(root)? {
         if is_file

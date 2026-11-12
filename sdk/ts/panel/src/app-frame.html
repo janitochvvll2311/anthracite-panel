@@ -17,7 +17,7 @@
       }
       * { box-sizing: border-box; }
       html { background: transparent; }
-      html, body { margin: 0; padding: 0; background: transparent; }
+      html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
       html { background: transparent; }
       body {
         background: transparent;
@@ -331,7 +331,7 @@
           } else if (message.type === "anth:action") {
             for (const handler of actionHandlers) {
               try {
-                handler(message.tag);
+                handler(message.tag, message.payload);
               } catch {
                 // One view listener must not break the others.
               }

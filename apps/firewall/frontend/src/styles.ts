@@ -35,6 +35,29 @@ export const styles = `
   .fw-status { margin: 0; min-height: 16px; color: #667087; font-size: 12px; }
   .fw-status.bad { color: #ffb3ba; }
   .fw-warning { color: #e5ca83; font-size: 12px; }
+  @media (max-width: 860px) {
+    .fw-bar { flex-wrap: wrap; }
+    .fw-policy, .fw-chains { align-items: stretch; }
+    .fw-card { width: 100%; min-width: 0; }
+    .fw-table { border: 0; background: transparent; overflow: visible; }
+    .fw-row.head { display: none; }
+    .fw-row:not(.head) {
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px;
+      padding: 10px 12px; margin-bottom: 8px; border: 1px solid #202632;
+      border-radius: 9px; background: #0d1016;
+    }
+    .fw-row:not(.head) > span:not(.fw-actions) {
+      display: flex; justify-content: space-between; gap: 12px; font-size: 11.5px;
+    }
+    .fw-row:not(.head) > span[data-label]::before {
+      content: attr(data-label); color: #667087; font-size: 9.5px;
+      text-transform: uppercase; letter-spacing: .06em;
+    }
+    .fw-actions { margin-top: 6px; padding-top: 6px; border-top: 1px solid #171c26; }
+    .fw-form { align-items: stretch; }
+    .fw-form input, .fw-form select, .fw-form button { width: 100%; }
+    .fw-form input[data-port], .fw-form input[data-comment] { width: 100%; }
+  }
 
   .confirm-dialog { border: 0; padding: 0; background: transparent; color: #e8ebf2; }
   .confirm-dialog::backdrop { background: rgba(5, 7, 11, .72); backdrop-filter: blur(2px); }

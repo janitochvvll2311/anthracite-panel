@@ -5,15 +5,19 @@
 export type FabAction = {
   label: string;
   icon?: string;
+  icon_sha256?: string;
   tag: string;
   target?: string;
   action?: string;
+  /// The panel picks files and delivers them with the local action.
+  files?: boolean;
 };
 
 export type Slot = {
   id: string;
   label: string;
   icon?: string;
+  icon_sha256?: string;
   order: number;
   /// Hidden contributions can be opened by other views, but not listed.
   hidden?: boolean;
@@ -35,6 +39,8 @@ export type App = {
   id: string;
   version: string;
   risk: string;
+  icon?: string;
+  icon_sha256?: string;
   slots: Slot[];
 };
 

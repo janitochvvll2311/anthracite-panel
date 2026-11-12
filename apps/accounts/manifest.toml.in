@@ -7,6 +7,7 @@ name = "{{app_name}}"
 version = "0.6.0"
 summary = "{{app_summary}}"
 license = "Apache-2.0"
+icon = "users"
 
 [service]
 path = "{{service_path}}"
@@ -74,7 +75,7 @@ sha256 = "{{module_sha256}}"
 [[slot]]
 id = "panel.fab"
 label = "Add"
-icon = "users"
+icon = "plus"
 order = 30
 tag = "accounts-add"
 view = "anth-accounts"
@@ -83,11 +84,13 @@ sha256 = ""
 
 [[slot.actions]]
 label = "Create user"
+icon = "plus"
 tag = "new-user"
 action = "new-user"
 
 [[slot.actions]]
 label = "Create group"
+icon = "plus"
 tag = "new-group"
 action = "new-group"
 

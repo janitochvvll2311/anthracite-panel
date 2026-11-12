@@ -7,6 +7,7 @@ name = "Processes"
 version = "0.6.0"
 summary = "Process table, allowlisted signals and detached spawn."
 license = "Apache-2.0"
+icon = "activity"
 
 [service]
 path = "{{service_path}}"
@@ -44,7 +45,7 @@ sha256 = "{{module_sha256}}"
 [[slot]]
 id = "panel.fab"
 label = "Spawn"
-icon = "activity"
+icon = "plus"
 order = 30
 tag = "proc-spawn"
 view = "anth-proc"
@@ -53,6 +54,7 @@ sha256 = ""
 
 [[slot.actions]]
 label = "Spawn"
+icon = "plus"
 tag = "spawn"
 target = "proc-spawn-modal"
 

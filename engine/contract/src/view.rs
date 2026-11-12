@@ -112,6 +112,11 @@ pub struct KeyView {
 pub struct SurfaceApp {
     pub id: AppId,
     pub version: String,
+    /// A representative icon: a name or a `web/` asset with `icon_sha256`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_sha256: Option<String>,
     /// The effective risk: the maximum over its resolved imports (§9.3).
     pub risk: Risk,
     /// HTTP routes the app declares (§7.6).
@@ -141,6 +146,8 @@ pub struct SurfaceSlot {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_sha256: Option<String>,
     pub order: i64,
     /// The panel renders this contribution only on request, not in navigation.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -167,11 +174,15 @@ pub struct SurfaceFabAction {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_sha256: Option<String>,
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub files: bool,
 }
 
 /// One CLI verb of a running app.
@@ -354,6 +365,8 @@ mod tests {
                 apps: vec![SurfaceApp {
                     id: app.clone(),
                     version: "0.1.0".to_string(),
+                    icon: None,
+                    icon_sha256: None,
                     risk: Risk::Read,
                     routes: vec![SurfaceRoute {
                         method: "GET".to_string(),
@@ -366,6 +379,7 @@ mod tests {
                         id: "panel.view".to_string(),
                         label: "Notes".to_string(),
                         icon: None,
+                        icon_sha256: None,
                         order: 1,
                         hidden: false,
                         parent: None,

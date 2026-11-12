@@ -49,6 +49,7 @@ import {
 } from "./windows";
 import { mountManager } from "./manager";
 import { defaultView } from "./defaults";
+import { renderIcon } from "./icons";
 import { groupFor, groupViews, type ViewGroup } from "./groups";
 
 type DegradedApp = {
@@ -89,8 +90,8 @@ type Mounted = {
   snapshot?: () => Promise<unknown>;
   /// Pauses app polling while the pane is not the active tab.
   setVisible?: (visible: boolean) => void;
-  /// Delivers a local action tag, e.g. `refresh` after a modal closes.
-  action?: (tag: string) => void;
+  /// Delivers a local action tag, with an optional file payload.
+  action?: (tag: string, payload?: unknown) => void;
   /// Last visibility sent to the frame; a refresh must not resend it.
   visible?: boolean;
   /// Set when the host closes or replaces the mount; a late module must not
@@ -291,14 +292,6 @@ const tabLabel = (group: ViewGroup, child: Contribution): string =>
     ? child.slot.tab ?? child.slot.label
     : child.slot.label;
 
-function icon(value: string | undefined, fallback: string): string {
-  const trimmed = value?.trim();
-  if (!trimmed) return fallback;
-  // The manifest carries names, not markup. One character keeps the sidebar
-  // calm and avoids injecting arbitrary content into the DOM.
-  return [...trimmed][0] ?? fallback;
-}
-
 const WINDOW_ICONS = {
   dock:
     '<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v7"/><path d="m5 6 3 3 3-3"/><path d="M3 13h10"/></svg>',
@@ -371,11 +364,16 @@ function renderSidebar(): void {
       node.classList.add("active");
     }
 
-    const badge = element(
-      "span",
-      "view-icon",
-      icon(parent.slot.icon, [...parent.slot.label][0] ?? "•"),
-    );
+    const badge = element("span", "view-icon");
+    const glyph = element("span", "view-glyph");
+    const appIcon = parent.app.icon;
+    renderIcon(glyph, {
+      appId: parent.app.id,
+      icon: appIcon ?? parent.slot.icon,
+      icon_sha256: appIcon ? parent.app.icon_sha256 : parent.slot.icon_sha256,
+      fallback: parent.slot.label,
+    });
+    badge.append(glyph);
     const copy = element("span", "view-copy");
     copy.append(
       element("span", "view-label", parent.slot.label),
@@ -597,10 +595,45 @@ function renderWorkspace(): void {
 }
 
 /// Sends a local action tag to a live view, whether it is a tab or a window.
-function sendAction(key: string | null, tag: string): void {
+function sendAction(
+  key: string | null,
+  tag: string,
+  payload?: unknown,
+): void {
   if (!key) return;
   const state = mounted.get(key) ?? floating.get(key);
-  state?.action?.(tag);
+  state?.action?.(tag, payload);
+}
+
+/// Opens the picker synchronously from the FAB click, reads the files and
+/// sends them with the local action. Doing this in the panel preserves the
+/// user activation that a postMessage round-trip would lose.
+function pickFiles(originKey: string | null, tag: string): void {
+  if (!originKey) return;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.hidden = true;
+  document.body.append(input);
+  input.addEventListener(
+    "change",
+    () => {
+      const files = [...(input.files ?? [])];
+      input.remove();
+      if (files.length === 0) return;
+      void Promise.all(
+        files.map(async (file) => ({
+          name: file.name,
+          type: file.type,
+          lastModified: file.lastModified,
+          bytes: await file.arrayBuffer(),
+        })),
+      ).then((entries) => sendAction(originKey, tag, { files: entries }));
+    },
+    { once: true },
+  );
+  input.addEventListener("cancel", () => input.remove(), { once: true });
+  input.click();
 }
 
 function closeFabMenus(): void {
@@ -617,13 +650,26 @@ function closeFabMenus(): void {
 function fabButton(
   className: string,
   label: string,
+  appId: string,
   iconName?: string,
+  iconSha256?: string,
+  iconOnly = false,
 ): HTMLButtonElement {
   const node = button(className, "", label);
-  const glyph = icon(iconName, "");
-  if (glyph) node.append(element("span", "fab-icon", glyph));
-  node.append(element("span", "fab-label", label));
+  const hasIcon = Boolean(iconName?.trim() || iconSha256);
+  const onlyIcon = iconOnly && hasIcon;
+  if (onlyIcon) node.classList.add("fab-icon-only");
+  const glyph = element("span", "fab-icon");
+  renderIcon(glyph, {
+    appId,
+    icon: iconName,
+    icon_sha256: iconSha256,
+    fallback: label,
+  });
+  node.append(glyph);
+  if (!onlyIcon) node.append(element("span", "fab-label", label));
   node.setAttribute("aria-label", label);
+  node.title = label;
   return node;
 }
 
@@ -637,7 +683,9 @@ function runFabAction(
     openModal(source, { tag: action.target }, originKey);
     return;
   }
-  if (action.action) sendAction(originKey, action.action);
+  if (!action.action) return;
+  if (action.files) pickFiles(originKey, action.action);
+  else sendAction(originKey, action.action);
 }
 
 function renderFab(
@@ -654,7 +702,10 @@ function renderFab(
       const node = fabButton(
         "fab-button",
         action.label,
+        source.app.id,
         action.icon ?? fab.slot.icon,
+        action.icon ? action.icon_sha256 : fab.slot.icon_sha256,
+        true,
       );
       node.addEventListener("click", () => runFabAction(source, action, originKey));
       wrap.append(node);
@@ -666,7 +717,13 @@ function renderFab(
   menu.hidden = true;
   menu.setAttribute("role", "menu");
   for (const action of actions) {
-    const item = fabButton("fab-menu-item", action.label, action.icon);
+    const item = fabButton(
+      "fab-menu-item",
+      action.label,
+      source.app.id,
+      action.icon,
+      action.icon_sha256,
+    );
     item.setAttribute("role", "menuitem");
     item.addEventListener("click", () => runFabAction(source, action, originKey));
     menu.append(item);
@@ -674,7 +731,10 @@ function renderFab(
   const main = fabButton(
     "fab-button fab-multi",
     fab.slot.label,
+    source.app.id,
     fab.slot.icon,
+    fab.slot.icon_sha256,
+    true,
   );
   main.setAttribute("aria-haspopup", "menu");
   main.setAttribute("aria-expanded", "false");

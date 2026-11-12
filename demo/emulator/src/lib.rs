@@ -882,6 +882,9 @@ struct Term {
     /// Output chunks, each with the sequence a reader uses as its cursor.
     chunks: Vec<(u64, Vec<u8>)>,
     next_seq: u64,
+    /// Input on the current line. A line editor needs it to apply backspace
+    /// and to run the command that was typed across several writes.
+    line: Vec<u8>,
     /// Set by `exit`: the shell ended, but the queued output is still readable.
     closed: bool,
     /// Streams parked until this session produces output or ends.
@@ -1258,6 +1261,7 @@ impl Emulator {
                     rows: number(input, "rows").unwrap_or(24).max(1) as u32,
                     chunks: Vec::new(),
                     next_seq: 0,
+                    line: Vec::new(),
                     closed: false,
                     waiters: Vec::new(),
                 };
@@ -1302,35 +1306,52 @@ impl Emulator {
                     return Err(Error::not_found(format!("session `{id}` has ended")));
                 }
                 let data = bytes(input.get("data").unwrap_or(&Value::Null))?;
-                let line = String::from_utf8_lossy(&data).to_string();
-                let newline = line.ends_with('\n') || line.ends_with('\r');
-                // The fixture only echoes visible text (and newlines). Control
-                // bytes and escape sequences are consumed silently, like a
-                // line editor that has no matching binding.
-                let escape = data.contains(&0x1b);
-                let visible = data.iter().any(|byte| *byte >= 0x20 && *byte != 0x7f);
-                if !escape && (visible || newline) {
-                    term.push(data);
+                let newline = data.iter().any(|byte| *byte == b'\n' || *byte == b'\r');
+                let mut output = Vec::new();
+                let mut line = std::mem::take(&mut term.line);
+                for byte in data {
+                    match byte {
+                        0x7f | 0x08 => {
+                            if line.pop().is_some() {
+                                output.extend_from_slice(b"\x08 \x08");
+                            }
+                        }
+                        b'\r' | b'\n' => {}
+                        // The fixture ignores escape sequences; the app already
+                        // sends the matching control sequence.
+                        0x1b => {}
+                        byte if byte >= 0x20 => {
+                            line.push(byte);
+                            output.push(byte);
+                        }
+                        _ => {}
+                    }
                 }
                 if newline {
-                    let trimmed = line.trim();
+                    output.extend_from_slice(b"\r\n");
+                    let trimmed = String::from_utf8_lossy(&line).trim().to_string();
+                    line.clear();
                     if trimmed == "exit" {
+                        term.line = line;
+                        term.push(output);
                         term.push(b"logout\r\n".to_vec());
                         term.closed = true;
                         term.wake();
                         return Ok(Value::Null);
                     }
-                    let response = match trimmed {
+                    let response = match trimmed.as_str() {
                         "help" => HELP.to_string(),
                         "ls" => "deep  notes.txt  readme.md\r\n".to_string(),
                         "cat" => "usage: cat <file>\r\n".to_string(),
                         "" => String::new(),
                         other => format!("{other}: command not found\r\n"),
                     };
-                    if !response.is_empty() {
-                        term.push(response.into_bytes());
-                    }
-                    term.push(PROMPT.as_bytes().to_vec());
+                    output.extend_from_slice(response.as_bytes());
+                    output.extend_from_slice(PROMPT.as_bytes());
+                }
+                term.line = line;
+                if !output.is_empty() {
+                    term.push(output);
                 }
                 Ok(Value::Null)
             }
@@ -1708,6 +1729,47 @@ mod tests {
             .call(TERMINAL, "read", json!({"id": id, "seq": 0}))
             .expect_err("closed");
         assert_eq!(error.kind(), ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn the_terminal_line_editor_applies_backspace_and_accumulates() {
+        let emulator = Emulator::new();
+        let session = emulator
+            .call(
+                TERMINAL,
+                "open",
+                json!({"shell": "/bin/sh", "cols": 80, "rows": 24}),
+            )
+            .expect("open");
+        let id = session["id"].as_str().expect("id");
+        emulator
+            .call(
+                TERMINAL,
+                "write",
+                json!({"id": id, "data": [104, 101, 108, 112]}),
+            )
+            .expect("type");
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [127]}))
+            .expect("backspace");
+        let erased = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 2}))
+            .expect("erase chunk");
+        assert_eq!(erased["data"], json!([8, 32, 8]));
+        emulator
+            .call(TERMINAL, "write", json!({"id": id, "data": [10]}))
+            .expect("enter");
+        let reply = emulator
+            .call(TERMINAL, "read", json!({"id": id, "seq": 3}))
+            .expect("reply");
+        let bytes = reply["data"]
+            .as_array()
+            .expect("bytes")
+            .iter()
+            .map(|value| value.as_u64().expect("byte") as u8)
+            .collect::<Vec<_>>();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("hel: command not found"), "{text}");
     }
 
     #[tokio::test]

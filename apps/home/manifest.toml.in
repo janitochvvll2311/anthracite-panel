@@ -7,6 +7,8 @@ name = "Home"
 version = "0.1.0"
 summary = "Host overview: system, CPU, memory, disks and network."
 license = "Apache-2.0"
+icon = "web/icon.svg"
+icon-sha256 = "{{icon_sha256}}"
 
 [service]
 path = "{{service_path}}"
@@ -54,5 +56,6 @@ sha256 = ""
 
 [[slot.actions]]
 label = "Refresh"
+icon = "refresh"
 tag = "refresh"
 action = "refresh"
