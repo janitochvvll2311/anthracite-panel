@@ -1,4 +1,4 @@
-# Anthracite v0.5.0 — design index
+# Anthracite — design index
 
 Status: **accepted**. This is the entry point to the design of record. Each
 section lives in its own document under `docs/design/`; this file summarises the
@@ -33,7 +33,8 @@ and a change to one of them is a design change, not an implementation detail.
   on engine internals, and it is transport-neutral so a remote panel is a
   transport question rather than a redesign.
 - **v0.5.0 ships M0–M3**: the platform, a minimal official panel and the apps that
-  prove both. Feature apps return in v0.6.0.
+  prove both. v0.6.0 adds the system and third-party app proof; v0.7.0 scopes the
+  business apps in [§21](docs/design/21-next-version-apps.md).
 - **The acid test**: an app written outside the engine tree appears and answers
   inside a panel that was never compiled against it, with zero changes to engine
   code.
@@ -60,10 +61,11 @@ and a change to one of them is a design change, not an implementation detail.
 | 14 | [Risks](docs/design/14-risks.md) | What could go wrong and the answer to each |
 | 15 | [Open decisions](docs/design/15-open-decisions.md) | What is still undecided, with a recommendation and a deadline |
 | 16 | [Decision log](docs/design/16-decision-log.md) | Every binding decision taken during the review |
-| 17 | [Deferred](docs/design/17-deferred.md) | Everything postponed to v0.6.0, with the reason and the trigger |
+| 17 | [Deferred](docs/design/17-deferred.md) | Everything postponed beyond v0.5.0, with the reason and the trigger |
 | 18 | [v0.6.0 plan](docs/design/18-v0.6-plan.md) | M4–M5 phases, entry conditions and the open decisions |
 | 19 | [v0.6.0 baseline and service contract](docs/design/19-v0.6-baseline.md) | v0.4 reference inventory, service v3, host emulator, fs root and terminal protocol |
 | 20 | [Streams](docs/design/20-streams.md) | WIT streams, chunked/SSE mapping, service and panel transports, Terminal retrofit |
+| 21 | [Next version: business apps](docs/design/21-next-version-apps.md) | v0.7.0/M6: certificates, ACME, reverse proxy, containers and app store; prerequisites and open decisions |
 | A | [Vertical slice](docs/design/appendix-a-vertical-slice.md) | `hello` end to end: install, approve, compose, call |
 
 ---
@@ -76,6 +78,7 @@ and a change to one of them is a design change, not an implementation detail.
 | Writing an app | 7 → A |
 | Writing a panel | 5 → 6 → 7 (7.7, 7.14) → 10 |
 | Operating a deployment | 6 (6.4, 6.5) → 8 → 9 → 15 |
+| Planning v0.7.0 | 18 → 21 → 15 |
 | Reviewing a change | 16, then the document for the area |
 
 ---

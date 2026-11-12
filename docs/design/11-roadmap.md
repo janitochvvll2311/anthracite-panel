@@ -128,6 +128,39 @@ state across browsers.
 **Done when:** an app that lives outside this repository installs, composes,
 renders and answers — the acid test, executed by someone who is not us.
 
+### v0.7.0 — the operated edge (M6)
+
+> **Plan:** the five business apps and their prerequisites are
+> [§21](21-next-version-apps.md). Status: **proposed**; the mechanisms are not
+> binding until they enter [§16](16-decision-log.md).
+
+v0.6.0 proves the platform can run system apps and third-party apps. v0.7.0 uses
+that proof to run an edge: TLS material and certificates, one ingress in front of
+the workloads, containers behind it, and a store that installs apps without
+giving an app the operator's authority.
+
+- `certs` owns certificate and key custody; private keys are never returned
+  through WIT, HTTP or the panel, and the manual import is an explicit write.
+- `acme` issues and renews against any RFC 8555 CA, with HTTP-01 through the
+  ingress and DNS-01 through a solver.
+- `proxy` is the data-plane ingress: virtual hosts, path routes, TLS, WebSockets
+  and atomic apply. It is a service, not an engine feature.
+- `containers` manages a Docker-compatible runtime, with logs, stats and exec
+  behind the same approval.
+- `store` is a provider-agnostic catalogue with signed indexes and digest-pinned
+  bundles. It cannot install or approve; the panel manager does that with the
+  operator's session.
+
+The milestone adds generic platform work first: a service-to-service broker, a
+manifest that declares listeners and egress, secret custody, surface exports and
+a service audit bridge ([§21 §3](21-next-version-apps.md#3-platform-prerequisites)).
+
+**Done when:** a new host can issue or import a certificate, serve two hosts
+through the proxy, operate a container without SSH, and install a signed bundle
+through the manager with an explicit approval; and removing any of the five
+leaves a working system with only the expected degraded section — asserted by
+the golden edge composition.
+
 ### The platform's definition of done
 
 1. `anth-engine` with no apps is a valid, healthy system.

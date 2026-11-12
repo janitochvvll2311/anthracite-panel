@@ -1,4 +1,4 @@
-# 17. Deferred to v0.6.0
+# 17. Deferred beyond v0.5.0
 
 > Part of the [design index](../../DESIGN.md).
 
@@ -129,6 +129,25 @@ gesture layer are available to other slot modules. Acceptance:
   press-and-drag arrows;
 - keeps history, completion and copy/paste at the panel level, not inside each
   app.
+
+### 2.4 The v0.7.0 business apps
+
+The next milestone adds five apps that turn the panelled host into an operated
+edge: a certificate manager, an ACME client, a reverse proxy, a container
+manager and a provider-agnostic app store. They are not deferred from v0.6.0;
+they are scheduled after it, because each depends on the service broker,
+listener/egress approval, secret custody and the service sandbox that v0.6.0
+completes.
+
+**Why scheduled, not deferred.** They are the first apps whose value is measured
+outside the host: TLS on the wire, workloads behind an ingress, and installs from
+a signed catalogue. Building them before the v0.6.0 platform work would put
+private keys in a wasm module or give an app the operator's session.
+
+**Ready when** v0.6.0 is tagged and the prerequisites in
+[§21 §3](21-next-version-apps.md#3-platform-prerequisites) pass. The scope,
+phases, removal matrix and open decisions are
+[§21](21-next-version-apps.md).
 
 ---
 
