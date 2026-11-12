@@ -1,4 +1,5 @@
 import { call } from "./api";
+import { confirmAction } from "./confirm";
 import { styles } from "./styles";
 import type { FrameContext } from "./types";
 
@@ -201,7 +202,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   async function flushChain(chainName: string): Promise<void> {
-    if (!window.confirm(`Flush every rule from ${chainName}? This cannot be undone.`)) return;
+    const ok = await confirmAction({
+      title: `Flush ${chainName}?`,
+      message: "Every rule in this chain will be removed. The policies stay.",
+      confirmLabel: "Flush",
+      danger: true,
+    });
+    if (!ok) return;
     setStatus(`Flushing ${chainName}…`);
     try {
       await call(context, "/flush", {
@@ -217,11 +224,17 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   async function setPolicy(chainName: string, next: string): Promise<void> {
-    const warning =
+    const message =
       next === "deny"
-        ? `Set ${chainName} to deny? Packets without an accept rule will be dropped, including management traffic. Keep an out-of-band console ready.`
-        : `Set ${chainName} to allow?`;
-    if (!window.confirm(warning)) return;
+        ? "Packets without an accept rule will be dropped, including management traffic. Keep an out-of-band console ready."
+        : "The chain will accept packets that no rule drops.";
+    const ok = await confirmAction({
+      title: `Set ${chainName} policy to ${next}?`,
+      message,
+      confirmLabel: `Set ${next}`,
+      danger: next === "deny",
+    });
+    if (!ok) return;
     setStatus(`Setting ${chainName} policy to ${next}…`);
     try {
       await call(context, "/policy", {
@@ -237,7 +250,13 @@ export function mount(root: HTMLElement, context: FrameContext) {
   }
 
   async function deleteRule(rule: any): Promise<void> {
-    if (!window.confirm(`Delete rule ${rule.handle}?`)) return;
+    const ok = await confirmAction({
+      title: `Delete rule ${rule.handle}?`,
+      message: "The rule will be removed from the managed table.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setStatus(`Deleting rule ${rule.handle}…`);
     try {
       await call(context, `/rule?handle=${encodeURIComponent(rule.handle)}`, {
