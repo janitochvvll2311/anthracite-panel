@@ -57,7 +57,8 @@ The script installs, type-checks and bundles every `apps/*/frontend` into
 ## FAB and modal modules
 
 An app that contributes a FAB declares it in `manifest.toml.in`; unlike a view,
-the FAB is declarative and has no module:
+the FAB is declarative and has no module. The `view` tag in this hypothetical
+app must match one of its own `panel.view` tags in a real manifest:
 
 ```toml
 [[slot]]

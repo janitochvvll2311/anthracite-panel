@@ -334,6 +334,10 @@ export async function mountFrame(
         }
         return;
       }
+      if (message.type === "anth:escape") {
+        if (options.context.kind === "modal") options.close?.();
+        return;
+      }
       if (message.type === "anth:params") {
         options.onParams?.(message.params);
         return;

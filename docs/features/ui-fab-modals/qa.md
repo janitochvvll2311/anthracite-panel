@@ -1,7 +1,7 @@
 # FAB and modal QA
 
-Scope: v0.6.0 phase 4, official panel against the demo composition, plus the
-SDK contract tests for a view-only panel.
+Scope: FAB and modal delivery (#155, #156, #158), official panel against the
+demo composition, plus the SDK contract tests for a view-only panel.
 
 Environment: Chromium 155 headless, panel on `127.0.0.1:5175`, 8 apps, 0
 degraded. The demo bundles were rebuilt with the modal modules and the apps were
@@ -13,11 +13,11 @@ upgraded through the engine CLI.
 | --- | --- |
 | Single-action FAB (Home Refresh) | Pass — runs the local action and refreshes Home |
 | Multi-action FAB (Accounts Add, Files Add) | Pass — menu opens with every action |
-| FAB action `target` (Storage, Network, Processes, Firewall, Accounts) | Pass — opens the matching modal |
-| FAB local action (Home refresh, Files upload) | Pass — reaches the active view; Upload opens the file picker |
-| Modal close (button, Escape) | Pass — dialog closes and the origin view refreshes |
+| FAB action `target` (Storage, Network, Processes, Firewall) | Pass — opens the matching modal |
+| FAB local action (Home refresh, Files upload, Accounts user/group) | Pass — reaches the active view; Upload opens the file picker and Accounts opens its modal from the view |
+| Modal close (button, Escape) | Pass — dialog closes and the origin view refreshes, including Escape while focus is inside the modal iframe |
 | Modal backdrop | Pass — pointerdown on the dialog closes it |
-| Keyboard menu | Pass — Space on the focused FAB opens the menu; Escape closes it |
+| Keyboard menu | Pass — Space on the focused FAB opens the menu; Escape closes it from a tab and from a floating window without closing the window |
 | Focus after modal | Pass at panel level — the panel restores the origin frame; the exact element inside the frame stays app-owned |
 | Floating window FAB (Home, Storage) | Pass — the window has its own FAB and opens its modal |
 | Mobile 390×844 | Pass — FAB stays inside the viewport; modal width 356 px |
