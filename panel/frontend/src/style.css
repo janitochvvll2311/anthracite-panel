@@ -545,15 +545,52 @@ button.drawer-close {
   position: absolute;
   inset: 0;
   display: none;
-  grid-template-rows: 48px minmax(0, 1fr);
+  flex-direction: column;
   overflow: hidden;
 }
 
 .pane.active {
-  display: grid;
+  display: flex;
+}
+
+.pane-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: #0b0e14d9;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sub-tab {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sub-tab:hover {
+  color: var(--text);
+  background: #171c274f;
+}
+
+.sub-tab.active {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel-2);
 }
 
 .pane-head {
+  flex: none;
+  height: 48px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -589,6 +626,8 @@ button.drawer-close {
 }
 
 .pane-body {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 22px;
 }
@@ -1548,10 +1587,6 @@ html[data-viewport="mobile"] .tab-tool {
 
 html[data-viewport="mobile"] .tab-float {
   display: none;
-}
-
-html[data-viewport="mobile"] .pane {
-  grid-template-rows: minmax(0, 1fr);
 }
 
 html[data-viewport="mobile"] .pane-head {

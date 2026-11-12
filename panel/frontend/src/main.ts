@@ -44,6 +44,7 @@ import {
 } from "./windows";
 import { mountManager } from "./manager";
 import { defaultView } from "./defaults";
+import { groupFor, groupViews, type ViewGroup } from "./groups";
 
 type DegradedApp = {
   app: string;
@@ -73,6 +74,8 @@ type Mounted = {
   /// The panel data this mount was opened with.
   params?: unknown;
   dispose: () => void;
+  /// Sub-tab strip when this view belongs to a group.
+  subtabs?: HTMLElement;
   /// Sends a transient open request to a live frame without remounting it.
   update?: (params: unknown) => void;
   /// Asks the live frame for permission before closing (unsaved changes).
@@ -231,6 +234,33 @@ const ordered = (slot: string): Contribution[] =>
 const implementedByPanel = (contribution: Contribution): boolean =>
   implemented.includes(contribution.slot.id);
 
+const allGroups = (): ViewGroup[] =>
+  groupViews(ordered(VIEW).filter(implementedByPanel));
+
+const visibleGroups = (): ViewGroup[] =>
+  allGroups().filter(
+    (group) =>
+      implementedByPanel(group.parent) && !group.parent.slot.hidden,
+  );
+
+const groupOf = (contribution: Contribution): ViewGroup | undefined =>
+  groupFor(allGroups(), contribution);
+
+const visibleChildren = (group: ViewGroup): Contribution[] =>
+  group.children.filter(
+    (child) => implementedByPanel(child) && !child.slot.hidden,
+  );
+
+const openGroups = (): ViewGroup[] =>
+  allGroups().filter((group) =>
+    group.children.some((child) => tabs.has(contributionKey(child))),
+  );
+
+const tabLabel = (group: ViewGroup, child: Contribution): string =>
+  contributionKey(child) === contributionKey(group.parent)
+    ? child.slot.tab ?? child.slot.label
+    : child.slot.label;
+
 function icon(value: string | undefined, fallback: string): string {
   const trimmed = value?.trim();
   if (!trimmed) return fallback;
@@ -290,38 +320,39 @@ function renderSidebar(): void {
     return;
   }
 
-  const contributions = ordered(VIEW).filter(
-    (contribution) => implementedByPanel(contribution) && !contribution.slot.hidden,
-  );
-  if (contributions.length === 0) {
+  const groups = visibleGroups();
+  if (groups.length === 0) {
     views.append(element("div", "placeholder", "No app contributes a view."));
     return;
   }
 
   const label = element("div", "sidebar-title", "Views");
   views.append(label);
-  for (const contribution of contributions) {
-    const key = contributionKey(contribution);
+  for (const group of groups) {
+    const parent = group.parent;
+    const key = group.key;
     const node = button(
       "view-button",
       "",
-      `${contribution.slot.label} — ${contribution.app.id}`,
+      `${parent.slot.label} — ${parent.app.id}`,
     );
     node.dataset.key = key;
-    if (key === activeKey) node.classList.add("active");
+    if (group.children.some((child) => contributionKey(child) === activeKey)) {
+      node.classList.add("active");
+    }
 
     const badge = element(
       "span",
       "view-icon",
-      icon(contribution.slot.icon, [...contribution.slot.label][0] ?? "•"),
+      icon(parent.slot.icon, [...parent.slot.label][0] ?? "•"),
     );
     const copy = element("span", "view-copy");
     copy.append(
-      element("span", "view-label", contribution.slot.label),
-      element("span", "view-app", contribution.app.id),
+      element("span", "view-label", parent.slot.label),
+      element("span", "view-app", parent.app.id),
     );
     node.append(badge, copy);
-    node.addEventListener("click", () => openTab(contribution));
+    node.addEventListener("click", () => openGroup(group));
     views.append(node);
   }
 }
@@ -378,41 +409,45 @@ function renderWarnings(): void {
 
 function renderTabs(): void {
   tabsElement.replaceChildren();
-  for (const tab of tabs.values()) {
+  const groups = openGroups();
+  for (const group of groups) {
+    const active = group.children.some(
+      (child) => contributionKey(child) === activeKey,
+    );
     const node = element("div", "tab");
-    node.dataset.key = tab.key;
+    node.dataset.key = group.key;
     node.setAttribute("role", "tab");
-    if (tab.key === activeKey) {
+    if (active) {
       node.classList.add("active");
       node.setAttribute("aria-selected", "true");
     }
 
-    const select = button("tab-label", tab.contribution.slot.label);
-    select.title = tab.contribution.app.id;
-    select.addEventListener("click", () => activate(tab.key));
+    const select = button("tab-label", group.parent.slot.label);
+    select.title = group.parent.app.id;
+    select.addEventListener("click", () => activateGroup(group));
 
-    const detach = button("tab-tool tab-float", "⇱", "Open in a floating window");
+    const detach = button("tab-tool tab-float", "⇱", "Float the active view");
     detach.addEventListener("click", (event) => {
       event.stopPropagation();
-      void detachTab(tab.key);
+      detachGroup(group);
     });
 
-    const close = button("tab-tool", "×", "Close");
+    const close = button("tab-tool", "×", "Close this group");
     close.addEventListener("click", (event) => {
       event.stopPropagation();
-      void requestTabClose(tab.key);
+      void requestGroupClose(group);
     });
 
     node.append(select, detach, close);
     tabsElement.append(node);
-    if (tab.key === activeKey && activeKey !== scrolledActiveKey) {
+    if (active && activeKey !== scrolledActiveKey) {
       scrolledActiveKey = activeKey;
       node.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   }
   if (activeKey === null) scrolledActiveKey = null;
-  tabsElement.hidden = tabs.size === 0;
-  workspace.classList.toggle("no-tabs", tabs.size === 0);
+  tabsElement.hidden = groups.length === 0;
+  workspace.classList.toggle("no-tabs", groups.length === 0);
 }
 
 async function mountInto(
@@ -572,6 +607,31 @@ function openAppView(
   return true;
 }
 
+function renderSubtabs(state: Mounted): void {
+  const group = groupOf(state.contribution);
+  const children = group ? visibleChildren(group) : [];
+  if (!group || children.length < 2) {
+    state.subtabs?.remove();
+    state.subtabs = undefined;
+    return;
+  }
+  if (!state.subtabs) {
+    const pane = state.root.parentElement;
+    if (!pane) return;
+    const bar = element("div", "pane-subtabs");
+    pane.insertBefore(bar, pane.firstChild);
+    state.subtabs = bar;
+  }
+  state.subtabs.replaceChildren();
+  for (const child of children) {
+    const key = contributionKey(child);
+    const node = button("sub-tab", tabLabel(group, child), child.app.id);
+    if (key === activeKey) node.classList.add("active");
+    node.addEventListener("click", () => openTab(child));
+    state.subtabs.append(node);
+  }
+}
+
 function ensurePane(contribution: Contribution, params?: unknown): void {
   const key = contributionKey(contribution);
   const existing = mounted.get(key);
@@ -598,13 +658,17 @@ function ensurePane(contribution: Contribution, params?: unknown): void {
     element("span", "pane-app", contribution.app.id),
   );
   const tools = element("div", "pane-tools");
-  const detach = button("ghost small", "Float", "Open in a floating window");
+  const detach = button("ghost small", "Float", "Open this view in a floating window");
   detach.addEventListener("click", () => {
-    void detachTab(key);
+    const group = groupOf(contribution);
+    if (group) detachGroup(group);
+    else void detachTab(key);
   });
-  const close = button("ghost small", "Close", "Close this view");
+  const close = button("ghost small", "Close", "Close this view group");
   close.addEventListener("click", () => {
-    void requestTabClose(key);
+    const group = groupOf(contribution);
+    if (group) void requestGroupClose(group);
+    else void requestTabClose(key);
   });
   tools.append(detach, close);
   head.append(copy, tools);
@@ -643,6 +707,13 @@ function renderPanes(): void {
   }
   for (const tab of tabs.values()) ensurePane(tab.contribution, tab.params);
   for (const [key, state] of mounted) {
+    if (tabs.has(key)) renderSubtabs(state);
+    else {
+      state.subtabs?.remove();
+      state.subtabs = undefined;
+    }
+  }
+  for (const [key, state] of mounted) {
     const pane = state.root.parentElement;
     if (!pane) continue;
     const visible = key === activeKey;
@@ -657,6 +728,14 @@ function renderPanes(): void {
 function openTab(
   contribution: Contribution,
   activateTab = true,
+  params?: unknown,
+): void {
+  openSingle(contribution, activateTab, params);
+}
+
+function openSingle(
+  contribution: Contribution,
+  activateTab: boolean,
   params?: unknown,
 ): void {
   const key = contributionKey(contribution);
@@ -685,12 +764,39 @@ function openTab(
   closeDrawer();
 }
 
+function preferredChild(group: ViewGroup): Contribution | undefined {
+  const current = activeKey;
+  const active =
+    current === null
+      ? undefined
+      : group.children.find(
+          (child) =>
+            contributionKey(child) === current && tabs.has(current),
+        );
+  return (
+    active ??
+    group.children.find((child) => tabs.has(contributionKey(child)))
+  );
+}
+
+function openGroup(group: ViewGroup): void {
+  const child =
+    preferredChild(group) ??
+    visibleChildren(group)[0] ??
+    group.parent;
+  openTab(child);
+}
+
 function activate(key: string): void {
   activeKey = key;
   renderWorkspace();
 }
 
-function closeTab(key: string): void {
+function activateGroup(group: ViewGroup): void {
+  openTab(preferredChild(group) ?? group.parent);
+}
+
+function closeTab(key: string, render = true): void {
   const state = mounted.get(key);
   if (state) {
     retire(state);
@@ -700,7 +806,15 @@ function closeTab(key: string): void {
   if (activeKey === key) {
     activeKey = lastTabKey();
   }
-  renderWorkspace();
+  if (render) renderWorkspace();
+}
+
+function closeGroup(group: ViewGroup, render = true): void {
+  for (const child of group.children) {
+    const key = contributionKey(child);
+    if (tabs.has(key)) closeTab(key, false);
+  }
+  if (render) renderWorkspace();
 }
 
 async function allowClose(state: Mounted | undefined): Promise<boolean> {
@@ -715,6 +829,20 @@ async function allowClose(state: Mounted | undefined): Promise<boolean> {
 async function requestTabClose(key: string): Promise<void> {
   if (!(await allowClose(mounted.get(key)))) return;
   closeTab(key);
+}
+
+async function requestGroupClose(group: ViewGroup): Promise<void> {
+  for (const child of group.children) {
+    const key = contributionKey(child);
+    if (!tabs.has(key)) continue;
+    if (!(await allowClose(mounted.get(key)))) return;
+  }
+  closeGroup(group);
+}
+
+function detachGroup(group: ViewGroup): void {
+  const child = preferredChild(group);
+  if (child) void detachTab(contributionKey(child));
 }
 
 async function detachTab(key: string): Promise<void> {
