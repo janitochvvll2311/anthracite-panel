@@ -1,0 +1,82 @@
+manifest_version = 3
+
+[app]
+id = "org.anthracite.firewall"
+namespace = "anthracite:firewall"
+name = "{{app_name}}"
+version = "0.6.0"
+summary = "{{app_summary}}"
+license = "Apache-2.0"
+
+[service]
+path = "{{service_path}}"
+sha256 = "{{sha256}}"
+class = "{{service_class}}"
+argv = {{service_argv}}
+
+[[export]]
+interface = "anthracite:firewall/firewall@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/snapshot"
+call = "anthracite:firewall/firewall@1.0.0#snapshot"
+
+[[route]]
+method = "POST"
+path = "/rule"
+call = "anthracite:firewall/firewall@1.0.0#add-rule"
+
+[[route]]
+method = "POST"
+path = "/update"
+call = "anthracite:firewall/firewall@1.0.0#update-rule"
+
+[[route]]
+method = "DELETE"
+path = "/rule"
+call = "anthracite:firewall/firewall@1.0.0#delete-rule"
+
+[[route]]
+method = "POST"
+path = "/flush"
+call = "anthracite:firewall/firewall@1.0.0#flush"
+
+[[route]]
+method = "POST"
+path = "/policy"
+call = "anthracite:firewall/firewall@1.0.0#set-policy"
+
+[[slot]]
+id = "panel.view"
+label = "Firewall"
+icon = "shield"
+order = 22
+parent = "org.anthracite.net#anth-net"
+tag = "anth-firewall"
+module = "web/firewall.js"
+sha256 = "{{module_sha256}}"
+
+[[cli]]
+call = "anthracite:firewall/firewall@1.0.0#snapshot"
+verb = "status"
+
+[[cli]]
+call = "anthracite:firewall/firewall@1.0.0#add-rule"
+verb = "rule-add"
+
+[[cli]]
+call = "anthracite:firewall/firewall@1.0.0#update-rule"
+verb = "rule-update"
+
+[[cli]]
+call = "anthracite:firewall/firewall@1.0.0#delete-rule"
+verb = "rule-delete"
+
+[[cli]]
+call = "anthracite:firewall/firewall@1.0.0#flush"
+verb = "flush"
+
+[[cli]]
+call = "anthracite:firewall/firewall@1.0.0#set-policy"
+verb = "policy"

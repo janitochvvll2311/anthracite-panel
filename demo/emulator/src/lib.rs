@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 
 mod accounts;
 pub mod bundle;
+mod firewall;
 mod home;
 mod net;
 mod proc;
@@ -38,6 +39,7 @@ const HOME: &str = "anthracite:home/host@1.0.0";
 const NET: &str = "anthracite:net/net@1.2.0";
 const STORAGE: &str = "anthracite:storage/storage@1.2.0";
 const ACCOUNTS: &str = "anthracite:accounts/accounts@1.2.0";
+const FIREWALL: &str = "anthracite:firewall/firewall@1.0.0";
 
 /// Every fixture entry shares one timestamp: a demo must not depend on the clock.
 const MODIFIED_MS: u64 = 1_760_000_000_000;
@@ -55,6 +57,7 @@ pub struct Emulator {
     net: Arc<Mutex<net::NetFixture>>,
     storage: Mutex<storage::StorageFixture>,
     accounts: Mutex<accounts::AccountsFixture>,
+    firewall: Mutex<firewall::FirewallFixture>,
     state_path: Option<PathBuf>,
     state_lock: Mutex<()>,
 }
@@ -115,6 +118,7 @@ impl Emulator {
             net: Arc::new(Mutex::new(net::NetFixture::new())),
             storage: Mutex::new(storage),
             accounts: Mutex::new(accounts::AccountsFixture::new()),
+            firewall: Mutex::new(firewall::FirewallFixture::new()),
             state_path: None,
             state_lock: Mutex::new(()),
         }
@@ -344,6 +348,7 @@ impl Handler for Emulator {
             NET => !matches!(function, "interfaces" | "routes"),
             STORAGE => !matches!(function, "devices" | "mounts"),
             ACCOUNTS => !matches!(function, "users" | "groups" | "policy"),
+            FIREWALL => function != "snapshot",
             _ => false,
         };
         let result = match interface {
@@ -368,6 +373,11 @@ impl Handler for Emulator {
                 .handle(function, &input),
             ACCOUNTS => self
                 .accounts
+                .lock()
+                .expect("the fixture mutex is not poisoned")
+                .handle(function, &input),
+            FIREWALL => self
+                .firewall
                 .lock()
                 .expect("the fixture mutex is not poisoned")
                 .handle(function, &input),

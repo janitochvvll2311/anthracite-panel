@@ -1,0 +1,18 @@
+[package]
+name = "firewall-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Managed nftables firewall for the Firewall app"
+
+[[bin]]
+name = "firewall-service"
+path = "src/main.rs"
+
+[dependencies]
+anth-contract = { path = "../../../engine/contract" }
+anth-service = { path = "../../../sdk/rust/service" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
+
+[workspace]
