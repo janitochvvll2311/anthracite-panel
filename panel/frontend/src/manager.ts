@@ -4,6 +4,8 @@
 // and may only call their own `/api/apps/{id}/` prefix; managing the engine is
 // the host's job and uses the same session as the rest of the shell.
 
+import { authorityDiff, RISKS, type Risk } from "./authority";
+
 type AppView = {
   id: string;
   version: string;
@@ -14,7 +16,12 @@ type AppView = {
   installed_at: string;
   grant_state: "none" | "current" | "stale" | "invalid";
   grant_problem?: string;
-  grant?: { risk: string; accepted: string[] };
+  grant?: {
+    risk: string;
+    accepted: string[];
+    approved_by?: string;
+    approved_at?: string;
+  };
 };
 
 type AppList = {
@@ -27,9 +34,15 @@ type Composition = {
   profile: { id: string; apps: string[] }[];
 };
 
+type SurfaceApp = {
+  id: string;
+  version: string;
+  risk: string;
+};
+
 type CompositionView = {
   composition: Composition;
-  surface: { apps: unknown[]; degraded: unknown[] };
+  surface: { apps: SurfaceApp[]; degraded: unknown[] };
 };
 
 type AuditRow = {
@@ -60,9 +73,6 @@ class ManagerError extends Error {
     this.detail = detail;
   }
 }
-
-const RISKS = ["write", "admin", "host", "package"] as const;
-type Risk = (typeof RISKS)[number];
 
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -123,6 +133,8 @@ export function mountManager(
     version: 1,
     profile: [{ id: "default", apps: [] }],
   };
+  let surfaceApps: SurfaceApp[] = [];
+  const loadedGrants = new Set<string>();
   let etag = "";
   let pendingApprove: string | null = null;
   let audit: AuditRow[] = [];
@@ -214,7 +226,10 @@ export function mountManager(
       if (disposed) return;
       apps = (list.body as AppList).apps ?? [];
       problems = (list.body as AppList).problems ?? [];
-      composition = (current.body as CompositionView).composition;
+      loadedGrants.clear();
+      const view = current.body as CompositionView;
+      composition = view.composition;
+      surfaceApps = view.surface?.apps ?? [];
       etag = current.response.headers.get("etag") ?? "";
       if (!silent) setStatus(`${apps.length} installed app(s)`);
       renderApps();
@@ -285,8 +300,16 @@ export function mountManager(
         toggleButton.addEventListener("click", () => void patch(app, !app.enabled));
         const approveButton = button("mgr-btn primary", "Approve", "Approve a grant");
         approveButton.addEventListener("click", () => {
-          pendingApprove = pendingApprove === app.id ? null : app.id;
+          if (pendingApprove === app.id) {
+            pendingApprove = null;
+            renderApps();
+            return;
+          }
+          pendingApprove = app.id;
           renderApps();
+          if (app.grant_state !== "none" && !app.grant) {
+            void loadGrant(app.id);
+          }
         });
         const removeButton = button("mgr-btn danger", "Remove", "Remove this app");
         removeButton.addEventListener("click", () => void remove(app));
@@ -318,6 +341,20 @@ export function mountManager(
     renderUpgradeOptions();
   }
 
+  async function loadGrant(id: string): Promise<void> {
+    try {
+      const { body } = await api(options.request, `/api/engine/apps/${encodeURIComponent(id)}`);
+      if (disposed) return;
+      const detail = body as AppView;
+      const app = apps.find((candidate) => candidate.id === id);
+      if (app) app.grant = detail.grant;
+      loadedGrants.add(id);
+      if (pendingApprove === id) renderApps();
+    } catch (error) {
+      if (!disposed) setStatus(reason(error), true);
+    }
+  }
+
   function renderApprove(): void {
     approveRoot.replaceChildren();
     approveRoot.hidden = pendingApprove === null;
@@ -329,6 +366,41 @@ export function mountManager(
       return;
     }
     approveRoot.append(element("strong", "mgr-mono mgr-approve-title", `Approve ${app.id}`));
+    if (app.grant_state !== "none" && !app.grant && !loadedGrants.has(app.id)) {
+      approveRoot.append(element("span", "mgr-hint", "Reading the frozen grant…"));
+      return;
+    }
+    const effective = surfaceApps.find(
+      (candidate) => candidate.id === app.id,
+    )?.risk;
+    const diff = authorityDiff(app.grant, effective);
+    const summary = element("div", "mgr-diff");
+    const diffRow = (label: string, value: string, kind = "") => {
+      const row = element("div", "mgr-diff-row");
+      row.append(element("span", "mgr-diff-label", label), badge(value, kind));
+      return row;
+    };
+    summary.append(
+      diffRow("Current grant", diff.current, diff.current === "none" ? "" : "ok"),
+      diffRow("Effective risk", diff.effective, diff.effective === "none" ? "" : "warn"),
+      diffRow(
+        "New authority",
+        diff.newLevels.length > 0 ? diff.newLevels.join(", ") : "none",
+        diff.newLevels.length > 0 ? "warn" : "ok",
+      ),
+    );
+    if (app.grant?.approved_by) {
+      summary.append(
+        element(
+          "p",
+          "mgr-hint",
+          `Approved by ${app.grant.approved_by}${
+            app.grant.approved_at ? ` at ${app.grant.approved_at}` : ""
+          }`,
+        ),
+      );
+    }
+    approveRoot.append(summary);
     const risks = element("div", "mgr-risks");
     const chosen: HTMLInputElement[] = [];
     for (const risk of RISKS) {
@@ -337,6 +409,7 @@ export function mountManager(
       input.type = "checkbox";
       input.value = risk;
       if (app.grant?.accepted.includes(risk)) input.checked = true;
+      if (diff.required.includes(risk)) input.title = "required by the effective risk";
       chosen.push(input);
       label.append(input, document.createTextNode(` ${risk}`));
       risks.append(label);
@@ -344,10 +417,15 @@ export function mountManager(
     approveRoot.append(risks);
     const confirm = button("mgr-btn primary", "Approve");
     confirm.addEventListener("click", () => {
-      void approve(
-        app,
-        chosen.filter((input) => input.checked).map((input) => input.value as Risk),
-      );
+      const selected = chosen
+        .filter((input) => input.checked)
+        .map((input) => input.value as Risk);
+      const missing = diff.required.filter((level) => !selected.includes(level));
+      if (missing.length > 0) {
+        setStatus(`Approve requires: ${missing.join(", ")}`, true);
+        return;
+      }
+      void approve(app, selected);
     });
     const cancel = button("mgr-btn", "Cancel");
     cancel.addEventListener("click", () => {

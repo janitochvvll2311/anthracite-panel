@@ -1471,6 +1471,30 @@ button.drawer-close {
   flex: 0 0 auto;
 }
 
+.mgr-diff {
+  flex: 1 0 100%;
+  display: grid;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #12161e;
+}
+
+.mgr-diff-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mgr-diff-label {
+  color: var(--muted-2);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .mgr-risks {
   display: flex;
   flex-wrap: wrap;
