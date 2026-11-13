@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anth_compose::audit::AuditLog;
-use anth_contract::{AppId, AuditAction, ExportTarget};
+use anth_contract::{AppId, AuditAction, ExportTarget, ServiceClass};
 use anth_engine::service::{ServiceLaunch, ServiceSupervisor};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -60,6 +60,7 @@ fn launch(state: &Path, extra: &[&str], start_timeout: Duration) -> ServiceLaunc
     ServiceLaunch {
         app: APP.to_string(),
         binary: fixture(),
+        class: ServiceClass::Socket,
         argv,
         socket,
         data_dir: state.join("data").join(APP),
@@ -88,6 +89,12 @@ async fn a_service_starts_answers_and_stops() {
         .await
         .expect("call");
     assert_eq!(output, json!({"message": "hi"}));
+
+    let status = services
+        .call(APP, INTERFACE, "status", json!({}))
+        .await
+        .expect("status");
+    assert_eq!(status["NoNewPrivs"], "1");
 
     services.stop(APP).await;
     assert!(!socket.exists(), "the socket is removed on stop");

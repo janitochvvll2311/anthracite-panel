@@ -280,6 +280,7 @@ fn service_launch(
     Ok(ServiceLaunch {
         app: id.to_string(),
         binary,
+        class: service.class,
         argv,
         socket,
         data_dir,

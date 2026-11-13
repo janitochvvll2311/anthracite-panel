@@ -27,6 +27,7 @@ use std::time::Duration;
 use anth_compose::audit::{timestamp, AuditLog};
 use anth_contract::{
     AppId, AuditAction, AuditEntry, Error, ErrorEnvelope, ErrorKind, ExportTarget, Outcome,
+    ServiceClass,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -50,6 +51,7 @@ const MAX_RESTARTS: u32 = 3;
 pub struct ServiceLaunch {
     pub app: String,
     pub binary: PathBuf,
+    pub class: ServiceClass,
     pub argv: Vec<String>,
     pub socket: PathBuf,
     /// The per-app data directory substituted for `{data}`.
@@ -62,6 +64,7 @@ pub struct ServiceLaunch {
 struct Service {
     app: AppId,
     binary: PathBuf,
+    class: ServiceClass,
     argv: Vec<String>,
     socket: PathBuf,
     exports: BTreeMap<String, ExportTarget>,
@@ -158,6 +161,7 @@ impl ServiceSupervisor {
         let service = Arc::new(Service {
             app: app.clone(),
             binary: launch.binary,
+            class: launch.class,
             argv: launch.argv,
             socket: launch.socket,
             exports: launch.exports,
@@ -436,7 +440,11 @@ async fn drive(service: Arc<Service>, ready: oneshot::Sender<Result<(), Error>>)
                     }
                 }
                 service.running.store(true, Ordering::Release);
-                service.record(AuditAction::ServiceStart, Outcome::Ok, None);
+                service.record(
+                    AuditAction::ServiceStart,
+                    Outcome::Ok,
+                    Some(serde_json::json!({"class": service.class.as_str()})),
+                );
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(Ok(()));
                 }
@@ -514,19 +522,56 @@ fn spawn(service: &Service) -> Result<Child, Error> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    // SAFETY: `setsid` is async-signal-safe and the closure allocates nothing.
-    // It runs between fork and exec, which is the only place it can run.
+    let class = service.class;
+    // SAFETY: every call is async-signal-safe, the closure allocates nothing,
+    // and it runs between fork and exec, which is the only place it can run.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setsid() == -1 {
                 return Err(std::io::Error::last_os_error());
             }
+            // No setuid/setgid/file capabilities through a later exec.
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Die with the engine; do not leave a service behind.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // No core dump, and no ptrace of this service by an unrelated process.
+            if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            libc::umask(0o077);
+            set_limit(libc::RLIMIT_CORE, 0)?;
+            set_limit(libc::RLIMIT_NOFILE, 4096)?;
+            let nproc = match class {
+                ServiceClass::Exec | ServiceClass::Host => 4096,
+                ServiceClass::Socket | ServiceClass::Device | ServiceClass::Admin => 1024,
+            };
+            set_limit(libc::RLIMIT_NPROC, nproc)?;
             Ok(())
         });
     }
     command.spawn().map_err(|error| {
         Error::unavailable(format!("starting `{}`: {error}", service.binary.display()))
     })
+}
+
+fn set_limit(resource: libc::c_int, desired: libc::rlim_t) -> std::io::Result<()> {
+    let mut current: libc::rlimit = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrlimit(resource, &mut current) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    current.rlim_cur = if current.rlim_max == libc::RLIM_INFINITY {
+        desired
+    } else {
+        desired.min(current.rlim_max)
+    };
+    if unsafe { libc::setrlimit(resource, &current) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Three restarts inside sixty seconds. A crash after a quiet window starts a
