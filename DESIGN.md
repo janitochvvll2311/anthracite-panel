@@ -65,7 +65,7 @@ and a change to one of them is a design change, not an implementation detail.
 | 18 | [v0.6.0 plan](docs/design/18-v0.6-plan.md) | M4–M5 phases, entry conditions and the open decisions |
 | 19 | [v0.6.0 baseline and service contract](docs/design/19-v0.6-baseline.md) | v0.4 reference inventory, service v3, host emulator, fs root and terminal protocol |
 | 20 | [Streams](docs/design/20-streams.md) | WIT streams, chunked/SSE mapping, service and panel transports, Terminal retrofit |
-| 21 | [Next version: overview](docs/design/21-next-version-apps.md) | v0.7.0/M6 scope, start conditions, composition, removal and decisions |
+| 21 | [The next version](docs/design/21-next-version-apps.md) | v0.7.0/M6 scope, start conditions, composition, removal and decisions |
 | 22 | [Platform prerequisites](docs/design/22-platform-prerequisites.md) | Broker, listener/egress, secrets, streams, system tier, surface exports, audit and time |
 | 23 | [Certificate manager](docs/design/23-certificate-manager.md) | Inventory, import, custody and publication of TLS material |
 | 24 | [ACME client](docs/design/24-acme-client.md) | Accounts, orders, HTTP-01, DNS-01 and renewal |

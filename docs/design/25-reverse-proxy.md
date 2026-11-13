@@ -64,7 +64,7 @@ ports and the egress class, not a feature name.
 ## 3. Configuration model
 
 One document, versioned, applied atomically. These records are the `admin`
-interface's types; [§23](23-certificate-manager.md) shows the functions.
+interface's types; §4 shows the functions.
 
 ```wit
 record config {
@@ -163,7 +163,7 @@ picked up without a panel action; an invalid file keeps the last good resolver
 and reports the error.
 
 `config`, `listener`, `upstream`, `host`, `route` and `header` are the records in
-[§22](22-platform-prerequisites.md); they are part of this interface.
+§3; they are part of this interface.
 
 ## 5. Routes, CLI and UI
 

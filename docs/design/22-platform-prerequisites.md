@@ -110,8 +110,10 @@ composed app's exported interfaces to `SurfaceApp` in
 ```
 
 This is generic surface data. The manager can then find the store provider, the
-certificate provider or any future provider by interface, not by name. The
-composition still binds one provider per interface id.
+certificate provider or any future provider by interface, not by name. Before
+using a provider it checks that app's descriptor tier; the store and certificate
+roles are system-tier, and a third-party app claiming the interface is shown as
+unsupported. The composition still binds one provider per interface id.
 
 ## 7. A service audit bridge
 

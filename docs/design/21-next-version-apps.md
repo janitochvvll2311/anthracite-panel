@@ -5,7 +5,7 @@
 
 Status: **draft for review**. The scope is proposed; the mechanisms marked
 *proposed* are not binding until accepted in [§16](16-decision-log.md). Nothing
-here starts before the v0.6.0 start conditions in §2 are met.
+here starts before the v0.7.0 start conditions in §2 are met.
 
 v0.6.0 proves the platform with system apps and third-party apps. v0.7.0 uses
 that proof to run a real edge: TLS material, certificates issued by an ACME CA,
