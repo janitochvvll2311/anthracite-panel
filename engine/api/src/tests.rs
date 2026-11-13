@@ -1907,6 +1907,45 @@ fn a_forwarded_https_request_marks_the_cookie_secure() {
 }
 
 #[tokio::test]
+async fn the_audit_endpoint_pages_newest_first() {
+    let (state, dir) = apps_state();
+    let log = AuditLog::new(&dir);
+    for (index, action) in [
+        AuditAction::AppInstall,
+        AuditAction::AppApprove,
+        AuditAction::Compose,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        log.append(&AuditEntry {
+            at: format!("2026-11-13T00:0{index}:00Z"),
+            actor: "operator".to_string(),
+            action,
+            app: None,
+            result: Outcome::Ok,
+            detail: None,
+        })
+        .expect("append");
+    }
+
+    let (status, value) = json(state.clone(), "/api/engine/audit?limit=2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["total"], 3);
+    assert_eq!(value["entries"].as_array().expect("entries").len(), 2);
+    assert_eq!(value["entries"][0]["action"], "compose");
+    assert_eq!(value["entries"][1]["action"], "app.approve");
+    assert_eq!(value["next"], 1);
+
+    let (status, value) = json(state, "/api/engine/audit?limit=2&before=1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["entries"].as_array().expect("entries").len(), 1);
+    assert_eq!(value["entries"][0]["action"], "app.install");
+    assert!(value["next"].is_null());
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
 async fn an_install_is_audited() {
     let (state, dir) = apps_state();
     let bundle = bundle("org.example.other", "example:other", "0.1.0", b"component");

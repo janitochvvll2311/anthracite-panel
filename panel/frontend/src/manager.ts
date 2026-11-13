@@ -32,6 +32,22 @@ type CompositionView = {
   surface: { apps: unknown[]; degraded: unknown[] };
 };
 
+type AuditRow = {
+  at: string;
+  actor: string;
+  action: string;
+  result: string;
+  app?: string;
+  detail?: unknown;
+};
+
+type AuditPage = {
+  entries: AuditRow[];
+  total: number;
+  next: number | null;
+  problems: string[];
+};
+
 export type ManagerOptions = {
   request: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   onChanged: () => Promise<void>;
@@ -109,6 +125,10 @@ export function mountManager(
   };
   let etag = "";
   let pendingApprove: string | null = null;
+  let audit: AuditRow[] = [];
+  let auditNext: number | null = null;
+  let auditProblems: string[] = [];
+  let auditLoading = false;
   let disposed = false;
 
   root.innerHTML = `
@@ -147,11 +167,28 @@ export function mountManager(
       </div>
     </section>
 
+    <section class="mgr-section">
+      <header>
+        <strong>Audit</strong>
+        <div class="mgr-form">
+          <button class="mgr-btn" type="button" data-audit-refresh>Refresh</button>
+        </div>
+      </header>
+      <div class="mgr-section-body">
+        <div data-audit></div>
+        <div class="mgr-form" data-audit-more hidden>
+          <button class="mgr-btn" type="button" data-audit-older>Load older</button>
+        </div>
+      </div>
+    </section>
+
     <p class="mgr-status" data-status role="status"></p>
   `;
 
   const appsRoot = root.querySelector<HTMLElement>("[data-apps]")!;
   const composeRoot = root.querySelector<HTMLElement>("[data-compose]")!;
+  const auditRoot = root.querySelector<HTMLElement>("[data-audit]")!;
+  const auditMore = root.querySelector<HTMLElement>("[data-audit-more]")!;
   const status = root.querySelector<HTMLElement>("[data-status]")!;
   const approveRoot = root.querySelector<HTMLElement>("[data-approve]")!;
   const ack = root.querySelector<HTMLInputElement>("[data-ack]")!;
@@ -182,6 +219,7 @@ export function mountManager(
       if (!silent) setStatus(`${apps.length} installed app(s)`);
       renderApps();
       renderComposition();
+      void loadAudit();
     } catch (error) {
       if (!disposed) setStatus(reason(error), true);
     }
@@ -356,6 +394,79 @@ export function mountManager(
     }
   }
 
+  async function loadAudit(older = false): Promise<void> {
+    if (auditLoading || disposed) return;
+    auditLoading = true;
+    try {
+      const path =
+        older && auditNext !== null
+          ? `/api/engine/audit?before=${auditNext}`
+          : "/api/engine/audit";
+      const { body } = await api(options.request, path);
+      if (disposed) return;
+      const page = body as AuditPage;
+      const entries = page.entries ?? [];
+      audit = older ? [...audit, ...entries] : entries;
+      auditNext = page.next ?? null;
+      auditProblems = page.problems ?? [];
+      renderAudit();
+    } catch (error) {
+      if (!disposed) {
+        auditRoot.replaceChildren(
+          element("p", "mgr-hint", `Could not read the audit log: ${reason(error)}`),
+        );
+        auditMore.hidden = true;
+      }
+    } finally {
+      auditLoading = false;
+    }
+  }
+
+  function renderAudit(): void {
+    auditRoot.replaceChildren();
+    if (audit.length === 0) {
+      auditRoot.append(element("p", "mgr-hint", "No audit entries."));
+    } else {
+      const table = element("table", "mgr-table");
+      const head = element("tr", "mgr-head");
+      for (const label of ["AT", "ACTOR", "ACTION", "RESULT", "APP", "DETAIL"]) {
+        head.append(element("th", "", label));
+      }
+      table.append(head);
+      for (const entry of audit) {
+        const row = element("tr");
+        const at = element("td", "mgr-mono", entry.at);
+        at.dataset.label = "At";
+        const actor = element("td", "mgr-mono", entry.actor);
+        actor.dataset.label = "Actor";
+        const action = element("td", "mgr-mono", entry.action);
+        action.dataset.label = "Action";
+        const result = element("td", "");
+        result.dataset.label = "Result";
+        result.append(
+          badge(
+            entry.result,
+            entry.result === "ok" ? "ok" : entry.result === "denied" ? "bad" : "warn",
+          ),
+        );
+        const app = element("td", "mgr-mono", entry.app ?? "—");
+        app.dataset.label = "App";
+        const detailText =
+          entry.detail === undefined ? "" : JSON.stringify(entry.detail);
+        const detail = element("td", "mgr-mono mgr-audit-detail", detailText || "—");
+        detail.dataset.label = "Detail";
+        detail.title = detailText;
+        row.append(at, actor, action, result, app, detail);
+        table.append(row);
+      }
+      auditRoot.append(table);
+    }
+    for (const problem of auditProblems) {
+      auditRoot.append(element("p", "mgr-hint", `unreadable audit line: ${problem}`));
+    }
+    auditMore.hidden = auditNext === null;
+  }
+
   async function patch(app: AppView, enabled: boolean): Promise<void> {
     setStatus(`${enabled ? "Enabling" : "Disabling"} ${app.id}…`);
     try {
@@ -497,6 +608,12 @@ export function mountManager(
   });
   root.querySelector("[data-save-compose]")!.addEventListener("click", () => {
     void saveComposition();
+  });
+  root.querySelector("[data-audit-refresh]")!.addEventListener("click", () => {
+    void loadAudit();
+  });
+  root.querySelector("[data-audit-older]")!.addEventListener("click", () => {
+    void loadAudit(true);
   });
 
   void refresh();

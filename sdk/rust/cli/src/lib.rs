@@ -45,6 +45,26 @@ struct KeysView {
     keys: Vec<KeyView>,
 }
 
+#[derive(Deserialize)]
+struct AuditPage {
+    entries: Vec<AuditRow>,
+    #[serde(default)]
+    total: usize,
+    next: Option<usize>,
+    #[serde(default)]
+    problems: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AuditRow {
+    at: String,
+    actor: String,
+    action: String,
+    result: String,
+    app: Option<String>,
+    detail: Option<serde_json::Value>,
+}
+
 pub const USAGE: &str = "\
 usage: anth [--socket <path>] <command> [options]
 
@@ -54,6 +74,8 @@ commands:
   status                health, version and the installed catalogue
   compose [--show] [--add <id>] [--remove <id>] [--now]
                         read or edit the composition
+  audit [--limit <n>] [--before <n>]
+                        read the audit log, newest first
   key list              trusted signers
   key add <public-key> [--label <label>]
                         trust a third-party signer
@@ -105,6 +127,11 @@ pub enum Invocation {
         add: Vec<String>,
         remove: Vec<String>,
         now: bool,
+    },
+    Audit {
+        socket: Option<PathBuf>,
+        limit: usize,
+        before: Option<usize>,
     },
     Key {
         socket: Option<PathBuf>,
@@ -204,6 +231,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Err
         }
         "app" => parse_app(args, socket),
         "compose" => parse_compose(args, socket),
+        "audit" => parse_audit(args, socket),
         "key" => parse_key(args, socket),
         other => Err(usage(format!("`{other}` is not a command"))),
     }
@@ -380,6 +408,47 @@ fn parse_compose(
     })
 }
 
+fn parse_audit(
+    args: impl Iterator<Item = OsString>,
+    socket: Option<PathBuf>,
+) -> Result<Invocation, Error> {
+    let mut args = args.into_iter();
+    let mut limit = 100usize;
+    let mut before = None;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--limit") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| usage("`--limit` needs a number".to_string()))?;
+                limit = as_text(&value)?
+                    .parse::<usize>()
+                    .map_err(|_| usage("`--limit` needs a positive number".to_string()))?;
+            }
+            Some("--before") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| usage("`--before` needs a number".to_string()))?;
+                before = Some(
+                    as_text(&value)?
+                        .parse::<usize>()
+                        .map_err(|_| usage("`--before` needs a positive number".to_string()))?,
+                );
+            }
+            Some("--help" | "-h") => return Ok(Invocation::Help),
+            Some(value) => {
+                return Err(usage(format!("`{value}` is not an audit option")));
+            }
+            None => return Err(usage("an audit option is not valid UTF-8".to_string())),
+        }
+    }
+    Ok(Invocation::Audit {
+        socket,
+        limit,
+        before,
+    })
+}
+
 fn parse_key(
     args: impl Iterator<Item = OsString>,
     socket: Option<PathBuf>,
@@ -481,6 +550,11 @@ pub fn execute(invocation: Invocation) -> Result<u8, Error> {
             remove,
             now,
         } => compose(socket, show, add, remove, now),
+        Invocation::Audit {
+            socket,
+            limit,
+            before,
+        } => audit(socket, limit, before),
         Invocation::Key { socket, command } => key(socket, command),
         Invocation::App { socket, command } => app(socket, command),
     }
@@ -658,6 +732,35 @@ fn grant_label(state: GrantState) -> &'static str {
         GrantState::Stale => "stale",
         GrantState::Invalid => "invalid",
     }
+}
+
+fn audit(socket: Option<PathBuf>, limit: usize, before: Option<usize>) -> Result<u8, Error> {
+    let client = client(socket);
+    let mut path = format!("/api/engine/audit?limit={limit}");
+    if let Some(before) = before {
+        path.push_str(&format!("&before={before}"));
+    }
+    let page: AuditPage = client.get_typed(&path)?;
+    let _total = page.total;
+    for problem in &page.problems {
+        eprintln!("warning: {problem}");
+    }
+    for entry in &page.entries {
+        let app = entry.app.as_deref().unwrap_or("-");
+        let detail = entry
+            .detail
+            .as_ref()
+            .and_then(|value| serde_json::to_string(value).ok())
+            .unwrap_or_default();
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            entry.at, entry.actor, entry.action, entry.result, app, detail
+        );
+    }
+    if let Some(next) = page.next {
+        println!("next: --before {next}");
+    }
+    Ok(0)
 }
 
 fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
@@ -1183,6 +1286,52 @@ mod tests {
     #[test]
     fn status_refuses_positional_arguments() {
         assert!(parse(args(&["status", "now"])).is_err());
+    }
+
+    #[test]
+    fn audit_takes_paging_options() {
+        assert_eq!(
+            parse(args(&["audit"])).expect("parse"),
+            Invocation::Audit {
+                socket: None,
+                limit: 100,
+                before: None,
+            }
+        );
+        assert_eq!(
+            parse(args(&["audit", "--limit", "2", "--before", "7"])).expect("parse"),
+            Invocation::Audit {
+                socket: None,
+                limit: 2,
+                before: Some(7),
+            }
+        );
+        assert!(parse(args(&["audit", "--limit", "nope"])).is_err());
+        assert!(parse(args(&["audit", "--nope"])).is_err());
+    }
+
+    #[test]
+    fn audit_requests_a_page_and_a_cursor() {
+        let dir = scratch("audit");
+        let socket = dir.join("engine.sock");
+        let body = r#"{"entries":[],"total":3,"next":1,"limit":2,"before":3,"problems":[]}"#;
+        let receive = serve(
+            &socket,
+            vec![answer("200 OK", body), answer("200 OK", body)],
+        );
+        audit(Some(socket.clone()), 2, None).expect("latest page");
+        let first = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            first.starts_with("GET /api/engine/audit?limit=2 HTTP/1.1"),
+            "{first}"
+        );
+
+        audit(Some(socket), 2, Some(1)).expect("older page");
+        let second = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            second.starts_with("GET /api/engine/audit?limit=2&before=1 HTTP/1.1"),
+            "{second}"
+        );
     }
 
     #[test]

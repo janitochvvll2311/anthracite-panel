@@ -1326,6 +1326,13 @@ button.drawer-close {
   font: 11px ui-monospace, monospace;
 }
 
+.mgr-audit-detail {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mgr-actions {
   display: flex;
   gap: 4px;
@@ -1561,6 +1568,12 @@ html[data-viewport="mobile"] .mgr-table td[data-label]::before {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+html[data-viewport="mobile"] .mgr-audit-detail {
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 html[data-viewport="mobile"] .mgr-table td.mgr-app {
