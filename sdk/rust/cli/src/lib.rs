@@ -1494,6 +1494,23 @@ mod tests {
     }
 
     #[test]
+    fn fetch_wit_refuses_an_unsafe_file_name() {
+        let dir = scratch("fetch-wit-unsafe");
+        let socket = dir.join("engine.sock");
+        let body = r#"{"app":"org.example.notes","package":"example:notes","files":{"../escape.wit":"package example:notes@1.0.0;\n"}}"#;
+        serve(&socket, vec![answer("200 OK", body)]);
+        let out = dir.join("wit");
+        let error = fetch_wit(
+            &Client::new(&socket),
+            "org.example.notes".to_string(),
+            Some(out.clone()),
+        )
+        .expect_err("unsafe name");
+        assert_eq!(error.kind(), ErrorKind::Invalid);
+        assert!(!out.join("../escape.wit").exists());
+    }
+
+    #[test]
     fn install_and_upgrade_take_a_bundle() {
         assert_eq!(
             parse(args(&["app", "install", "/tmp/notes.zip"])).expect("parse"),

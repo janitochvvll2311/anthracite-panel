@@ -22,8 +22,8 @@ need to vendor a provider's WIT by hand before building a consumer.
 
 - `engine/api`: the WIT endpoint serves `example:notes`, and a missing app is
   `404 not-found`.
-- `sdk/rust`: parse test for `fetch-wit --out`, plus a fake-engine test that
-  asserts the requested URL and the written `notes.wit`.
+- `sdk/rust`: parse test for `fetch-wit --out`, a fake-engine test that asserts
+  the requested URL and the written `notes.wit`, and an unsafe-file-name refusal.
 - Live smoke: fetched `org.anthracite.fs` from the running panel into an explicit
   `--out` directory and into the default `wit/deps/anthracite_fs/`.
 - `cargo fmt --check` and `clippy -D warnings` on both touched workspaces.
