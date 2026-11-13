@@ -1,0 +1,17 @@
+version = 1
+
+# The system apps as they ship in v0.6.0. The app fixtures are rendered from the
+# real `apps/<name>/manifest.toml.in` and `wit/` files at test time; this file
+# only fixes the composition.
+[[profile]]
+id = "default"
+apps = [
+    "org.anthracite.fs",
+    "org.anthracite.terminal",
+    "org.anthracite.proc",
+    "org.anthracite.net",
+    "org.anthracite.firewall",
+    "org.anthracite.storage",
+    "org.anthracite.accounts",
+    "org.anthracite.home",
+]

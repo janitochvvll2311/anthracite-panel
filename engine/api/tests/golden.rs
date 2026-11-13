@@ -136,6 +136,82 @@ fn fixture_state(composition: &str, approved: &[&str]) -> (Arc<EngineState>, Pat
     (state, dir)
 }
 
+fn repo_root() -> PathBuf {
+    fixtures()
+        .parent()
+        .and_then(Path::parent)
+        .expect("repository root")
+        .to_path_buf()
+}
+
+/// The real system apps, with the risk their service class contributes.
+const SYSTEM_APPS: &[(&str, &str, Risk, &str)] = &[
+    ("fs", "org.anthracite.fs", Risk::Host, "host"),
+    ("terminal", "org.anthracite.terminal", Risk::Host, "exec"),
+    ("proc", "org.anthracite.proc", Risk::Admin, "admin"),
+    ("net", "org.anthracite.net", Risk::Host, "host"),
+    ("firewall", "org.anthracite.firewall", Risk::Host, "host"),
+    ("storage", "org.anthracite.storage", Risk::Host, "host"),
+    ("accounts", "org.anthracite.accounts", Risk::Host, "host"),
+    ("home", "org.anthracite.home", Risk::Host, "host"),
+];
+
+/// Render the real `manifest.toml.in` with deterministic fixture values.
+///
+/// The app's WIT files are copied from `apps/<name>/wit`; nothing about the
+/// interfaces, routes, slots or CLI is duplicated in the fixture.
+fn system_manifest(app: &str, class: &str) -> String {
+    let path = repo_root().join("apps").join(app).join("manifest.toml.in");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let sha = "0".repeat(64);
+    let asset = "a".repeat(64);
+    text.replace("{{app_name}}", "System app")
+        .replace("{{app_summary}}", "System app fixture.")
+        .replace("{{service_path}}", "bin/app")
+        .replace("{{sha256}}", &sha)
+        .replace("{{service_class}}", class)
+        .replace("{{service_argv}}", r#"["--socket", "{socket}"]"#)
+        .replace("{{module_sha256}}", &asset)
+        .replace("{{modal_sha256}}", &asset)
+        .replace("{{icon_sha256}}", &asset)
+        .replace("{{refresh_sha256}}", &asset)
+}
+
+fn system_state(composition: &str) -> (Arc<EngineState>, PathBuf) {
+    let dir = scratch();
+    let apps = dir.join("apps");
+    fs::create_dir_all(&apps).expect("apps");
+    fs::set_permissions(&apps, fs::Permissions::from_mode(0o700)).expect("chmod");
+    for (name, id, risk, class) in SYSTEM_APPS {
+        let app_dir = apps.join(id);
+        copy_tree(
+            &repo_root().join("apps").join(name).join("wit"),
+            &app_dir.join("wit"),
+        );
+        fs::write(app_dir.join("manifest.toml"), system_manifest(name, class)).expect("manifest");
+        fs::write(
+            app_dir.join("descriptor.toml"),
+            format!(
+                "version = 1\napp = \"{id}\"\nenabled = true\ntier = \"third-party\"\n\
+                 installed_at = \"2026-11-05T20:00:00Z\"\n"
+            ),
+        )
+        .expect("descriptor");
+        approve_with(&dir, id, *risk);
+    }
+    let text = fs::read_to_string(fixtures().join("compositions").join(composition))
+        .expect("composition fixture");
+    let composition = Composition::parse(&text).expect("parse");
+    composition.validate().expect("validate");
+    let state = Arc::new(
+        EngineState::new(1000)
+            .with_composition(composition)
+            .with_apps(&dir, 1 << 20, false, true),
+    );
+    (state, dir)
+}
+
 async fn composition(state: Arc<EngineState>) -> Value {
     let mut request = Request::builder()
         .uri("/api/engine/composition")
@@ -174,6 +250,62 @@ async fn the_golden_composition_produces_the_golden_surface() {
         serde_json::from_str(&fs::read_to_string(&path).expect("expected fixture"))
             .expect("expected json");
     assert_eq!(value, expected);
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn the_system_composition_produces_the_golden_surface() {
+    let (state, dir) = system_state("system.toml");
+    let value = composition(state).await;
+    let path = fixtures().join("expected/system.json");
+    if std::env::var_os("BLESS").is_some() {
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&value).expect("render")
+            ),
+        )
+        .expect("bless");
+    }
+    let expected: Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("expected fixture"))
+            .expect("expected json");
+    assert_eq!(value, expected);
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn removing_net_leaves_the_other_system_apps() {
+    let (state, dir) = system_state("system-without-net.toml");
+    let value = composition(state).await;
+    assert!(value["surface"]["fatal"].is_null(), "{value}");
+    assert_eq!(value["surface"]["degraded"], serde_json::json!([]));
+    assert_eq!(value["surface"]["links"], serde_json::json!([]));
+
+    let apps = value["surface"]["apps"].as_array().expect("apps");
+    let ids = apps
+        .iter()
+        .map(|app| app["id"].as_str().expect("id"))
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 7, "{ids:?}");
+    assert!(!ids.contains(&"org.anthracite.net"), "{ids:?}");
+    assert!(ids.contains(&"org.anthracite.firewall"), "{ids:?}");
+
+    let firewall = apps
+        .iter()
+        .find(|app| app["id"] == "org.anthracite.firewall")
+        .expect("firewall");
+    assert_eq!(firewall["risk"], "host");
+    let view = firewall["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .find(|slot| slot["id"] == "panel.view")
+        .expect("firewall view");
+    assert_eq!(view["label"], "Firewall");
+    assert_eq!(view["parent"], "org.anthracite.net#anth-net");
+
     cleanup(dir);
 }
 

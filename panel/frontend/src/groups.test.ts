@@ -57,6 +57,18 @@ describe("groupViews", () => {
     expect(groups.map((group) => group.parent)).toEqual([child]);
   });
 
+  test("Firewall becomes a top-level tab when Network is removed", () => {
+    const firewall = view(
+      "org.anthracite.firewall",
+      "Firewall",
+      "anth-firewall",
+      { parent: "org.anthracite.net#anth-net", order: 22 },
+    );
+    const groups = groupViews([firewall]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].parent).toBe(firewall);
+  });
+
   test("a nested parent is not followed", () => {
     const root = view("org.example.root", "Root", "root");
     const middle = view("org.example.middle", "Middle", "middle", {
