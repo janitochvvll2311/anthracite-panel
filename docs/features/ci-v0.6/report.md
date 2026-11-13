@@ -10,7 +10,7 @@ the conformance kit and `anth app fetch-wit`.
 
 - `push`/`pull_request` branches include `v0.6.0`.
 - A `demo` job runs `fmt`, `clippy -D warnings` and `cargo test` for
-  `demo/emulator`.
+  `demo/emulator`; the edge gate now includes that crate.
 - The panel job builds `anth-conformance` and validates the packaged `hello`
   bundle before the remote-client acid test.
 - The remote-client test installs `hello`, fetches its WIT with
