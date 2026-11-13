@@ -43,6 +43,13 @@ the `audit and approval UI` item.
 
 Both reject `limit=0` and `limit=1001`; neither silently clamps them.
 
+The parity review also checked the fixed engine commands. `status`, `compose`,
+`key`, `app` and `audit` each have an API path in the CLI. Two gaps remain
+outside this slice: `restart` has no API route or CLI verb yet, and
+`login`/`logout` are HTTP session endpoints with no CLI client because the
+engine client is Unix-socket-only. `app inspect` stays deferred. Neither gap is
+introduced or widened by the audit command.
+
 ## Tests
 
 - `engine/api`: **92 unit tests**, including the audit page test, plus the
