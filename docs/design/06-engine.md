@@ -157,6 +157,13 @@ Assets use the hash we already verified:
 - `If-None-Match` answers `304` without reading the file.
 - `HEAD` is free.
 
+`GET /api/engine/audit?limit=<n>&before=<index>` pages the append-only log. The
+page is newest first, `limit` defaults to 100 and is capped at 1000, and `before`
+defaults to the end. The answer is `{entries, total, next, limit, before,
+problems}`: `next` is the cursor for the next older page, and `problems` names
+lines the engine could read but not parse. The CLI and the panel use the same
+page; there is no second audit reader.
+
 Health answers two different questions, so it is two endpoints rather than one
 endpoint with a mode:
 
