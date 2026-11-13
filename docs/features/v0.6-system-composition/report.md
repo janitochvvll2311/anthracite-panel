@@ -12,7 +12,7 @@ seven apps running, and Firewall falls back to a top-level tab in the panel.
 
 | Phase | PR | State |
 | --- | --- | --- |
-| Phase 7 — Manager and M4 close | this PR | open |
+| Phase 7 — Manager and M4 close | #162 | open |
 
 The manager itself landed in #104; this report covers the composition close.
 
