@@ -12,9 +12,12 @@ wasm/<name>.wasm         # the component; required when the app exports an inter
 web/<name>.js            # optional UI module(s), hash-pinned by the manifest
 ```
 
-`wit/` holds the package and nothing else. `wit/deps/` is not needed: the engine
+In the **bundle**, `wit/` holds the package and nothing else: the engine
 resolves `use` against its own host catalog and the packages of installed
-providers ([§7.3](07-app.md#73-wit-as-the-contract)), so a vendored copy cannot go stale.
+providers ([§7.3](07-app.md#73-wit-as-the-contract)), so a vendored copy cannot
+go stale inside the signed artifact. A **source tree** may keep build-time
+`wit/deps/` populated by `anth app fetch-wit`; the build script packages only
+the app's `wit/*.wit`, so the bundle stays closed.
 
 A `bin/` entry joins this layout in v0.6.0 with the first service app ([§7.4](07-app.md#74-app-kinds)).
 
@@ -503,8 +506,8 @@ no second, generic call endpoint into an app.
 
 `anth app fetch-wit <id> [--out <dir>]` is the build-time companion: it reads the
 installed provider's WIT from `GET /api/engine/apps/{id}/wit` and writes it under
-`wit/deps/<package>` by default. It fetches a build input, not authority: the
-consumer still needs a grant for the interfaces it imports.
+`wit/deps/<package>` in the source tree by default. It fetches a build input, not
+authority: the consumer still needs a grant for the interfaces it imports.
 
 **Flags** are the inverse of [§7.13](07-app.md#713-http-and-wit-one-mapping): one flag per parameter, named after it,
 optional for `option<T>`, repeated for `list<T>`, and `--flag` / `--no-flag` for

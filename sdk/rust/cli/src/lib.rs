@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -965,22 +967,92 @@ fn app(socket: Option<PathBuf>, command: AppCommand) -> Result<u8, Error> {
 fn fetch_wit(client: &Client, app: String, out: Option<PathBuf>) -> Result<u8, Error> {
     anth_contract::AppId::parse(&app)?;
     let value: WitView = client.get_typed(&format!("/api/engine/apps/{app}/wit"))?;
+    let managed = out.is_none();
     let dir =
         out.unwrap_or_else(|| PathBuf::from("wit/deps").join(package_directory(&value.package)));
-    fs::create_dir_all(&dir)
+    write_wit(&dir, &value.files, managed)?;
+    println!("{}", dir.display());
+    Ok(0)
+}
+
+fn write_wit(dir: &Path, files: &BTreeMap<String, String>, clean: bool) -> Result<(), Error> {
+    if let Ok(metadata) = fs::symlink_metadata(dir) {
+        if metadata.file_type().is_symlink() {
+            return Err(Error::invalid(format!(
+                "{} is a symlink; choose a real directory",
+                dir.display()
+            )));
+        }
+    }
+    fs::create_dir_all(dir)
         .map_err(|error| Error::internal(format!("creating {}: {error}", dir.display())))?;
-    for (name, content) in &value.files {
+
+    // Validate the whole set before writing a byte, so a bad name cannot leave
+    // a partially updated package.
+    for name in files.keys() {
         if !safe_wit_name(name) {
             return Err(Error::invalid(format!(
                 "the engine returned an unsafe WIT file name: `{name}`"
             )));
         }
+    }
+    if clean {
+        clean_stale_wit(dir, files)?;
+    }
+    for (name, content) in files {
         let path = dir.join(name);
-        fs::write(&path, content)
+        if let Ok(metadata) = fs::symlink_metadata(&path) {
+            if metadata.file_type().is_symlink() {
+                return Err(Error::invalid(format!(
+                    "{} is a symlink; refusing to write through it",
+                    path.display()
+                )));
+            }
+        }
+        let mut options = fs::OpenOptions::new();
+        options
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .custom_flags(libc::O_NOFOLLOW);
+        let mut file = options
+            .open(&path)
+            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
+        file.write_all(content.as_bytes())
             .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
     }
-    println!("{}", dir.display());
-    Ok(0)
+    Ok(())
+}
+
+/// Remove WIT files left by an older version of a managed package directory.
+fn clean_stale_wit(dir: &Path, files: &BTreeMap<String, String>) -> Result<(), Error> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(Error::internal(format!(
+                "reading {}: {error}",
+                dir.display()
+            )))
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| Error::internal(error.to_string()))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".wit") || files.contains_key(&name) {
+            continue;
+        }
+        if entry
+            .file_type()
+            .map_err(|error| Error::internal(error.to_string()))?
+            .is_file()
+        {
+            fs::remove_file(entry.path()).map_err(|error| {
+                Error::internal(format!("removing stale WIT file `{name}`: {error}"))
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// A package name is not a path: keep it readable and inside one directory.
@@ -1508,6 +1580,36 @@ mod tests {
         .expect_err("unsafe name");
         assert_eq!(error.kind(), ErrorKind::Invalid);
         assert!(!out.join("../escape.wit").exists());
+    }
+
+    #[test]
+    fn write_wit_validates_first_cleans_stale_files_and_refuses_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = scratch("write-wit");
+        let out = dir.join("package");
+        fs::create_dir_all(&out).expect("mkdir");
+        fs::write(out.join("old.wit"), "old").expect("old");
+        let mut files = BTreeMap::new();
+        files.insert("new.wit".to_string(), "new".to_string());
+        write_wit(&out, &files, true).expect("write");
+        assert!(!out.join("old.wit").exists());
+        assert_eq!(fs::read_to_string(out.join("new.wit")).expect("new"), "new");
+
+        let target = dir.join("target.wit");
+        fs::write(&target, "target").expect("target");
+        symlink(&target, out.join("link.wit")).expect("symlink");
+        files.insert("link.wit".to_string(), "link".to_string());
+        let error = write_wit(&out, &files, false).expect_err("symlink");
+        assert_eq!(error.kind(), ErrorKind::Invalid);
+        assert_eq!(fs::read_to_string(&target).expect("target"), "target");
+
+        let mut unsafe_files = BTreeMap::new();
+        unsafe_files.insert("ok.wit".to_string(), "ok".to_string());
+        unsafe_files.insert("../escape.wit".to_string(), "escape".to_string());
+        let before = fs::read_dir(&out).expect("read").count();
+        assert!(write_wit(&out, &unsafe_files, true).is_err());
+        assert_eq!(fs::read_dir(&out).expect("read").count(), before);
     }
 
     #[test]

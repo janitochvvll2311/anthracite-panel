@@ -12,18 +12,21 @@ need to vendor a provider's WIT by hand before building a consumer.
   is a `{name: text}` map of the app's `wit/*.wit`.
 - `Registry::wit_files` reads the installed package and refuses a missing or
   non-UTF-8 WIT tree.
-- `anth app fetch-wit <id>` writes to `wit/deps/<package>` by default, with
-  `--out <dir>` for an explicit destination. Package characters that are not
-  path-safe become `_`; file names must be safe `.wit` names.
+- `anth app fetch-wit <id>` writes to `wit/deps/<package>` in the source tree
+  by default, with `--out <dir>` for an explicit destination. The managed
+  default removes stale `.wit` files; an explicit directory is left untouched.
+  Package characters that are not path-safe become `_`; file names must be safe
+  `.wit` names and writes do not follow symlinks.
 - The command validates the app id before the request and prints the directory
   it wrote.
 
 ## Tests
 
 - `engine/api`: the WIT endpoint serves `example:notes`, and a missing app is
-  `404 not-found`.
+  `404 not-found`; a corrupt installed tree is an internal error, not a `400`.
 - `sdk/rust`: parse test for `fetch-wit --out`, a fake-engine test that asserts
-  the requested URL and the written `notes.wit`, and an unsafe-file-name refusal.
+  the requested URL and the written `notes.wit`, and unsafe-name, stale-file
+  and symlink refusals.
 - Live smoke: fetched `org.anthracite.fs` from the running panel into an explicit
   `--out` directory and into the default `wit/deps/anthracite_fs/`.
 - `cargo fmt --check` and `clippy -D warnings` on both touched workspaces.

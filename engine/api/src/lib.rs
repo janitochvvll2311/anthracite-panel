@@ -1240,7 +1240,6 @@ struct KeyBody {
     label: Option<String>,
 }
 
-/// One app: descriptor, effective alias and its frozen grant.
 /// The installed app's WIT package, for `anth app fetch-wit`.
 async fn app_wit(
     State(state): State<Arc<EngineState>>,
@@ -1248,10 +1247,7 @@ async fn app_wit(
 ) -> Result<Json<Value>, ApiError> {
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
-    let installed = apps
-        .registry
-        .get(&id)?
-        .ok_or_else(|| Error::not_found(format!("`{id}` is not installed")))?;
+    let installed = installed_app(apps, &id)?;
     let files = apps.registry.wit_files(&id)?;
     Ok(Json(json!({
         "app": id,
@@ -1260,18 +1256,12 @@ async fn app_wit(
     })))
 }
 
-async fn get_app(
-    State(state): State<Arc<EngineState>>,
-    Path(id): Path<String>,
-) -> Result<Json<AppView>, ApiError> {
-    let apps = apps(&state)?;
-    let id = AppId::parse(&id)?;
-    let installed = apps
-        .registry
-        .get(&id)
+/// The registry's installed entry, with a corrupt tree reported as an internal
+/// error rather than a bad request.
+fn installed_app(apps: &Apps, id: &AppId) -> Result<Installed, ApiError> {
+    apps.registry
+        .get(id)
         .map_err(|error| {
-            // A corrupt installed tree is state the operator must repair, not a
-            // bad request.
             if error.kind() == ErrorKind::Invalid {
                 ApiError(Error::internal(format!(
                     "the installed tree for `{id}` is corrupt: {}",
@@ -1281,7 +1271,17 @@ async fn get_app(
                 ApiError(error)
             }
         })?
-        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))?;
+        .ok_or_else(|| ApiError(Error::not_found(format!("`{id}` is not installed"))))
+}
+
+/// One app: descriptor, effective alias and its frozen grant.
+async fn get_app(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+) -> Result<Json<AppView>, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    let installed = installed_app(apps, &id)?;
     Ok(Json(app_view(apps, &installed, true)?))
 }
 
