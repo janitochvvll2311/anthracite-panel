@@ -34,7 +34,7 @@ use anth_contract::{
 use axum::body::Bytes;
 use axum::extract::{
     connect_info::Connected, ws::Message, ws::WebSocket, ws::WebSocketUpgrade, ConnectInfo,
-    DefaultBodyLimit, Extension, FromRequestParts, Path, RawQuery, Request, State,
+    DefaultBodyLimit, Extension, FromRequestParts, Path, Query, RawQuery, Request, State,
 };
 use axum::http::header::{
     ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION,
@@ -512,6 +512,7 @@ fn api_routes(state: Arc<EngineState>) -> Router {
         )
         .route("/engine/keys", get(list_keys).post(add_key))
         .route("/engine/keys/{fingerprint}", delete(remove_key))
+        .route("/engine/audit", get(read_audit))
         .route("/engine/apps", get(list_apps).post(install_app))
         .route(
             "/engine/apps/{id}",
@@ -862,6 +863,45 @@ async fn list_keys(State(state): State<Arc<EngineState>>) -> Result<Json<Value>,
         .map(|(fingerprint, key)| KeyView { fingerprint, key })
         .collect();
     Ok(Json(json!({ "keys": keys })))
+}
+
+const AUDIT_LIMIT: usize = 100;
+const AUDIT_LIMIT_MAX: usize = 1000;
+
+#[derive(Debug, Deserialize)]
+struct AuditQuery {
+    limit: Option<usize>,
+    before: Option<usize>,
+}
+
+/// The audit log, newest first. `before` is the index from which to page back;
+/// the response's `next` is the value for the next request.
+async fn read_audit(
+    State(state): State<Arc<EngineState>>,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let (entries, problems) = apps.audit.scan()?;
+    let total = entries.len();
+    let before = query.before.unwrap_or(total).min(total);
+    let limit = query.limit.unwrap_or(AUDIT_LIMIT);
+    if !(1..=AUDIT_LIMIT_MAX).contains(&limit) {
+        return Err(ApiError(Error::invalid(format!(
+            "`limit` must be between 1 and {AUDIT_LIMIT_MAX}"
+        ))));
+    }
+    let start = before.saturating_sub(limit);
+    let mut page = entries[start..before].to_vec();
+    page.reverse();
+    let next = (start > 0).then_some(start);
+    Ok(Json(json!({
+        "entries": page,
+        "total": total,
+        "next": next,
+        "limit": limit,
+        "before": before,
+        "problems": problems,
+    })))
 }
 
 /// The public key is the request; the engine fills the operator and the time.
