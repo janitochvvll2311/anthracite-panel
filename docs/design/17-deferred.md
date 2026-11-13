@@ -301,9 +301,10 @@ the same information from the engine.
 
 Approval, risk and authority-diff screens in the panel's settings slot.
 
-**Status: partially delivered.** Approval and the audit section are in the
-Manager; the authority diff for an upgrade is still pending. The API and CLI
-already carry the grant and risk data the screen will use.
+**Status: delivered in v0.6.0.** The Manager shows the frozen grant, the
+effective risk and any newly required levels, and validates the checked levels
+before approval. The diff is risk-level; an interface-level diff waits for the
+surface to carry exports/imports.
 
 ---
 

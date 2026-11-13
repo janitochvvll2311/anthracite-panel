@@ -98,6 +98,7 @@ not a resource.
 | `/api/engine/apps` | catalogue | — | — | — | install, id derived from the bundle |
 | `/api/engine/apps/{id}` | descriptor and grant | replace the bundle | `enabled`, alias | uninstall | — |
 | `/api/engine/apps/{id}/grant` | frozen grant | approve with the accepted levels | — | revoke | — |
+| `/api/engine/apps/{id}/approval` | computed risk and required levels | — | — | — | — |
 | `/api/engine/apps/{id}/wit` | the installed WIT package | — | — | — | — |
 | `/api/engine/audit` | paginated log | — | — | — | — |
 | `/api/engine/keys` | trusted keys | — | — | — | add a third-party key |

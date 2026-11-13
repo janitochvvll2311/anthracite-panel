@@ -4,6 +4,8 @@
 // and may only call their own `/api/apps/{id}/` prefix; managing the engine is
 // the host's job and uses the same session as the rest of the shell.
 
+import { authorityDiff, RISKS, type Risk } from "./authority";
+
 type AppView = {
   id: string;
   version: string;
@@ -14,7 +16,12 @@ type AppView = {
   installed_at: string;
   grant_state: "none" | "current" | "stale" | "invalid";
   grant_problem?: string;
-  grant?: { risk: string; accepted: string[] };
+  grant?: {
+    risk: string;
+    accepted: string[];
+    approved_by?: string;
+    approved_at?: string;
+  };
 };
 
 type AppList = {
@@ -29,8 +36,17 @@ type Composition = {
 
 type CompositionView = {
   composition: Composition;
-  surface: { apps: unknown[]; degraded: unknown[] };
 };
+
+type ApprovalPreview = {
+  risk: string;
+  required: Risk[];
+};
+
+type ApprovalState =
+  | { status: "loading" }
+  | { status: "ready"; risk: string; required: Risk[]; grant?: AppView["grant"] }
+  | { status: "error"; message: string };
 
 type AuditRow = {
   at: string;
@@ -60,9 +76,6 @@ class ManagerError extends Error {
     this.detail = detail;
   }
 }
-
-const RISKS = ["write", "admin", "host", "package"] as const;
-type Risk = (typeof RISKS)[number];
 
 function element<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -125,6 +138,7 @@ export function mountManager(
   };
   let etag = "";
   let pendingApprove: string | null = null;
+  let approval: ApprovalState | null = null;
   let audit: AuditRow[] = [];
   let auditNext: number | null = null;
   let auditProblems: string[] = [];
@@ -214,7 +228,8 @@ export function mountManager(
       if (disposed) return;
       apps = (list.body as AppList).apps ?? [];
       problems = (list.body as AppList).problems ?? [];
-      composition = (current.body as CompositionView).composition;
+      const view = current.body as CompositionView;
+      composition = view.composition;
       etag = current.response.headers.get("etag") ?? "";
       if (!silent) setStatus(`${apps.length} installed app(s)`);
       renderApps();
@@ -285,8 +300,16 @@ export function mountManager(
         toggleButton.addEventListener("click", () => void patch(app, !app.enabled));
         const approveButton = button("mgr-btn primary", "Approve", "Approve a grant");
         approveButton.addEventListener("click", () => {
-          pendingApprove = pendingApprove === app.id ? null : app.id;
+          if (pendingApprove === app.id) {
+            pendingApprove = null;
+            approval = null;
+            renderApps();
+            return;
+          }
+          pendingApprove = app.id;
+          approval = { status: "loading" };
           renderApps();
+          void loadApproval(app.id);
         });
         const removeButton = button("mgr-btn danger", "Remove", "Remove this app");
         removeButton.addEventListener("click", () => void remove(app));
@@ -318,6 +341,29 @@ export function mountManager(
     renderUpgradeOptions();
   }
 
+  async function loadApproval(id: string): Promise<void> {
+    try {
+      const [detail, preview] = await Promise.all([
+        api(options.request, `/api/engine/apps/${encodeURIComponent(id)}`),
+        api(options.request, `/api/engine/apps/${encodeURIComponent(id)}/approval`),
+      ]);
+      if (disposed || pendingApprove !== id) return;
+      const risk = preview.body as ApprovalPreview;
+      approval = {
+        status: "ready",
+        risk: risk.risk,
+        required: risk.required ?? [],
+        grant: (detail.body as AppView).grant,
+      };
+      renderApps();
+    } catch (error) {
+      if (!disposed && pendingApprove === id) {
+        approval = { status: "error", message: reason(error) };
+        renderApps();
+      }
+    }
+  }
+
   function renderApprove(): void {
     approveRoot.replaceChildren();
     approveRoot.hidden = pendingApprove === null;
@@ -329,6 +375,66 @@ export function mountManager(
       return;
     }
     approveRoot.append(element("strong", "mgr-mono mgr-approve-title", `Approve ${app.id}`));
+    const close = (): void => {
+      pendingApprove = null;
+      approval = null;
+      renderApps();
+    };
+    const cancel = button("mgr-btn", "Cancel");
+    cancel.addEventListener("click", close);
+    const showActions = (...buttons: HTMLButtonElement[]): void => {
+      const actions = element("div", "mgr-approve-actions");
+      actions.append(...buttons, cancel);
+      approveRoot.append(actions);
+      approveRoot.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+    if (!approval || approval.status === "loading") {
+      approveRoot.append(element("span", "mgr-hint", "Reading the approval…"));
+      showActions();
+      return;
+    }
+    if (approval.status === "error") {
+      approveRoot.append(
+        element("span", "mgr-hint", `Could not read the approval: ${approval.message}`),
+      );
+      const retry = button("mgr-btn primary", "Retry");
+      retry.addEventListener("click", () => {
+        approval = { status: "loading" };
+        renderApps();
+        void loadApproval(app.id);
+      });
+      showActions(retry);
+      return;
+    }
+    const grant = approval.grant;
+    const diff = authorityDiff(grant, approval.risk, approval.required);
+    const summary = element("div", "mgr-diff");
+    const diffRow = (label: string, value: string, kind = "") => {
+      const row = element("div", "mgr-diff-row");
+      row.append(element("span", "mgr-diff-label", label), badge(value, kind));
+      return row;
+    };
+    summary.append(
+      diffRow("Current grant", diff.current, diff.current === "none" ? "" : "ok"),
+      diffRow("Effective risk", diff.effective, diff.effective === "none" ? "" : "warn"),
+      diffRow(
+        "New authority",
+        diff.newLevels.length > 0 ? diff.newLevels.join(", ") : "none",
+        diff.newLevels.length > 0 ? "warn" : "ok",
+      ),
+    );
+    if (grant?.approved_by) {
+      summary.append(
+        element(
+          "p",
+          "mgr-hint",
+          `Approved by ${grant.approved_by}${
+            grant.approved_at ? ` at ${grant.approved_at}` : ""
+          }`,
+        ),
+      );
+    }
+    approveRoot.append(summary);
     const risks = element("div", "mgr-risks");
     const chosen: HTMLInputElement[] = [];
     for (const risk of RISKS) {
@@ -336,7 +442,8 @@ export function mountManager(
       const input = document.createElement("input");
       input.type = "checkbox";
       input.value = risk;
-      if (app.grant?.accepted.includes(risk)) input.checked = true;
+      if (grant?.accepted.includes(risk)) input.checked = true;
+      if (diff.required.includes(risk)) input.title = "required by the effective risk";
       chosen.push(input);
       label.append(input, document.createTextNode(` ${risk}`));
       risks.append(label);
@@ -344,25 +451,20 @@ export function mountManager(
     approveRoot.append(risks);
     const confirm = button("mgr-btn primary", "Approve");
     confirm.addEventListener("click", () => {
-      void approve(
-        app,
-        chosen.filter((input) => input.checked).map((input) => input.value as Risk),
-      );
+      const selected = chosen
+        .filter((input) => input.checked)
+        .map((input) => input.value as Risk);
+      const missing = diff.required.filter((level) => !selected.includes(level));
+      if (missing.length > 0) {
+        setStatus(`Approve requires: ${missing.join(", ")}`, true);
+        return;
+      }
+      void approve(app, selected);
     });
-    const cancel = button("mgr-btn", "Cancel");
-    cancel.addEventListener("click", () => {
-      pendingApprove = null;
-      renderApps();
-    });
-    const actions = element("div", "mgr-approve-actions");
-    actions.append(confirm, cancel);
-    approveRoot.append(actions);
+    showActions(confirm);
     approveRoot.append(
       element("span", "mgr-hint", "read is implicit; check every level the risk needs"),
     );
-    // The panel sits below the app list; on a phone it would otherwise open
-    // off-screen after the clicked card.
-    approveRoot.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   function renderUpgradeOptions(): void {
@@ -492,6 +594,7 @@ export function mountManager(
         body: JSON.stringify({ accept }),
       });
       pendingApprove = null;
+      approval = null;
       setStatus(`${app.id} approved`);
       await options.onChanged();
       await refresh(true);
