@@ -280,11 +280,12 @@ An app that imports `anthracite:fs/read` needs that package at build time. Today
 the only path is vendoring a copy, which is the second truth we removed for the
 host catalog.
 
-**Why deferred.** v0.5.0 has no app-to-app imports; `hello` imports only host
-interfaces.
+v0.5.0 had no app-to-app imports; `hello` imports only host interfaces.
 
-**Ready when** the first app imports another app. The options are a registry, a
-`anth app fetch-wit` command, or installing the provider first.
+**Status: delivered in v0.6.0.** `anth app fetch-wit <id> [--out <dir>]` reads
+the installed provider's WIT from `GET /api/engine/apps/{id}/wit` and writes it
+under `wit/deps/<package>` by default. A registry and a version solver remain
+later work.
 
 ### 4.3 `anth app inspect`
 
@@ -299,10 +300,9 @@ the same information from the engine.
 
 Approval, risk and authority-diff screens in the panel's settings slot.
 
-**Why deferred.** The API and the CLI carry the information; the panel's settings
-slot is built in M3, and the screens are M5.
-
-**Ready when** M3 ships.
+**Status: partially delivered.** Approval and the audit section are in the
+Manager; the authority diff for an upgrade is still pending. The API and CLI
+already carry the grant and risk data the screen will use.
 
 ---
 

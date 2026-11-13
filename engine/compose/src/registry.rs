@@ -5,6 +5,7 @@
 //! whole or not at all. The registry never grants authority: an installed app
 //! still needs a grant to run.
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -313,6 +314,57 @@ impl Registry {
         Ok((apps, installed, problems))
     }
 
+    /// The app's WIT files by file name, for `anth app fetch-wit`.
+    pub fn wit_files(&self, app: &AppId) -> Result<BTreeMap<String, String>, Error> {
+        let mut files = BTreeMap::new();
+        for (name, bytes) in self.wit_set(app)? {
+            let text = String::from_utf8(bytes)
+                .map_err(|error| Error::invalid(format!("{name} is not UTF-8: {error}")))?;
+            files.insert(name.strip_prefix("wit/").unwrap_or(&name).to_string(), text);
+        }
+        Ok(files)
+    }
+
+    /// The WIT files in the shape the hash and the signature use.
+    fn wit_set(&self, app: &AppId) -> Result<Vec<(String, Vec<u8>)>, Error> {
+        let dir = self.apps.join(app.as_str()).join("wit");
+        let entries = fs::read_dir(&dir).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Error::invalid(format!("{} has no WIT files", dir.display()))
+            } else {
+                Error::internal(format!("reading {}: {error}", dir.display()))
+            }
+        })?;
+        let mut wit = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| Error::internal(format!("reading {}: {error}", dir.display())))?;
+            if !entry
+                .file_type()
+                .map_err(|error| Error::internal(error.to_string()))?
+                .is_file()
+            {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".wit") {
+                continue;
+            }
+            let path = entry.path();
+            let bytes = fs::read(&path)
+                .map_err(|error| Error::internal(format!("reading {}: {error}", path.display())))?;
+            wit.push((format!("wit/{name}"), bytes));
+        }
+        if wit.is_empty() {
+            return Err(Error::invalid(format!(
+                "{} has no WIT files",
+                dir.display()
+            )));
+        }
+        wit.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(wit)
+    }
+
     /// A fingerprint of the WIT set, the manifest and the signature, ready for a
     /// grant (D-Wit-Hash).
     pub fn approval_material(&self, app: &AppId) -> Result<Option<ApprovalMaterial>, Error> {
@@ -337,35 +389,7 @@ impl Registry {
         let manifest = fs::read(&manifest_path).map_err(|error| {
             Error::internal(format!("reading {}: {error}", manifest_path.display()))
         })?;
-        let wit_dir = dir.join("wit");
-        let entries = fs::read_dir(&wit_dir).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Error::invalid(format!("{} has no WIT files", dir.display()))
-            } else {
-                Error::internal(format!("reading {}: {error}", wit_dir.display()))
-            }
-        })?;
-        let mut wit = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                Error::internal(format!("reading {}: {error}", wit_dir.display()))
-            })?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".wit") {
-                continue;
-            }
-            let path = entry.path();
-            let bytes = fs::read(&path)
-                .map_err(|error| Error::internal(format!("reading {}: {error}", path.display())))?;
-            wit.push((format!("wit/{name}"), bytes));
-        }
-        if wit.is_empty() {
-            return Err(Error::invalid(format!(
-                "{} has no WIT files",
-                dir.display()
-            )));
-        }
-        wit.sort_by(|a, b| a.0.cmp(&b.0));
+        let wit = self.wit_set(app)?;
         let wit_sha256 =
             crate::signature::sha256_hex(&anth_contract::signature::wit_message(&wit)?);
         let signature = match fs::read(dir.join("manifest.sig")) {
