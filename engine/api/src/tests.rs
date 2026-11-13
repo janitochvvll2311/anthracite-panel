@@ -1954,6 +1954,35 @@ async fn the_audit_endpoint_pages_newest_first() {
 }
 
 #[tokio::test]
+async fn the_audit_endpoint_surfaces_unreadable_lines_without_the_state_path() {
+    let (state, dir) = apps_state();
+    let log = AuditLog::new(&dir);
+    log.append(&AuditEntry {
+        at: "2026-11-13T00:00:00Z".to_string(),
+        actor: "operator".to_string(),
+        action: AuditAction::AppInstall,
+        app: None,
+        result: Outcome::Ok,
+        detail: None,
+    })
+    .expect("append");
+    let mut text = std::fs::read_to_string(log.path()).expect("read");
+    text.push_str("{not json}\n");
+    std::fs::write(log.path(), text).expect("write");
+
+    let (status, value) = json(state, "/api/engine/audit").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["entries"].as_array().expect("entries").len(), 1);
+    let problems = value["problems"].as_array().expect("problems");
+    assert_eq!(problems.len(), 1);
+    let problem = problems[0].as_str().expect("problem");
+    assert!(problem.contains("audit.jsonl"), "{problem}");
+    let state_path = dir.display().to_string();
+    assert!(!problem.contains(&state_path), "{problem}");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
 async fn an_install_is_audited() {
     let (state, dir) = apps_state();
     let bundle = bundle("org.example.other", "example:other", "0.1.0", b"component");

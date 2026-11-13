@@ -112,14 +112,11 @@ impl AuditLog {
             match std::str::from_utf8(bytes) {
                 Ok(text) => match AuditEntry::parse_line(text) {
                     Ok(entry) => entries.push(entry),
-                    Err(error) => {
-                        problems.push(format!("{}:{number}: {error}", self.path.display()))
-                    }
+                    Err(error) => problems.push(format!("{AUDIT_FILE}:{number}: {error}")),
                 },
-                Err(error) => problems.push(format!(
-                    "{}:{number}: not valid UTF-8: {error}",
-                    self.path.display()
-                )),
+                Err(error) => {
+                    problems.push(format!("{AUDIT_FILE}:{number}: not valid UTF-8: {error}"))
+                }
             }
         }
         Ok((entries, problems))
