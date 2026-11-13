@@ -3,6 +3,7 @@
 //! The fixtures live at the repository root under `tests/fixtures`; the apps are
 //! real state-tree layouts and grants are derived exactly as an approval would.
 
+use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::sync::Arc;
 use anth_api::{router, EngineState, PeerUid};
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::Registry;
-use anth_contract::manifest::ServiceClass;
+use anth_contract::manifest::{Manifest, ServiceClass};
 use anth_contract::{AppId, Composition, Grant, InterfaceId, Risk, GRANT_VERSION};
 use axum::body::{to_bytes, Body};
 use axum::extract::ConnectInfo;
@@ -247,6 +248,47 @@ fn system_state(include_net: bool) -> (Arc<EngineState>, PathBuf) {
             .with_apps(&dir, 1 << 20, false, true),
     );
     (state, dir)
+}
+
+/// The CLI is generated from the surface, but it invokes an app's route. A
+/// verb without a route is a parity bug in the app, not a runtime fallback.
+#[test]
+fn every_app_cli_verb_has_a_route() {
+    let root = repo_root().join("apps");
+    let mut apps = fs::read_dir(&root)
+        .expect("apps")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    apps.sort();
+
+    for app_dir in apps {
+        let name = app_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("app name");
+        let text = if app_dir.join("manifest.toml.in").is_file() {
+            system_manifest(name, "host")
+        } else {
+            fs::read_to_string(app_dir.join("manifest.toml"))
+                .unwrap_or_else(|error| panic!("reading {name}: {error}"))
+        };
+        let manifest =
+            Manifest::parse(&text).unwrap_or_else(|error| panic!("parsing {name}: {error}"));
+        let routes = manifest
+            .route
+            .iter()
+            .map(|route| route.call.as_str())
+            .collect::<HashSet<_>>();
+        for cli in &manifest.cli {
+            assert!(
+                routes.contains(cli.call.as_str()),
+                "{name}: CLI verb `{}` calls `{}` without a matching route",
+                cli.verb,
+                cli.call
+            );
+        }
+    }
 }
 
 async fn composition(state: Arc<EngineState>) -> Value {
