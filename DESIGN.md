@@ -55,7 +55,7 @@ and a change to one of them is a design change, not an implementation detail.
 | 8 | [Composition](docs/design/08-composition.md) | The file, resolution, rules, linking, failures, recompose |
 | 9 | [Authority](docs/design/09-authority.md) | Tiers and signing, native set, grants, prohibitions, updates |
 | 10 | [Workspace](docs/design/10-workspace.md) | The four Rust and three Bun workspaces, forbidden edges, one target dir |
-| 11 | [Roadmap](docs/design/11-roadmap.md) | M0–M5, the definition of done, and what gates what |
+| 11 | [Roadmap](docs/design/11-roadmap.md) | M0–M6, the definition of done, and what gates what |
 | 12 | [Testing](docs/design/12-testing.md) | Contract tests, golden compositions, the conformance kit |
 | 13 | [Migration](docs/design/13-migration.md) | What survives from v0.4.0 and the safety invariants it must keep |
 | 14 | [Risks](docs/design/14-risks.md) | What could go wrong and the answer to each |
@@ -65,7 +65,13 @@ and a change to one of them is a design change, not an implementation detail.
 | 18 | [v0.6.0 plan](docs/design/18-v0.6-plan.md) | M4–M5 phases, entry conditions and the open decisions |
 | 19 | [v0.6.0 baseline and service contract](docs/design/19-v0.6-baseline.md) | v0.4 reference inventory, service v3, host emulator, fs root and terminal protocol |
 | 20 | [Streams](docs/design/20-streams.md) | WIT streams, chunked/SSE mapping, service and panel transports, Terminal retrofit |
-| 21 | [Next version: business apps](docs/design/21-next-version-apps.md) | v0.7.0/M6: certificates, ACME, reverse proxy, containers and app store; prerequisites and open decisions |
+| 21 | [Next version: overview](docs/design/21-next-version-apps.md) | v0.7.0/M6 scope, start conditions, composition, removal and decisions |
+| 22 | [Platform prerequisites](docs/design/22-platform-prerequisites.md) | Broker, listener/egress, secrets, streams, system tier, surface exports, audit and time |
+| 23 | [Certificate manager](docs/design/23-certificate-manager.md) | Inventory, import, custody and publication of TLS material |
+| 24 | [ACME client](docs/design/24-acme-client.md) | Accounts, orders, HTTP-01, DNS-01 and renewal |
+| 25 | [Reverse proxy](docs/design/25-reverse-proxy.md) | Hosts, routes, TLS, WebSockets and atomic apply |
+| 26 | [Container manager](docs/design/26-container-manager.md) | Docker/Podman inventory, lifecycle, logs, stats and exec |
+| 27 | [App store](docs/design/27-app-store.md) | Signed catalogues, sources and the manager-mediated install handoff |
 | A | [Vertical slice](docs/design/appendix-a-vertical-slice.md) | `hello` end to end: install, approve, compose, call |
 
 ---
@@ -78,7 +84,7 @@ and a change to one of them is a design change, not an implementation detail.
 | Writing an app | 7 → A |
 | Writing a panel | 5 → 6 → 7 (7.7, 7.14) → 10 |
 | Operating a deployment | 6 (6.4, 6.5) → 8 → 9 → 15 |
-| Planning v0.7.0 | 18 → 21 → 15 |
+| Planning v0.7.0 | 18 → 21 → 22 → 15 |
 | Reviewing a change | 16, then the document for the area |
 
 ---

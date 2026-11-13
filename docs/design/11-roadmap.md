@@ -139,21 +139,23 @@ that proof to run an edge: TLS material and certificates, one ingress in front o
 the workloads, containers behind it, and a store that installs apps without
 giving an app the operator's authority.
 
-- `certs` owns certificate and key custody; private keys are never returned
-  through WIT, HTTP or the panel, and the manual import is an explicit write.
-- `acme` issues and renews against any RFC 8555 CA, with HTTP-01 through the
-  ingress and DNS-01 through a solver.
-- `proxy` is the data-plane ingress: virtual hosts, path routes, TLS, WebSockets
-  and atomic apply. It is a service, not an engine feature.
-- `containers` manages a Docker-compatible runtime, with logs, stats and exec
-  behind the same approval.
-- `store` is a provider-agnostic catalogue with signed indexes and digest-pinned
-  bundles. It cannot install or approve; the panel manager does that with the
-  operator's session.
+- [`certs`](23-certificate-manager.md) owns certificate and key custody; private
+  keys are never returned through WIT, HTTP or the panel, and the manual import
+  is an explicit write.
+- [`acme`](24-acme-client.md) issues and renews against any RFC 8555 CA, with
+  HTTP-01 through the ingress and DNS-01 through a solver.
+- [`proxy`](25-reverse-proxy.md) is the data-plane ingress: virtual hosts, path
+  routes, TLS, WebSockets and atomic apply. It is a service, not an engine
+  feature.
+- [`containers`](26-container-manager.md) manages a Docker-compatible runtime,
+  with logs, stats and exec behind the same approval.
+- [`store`](27-app-store.md) is a provider-agnostic catalogue with signed indexes
+  and digest-pinned bundles. It cannot install or approve; the panel manager does
+  that with the operator's session.
 
 The milestone adds generic platform work first: a service-to-service broker, a
 manifest that declares listeners and egress, secret custody, surface exports and
-a service audit bridge ([§21 §3](21-next-version-apps.md#3-platform-prerequisites)).
+a service audit bridge ([§22](22-platform-prerequisites.md)).
 
 **Done when:** a new host can issue or import a certificate, serve two hosts
 through the proxy, operate a container without SSH, and install a signed bundle

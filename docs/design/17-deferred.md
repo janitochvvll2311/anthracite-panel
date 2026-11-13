@@ -136,8 +136,8 @@ The next milestone adds five apps that turn the panelled host into an operated
 edge: a certificate manager, an ACME client, a reverse proxy, a container
 manager and a provider-agnostic app store. They are not deferred from v0.6.0;
 they are scheduled after it, because each depends on the service broker,
-listener/egress approval, secret custody and the service sandbox that v0.6.0
-completes.
+listener/egress approval and secret custody that v0.7.0 phase 0 adds, plus the
+service sandbox that v0.6.0 completes.
 
 **Why scheduled, not deferred.** They are the first apps whose value is measured
 outside the host: TLS on the wire, workloads behind an ingress, and installs from
@@ -145,9 +145,8 @@ a signed catalogue. Building them before the v0.6.0 platform work would put
 private keys in a wasm module or give an app the operator's session.
 
 **Ready when** v0.6.0 is tagged and the prerequisites in
-[§21 §3](21-next-version-apps.md#3-platform-prerequisites) pass. The scope,
-phases, removal matrix and open decisions are
-[§21](21-next-version-apps.md).
+[§22](22-platform-prerequisites.md) pass. The scope, phases, removal matrix
+and open decisions are [§21](21-next-version-apps.md).
 
 ---
 
