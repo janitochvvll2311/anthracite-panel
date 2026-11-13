@@ -262,6 +262,8 @@ fn every_app_cli_verb_has_a_route() {
         .collect::<Vec<_>>();
     apps.sort();
 
+    let mut apps_checked = 0;
+    let mut verbs_checked = 0;
     for app_dir in apps {
         let name = app_dir
             .file_name()
@@ -288,7 +290,20 @@ fn every_app_cli_verb_has_a_route() {
                 cli.call
             );
         }
+        apps_checked += 1;
+        verbs_checked += manifest.cli.len();
     }
+
+    // A silently empty apps directory must not turn this test into a no-op.
+    // The counts are a floor: adding apps or verbs keeps passing.
+    assert!(
+        apps_checked >= 9,
+        "checked only {apps_checked} app manifests"
+    );
+    assert!(
+        verbs_checked >= 38,
+        "checked only {verbs_checked} CLI verbs across the app catalogue"
+    );
 }
 
 async fn composition(state: Arc<EngineState>) -> Value {
