@@ -51,15 +51,42 @@ Each layer is independently testable and can land in its own PR.
 
 ### L0 — process hygiene (implemented)
 
-- `PR_SET_NO_NEW_PRIVS`: no setuid/setgid/file capabilities through `exec`.
-- `PR_SET_PDEATHSIG(SIGKILL)`: the child dies with the engine.
-- `PR_SET_DUMPABLE(0)`: no core dump and no ptrace by an unrelated process.
-- `umask(077)`: new files are private by default.
-- `RLIMIT_CORE = 0`, a bounded `RLIMIT_NOFILE` and a per-class `RLIMIT_NPROC`.
-- `setsid` as before; the supervisor keeps the process group.
+| Knob | Value | Why |
+| --- | --- | --- |
+| `PR_SET_NO_NEW_PRIVS` | `1` | no setuid/setgid/file capabilities through `exec` |
+| `PR_SET_PDEATHSIG` | `SIGKILL` | the child dies with the engine |
+| `PR_SET_DUMPABLE` | `0` | no core dump, no ptrace by an unrelated process |
+| `umask` | `077` | new files are private by default |
+| `RLIMIT_CORE` | `0` | no core dump even if `dumpable` is reset |
+| `RLIMIT_NOFILE` | `4096` | a fd leak degrades one app, not the host |
+| `RLIMIT_NPROC` | `4096` (`exec`, `host`), `1024` (rest) | bounded fork bomb |
+| `setsid` | as before | the supervisor keeps the process group |
+
+The `prctl` calls are Linux-only. On another Unix the child keeps the process
+group, the umask and the limits, and the missing layer is a documented gap.
+
+Two properties of these values are easy to misread:
+
+- **`RLIMIT_NPROC` counts threads, not just processes, and the kernel enforces it
+  per real user id.** Every service still runs as the engine user, so the limit
+  is shared with the engine and with the other services. A value below the
+  engine's own thread count makes every `fork` in a service fail, and the
+  service looks broken instead of denied.
+- **`PR_SET_DUMPABLE(0)` makes `/proc/<pid>` root-owned.** A service that reads
+  another process's proc files, or a debugger attached by the same user, loses
+  that access.
+- **`umask(077)`** is defence in depth, not isolation: services share the engine
+  uid, so a `0600` file in `{shared}` is still readable by another service. It
+  matters once each service gets its own uid.
 
 L0 is not a complete sandbox. It removes the cheap escapes and gives the later
-layers a stable baseline.
+layers a stable baseline; it does **not** isolate services from each other,
+because they share the engine user. That needs a per-app uid (L1) and a cgroup
+per service (L4).
+
+A launch the kernel or the supervisor refuses is audited as `service.deny` with
+the class and the reason, never as `service.crash`, and it is not retried: the
+supervisor cannot fix a refusal by trying again.
 
 ### L1 — filesystem (proposed)
 
@@ -174,8 +201,9 @@ when a real host forbids executable memory or a deployment asks for it.
 
 ## 8. Phases
 
-1. **L0 process hygiene** (this PR): no_new_privs, pdeathsig, dumpable, umask,
-   per-class rlimits, audit class, fixture assertion.
+1. **L0 process hygiene** (landed in v0.6.0): no_new_privs, pdeathsig,
+   dumpable, umask, per-class rlimits, class in `service.start`, a `service.deny`
+   on refusal, and a fixture assertion.
 2. **L1 roots**: manifest v4 roots, Landlock, approval display, negative tests.
 3. **L3 capabilities/seccomp**: class policy, declared ports, seccomp allowlist.
 4. **L2 namespaces**: per-class mount/PID/net/IPC policy.
@@ -184,6 +212,11 @@ when a real host forbids executable memory or a deployment asks for it.
 
 ## 9. Open questions
 
+- **Per-service uid.** Today every service runs as the engine user, so L0 cannot
+  isolate services from each other or from the engine's own files. Giving each
+  app a uid/gid needs `CAP_SETUID` or a root engine, and it changes `{data}`,
+  `{shared}` and socket ownership. This is the single largest gap left by L0
+  and it belongs to L1.
 - Whether a v3 service should remain launchable in a release with L0 only, or
   require a migration to v4 before a release. The proposal is to keep v3
   launchable in debug and mark it `sandbox = "process"`; a release can refuse
@@ -194,3 +227,5 @@ when a real host forbids executable memory or a deployment asks for it.
   proposal is no, because proxies need the host network.
 - Whether cgroup v2 is available on every supported host; the fallback is
   rlimits and a documented limitation.
+- Whether the lines between L0, L1 and L4 should be re-cut so the per-service
+  uid lands with L0, since it is what makes the rest measurable.

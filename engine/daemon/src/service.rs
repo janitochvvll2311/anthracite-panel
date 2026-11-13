@@ -45,6 +45,13 @@ const HEADER_CAP: usize = 8 * 1024;
 const STOP_GRACE: Duration = Duration::from_secs(5);
 const MAX_RESTARTS: u32 = 3;
 
+/// L0 limits. `RLIMIT_NPROC` counts threads, not just processes, and the kernel
+/// enforces it per real user id: every service shares the engine user until a
+/// later layer gives each its own uid (design §28 §9).
+const NOFILE_LIMIT: libc::rlim_t = 4096;
+const NPROC_LIMIT_EXEC: libc::rlim_t = 4096;
+const NPROC_LIMIT_SERVICE: libc::rlim_t = 1024;
+
 /// Everything boot needs to start one service. The manifest has already been
 /// validated and the binary hashed.
 #[derive(Debug, Clone)]
@@ -419,6 +426,18 @@ async fn drive(service: Arc<Service>, ready: oneshot::Sender<Result<(), Error>>)
             Ok(child) => child,
             Err(error) => {
                 service.running.store(false, Ordering::Release);
+                // A launch the supervisor refuses is a denial, not a crash: it is
+                // recorded once with its class and never retried behind the
+                // operator's back, because nothing changed since the refusal.
+                service.record(
+                    AuditAction::ServiceDeny,
+                    Outcome::Denied,
+                    Some(serde_json::json!({
+                        "reason": error.message(),
+                        "class": service.class.as_str(),
+                    })),
+                );
+                let _ = std::fs::remove_file(&service.socket);
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(Err(error));
                 }
@@ -530,24 +549,33 @@ fn spawn(service: &Service) -> Result<Child, Error> {
             if libc::setsid() == -1 {
                 return Err(std::io::Error::last_os_error());
             }
-            // No setuid/setgid/file capabilities through a later exec.
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            // Die with the engine; do not leave a service behind.
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            // No core dump, and no ptrace of this service by an unrelated process.
-            if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) == -1 {
-                return Err(std::io::Error::last_os_error());
+            // The prctl knobs are Linux-only; elsewhere the child keeps the
+            // process-group and limits below and the gap is documented.
+            #[cfg(target_os = "linux")]
+            {
+                // No setuid/setgid/file capabilities through a later exec.
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // Die with the engine; do not leave a service behind.
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // No core dump, and no ptrace of this service by an unrelated
+                // process. It also makes `/proc/<pid>` root-owned, so a service
+                // must not rely on reading another process's proc files.
+                if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
             libc::umask(0o077);
             set_limit(libc::RLIMIT_CORE, 0)?;
-            set_limit(libc::RLIMIT_NOFILE, 4096)?;
+            set_limit(libc::RLIMIT_NOFILE, NOFILE_LIMIT)?;
             let nproc = match class {
-                ServiceClass::Exec | ServiceClass::Host => 4096,
-                ServiceClass::Socket | ServiceClass::Device | ServiceClass::Admin => 1024,
+                ServiceClass::Exec | ServiceClass::Host => NPROC_LIMIT_EXEC,
+                ServiceClass::Socket | ServiceClass::Device | ServiceClass::Admin => {
+                    NPROC_LIMIT_SERVICE
+                }
             };
             set_limit(libc::RLIMIT_NPROC, nproc)?;
             Ok(())

@@ -107,6 +107,37 @@ async fn a_service_starts_answers_and_stops() {
 }
 
 #[tokio::test]
+async fn a_refused_launch_is_a_denial_not_a_crash() {
+    let state = scratch("deny");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    // A missing binary is the cheapest sandbox refusal: the supervisor cannot
+    // exec what the grant approved.
+    spec.binary = state.join("missing-service");
+    let error = services.start(spec).await.expect_err("refused");
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
+
+    let entries = AuditLog::new(&state).entries().expect("audit");
+    let deny = entries
+        .iter()
+        .find(|entry| entry.action == AuditAction::ServiceDeny)
+        .expect("the refusal is audited");
+    assert_eq!(
+        deny.detail
+            .as_ref()
+            .and_then(|detail| detail["class"].as_str()),
+        Some("socket")
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.action == AuditAction::ServiceCrash),
+        "{entries:?}"
+    );
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
 async fn a_service_error_keeps_its_contract_envelope() {
     let state = scratch("error");
     let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
