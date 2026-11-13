@@ -34,16 +34,19 @@ type Composition = {
   profile: { id: string; apps: string[] }[];
 };
 
-type SurfaceApp = {
-  id: string;
-  version: string;
-  risk: string;
-};
-
 type CompositionView = {
   composition: Composition;
-  surface: { apps: SurfaceApp[]; degraded: unknown[] };
 };
+
+type ApprovalPreview = {
+  risk: string;
+  required: Risk[];
+};
+
+type ApprovalState =
+  | { status: "loading" }
+  | { status: "ready"; risk: string; required: Risk[]; grant?: AppView["grant"] }
+  | { status: "error"; message: string };
 
 type AuditRow = {
   at: string;
@@ -133,10 +136,9 @@ export function mountManager(
     version: 1,
     profile: [{ id: "default", apps: [] }],
   };
-  let surfaceApps: SurfaceApp[] = [];
-  const loadedGrants = new Set<string>();
   let etag = "";
   let pendingApprove: string | null = null;
+  let approval: ApprovalState | null = null;
   let audit: AuditRow[] = [];
   let auditNext: number | null = null;
   let auditProblems: string[] = [];
@@ -226,10 +228,8 @@ export function mountManager(
       if (disposed) return;
       apps = (list.body as AppList).apps ?? [];
       problems = (list.body as AppList).problems ?? [];
-      loadedGrants.clear();
       const view = current.body as CompositionView;
       composition = view.composition;
-      surfaceApps = view.surface?.apps ?? [];
       etag = current.response.headers.get("etag") ?? "";
       if (!silent) setStatus(`${apps.length} installed app(s)`);
       renderApps();
@@ -302,14 +302,14 @@ export function mountManager(
         approveButton.addEventListener("click", () => {
           if (pendingApprove === app.id) {
             pendingApprove = null;
+            approval = null;
             renderApps();
             return;
           }
           pendingApprove = app.id;
+          approval = { status: "loading" };
           renderApps();
-          if (app.grant_state !== "none" && !app.grant) {
-            void loadGrant(app.id);
-          }
+          void loadApproval(app.id);
         });
         const removeButton = button("mgr-btn danger", "Remove", "Remove this app");
         removeButton.addEventListener("click", () => void remove(app));
@@ -341,17 +341,26 @@ export function mountManager(
     renderUpgradeOptions();
   }
 
-  async function loadGrant(id: string): Promise<void> {
+  async function loadApproval(id: string): Promise<void> {
     try {
-      const { body } = await api(options.request, `/api/engine/apps/${encodeURIComponent(id)}`);
-      if (disposed) return;
-      const detail = body as AppView;
-      const app = apps.find((candidate) => candidate.id === id);
-      if (app) app.grant = detail.grant;
-      loadedGrants.add(id);
-      if (pendingApprove === id) renderApps();
+      const [detail, preview] = await Promise.all([
+        api(options.request, `/api/engine/apps/${encodeURIComponent(id)}`),
+        api(options.request, `/api/engine/apps/${encodeURIComponent(id)}/approval`),
+      ]);
+      if (disposed || pendingApprove !== id) return;
+      const risk = preview.body as ApprovalPreview;
+      approval = {
+        status: "ready",
+        risk: risk.risk,
+        required: risk.required ?? [],
+        grant: (detail.body as AppView).grant,
+      };
+      renderApps();
     } catch (error) {
-      if (!disposed) setStatus(reason(error), true);
+      if (!disposed && pendingApprove === id) {
+        approval = { status: "error", message: reason(error) };
+        renderApps();
+      }
     }
   }
 
@@ -366,14 +375,39 @@ export function mountManager(
       return;
     }
     approveRoot.append(element("strong", "mgr-mono mgr-approve-title", `Approve ${app.id}`));
-    if (app.grant_state !== "none" && !app.grant && !loadedGrants.has(app.id)) {
-      approveRoot.append(element("span", "mgr-hint", "Reading the frozen grant…"));
+    const close = (): void => {
+      pendingApprove = null;
+      approval = null;
+      renderApps();
+    };
+    const cancel = button("mgr-btn", "Cancel");
+    cancel.addEventListener("click", close);
+    const showActions = (...buttons: HTMLButtonElement[]): void => {
+      const actions = element("div", "mgr-approve-actions");
+      actions.append(...buttons, cancel);
+      approveRoot.append(actions);
+      approveRoot.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+    if (!approval || approval.status === "loading") {
+      approveRoot.append(element("span", "mgr-hint", "Reading the approval…"));
+      showActions();
       return;
     }
-    const effective = surfaceApps.find(
-      (candidate) => candidate.id === app.id,
-    )?.risk;
-    const diff = authorityDiff(app.grant, effective);
+    if (approval.status === "error") {
+      approveRoot.append(
+        element("span", "mgr-hint", `Could not read the approval: ${approval.message}`),
+      );
+      const retry = button("mgr-btn primary", "Retry");
+      retry.addEventListener("click", () => {
+        approval = { status: "loading" };
+        renderApps();
+        void loadApproval(app.id);
+      });
+      showActions(retry);
+      return;
+    }
+    const grant = approval.grant;
+    const diff = authorityDiff(grant, approval.risk, approval.required);
     const summary = element("div", "mgr-diff");
     const diffRow = (label: string, value: string, kind = "") => {
       const row = element("div", "mgr-diff-row");
@@ -389,13 +423,13 @@ export function mountManager(
         diff.newLevels.length > 0 ? "warn" : "ok",
       ),
     );
-    if (app.grant?.approved_by) {
+    if (grant?.approved_by) {
       summary.append(
         element(
           "p",
           "mgr-hint",
-          `Approved by ${app.grant.approved_by}${
-            app.grant.approved_at ? ` at ${app.grant.approved_at}` : ""
+          `Approved by ${grant.approved_by}${
+            grant.approved_at ? ` at ${grant.approved_at}` : ""
           }`,
         ),
       );
@@ -408,7 +442,7 @@ export function mountManager(
       const input = document.createElement("input");
       input.type = "checkbox";
       input.value = risk;
-      if (app.grant?.accepted.includes(risk)) input.checked = true;
+      if (grant?.accepted.includes(risk)) input.checked = true;
       if (diff.required.includes(risk)) input.title = "required by the effective risk";
       chosen.push(input);
       label.append(input, document.createTextNode(` ${risk}`));
@@ -427,20 +461,10 @@ export function mountManager(
       }
       void approve(app, selected);
     });
-    const cancel = button("mgr-btn", "Cancel");
-    cancel.addEventListener("click", () => {
-      pendingApprove = null;
-      renderApps();
-    });
-    const actions = element("div", "mgr-approve-actions");
-    actions.append(confirm, cancel);
-    approveRoot.append(actions);
+    showActions(confirm);
     approveRoot.append(
       element("span", "mgr-hint", "read is implicit; check every level the risk needs"),
     );
-    // The panel sits below the app list; on a phone it would otherwise open
-    // off-screen after the clicked card.
-    approveRoot.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   function renderUpgradeOptions(): void {
@@ -570,6 +594,7 @@ export function mountManager(
         body: JSON.stringify({ accept }),
       });
       pendingApprove = null;
+      approval = null;
       setStatus(`${app.id} approved`);
       await options.onChanged();
       await refresh(true);

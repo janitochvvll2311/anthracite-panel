@@ -22,12 +22,12 @@ use anth_compose::bundle::Options as BundleOptions;
 use anth_compose::composition::CompositionStore;
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::{Installed, Registry};
-use anth_compose::risk::{approve, Approval};
+use anth_compose::risk::{app_risk, approve, Approval};
 use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
 use anth_contract::manifest::{parse_call, RouteTransport, SlotSection};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
-    Error, ErrorKind, FatalView, GrantState, GrantView, InterfaceId, KeyAlgorithm, KeyView,
+    Error, ErrorKind, FatalView, Grant, GrantState, GrantView, InterfaceId, KeyAlgorithm, KeyView,
     Outcome, Risk, SurfaceApp, SurfaceCli, SurfaceFabAction, SurfaceLink, SurfaceRoute,
     SurfaceSlot, SurfaceView, TrustedKey, KEY_VERSION,
 };
@@ -515,6 +515,7 @@ fn api_routes(state: Arc<EngineState>) -> Router {
         .route("/engine/audit", get(read_audit))
         .route("/engine/apps", get(list_apps).post(install_app))
         .route("/engine/apps/{id}/wit", get(app_wit))
+        .route("/engine/apps/{id}/approval", get(preview_approval))
         .route(
             "/engine/apps/{id}",
             get(get_app)
@@ -1238,6 +1239,24 @@ struct KeyBody {
     public_key: String,
     #[serde(default)]
     label: Option<String>,
+}
+
+/// The risk `approve` would freeze for this app over the installed graph.
+async fn preview_approval(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    let _installed = installed_app(apps, &id)?;
+    let installed_apps = installed_apps(apps)?;
+    let risk = app_risk(&id, &installed_apps).map_err(|error| ApiError(error.into_error()))?;
+    let required = Grant::required_levels(risk).collect::<Vec<_>>();
+    Ok(Json(json!({
+        "app": id,
+        "risk": risk,
+        "required": required,
+    })))
 }
 
 /// The installed app's WIT package, for `anth app fetch-wit`.

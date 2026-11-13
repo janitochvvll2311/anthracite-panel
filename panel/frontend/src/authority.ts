@@ -19,7 +19,9 @@ export type Authority = {
 function indexOf(risk: string): number {
   if (risk === "read") return 0;
   const index = RISKS.indexOf(risk as Risk);
-  return index < 0 ? 0 : index + 1;
+  // An unknown level is treated as the top of the ladder: the UI must not
+  // under-approve because the engine sent a name it does not know.
+  return index < 0 ? RISKS.length : index + 1;
 }
 
 /// The approval flags a risk requires: write, then admin, then host, then
@@ -31,18 +33,21 @@ export function requiredLevels(effective: string): Risk[] {
 
 /// Compare the grant against the current composition. An app that is not
 /// running has no effective risk; the current grant is the only fact left.
+/// `required` comes from the engine's approval preview when available.
 export function authorityDiff(
   grant: { risk: string; accepted: string[] } | undefined,
   effective: string | undefined,
+  required?: Risk[],
 ): Authority {
   const current = grant ? (grant.risk as Authority["current"]) : "none";
   const target = (effective ?? grant?.risk ?? "none") as Authority["effective"];
-  const required = target === "none" ? [] : requiredLevels(target);
+  const levels =
+    required ?? (target === "none" ? [] : requiredLevels(target));
   const accepted = grant?.accepted ?? [];
   return {
     current,
     effective: target,
-    required,
-    newLevels: required.filter((level) => !accepted.includes(level)),
+    required: levels,
+    newLevels: levels.filter((level) => !accepted.includes(level)),
   };
 }

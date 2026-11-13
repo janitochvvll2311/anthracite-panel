@@ -325,6 +325,20 @@ async fn json(state: Arc<EngineState>, uri: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
+async fn the_approval_preview_reports_the_computed_risk() {
+    let (state, dir) = apps_state();
+    let (status, value) = json(state.clone(), "/api/engine/apps/org.example.notes/approval").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["risk"], "read");
+    assert_eq!(value["required"], serde_json::json!([]));
+
+    let (status, value) = json(state, "/api/engine/apps/org.example.missing/approval").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(value["error"]["code"], "not-found");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
 async fn an_app_wit_package_is_served() {
     let (state, dir) = apps_state();
     let (status, value) = json(state.clone(), "/api/engine/apps/org.example.notes/wit").await;

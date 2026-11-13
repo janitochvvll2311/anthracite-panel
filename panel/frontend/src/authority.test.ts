@@ -64,6 +64,26 @@ describe("authorityDiff", () => {
     });
   });
 
+  test("an unknown level requires the whole ladder", () => {
+    expect(requiredLevels("future-risk")).toEqual([
+      "write",
+      "admin",
+      "host",
+      "package",
+    ]);
+  });
+
+  test("a preview's required levels win over the local ladder", () => {
+    expect(
+      authorityDiff({ risk: "read", accepted: [] }, "write", ["write", "admin"]),
+    ).toEqual({
+      current: "read",
+      effective: "write",
+      required: ["write", "admin"],
+      newLevels: ["write", "admin"],
+    });
+  });
+
   test("no grant and no effective app has no required levels", () => {
     expect(authorityDiff(undefined, undefined)).toEqual({
       current: "none",
