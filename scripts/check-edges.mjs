@@ -25,6 +25,7 @@ const WORKSPACES = [
   "sdk/rust/Cargo.toml",
   "panel/backend/Cargo.toml",
   "apps/Cargo.toml",
+  "demo/emulator/Cargo.toml",
 ];
 
 const violations = [];
