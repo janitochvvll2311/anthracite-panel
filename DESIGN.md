@@ -72,6 +72,7 @@ and a change to one of them is a design change, not an implementation detail.
 | 25 | [Reverse proxy](docs/design/25-reverse-proxy.md) | Hosts, routes, TLS, WebSockets and atomic apply |
 | 26 | [Container manager](docs/design/26-container-manager.md) | Docker/Podman inventory, lifecycle, logs, stats and exec |
 | 27 | [App store](docs/design/27-app-store.md) | Signed catalogues, sources and the manager-mediated install handoff |
+| 28 | [Service sandbox and Pulley](docs/design/28-service-sandbox.md) | Threat model, layers, per-class policy, failure semantics and the Pulley decision |
 | A | [Vertical slice](docs/design/appendix-a-vertical-slice.md) | `hello` end to end: install, approve, compose, call |
 
 ---

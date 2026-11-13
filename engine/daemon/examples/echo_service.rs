@@ -155,6 +155,24 @@ fn call(body: &[u8]) -> (u16, Vec<u8>) {
             .expect("json"),
         ),
         "fail" => (400, envelope("invalid", "the fixture refused")),
+        "status" => {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let mut fields = serde_json::Map::new();
+            for line in status.lines() {
+                if line.starts_with("NoNewPrivs:") || line.starts_with("Seccomp:") {
+                    if let Some((key, value)) = line.split_once(':') {
+                        fields.insert(
+                            key.to_string(),
+                            serde_json::Value::String(value.trim().to_string()),
+                        );
+                    }
+                }
+            }
+            (
+                200,
+                serde_json::to_vec(&serde_json::json!({"ok": fields})).expect("json"),
+            )
+        }
         "slow" => {
             std::thread::sleep(Duration::from_secs(30));
             (200, b"{\"ok\":true}".to_vec())

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anth_compose::audit::AuditLog;
-use anth_contract::{AppId, AuditAction, ExportTarget};
+use anth_contract::{AppId, AuditAction, ExportTarget, ServiceClass};
 use anth_engine::service::{ServiceLaunch, ServiceSupervisor};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -60,6 +60,7 @@ fn launch(state: &Path, extra: &[&str], start_timeout: Duration) -> ServiceLaunc
     ServiceLaunch {
         app: APP.to_string(),
         binary: fixture(),
+        class: ServiceClass::Socket,
         argv,
         socket,
         data_dir: state.join("data").join(APP),
@@ -89,6 +90,12 @@ async fn a_service_starts_answers_and_stops() {
         .expect("call");
     assert_eq!(output, json!({"message": "hi"}));
 
+    let status = services
+        .call(APP, INTERFACE, "status", json!({}))
+        .await
+        .expect("status");
+    assert_eq!(status["NoNewPrivs"], "1");
+
     services.stop(APP).await;
     assert!(!socket.exists(), "the socket is removed on stop");
     let error = services
@@ -96,6 +103,37 @@ async fn a_service_starts_answers_and_stops() {
         .await
         .expect_err("stopped");
     assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_refused_launch_is_a_denial_not_a_crash() {
+    let state = scratch("deny");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    // A missing binary is the cheapest sandbox refusal: the supervisor cannot
+    // exec what the grant approved.
+    spec.binary = state.join("missing-service");
+    let error = services.start(spec).await.expect_err("refused");
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
+
+    let entries = AuditLog::new(&state).entries().expect("audit");
+    let deny = entries
+        .iter()
+        .find(|entry| entry.action == AuditAction::ServiceDeny)
+        .expect("the refusal is audited");
+    assert_eq!(
+        deny.detail
+            .as_ref()
+            .and_then(|detail| detail["class"].as_str()),
+        Some("socket")
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.action == AuditAction::ServiceCrash),
+        "{entries:?}"
+    );
     let _ = std::fs::remove_dir_all(&state);
 }
 
