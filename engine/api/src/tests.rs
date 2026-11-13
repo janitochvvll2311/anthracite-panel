@@ -325,6 +325,23 @@ async fn json(state: Arc<EngineState>, uri: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
+async fn an_app_wit_package_is_served() {
+    let (state, dir) = apps_state();
+    let (status, value) = json(state.clone(), "/api/engine/apps/org.example.notes/wit").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["package"], "example:notes");
+    assert!(value["files"]["notes.wit"]
+        .as_str()
+        .expect("WIT")
+        .contains("package example:notes"));
+
+    let (status, value) = json(state, "/api/engine/apps/org.example.missing/wit").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(value["error"]["code"], "not-found");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
 async fn the_app_catalogue_lists_installed_apps() {
     let (state, dir) = apps_state();
     let (status, value) = json(state, "/api/engine/apps").await;

@@ -8,8 +8,10 @@
 //! `doctor` is the offline half of the pair: `status` asks "is it healthy now?",
 //! `doctor` asks "would it boot?" without a daemon (§7.9).
 
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -67,6 +69,12 @@ struct AuditRow {
 
 const AUDIT_LIMIT_MAX: usize = 1000;
 
+#[derive(Deserialize)]
+struct WitView {
+    package: String,
+    files: BTreeMap<String, String>,
+}
+
 pub const USAGE: &str = "\
 usage: anth [--socket <path>] <command> [options]
 
@@ -88,6 +96,8 @@ commands:
   app install <bundle>  install a bundle (zip)
   app upgrade <id> <bundle>
                         replace an installed bundle
+  app fetch-wit <id> [--out <dir>]
+                        fetch the installed app's WIT package
   app enable|disable <id> [--acknowledge <token>]
   app remove <id> [--acknowledge <token>]
   app approve <id> [--accept-write|--accept-admin|--accept-host|--accept-package]
@@ -156,6 +166,10 @@ pub enum AppCommand {
     Upgrade {
         app: String,
         bundle: PathBuf,
+    },
+    FetchWit {
+        app: String,
+        out: Option<PathBuf>,
     },
     Enable {
         app: String,
@@ -241,7 +255,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Err
 
 /// The fixed `anth app` verbs. `parse_invoke` handles everything else.
 const APP_SUBCOMMANDS: &[&str] = &[
-    "list", "show", "install", "upgrade", "enable", "disable", "remove", "approve", "revoke",
+    "list",
+    "show",
+    "install",
+    "upgrade",
+    "fetch-wit",
+    "enable",
+    "disable",
+    "remove",
+    "approve",
+    "revoke",
 ];
 
 fn parse_app(
@@ -258,6 +281,7 @@ fn parse_app(
     }
     let mut acknowledge = None;
     let mut accept = Vec::new();
+    let mut out = None;
     let mut positional: Vec<OsString> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -271,6 +295,12 @@ fn parse_app(
             Some("--accept-admin") => accept.push("admin".to_string()),
             Some("--accept-host") => accept.push("host".to_string()),
             Some("--accept-package") => accept.push("package".to_string()),
+            Some("--out") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| usage("`--out` needs a directory".to_string()))?;
+                out = Some(PathBuf::from(value));
+            }
             Some("--help" | "-h") => return Ok(Invocation::Help),
             Some(value) if value.starts_with('-') => {
                 return Err(usage(format!("`{value}` is not an app option")));
@@ -289,6 +319,9 @@ fn parse_app(
             "--accept-* only applies to `app approve`".to_string(),
         ));
     }
+    if sub != "fetch-wit" && out.is_some() {
+        return Err(usage("`--out` only applies to `app fetch-wit`".to_string()));
+    }
     let command = match (sub.as_str(), positional.as_slice()) {
         ("list", []) => AppCommand::List,
         ("show", [app]) => AppCommand::Show(as_text(app)?.to_string()),
@@ -296,6 +329,10 @@ fn parse_app(
         ("upgrade", [app, bundle]) => AppCommand::Upgrade {
             app: as_text(app)?.to_string(),
             bundle: PathBuf::from(bundle.clone()),
+        },
+        ("fetch-wit", [app]) => AppCommand::FetchWit {
+            app: as_text(app)?.to_string(),
+            out,
         },
         ("enable", [app]) => AppCommand::Enable {
             app: as_text(app)?.to_string(),
@@ -920,8 +957,53 @@ fn app(socket: Option<PathBuf>, command: AppCommand) -> Result<u8, Error> {
             &format!("/api/engine/apps/{app}/grant"),
             acknowledge,
         ),
+        AppCommand::FetchWit { app, out } => fetch_wit(&client, app, out),
         AppCommand::Invoke { app, verb, flags } => invoke(&client, &app, &verb, &flags),
     }
+}
+
+fn fetch_wit(client: &Client, app: String, out: Option<PathBuf>) -> Result<u8, Error> {
+    anth_contract::AppId::parse(&app)?;
+    let value: WitView = client.get_typed(&format!("/api/engine/apps/{app}/wit"))?;
+    let dir =
+        out.unwrap_or_else(|| PathBuf::from("wit/deps").join(package_directory(&value.package)));
+    fs::create_dir_all(&dir)
+        .map_err(|error| Error::internal(format!("creating {}: {error}", dir.display())))?;
+    for (name, content) in &value.files {
+        if !safe_wit_name(name) {
+            return Err(Error::invalid(format!(
+                "the engine returned an unsafe WIT file name: `{name}`"
+            )));
+        }
+        let path = dir.join(name);
+        fs::write(&path, content)
+            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))?;
+    }
+    println!("{}", dir.display());
+    Ok(0)
+}
+
+/// A package name is not a path: keep it readable and inside one directory.
+fn package_directory(package: &str) -> String {
+    package
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn safe_wit_name(name: &str) -> bool {
+    name.ends_with(".wit")
+        && !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
 }
 
 /// A generated CLI verb: resolve alias → id and verb → route in the surface,
@@ -1360,6 +1442,54 @@ mod tests {
                 socket: None,
                 command: AppCommand::Show("org.example.notes".to_string()),
             }
+        );
+    }
+
+    #[test]
+    fn fetch_wit_takes_an_output_directory() {
+        assert_eq!(
+            parse(args(&[
+                "app",
+                "fetch-wit",
+                "org.example.notes",
+                "--out",
+                "/tmp/wit"
+            ]))
+            .expect("parse"),
+            Invocation::App {
+                socket: None,
+                command: AppCommand::FetchWit {
+                    app: "org.example.notes".to_string(),
+                    out: Some(PathBuf::from("/tmp/wit")),
+                },
+            }
+        );
+        assert!(parse(args(&["app", "fetch-wit", "org.example.notes", "--out"])).is_err());
+        assert!(parse(args(&["app", "list", "--out", "/tmp/wit"])).is_err());
+    }
+
+    #[test]
+    fn fetch_wit_writes_the_package_files() {
+        let dir = scratch("fetch-wit");
+        let socket = dir.join("engine.sock");
+        let body = r#"{"app":"org.example.notes","package":"example:notes","files":{"notes.wit":"package example:notes@1.0.0;\n"}}"#;
+        let receive = serve(&socket, vec![answer("200 OK", body)]);
+        let out = dir.join("wit");
+        let code = fetch_wit(
+            &Client::new(&socket),
+            "org.example.notes".to_string(),
+            Some(out.clone()),
+        )
+        .expect("fetch");
+        assert_eq!(code, 0);
+        let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            request.starts_with("GET /api/engine/apps/org.example.notes/wit HTTP/1.1"),
+            "{request}"
+        );
+        assert_eq!(
+            fs::read_to_string(out.join("notes.wit")).expect("WIT"),
+            "package example:notes@1.0.0;\n"
         );
     }
 

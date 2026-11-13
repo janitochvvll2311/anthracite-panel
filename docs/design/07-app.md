@@ -501,6 +501,11 @@ alias in the catalogue, the verb in the surface, and then calls
 `/api/apps/{id}/{route.path}`. A verb without a route is `unavailable`; there is
 no second, generic call endpoint into an app.
 
+`anth app fetch-wit <id> [--out <dir>]` is the build-time companion: it reads the
+installed provider's WIT from `GET /api/engine/apps/{id}/wit` and writes it under
+`wit/deps/<package>` by default. It fetches a build input, not authority: the
+consumer still needs a grant for the interfaces it imports.
+
 **Flags** are the inverse of [§7.13](07-app.md#713-http-and-wit-one-mapping): one flag per parameter, named after it,
 optional for `option<T>`, repeated for `list<T>`, and `--flag` / `--no-flag` for
 `bool`.

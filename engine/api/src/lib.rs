@@ -514,6 +514,7 @@ fn api_routes(state: Arc<EngineState>) -> Router {
         .route("/engine/keys/{fingerprint}", delete(remove_key))
         .route("/engine/audit", get(read_audit))
         .route("/engine/apps", get(list_apps).post(install_app))
+        .route("/engine/apps/{id}/wit", get(app_wit))
         .route(
             "/engine/apps/{id}",
             get(get_app)
@@ -1240,6 +1241,25 @@ struct KeyBody {
 }
 
 /// One app: descriptor, effective alias and its frozen grant.
+/// The installed app's WIT package, for `anth app fetch-wit`.
+async fn app_wit(
+    State(state): State<Arc<EngineState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let id = AppId::parse(&id)?;
+    let installed = apps
+        .registry
+        .get(&id)?
+        .ok_or_else(|| Error::not_found(format!("`{id}` is not installed")))?;
+    let files = apps.registry.wit_files(&id)?;
+    Ok(Json(json!({
+        "app": id,
+        "package": installed.manifest.app.namespace,
+        "files": files,
+    })))
+}
+
 async fn get_app(
     State(state): State<Arc<EngineState>>,
     Path(id): Path<String>,
