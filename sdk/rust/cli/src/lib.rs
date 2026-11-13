@@ -65,6 +65,8 @@ struct AuditRow {
     detail: Option<serde_json::Value>,
 }
 
+const AUDIT_LIMIT_MAX: usize = 1000;
+
 pub const USAGE: &str = "\
 usage: anth [--socket <path>] <command> [options]
 
@@ -424,6 +426,11 @@ fn parse_audit(
                 limit = as_text(&value)?
                     .parse::<usize>()
                     .map_err(|_| usage("`--limit` needs a positive number".to_string()))?;
+                if !(1..=AUDIT_LIMIT_MAX).contains(&limit) {
+                    return Err(usage(format!(
+                        "`--limit` must be between 1 and {AUDIT_LIMIT_MAX}"
+                    )));
+                }
             }
             Some("--before") => {
                 let value = args
@@ -741,7 +748,9 @@ fn audit(socket: Option<PathBuf>, limit: usize, before: Option<usize>) -> Result
         path.push_str(&format!("&before={before}"));
     }
     let page: AuditPage = client.get_typed(&path)?;
-    let _total = page.total;
+    if page.total > page.entries.len() {
+        eprintln!("# {} audit entries total", page.total);
+    }
     for problem in &page.problems {
         eprintln!("warning: {problem}");
     }
@@ -1307,6 +1316,8 @@ mod tests {
             }
         );
         assert!(parse(args(&["audit", "--limit", "nope"])).is_err());
+        assert!(parse(args(&["audit", "--limit", "0"])).is_err());
+        assert!(parse(args(&["audit", "--limit", "1001"])).is_err());
         assert!(parse(args(&["audit", "--nope"])).is_err());
     }
 

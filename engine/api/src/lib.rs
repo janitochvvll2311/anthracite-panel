@@ -884,7 +884,12 @@ async fn read_audit(
     let (entries, problems) = apps.audit.scan()?;
     let total = entries.len();
     let before = query.before.unwrap_or(total).min(total);
-    let limit = query.limit.unwrap_or(AUDIT_LIMIT).clamp(1, AUDIT_LIMIT_MAX);
+    let limit = query.limit.unwrap_or(AUDIT_LIMIT);
+    if !(1..=AUDIT_LIMIT_MAX).contains(&limit) {
+        return Err(ApiError(Error::invalid(format!(
+            "`limit` must be between 1 and {AUDIT_LIMIT_MAX}"
+        ))));
+    }
     let start = before.saturating_sub(limit);
     let mut page = entries[start..before].to_vec();
     page.reverse();

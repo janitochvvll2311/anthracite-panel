@@ -1937,6 +1937,14 @@ async fn the_audit_endpoint_pages_newest_first() {
     assert_eq!(value["entries"][1]["action"], "app.approve");
     assert_eq!(value["next"], 1);
 
+    let (status, value) = json(state.clone(), "/api/engine/audit?limit=0").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["error"]["code"], "invalid");
+
+    let (status, value) = json(state.clone(), "/api/engine/audit?limit=1001").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(value["error"]["code"], "invalid");
+
     let (status, value) = json(state, "/api/engine/audit?limit=2&before=1").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(value["entries"].as_array().expect("entries").len(), 1);

@@ -23,10 +23,25 @@ the `audit and approval UI` item.
   - `limit` defaults to 100 and is capped at 1000.
   - `problems` names unparseable lines instead of hiding the readable history.
 - `anth audit [--limit <n>] [--before <n>]` prints one tab-separated row per
-  entry and the `next: --before <n>` hint.
+  entry and the `next: --before <n>` hint. When the page is partial it prints
+  the total to stderr.
 - The Manager has an Audit section with actor, action, result, app and detail,
   a refresh button and a `Load older` cursor.
 - API and CLI tests cover the page shape, newest-first order and the cursor.
+
+### API and CLI parity
+
+| Capability | API | CLI |
+| --- | --- | --- |
+| Default page | `limit=100` | `--limit 100` |
+| Page size | `limit` 1–1000, `400` otherwise | `--limit` 1–1000, usage error otherwise |
+| Older page | `before=<index>` | `--before <index>` |
+| Next cursor | `next` | `next: --before <n>` |
+| Total | `total` | stderr when the page is partial |
+| Unparseable lines | `problems` | `warning:` lines on stderr |
+| Order | newest first | newest first |
+
+Both reject `limit=0` and `limit=1001`; neither silently clamps them.
 
 ## Tests
 
