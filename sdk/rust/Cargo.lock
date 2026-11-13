@@ -86,6 +86,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-conformance"
+version = "0.5.0"
+dependencies = [
+ "anth-compose",
+ "anth-contract",
+ "base64",
+ "ed25519-dalek",
+ "serde_json",
+ "sha2",
+ "zip",
+]
+
+[[package]]
 name = "anth-contract"
 version = "0.5.0"
 dependencies = [
