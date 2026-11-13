@@ -66,6 +66,7 @@ truth.
 engine/*        <-  sdk/rust/panel  <-  panel/backend
 engine/*        <-  sdk/rust/guest  <-  apps/*
 engine/*        <-  sdk/rust/cli
+engine/*        <-  sdk/rust/conformance
 sdk/ts/panel    <-  panel/frontend,  apps/*/frontend
 
 forbidden:  panel/backend -> engine/*        (only through the SDK)

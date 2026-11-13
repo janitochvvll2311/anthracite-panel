@@ -269,10 +269,11 @@ message, `manifest.sig` in base64, fingerprint `sha256(public key)` in hex
 `anth-conformance` as something a third party runs against their bundle offline,
 with the same checks our CI runs.
 
-**Why deferred.** The kit is written with M5; publishing it before there is a
-third party would be publishing a draft.
-
-**Ready when** an app outside this repository is being written.
+**Status: delivered in v0.6.0.** `sdk/rust/conformance` builds
+`anth-conformance`, which calls the engine's bundle verifier in a temporary
+state tree. It checks layout, manifest, hashes, WIT, imports and signatures,
+reports the app id/version/package/exports/imports/service class, and exits `1`
+on a refusal.
 
 ### 4.2 Provider WIT for consumers
 
