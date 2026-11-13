@@ -18,9 +18,8 @@ The manager itself landed in #104; this report covers the composition close.
 
 ## Delivered
 
-- `tests/fixtures/compositions/system.toml`: the eight system apps.
-- `tests/fixtures/compositions/system-without-net.toml`: the same composition
-  without `org.anthracite.net`.
+- `demo/composition.toml` is the source of the system app list; the test filters
+  `org.anthracite.net` for the removal case instead of keeping a second list.
 - `tests/fixtures/expected/system.json`: the blessed surface (routes, slots,
   CLI, risk and boot order).
 - `engine/api/tests/golden.rs`: renders the real manifests with deterministic
@@ -29,8 +28,8 @@ The manager itself landed in #104; this report covers the composition close.
 - `removing_net_leaves_the_other_system_apps`: no fatal, no degraded, seven
   apps, Firewall present with its `parent = "org.anthracite.net#anth-net"`
   reference intact.
-- `panel/frontend/src/groups.test.ts`: a Firewall contribution without Network
-  becomes a top-level tab.
+- `panel/frontend/src/groups.test.ts`: Firewall keeps its place as a top-level
+  tab, after Terminal, when Network is removed.
 
 ## Tests
 
@@ -44,9 +43,10 @@ The manager itself landed in #104; this report covers the composition close.
 
 - The system fixture renders the real manifests instead of duplicating them.
   `{{app_name}}`, `{{service_*}}` and asset hashes get deterministic values.
-- Service classes are listed in the test table because risk is computed from the
-  class, and the manifest placeholder is not a type. The real app WIT is copied
-  from the apps, so interface drift still fails the golden.
+- The app list comes from `demo/composition.toml`. `SYSTEM_CLASSES` maps each
+  app to its `ServiceClass`, and risk comes from `class.risk()`, not a second
+  risk table. The real app WIT is copied from the apps, so interface drift still
+  fails the golden.
 - The fixture uses `allow-third-party-service` because v0.6.0 has no distribution
   key yet; a release build still refuses third-party services by default.
 - Removing `net` does not rewrite the Firewall manifest. The engine keeps the

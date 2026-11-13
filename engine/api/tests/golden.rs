@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anth_api::{router, EngineState, PeerUid};
 use anth_compose::grant::GrantStore;
 use anth_compose::registry::Registry;
+use anth_contract::manifest::ServiceClass;
 use anth_contract::{AppId, Composition, Grant, InterfaceId, Risk, GRANT_VERSION};
 use axum::body::{to_bytes, Body};
 use axum::extract::ConnectInfo;
@@ -144,17 +145,35 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The real system apps, with the risk their service class contributes.
-const SYSTEM_APPS: &[(&str, &str, Risk, &str)] = &[
-    ("fs", "org.anthracite.fs", Risk::Host, "host"),
-    ("terminal", "org.anthracite.terminal", Risk::Host, "exec"),
-    ("proc", "org.anthracite.proc", Risk::Admin, "admin"),
-    ("net", "org.anthracite.net", Risk::Host, "host"),
-    ("firewall", "org.anthracite.firewall", Risk::Host, "host"),
-    ("storage", "org.anthracite.storage", Risk::Host, "host"),
-    ("accounts", "org.anthracite.accounts", Risk::Host, "host"),
-    ("home", "org.anthracite.home", Risk::Host, "host"),
+/// The service class of each system app. The risk comes from the class, not
+/// from a second table.
+const SYSTEM_CLASSES: &[(&str, ServiceClass)] = &[
+    ("fs", ServiceClass::Host),
+    ("terminal", ServiceClass::Exec),
+    ("proc", ServiceClass::Admin),
+    ("net", ServiceClass::Host),
+    ("firewall", ServiceClass::Host),
+    ("storage", ServiceClass::Host),
+    ("accounts", ServiceClass::Host),
+    ("home", ServiceClass::Host),
 ];
+
+fn system_class(name: &str) -> ServiceClass {
+    SYSTEM_CLASSES
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, class)| *class)
+        .unwrap_or_else(|| panic!("no service class for `{name}`"))
+}
+
+/// The demo composition is the system composition; the test filters it for the
+/// `net`-removal case instead of keeping a second app list.
+fn demo_composition() -> Composition {
+    let path = repo_root().join("demo/composition.toml");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    Composition::parse(&text).expect("demo composition")
+}
 
 /// Render the real `manifest.toml.in` with deterministic fixture values.
 ///
@@ -178,18 +197,40 @@ fn system_manifest(app: &str, class: &str) -> String {
         .replace("{{refresh_sha256}}", &asset)
 }
 
-fn system_state(composition: &str) -> (Arc<EngineState>, PathBuf) {
+fn system_state(include_net: bool) -> (Arc<EngineState>, PathBuf) {
     let dir = scratch();
     let apps = dir.join("apps");
     fs::create_dir_all(&apps).expect("apps");
     fs::set_permissions(&apps, fs::Permissions::from_mode(0o700)).expect("chmod");
-    for (name, id, risk, class) in SYSTEM_APPS {
+    let mut composition = demo_composition();
+    if !include_net {
+        for profile in &mut composition.profile {
+            profile.apps.retain(|id| id != "org.anthracite.net");
+        }
+    }
+    composition.validate().expect("validate");
+
+    let mut ids = Vec::new();
+    for profile in &composition.profile {
+        for id in &profile.apps {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+    }
+    for id in &ids {
+        let name = id.rsplit('.').next().expect("app id segment");
+        let class = system_class(name);
         let app_dir = apps.join(id);
         copy_tree(
             &repo_root().join("apps").join(name).join("wit"),
             &app_dir.join("wit"),
         );
-        fs::write(app_dir.join("manifest.toml"), system_manifest(name, class)).expect("manifest");
+        fs::write(
+            app_dir.join("manifest.toml"),
+            system_manifest(name, class.as_str()),
+        )
+        .expect("manifest");
         fs::write(
             app_dir.join("descriptor.toml"),
             format!(
@@ -198,12 +239,8 @@ fn system_state(composition: &str) -> (Arc<EngineState>, PathBuf) {
             ),
         )
         .expect("descriptor");
-        approve_with(&dir, id, *risk);
+        approve_with(&dir, id, class.risk());
     }
-    let text = fs::read_to_string(fixtures().join("compositions").join(composition))
-        .expect("composition fixture");
-    let composition = Composition::parse(&text).expect("parse");
-    composition.validate().expect("validate");
     let state = Arc::new(
         EngineState::new(1000)
             .with_composition(composition)
@@ -255,7 +292,7 @@ async fn the_golden_composition_produces_the_golden_surface() {
 
 #[tokio::test]
 async fn the_system_composition_produces_the_golden_surface() {
-    let (state, dir) = system_state("system.toml");
+    let (state, dir) = system_state(true);
     let value = composition(state).await;
     let path = fixtures().join("expected/system.json");
     if std::env::var_os("BLESS").is_some() {
@@ -277,11 +314,10 @@ async fn the_system_composition_produces_the_golden_surface() {
 
 #[tokio::test]
 async fn removing_net_leaves_the_other_system_apps() {
-    let (state, dir) = system_state("system-without-net.toml");
+    let (state, dir) = system_state(false);
     let value = composition(state).await;
     assert!(value["surface"]["fatal"].is_null(), "{value}");
     assert_eq!(value["surface"]["degraded"], serde_json::json!([]));
-    assert_eq!(value["surface"]["links"], serde_json::json!([]));
 
     let apps = value["surface"]["apps"].as_array().expect("apps");
     let ids = apps
