@@ -5,8 +5,10 @@
 This pass compared the engine API, the `anth` CLI, the panel surface and the app
 surfaces. App verbs are clean: every `[[cli]]` verb resolves to a route bound to
 the same `interface#function`, and the committed system apps have no missing
-frontend calls. The remaining gaps are pre-existing engine commands and the
-absence of generated clients for the system apps.
+frontend calls. `operator`, `restart` and `compose --now` closed the engine
+command gaps. What remains is `anth login/logout` — a transport question, not a
+missing route — and the deliberate choice not to generate clients for the system
+apps.
 
 ## Matrix
 
