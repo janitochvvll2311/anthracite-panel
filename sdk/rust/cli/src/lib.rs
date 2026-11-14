@@ -568,6 +568,9 @@ fn parse_operator(
         .next()
         .ok_or_else(|| usage("`operator` needs a subcommand".to_string()))?;
     let sub = as_text(&sub)?.to_string();
+    if matches!(sub.as_str(), "--help" | "-h") {
+        return Ok(Invocation::Help);
+    }
     let command = match (sub.as_str(), args.next()) {
         ("show", None) => OperatorCommand::Show,
         ("password", None) => OperatorCommand::Password { password: None },
@@ -2088,6 +2091,10 @@ mod tests {
         assert!(parse(args(&["operator", "show", "extra"])).is_err());
         assert!(parse(args(&["operator", "password", "secret"])).is_err());
         assert!(parse(args(&["operator", "rotate"])).is_err());
+        assert_eq!(
+            parse(args(&["operator", "--help"])).expect("help"),
+            Invocation::Help
+        );
     }
 
     #[test]
