@@ -26,8 +26,10 @@ side is wrong. The private key stays on the release machine and is never printed
      repacks it;
   5. verifies each bundle with `anth-conformance --require-signature --key` and
      stops unless the kit reports `tier system`;
-  6. writes `release/manifest.json` with the key fingerprint and every bundle's
-     id, version and SHA-256.
+  6. writes `release/bin/` with `anth`, `anth-engine` and `anth-panel`,
+     `release/bundles/` with the signed bundles, `SHA256SUMS` over both, and
+     `release/manifest.json` with the version, the key fingerprint, the binary
+     digests and every bundle's id, version and SHA-256.
 - Docs: §9.1 gains the ceremony and the custody rule, §10 lists the scripts,
   §17.3.9 narrows what is still owed to key custody, `AGENTS.md` lists the
   command.
@@ -39,7 +41,8 @@ side is wrong. The private key stays on the release machine and is never printed
 - `scripts/release.sh --apps hello` (a fresh key, release profile):
   - the built engine answered `key distribution` with the signing fingerprint;
   - `hello.anth` verified with `--require-signature` and reported `tier system`;
-  - `release/manifest.json` carries the fingerprint and the bundle digest.
+  - `release/bin/`, `release/bundles/`, `manifest.json` and `SHA256SUMS` are
+    written, and `sha256sum -c SHA256SUMS` passes.
 - Acceptance with the release binaries: the keyed `anth-engine` installed
   `hello.anth` with `require-signature = true` and no keyring, `app show`
   reported `tier system` and the signing fingerprint, `compose --add hello

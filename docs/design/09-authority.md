@@ -77,8 +77,10 @@ than the one that signed the bundles:
    `anth-sign`, repacked and verified with `anth-conformance
    --require-signature --key <public>`; a bundle that does not report `tier
    system` stops the release.
-5. `release/manifest.json` records the key fingerprint and every bundle's id,
-   version and SHA-256, so a deployment can check what it is about to install.
+5. `release/manifest.json` records the version, the key fingerprint, the
+   `anth`/`anth-engine`/`anth-panel` digests and every bundle's id, version and
+   SHA-256; `release/SHA256SUMS` repeats them for `sha256sum -c`, so a deployment
+   can check what it is about to install and run.
 
 The private key is one file at mode 0600 and lives with the release process, not
 in this repository and not in CI. Rotation is a release: generate a new pair,
