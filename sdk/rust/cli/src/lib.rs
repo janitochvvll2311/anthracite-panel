@@ -204,6 +204,8 @@ pub enum AppCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyCommand {
     List,
+    /// The distribution key this engine was built with, if any.
+    Distribution,
     Add {
         public_key: String,
         label: Option<String>,
@@ -523,6 +525,7 @@ fn parse_key(
     }
     let command = match (sub.as_str(), positional.as_slice()) {
         ("list", []) if label.is_none() => KeyCommand::List,
+        ("distribution", []) if label.is_none() => KeyCommand::Distribution,
         ("add", [public_key]) => KeyCommand::Add {
             public_key: as_text(public_key)?.to_string(),
             label,
@@ -823,6 +826,20 @@ fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
                     key.key.label.as_deref().unwrap_or("-"),
                     key.key.added_at
                 );
+            }
+            Ok(0)
+        }
+        KeyCommand::Distribution => {
+            let value: serde_json::Value = client.get_typed("/api/engine/keys/distribution")?;
+            match value["fingerprint"].as_str() {
+                Some(fingerprint) => {
+                    println!("fingerprint\t{fingerprint}");
+                    if let Some(problem) = value["problem"].as_str() {
+                        eprintln!("this build has an unusable distribution key: {problem}");
+                        return Ok(1);
+                    }
+                }
+                None => println!("fingerprint\tnone"),
             }
             Ok(0)
         }
@@ -1885,11 +1902,31 @@ mod tests {
     #[test]
     fn key_refuses_options_that_do_not_apply() {
         assert!(parse(args(&["key", "list", "--label", "x"])).is_err());
+        assert!(parse(args(&["key", "distribution", "extra"])).is_err());
         assert!(parse(args(&["key", "remove", "abc", "--label", "x"])).is_err());
         assert!(parse(args(&["key", "add"])).is_err());
         assert!(parse(args(&["key", "add", "ea4a", "extra"])).is_err());
         assert!(parse(args(&["key", "nope"])).is_err());
         assert!(parse(args(&["key"])).is_err());
+    }
+
+    #[test]
+    fn the_distribution_key_is_asked_for_by_its_own_route() {
+        let dir = scratch("key-distribution");
+        let socket = dir.join("engine.sock");
+        let receive = serve(
+            &socket,
+            vec![answer(
+                "200 OK",
+                r#"{"fingerprint":"abc","public_key":"ea4a","problem":null}"#,
+            )],
+        );
+        key(Some(socket), KeyCommand::Distribution).expect("distribution");
+        let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            request.starts_with("GET /api/engine/keys/distribution HTTP/1.1"),
+            "{request}"
+        );
     }
 
     #[test]

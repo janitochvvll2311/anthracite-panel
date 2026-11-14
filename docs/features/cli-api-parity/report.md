@@ -15,6 +15,7 @@ absence of generated clients for the system apps.
 | `anth status` ↔ `/api/health`, `/api/engine/version`, `/api/engine/composition`, `/api/engine/apps` | pass |
 | `anth compose` ↔ `GET`/`PUT /api/engine/composition` | pass |
 | `anth key list/add/remove` ↔ keys resources | pass |
+| `anth key distribution` ↔ `GET /api/engine/keys/distribution` | pass in the system-tier PR |
 | `anth app list/show/install/upgrade/enable/disable/remove/approve/revoke` ↔ apps resources | pass |
 | `anth app <alias> <verb>` ↔ app route | pass |
 | `anth audit` ↔ `GET /api/engine/audit` | pass in #163 |

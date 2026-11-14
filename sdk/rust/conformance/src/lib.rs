@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anth_compose::bundle::{self, Options};
-use anth_compose::keys::Keyring;
+use anth_compose::keys::{Distribution, Keyring};
 use anth_contract::{Error, TrustedKey, KEY_VERSION};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -50,6 +50,9 @@ pub struct Report {
     pub version: String,
     pub package: String,
     pub signer: Option<String>,
+    /// The tier the signature earns on this build: `system` only when the kit
+    /// was built with the distribution key and that key signed the bundle.
+    pub tier: String,
     pub exports: Vec<String>,
     pub imports: Vec<String>,
     pub service: Option<String>,
@@ -62,6 +65,7 @@ impl Report {
             "version": self.version,
             "package": self.package,
             "signer": self.signer,
+            "tier": self.tier,
             "exports": self.exports,
             "imports": self.imports,
             "service": self.service,
@@ -91,13 +95,23 @@ pub fn validate(bundle: &[u8], request: &Request) -> Result<Report, Error> {
             allow_third_party_service: request.allow_third_party_service,
             known_packages: request.known_packages.clone(),
         };
-        let staged = bundle::extract(bundle, &state, &options, &keyring)?;
+        let staged = bundle::extract(
+            bundle,
+            &state,
+            &options,
+            &keyring,
+            &Distribution::embedded(),
+        )?;
         let manifest = staged.manifest();
         Ok(Report {
             id: manifest.app.id.clone(),
             version: manifest.app.version.clone(),
             package: manifest.app.namespace.clone(),
             signer: staged.signer().map(ToString::to_string),
+            tier: match staged.tier() {
+                anth_contract::Tier::System => "system".to_string(),
+                anth_contract::Tier::ThirdParty => "third-party".to_string(),
+            },
             exports: manifest
                 .export
                 .iter()

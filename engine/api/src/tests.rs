@@ -373,6 +373,27 @@ async fn the_app_catalogue_lists_installed_apps() {
 }
 
 #[tokio::test]
+async fn the_distribution_key_of_the_build_is_reported() {
+    let (state, dir) = apps_state();
+    let (status, value) = json(state, "/api/engine/keys/distribution").await;
+    assert_eq!(status, StatusCode::OK);
+    // A debug build carries no key and says so; a release build answers with
+    // the fingerprint an operator compares against the release notes.
+    match value["fingerprint"].as_str() {
+        Some(fingerprint) => {
+            assert_eq!(fingerprint.len(), 64, "{value}");
+            assert_eq!(value["public_key"].as_str().map(str::len), Some(64));
+        }
+        None => assert!(value["fingerprint"].is_null(), "{value}"),
+    }
+    assert!(
+        value.get("problem").is_some(),
+        "the build reports its problem"
+    );
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
 async fn a_key_is_added_listed_and_removed() {
     let (state, dir) = apps_state();
     let body = format!(

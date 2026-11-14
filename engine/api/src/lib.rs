@@ -511,6 +511,7 @@ fn api_routes(state: Arc<EngineState>) -> Router {
             get(composition).put(replace_composition),
         )
         .route("/engine/keys", get(list_keys).post(add_key))
+        .route("/engine/keys/distribution", get(distribution_key))
         .route("/engine/keys/{fingerprint}", delete(remove_key))
         .route("/engine/audit", get(read_audit))
         .route("/engine/apps", get(list_apps).post(install_app))
@@ -865,6 +866,20 @@ async fn list_keys(State(state): State<Arc<EngineState>>) -> Result<Json<Value>,
         .map(|(fingerprint, key)| KeyView { fingerprint, key })
         .collect();
     Ok(Json(json!({ "keys": keys })))
+}
+
+/// The distribution key compiled into this binary, if any (§9.1).
+///
+/// It is public by definition: an operator compares the fingerprint against the
+/// release notes to know which builds can install `system` bundles.
+async fn distribution_key(State(state): State<Arc<EngineState>>) -> Result<Json<Value>, ApiError> {
+    let apps = apps(&state)?;
+    let distribution = apps.registry.distribution();
+    Ok(Json(json!({
+        "fingerprint": distribution.fingerprint(),
+        "public_key": distribution.public_key(),
+        "problem": distribution.problem(),
+    })))
 }
 
 const AUDIT_LIMIT: usize = 100;

@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anth_contract::manifest::parse_call;
-use anth_contract::{catalog, signature, Error, InterfaceId, Manifest};
+use anth_contract::{catalog, signature, Error, InterfaceId, Manifest, Tier};
 use sha2::{Digest, Sha256};
 use wit_parser::{Type, TypeDefKind, UnresolvedPackage, UnresolvedPackageGroup};
 
-use crate::keys::Keyring;
+use crate::keys::{Distribution, Keyring};
 use crate::store;
 
 /// A bundle that unpacks to more entries than this is refused before reading.
@@ -47,6 +47,7 @@ pub struct StagedBundle {
     root: PathBuf,
     manifest: Manifest,
     signer: Option<String>,
+    tier: Tier,
     keep: bool,
 }
 
@@ -62,6 +63,11 @@ impl StagedBundle {
     /// The fingerprint that signed, or `None` for an accepted unsigned bundle.
     pub fn signer(&self) -> Option<&str> {
         self.signer.as_deref()
+    }
+
+    /// The tier the signature earned: `system` only for the distribution key.
+    pub fn tier(&self) -> Tier {
+        self.tier
     }
 
     /// Hands the directory to the caller; `Drop` will no longer remove it.
@@ -85,6 +91,7 @@ pub fn extract(
     staging_parent: &Path,
     options: &Options,
     keyring: &Keyring,
+    distribution: &Distribution,
 ) -> Result<StagedBundle, Error> {
     if bundle.len() as u64 > options.max_bundle_bytes {
         return Err(Error::too_large(format!(
@@ -123,7 +130,7 @@ pub fn extract(
             staging_parent.display()
         ))
     })?;
-    match verify(&root, bundle, options, keyring) {
+    match verify(&root, bundle, options, keyring, distribution) {
         Ok(staged) => Ok(staged),
         Err(error) => {
             let _ = fs::remove_dir_all(&root);
@@ -137,7 +144,11 @@ fn verify(
     bundle: &[u8],
     options: &Options,
     keyring: &Keyring,
+    distribution: &Distribution,
 ) -> Result<StagedBundle, Error> {
+    // A binary that names a key it cannot parse must not install anything: the
+    // tier of every future bundle would be a guess.
+    distribution.check()?;
     unpack(root, bundle, options.max_bundle_bytes)?;
 
     let manifest_text = read_required(root, "manifest.toml")?;
@@ -153,7 +164,12 @@ fn verify(
     let signer = match store::read(&root.join("manifest.sig"))? {
         Some(text) => {
             let message = signed_message(root)?;
-            Some(keyring.verify(&message, &text)?)
+            // The distribution key is compiled-in trust, not a keyring entry:
+            // trying it first is what makes the system tier reachable.
+            match distribution.verify(&message, &text)? {
+                Some(fingerprint) => Some(fingerprint),
+                None => Some(keyring.verify(&message, &text)?),
+            }
         }
         None if options.require_signature => {
             return Err(Error::denied(
@@ -162,6 +178,7 @@ fn verify(
         }
         None => None,
     };
+    let tier = distribution.tier(signer.as_deref());
 
     sync_tree(root)?;
 
@@ -169,6 +186,7 @@ fn verify(
         root: root.to_path_buf(),
         manifest,
         signer,
+        tier,
         keep: false,
     })
 }
@@ -776,6 +794,23 @@ mod tests {
             writer.write_all(bytes).expect("write");
         }
         writer.finish().expect("finish").into_inner()
+    }
+
+    /// These tests install without a distribution key: a signed bundle is
+    /// `third-party`. The system tier has its own tests below.
+    fn extract(
+        bundle: &[u8],
+        state: &Path,
+        options: &Options,
+        keyring: &Keyring,
+    ) -> Result<StagedBundle, Error> {
+        super::extract(
+            bundle,
+            state,
+            options,
+            keyring,
+            &crate::keys::Distribution::none(),
+        )
     }
 
     fn options(require_signature: bool) -> Options {

@@ -246,19 +246,14 @@ should be used if the call is revisited for any other reason.
 A public key compiled into the binary that signs `system` apps, with the private
 half held by the release process.
 
-**Why deferred (D-Distribution-Key).** v0.5.0 has no release process to hold a
-private key, and a compiled public key nobody can rotate is a liability, not a
-guarantee. Every signed bundle is `third-party` through the keyring; an operator
-can still trust a signer explicitly. The tier rule that matters for safety — a
-third party never gets a service — is unchanged.
-
-**Ready when** there is a signed release to ship. The mechanism is already
-specified in [§9.1](09-authority.md#91-tiers-and-signing); this entry only delays
-the first key, not the design.
-
-The signature scheme itself is **not** deferred: Ed25519 over the canonical
-message, `manifest.sig` in base64, fingerprint `sha256(public key)` in hex
-(D-Signature-Algorithm). The registry verifies against that in v0.5.0.
+**Status: delivered as the mechanism.** v0.6.0 compiles the key in when
+`ANTHRACITE_DISTRIBUTION_KEY` is set at build time, derives the tier from the
+signer, validates a stored `system` descriptor against the key and reports the
+fingerprint at `GET /api/engine/keys/distribution` (`anth key distribution`).
+A build without the variable has no `system` tier, which is the honest debug
+default. What is still owed to a deployment: the actual release key pair, the
+step that signs the shipped bundles, and the rotation runbook
+([§9.1](09-authority.md#91-tiers-and-signing)).
 
 ---
 

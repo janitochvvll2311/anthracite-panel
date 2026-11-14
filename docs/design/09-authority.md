@@ -17,18 +17,31 @@ optional `--label`); the engine derives the fingerprint and prints it, and
 everything trusted that way is `third-party`: the keyring can extend trust, never
 privilege.
 
-v0.5.0 ships **without** a distribution key (D-Distribution-Key): every signed
-bundle is `third-party`, and the `system` tier waits for a release key in v0.6.0
-([§17](17-deferred.md#39-the-distribution-key-and-the-system-tier)). The
-mechanism above is unchanged; only the first key is late.
+v0.6.0 builds the mechanism: `ANTHRACITE_DISTRIBUTION_KEY` (32 bytes of lowercase
+hex) is read at compile time, so a release binary carries the public half and a
+debug build carries none. The tier is derived from the **signer**, not from
+anything the bundle says:
+
+- the distribution key is tried before the keyring, and only its fingerprint
+  earns `system`;
+- a keyring key that happens to verify the same bundle still earns `third-party`;
+- a stored `descriptor.toml` that claims `system` without that signer is refused,
+  and so is any `system` descriptor read by a build without the key.
+
+An unusable compiled key — present but not 32 bytes of hex — refuses every
+install rather than silently demoting release bundles. The operator can check
+what a binary trusts with `GET /api/engine/keys/distribution`
+(`anth key distribution`), and the third-party author gets the same verdict from
+`anth-conformance`'s `tier` line.
 
 An unsigned bundle is accepted only with `[apps] require_signature = false`, and
 it is `third-party` regardless of its id — a manifest that claims `org.anth.*`
 gains nothing.
 
-Revocation is manual in v0.5.0: uninstall the app, or rotate the distribution key
-in a release. There is no CRL, and that is a documented limitation, not an
-oversight.
+Revocation is manual: uninstall the app, or rotate the distribution key in a
+release. There is no CRL, and that is a documented limitation, not an oversight.
+Rotation is a release because the key is compiled in; there is no way to add a
+distribution key at runtime.
 
 A third-party app never gets a service by default (`D-Service-Third-Party`).
 Services arrive in v0.6.0 as WIT providers over a private socket, and they still

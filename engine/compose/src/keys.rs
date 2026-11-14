@@ -1,15 +1,115 @@
-//! The keyring: trusted third-party signers under `state/keys` (§9.1).
+//! The keyring: trusted third-party signers under `state/keys` (§9.1), and the
+//! distribution key compiled into the binary.
 //!
-//! v0.5.0 has no distribution key (D-Distribution-Key), so this is the whole
-//! trust model: a signed bundle is accepted when one of these keys signs the
-//! canonical message. The keyring can extend trust, never privilege.
+//! The keyring can extend trust, never privilege: anything it trusts is
+//! `third-party`. The `system` tier comes from the distribution key, whose
+//! public half is a build input and whose private half never enters the build.
 
 use std::path::{Path, PathBuf};
 
 use anth_contract::id::is_sha256;
-use anth_contract::{Error, TrustedKey};
+use anth_contract::{Error, Tier, TrustedKey};
 
 use crate::{signature, store};
+
+/// The distribution key of this build (§9.1, D-Distribution-Key).
+///
+/// A release build compiles the public key in
+/// (`ANTHRACITE_DISTRIBUTION_KEY`, 32 bytes of lowercase hex); a debug build
+/// carries none and can install nothing as `system`. A bundle this key signs is
+/// `system` and skips the third-party service switch.
+#[derive(Debug, Clone, Default)]
+pub struct Distribution {
+    public_key: Option<String>,
+    fingerprint: Option<String>,
+    problem: Option<String>,
+}
+
+impl Distribution {
+    /// No key: every signed bundle is `third-party`.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// The key this binary was built with. Read at compile time, so a release
+    /// binary carries it and no configuration file can replace it.
+    pub fn embedded() -> Self {
+        Self::from_public_key(option_env!("ANTHRACITE_DISTRIBUTION_KEY"))
+    }
+
+    /// Parses a public key. A key that is present but malformed is a build
+    /// mistake, not an absent key: `check` refuses installs instead of silently
+    /// demoting system bundles to third-party.
+    pub fn from_public_key(public_key: Option<&str>) -> Self {
+        let Some(text) = public_key.map(str::trim).filter(|text| !text.is_empty()) else {
+            return Self::default();
+        };
+        let text = text.to_ascii_lowercase();
+        match signature::fingerprint(&text) {
+            Ok(fingerprint) => Self {
+                public_key: Some(text),
+                fingerprint: Some(fingerprint),
+                problem: None,
+            },
+            Err(error) => Self {
+                public_key: None,
+                fingerprint: None,
+                problem: Some(error.message().to_string()),
+            },
+        }
+    }
+
+    pub fn public_key(&self) -> Option<&str> {
+        self.public_key.as_deref()
+    }
+
+    pub fn fingerprint(&self) -> Option<&str> {
+        self.fingerprint.as_deref()
+    }
+
+    /// The tier a signer earns. Only the distribution fingerprint is `system`.
+    pub fn tier(&self, signer: Option<&str>) -> Tier {
+        match (self.fingerprint(), signer) {
+            (Some(key), Some(signer)) if key == signer => Tier::System,
+            _ => Tier::ThirdParty,
+        }
+    }
+
+    /// Verifies `signature` over `message` with the compiled key.
+    ///
+    /// `Ok(None)` means "not this key", so the keyring still gets its turn: a
+    /// distribution signature that does not verify is not an error, it is
+    /// someone else's signature.
+    pub fn verify(&self, message: &[u8], signature_b64: &str) -> Result<Option<String>, Error> {
+        let (Some(key), Some(fingerprint)) = (self.public_key(), self.fingerprint()) else {
+            return Ok(None);
+        };
+        // A malformed signature is an invalid artifact; only a well-formed one
+        // that does not match is "not this key".
+        let parsed = signature::parse_signature(signature_b64)?;
+        match signature::verify_bytes(message, &parsed, key) {
+            Ok(()) => Ok(Some(fingerprint.to_string())),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Refuses the operation when a compiled key cannot be used. A build that
+    /// names a key it cannot parse must not pretend it has none.
+    pub fn check(&self) -> Result<(), Error> {
+        match &self.problem {
+            Some(problem) => Err(Error::internal(format!(
+                "this engine was built with an invalid distribution key: {problem}"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// Why the compiled key cannot be used, if it cannot. Reported so an
+    /// operator sees a broken build instead of a missing tier.
+    pub fn problem(&self) -> Option<&str> {
+        self.problem.as_deref()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Keyring {
