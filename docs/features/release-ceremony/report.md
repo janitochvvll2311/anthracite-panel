@@ -117,14 +117,13 @@ For `demo-sessions`, publish the launcher and child range and set the CAPTCHA
 variables:
 `-p 8091:8091 -p 8100-8199:8100-8199 -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1`.
 
-**Podman in this environment.** Podman 5.8.10 is installed under `/tools`
-(`apk add podman`), but the sandbox blocks `clone(CLONE_NEWUSER)` and mounts
-cgroups read-only, so Podman and Buildah cannot run or build containers here
-(`cannot clone: Operation not permitted`). The images are produced with the OCI
-tooling that does not need namespaces and are Docker/Podman-compatible; they
-were validated with `skopeo inspect` and by chrooting the extracted layer
-(`anth --version`, the manifest and the variant tree), not by running a
-container.
+**Why not Podman here.** Podman 5.8.10 and Buildah were installed and tried: this
+sandbox blocks `clone(CLONE_NEWUSER)` and mounts cgroups read-only, so both fail
+with `cannot clone: Operation not permitted`. They were removed again; the image
+build keeps `umoci` and `skopeo`, which assemble and validate the docker-archives
+without namespaces. The images are standard Docker/Podman archives; they were
+validated with `skopeo inspect` and by chrooting the extracted layer (`anth
+--version`, the manifest and the variant tree), not by running a container here.
 
 ## Decisions
 
