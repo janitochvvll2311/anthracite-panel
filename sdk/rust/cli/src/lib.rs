@@ -94,6 +94,8 @@ commands:
                         trust a third-party signer
   key remove <fingerprint>
                         stop trusting a signer
+  operator show         the operator identity and the first-boot flag
+  operator password     change the operator password (reads the terminal)
   app list              list installed apps
   app show <id>         show one app
   app install <bundle>  install a bundle (zip)
@@ -151,6 +153,10 @@ pub enum Invocation {
     Key {
         socket: Option<PathBuf>,
         command: KeyCommand,
+    },
+    Operator {
+        socket: Option<PathBuf>,
+        command: OperatorCommand,
     },
     App {
         socket: Option<PathBuf>,
@@ -214,6 +220,17 @@ pub enum KeyCommand {
     Remove(String),
 }
 
+/// The `anth operator` subcommands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorCommand {
+    Show,
+    /// `password` is set by a caller that already has it (tests); the CLI reads
+    /// it from the terminal or stdin, never from argv.
+    Password {
+        password: Option<String>,
+    },
+}
+
 /// Parses arguments without touching the filesystem.
 ///
 /// Flags are compared as text, but a path is kept as [`OsString`]: a state
@@ -254,6 +271,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Err
         "compose" => parse_compose(args, socket),
         "audit" => parse_audit(args, socket),
         "key" => parse_key(args, socket),
+        "operator" => parse_operator(args, socket),
         other => Err(usage(format!("`{other}` is not a command"))),
     }
 }
@@ -541,6 +559,32 @@ fn parse_key(
     Ok(Invocation::Key { socket, command })
 }
 
+fn parse_operator(
+    args: impl Iterator<Item = OsString>,
+    socket: Option<PathBuf>,
+) -> Result<Invocation, Error> {
+    let mut args = args.into_iter();
+    let sub = args
+        .next()
+        .ok_or_else(|| usage("`operator` needs a subcommand".to_string()))?;
+    let sub = as_text(&sub)?.to_string();
+    if matches!(sub.as_str(), "--help" | "-h") {
+        return Ok(Invocation::Help);
+    }
+    let command = match (sub.as_str(), args.next()) {
+        ("show", None) => OperatorCommand::Show,
+        ("password", None) => OperatorCommand::Password { password: None },
+        ("show" | "password", Some(extra)) => {
+            return Err(usage(format!(
+                "`operator {sub}` takes no arguments, not `{}`",
+                extra.to_string_lossy()
+            )));
+        }
+        (other, _) => return Err(usage(format!("`operator {other}` is not a subcommand"))),
+    };
+    Ok(Invocation::Operator { socket, command })
+}
+
 fn as_text(arg: &OsString) -> Result<&str, Error> {
     arg.to_str()
         .ok_or_else(|| usage("an option is not valid UTF-8".to_string()))
@@ -606,6 +650,7 @@ pub fn execute(invocation: Invocation) -> Result<u8, Error> {
             before,
         } => audit(socket, limit, before),
         Invocation::Key { socket, command } => key(socket, command),
+        Invocation::Operator { socket, command } => operator(socket, command),
         Invocation::App { socket, command } => app(socket, command),
     }
 }
@@ -870,6 +915,87 @@ fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
             Ok(0)
         }
     }
+}
+
+/// `anth operator`: the identity and the password.
+///
+/// The password is read from the terminal (or stdin) and never from argv, so it
+/// does not land in the shell history or the process list. Over the Unix socket
+/// the peer credential is the proof; nothing asks for the old password there.
+fn operator(socket: Option<PathBuf>, command: OperatorCommand) -> Result<u8, Error> {
+    let client = client(socket);
+    match command {
+        OperatorCommand::Show => {
+            let value: serde_json::Value = client.get_typed("/api/engine/operator")?;
+            let name = value["name"].as_str().unwrap_or("operator");
+            println!("operator\t{name}");
+            Ok(0)
+        }
+        OperatorCommand::Password { password } => {
+            let new_password = match password {
+                Some(password) => password,
+                None => read_new_password()?,
+            };
+            if new_password.is_empty() {
+                return Err(Error::invalid("the new password is empty"));
+            }
+            let body = serde_json::json!({ "new_password": new_password }).to_string();
+            let value = client.json("PATCH", "/api/engine/operator", body.as_bytes())?;
+            let name = value["name"].as_str().unwrap_or("operator");
+            println!("password changed for operator\t{name}");
+            Ok(0)
+        }
+    }
+}
+
+/// Reads the new password without putting it in argv.
+///
+/// A terminal gets two prompts with echo off; a pipe gets one line, which is what
+/// a deployment script needs. Either way the value never appears in the process
+/// list or the shell history.
+fn read_new_password() -> Result<String, Error> {
+    // SAFETY: `isatty` has no preconditions and only reads the descriptor.
+    let interactive = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
+    if !interactive {
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|error| Error::internal(format!("reading the password: {error}")))?;
+        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
+    }
+    let first = prompt_secret("new password: ")?;
+    let second = prompt_secret("repeat new password: ")?;
+    if first != second {
+        return Err(Error::invalid("the passwords do not match"));
+    }
+    Ok(first)
+}
+
+/// One line with echo off. The original terminal state is restored even when the
+/// read fails, so a failed prompt does not leave the terminal mute.
+fn prompt_secret(label: &str) -> Result<String, Error> {
+    eprint!("{label}");
+    let _ = std::io::stderr().flush();
+    let fd = libc::STDIN_FILENO;
+    // SAFETY: `termios` is plain data; `zeroed` is a valid empty state and the
+    // structure is only used when `tcgetattr` succeeded.
+    let mut original = unsafe { std::mem::zeroed::<libc::termios>() };
+    let restore = unsafe { libc::tcgetattr(fd, &mut original) } == 0;
+    if restore {
+        let mut hidden = original;
+        hidden.c_lflag &= !libc::ECHO;
+        // SAFETY: `hidden` came from `tcgetattr` on this descriptor.
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &hidden) };
+    }
+    let mut line = String::new();
+    let read = std::io::stdin().read_line(&mut line);
+    if restore {
+        // SAFETY: restoring the state read from this descriptor above.
+        unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) };
+    }
+    eprintln!();
+    read.map_err(|error| Error::internal(format!("reading the password: {error}")))?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
 /// Readiness, the composition, the version and the catalogue in one answer.
@@ -1943,6 +2069,94 @@ mod tests {
             key(Some(socket), KeyCommand::Distribution).expect("distribution"),
             1
         );
+    }
+
+    #[test]
+    fn operator_takes_exactly_its_two_subcommands() {
+        assert_eq!(
+            parse(args(&["operator", "show"])).expect("show"),
+            Invocation::Operator {
+                socket: None,
+                command: OperatorCommand::Show,
+            }
+        );
+        assert_eq!(
+            parse(args(&["operator", "password"])).expect("password"),
+            Invocation::Operator {
+                socket: None,
+                command: OperatorCommand::Password { password: None },
+            }
+        );
+        assert!(parse(args(&["operator"])).is_err());
+        assert!(parse(args(&["operator", "show", "extra"])).is_err());
+        assert!(parse(args(&["operator", "password", "secret"])).is_err());
+        assert!(parse(args(&["operator", "rotate"])).is_err());
+        assert_eq!(
+            parse(args(&["operator", "--help"])).expect("help"),
+            Invocation::Help
+        );
+    }
+
+    #[test]
+    fn operator_show_reads_the_identity_route() {
+        let dir = scratch("operator-show");
+        let socket = dir.join("engine.sock");
+        let receive = serve(&socket, vec![answer("200 OK", r#"{"name":"operator"}"#)]);
+        operator(Some(socket), OperatorCommand::Show).expect("show");
+        let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            request.starts_with("GET /api/engine/operator HTTP/1.1"),
+            "{request}"
+        );
+    }
+
+    #[test]
+    fn an_operator_password_is_a_patch_and_never_argv() {
+        let dir = scratch("operator-password");
+        let socket = dir.join("engine.sock");
+        let receive = serve(
+            &socket,
+            vec![answer(
+                "200 OK",
+                r#"{"name":"operator","must_change_password":false}"#,
+            )],
+        );
+        operator(
+            Some(socket),
+            OperatorCommand::Password {
+                password: Some("a-long-enough-password".to_string()),
+            },
+        )
+        .expect("change");
+        let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            request.starts_with("PATCH /api/engine/operator HTTP/1.1"),
+            "{request}"
+        );
+        assert!(
+            request.contains(r#"{"new_password":"a-long-enough-password"}"#),
+            "{request}"
+        );
+        assert!(
+            request
+                .to_lowercase()
+                .contains("content-type: application/json"),
+            "{request}"
+        );
+    }
+
+    #[test]
+    fn an_empty_operator_password_is_refused_before_the_request() {
+        let dir = scratch("operator-empty");
+        let socket = dir.join("engine.sock");
+        let error = operator(
+            Some(socket),
+            OperatorCommand::Password {
+                password: Some(String::new()),
+            },
+        )
+        .expect_err("empty password");
+        assert!(error.message().contains("empty"), "{error}");
     }
 
     #[test]

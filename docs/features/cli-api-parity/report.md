@@ -22,7 +22,7 @@ absence of generated clients for the system apps.
 | `anth doctor` | offline; no API by design |
 | `anth restart` ↔ `POST /api/engine/restart` | **gap**: neither route nor verb exists |
 | `anth login/logout` ↔ session resource | **gap**: API exists, CLI is Unix-socket only |
-| operator password ↔ `GET`/`PATCH /api/engine/operator` | **gap**: API exists, no CLI command |
+| operator password ↔ `GET`/`PATCH /api/engine/operator` | pass in the operator-cli PR |
 | Panel shell routes (`/login`, `/setup`, `/panel/config.json`, assets) | panel-only; no CLI equivalent |
 | Panel frontend → engine API | pass; audit call is in #163 |
 | App `[[cli]]` → `[[route]]` | pass: 38 verbs, 0 missing |
@@ -45,13 +45,18 @@ absence of generated clients for the system apps.
   browser application; the engine and app APIs are the shared boundary.
 - The audit command is an engine command, not an app `[[cli]]`; its parity is
   covered by #163's API/CLI limit and cursor tests.
+- The operator resource is the one place a secret crosses the CLI: `anth operator
+  password` reads it from the terminal (echo off) or stdin, never from argv, and
+  the socket's peer credential is the proof of identity on that side.
 
 ## Out of scope
 
 - Implementing `restart`: the API route is not implemented either, and it is a
   daemon lifecycle change.
-- Implementing `anth login/logout` and an operator command: the CLI client is
-  Unix-socket-only, so remote sessions need a transport and cookie store.
+- Implementing `anth login/logout`: the CLI's transport is the engine's Unix
+  socket, where the peer credential *is* the session. A remote CLI needs an HTTP
+  transport and a cookie store, which is a second client; the panel session and
+  `tests/e2e/remote-client.sh` cover the HTTP surface.
 - Generating Rust/TS clients for the system apps. Their frontends use the
   panel context and hand-written route calls; the generated client stays the
   third-party app surface.
