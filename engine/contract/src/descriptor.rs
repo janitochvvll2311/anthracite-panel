@@ -13,8 +13,9 @@ use crate::manifest::RESERVED_ALIASES;
 
 pub const DESCRIPTOR_VERSION: u32 = 1;
 
-/// Which signer vouched for the bundle. v0.5.0 has no distribution key, so every
-/// signed app is `third-party`; `system` is reserved for v0.6.0.
+/// Which signer vouched for the bundle: `third-party` for anything the keyring
+/// trusts, `system` only for a bundle signed by the distribution key compiled
+/// into the binary (§9.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Tier {

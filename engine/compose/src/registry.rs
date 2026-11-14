@@ -17,7 +17,7 @@ use anth_contract::{AppId, Descriptor, Error, Grant, Manifest, Tier, DESCRIPTOR_
 
 use crate::bundle::{self, Options, StagedBundle};
 use crate::grant::GrantStore;
-use crate::keys::Keyring;
+use crate::keys::{Distribution, Keyring};
 use crate::store;
 use crate::{ApprovalMaterial, InstalledApp};
 
@@ -66,6 +66,7 @@ pub struct Problem {
 pub struct Registry {
     apps: PathBuf,
     keyring: Keyring,
+    distribution: Distribution,
 }
 
 /// The catalogue and the compose-side projection of each app.
@@ -73,15 +74,27 @@ pub type InstalledSet = (Vec<Installed>, Vec<InstalledApp>, Vec<Problem>);
 
 impl Registry {
     pub fn new(state: &Path) -> Self {
+        Self::with_distribution(state, Distribution::embedded())
+    }
+
+    /// A registry with an explicit distribution key. The engine uses the
+    /// compiled-in one; tests and the release tooling pick their own.
+    pub fn with_distribution(state: &Path, distribution: Distribution) -> Self {
         Self {
             apps: state.join("apps"),
             keyring: Keyring::new(state),
+            distribution,
         }
     }
 
     /// The trusted signers. The keyring is part of install, not composition.
     pub fn keyring(&self) -> &Keyring {
         &self.keyring
+    }
+
+    /// The distribution key this engine trusts, compiled in (§9.1).
+    pub fn distribution(&self) -> &Distribution {
+        &self.distribution
     }
 
     /// The installed tree of one app. Asset serving joins a manifest-declared
@@ -101,7 +114,6 @@ impl Registry {
         let staged = self.extract(bundle, options)?;
         let manifest = staged.manifest().clone();
         let id = AppId::parse(&manifest.app.id)?;
-        check_service_tier(&manifest, Tier::ThirdParty, options)?;
         let target = self.apps.join(id.as_str());
         match fs::symlink_metadata(&target) {
             Ok(_) => {
@@ -115,15 +127,7 @@ impl Registry {
                 )));
             }
         }
-        let descriptor = Descriptor {
-            version: DESCRIPTOR_VERSION,
-            app: id.clone(),
-            enabled: true,
-            alias: None,
-            signer: staged.signer().map(str::to_string),
-            tier: Tier::ThirdParty,
-            installed_at: now(),
-        };
+        let descriptor = self.descriptor_for(&staged, &id, true, None, options)?;
         // A fallback alias may collide with another fallback (§7.9 resolves it
         // with the full id), but not with an operator alias.
         if let Some(other) = self.alias_conflict(&id, manifest.cli_name(), false)? {
@@ -162,16 +166,13 @@ impl Registry {
                 manifest.app.id
             )));
         }
-        check_service_tier(&manifest, Tier::ThirdParty, options)?;
-        let descriptor = Descriptor {
-            version: DESCRIPTOR_VERSION,
-            app: app.clone(),
-            enabled: previous.descriptor.enabled,
-            alias: previous.descriptor.alias.clone(),
-            signer: staged.signer().map(str::to_string),
-            tier: Tier::ThirdParty,
-            installed_at: now(),
-        };
+        let descriptor = self.descriptor_for(
+            &staged,
+            app,
+            previous.descriptor.enabled,
+            previous.descriptor.alias.clone(),
+            options,
+        )?;
         // The new manifest may change the fallback alias (its `[app] alias`),
         // and the operator alias may be absent.
         let effective = descriptor.alias.as_deref().or_else(|| manifest.cli_name());
@@ -229,7 +230,7 @@ impl Registry {
                 "inspecting {}: {error}",
                 target.display()
             ))),
-            Ok(_) => Ok(Some(read_app(&target)?)),
+            Ok(_) => Ok(Some(read_app(&target, &self.distribution)?)),
         }
     }
 
@@ -257,7 +258,7 @@ impl Registry {
         let mut problems = Vec::new();
         for entry in self.visible_entries()? {
             let app = entry.file_name().to_string_lossy().to_string();
-            match read_app(&entry.path()) {
+            match read_app(&entry.path(), &self.distribution) {
                 Ok(installed) => apps.push(installed),
                 Err(error) => problems.push(Problem {
                     app,
@@ -528,7 +529,40 @@ impl Registry {
     fn extract(&self, bundle: &[u8], options: &Options) -> Result<StagedBundle, Error> {
         let mut options = options.clone();
         options.known_packages.extend(self.known_packages()?);
-        bundle::extract(bundle, &self.apps, &options, &self.keyring)
+        bundle::extract(
+            bundle,
+            &self.apps,
+            &options,
+            &self.keyring,
+            &self.distribution,
+        )
+    }
+
+    /// The descriptor an install produces.
+    ///
+    /// The tier comes from the signature: only the distribution key mints
+    /// `system`, and only a `system` bundle may carry a service without the
+    /// third-party switch (`D-Service-Third-Party`).
+    fn descriptor_for(
+        &self,
+        staged: &StagedBundle,
+        id: &AppId,
+        enabled: bool,
+        alias: Option<String>,
+        options: &Options,
+    ) -> Result<Descriptor, Error> {
+        let manifest = staged.manifest();
+        let tier = staged.tier();
+        check_service_tier(manifest, tier, options)?;
+        Ok(Descriptor {
+            version: DESCRIPTOR_VERSION,
+            app: id.clone(),
+            enabled,
+            alias,
+            signer: staged.signer().map(str::to_string),
+            tier,
+            installed_at: now(),
+        })
     }
 
     /// Packages of the installed apps, skipping any tree that cannot be read.
@@ -551,7 +585,7 @@ impl Registry {
     fn readable(&self) -> Result<Vec<Installed>, Error> {
         let mut apps = Vec::new();
         for entry in self.visible_entries()? {
-            if let Ok(installed) = read_app(&entry.path()) {
+            if let Ok(installed) = read_app(&entry.path(), &self.distribution) {
                 apps.push(installed);
             }
         }
@@ -679,7 +713,7 @@ fn read_manifest(dir: &Path) -> Result<Manifest, Error> {
 
 /// Reads a real app directory: no symlink, a directory, and a manifest that
 /// names the directory it lives in.
-fn read_app(dir: &Path) -> Result<Installed, Error> {
+fn read_app(dir: &Path, distribution: &Distribution) -> Result<Installed, Error> {
     let metadata = fs::symlink_metadata(dir)
         .map_err(|error| Error::internal(format!("inspecting {}: {error}", dir.display())))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -688,14 +722,14 @@ fn read_app(dir: &Path) -> Result<Installed, Error> {
             dir.display()
         )));
     }
-    read_installed(dir)
+    read_installed(dir, distribution)
 }
 
 /// Reads the manifest and the descriptor and refuses a pair that names two
 /// different apps: the directory is one app or it is corrupt.
-fn read_installed(dir: &Path) -> Result<Installed, Error> {
+fn read_installed(dir: &Path, distribution: &Distribution) -> Result<Installed, Error> {
     let manifest = read_manifest(dir)?;
-    let descriptor = read_descriptor(dir)?;
+    let descriptor = read_descriptor(dir, distribution)?;
     if descriptor.app.as_str() != manifest.app.id {
         return Err(Error::invalid(format!(
             "{} descriptor names `{}` but the manifest is `{}`",
@@ -739,7 +773,7 @@ fn check_service_tier(manifest: &Manifest, tier: Tier, options: &Options) -> Res
     Ok(())
 }
 
-fn read_descriptor(dir: &Path) -> Result<Descriptor, Error> {
+fn read_descriptor(dir: &Path, distribution: &Distribution) -> Result<Descriptor, Error> {
     let path = dir.join("descriptor.toml");
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -760,13 +794,48 @@ fn read_descriptor(dir: &Path) -> Result<Descriptor, Error> {
     descriptor
         .validate()
         .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
-    if descriptor.tier == Tier::System {
-        return Err(Error::invalid(format!(
-            "{} claims the system tier; v0.5.0 has no distribution key",
-            path.display()
-        )));
-    }
+    check_system_descriptor(dir, &descriptor, distribution)
+        .map_err(|error| Error::invalid(format!("{}: {}", path.display(), error.message())))?;
     Ok(descriptor)
+}
+
+/// The `system` tier is a signature, not a claim.
+///
+/// The descriptor is engine-written, but it lives on disk next to a bundle: a
+/// hand-edited `tier = "system"` must not grant the privileges of a release
+/// signature, and a build without a distribution key has no system tier at all.
+/// The stored `manifest.sig` is re-verified, so a rewritten `signer` field
+/// proves nothing.
+fn check_system_descriptor(
+    dir: &Path,
+    descriptor: &Descriptor,
+    distribution: &Distribution,
+) -> Result<(), Error> {
+    if descriptor.tier != Tier::System {
+        return Ok(());
+    }
+    distribution.check()?;
+    match (distribution.fingerprint(), descriptor.signer.as_deref()) {
+        (Some(key), Some(signer)) if key == signer => {}
+        (None, _) => {
+            return Err(Error::denied(
+                "this engine was built without a distribution key, so it has no `system` tier",
+            ));
+        }
+        _ => {
+            return Err(Error::denied(
+                "the descriptor claims the `system` tier without the distribution signature",
+            ));
+        }
+    }
+    let signature = store::read(&dir.join("manifest.sig"))?
+        .ok_or_else(|| Error::denied("the `system` descriptor has no bundle signature to check"))?;
+    match distribution.verify(&bundle::signed_message(dir)?, &signature)? {
+        Some(_) => Ok(()),
+        None => Err(Error::denied(
+            "the stored bundle is not signed by the distribution key",
+        )),
+    }
 }
 
 /// The descriptor a pre-descriptor install would have had.
@@ -901,17 +970,38 @@ mod tests {
     }
 
     fn service_bundle() -> Vec<u8> {
+        zip(&service_entries())
+    }
+
+    fn service_entries() -> Vec<(String, Vec<u8>)> {
         let binary = b"\x7fELF a fake service";
         let manifest = format!(
             "manifest_version = 3\n\n[app]\nid = \"org.example.service\"\nnamespace = \"example:service\"\nname = \"Service\"\nversion = \"0.1.0\"\n\n[service]\npath = \"bin/service\"\nsha256 = \"{}\"\nclass = \"socket\"\nargv = [\"--socket\", \"{{socket}}\"]\n\n[[export]]\ninterface = \"example:service/notes@1.0.0\"\n",
             hex(&Sha256::digest(binary))
         );
         let wit = "package example:service@1.0.0;\ninterface notes { all: func(); }\nworld app { export notes; }\n";
-        zip(&[
+        vec![
             ("manifest.toml".to_string(), manifest.into_bytes()),
             ("wit/service.wit".to_string(), wit.as_bytes().to_vec()),
             ("bin/service".to_string(), binary.to_vec()),
-        ])
+        ]
+    }
+
+    /// Signs the canonical message of `entries` and appends `manifest.sig`.
+    fn signed(mut entries: Vec<(String, Vec<u8>)>, signing: &SigningKey) -> Vec<u8> {
+        let files = entries
+            .iter()
+            .filter(|(name, _)| name == "manifest.toml" || name.starts_with("wit/"))
+            .cloned()
+            .collect::<Vec<_>>();
+        let message = anth_contract::signature::message(&files).expect("message");
+        let signature = crate::signature::signature_base64(&signing.sign(&message).to_bytes());
+        entries.push(("manifest.sig".to_string(), signature.into_bytes()));
+        zip(&entries)
+    }
+
+    fn distribution(signing: &SigningKey) -> Distribution {
+        Distribution::from_public_key(Some(&hex(&signing.verifying_key().to_bytes())))
     }
 
     fn options() -> Options {
@@ -1282,9 +1372,9 @@ mod tests {
     }
 
     #[test]
-    fn the_system_tier_is_refused_in_v0_5() {
-        let state = scratch("system-tier");
-        let registry = Registry::new(&state);
+    fn a_keyless_build_refuses_a_system_descriptor() {
+        let state = scratch("system-keyless");
+        let registry = Registry::with_distribution(&state, Distribution::none());
         let app = AppId::parse("org.example.notes").unwrap();
         registry
             .install(&notes_bundle("0.1.0", WASM), &options())
@@ -1606,6 +1696,172 @@ mod tests {
             .expect_err("untrusted");
         assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
         assert!(Registry::new(&state).list().expect("list").is_empty());
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn the_distribution_key_mints_the_system_tier() {
+        let state = scratch("distribution-tier");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let registry = Registry::with_distribution(&state, distribution(&release));
+        let bundle = signed(service_entries(), &release);
+        // No operator key and no `allow-third-party`: a system service installs.
+        let installed = registry
+            .install(&bundle, &options())
+            .expect("system install");
+        assert_eq!(installed.descriptor.tier, Tier::System);
+        assert_eq!(
+            installed.descriptor.signer.as_deref(),
+            registry.distribution().fingerprint()
+        );
+        assert_eq!(
+            installed.manifest.service.expect("service").class.as_str(),
+            "socket"
+        );
+        // The descriptor is read back as system only by a build with the key.
+        assert_eq!(
+            registry
+                .get(&AppId::parse("org.example.service").unwrap())
+                .expect("get")
+                .expect("installed")
+                .descriptor
+                .tier,
+            Tier::System
+        );
+        let keyless = Registry::with_distribution(&state, Distribution::none());
+        let error = keyless
+            .get(&AppId::parse("org.example.service").unwrap())
+            .expect_err("no distribution key");
+        assert!(
+            error.message().contains("without a distribution key"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_keyring_key_cannot_mint_the_system_tier() {
+        let state = scratch("system-keyring");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let third_party = SigningKey::from_bytes(&[3u8; 32]);
+        Keyring::new(&state)
+            .add(&TrustedKey {
+                version: KEY_VERSION,
+                algorithm: KeyAlgorithm::Ed25519,
+                public_key: hex(&third_party.verifying_key().to_bytes()),
+                label: None,
+                added_by: "operator-test".to_string(),
+                added_at: "2026-11-13T20:00:00Z".to_string(),
+            })
+            .expect("add key");
+        let registry = Registry::with_distribution(&state, distribution(&release));
+        let bundle = signed(service_entries(), &third_party);
+        // Trusted, so the signature verifies, but it is not the release key:
+        // the service switch still applies.
+        let error = registry
+            .install(&bundle, &options())
+            .expect_err("third-party service");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        assert!(error.message().contains("allow-third-party"), "{error}");
+
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        let installed = registry.install(&bundle, &allowed).expect("opted in");
+        assert_eq!(installed.descriptor.tier, Tier::ThirdParty);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_descriptor_cannot_claim_the_system_tier() {
+        let state = scratch("system-claim");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let third_party = SigningKey::from_bytes(&[3u8; 32]);
+        Keyring::new(&state)
+            .add(&TrustedKey {
+                version: KEY_VERSION,
+                algorithm: KeyAlgorithm::Ed25519,
+                public_key: hex(&third_party.verifying_key().to_bytes()),
+                label: None,
+                added_by: "operator-test".to_string(),
+                added_at: "2026-11-13T20:00:00Z".to_string(),
+            })
+            .expect("add key");
+        let registry = Registry::with_distribution(&state, distribution(&release));
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        registry
+            .install(&signed(service_entries(), &third_party), &allowed)
+            .expect("install");
+        let descriptor = registry.dir().join("org.example.service/descriptor.toml");
+        let text = fs::read_to_string(&descriptor).expect("descriptor");
+        fs::write(&descriptor, text.replace("third-party", "system")).expect("rewrite");
+        let error = registry
+            .get(&AppId::parse("org.example.service").unwrap())
+            .expect_err("tier claim");
+        assert!(
+            error.message().contains("distribution signature"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_descriptor_cannot_lend_the_distribution_signature() {
+        let state = scratch("system-forged");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let third_party = SigningKey::from_bytes(&[3u8; 32]);
+        let distribution = distribution(&release);
+        let release_fingerprint = distribution.fingerprint().expect("fingerprint").to_string();
+        let third_party_fingerprint = Keyring::new(&state)
+            .add(&TrustedKey {
+                version: KEY_VERSION,
+                algorithm: KeyAlgorithm::Ed25519,
+                public_key: hex(&third_party.verifying_key().to_bytes()),
+                label: None,
+                added_by: "operator-test".to_string(),
+                added_at: "2026-11-13T20:00:00Z".to_string(),
+            })
+            .expect("add key");
+        let registry = Registry::with_distribution(&state, distribution);
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        registry
+            .install(&signed(service_entries(), &third_party), &allowed)
+            .expect("install");
+        // Rewrite both the tier and the signer: the pair now names the release
+        // key, but the stored bundle is still signed by the other key.
+        let descriptor = registry.dir().join("org.example.service/descriptor.toml");
+        let text = fs::read_to_string(&descriptor).expect("descriptor");
+        let forged = text
+            .replace("third-party", "system")
+            .replace(&third_party_fingerprint, &release_fingerprint);
+        fs::write(&descriptor, forged).expect("rewrite");
+        let error = registry
+            .get(&AppId::parse("org.example.service").unwrap())
+            .expect_err("forged signer");
+        assert!(
+            error
+                .message()
+                .contains("not signed by the distribution key"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn an_unusable_distribution_key_refuses_installs() {
+        let state = scratch("system-invalid");
+        let registry =
+            Registry::with_distribution(&state, Distribution::from_public_key(Some("not-hex")));
+        let error = registry
+            .install(&notes_bundle("0.1.0", WASM), &options())
+            .expect_err("invalid key");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Internal);
+        assert!(
+            error.message().contains("invalid distribution key"),
+            "{error}"
+        );
+        assert!(!registry.dir().join("org.example.notes").exists());
         fs::remove_dir_all(&state).expect("cleanup");
     }
 

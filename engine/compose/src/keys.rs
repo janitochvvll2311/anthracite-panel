@@ -1,15 +1,122 @@
-//! The keyring: trusted third-party signers under `state/keys` (§9.1).
+//! The keyring: trusted third-party signers under `state/keys` (§9.1), and the
+//! distribution key compiled into the binary.
 //!
-//! v0.5.0 has no distribution key (D-Distribution-Key), so this is the whole
-//! trust model: a signed bundle is accepted when one of these keys signs the
-//! canonical message. The keyring can extend trust, never privilege.
+//! The keyring can extend trust, never privilege: anything it trusts is
+//! `third-party`. The `system` tier comes from the distribution key, whose
+//! public half is a build input and whose private half never enters the build.
 
 use std::path::{Path, PathBuf};
 
 use anth_contract::id::is_sha256;
-use anth_contract::{Error, TrustedKey};
+use anth_contract::{Error, ErrorKind, Tier, TrustedKey};
 
 use crate::{signature, store};
+
+/// The distribution key of this build (§9.1, D-Distribution-Key).
+///
+/// A release build compiles the public key in
+/// (`ANTHRACITE_DISTRIBUTION_KEY`, 32 bytes of lowercase hex); a debug build
+/// carries none and can install nothing as `system`. A bundle this key signs is
+/// `system` and skips the third-party service switch.
+#[derive(Debug, Clone, Default)]
+pub struct Distribution {
+    public_key: Option<String>,
+    fingerprint: Option<String>,
+    problem: Option<String>,
+}
+
+impl Distribution {
+    /// No key: every signed bundle is `third-party`.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// The key this binary was built with. Read at compile time, so a release
+    /// binary carries it and no configuration file can replace it.
+    pub fn embedded() -> Self {
+        Self::from_public_key(option_env!("ANTHRACITE_DISTRIBUTION_KEY"))
+    }
+
+    /// Parses a public key. A key that is present but malformed is a build
+    /// mistake, not an absent key: `check` refuses installs instead of silently
+    /// demoting system bundles to third-party.
+    pub fn from_public_key(public_key: Option<&str>) -> Self {
+        let Some(text) = public_key.map(str::trim).filter(|text| !text.is_empty()) else {
+            return Self::default();
+        };
+        let text = text.to_ascii_lowercase();
+        // A fingerprint only proves the bytes are 32 hex bytes; a key that does
+        // not decompress would report itself healthy and then fail every
+        // verification, so the key is checked as an Ed25519 point as well.
+        match signature::check_public_key(&text).and_then(|()| signature::fingerprint(&text)) {
+            Ok(fingerprint) => Self {
+                public_key: Some(text),
+                fingerprint: Some(fingerprint),
+                problem: None,
+            },
+            Err(error) => Self {
+                public_key: None,
+                fingerprint: None,
+                problem: Some(error.message().to_string()),
+            },
+        }
+    }
+
+    pub fn public_key(&self) -> Option<&str> {
+        self.public_key.as_deref()
+    }
+
+    pub fn fingerprint(&self) -> Option<&str> {
+        self.fingerprint.as_deref()
+    }
+
+    /// The tier a signer earns. Only the distribution fingerprint is `system`.
+    pub fn tier(&self, signer: Option<&str>) -> Tier {
+        match (self.fingerprint(), signer) {
+            (Some(key), Some(signer)) if key == signer => Tier::System,
+            _ => Tier::ThirdParty,
+        }
+    }
+
+    /// Verifies `signature` over `message` with the compiled key.
+    ///
+    /// `Ok(None)` means "not this key", so the keyring still gets its turn: a
+    /// distribution signature that does not verify is not an error, it is
+    /// someone else's signature.
+    pub fn verify(&self, message: &[u8], signature_b64: &str) -> Result<Option<String>, Error> {
+        let (Some(key), Some(fingerprint)) = (self.public_key(), self.fingerprint()) else {
+            return Ok(None);
+        };
+        // A malformed signature is an invalid artifact; only a well-formed one
+        // that does not match is "not this key".
+        let parsed = signature::parse_signature(signature_b64)?;
+        match signature::verify_bytes(message, &parsed, key) {
+            Ok(()) => Ok(Some(fingerprint.to_string())),
+            // A well-formed signature by another key is not an error; a key
+            // that cannot be used at all is, and must not be read as "someone
+            // else's signature".
+            Err(error) if error.kind() == ErrorKind::Denied => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Refuses the operation when a compiled key cannot be used. A build that
+    /// names a key it cannot parse must not pretend it has none.
+    pub fn check(&self) -> Result<(), Error> {
+        match &self.problem {
+            Some(problem) => Err(Error::internal(format!(
+                "this engine was built with an invalid distribution key: {problem}"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// Why the compiled key cannot be used, if it cannot. Reported so an
+    /// operator sees a broken build instead of a missing tier.
+    pub fn problem(&self) -> Option<&str> {
+        self.problem.as_deref()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Keyring {
@@ -352,5 +459,72 @@ mod tests {
         let encoded = signature::signature_base64(&signature.to_bytes());
         assert!(keyring.verify(b"x", &encoded).is_err());
         fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_distribution_key_that_cannot_verify_is_a_broken_build() {
+        for public_key in [
+            "not-hex".to_string(),
+            // Does not decompress to an Edwards point (y = 2).
+            "02".to_string() + &"00".repeat(31),
+            // The identity point: weak (small order).
+            "01".to_string() + &"00".repeat(31),
+        ] {
+            let distribution = Distribution::from_public_key(Some(&public_key));
+            assert!(distribution.fingerprint().is_none(), "{public_key}");
+            assert!(distribution.public_key().is_none(), "{public_key}");
+            assert!(distribution.problem().is_some(), "{public_key}");
+            let error = distribution.check().expect_err("unusable key");
+            assert_eq!(error.kind(), ErrorKind::Internal);
+            assert!(
+                error.message().contains("invalid distribution key"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absent_or_blank_distribution_key_is_none_not_broken() {
+        for text in [None, Some(""), Some("   ")] {
+            let distribution = Distribution::from_public_key(text);
+            assert!(distribution.fingerprint().is_none());
+            assert!(distribution.problem().is_none());
+            distribution.check().expect("no key is not a problem");
+            assert_eq!(distribution.tier(Some("someone")), Tier::ThirdParty);
+        }
+    }
+
+    #[test]
+    fn only_the_distribution_fingerprint_earns_the_system_tier() {
+        let distribution = Distribution::from_public_key(Some(&public_hex()));
+        let fingerprint = distribution.fingerprint().expect("fingerprint");
+        assert_eq!(distribution.tier(Some(fingerprint)), Tier::System);
+        assert_eq!(
+            distribution.tier(Some(&other_public_hex())),
+            Tier::ThirdParty
+        );
+        assert_eq!(distribution.tier(None), Tier::ThirdParty);
+    }
+
+    #[test]
+    fn a_foreign_signature_is_not_this_key_and_a_corrupt_one_is_an_error() {
+        let distribution = Distribution::from_public_key(Some(&public_hex()));
+        let message = b"manifest";
+        let own = signature::signature_base64(&signing_key().sign(message).to_bytes());
+        assert_eq!(
+            distribution.verify(message, &own).expect("own"),
+            distribution.fingerprint().map(str::to_string)
+        );
+        let foreign = signature::signature_base64(
+            &SigningKey::from_bytes(&[9u8; 32]).sign(message).to_bytes(),
+        );
+        assert!(distribution
+            .verify(message, &foreign)
+            .expect("foreign")
+            .is_none());
+        let error = distribution
+            .verify(message, "not base64!")
+            .expect_err("corrupt");
+        assert_eq!(error.kind(), ErrorKind::Invalid);
     }
 }

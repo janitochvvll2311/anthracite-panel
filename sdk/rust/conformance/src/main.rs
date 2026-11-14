@@ -35,6 +35,7 @@ fn main() -> ExitCode {
             println!("{} {}", report.id, report.version);
             println!("package {}", report.package);
             println!("signer {}", report.signer.as_deref().unwrap_or("unsigned"));
+            println!("tier {}", report.tier);
             for export in &report.exports {
                 println!("export {export}");
             }

@@ -102,6 +102,7 @@ not a resource.
 | `/api/engine/apps/{id}/wit` | the installed WIT package | — | — | — | — |
 | `/api/engine/audit` | paginated log | — | — | — | — |
 | `/api/engine/keys` | trusted keys | — | — | — | add a third-party key |
+| `/api/engine/keys/distribution` | the compiled distribution key (public) | — | — | — | — |
 | `/api/engine/keys/{fingerprint}` | — | — | — | remove | — |
 | `/api/engine/operator` | operator identity | — | change password | — | — |
 | `/api/engine/session` | current session | — | — | log out | log in |
@@ -357,6 +358,17 @@ Rules:
   of why the format is TOML (`D-Format`).
 - **Secrets never live here.** Operator credentials are in
   `state/credentials.txt`; trusted keys are in the engine's keyring.
+- **The distribution key is not configuration.** It is a build input, read by
+  `anth-compose` at compile time:
+
+  | Variable | Meaning |
+  | --- | --- |
+  | `ANTHRACITE_DISTRIBUTION_KEY` | the public half of the release key, 32 bytes of lowercase hex |
+
+  Set, the binary can install `system` bundles signed by that key; unset, it has
+  no `system` tier at all. A value that is present but malformed refuses every
+  install, because a broken build must not guess tiers. The private half never
+  enters this repository or the build.
 
 ### 6.8 State and audit
 
