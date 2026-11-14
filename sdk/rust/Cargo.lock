@@ -177,6 +177,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "anth-signer"
+version = "0.5.0"
+dependencies = [
+ "anth-compose",
+ "anth-contract",
+ "base64",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "sha2",
+ "zip",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"

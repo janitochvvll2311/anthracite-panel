@@ -3,6 +3,10 @@
 # (not `wit/deps`, which the engine injects), the component and web assets.
 #
 # Usage: scripts/package-app.sh apps/hello [output.zip]
+#
+# Signing is opt-in: set ANTHRACITE_SIGNING_KEY to the private key and `anth-sign`
+# (or ANTH_SIGN to its path) signs the staging directory before it is zipped.
+# Release artifacts are signed; development bundles are not.
 set -eu
 app=${1:?usage: package-app.sh <app-dir> [output.zip]}
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
@@ -33,6 +37,17 @@ mkdir -p "$tmp/$(dirname "$wasm_path")"
 cp "$app/$wasm_path" "$tmp/$wasm_path"
 if [ -d "$app/web" ]; then
     cp -R "$app/web" "$tmp/"
+fi
+
+if [ -n "${ANTHRACITE_SIGNING_KEY:-}" ]; then
+    signer=${ANTH_SIGN:-anth-sign}
+    if ! command -v "$signer" >/dev/null 2>&1; then
+        echo "ANTHRACITE_SIGNING_KEY is set but \`$signer\` is not on PATH; build it with \`cargo build -p anth-signer\` or set ANTH_SIGN" >&2
+        exit 2
+    fi
+    "$signer" "$tmp" --key "$ANTHRACITE_SIGNING_KEY"
+else
+    echo "unsigned: set ANTHRACITE_SIGNING_KEY to sign this bundle" >&2
 fi
 
 rm -f "$out"

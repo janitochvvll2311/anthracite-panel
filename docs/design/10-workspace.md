@@ -25,6 +25,7 @@ sdk/                       the compatibility boundary
     client/                generated Rust HTTP and CLI clients
     cli/                   the commands; builds the `anth` binary
     conformance/           bin `anth-conformance`; the kit third parties run
+    signer/                bin `anth-sign`; signs a bundle, keeps the private half
   ts/
     panel/                 iframe bridge, slot mounting, base components
     client/                generated TypeScript client
@@ -67,6 +68,7 @@ engine/*        <-  sdk/rust/panel  <-  panel/backend
 engine/*        <-  sdk/rust/guest  <-  apps/*
 engine/*        <-  sdk/rust/cli
 engine/*        <-  sdk/rust/conformance
+engine/*        <-  sdk/rust/signer
 sdk/ts/panel    <-  panel/frontend,  apps/*/frontend
 
 forbidden:  panel/backend -> engine/*        (only through the SDK)

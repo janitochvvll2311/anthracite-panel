@@ -152,11 +152,28 @@ jobs:
         run: |
           scripts/build-app.sh apps/hello
           scripts/package-app.sh apps/hello /tmp/anthracite-panel/hello-e2e.zip
-          cargo build --manifest-path sdk/rust/Cargo.toml -p anth-cli -p anth-conformance
+          cargo build --manifest-path sdk/rust/Cargo.toml -p anth-cli -p anth-conformance -p anth-signer
           cargo build --manifest-path panel/backend/Cargo.toml
 
       - name: Conformance kit on the hello bundle
         run: ./target/debug/anth-conformance /tmp/anthracite-panel/hello-e2e.zip
+
+      # The signer and the engine agree on the signed set, from outside: a fresh
+      # key pair signs the packaged bundle and the kit verifies it.
+      - name: Sign the hello bundle and check the signature
+        run: |
+          set -eu
+          dir=$(mktemp -d /tmp/anthracite-panel/sign-e2e.XXXXXX)
+          trap 'rm -rf "$dir"' EXIT
+          key=$(./target/debug/anth-sign keygen --out "$dir/key" | awk '/^public_key/ {print $2}')
+          test -n "$key"
+          ANTHRACITE_SIGNING_KEY="$dir/key" ANTH_SIGN=./target/debug/anth-sign \
+            scripts/package-app.sh apps/hello "$dir/hello-signed.zip"
+          ./target/debug/anth-conformance --require-signature --key "$key" "$dir/hello-signed.zip"
+          if ./target/debug/anth-conformance --require-signature "$dir/hello-signed.zip"; then
+            echo "an untrusted signature must be refused" >&2
+            exit 1
+          fi
 
       - name: Remote client acid test
         run: |
