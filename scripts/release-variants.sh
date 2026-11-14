@@ -418,6 +418,8 @@ exec "$here/bin/anth-demo-sessions" \
     --listen "$listen" \
     --max "${ANTHRACITE_MAX_SESSIONS:-8}" \
     --ttl-seconds "${ANTHRACITE_DEMO_TTL:-1800}" \
+    --port-base "${ANTHRACITE_PORT_BASE:-0}" \
+    --port-count "${ANTHRACITE_PORT_COUNT:-100}" \
     "$@"
 RUN
 chmod 755 "$out/demo-sessions/run.sh"
@@ -477,6 +479,10 @@ terminates TLS and forwards to the launcher and to the per-session child ports;
 the launcher reads \`X-Forwarded-Proto\` and \`Host\` so redirects and cookies use
 the public scheme and host. Service sockets live under the state root and Linux
 caps a Unix socket path at 107 bytes, so keep that root short.
+
+The release also builds a Docker image of this variant
+(\`scripts/release-images.sh\`): it exposes 8091 and 8100-8199, sets
+\`ANTHRACITE_PORT_BASE=8100\` and needs the Turnstile variables at run time.
 
 ## Verify
 

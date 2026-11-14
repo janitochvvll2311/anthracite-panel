@@ -96,6 +96,36 @@ side is wrong. The private key stays on the release machine and is never printed
     child panel.
 - fmt, clippy and the edge gate on the touched workspaces.
 
+## Images
+
+`scripts/release-images.sh --variants <dir>` turns the staged variants into four
+Docker-compatible images (docker-archive tarballs) with `umoci` and `skopeo`, no
+container runtime or namespace required. The rootfs is a minimal Alpine
+userspace (busybox, musl loader, passwd) plus the static release binaries under
+`/opt/anthracite`; `state/` is the volume.
+
+| Image | User | Ports | Notes |
+| --- | --- | --- | --- |
+| `anthracite-core:0.6.0` | 1000 | 8090 | empty composition |
+| `anthracite-base:0.6.0` | root | 8090 | real system services; `nft` is not in the image, so firewall routes need a host-provided nft and `NET_ADMIN` |
+| `anthracite-demo:0.6.0` | 1000 | 8090 | signed emulator; `run.sh` state per run |
+| `anthracite-demo-sessions:0.6.0` | 1000 | 8091, 8100-8199 | Turnstile env required; `ANTHRACITE_PORT_BASE=8100` |
+
+`docker load -i anthracite-0.6.0-core.tar.gz` (or `podman load`), then
+`docker run -p 8090:8090 -v anth-core:/opt/anthracite/state anthracite-core:0.6.0`.
+For `demo-sessions`, publish the launcher and child range and set the CAPTCHA
+variables:
+`-p 8091:8091 -p 8100-8199:8100-8199 -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1`.
+
+**Podman in this environment.** Podman 5.8.10 is installed under `/tools`
+(`apk add podman`), but the sandbox blocks `clone(CLONE_NEWUSER)` and mounts
+cgroups read-only, so Podman and Buildah cannot run or build containers here
+(`cannot clone: Operation not permitted`). The images are produced with the OCI
+tooling that does not need namespaces and are Docker/Podman-compatible; they
+were validated with `skopeo inspect` and by chrooting the extracted layer
+(`anth --version`, the manifest and the variant tree), not by running a
+container.
+
 ## Decisions
 
 - **One script, two halves, one key.** The dangerous failure is a release whose
