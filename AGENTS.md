@@ -4,7 +4,9 @@
 
 Anthracite is a headless engine that composes apps; a panel is the application
 that hosts them. Read `DESIGN.md` first: it is the architecture of record and its
-decision log is binding.
+decision log is binding. The user, operator and app-author manual is
+`docs/guide/README.md`; it describes the shipped behaviour and links back here
+and to the design where the reason matters.
 
 ## State
 

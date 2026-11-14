@@ -31,7 +31,7 @@ What a build trusts is public and reportable:
 
 ```sh
 anth key distribution
-# fingerprint 300ac4…
+# fingerprint <64 hex chars>
 ```
 
 or `GET /api/engine/keys/distribution` → `{fingerprint, public_key, problem}`.
