@@ -157,8 +157,10 @@ the challenge type and the exact next step for manual DNS, never the account key
 
 ## 7. Acceptance
 
-- A staging order against a local ACME test server completes via HTTP-01, and the
-  issued chain is imported into the certificate store and published.
+- A staging order against a local **Pebble** instance completes via HTTP-01, and
+  the issued chain is imported into the certificate store and published. Pebble
+  is the automated fixture; Let's Encrypt staging is a manual QA row, not the
+  gate.
 - The account key is not present in any route response, log or audit record.
 - A failed challenge reports the CA error and the self-check result.
 - Renewal runs on schedule, survives a restart, and never renews a certificate

@@ -13,7 +13,7 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | R1.5 | Install, approve and compose are separate acts | Three different questions, three auditable states |
 | D-Runtime | wasmtime + Cranelift, single backend | Reference implementation; lets wasm do heavy work |
 | D-Pulley | Pulley documented, not shipped | W^X hosts are a deployment profile, not the default |
-| D-Linking | Direct typed links app→app; broker only for host interfaces | Fighting the linker costs weeks and buys little |
+| D-Linking | Direct typed links app→app for wasm; broker only for host interfaces. A native service reaches a peer through the broker (D9) because two processes cannot link a component | Fighting the linker costs weeks and buys little |
 | R2.1 | WIT ids for interfaces; reverse-DNS for apps; app WIT namespace declared | WIT cannot express DNS-shaped names |
 | R2.2 | Exact interface versions | What the linker requires; evolve by exporting two versions |
 | R2.3 | Manifest is an index; the WIT package lives under `wit/` and is signed (refined by D-Wit-Package) | WIT is a language, not a config string |
@@ -104,5 +104,17 @@ Decisions taken during the v0.5.0 review. Binding until superseded.
 | D-Fs-Root | The real `fs` service runs with class `host` and an operator-approved root (default `/`); the wasm UI never receives paths | The explorer needs host reach, but path authority stays in an auditable service |
 | D-Streams-Order | The terminal exports WIT functions with bounded reads; WIT streams, typed events and quotas land in M5 | Designing streams against a real terminal beats guessing; the retrofit stays bounded |
 | D-V060-Baseline | v0.6.0 builds on the v0.5.0 contract; the v0.4 feature inventory is a scope checklist, not the gate | The contract is the baseline; v0.4 is a reference, not a reimplementation target |
+| D9 | A service calls another through a private `{broker}` socket with generated clients; the broker resolves the provider, applies the grant and the budget, and audits. There is no file-drop fallback in v0.7.0 | A file drop or a panel courier puts keys or authority in the wrong process |
+| D10 | Manifest v4 adds optional `roots`, `listen`, `egress` and the `{broker}` placeholder; v3 stays accepted; approval freezes them; L1 enforces roots and the port capability enforces listeners, while egress is intent until network isolation (L2) | `argv` is a convention, not a contract; unenforced intent must be labelled as such |
+| D11 | Service secrets live in `{data}` (`0700`/`0600`); the panel may write them but never read them back; no route, log, audit record or WIT output returns them | `anth:store/kv` is plaintext by design, and a secret that can be read is not custody |
+| D12 | Proxy configuration is a whole document applied with a version and last-good rollback | A half-applied host list is an outage |
+| D13 | The proxy defaults to `:8080`/`:8443`; production `:80`/`:443` uses `CAP_NET_BIND_SERVICE` granted by the supervisor. Socket activation is out of scope | A developer should not need root, and a release should not depend on one init system |
+| D14 | DNS-01 solvers are `manual`, `rfc2136` and `webhook` inside the ACME service; vendor adapters are additive | A separate provider bundle needs a contract and a trust decision of its own |
+| D15 | Containers use the Docker-compatible API (Docker and Podman); no pluggable runtime interface in v0.7.0 | One interface and two runtimes; a false abstraction costs more than it buys |
+| D16 | The manager installs with the operator session and offers an explicit `key add` when the publisher is untrusted; the store only catalogues and downloads | An app must not hold engine management authority, and the store cannot vouch for a signer |
+| D17 | One store provider per composition; sources are adapters; provider negotiation is post-v0.7.0 | The composition binds one provider per interface id |
+| D18 | A store index is a detached Ed25519 signature over the exact served bytes, produced by `anth-sign file`; the bundle digest and the engine signature stay independent | Two independent checks, no canonical-JSON argument, one signing tool |
+| D19 | A v0.7.0 release requires the distribution key, the system tier, sandbox L1 and the port capability; there is no debug-preview release | Shipping unsandboxed host reach under a release name would be dishonest |
+| D20 | Services audit through `anth:audit/record@1.0.0` over the broker with sanitized detail; there is no app-local audit fallback | Certificate, proxy and container actions belong in the engine record |
 
 ---

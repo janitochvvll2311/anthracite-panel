@@ -20,7 +20,7 @@ What is left is operational, not code: GitHub Actions has no runner (every job
 fails in two seconds with `runner_id: 0`), no real release key has been used yet,
 and the native services have not been exercised on a deployment host. The next
 milestone is v0.7.0/M6 (`docs/design/11-roadmap.md`), planned in
-`docs/design/21-next-version-apps.md`.
+`docs/design/29-v0.7-plan.md` and cut from tag `v0.6.0` (`29e0ef6`).
 
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.

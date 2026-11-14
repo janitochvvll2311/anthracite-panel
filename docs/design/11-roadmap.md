@@ -144,8 +144,8 @@ including the operational items that remain, is
 ### v0.7.0 — the operated edge (M6)
 
 > **Plan:** the five business apps and their prerequisites are
-> [§21](21-next-version-apps.md). Status: **proposed**; the mechanisms are not
-> binding until they enter [§16](16-decision-log.md).
+> [§21](21-next-version-apps.md), phased in [§29](29-v0.7-plan.md). Status:
+> **accepted**; decisions D9–D20 are binding in [§16](16-decision-log.md).
 
 v0.6.0 proves the platform can run system apps and third-party apps. v0.7.0 uses
 that proof to run an edge: TLS material and certificates, one ingress in front of

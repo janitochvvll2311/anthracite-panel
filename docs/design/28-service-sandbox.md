@@ -1,8 +1,9 @@
 # 28. Service sandbox and Pulley
 
 > Part of the [design index](../../DESIGN.md). Phase 9 of
-> [§18](18-v0.6-plan.md). Status: **phase 1 implemented in v0.6.0**; the later
-> layers are proposed.
+> [§18](18-v0.6-plan.md), then phase 0b of [§29](29-v0.7-plan.md). Status:
+> **L0 implemented in v0.6.0**; **L1 and the port half of L3 are v0.7.0 scope**
+> (D19); L2, the seccomp half of L3 and L4 remain proposed.
 
 ## 1. The problem
 
@@ -88,10 +89,11 @@ A launch the kernel or the supervisor refuses is audited as `service.deny` with
 the class and the reason, never as `service.crash`, and it is not retried: the
 supervisor cannot fix a refusal by trying again.
 
-### L1 — filesystem (proposed)
+### L1 — filesystem (v0.7.0)
 
 - The manifest declares the roots a service may read or write:
-  `roots = ["{data}", "{shared}", "/etc/ssl:ro"]` or an equivalent v4 field.
+  `roots = ["{data}", "{shared}", "/etc/ssl:ro"]` or an equivalent v4 field
+  ([§29](29-v0.7-plan.md)).
 - Approval shows every root, its mode and the class.
 - The supervisor applies **Landlock** (preferred, unprivileged) or a mount
   namespace with read-only binds when Landlock is unavailable.
@@ -116,7 +118,7 @@ A private network namespace is **not** the default for `socket`: a proxy or an
 ACME client needs the host network. The class says which reach is approved; the
 sandbox narrows everything else.
 
-### L3 — capabilities and seccomp (proposed)
+### L3 — capabilities and seccomp (port half in v0.7.0)
 
 - Drop the capability bounding set to the class and the declared ports:
   `CAP_NET_BIND_SERVICE` for a privileged listener, `CAP_NET_ADMIN` for `admin`,

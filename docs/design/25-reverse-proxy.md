@@ -211,14 +211,16 @@ draft.
 ## 7. Privileged ports
 
 Default binds are `:8080` and `:8443` so a developer can run the stack without
-root. Production uses one of:
+root. Production binds `:80` and `:443` through `CAP_NET_BIND_SERVICE`: the
+supervisor grants the capability to the child when the manifest declares the
+listener and the engine holds it (`no_new_privs` stays on; the capability is
+already in the child's sets at exec). systemd socket activation is out of scope
+for v0.7.0 (D13, [§29 §0b](29-v0.7-plan.md#phase-0b--sandbox-l1-and-the-port-capability)),
+and an operator-managed forward is not a supported deployment.
 
-- systemd socket activation, with the service inheriting the listening sockets;
-- `CAP_NET_BIND_SERVICE` on the service binary;
-- an operator-managed port forward.
-
-The service reports a bind failure as a typed error and keeps the previous
-listener; it does not retry in a tight loop.
+A host where the engine runs unprivileged gets the high ports only; a declared
+privileged listener is refused with a typed `service.deny`, and the service
+reports the failure without retrying in a tight loop.
 
 ## 8. Dependencies and phases
 
