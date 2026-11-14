@@ -16,3 +16,4 @@ panel/frontend/dist
 
 apps/*/wit/deps/
 tests/acid/app/wit/deps/
+/release/

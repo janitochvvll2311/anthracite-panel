@@ -253,9 +253,10 @@ signer, re-verifies a stored `system` descriptor against the stored
 `GET /api/engine/keys/distribution` (`anth key distribution`). A build without
 the variable has no `system` tier, which is the honest debug default.
 `anth-sign` produces `manifest.sig` and `anth-sign keygen` writes the key pair,
-so the signing step no longer has to be invented per deployment. What is still
-owed to a deployment: the custody of the release key pair, wiring `anth-sign`
-into the release job, and the rotation runbook
+and `scripts/release.sh` builds the keyed binaries, signs every bundle and proves
+the two agree, so the signing step no longer has to be invented per deployment.
+What is still owed to a deployment: the custody of the release key pair and the
+rotation runbook
 ([§9.1](09-authority.md#91-tiers-and-signing)).
 
 ---

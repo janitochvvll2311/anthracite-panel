@@ -49,8 +49,11 @@ tests/
 
 scripts/
   codegen.ts               WIT -> CLI commands, Rust client, TS client
-  dev.sh
-  package.sh
+  build-app.sh             build one wasm app and wrap it as a component
+  package-app.sh           pack an app directory, optionally signed
+  release.sh               build + sign the binaries and every bundle, check the key
+  acid-test.sh             the external-bundle path, end to end
+  check-edges.mjs          the forbidden edges of §10.1
 ```
 
 The `anth` binary comes from `sdk/rust/cli`; the official distribution ships it

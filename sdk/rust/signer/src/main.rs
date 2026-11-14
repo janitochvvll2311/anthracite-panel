@@ -8,15 +8,17 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anth_contract::Error;
-use anth_signer::{generate_key, sign};
+use anth_signer::{generate_key, key_info, sign};
 
 const USAGE: &str = "\
 usage: anth-sign <dir> --key <path>
        anth-sign keygen --out <path>
+       anth-sign public-key --key <path>
 
 commands:
   <dir>                 write <dir>/manifest.sig over manifest.toml and wit/**
   keygen                write a new Ed25519 private key (mode 0600)
+  public-key            print the public half of a private key, no signature
 
 options:
   --key <path>          private key: 32 bytes of lowercase hex, mode 0600
@@ -27,6 +29,7 @@ options:
 enum Command {
     Sign { dir: PathBuf, key: PathBuf },
     Keygen { out: PathBuf },
+    PublicKey { key: PathBuf },
 }
 
 fn main() -> ExitCode {
@@ -54,6 +57,11 @@ fn run(command: Command) -> Result<(), Error> {
             println!("public_key\t{}", public.key);
             println!("fingerprint\t{}", public.fingerprint);
         }
+        Command::PublicKey { key } => {
+            let public = key_info(&key)?;
+            println!("public_key\t{}", public.key);
+            println!("fingerprint\t{}", public.fingerprint);
+        }
     }
     Ok(())
 }
@@ -78,6 +86,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Command, Error> {
         }
     }
     match (positional.as_slice(), key, out) {
+        ([command], Some(key), None) if command == "public-key" => Ok(Command::PublicKey { key }),
         ([dir], Some(key), None) => Ok(Command::Sign {
             dir: dir.clone(),
             key,
@@ -86,6 +95,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Command, Error> {
         ([command], None, None) if command == "keygen" => Err(usage(
             "`keygen` needs an `--out <path>`; refusing to guess where a key lives".to_string(),
         )),
+        ([command], None, None) if command == "public-key" => {
+            Err(usage("`public-key` needs a `--key <path>`".to_string()))
+        }
         ([_], Some(_), Some(_)) => Err(usage(
             "`--out` belongs to `keygen`, not to signing".to_string(),
         )),
@@ -137,5 +149,15 @@ mod tests {
         assert!(parse_args(&["bundle", "--key"]).is_err());
         assert!(parse_args(&["bundle", "--key", "k", "--out", "o"]).is_err());
         assert!(parse_args(&["--nonsense"]).is_err());
+        assert!(parse_args(&["public-key"]).is_err());
+    }
+
+    #[test]
+    fn public_key_is_a_read_only_command_for_a_key() {
+        let command = parse_args(&["public-key", "--key", "release.key"]).expect("public key");
+        assert!(matches!(
+            command,
+            Command::PublicKey { ref key } if key == std::path::Path::new("release.key")
+        ));
     }
 }
