@@ -29,12 +29,14 @@ code, its crates or its structure.
 
 ## Tags
 
-A release is tagged `vX.Y.Z`. Successive publishes of the same version append a
-letter: `vX.Y.Za`, `vX.Y.Zb`, `vX.Y.Zc`, in order, with no separator (as
-`v0.3.0a` already does). The letter is the publish count, not a stability label.
-Do not add more `-pre.N` tags: `v0.6.0-pre.1` to `v0.6.0-pre.3` stay as they
-are, and the next publish after them is `v0.6.0a`. A tag is cut from the branch
-it publishes and is never moved or reused.
+Intermediate publishes of a version append a letter: `vX.Y.Za`, `vX.Y.Zb`,
+`vX.Y.Zc`, in order, with no separator (as `v0.3.0a` did). The unsuffixed
+`vX.Y.Z` is the **final** publish of that version and is cut last, once the line
+is done: the suffix means "not final yet", not "after the release". The letter is
+the publish count, not a stability label. Do not add more `-pre.N` tags:
+`v0.6.0-pre.1` to `v0.6.0-pre.3` stay as they are and `v0.6.0` is the final tag
+of its line; the next line starts at `v0.7.0a`. A tag is cut from the branch it
+publishes and is never moved or reused.
 
 ## Toolchain
 
