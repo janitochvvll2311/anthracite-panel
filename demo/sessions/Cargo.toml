@@ -1,0 +1,26 @@
+[package]
+name = "anth-demo-sessions"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+# Demo tooling with its own workspace: the release copies the built binary next
+# to the panel; nothing in the engine or the SDK depends on it.
+[workspace]
+
+[[bin]]
+name = "anth-demo-sessions"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "process",
+    "io-util",
+    "time",
+    "signal",
+] }

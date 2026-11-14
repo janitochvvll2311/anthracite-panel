@@ -74,6 +74,9 @@ scripts/acid-test.sh
 # a release: compile the public key in, sign every app bundle (private key local)
 scripts/release.sh --key <private-key> [--out release]
 
+# the four distribution archives from a signed release
+scripts/release-variants.sh --release <signed-release-dir>
+
 # an app bundle (the SDK wraps these three steps)
 cargo build --manifest-path apps/Cargo.toml --release --target wasm32-unknown-unknown
 wasm-tools component embed --world app apps/<app>/wit <module>.wasm -o embedded.wasm

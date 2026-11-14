@@ -120,6 +120,31 @@ for binary in anth anth-engine anth-panel; do
 done
 
 mkdir -p "$out/bundles"
+# Signs one staged directory, verifies the tier and leaves the id, version and
+# digest in `bundle_*` for the loop that calls it.
+sign_one() {
+    unsigned=$1
+    target=$2
+    label=$3
+    stage=$tmp/stage-$label
+    mkdir -p "$stage"
+    unzip -q "$unsigned" -d "$stage"
+    ./target/release/anth-sign "$stage" --key "$key" >/dev/null
+    rm -f "$target"
+    (cd "$stage" && zip -qr "$target" .)
+
+    report=$(./target/release/anth-conformance --require-signature --key "$public" "$target")
+    if ! printf '%s\n' "$report" | grep -qx 'tier system'; then
+        echo "the signed $label bundle did not earn the system tier:" >&2
+        printf '%s\n' "$report" >&2
+        exit 1
+    fi
+    bundle_id=$(printf '%s\n' "$report" | head -1 | cut -d' ' -f1)
+    bundle_version=$(printf '%s\n' "$report" | head -1 | cut -d' ' -f2)
+    bundle_sha=$(sha256sum "$target" | cut -d' ' -f1)
+    echo "release: $bundle_id $bundle_version -> $target"
+}
+
 rows=
 for name in $(printf '%s' "$apps" | tr ',' ' '); do
     [ -d "apps/$name" ] || { echo "no such app: $name" >&2; exit 2; }
@@ -130,26 +155,22 @@ for name in $(printf '%s' "$apps" | tr ',' ' '); do
     else
         "apps/$name/build.sh" "$unsigned"
     fi
+    sign_one "$unsigned" "$out/bundles/$name.anth" "$name"
+    rows="$rows$bundle_id	$bundle_version	$name.anth	$bundle_sha
+"
+done
 
-    stage=$tmp/stage-$name
-    mkdir -p "$stage"
-    unzip -q "$unsigned" -d "$stage"
-    ./target/release/anth-sign "$stage" --key "$key" >/dev/null
-    rm -f "$out/bundles/$name.anth"
-    (cd "$stage" && zip -qr "$out/bundles/$name.anth" .)
-
-    report=$(./target/release/anth-conformance --require-signature --key "$public" \
-        "$out/bundles/$name.anth")
-    if ! printf '%s\n' "$report" | grep -qx 'tier system'; then
-        echo "the signed $name bundle did not earn the system tier:" >&2
-        printf '%s\n' "$report" >&2
-        exit 1
-    fi
-    id=$(printf '%s\n' "$report" | head -1 | cut -d' ' -f1)
-    version=$(printf '%s\n' "$report" | head -1 | cut -d' ' -f2)
-    sha=$(sha256sum "$out/bundles/$name.anth" | cut -d' ' -f1)
-    echo "release: $id $version -> $out/bundles/$name.anth"
-    rows="$rows$id	$version	$name.anth	$sha
+echo "release: building and signing the demo emulator bundles"
+cargo build --manifest-path demo/emulator/Cargo.toml --release \
+    --bin host-emulator --bin bundle-emulator
+./target/release/bundle-emulator --binary ./target/release/host-emulator \
+    --out "$tmp/demo" >/dev/null
+mkdir -p "$out/demo"
+demo_rows=
+for name in accounts firewall fs home net proc storage terminal; do
+    [ -f "$tmp/demo/$name.anth" ] || { echo "the emulator did not build $name" >&2; exit 1; }
+    sign_one "$tmp/demo/$name.anth" "$out/demo/$name.anth" "demo-$name"
+    demo_rows="$demo_rows$bundle_id	$bundle_version	$name.anth	$bundle_sha
 "
 done
 
@@ -183,9 +204,22 @@ done
         printf '    {"id": "%s", "version": "%s", "file": "%s", "sha256": "%s", "tier": "system"}' \
             "$id" "$version" "$file" "$sha"
     done
+    printf '\n  ],\n'
+    printf '  "demo": [\n'
+    first=1
+    printf '%s' "$demo_rows" | while IFS='	' read -r id version file sha; do
+        [ -n "$id" ] || continue
+        if [ "$first" = 1 ]; then
+            first=0
+        else
+            printf ',\n'
+        fi
+        printf '    {"id": "%s", "version": "%s", "file": "%s", "sha256": "%s", "tier": "system"}' \
+            "$id" "$version" "$file" "$sha"
+    done
     printf '\n  ]\n}\n'
 } > "$out/manifest.json"
 
-(cd "$out" && sha256sum bin/* bundles/* > SHA256SUMS)
+(cd "$out" && sha256sum bin/* bundles/* demo/* > SHA256SUMS)
 
 echo "release: wrote $out/manifest.json and $out/SHA256SUMS ($release_version, key $fingerprint)"
