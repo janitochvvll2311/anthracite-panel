@@ -565,7 +565,8 @@ server; v0.4.0 proved it, and the fix is generation, not discipline.
 
 `doctor` answers "would this boot?" without a daemon; `status` answers "is it
 healthy now?" with one. The first is what saves you when the engine does not
-start.
+start. `compose --now` saves the document and then asks for the restart, instead
+of telling the operator to go find one.
 
 **Breaking actions ask for acknowledgment.** Disabling, removing or revoking an app
 that other composed apps depend on returns `409` with

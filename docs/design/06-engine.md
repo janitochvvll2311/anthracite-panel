@@ -399,9 +399,10 @@ a tree created before v0.6.0 until the next boot creates it.
 
 `at` is UTC, `actor` is the operator name or `system`, and `action` is one of
 `app.install`, `app.upgrade`, `app.approve`, `app.revoke`, `app.enable`,
-`app.disable`, `app.remove`, `compose`, `key.add`, `key.remove`, `acknowledge`,
-`deny`, `session.login`. `detail` carries what the action needs: the risk, the
-dependents broken, the capability denied.
+`app.disable`, `app.remove`, `compose`, `engine.restart`, `key.add`,
+`key.remove`, `acknowledge`, `deny`, `session.login`, `service.start`,
+`service.stop`, `service.crash`, `service.deny`. `detail` carries what the
+action needs: the risk, the dependents broken, the capability denied.
 
 A denial is audited even when nothing changed. The record of what an app tried is
 the point of having one.

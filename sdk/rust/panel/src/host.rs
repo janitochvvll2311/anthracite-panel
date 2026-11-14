@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anth_api::{EngineState, PeerUid, SessionInfo};
+use anth_api::{EngineState, PeerUid, Restart, SessionInfo};
 use anth_contract::Error;
 use anth_engine::config::{Config, Profile};
 use anth_engine::log::Logger;
@@ -31,13 +31,45 @@ impl Sessions {
     }
 }
 
+/// Why the host stopped: a signal, or a restart the API asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    Shutdown,
+    Restart,
+}
+
 /// A booted engine owned by the panel.
 pub struct Host {
     state: Arc<EngineState>,
     supervisor: Arc<Supervisor>,
     services: Arc<anth_engine::service::ServiceSupervisor>,
-    stop: watch::Sender<bool>,
+    stop: watch::Sender<Option<Stop>>,
     socket: JoinHandle<std::io::Result<()>>,
+}
+
+/// The panel's claim on its own process: the router asks, the binary replaces
+/// itself after the host stops (§6.5).
+struct RestartProcess {
+    stop: watch::Sender<Option<Stop>>,
+}
+
+impl Restart for RestartProcess {
+    fn restart(&self) -> Result<(), Error> {
+        // Once a stop is in progress a restart no longer wins: a service
+        // manager's TERM must not be turned into a re-exec by a late request.
+        let applied = self.stop.send_if_modified(|value| {
+            if value.is_some() {
+                return false;
+            }
+            *value = Some(Stop::Restart);
+            true
+        });
+        if applied {
+            Ok(())
+        } else {
+            Err(Error::unavailable("the panel is already stopping"))
+        }
+    }
 }
 
 impl Host {
@@ -87,6 +119,7 @@ impl Host {
             &config.state,
             std::time::Duration::from_millis(config.limits.wall_ms),
         ));
+        let (stop, stopped) = watch::channel(None::<Stop>);
         let state = Arc::new(
             EngineState::new(allowed_uid)
                 .with_composition(composition.clone())
@@ -100,6 +133,7 @@ impl Host {
                     SupervisorCaller::new(supervisor.clone()),
                     services.clone(),
                 )))
+                .with_restart(Arc::new(RestartProcess { stop: stop.clone() }))
                 .with_auth(auth)
                 .booting(),
         );
@@ -108,7 +142,6 @@ impl Host {
         anth_engine::socket::restrict(&config.socket)?;
         logger.info(&format!("listening on {}", config.socket.display()));
 
-        let (stop, stopped) = watch::channel(false);
         let router_state = Arc::clone(&state);
         let socket_task = tokio::spawn(async move {
             let mut stopped = stopped;
@@ -117,7 +150,7 @@ impl Host {
                 anth_api::router(router_state).into_make_service_with_connect_info::<PeerUid>(),
             )
             .with_graceful_shutdown(async move {
-                while !*stopped.borrow() {
+                while stopped.borrow().is_none() {
                     if stopped.changed().await.is_err() {
                         break;
                     }
@@ -142,7 +175,7 @@ impl Host {
         let report = match report {
             Ok(report) => report,
             Err(error) => {
-                let _ = stop.send(true);
+                let _ = stop.send(Some(Stop::Shutdown));
                 let _ = socket_task.await;
                 services.stop_all().await;
                 supervisor.stop_all().await;
@@ -188,11 +221,19 @@ impl Host {
         })
     }
 
-    /// Stops the socket and every running app.
-    pub async fn stop(self) {
-        let _ = self.stop.send(true);
+    /// A receiver the panel's own server watches so it stops accepting when the
+    /// API asks to restart the process. A plain shutdown is `Some(Shutdown)`.
+    pub fn restart_signal(&self) -> watch::Receiver<Option<Stop>> {
+        self.stop.subscribe()
+    }
+
+    /// Stops the socket and every running app. `reason` is decided by the
+    /// caller: a signal means shutdown, the API's restart signal means re-exec.
+    pub async fn stop(self, reason: Stop) -> Stop {
+        let _ = self.stop.send(Some(reason));
         let _ = self.socket.await;
         self.services.stop_all().await;
         self.supervisor.stop_all().await;
+        reason
     }
 }

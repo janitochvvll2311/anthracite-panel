@@ -93,6 +93,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "socket2",
  "tokio",
  "toml 1.2.1+spec-1.1.0",
 ]
@@ -121,6 +122,7 @@ dependencies = [
  "mime_guess",
  "percent-encoding",
  "rust-embed",
+ "socket2",
  "tokio",
  "tower",
 ]
