@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "anth-contract"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "humantime",
  "semver",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "anth-service"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anth-contract",
  "futures-core",
