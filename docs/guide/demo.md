@@ -2,8 +2,12 @@
 
 Anthracite has two demo shapes: a **developer demo** that runs the deterministic
 host emulator under a debug panel, and the **release demo** variants that package
-the emulator as signed bundles behind a strict configuration. Neither one reads
-the host you run it on; the emulator is an app like any other.
+the emulator as signed bundles behind a strict configuration. Both compose the
+**eight system app ids**, exactly like `base`: the difference is who answers them
+(`home`, `fs`, `terminal`, `proc`, `net`, `firewall`, `storage` and `accounts`
+are emulated, not the host). A demo that ships fewer than the eight is not a
+demo build. Neither shape reads the host you run it on; the emulator is an app
+like any other.
 
 ## The host emulator
 

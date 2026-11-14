@@ -12,8 +12,8 @@ Unpack one and run its `run.sh`; there is no installer and no daemon setup.
 | --- | --- | --- |
 | `core` | none; an empty composition | `state/` |
 | `base` | the eight signed system apps | `state/` |
-| `demo` | the signed host emulator | a fresh `state/session-*` per run |
-| `demo-sessions` | the host emulator, one ephemeral session per browser | `state/sessions/<id>` |
+| `demo` | the eight emulated system apps | a fresh `state/session-*` per run |
+| `demo-sessions` | the same eight apps, one ephemeral session per browser | `state/sessions/<id>` |
 
 ```sh
 tar -xzf anthracite-0.6.0-core-linux-x86_64.tar.gz
@@ -31,7 +31,8 @@ to the same engine over the Unix socket:
 ```
 
 `base` installs and composes the system apps on the first run; `demo` installs
-the emulator bundles and prints the session state path. `demo-sessions` is the
+the eight emulator bundles under the same ids and prints the session state path.
+`demo-sessions` is the
 public demo: it needs Turnstile variables and its own domain, and is documented
 in [Demo](demo.md). The Docker images are the same variants; see
 [Installation](installation.md#docker-images).

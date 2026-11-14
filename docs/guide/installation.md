@@ -23,7 +23,7 @@ and the panel are ordinary processes.
 | --- | --- | --- |
 | `core` | `anth`, `anth-engine`, `anth-panel`; empty composition | `./run.sh` |
 | `base` | core + the eight signed system bundles | `./run.sh` installs, approves and composes |
-| `demo` | core + the signed host emulator, one state per run | `./run.sh` |
+| `demo` | core + the eight emulated system bundles, one state per run | `./run.sh` |
 | `demo-sessions` | demo with one ephemeral, Turnstile-gated session per browser | `./run.sh` (landing page on 8091) |
 
 Each archive has `bin/`, `run.sh`, `README.md`, `manifest.json` and
@@ -47,7 +47,7 @@ The four variants are also published as Docker-compatible images
 | --- | --- | --- | --- |
 | `anthracite-core:0.6.0` | 1000 | 8090 | no apps |
 | `anthracite-base:0.6.0` | root | 8090 | real services; `nft` is not in the image |
-| `anthracite-demo:0.6.0` | 1000 | 8090 | signed emulator |
+| `anthracite-demo:0.6.0` | 1000 | 8090 | the eight emulated system apps |
 | `anthracite-demo-sessions:0.6.0` | 1000 | 8091, 8100-8199 | Turnstile variables required |
 
 ```sh
