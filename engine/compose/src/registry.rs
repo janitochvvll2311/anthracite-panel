@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
+use anth_contract::id::Namespace;
 use anth_contract::{AppId, Descriptor, Error, Grant, Manifest, Tier, DESCRIPTOR_VERSION};
 
 use crate::bundle::{self, Options, StagedBundle};
@@ -554,6 +555,7 @@ impl Registry {
         let manifest = staged.manifest();
         let tier = staged.tier();
         check_service_tier(manifest, tier, options)?;
+        check_namespace_tier(manifest, tier, &self.distribution)?;
         Ok(Descriptor {
             version: DESCRIPTOR_VERSION,
             app: id.clone(),
@@ -738,6 +740,7 @@ fn read_installed(dir: &Path, distribution: &Distribution) -> Result<Installed, 
             manifest.app.id
         )));
     }
+    check_namespace_tier(&manifest, descriptor.tier, distribution)?;
     let expected = dir
         .file_name()
         .and_then(|name| name.to_str())
@@ -769,6 +772,39 @@ fn check_service_tier(manifest: &Manifest, tier: Tier, options: &Options) -> Res
             "this engine refuses third-party service bundles; start it with \
              `[services] allow-third-party = true` to opt in",
         ));
+    }
+    Ok(())
+}
+
+/// The first-party namespace is a tier, not a guess (§7.3, D-Namespace).
+///
+/// The manifest already refuses `anth`, which belongs to the engine. `anthracite`
+/// belongs to apps the distribution key signs: a release build refuses it from
+/// anything `third-party`, so a random bundle cannot impersonate a shipped app's
+/// interface ids. A build without a key has no `system` tier at all — it is the
+/// development build, where the shipped apps install as `third-party` — so the
+/// rule only bites where there is a release key to compare against.
+fn check_namespace_tier(
+    manifest: &Manifest,
+    tier: Tier,
+    distribution: &Distribution,
+) -> Result<(), Error> {
+    distribution.check()?;
+    if tier == Tier::System || distribution.fingerprint().is_none() {
+        return Ok(());
+    }
+    let namespace = manifest
+        .app
+        .namespace
+        .split_once(':')
+        .map(|(namespace, _)| namespace)
+        .unwrap_or_default();
+    if Namespace::of(namespace) == Namespace::FirstParty {
+        return Err(Error::denied(format!(
+            "`{}` uses the first-party `anthracite` namespace; only a bundle \
+             signed by the distribution key may use it",
+            manifest.app.namespace
+        )));
     }
     Ok(())
 }
@@ -967,6 +1003,28 @@ mod tests {
 
     fn other_bundle() -> Vec<u8> {
         plain_bundle("org.example.other", "example:other", None)
+    }
+
+    /// A first-party-shaped app: the `anthracite` namespace with no exports, so
+    /// the tier rule is the only thing being tested.
+    fn first_party_entries() -> Vec<(String, Vec<u8>)> {
+        let manifest = "manifest_version = 2\n\n[app]\nid = \"org.anthracite.notes\"\nnamespace = \"anthracite:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n";
+        let wit = "package anthracite:notes@1.0.0;\nworld app {}\n";
+        vec![
+            ("manifest.toml".to_string(), manifest.as_bytes().to_vec()),
+            ("wit/notes.wit".to_string(), wit.as_bytes().to_vec()),
+        ]
+    }
+
+    fn trusted(public_key: &SigningKey) -> TrustedKey {
+        TrustedKey {
+            version: KEY_VERSION,
+            algorithm: KeyAlgorithm::Ed25519,
+            public_key: hex(&public_key.verifying_key().to_bytes()),
+            label: None,
+            added_by: "operator-test".to_string(),
+            added_at: "2026-11-13T20:00:00Z".to_string(),
+        }
     }
 
     fn service_bundle() -> Vec<u8> {
@@ -1845,6 +1903,63 @@ mod tests {
                 .contains("not signed by the distribution key"),
             "{error}"
         );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_release_build_refuses_the_first_party_namespace_from_third_parties() {
+        let state = scratch("namespace-third-party");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let third_party = SigningKey::from_bytes(&[3u8; 32]);
+        Keyring::new(&state)
+            .add(&trusted(&third_party))
+            .expect("add key");
+        let registry = Registry::with_distribution(&state, distribution(&release));
+        let error = registry
+            .install(&signed(first_party_entries(), &third_party), &options())
+            .expect_err("first-party namespace");
+        assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
+        assert!(error.message().contains("first-party"), "{error}");
+        assert!(!registry.dir().join("org.anthracite.notes").exists());
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn the_distribution_key_owns_the_first_party_namespace() {
+        let state = scratch("namespace-system");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let registry = Registry::with_distribution(&state, distribution(&release));
+        let installed = registry
+            .install(&signed(first_party_entries(), &release), &options())
+            .expect("system install");
+        assert_eq!(installed.descriptor.tier, Tier::System);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_keyless_build_still_installs_the_shipped_apps() {
+        let state = scratch("namespace-keyless");
+        let registry = Registry::with_distribution(&state, Distribution::none());
+        let installed = registry
+            .install(&zip(&first_party_entries()), &options())
+            .expect("debug install");
+        assert_eq!(installed.descriptor.tier, Tier::ThirdParty);
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_release_build_refuses_a_first_party_app_installed_as_third_party() {
+        let state = scratch("namespace-read");
+        let keyless = Registry::with_distribution(&state, Distribution::none());
+        keyless
+            .install(&zip(&first_party_entries()), &options())
+            .expect("debug install");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let registry = Registry::with_distribution(&state, distribution(&release));
+        let error = registry
+            .get(&AppId::parse("org.anthracite.notes").unwrap())
+            .expect_err("third-party first-party app");
+        assert!(error.message().contains("first-party"), "{error}");
         fs::remove_dir_all(&state).expect("cleanup");
     }
 

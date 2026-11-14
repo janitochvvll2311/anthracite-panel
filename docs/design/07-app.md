@@ -200,6 +200,13 @@ in reverse-DNS (`org.example.notes`) because that is what DNS-shaped ids are for
 while the app's WIT namespace is declared in the manifest and must be unique
 across a composition.
 
+The manifest refuses `anth` outright. `anthracite` is enforced against the tier:
+a build that carries a distribution key refuses it from a `third-party` bundle,
+and a keyless build — the development build with no `system` tier at all — still
+installs the shipped apps as `third-party`, so the repository can be developed
+without a release key. Exports must live under the app's own package namespace,
+so the package check covers the interfaces the app exports.
+
 **Two version numbers, two meanings.** The package version versions the interface
 set (`anthracite:hello@1.0.0`); the app has its own version
 (`anthracite:hello@0.5.1` in the manifest). The interface id carries the package

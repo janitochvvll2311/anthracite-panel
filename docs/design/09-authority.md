@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `engine` | compiled in | nothing; it *provides* the native set |
 | `system` | signed by the distribution key, shipped in `apps/` | wasm, ui; services in v0.6.0 |
-| `third-party` | any other signer, approved by the operator | wasm, ui; a service only with `[services] allow-third-party = true` |
+| `third-party` | any other signer, approved by the operator | wasm, ui; a service only with `[services] allow-third-party = true`; never the `anthracite` namespace when the build has a distribution key |
 
 The **distribution key is compiled into the binary**. Rotating it requires a
 release; no configuration file can mint a `system` app. An operator may add keys
