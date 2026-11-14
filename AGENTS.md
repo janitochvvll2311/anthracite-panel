@@ -8,12 +8,19 @@ decision log is binding.
 
 ## State
 
-`v0.5.0` is complete through M3 and the auth boundary: engine, composition,
-runtime, the official panel and the second minimal panel, generated Rust/TS
-clients, first-boot credentials, TCP sessions, panel sessions, origin checks and
-security headers. The next milestone is v0.6.0/M4 (`docs/design/11-roadmap.md`);
-its phased plan is `docs/design/18-v0.6-plan.md` and work is cut from the
-`v0.6.0` branch.
+`v0.6.0` is complete through M5: engine, composition, runtime, the official panel
+and the second minimal panel, generated Rust/TS clients, first-boot credentials,
+TCP and panel sessions, origin checks and security headers, service apps on the
+v3 contract, streams/events/quotas, the `system` tier with a compiled distribution
+key and the `anth-sign`/`release.sh` ceremony, the sandbox baseline (L0) and the
+external-bundle acid test. Phases 0–9 of `docs/design/18-v0.6-plan.md` shipped as
+PRs into `v0.6.0`; the evidence is `docs/features/v0.6-close/report.md`.
+
+What is left is operational, not code: GitHub Actions has no runner (every job
+fails in two seconds with `runner_id: 0`), no real release key has been used yet,
+and the native services have not been exercised on a deployment host. The next
+milestone is v0.7.0/M6 (`docs/design/11-roadmap.md`), planned in
+`docs/design/21-next-version-apps.md`.
 
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.
