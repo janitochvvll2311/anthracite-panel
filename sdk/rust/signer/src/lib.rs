@@ -95,6 +95,14 @@ pub fn read_key(path: &Path) -> Result<SigningKey, Error> {
     Ok(SigningKey::from_bytes(&bytes))
 }
 
+/// Reads a private key and returns its public half, without signing anything.
+///
+/// The release script uses it to prove that the key that signs the bundles is
+/// the key the binaries were compiled with; nothing secret is printed.
+pub fn key_info(key_path: &Path) -> Result<PublicKey, Error> {
+    public_key(&read_key(key_path)?)
+}
+
 fn public_key(key: &SigningKey) -> Result<PublicKey, Error> {
     let key = signature::hex_encode(&key.verifying_key().to_bytes());
     let fingerprint = signature::fingerprint(&key)?;
@@ -215,6 +223,17 @@ mod tests {
         generate_key(&key).expect("keygen");
         let mode = fs::metadata(&key).expect("metadata").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn key_info_matches_the_key_that_signs() {
+        let dir = app_dir("key-info");
+        let key = dir.join("key");
+        let generated = generate_key(&key).expect("keygen");
+        assert_eq!(key_info(&key).expect("info"), generated);
+        let signed = sign(&dir, &key).expect("sign");
+        assert_eq!(key_info(&key).expect("info"), signed);
         fs::remove_dir_all(&dir).expect("cleanup");
     }
 

@@ -17,6 +17,7 @@ name = "anth-service"
 version = "0.5.0"
 dependencies = [
  "anth-contract",
+ "futures-core",
  "serde",
  "serde_json",
  "tokio",
@@ -38,6 +39,12 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "futures-core"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
 
 [[package]]
 name = "humantime"

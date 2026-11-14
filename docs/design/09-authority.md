@@ -62,6 +62,30 @@ do not hand out host reach for free: the daemon must start with
 and a service is always at least `admin`. System-tier services are unaffected by
 the switch.
 
+**The release ceremony.** `scripts/release.sh --key <private-key>` does the whole
+pair in one run, because the failure mode is a binary that trusts a different key
+than the one that signed the bundles:
+
+1. `anth-sign public-key` derives the public half without printing the private
+   one; a key that group or others can read is refused at that first step.
+2. The engine, the panel, the CLI and the conformance kit are built with
+   `ANTHRACITE_DISTRIBUTION_KEY` set to that public half.
+3. The freshly built release engine is started on a throwaway state and must
+   answer `anth key distribution` with the key's fingerprint. A build that
+   trusts anything else stops the release there.
+4. Every app is built by its own build script, unpacked, signed with
+   `anth-sign`, repacked and verified with `anth-conformance
+   --require-signature --key <public>`; a bundle that does not report `tier
+   system` stops the release.
+5. `release/manifest.json` records the key fingerprint and every bundle's id,
+   version and SHA-256, so a deployment can check what it is about to install.
+
+The private key is one file at mode 0600 and lives with the release process, not
+in this repository and not in CI. Rotation is a release: generate a new pair,
+compile the new public half in, re-sign every bundle and reinstall. A deployment
+that still runs the old binary cannot verify the new bundles, which is the point
+of the tier, not a bug.
+
 ### 9.2 The closed native capability set
 
 The engine provides exactly these interfaces, because they are mechanism-adjacent

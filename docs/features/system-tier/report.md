@@ -84,7 +84,8 @@ next PR (see *Pending*).
 
 - The release tool that produces `manifest.sig` (delivered by
   [`anth-sign`](../bundle-signer/report.md)).
-- Signing the shipped `apps/*` bundles and making them `system` in a release.
+- Signing the shipped `apps/*` bundles and making them `system` in a release —
+  delivered by [`scripts/release.sh`](../release-ceremony/report.md).
 - Key rotation mechanics beyond "it is a release": there is still no CRL.
 - Enforcing namespace ownership (`anth`, `anthracite`) by tier — delivered in the
   namespace-tier PR: `anthracite` is refused for `third-party` bundles once the
