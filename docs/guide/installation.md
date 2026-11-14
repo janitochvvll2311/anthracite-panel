@@ -45,25 +45,51 @@ The four variants are also published as Docker-compatible images
 
 | Image | User | Ports | Notes |
 | --- | --- | --- | --- |
-| `anthracite-core:0.6.0` | 1000 | 8090 | no apps |
-| `anthracite-base:0.6.0` | root | 8090 | real services; `nft` is not in the image |
-| `anthracite-demo:0.6.0` | 1000 | 8090 | the eight emulated system apps |
-| `anthracite-demo-sessions:0.6.0` | 1000 | 8091, 8100-8199 | Turnstile variables required |
+| `anthracite-core:0.6.1` | 1000 | 8090 | no apps |
+| `anthracite-base:0.6.1` | root | 8090 | real services; `nft` is not in the image |
+| `anthracite-demo:0.6.1` | 1000 | 8090 | the eight emulated system apps |
+| `anthracite-demo-sessions:0.6.1` | 1000 | 8091, 8100-8199 | Turnstile variables required |
 
 ```sh
-docker load -i anthracite-0.6.0-core.tar.gz
-docker run -p 8090:8090 -v anth-core:/opt/anthracite/state anthracite-core:0.6.0
+docker load -i anthracite-0.6.1-core.tar.gz
+docker run -p 8090:8090 -v anth-core:/opt/anthracite/state anthracite-core:0.6.1
 
 docker run -p 8091:8091 -p 8100-8199:8100-8199 \
   -v anth-sessions:/opt/anthracite/state \
   -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET \
   -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1 \
-  anthracite-demo-sessions:0.6.0
+  anthracite-demo-sessions:0.6.1
 ```
 
 `base` may need `--cap-add=NET_ADMIN` and an `nft` binary. A bind-mounted state
 directory must be writable by uid 1000 (or root for `base`). See [Demo](demo.md)
 for the session launcher's proxy and range details.
+
+## Single bundles
+
+The release also publishes every app on its own, so an existing deployment can
+take one app without downloading another variant:
+
+| Asset | Contents |
+| --- | --- |
+| `system-org.anthracite.<app>.anth` | the signed real system service, the same bundle `base` carries |
+| `demo-org.anthracite.<app>.anth` | the signed host emulator under the same id |
+| `anthracite-0.6.1-bundles.tar.gz` | all 16 bundles and their `SHA256SUMS` |
+
+```sh
+sha256sum -c SHA256SUMS
+anth app install system-org.anthracite.fs.anth
+anth app show org.anthracite.fs        # the risk, the interfaces, the grant state
+anth app approve org.anthracite.fs --accept-write --accept-admin --accept-host
+anth compose --add org.anthracite.fs --now
+```
+
+The flags depend on the risk the approval preview computes; `--accept-host` is
+only needed for a service that declares a host-reaching class. A `system` and a
+`demo` bundle share the app id, so install one or the other, not both: the second
+install is a `conflict`. Every bundle in the release is signed by the same
+distribution key, so a keyed binary verifies them without adding anything to the
+keyring.
 
 ## From source
 

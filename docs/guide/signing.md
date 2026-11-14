@@ -122,11 +122,16 @@ Then:
 ```sh
 scripts/release-variants.sh --release <dir>   # core, base, demo, demo-sessions archives
 scripts/release-images.sh --variants <dir>    # Docker images of the same variants
+scripts/release-bundles.sh --release <dir>    # the 16 bundles as standalone assets
 ```
 
 The variants carry a `README.md`, `manifest.json` and `SHA256SUMS` each; the
-images carry the same state volume and entrypoint. See [Installation](installation.md)
-and [Demo](demo.md).
+images carry the same state volume and entrypoint. `release-bundles.sh` copies
+the signed system and emulator bundles into `separate/` as
+`system-<app-id>.anth` and `demo-<app-id>.anth`, re-verifies every one against
+the manifest's distribution key, and writes `SHA256SUMS` and
+`anthracite-<version>-bundles.tar.gz`. See [Installation](installation.md) and
+[Demo](demo.md).
 
 ## Verifying a download or a bundle
 

@@ -93,6 +93,9 @@ scripts/release-variants.sh --release <signed-release-dir>
 # Docker images for those variants (docker load -i <tar.gz>)
 scripts/release-images.sh --variants <staged-variants-dir>
 
+# the 16 signed bundles as standalone assets (per-app installs)
+scripts/release-bundles.sh --release <signed-release-dir> [--out <dir>]
+
 # an app bundle (the SDK wraps these three steps)
 cargo build --manifest-path apps/Cargo.toml --release --target wasm32-unknown-unknown
 wasm-tools component embed --world app apps/<app>/wit <module>.wasm -o embedded.wasm
