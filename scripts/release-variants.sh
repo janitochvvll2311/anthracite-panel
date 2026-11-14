@@ -405,8 +405,8 @@ for app in $system_apps; do
 done
 cat > "$out/demo-sessions/run.sh" <<'RUN'
 #!/bin/sh
-# One panel and one demo state per browser session. The landing page shows the
-# password for the session this browser owns.
+# One panel and one expired demo state per browser session. No password: the
+# launcher signs the visitor in. A public launcher requires a CAPTCHA.
 set -eu
 here=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 listen=${ANTHRACITE_LISTEN:-127.0.0.1:8091}
@@ -417,17 +417,48 @@ exec "$here/bin/anth-demo-sessions" \
     --state "$here/state" \
     --listen "$listen" \
     --max "${ANTHRACITE_MAX_SESSIONS:-8}" \
+    --ttl-seconds "${ANTHRACITE_DEMO_TTL:-1800}" \
     "$@"
 RUN
 chmod 755 "$out/demo-sessions/run.sh"
 cat > "$out/demo-sessions/README.md" <<EOF
-# Anthracite $version — demo, one state per browser session
+# Anthracite $version — demo, one ephemeral state per browser session
 
 Like **demo**, with one panel and one emulator state **per browser session**. The
 launcher keeps a cookie that maps a browser to its own panel on its own port, so
 two visitors never see each other's files, users, routes or mounts. The eight
 bundles are the signed host emulator; the configuration is strict
 (\`require-signature = true\`, \`allow-third-party = false\`).
+
+There is **no password**: the launcher changes the panel's generated password to
+a random one it never shows, signs the visitor in through the engine's session
+endpoint and forwards the session cookie. Sessions last
+\`ANTHRACITE_DEMO_TTL\` seconds (1800 by default); when one expires the launcher
+kills its panel and **deletes its state**.
+
+## Turnstile and abuse limits
+
+A launcher that is not loopback, or that sets \`--public-host\`, refuses to start
+without Cloudflare Turnstile and the expected hostname. Set:
+
+\`\`\`sh
+ANTHRACITE_CAPTCHA_SITE_KEY=<site key>      # public; can also be --captcha-site-key
+ANTHRACITE_CAPTCHA_SECRET=<secret>          # env only, never argv
+ANTHRACITE_CAPTCHA_HOSTNAME=demo.internal   # required for a public launcher
+ANTHRACITE_TRUST_PROXY=1                    # read CF-Connecting-IP / X-Forwarded-For
+\`\`\`
+
+The landing page renders the Turnstile widget with \`action=demo-session\`; the
+launcher verifies success, action and hostname server-side before creating
+anything, and checks \`Origin\`/\`Referer\` on the form post. On a loopback
+launcher Turnstile is optional, which is what makes local development work
+without keys. \`--captcha-verify-url\` overrides the endpoint for a local verifier.
+
+Abuse limits: three sessions per address per hour, six per minute and sixty per
+hour globally, ten attempts per address per minute, and five failed challenges in
+ten minutes block that address for an hour. \`ANTHRACITE_MAX_SESSIONS\` caps the
+live sessions. The proxy should overwrite \`X-Forwarded-For\` (or send
+\`CF-Connecting-IP\`) so the per-address limits see the visitor, not the proxy.
 
 ## Run
 
@@ -437,27 +468,26 @@ ANTHRACITE_LISTEN=127.0.0.1:9000 ./run.sh  # another address
 ./run.sh --public-host demo.internal       # when a proxy or tunnel fronts it
 \`\`\`
 
-Open the landing page: it creates a session, shows the password for that session
-and links to its panel. Reloading or reopening the browser returns to the same
-session; **Start a new session** creates another panel and state, and the old one
-stays under \`state/sessions/<id>\` (it is not deleted).
+Open the landing page, solve the challenge and the panel opens already signed in.
+Reloading or reopening the browser returns to the same session until it expires;
+the state is then gone for good.
 
-The launcher binds loopback by default and caps the sessions at
-\`ANTHRACITE_MAX_SESSIONS\` (8). For a remote demo, bind a reachable address and
-expose every child port; put TLS in front of it, since each panel speaks HTTP.
+The launcher binds loopback by default. For the public demo, the operator's proxy
+terminates TLS and forwards to the launcher and to the per-session child ports;
+the launcher reads \`X-Forwarded-Proto\` and \`Host\` so redirects and cookies use
+the public scheme and host. Service sockets live under the state root and Linux
+caps a Unix socket path at 107 bytes, so keep that root short.
 
 ## Verify
 
 \`\`\`sh
 sha256sum -c SHA256SUMS
-ls state/sessions                     # one directory per session
+ls state/sessions                     # one directory per live session
 \`\`\`
 
 Each session's state is a complete engine tree: \`state/sessions/<id>/state\` holds
 its apps, grants, audit and the emulator snapshot at
-\`state/sessions/<id>/state/shared/emulator/host.json\`. Keep the state root short:
-every service socket lives under it and Linux caps a Unix socket path at 107
-bytes, so a deep extraction directory degrades every native app.
+\`state/sessions/<id>/state/shared/emulator/host.json\`.
 EOF
 variant_manifest "$out/demo-sessions" demo-sessions bundles true
 
@@ -490,7 +520,7 @@ done
     printf '| `core` | panel, CLI, engine, **no apps** | `./run.sh` |\n'
     printf '| `base` | core + the eight signed system apps | `./run.sh` (installs and composes) |\n'
     printf '| `demo` | core + the signed host-emulator bundles, one state per run | `./run.sh` |\n'
-    printf '| `demo-sessions` | demo + one panel and one state per browser session | `./run.sh` (landing page) |\n\n'
+    printf '| `demo-sessions` | demo + one ephemeral, CAPTCHA-gated session per browser | `./run.sh` (landing page) |\n\n'
     printf 'Each archive contains `bin/`, `run.sh`, a `README.md`, a `manifest.json` and `SHA256SUMS`; `base`, `demo` and `demo-sessions` also carry `bundles/`. Verify with `sha256sum -c SHA256SUMS` (and again over this file for the tarballs).\n\n'
     printf 'Platform: `%s`. These are pre-release artifacts: GitHub Actions has had no runner, the native services have not been exercised on a deployment host, and the key is the pre-release key, not a blessed long-lived release key.\n' "$platform"
 } > "$out/RELEASE-NOTES.md"
