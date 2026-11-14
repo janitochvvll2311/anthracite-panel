@@ -107,5 +107,7 @@ A release build of the panel fails without `panel/frontend/dist`, by design.
   app.
 - The engine must not assume its client runs in the same process.
 - Docs are written in English.
+- The `demo` and `demo-sessions` variants carry all eight emulated system
+  bundles under the system app ids. A demo with fewer is not a release.
 - Scratch state goes in `/tmp/anthracite-panel`, never the `/tmp` root.
 - Do not switch, merge or rebase branches unless asked.

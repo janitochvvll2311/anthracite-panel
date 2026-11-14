@@ -42,13 +42,14 @@ The design of record is [`DESIGN.md`](DESIGN.md); the official manual is
 | Conformance kit | `anth-conformance` (`sdk/rust/conformance`) | validates a bundle offline |
 | SDK | `sdk/rust`, `sdk/ts` | guest bindings, panel contract, generated clients |
 | Apps | `apps/` | hello and the system apps (files, terminal, processes, network, storage, accounts, home, firewall) |
-| Demo | `demo/` | the deterministic host emulator and the release demo variants |
+| Demo | `demo/` | the deterministic host emulator behind the eight system app ids, and the release demo variants |
 
 ## Quick start
 
 The fastest path is a pre-release variant: unpack it and run it. `core` has no
-apps, `base` composes the signed system apps, `demo` uses the host emulator, and
-`demo-sessions` gives every browser an ephemeral, Turnstile-gated session.
+apps, `base` composes the signed system apps, `demo` composes the same eight ids
+served by the host emulator, and `demo-sessions` gives every browser an
+ephemeral, Turnstile-gated copy of that demo.
 
 ```sh
 tar -xzf anthracite-0.6.0-demo-linux-x86_64.tar.gz
