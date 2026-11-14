@@ -126,7 +126,14 @@ state across browsers.
 - Sandbox hardening for services; decision on shipping the Pulley profile.
 
 **Done when:** an app that lives outside this repository installs, composes,
-renders and answers — the acid test, executed by someone who is not us.
+renders and answers — the acid test, executed by someone who is not us. The
+mechanism is exercised in CI by `scripts/acid-test.sh` against
+`tests/acid/app`, which is outside `apps/` and outside the apps workspace; the
+"not us" half is a release-time check, not something a repository can prove.
+
+**Status (v0.6.0):** the CI flow passes. The external app is built with plain
+`cargo`, signed with its own key, installed with `require-signature = true`,
+approved, composed, served and answered by a real panel.
 
 ### v0.7.0 — the operated edge (M6)
 

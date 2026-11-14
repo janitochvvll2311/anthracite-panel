@@ -31,6 +31,9 @@ The platform is tested by *contract*, not by feature coverage.
   violation must fail the build.
 - **The conformance kit** is the same suite a third party runs against their
   bundle. If our tests and their tests are different, the platform is not real.
+- **The acid test is a script**, not a demo: `scripts/acid-test.sh` builds an app
+  that lives outside `apps/`, signs it with its own key and drives a real panel
+  through install, approval, composition, asset serving and a route call.
 
 Two rules for the suite:
 

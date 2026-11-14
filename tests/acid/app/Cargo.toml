@@ -1,0 +1,16 @@
+[package]
+name = "acid-ping"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+# This app is deliberately outside `apps/` and outside the apps workspace: the
+# acid test is that a bundle authored elsewhere installs and runs (§11).
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anth-guest = { path = "../../../sdk/rust/guest" }
