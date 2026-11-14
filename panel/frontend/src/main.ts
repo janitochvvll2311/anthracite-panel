@@ -178,7 +178,7 @@ const workspace = byId<HTMLElement>("workspace");
 
 let surface: Surface | null = null;
 let implemented: string[] = [...PORTABLE];
-let panelVersion = "0.5.0";
+let panelVersion = "0.6.0";
 let engineVersion = "";
 let versionPending = false;
 let activeKey: string | null = null;

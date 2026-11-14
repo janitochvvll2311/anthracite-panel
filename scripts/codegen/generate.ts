@@ -335,7 +335,7 @@ export function generate(appDir: string, catalog: string): Generation {
   const tsPackage = `${JSON.stringify(
     {
       name: "@anthracite/client",
-      version: "0.5.0",
+      version: "0.6.0",
       private: true,
       type: "module",
       description: "Generated clients for Anthracite apps",
