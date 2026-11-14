@@ -108,6 +108,17 @@ kill "$engine"
 wait "$engine" 2>/dev/null || true
 engine=
 
+release_version=$(./target/release/anth --version | awk '{print $2}')
+echo "release: staging the binaries ($release_version)"
+mkdir -p "$out/bin"
+binary_rows=
+for binary in anth anth-engine anth-panel; do
+    cp "target/release/$binary" "$out/bin/$binary"
+    sha=$(sha256sum "$out/bin/$binary" | cut -d' ' -f1)
+    binary_rows="$binary_rows$binary	$sha
+"
+done
+
 mkdir -p "$out/bundles"
 rows=
 for name in $(printf '%s' "$apps" | tr ',' ' '); do
@@ -144,7 +155,20 @@ done
 
 {
     printf '{\n'
+    printf '  "version": "%s",\n' "$release_version"
     printf '  "generated_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  "binaries": [\n'
+    first=1
+    printf '%s' "$binary_rows" | while IFS='	' read -r name sha; do
+        [ -n "$name" ] || continue
+        if [ "$first" = 1 ]; then
+            first=0
+        else
+            printf ',\n'
+        fi
+        printf '    {"name": "%s", "sha256": "%s"}' "$name" "$sha"
+    done
+    printf '\n  ],\n'
     printf '  "distribution_key": {"public_key": "%s", "fingerprint": "%s"},\n' \
         "$public" "$fingerprint"
     printf '  "apps": [\n'
@@ -162,4 +186,6 @@ done
     printf '\n  ]\n}\n'
 } > "$out/manifest.json"
 
-echo "release: wrote $out/manifest.json (key $fingerprint)"
+(cd "$out" && sha256sum bin/* bundles/* > SHA256SUMS)
+
+echo "release: wrote $out/manifest.json and $out/SHA256SUMS ($release_version, key $fingerprint)"
