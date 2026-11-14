@@ -87,7 +87,14 @@ impl Client {
     }
 
     pub fn json(&self, method: &str, path: &str, body: &[u8]) -> Result<serde_json::Value, Error> {
-        let response = self.request(method, path, body, &[])?;
+        // A JSON body without the header is a `415`, not a parse error at the
+        // engine; the method name promises JSON, so it sends it.
+        let headers: &[(&str, &str)] = if body.is_empty() {
+            &[]
+        } else {
+            &[("content-type", "application/json")]
+        };
+        let response = self.request(method, path, body, headers)?;
         serde_json::from_slice(&response.body).map_err(|error| {
             Error::internal(format!("the engine answered with invalid JSON: {error}"))
         })
