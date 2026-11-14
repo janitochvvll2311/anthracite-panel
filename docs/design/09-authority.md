@@ -47,8 +47,8 @@ engine's canonical message instead of reimplementing it. `anth-sign keygen --out
 and the signer refuses a key anybody else can read. The private half lives with
 the release process or with the third-party author; the engine binary only ever
 carries the public half. `scripts/package-app.sh` signs the staging directory
-when `ANTHRACITE_SIGNING_KEY` is set, so a release zip cannot be built unsigned
-by accident.
+when `ANTHRACITE_SIGNING_KEY` is set, and otherwise reports the bundle as
+unsigned on stderr, so a release cannot forget the step silently.
 
 Revocation is manual: uninstall the app, or rotate the distribution key in a
 release. There is no CRL, and that is a documented limitation, not an oversight.
