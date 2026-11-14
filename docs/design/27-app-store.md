@@ -42,6 +42,9 @@ The store is a **catalogue**, not an installer.
   4. The engine verifies the signature, the manifest and the WIT; it computes
      the grant. The manager shows the computed risk, the service class/argv, the
      declared interfaces and the authority diff, and requires explicit approval.
+     When the bundle's signer is not in the keyring and is not the distribution
+     key, the handoff shows the fingerprint and offers an explicit `key add`
+     before the install; the store cannot vouch for a publisher by itself.
   5. The store is told nothing about the session or the grant; the engine's
      audit is the record.
 
@@ -133,6 +136,10 @@ index.json.sig    detached Ed25519 signature over those exact bytes
   received.
 - The public key is configured in the store service and shown at approval. An
   index cannot introduce its own trust root.
+- A publisher signs the exact bytes with `anth-sign file index.json --key
+  <private-key>`, which writes `index.json.sig`. The same tool that signs bundles
+  signs the catalogue, so there is one signature format and one key-format rule
+  ([§9.1](09-authority.md#91-tiers-and-signing)).
 - The index is advisory metadata. The bundle's signature, manifest hash, WIT and
   grant are verified by the engine; the store's "publisher" label is not a trust
   decision.
@@ -185,7 +192,7 @@ contract classifies the `anthracite` namespace as first-party but does **not**
 yet enforce tier ownership, so a third-party provider is not a supported
 extension point; the official store aggregates sources. A future
 optional-interface negotiation could change that, but it is not v0.7.0
-([§21 §8](21-next-version-apps.md#8-proposed-decisions), P-Store-Provider).
+([§21 §8](21-next-version-apps.md#8-decisions), P-Store-Provider).
 
 ## 7. UI
 

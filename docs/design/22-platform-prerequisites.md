@@ -22,10 +22,9 @@ not through the public router.
   DNS-01 provider bundle would be the second typed consumer. A file drop or a
   panel courier would put private keys or operator authority in the wrong
   process.
-- **Fallback if the broker slips:** ACME writes an order directory under
-  `{shared}/tls/incoming/` with a typed `meta.json` and `0600` material, and the
-  certificate manager ingests it. This is a contingency, not the plan; it is
-  audited as a degraded path and removed when the broker lands.
+- **No fallback.** The file-drop contingency is not in v0.7.0: if the broker
+  slips, phase 0c and every phase that needs it slips (D9,
+  [§29](29-v0.7-plan.md)).
 
 ## 2. Listener and egress intent in the manifest
 
@@ -45,14 +44,15 @@ listen = ["tcp:8080", "tcp:8443"]
 egress = ["any"]                    # or ["host:443", "10.0.0.0/8:5432"]
 ```
 
-- `listen` and `egress` are **intent shown at approval and frozen in the grant**.
-  They are not enforced until the sandbox phase; `argv` remains the executable
-  truth.
+- `listen` and `egress` are **shown at approval and frozen in the grant**.
+  `roots` and the privileged listeners are enforced by phase 0b (L1 and the port
+  capability); `egress` stays intent, because network isolation is L2 and comes
+  after v0.7.0. The approval text says which is which.
 - The engine refuses a declared listener that is not a `tcp:` or `udp:` address.
   It does not allocate ports, and it does not reserve them.
-- In a release, the sandbox maps `listen` to `CAP_NET_BIND_SERVICE` or socket
-  activation and `egress` to a default-deny policy. In a debug build the class
-  and the argv are the audit trail.
+- In a release, the sandbox maps `listen` to `CAP_NET_BIND_SERVICE` and `roots`
+  to the filesystem policy. A debug build still gets L1 and the capability: the
+  sandbox is not a release-only feature.
 - A service that declares neither is unchanged (v3 semantics).
 
 ## 3. Secret custody
@@ -93,11 +93,13 @@ binds `:443`, a certificate manager that reads `/etc/ssl` and a container manage
 that holds the runtime socket are only supportable when:
 
 - the bundle is signed by the distribution key (`system` tier), and
-- the service runs with a privilege drop, a namespace or Landlock/seccomp
-  profile, and the port/capability set it declared.
+- the service runs with a privilege drop, a filesystem policy and the
+  port/capability set it declared.
 
-Until then v0.7.0 is a debug preview. That is an honest release note, not a
-limitation to bury.
+Phase 0b of [§29](29-v0.7-plan.md) delivers that: per-service uid, Landlock
+rules from `roots`, and `CAP_NET_BIND_SERVICE` for a declared privileged
+listener. A host that cannot provide them refuses the launch; v0.7.0 has no
+debug-preview release (D19).
 
 ## 6. Surface exports
 
@@ -123,9 +125,8 @@ approvals.
 
 Proposed: an `anth:audit/record@1.0.0` host call available to services through
 the broker, write-only, with `action`, `result` and a sanitized `detail`. The
-engine stamps `actor`, `app` and time. If this slips, each service writes a local
-JSONL audit in `{data}/audit.jsonl` and the panel shows it; the release notes say
-the records are app-local, not engine-global.
+engine stamps `actor`, `app` and time. The broker serves it as a native
+interface; there is no app-local audit fallback in v0.7.0 (D20).
 
 ## 8. Time and scheduling
 

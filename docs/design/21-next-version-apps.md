@@ -3,9 +3,9 @@
 > Part of the [design index](../../DESIGN.md). Scope for **v0.7.0 / M6**, the
 > milestone after [v0.6.0](18-v0.6-plan.md).
 
-Status: **draft for review**. The scope is proposed; the mechanisms marked
-*proposed* are not binding until accepted in [§16](16-decision-log.md). Nothing
-here starts before the v0.7.0 start conditions in §2 are met.
+Status: **accepted**. The scope is binding; the phased plan is
+[§29](29-v0.7-plan.md) and the decisions are in [§16](16-decision-log.md)
+(D9–D20). Nothing here starts before the start conditions in §2 are met.
 
 v0.6.0 proves the platform with system apps and third-party apps. v0.7.0 uses
 that proof to run a real edge: TLS material, certificates issued by an ACME CA,
@@ -93,18 +93,22 @@ and the operator sees the class, the argv and the ports at approval.
 
 ## 2. Start conditions
 
-v0.7.0 starts when v0.6.0 is tagged. Phase 0 then implements the platform
-prerequisites; the app phases follow.
+v0.7.0 starts when v0.6.0 is tagged — it is, at `29e0ef6` — and the work is cut
+from a `v0.7.0` branch. Phase 0 then implements the platform prerequisites; the
+app phases follow ([§29](29-v0.7-plan.md)).
 
 ### 2.1 v0.6.0 is complete
 
 - M4 closes with the golden system composition and the proof that removing `net`
   leaves a working system ([§18](18-v0.6-plan.md)).
 - Typed events and stream quotas are implemented ([§20](20-streams.md)).
-- The conformance kit, `fetch-wit`, the audit/diff UI and service sandbox are
-  shipped ([§18](18-v0.6-plan.md), phase 9).
-- A distribution key signs the system tier, or v0.7.0 is explicitly a debug-only
-  preview and says so in the release notes.
+- The conformance kit, `fetch-wit` and the audit/diff UI are shipped, and the
+  sandbox baseline (L0) is in place. The layers a supported release needs — L1
+  plus the port capability — are phase 0b, not a v0.6.0 deliverable
+  ([§28](28-service-sandbox.md)).
+- A distribution key can sign the system tier, and `scripts/release.sh` proves the
+  binaries and the bundles agree. Producing the first real release key is an
+  operator step, not a code gap.
 
 ### 2.2 The platform prerequisites are phase 0
 
@@ -152,18 +156,27 @@ installs and approvals.
 
 ## 4. Order
 
-1. **Phase 0 — prerequisites** ([§22](22-platform-prerequisites.md)).
-2. **Certificates** ([§23](23-certificate-manager.md)): inventory first, then import and publish.
-3. **Proxy** ([§25](25-reverse-proxy.md)): HTTP first, then TLS from the published directory.
-4. **ACME** ([§24](24-acme-client.md)): HTTP-01 once the proxy serves the token directory, then
-   renewal, then DNS-01.
-5. **Containers** ([§26](26-container-manager.md)): independent; can run in parallel with 3–4.
-6. **Store** ([§27](27-app-store.md)): independent; the manager handoff needs [§22 §6](22-platform-prerequisites.md#6-surface-exports).
-7. **Hardening and release** ([§21 §7](21-next-version-apps.md#7-release-gate)).
+The phases and their PR definitions are [§29](29-v0.7-plan.md). In order:
+
+1. **0a — manifest v4** ([§22](22-platform-prerequisites.md)): roots, listeners,
+   egress and `{broker}`.
+2. **0b — sandbox L1 and the port capability** ([§28](28-service-sandbox.md)).
+3. **0c — broker, audit bridge and surface exports** ([§22](22-platform-prerequisites.md)).
+4. **Certificates** ([§23](23-certificate-manager.md)): inventory first, then
+   import and publish.
+5. **Proxy** ([§25](25-reverse-proxy.md)): HTTP first, then TLS from the published
+   directory, then WebSocket and HTTP/2.
+6. **ACME** ([§24](24-acme-client.md)): HTTP-01 once the proxy serves the token
+   directory, then renewal, then DNS-01.
+7. **Containers** ([§26](26-container-manager.md)): independent of 4–6.
+8. **Store** ([§27](27-app-store.md)): independent; the manager handoff needs the
+   surface exports of 0c.
+9. **Hardening and release** (§7 below).
 
 Each phase is a PR-sized slice with its own acceptance, tests and docs. A phase
-that cannot be demonstrated on a loopback host (ACME staging, rootless Podman)
-ships with a fixture and a manual QA row, not a claim.
+that cannot be demonstrated on a loopback host (ACME production, Docker,
+rootless Podman) ships with a fixture (Pebble, a fake runtime) and a manual QA
+row, not a claim.
 
 ## 5. Removal behavior
 
@@ -191,9 +204,11 @@ these apps hold secrets.
 
 ## 7. Release gate
 
-- Service sandbox and system tier are in the release build.
+- The distribution key, system tier, sandbox L1 and the port capability are in
+  the release build. There is no debug-preview release ([§29](29-v0.7-plan.md),
+  D19).
 - The conformance kit passes for all five bundles.
-- The removal matrix above is automated.
+- The removal matrix above is automated; ACME is exercised against Pebble.
 - Manual QA covers: Let's Encrypt staging issue/renew via HTTP-01 and DNS-01,
   TLS reload, WebSocket through the proxy, Docker and rootless Podman, install
   from a local and a remote source, and a tampered bundle.
@@ -203,25 +218,27 @@ these apps hold secrets.
 
 ---
 
-## 8. Proposed decisions
+## 8. Decisions
 
-These are the open points the implementation must settle. They are proposed here
-and repeated in [§15](15-open-decisions.md) as D9–D20; none is binding until it
-enters [§16](16-decision-log.md).
+The recommendations below are **accepted and binding** as D9–D20 in
+[§16](16-decision-log.md); [§15](15-open-decisions.md) records them as decided.
+The review amended three of them: the broker has no file-drop fallback in
+v0.7.0, there is no debug-preview release, and privileged ports use
+`CAP_NET_BIND_SERVICE` rather than socket activation.
 
 | ID | Decision | Recommendation | Why |
 | --- | --- | --- | --- |
-| P-Service-Broker | How a service calls another service | Private `{broker}` socket and generated clients, authorized by the grant | A file drop or panel courier puts keys or authority in the wrong process |
-| P-Listener | How a service declares listeners and egress | Manifest v4 optional `listen`/`egress`, shown at approval and frozen; v3 stays accepted | `argv` is a convention; approval needs a contract |
+| P-Service-Broker | How a service calls another service | Private `{broker}` socket and generated clients, authorized by the grant; no file-drop fallback in v0.7.0 | A file drop or panel courier puts keys or authority in the wrong process |
+| P-Listener | How a service declares roots, listeners and egress | Manifest v4 optional `roots`/`listen`/`egress`, shown at approval and frozen; v3 stays accepted; roots and ports are enforced in v0.7.0, egress is intent until network isolation |
 | P-Secrets | Where service secrets live | `{data}` `0600`, write-only from the panel, never in WIT output or logs | `anth:store/kv` is plaintext and readable by design |
 | P-Proxy-Config | Partial edits vs whole document | Whole-document `apply` with a version and last-good rollback | A half-applied host list is an outage |
-| P-Proxy-Ports | Default ports | `:8080`/`:8443`; production via socket activation or `CAP_NET_BIND_SERVICE` | A developer should not need root to run the stack |
+| P-Proxy-Ports | Default ports | `:8080`/`:8443`; production `:80`/`:443` via `CAP_NET_BIND_SERVICE` granted by the supervisor; socket activation is out of scope | A developer should not need root to run the stack, and the release should not depend on a host init system |
 | P-ACME-DNS | How DNS-01 providers plug in | `manual`, `rfc2136` and `webhook` inside the ACME service; vendor adapters additive | A separate provider bundle needs a contract and a trust decision |
 | P-Container-Runtime | Which runtimes | Docker-compatible API only (Docker and Podman); no pluggable runtime interface in v0.7.0 | One interface, two runtimes, no false abstraction |
-| P-Store-Install | Who may install | The panel manager with the operator session; the store only catalogues and downloads | An app must not hold engine management authority |
+| P-Store-Install | Who may install | The panel manager with the operator session, including an explicit `key add` when the publisher is untrusted; the store only catalogues and downloads | An app must not hold engine management authority |
 | P-Store-Provider | How many store providers | One official aggregator per composition; sources are adapters; optional-interface negotiation is post-v0.7.0 | The composition binds one provider per interface id, and tier ownership is not enforced yet |
-| P-Store-Index | Index trust | Detached Ed25519 over the exact served bytes; bundle digest plus engine signature | Two independent checks, no canonical-JSON argument |
-| P-System-Gate | What a release requires | Distribution key, system tier and service sandbox; otherwise a debug preview | `class` is risk today, not a sandbox |
+| P-Store-Index | Index trust | Detached Ed25519 over the exact served bytes, produced by `anth-sign file`; bundle digest plus engine signature stay independent | Two independent checks, no canonical-JSON argument |
+| P-System-Gate | What a release requires | Distribution key, system tier, sandbox L1 and the port capability; a debug preview is not a release | `class` is risk today, not a sandbox; shipping unsandboxed host reach under a release name would be dishonest |
 | P-Audit-Bridge | How service actions are audited | `anth:audit/record@1.0.0` through the broker, sanitized detail | Certificate and container actions belong in the engine record |
 
 ---
