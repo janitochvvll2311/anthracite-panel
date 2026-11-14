@@ -3,6 +3,6 @@ resolver = "2"
 members = ["cli", "client", "conformance", "guest", "panel", "service", "signer"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "Apache-2.0"

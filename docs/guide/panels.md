@@ -45,7 +45,7 @@ const dispose = await mountFrame(host, {
   context: {
     app: contribution.app,
     contribution: contribution.slot,
-    panel: { slots: ["panel.view"], version: "0.6.0" },
+    panel: { slots: ["panel.view"], version: "0.6.1" },
     kind: "view",
     params: undefined,
   },
