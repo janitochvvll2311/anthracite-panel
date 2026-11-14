@@ -89,6 +89,7 @@ commands:
   audit [--limit <n>] [--before <n>]
                         read the audit log, newest first
   key list              trusted signers
+  key distribution      the distribution key this engine was built with
   key add <public-key> [--label <label>]
                         trust a third-party signer
   key remove <fingerprint>
@@ -832,14 +833,12 @@ fn key(socket: Option<PathBuf>, command: KeyCommand) -> Result<u8, Error> {
         KeyCommand::Distribution => {
             let value: serde_json::Value = client.get_typed("/api/engine/keys/distribution")?;
             match value["fingerprint"].as_str() {
-                Some(fingerprint) => {
-                    println!("fingerprint\t{fingerprint}");
-                    if let Some(problem) = value["problem"].as_str() {
-                        eprintln!("this build has an unusable distribution key: {problem}");
-                        return Ok(1);
-                    }
-                }
+                Some(fingerprint) => println!("fingerprint\t{fingerprint}"),
                 None => println!("fingerprint\tnone"),
+            }
+            if let Some(problem) = value["problem"].as_str() {
+                eprintln!("this build has an unusable distribution key: {problem}");
+                return Ok(1);
             }
             Ok(0)
         }
@@ -1926,6 +1925,23 @@ mod tests {
         assert!(
             request.starts_with("GET /api/engine/keys/distribution HTTP/1.1"),
             "{request}"
+        );
+    }
+
+    #[test]
+    fn a_broken_distribution_key_is_a_failure_not_an_empty_build() {
+        let dir = scratch("key-distribution-broken");
+        let socket = dir.join("engine.sock");
+        let _receive = serve(
+            &socket,
+            vec![answer(
+                "200 OK",
+                r#"{"fingerprint":null,"public_key":null,"problem":"the key is not hex"}"#,
+            )],
+        );
+        assert_eq!(
+            key(Some(socket), KeyCommand::Distribution).expect("distribution"),
+            1
         );
     }
 

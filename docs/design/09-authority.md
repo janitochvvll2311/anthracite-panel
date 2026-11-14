@@ -25,11 +25,13 @@ anything the bundle says:
 - the distribution key is tried before the keyring, and only its fingerprint
   earns `system`;
 - a keyring key that happens to verify the same bundle still earns `third-party`;
-- a stored `descriptor.toml` that claims `system` without that signer is refused,
-  and so is any `system` descriptor read by a build without the key.
+- a stored `descriptor.toml` that claims `system` is re-verified against the
+  stored `manifest.sig`, not trusted from its `signer` field: a hand-edited tier
+  or signer is refused, and so is any `system` descriptor read by a build
+  without the key.
 
-An unusable compiled key — present but not 32 bytes of hex — refuses every
-install rather than silently demoting release bundles. The operator can check
+An unusable compiled key — present but not a public key Ed25519 can verify with —
+refuses every install rather than silently demoting release bundles. The operator can check
 what a binary trusts with `GET /api/engine/keys/distribution`
 (`anth key distribution`), and the third-party author gets the same verdict from
 `anth-conformance`'s `tier` line.

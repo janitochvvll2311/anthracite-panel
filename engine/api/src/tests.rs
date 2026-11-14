@@ -377,6 +377,7 @@ async fn the_distribution_key_of_the_build_is_reported() {
     let (state, dir) = apps_state();
     let (status, value) = json(state, "/api/engine/keys/distribution").await;
     assert_eq!(status, StatusCode::OK);
+    assert!(value["problem"].is_null(), "{value}");
     // A debug build carries no key and says so; a release build answers with
     // the fingerprint an operator compares against the release notes.
     match value["fingerprint"].as_str() {
@@ -384,12 +385,11 @@ async fn the_distribution_key_of_the_build_is_reported() {
             assert_eq!(fingerprint.len(), 64, "{value}");
             assert_eq!(value["public_key"].as_str().map(str::len), Some(64));
         }
-        None => assert!(value["fingerprint"].is_null(), "{value}"),
+        None => {
+            assert!(value["fingerprint"].is_null(), "{value}");
+            assert!(value["public_key"].is_null(), "{value}");
+        }
     }
-    assert!(
-        value.get("problem").is_some(),
-        "the build reports its problem"
-    );
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 

@@ -794,7 +794,7 @@ fn read_descriptor(dir: &Path, distribution: &Distribution) -> Result<Descriptor
     descriptor
         .validate()
         .map_err(|error| Error::invalid(format!("{}: {error}", path.display())))?;
-    check_system_descriptor(&descriptor, distribution)
+    check_system_descriptor(dir, &descriptor, distribution)
         .map_err(|error| Error::invalid(format!("{}: {}", path.display(), error.message())))?;
     Ok(descriptor)
 }
@@ -804,7 +804,10 @@ fn read_descriptor(dir: &Path, distribution: &Distribution) -> Result<Descriptor
 /// The descriptor is engine-written, but it lives on disk next to a bundle: a
 /// hand-edited `tier = "system"` must not grant the privileges of a release
 /// signature, and a build without a distribution key has no system tier at all.
+/// The stored `manifest.sig` is re-verified, so a rewritten `signer` field
+/// proves nothing.
 fn check_system_descriptor(
+    dir: &Path,
     descriptor: &Descriptor,
     distribution: &Distribution,
 ) -> Result<(), Error> {
@@ -813,12 +816,24 @@ fn check_system_descriptor(
     }
     distribution.check()?;
     match (distribution.fingerprint(), descriptor.signer.as_deref()) {
-        (Some(key), Some(signer)) if key == signer => Ok(()),
-        (None, _) => Err(Error::denied(
-            "this engine was built without a distribution key, so it has no `system` tier",
-        )),
-        _ => Err(Error::denied(
-            "the descriptor claims the `system` tier without the distribution signature",
+        (Some(key), Some(signer)) if key == signer => {}
+        (None, _) => {
+            return Err(Error::denied(
+                "this engine was built without a distribution key, so it has no `system` tier",
+            ));
+        }
+        _ => {
+            return Err(Error::denied(
+                "the descriptor claims the `system` tier without the distribution signature",
+            ));
+        }
+    }
+    let signature = store::read(&dir.join("manifest.sig"))?
+        .ok_or_else(|| Error::denied("the `system` descriptor has no bundle signature to check"))?;
+    match distribution.verify(&bundle::signed_message(dir)?, &signature)? {
+        Some(_) => Ok(()),
+        None => Err(Error::denied(
+            "the stored bundle is not signed by the distribution key",
         )),
     }
 }
@@ -1359,7 +1374,7 @@ mod tests {
     #[test]
     fn a_keyless_build_refuses_a_system_descriptor() {
         let state = scratch("system-keyless");
-        let registry = Registry::new(&state);
+        let registry = Registry::with_distribution(&state, Distribution::none());
         let app = AppId::parse("org.example.notes").unwrap();
         registry
             .install(&notes_bundle("0.1.0", WASM), &options())
@@ -1713,7 +1728,7 @@ mod tests {
                 .tier,
             Tier::System
         );
-        let keyless = Registry::new(&state);
+        let keyless = Registry::with_distribution(&state, Distribution::none());
         let error = keyless
             .get(&AppId::parse("org.example.service").unwrap())
             .expect_err("no distribution key");
@@ -1785,6 +1800,49 @@ mod tests {
             .expect_err("tier claim");
         assert!(
             error.message().contains("distribution signature"),
+            "{error}"
+        );
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_descriptor_cannot_lend_the_distribution_signature() {
+        let state = scratch("system-forged");
+        let release = SigningKey::from_bytes(&[9u8; 32]);
+        let third_party = SigningKey::from_bytes(&[3u8; 32]);
+        let distribution = distribution(&release);
+        let release_fingerprint = distribution.fingerprint().expect("fingerprint").to_string();
+        let third_party_fingerprint = Keyring::new(&state)
+            .add(&TrustedKey {
+                version: KEY_VERSION,
+                algorithm: KeyAlgorithm::Ed25519,
+                public_key: hex(&third_party.verifying_key().to_bytes()),
+                label: None,
+                added_by: "operator-test".to_string(),
+                added_at: "2026-11-13T20:00:00Z".to_string(),
+            })
+            .expect("add key");
+        let registry = Registry::with_distribution(&state, distribution);
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        registry
+            .install(&signed(service_entries(), &third_party), &allowed)
+            .expect("install");
+        // Rewrite both the tier and the signer: the pair now names the release
+        // key, but the stored bundle is still signed by the other key.
+        let descriptor = registry.dir().join("org.example.service/descriptor.toml");
+        let text = fs::read_to_string(&descriptor).expect("descriptor");
+        let forged = text
+            .replace("third-party", "system")
+            .replace(&third_party_fingerprint, &release_fingerprint);
+        fs::write(&descriptor, forged).expect("rewrite");
+        let error = registry
+            .get(&AppId::parse("org.example.service").unwrap())
+            .expect_err("forged signer");
+        assert!(
+            error
+                .message()
+                .contains("not signed by the distribution key"),
             "{error}"
         );
         fs::remove_dir_all(&state).expect("cleanup");

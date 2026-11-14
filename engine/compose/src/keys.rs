@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anth_contract::id::is_sha256;
-use anth_contract::{Error, Tier, TrustedKey};
+use anth_contract::{Error, ErrorKind, Tier, TrustedKey};
 
 use crate::{signature, store};
 
@@ -45,7 +45,10 @@ impl Distribution {
             return Self::default();
         };
         let text = text.to_ascii_lowercase();
-        match signature::fingerprint(&text) {
+        // A fingerprint only proves the bytes are 32 hex bytes; a key that does
+        // not decompress would report itself healthy and then fail every
+        // verification, so the key is checked as an Ed25519 point as well.
+        match signature::check_public_key(&text).and_then(|()| signature::fingerprint(&text)) {
             Ok(fingerprint) => Self {
                 public_key: Some(text),
                 fingerprint: Some(fingerprint),
@@ -89,7 +92,11 @@ impl Distribution {
         let parsed = signature::parse_signature(signature_b64)?;
         match signature::verify_bytes(message, &parsed, key) {
             Ok(()) => Ok(Some(fingerprint.to_string())),
-            Err(_) => Ok(None),
+            // A well-formed signature by another key is not an error; a key
+            // that cannot be used at all is, and must not be read as "someone
+            // else's signature".
+            Err(error) if error.kind() == ErrorKind::Denied => Ok(None),
+            Err(error) => Err(error),
         }
     }
 
@@ -452,5 +459,72 @@ mod tests {
         let encoded = signature::signature_base64(&signature.to_bytes());
         assert!(keyring.verify(b"x", &encoded).is_err());
         fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_distribution_key_that_cannot_verify_is_a_broken_build() {
+        for public_key in [
+            "not-hex".to_string(),
+            // Does not decompress to an Edwards point (y = 2).
+            "02".to_string() + &"00".repeat(31),
+            // The identity point: weak (small order).
+            "01".to_string() + &"00".repeat(31),
+        ] {
+            let distribution = Distribution::from_public_key(Some(&public_key));
+            assert!(distribution.fingerprint().is_none(), "{public_key}");
+            assert!(distribution.public_key().is_none(), "{public_key}");
+            assert!(distribution.problem().is_some(), "{public_key}");
+            let error = distribution.check().expect_err("unusable key");
+            assert_eq!(error.kind(), ErrorKind::Internal);
+            assert!(
+                error.message().contains("invalid distribution key"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absent_or_blank_distribution_key_is_none_not_broken() {
+        for text in [None, Some(""), Some("   ")] {
+            let distribution = Distribution::from_public_key(text);
+            assert!(distribution.fingerprint().is_none());
+            assert!(distribution.problem().is_none());
+            distribution.check().expect("no key is not a problem");
+            assert_eq!(distribution.tier(Some("someone")), Tier::ThirdParty);
+        }
+    }
+
+    #[test]
+    fn only_the_distribution_fingerprint_earns_the_system_tier() {
+        let distribution = Distribution::from_public_key(Some(&public_hex()));
+        let fingerprint = distribution.fingerprint().expect("fingerprint");
+        assert_eq!(distribution.tier(Some(fingerprint)), Tier::System);
+        assert_eq!(
+            distribution.tier(Some(&other_public_hex())),
+            Tier::ThirdParty
+        );
+        assert_eq!(distribution.tier(None), Tier::ThirdParty);
+    }
+
+    #[test]
+    fn a_foreign_signature_is_not_this_key_and_a_corrupt_one_is_an_error() {
+        let distribution = Distribution::from_public_key(Some(&public_hex()));
+        let message = b"manifest";
+        let own = signature::signature_base64(&signing_key().sign(message).to_bytes());
+        assert_eq!(
+            distribution.verify(message, &own).expect("own"),
+            distribution.fingerprint().map(str::to_string)
+        );
+        let foreign = signature::signature_base64(
+            &SigningKey::from_bytes(&[9u8; 32]).sign(message).to_bytes(),
+        );
+        assert!(distribution
+            .verify(message, &foreign)
+            .expect("foreign")
+            .is_none());
+        let error = distribution
+            .verify(message, "not base64!")
+            .expect_err("corrupt");
+        assert_eq!(error.kind(), ErrorKind::Invalid);
     }
 }

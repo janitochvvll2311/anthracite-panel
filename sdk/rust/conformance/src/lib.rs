@@ -204,6 +204,8 @@ mod tests {
         assert_eq!(report.exports, ["example:notes/notes@1.0.0"]);
         assert!(report.imports.is_empty());
         assert!(report.signer.is_none());
+        assert_eq!(report.tier, "third-party");
+        assert_eq!(report.to_json()["tier"], "third-party");
     }
 
     #[test]
@@ -284,6 +286,8 @@ mod tests {
         )
         .expect("trusted signature");
         assert!(report.signer.is_some());
+        // A keyring key extends trust, never privilege.
+        assert_eq!(report.tier, "third-party");
     }
 
     #[test]

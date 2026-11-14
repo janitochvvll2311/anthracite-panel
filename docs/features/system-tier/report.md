@@ -29,11 +29,14 @@ next PR (see *Pending*).
 - A system bundle with `[service]` installs without
   `[services] allow-third-party`: the switch exists for third parties, not for
   the release.
-- `read_descriptor` validates a stored `system` descriptor against the compiled
-  key. A hand-edited `tier = "system"` with another signer is refused, and a
-  build without the key reports that it has no `system` tier instead of guessing.
-- A malformed compiled key refuses **every** install with an actionable message;
-  a broken build must not silently demote release bundles.
+- `read_descriptor` re-verifies the stored `manifest.sig` when a descriptor
+  claims `system`, instead of trusting the writable `signer` field. A
+  hand-edited tier or signer is refused, and a build without the key reports
+  that it has no `system` tier instead of guessing.
+- A compiled key is checked as an Ed25519 point, not just as 32 hex bytes: a key
+  that cannot verify refuses **every** install with an actionable message, and
+  `anth key distribution` exits non-zero, so a broken build is not mistaken for
+  a keyless one.
 - `GET /api/engine/keys/distribution` → `{fingerprint, public_key, problem}` and
   `anth key distribution` make the trusted key visible to the operator.
 - `anth-conformance` reports the `tier` it would earn on that build, in text and
@@ -41,24 +44,33 @@ next PR (see *Pending*).
 
 ## Tests
 
-- `engine/compose`: **162 passed**, including
+- `engine/compose`: **167 passed**, including
   - `the_distribution_key_mints_the_system_tier` (system service with no
     keyring and no `allow-third-party`; a keyless build refuses the descriptor),
   - `a_keyring_key_cannot_mint_the_system_tier` (trusted signer, still
     `third-party`, still gated),
-  - `a_descriptor_cannot_claim_the_system_tier` (hand-edited tier is refused),
-  - `an_unusable_distribution_key_refuses_installs`.
-- `engine/api`: **96 passed**, including the distribution endpoint.
-- `sdk/rust/cli`: **59 passed**, including the new verb and its route.
-- `sdk/rust/conformance`: **7 passed** with the `tier` field.
+  - `a_descriptor_cannot_claim_the_system_tier` and
+    `a_descriptor_cannot_lend_the_distribution_signature` (both a hand-edited
+    tier and a rewritten signer are refused),
+  - `an_unusable_distribution_key_refuses_installs`, plus unit tests for an
+    absent, blank, weak and non-point key, and for own/foreign/corrupt
+    signatures.
+  - The whole workspace also passes with `ANTHRACITE_DISTRIBUTION_KEY` set, so
+    the keyless tests no longer depend on how the suite was compiled.
+- `engine/api`: **96 passed**, including the distribution endpoint (no key,
+  `problem` null).
+- `sdk/rust/cli`: **60 passed**, including the new verb, its route and the
+  non-zero exit for a broken build.
+- `sdk/rust/conformance`: **7 passed** with the `tier` field asserted in text
+  and JSON.
 - `cargo fmt --check` and `clippy -D warnings` on the touched workspaces.
 
 ## Decisions
 
 - **The tier is derived from the signer, never declared.** The manifest is frozen
   at v2/v3 and must not gain a privileged field; a bundle cannot ask for a tier.
-  The descriptor records the outcome, and reading it re-checks the signature
-  fingerprint.
+  The descriptor records the outcome, and reading it re-verifies the stored
+  bundle signature.
 - **The distribution key is a build input, not configuration.** A config key
   would let an operator mint a `system` app, which contradicts
   [§9.1](../../design/09-authority.md#91-tiers-and-signing).

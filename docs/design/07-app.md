@@ -545,6 +545,7 @@ server; v0.4.0 proved it, and the fix is generation, not discipline.
 | `anth login` / `anth logout` | `POST`/`DELETE /api/engine/session` | session over TCP |
 | `anth app list\|show\|install\|upgrade\|approve\|revoke\|enable\|disable\|remove` | the app resources of [§6.4](06-engine.md#64-http-surface) | lifecycle |
 | `anth key add\|list\|remove` | `/api/engine/keys` | the third-party keyring |
+| `anth key distribution` | `GET /api/engine/keys/distribution` | the key this build trusts as `system` |
 | `anth audit` | `GET /api/engine/audit` | the log |
 
 `doctor` answers "would this boot?" without a daemon; `status` answers "is it
