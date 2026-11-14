@@ -39,7 +39,7 @@ dependency that should not exist becomes unrepresentable instead of discouraged.
 - `engine/` — the platform: `contract`, `runtime`, `compose`, `auth`, `api`,
   `daemon`. Builds `anth-engine`, the headless daemon.
 - `sdk/rust/` — `guest` (wasm apps), `panel` (panels), `client` (generated
-  HTTP/CLI clients), `cli` (the `anth` commands).
+  HTTP/CLI clients), `cli` (the `anth` commands), `signer` (`anth-sign`).
 - `panel/backend/` — the official panel binary; links the SDK, mounts the engine
   router, wires the CLI and embeds `panel/frontend/dist`.
 - `apps/` — app bundles. Its own workspace; never built for the host.

@@ -1,0 +1,21 @@
+[package]
+name = "anth-signer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sign an Anthracite app bundle offline: `anth-sign`"
+
+[[bin]]
+name = "anth-sign"
+path = "src/main.rs"
+
+[dependencies]
+anth-compose = { path = "../../../engine/compose" }
+anth-contract = { path = "../../../engine/contract" }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }
+getrandom = "0.3"
+
+[dev-dependencies]
+base64 = "0.22"
+sha2 = "0.10"
+zip = { version = "2.6", default-features = false, features = ["deflate"] }

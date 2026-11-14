@@ -84,7 +84,9 @@ fn verifying_key(text: &str) -> Result<VerifyingKey, Error> {
     Ok(key)
 }
 
-fn hex_decode(text: &str) -> Result<Vec<u8>, Error> {
+/// Decodes lowercase hex. Every key, fingerprint and digest in this file is
+/// written in this alphabet, so the parser lives once.
+pub fn hex_decode(text: &str) -> Result<Vec<u8>, Error> {
     if !text.len().is_multiple_of(2) || !text.is_ascii() {
         return Err(Error::invalid("the key is not lowercase hex"));
     }
@@ -103,7 +105,8 @@ fn hex_digit(byte: u8) -> Result<u8, Error> {
     }
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
+/// Lowercase hex, the inverse of [`hex_decode`].
+pub fn hex_encode(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         text.push_str(&format!("{byte:02x}"));

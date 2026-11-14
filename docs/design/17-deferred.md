@@ -248,11 +248,14 @@ half held by the release process.
 
 **Status: delivered as the mechanism.** v0.6.0 compiles the key in when
 `ANTHRACITE_DISTRIBUTION_KEY` is set at build time, derives the tier from the
-signer, validates a stored `system` descriptor against the key and reports the
-fingerprint at `GET /api/engine/keys/distribution` (`anth key distribution`).
-A build without the variable has no `system` tier, which is the honest debug
-default. What is still owed to a deployment: the actual release key pair, the
-step that signs the shipped bundles, and the rotation runbook
+signer, re-verifies a stored `system` descriptor against the stored
+`manifest.sig` and reports the fingerprint at
+`GET /api/engine/keys/distribution` (`anth key distribution`). A build without
+the variable has no `system` tier, which is the honest debug default.
+`anth-sign` produces `manifest.sig` and `anth-sign keygen` writes the key pair,
+so the signing step no longer has to be invented per deployment. What is still
+owed to a deployment: the custody of the release key pair, wiring `anth-sign`
+into the release job, and the rotation runbook
 ([§9.1](09-authority.md#91-tiers-and-signing)).
 
 ---

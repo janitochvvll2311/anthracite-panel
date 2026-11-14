@@ -616,7 +616,7 @@ fn check_hash(root: &Path, relative: &str, expected: &str) -> Result<(), Error> 
 /// The canonical message of a bundle tree: `manifest.toml` plus every `wit/**`
 /// file, sorted by name (§9.1, D-Signature-Message). Shared with the signer and
 /// with the stored-descriptor check, so all three agree on what is signed.
-pub(crate) fn signed_message(root: &Path) -> Result<Vec<u8>, Error> {
+pub fn signed_message(root: &Path) -> Result<Vec<u8>, Error> {
     let mut files = vec![(
         "manifest.toml".to_string(),
         read_required(root, "manifest.toml")?,

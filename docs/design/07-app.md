@@ -21,6 +21,13 @@ the app's `wit/*.wit`, so the bundle stays closed.
 
 A `bin/` entry joins this layout in v0.6.0 with the first service app ([§7.4](07-app.md#74-app-kinds)).
 
+`manifest.sig` is produced by `anth-sign <dir> --key <path>`, which signs exactly
+`manifest.toml` plus `wit/**` with the engine's own canonical message; the key
+pair comes from `anth-sign keygen --out <path>` and the private half stays at
+mode 0600 on the machine that signs. `scripts/package-app.sh` signs the staging
+directory when `ANTHRACITE_SIGNING_KEY` is set, so the released zip never exists
+unsigned.
+
 **How the component is built.** The target is `wasm32-unknown-unknown`, not
 `wasm32-wasip2`:
 

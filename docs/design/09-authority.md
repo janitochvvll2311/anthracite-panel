@@ -40,6 +40,16 @@ An unsigned bundle is accepted only with `[apps] require_signature = false`, and
 it is `third-party` regardless of its id — a manifest that claims `org.anth.*`
 gains nothing.
 
+**Producing the signature.** `anth-sign <dir> --key <path>` writes
+`manifest.sig` over exactly the set the engine verifies, because it calls the
+engine's canonical message instead of reimplementing it. `anth-sign keygen --out
+<path>` writes a new Ed25519 seed as one line of lowercase hex with mode 0600,
+and the signer refuses a key anybody else can read. The private half lives with
+the release process or with the third-party author; the engine binary only ever
+carries the public half. `scripts/package-app.sh` signs the staging directory
+when `ANTHRACITE_SIGNING_KEY` is set, so a release zip cannot be built unsigned
+by accident.
+
 Revocation is manual: uninstall the app, or rotate the distribution key in a
 release. There is no CRL, and that is a documented limitation, not an oversight.
 Rotation is a release because the key is compiled in; there is no way to add a
