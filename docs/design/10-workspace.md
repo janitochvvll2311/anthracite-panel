@@ -54,6 +54,7 @@ scripts/
   package-app.sh           pack an app directory, optionally signed
   release.sh               build + sign the binaries and every bundle, check the key
   release-variants.sh      turn a signed release into core/base/demo/demo-sessions
+  release-images.sh        assemble Docker images for the four variants
   acid-test.sh             the external-bundle path, end to end
   check-edges.mjs          the forbidden edges of §10.1
 ```

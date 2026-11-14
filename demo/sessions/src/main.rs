@@ -76,6 +76,9 @@ struct Config {
     ttl: Duration,
     trust_proxy: bool,
     captcha: Option<Turnstile>,
+    /// The first port of the child range; zero means an ephemeral port.
+    port_base: u16,
+    port_count: u16,
 }
 
 struct Session {
@@ -224,6 +227,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Config, String> {
     let mut public_host = None;
     let mut max = 8usize;
     let mut ttl_seconds = 1800u64;
+    let mut port_base = 0u16;
+    let mut port_count = 100u16;
     let mut trust_proxy = env_flag("ANTHRACITE_TRUST_PROXY");
     let mut site_key = std::env::var("ANTHRACITE_CAPTCHA_SITE_KEY").ok();
     let mut hostname = std::env::var("ANTHRACITE_CAPTCHA_HOSTNAME").ok();
@@ -254,6 +259,18 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Config, String> {
                     .parse()
                     .map_err(|_| "`--ttl-seconds` needs a number".to_string())?;
             }
+            "--port-base" => {
+                let value = args.next().ok_or("`--port-base` needs a port")?;
+                port_base = value
+                    .parse()
+                    .map_err(|_| "`--port-base` needs a port".to_string())?;
+            }
+            "--port-count" => {
+                let value = args.next().ok_or("`--port-count` needs a number")?;
+                port_count = value
+                    .parse()
+                    .map_err(|_| "`--port-count` needs a positive number".to_string())?;
+            }
             "--trust-proxy" => trust_proxy = true,
             "--captcha-site-key" => site_key = args.next(),
             "--captcha-hostname" => hostname = args.next(),
@@ -262,8 +279,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Config, String> {
                 println!(
                     "usage: anth-demo-sessions --panel <path> --cli <path> --bundles <dir> \
                      [--state <dir>] [--listen <addr>] [--public-host <host>] [--max <n>] \
-                     [--ttl-seconds <n>] [--trust-proxy] [--captcha-site-key <key>] \
-                     [--captcha-hostname <host>] [--captcha-verify-url <url>]\n\
+                     [--ttl-seconds <n>] [--port-base <n>] [--port-count <n>] [--trust-proxy] \
+                     [--captcha-site-key <key>] [--captcha-hostname <host>] \
+                     [--captcha-verify-url <url>]\n\
                      Turnstile is configured with ANTHRACITE_CAPTCHA_SITE_KEY (or the flag), \
                      ANTHRACITE_CAPTCHA_SECRET (env only) and ANTHRACITE_CAPTCHA_HOSTNAME."
                 );
@@ -314,6 +332,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Config, String> {
         ttl: Duration::from_secs(ttl_seconds),
         trust_proxy,
         captcha,
+        port_base,
+        port_count,
     })
 }
 
@@ -619,7 +639,7 @@ async fn spawn_session(app: &Arc<App>) -> Result<(String, Session), String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700));
     }
-    let port = free_port().map_err(|error| format!("choosing a port: {error}"))?;
+    let port = allocate_port(app).map_err(|error| format!("choosing a port: {error}"))?;
     let socket = state.join("engine.sock");
     let config_path = state.join("config.toml");
     let config = format!(
@@ -844,6 +864,29 @@ fn free_port() -> std::io::Result<u16> {
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
+}
+
+/// A child port: ephemeral by default, or the first free one in the configured
+/// range so a container image can publish it.
+fn allocate_port(app: &App) -> Result<u16, String> {
+    if app.config.port_base == 0 {
+        return free_port().map_err(|error| error.to_string());
+    }
+    let ip = app.config.listen.ip();
+    let count = u32::from(app.config.port_count.max(1));
+    let start = u32::from(app.config.port_base);
+    for port in start..start + count {
+        if port > u32::from(u16::MAX) {
+            break;
+        }
+        if TcpListener::bind((ip, port as u16)).is_ok() {
+            return Ok(port as u16);
+        }
+    }
+    Err(format!(
+        "no free session port in {start}..{}",
+        start + count
+    ))
 }
 
 async fn shutdown(app: &Arc<App>) -> Result<(), String> {

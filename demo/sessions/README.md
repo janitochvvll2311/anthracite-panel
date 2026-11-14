@@ -12,6 +12,9 @@ One panel and one emulator state per browser session, for the public demo.
   operator password for the visitor.
 - Sessions expire after `--ttl-seconds` (1800 by default); the launcher kills the
   panel, deletes its state and forgets the cookie mapping.
+- Child panels use an ephemeral port by default. `--port-base`/`--port-count`
+  pin them to a range so a container image can publish it (`ANTHRACITE_PORT_BASE`
+  and `ANTHRACITE_PORT_COUNT` in the release image).
 - Abuse limits: three sessions per address per hour, six per minute and sixty
   per hour globally, ten attempts per address per minute, and five failed
   challenges in ten minutes block that address for an hour. The session count is
