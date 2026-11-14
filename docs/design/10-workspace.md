@@ -42,6 +42,7 @@ apps/                      backend-frontend app catalogue
 
 demo/                      (v0.6.0) a demo instance: config, composition and demo apps
   emulator/                shared native service fixture; manifests/WIT/frontends live in apps/
+  sessions/                bin `anth-demo-sessions`; one panel and state per browser (release demo)
 
 tests/
   e2e/                     Playwright against a running panel
@@ -52,6 +53,7 @@ scripts/
   build-app.sh             build one wasm app and wrap it as a component
   package-app.sh           pack an app directory, optionally signed
   release.sh               build + sign the binaries and every bundle, check the key
+  release-variants.sh      turn a signed release into core/base/demo/demo-sessions
   acid-test.sh             the external-bundle path, end to end
   check-edges.mjs          the forbidden edges of §10.1
 ```

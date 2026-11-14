@@ -26,6 +26,7 @@ const WORKSPACES = [
   "panel/backend/Cargo.toml",
   "apps/Cargo.toml",
   "demo/emulator/Cargo.toml",
+  "demo/sessions/Cargo.toml",
 ];
 
 const violations = [];
@@ -35,7 +36,8 @@ const seen = [];
 for (const manifest of WORKSPACES) {
   const absolute = resolve(root, manifest);
   if (!existsSync(absolute)) continue;
-  seen.push(manifest.split("/")[0]);
+  const zone = manifest.split("/")[0];
+  if (!seen.includes(zone)) seen.push(zone);
 
   const result = spawnSync(
     "cargo",
