@@ -27,6 +27,15 @@ milestone is v0.7.0/M6 (`docs/design/11-roadmap.md`), planned in
 `v0.4.0` is frozen at tag `v0.4.0-freeze`. It is reference only: do not copy its
 code, its crates or its structure.
 
+## Tags
+
+A release is tagged `vX.Y.Z`. Successive publishes of the same version append a
+letter: `vX.Y.Za`, `vX.Y.Zb`, `vX.Y.Zc`, in order, with no separator (as
+`v0.3.0a` already does). The letter is the publish count, not a stability label.
+Do not add more `-pre.N` tags: `v0.6.0-pre.1` to `v0.6.0-pre.3` stay as they
+are, and the next publish after them is `v0.6.0a`. A tag is cut from the branch
+it publishes and is never moved or reused.
+
 ## Toolchain
 
 - Rust `1.99.1` (`CARGO_HOME=/tools/cargo`, `RUSTUP_HOME=/tools/rustup`).
