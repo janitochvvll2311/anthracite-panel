@@ -47,11 +47,17 @@ side is wrong. The private key stays on the release machine and is never printed
   Each archive carries `bin/`, `run.sh`, `README.md`, `manifest.json` and
   `SHA256SUMS`; the script also writes the tarballs, a combined `SHA256SUMS` and
   `RELEASE-NOTES.md`.
-- `demo/sessions/` (`anth-demo-sessions`): a small session launcher for the
-  fourth variant. A cookie maps a browser to its own panel on its own port and
-  state directory; the landing page shows that session's operator password and
-  link. It is demo tooling — loopback by default, a session cap, no proxy and no
-  session expiry — not a deployment mode.
+- `demo/sessions/` (`anth-demo-sessions`): the session launcher for the fourth
+  variant. A cookie maps a browser to its own panel on its own port and state
+  directory; the visitor solves a Cloudflare Turnstile challenge, the launcher
+  verifies success, action and hostname server-side, signs them in through the
+  engine's session endpoint and forwards the cookie, so there is no operator
+  password. Sessions expire after `--ttl-seconds` (30 min by default) and the
+  launcher deletes their state. Abuse limits: three sessions per address per
+  hour, six per minute and sixty per hour globally, ten attempts per minute and
+  an hour-long block after five failed challenges; `Origin`/`Referer` is checked
+  on the form post. It is demo tooling — loopback by default, no proxy of its
+  own, no framing — not a deployment mode.
 
 ## Tests
 
@@ -80,8 +86,14 @@ side is wrong. The private key stays on the release machine and is never printed
   - `demo`: eight emulator apps, `anth app home info` answers from the fixture
     (`Anthracite Demo CPU`), the session state survives the stop;
   - `demo-sessions`: two cookie jars get two panels on two ports with two
-    passwords; reloading a jar keeps its session; creating a user in session A
-    is invisible in B; SIGTERM kills the launcher and every child panel.
+    sessions; reloading a jar keeps its session; creating a user in session A
+    is invisible in B; `/start` sets both cookies and the child answers
+    authenticated; a TTL of 3 s removes the state and closes the port; a
+    non-loopback launcher without Turnstile refuses to start; with a local
+    verifier a bad token, a wrong action, a wrong hostname and a cross-origin
+    post are refused; five failed challenges block the address and the fourth
+    session from one address is `429`; SIGTERM kills the launcher and every
+    child panel.
 - fmt, clippy and the edge gate on the touched workspaces.
 
 ## Decisions
@@ -112,8 +124,9 @@ side is wrong. The private key stays on the release machine and is never printed
 - Publishing bundles to a registry or an app store (§27).
 - Replacing any keys on an existing deployment; a release key rotation requires
   reinstalling the bundles signed by the new key.
-- Session expiry, cleanup and a single-origin proxy for `demo-sessions`; a public
-  deployment needs a tunnel or a reverse proxy and its own lifecycle policy.
+- Session expiry, cleanup and a single-origin proxy for `demo-sessions`; the
+  launcher now expires and cleans sessions, and the proxy is the operator's (the
+  demo runs on its own domain, not embedded).
 
 ## Pending and risks
 
