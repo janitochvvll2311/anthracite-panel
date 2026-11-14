@@ -1,0 +1,37 @@
+manifest_version = 2
+
+[app]
+id = "org.example.ping"
+alias = "ping"
+namespace = "acid:ping"
+name = "Ping"
+version = "0.1.0"
+icon = "bolt"
+
+[wasm]
+path = "wasm/app.wasm"
+sha256 = "{{sha256}}"
+
+[[export]]
+interface = "acid:ping/ping@1.0.0"
+
+[[import]]
+interface = "anth:env/time@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/ping"
+call = "acid:ping/ping@1.0.0#now"
+
+[[slot]]
+id = "panel.view"
+label = "Ping"
+icon = "bolt"
+order = 1
+tag = "acid-ping"
+module = "web/ping.js"
+sha256 = "{{module_sha256}}"
+
+[[cli]]
+call = "acid:ping/ping@1.0.0#now"
+verb = "now"

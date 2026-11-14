@@ -1,0 +1,12 @@
+package acid:ping@1.0.0;
+
+interface ping {
+    /// Answers with the host clock reading, so the route proves the call reached
+    /// the app and the app reached a capability.
+    now: func() -> string;
+}
+
+world app {
+    import anth:env/time@1.0.0;
+    export ping;
+}

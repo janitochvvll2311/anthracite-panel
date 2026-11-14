@@ -146,6 +146,14 @@ jobs:
       - name: Test
         run: cargo test --manifest-path panel/backend/Cargo.toml
 
+      # The external bundle: authored outside apps/, signed with its own key,
+      # installed, composed, served and answered by a real panel.
+      - name: Format the external app
+        run: cargo fmt --manifest-path tests/acid/app/Cargo.toml --check
+
+      - name: External bundle acid test
+        run: scripts/acid-test.sh
+
       # The remote side of the acid test: a real panel process, the hello
       # bundle, and the generated Rust/TS clients speaking HTTP from outside.
       - name: Build the e2e panel and clients
