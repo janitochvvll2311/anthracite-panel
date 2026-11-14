@@ -43,7 +43,7 @@ use axum::http::header::{
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, delete, get};
+use axum::routing::{any, delete, get, post};
 use axum::{Json, Router};
 use futures_core::Stream;
 use futures_util::{SinkExt, StreamExt};
@@ -80,6 +80,16 @@ impl Apps {
     }
 }
 
+/// What a host must provide so the engine can ask for a process restart (§6.5).
+///
+/// The engine does not own its process: the daemon and the linked panel do. The
+/// router only records the request and answers `202`; the host stops serving,
+/// stops apps and replaces itself with the same arguments.
+pub trait Restart: Send + Sync {
+    /// Asks the host to restart once this response is on the wire.
+    fn restart(&self) -> Result<(), Error>;
+}
+
 /// What the router needs from the engine.
 #[derive(Clone)]
 pub struct EngineState {
@@ -101,6 +111,8 @@ pub struct EngineState {
     ready: Arc<AtomicBool>,
     /// The route dispatcher, when this host runs apps.
     caller: Option<Arc<dyn AppCaller>>,
+    /// The process owner, when this host can replace itself.
+    restart: Option<Arc<dyn Restart>>,
 }
 
 impl EngineState {
@@ -115,11 +127,20 @@ impl EngineState {
             auth: None,
             ready: Arc::new(AtomicBool::new(true)),
             caller: None,
+            restart: None,
         }
     }
 
     pub fn with_caller(mut self, caller: Arc<dyn AppCaller>) -> Self {
         self.caller = Some(caller);
+        self
+    }
+
+    /// The host can replace its own process. Without this, `POST
+    /// /api/engine/restart` answers `503`: a router mounted by a host that does
+    /// not own its process has nothing to restart.
+    pub fn with_restart(mut self, restart: Arc<dyn Restart>) -> Self {
+        self.restart = Some(restart);
         self
     }
 
@@ -535,6 +556,7 @@ fn api_routes(state: Arc<EngineState>) -> Router {
         .route("/engine/keys/distribution", get(distribution_key))
         .route("/engine/keys/{fingerprint}", delete(remove_key))
         .route("/engine/audit", get(read_audit))
+        .route("/engine/restart", post(restart_engine))
         .route("/engine/apps", get(list_apps).post(install_app))
         .route("/engine/apps/{id}/wit", get(app_wit))
         .route("/engine/apps/{id}/approval", get(preview_approval))
@@ -692,6 +714,39 @@ async fn replace_composition(
     };
     let etag = apps.compositions.etag(&composition)?;
     Ok((StatusCode::OK, [(ETAG, etag)], Json(view)).into_response())
+}
+
+/// `POST /api/engine/restart`: the process transition of §6.5.
+///
+/// A host that owns its process replaces itself with the same arguments; the
+/// router only asks. The answer is `202` with `Location: /api/health` because the
+/// engine never claims readiness before it is ready again.
+async fn restart_engine(
+    State(state): State<Arc<EngineState>>,
+    Extension(actor): Extension<Actor>,
+) -> Result<Response, ApiError> {
+    let restart = state.restart.as_ref().ok_or_else(|| {
+        ApiError(Error::unavailable(
+            "this host does not own its process; there is nothing to restart",
+        ))
+    })?;
+    if let Some(apps) = &state.apps {
+        audit(
+            apps,
+            &actor.0,
+            AuditAction::EngineRestart,
+            None,
+            Outcome::Ok,
+            Some(json!({"pid": std::process::id()})),
+        )?;
+    }
+    restart.restart().map_err(ApiError)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        [(LOCATION, "/api/health")],
+        Json(json!({"status": "restarting"})),
+    )
+        .into_response())
 }
 
 /// The current document, or an internal error if a panicking writer poisoned the

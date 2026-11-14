@@ -394,6 +394,56 @@ async fn the_distribution_key_of_the_build_is_reported() {
 }
 
 #[tokio::test]
+async fn a_restart_asks_the_host_and_answers_202() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counting(AtomicUsize);
+    impl Restart for Counting {
+        fn restart(&self) -> Result<(), anth_contract::Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    let (state, dir) = apps_state();
+    let counting = Arc::new(Counting(AtomicUsize::new(0)));
+    let state = Arc::new(
+        Arc::try_unwrap(state)
+            .ok()
+            .expect("one owner")
+            .with_restart(Arc::clone(&counting) as Arc<dyn Restart>),
+    );
+    let (status, headers, value) = call(
+        Arc::clone(&state),
+        "POST",
+        "/api/engine/restart",
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{value}");
+    assert_eq!(
+        headers
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/api/health")
+    );
+    assert_eq!(value["status"], "restarting");
+    assert_eq!(counting.0.load(Ordering::SeqCst), 1);
+    // The process transition is an operator action; the log says who asked.
+    let (_, audit) = json(state, "/api/engine/audit").await;
+    assert!(audit.to_string().contains("engine.restart"), "{audit}");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_host_without_a_process_refuses_to_restart() {
+    let (state, dir) = apps_state();
+    let (status, _headers, value) = call(state, "POST", "/api/engine/restart", Vec::new()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
 async fn a_key_is_added_listed_and_removed() {
     let (state, dir) = apps_state();
     let body = format!(

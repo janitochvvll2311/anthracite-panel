@@ -11,7 +11,7 @@ use anth_contract::{AppId, SurfaceFabAction, SurfaceSlot};
 pub mod host;
 pub use anth_api::{session_token, SessionInfo};
 pub use anth_contract::Error;
-pub use host::{Host, Sessions};
+pub use host::{Host, Sessions, Stop};
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 
 /// A path segment keeps `/` as a separator but encodes anything a URL would

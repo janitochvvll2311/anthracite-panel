@@ -33,6 +33,8 @@ pub enum AuditAction {
     AppRemove,
     #[serde(rename = "compose")]
     Compose,
+    #[serde(rename = "engine.restart")]
+    EngineRestart,
     #[serde(rename = "key.add")]
     KeyAdd,
     #[serde(rename = "key.remove")]
@@ -63,6 +65,7 @@ impl AuditAction {
         AuditAction::AppDisable,
         AuditAction::AppRemove,
         AuditAction::Compose,
+        AuditAction::EngineRestart,
         AuditAction::KeyAdd,
         AuditAction::KeyRemove,
         AuditAction::Acknowledge,
@@ -174,6 +177,7 @@ mod tests {
                 "app.disable",
                 "app.remove",
                 "compose",
+                "engine.restart",
                 "key.add",
                 "key.remove",
                 "acknowledge",

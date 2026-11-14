@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anth_panel::{Host, Sessions, ACTION, FAB, MODAL, SETTINGS, VIEW};
+use anth_panel::{Host, Sessions, Stop, ACTION, FAB, MODAL, SETTINGS, VIEW};
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{header, Method, StatusCode};
@@ -138,7 +138,7 @@ async fn main() -> ExitCode {
         );
     }
 
-    let listener = match TcpListener::bind(args.listen).await {
+    let listener = match bind_tcp(args.listen).await {
         Ok(listener) => listener,
         Err(error) => {
             eprintln!("binding {}: {error}", args.listen);
@@ -183,20 +183,80 @@ async fn main() -> ExitCode {
         args.listen,
         args.config.display()
     );
+    let mut restart = host.restart_signal();
+    let restarting = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let served = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown())
+    .with_graceful_shutdown({
+        let restarting = Arc::clone(&restarting);
+        async move {
+            tokio::select! {
+                _ = shutdown() => {}
+                _ = async move {
+                    while restart.borrow().is_none() {
+                        if restart.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                } => restarting.store(true, std::sync::atomic::Ordering::SeqCst),
+            }
+        }
+    })
     .await;
-    host.stop().await;
+    // A signal wins over a pending restart: the service manager asked to stop.
+    let reason = if restarting.load(std::sync::atomic::Ordering::SeqCst) {
+        Stop::Restart
+    } else {
+        Stop::Shutdown
+    };
+    host.stop(reason).await;
     match served {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            if reason == Stop::Restart {
+                return reexec();
+            }
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("serving the panel: {error}");
             ExitCode::from(1)
         }
     }
+}
+
+/// Binds with `SO_REUSEADDR`: a restart replaces the process while connections
+/// from the old one can still be in `TIME_WAIT`, and the port must be reusable.
+async fn bind_tcp(address: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(1024)?;
+    socket.set_nonblocking(true)?;
+    TcpListener::from_std(socket.into())
+}
+
+/// Replaces the panel with the same arguments, so the pid stays and a service
+/// manager does not see a stop/start pair.
+fn reexec() -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            eprintln!("locating this binary: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let error = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    eprintln!("re-exec failed: {error}");
+    ExitCode::from(1)
 }
 
 /// Liveness for the panel process itself. The engine's readiness is

@@ -88,6 +88,7 @@ commands:
                         read or edit the composition
   audit [--limit <n>] [--before <n>]
                         read the audit log, newest first
+  restart               replace the engine process with the same arguments
   key list              trusted signers
   key distribution      the distribution key this engine was built with
   key add <public-key> [--label <label>]
@@ -149,6 +150,9 @@ pub enum Invocation {
         socket: Option<PathBuf>,
         limit: usize,
         before: Option<usize>,
+    },
+    Restart {
+        socket: Option<PathBuf>,
     },
     Key {
         socket: Option<PathBuf>,
@@ -270,6 +274,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Invocation, Err
         "app" => parse_app(args, socket),
         "compose" => parse_compose(args, socket),
         "audit" => parse_audit(args, socket),
+        "restart" => {
+            if let Some(extra) = args.next() {
+                return Err(usage(format!(
+                    "`restart` takes no arguments, not `{}`",
+                    extra.to_string_lossy()
+                )));
+            }
+            Ok(Invocation::Restart { socket })
+        }
         "key" => parse_key(args, socket),
         "operator" => parse_operator(args, socket),
         other => Err(usage(format!("`{other}` is not a command"))),
@@ -649,6 +662,7 @@ pub fn execute(invocation: Invocation) -> Result<u8, Error> {
             limit,
             before,
         } => audit(socket, limit, before),
+        Invocation::Restart { socket } => restart(socket),
         Invocation::Key { socket, command } => key(socket, command),
         Invocation::Operator { socket, command } => operator(socket, command),
         Invocation::App { socket, command } => app(socket, command),
@@ -772,12 +786,30 @@ fn compose(
             .map_err(|error| Error::internal(format!("rendering the composition: {error}")))?,
     )?;
     if now {
-        eprintln!(
-            "v0.5.0 recomposes by restarting: the document is saved; running apps change on the next restart"
-        );
+        match client.request("POST", "/api/engine/restart", &[], &[]) {
+            Ok(_) => eprintln!("composition written; restart accepted"),
+            Err(error) => eprintln!(
+                "composition written; the restart was refused: {}",
+                error.message()
+            ),
+        }
     } else {
         eprintln!("composition written; running apps change on the next restart");
     }
+    Ok(0)
+}
+
+/// Asks the engine to replace its process (§6.5). The API answers `202` before
+/// the new process is ready; readiness is `anth status`.
+fn restart(socket: Option<PathBuf>) -> Result<u8, Error> {
+    let client = client(socket);
+    let response = client.request("POST", "/api/engine/restart", &[], &[])?;
+    let location = response
+        .headers
+        .get("location")
+        .cloned()
+        .unwrap_or_else(|| "/api/health".to_string());
+    println!("restart accepted ({location}); the engine is coming back");
     Ok(0)
 }
 
@@ -1960,7 +1992,7 @@ mod tests {
             false,
             vec!["org.example.notes".to_string()],
             Vec::new(),
-            true,
+            false,
         )
         .expect("compose");
         assert_eq!(code, 0);
@@ -1981,6 +2013,68 @@ mod tests {
             "{put}"
         );
         assert!(put.contains("org.example.notes"), "{put}");
+    }
+
+    #[test]
+    fn compose_now_asks_for_a_restart_after_the_write() {
+        let dir = scratch("compose-now");
+        let socket = dir.join("engine.sock");
+        let before = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":[]}]},"surface":{"apps":[],"degraded":[],"links":[]}}"#;
+        let after = r#"{"composition":{"version":1,"profile":[{"id":"default","apps":["org.example.notes"]}]},"surface":{"apps":[],"degraded":[],"links":[]}}"#;
+        let receive = serve(
+            &socket,
+            vec![
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"abc\"\r\n\r\n{before}",
+                    before.len()
+                )
+                .into_bytes(),
+                answer("200 OK", after),
+                answer("202 Accepted", r#"{"status":"restarting"}"#),
+            ],
+        );
+        compose(
+            Some(socket),
+            false,
+            vec!["org.example.notes".to_string()],
+            Vec::new(),
+            true,
+        )
+        .expect("compose");
+        let get = String::from_utf8_lossy(&receive.recv().expect("get")).to_string();
+        assert!(get.starts_with("GET /api/engine/composition"), "{get}");
+        let put = String::from_utf8_lossy(&receive.recv().expect("put")).to_string();
+        assert!(put.starts_with("PUT /api/engine/composition"), "{put}");
+        let restart = String::from_utf8_lossy(&receive.recv().expect("restart")).to_string();
+        assert!(
+            restart.starts_with("POST /api/engine/restart HTTP/1.1"),
+            "{restart}"
+        );
+    }
+
+    #[test]
+    fn restart_is_a_bare_command() {
+        assert_eq!(
+            parse(args(&["restart"])).expect("restart"),
+            Invocation::Restart { socket: None }
+        );
+        assert!(parse(args(&["restart", "now"])).is_err());
+    }
+
+    #[test]
+    fn restart_posts_to_the_restart_route() {
+        let dir = scratch("restart");
+        let socket = dir.join("engine.sock");
+        let receive = serve(
+            &socket,
+            vec![answer("202 Accepted", r#"{"status":"restarting"}"#)],
+        );
+        restart(Some(socket)).expect("restart");
+        let request = String::from_utf8_lossy(&receive.recv().expect("request")).to_string();
+        assert!(
+            request.starts_with("POST /api/engine/restart HTTP/1.1"),
+            "{request}"
+        );
     }
 
     #[test]

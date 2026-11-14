@@ -177,6 +177,7 @@ async fn run(args: Args) -> Result<(), Error> {
         &config.state,
         std::time::Duration::from_millis(config.limits.wall_ms),
     ));
+    let (stop, stopped) = watch::channel(None::<Stop>);
     let state = Arc::new(
         anth_api::EngineState::new(allowed_uid)
             .with_composition(composition)
@@ -190,6 +191,7 @@ async fn run(args: Args) -> Result<(), Error> {
                 anth_engine::supervisor::SupervisorCaller::new(supervisor.clone()),
                 services.clone(),
             )))
+            .with_restart(Arc::new(RestartProcess { stop: stop.clone() }))
             .with_auth(auth)
             .booting(),
     );
@@ -197,10 +199,10 @@ async fn run(args: Args) -> Result<(), Error> {
     anth_engine::socket::restrict(&config.socket)?;
     logger.info(&format!("listening on {}", config.socket.display()));
 
-    let (stop, stopped) = watch::channel(false);
+    let final_stop = stopped.clone();
     tokio::spawn(async move {
         shutdown_signal().await;
-        let _ = stop.send(true);
+        let _ = stop.send(Some(Stop::Shutdown));
     });
 
     // Serve before starting apps: a slow app must be diagnosable, and readiness
@@ -223,8 +225,7 @@ async fn run(args: Args) -> Result<(), Error> {
             let address: SocketAddr = address
                 .parse()
                 .map_err(|_| Error::invalid(format!("`{address}` is not a socket address")))?;
-            let listener = TcpListener::bind(address)
-                .await
+            let listener = bind_tcp(address)
                 .map_err(|error| Error::internal(format!("binding {address}: {error}")))?;
             logger.info(&format!("listening on http://{address}"));
             let stopped = stopped.clone();
@@ -281,14 +282,77 @@ async fn run(args: Args) -> Result<(), Error> {
     }
     services.stop_all().await;
     supervisor.stop_all().await;
+    if *final_stop.borrow() == Some(Stop::Restart) {
+        logger.info("restarting");
+        return reexec();
+    }
     logger.info("stopped");
     Ok(())
 }
 
+/// Why serving stopped: a signal, or a host-requested restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    Shutdown,
+    Restart,
+}
+
+/// The engine's claim on its own process: the router only asks, and the daemon
+/// replaces itself with the same arguments after an orderly stop.
+struct RestartProcess {
+    stop: watch::Sender<Option<Stop>>,
+}
+
+impl anth_api::Restart for RestartProcess {
+    fn restart(&self) -> Result<(), Error> {
+        // Once a stop is in progress a restart no longer wins: a service
+        // manager's TERM must not be turned into a re-exec by a late request.
+        let applied = self.stop.send_if_modified(|value| {
+            if value.is_some() {
+                return false;
+            }
+            *value = Some(Stop::Restart);
+            true
+        });
+        if applied {
+            Ok(())
+        } else {
+            Err(Error::unavailable("the engine is already stopping"))
+        }
+    }
+}
+
+/// Replaces this process with the same arguments, so the pid and the service
+/// manager's contract survive the restart.
+fn reexec() -> Result<(), Error> {
+    use std::os::unix::process::CommandExt;
+    let exe = std::env::current_exe()
+        .map_err(|error| Error::internal(format!("locating this binary: {error}")))?;
+    let error = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    Err(Error::internal(format!("re-exec failed: {error}")))
+}
+
+/// Binds with `SO_REUSEADDR`: a restart replaces the process while connections
+/// from the old one can still be in `TIME_WAIT`, and the port must be reusable.
+fn bind_tcp(address: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(1024)?;
+    socket.set_nonblocking(true)?;
+    TcpListener::from_std(socket.into())
+}
+
 /// Resolves when the shutdown signal fires.
-async fn wait(mut stopped: watch::Receiver<bool>) {
+async fn wait(mut stopped: watch::Receiver<Option<Stop>>) {
     loop {
-        if *stopped.borrow() {
+        if stopped.borrow().is_some() {
             return;
         }
         if stopped.changed().await.is_err() {
@@ -315,8 +379,26 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose_profile, Args};
+    use super::{choose_profile, Args, RestartProcess, Stop};
+    use anth_api::Restart;
     use anth_engine::config::Profile;
+
+    #[test]
+    fn a_restart_request_reaches_the_stop_channel() {
+        let (stop, stopped) = tokio::sync::watch::channel(None::<Stop>);
+        let process = RestartProcess { stop };
+        process.restart().expect("restart");
+        assert_eq!(*stopped.borrow(), Some(Stop::Restart));
+    }
+
+    #[test]
+    fn a_stop_in_progress_cannot_become_a_restart() {
+        let (stop, stopped) = tokio::sync::watch::channel(Some(Stop::Shutdown));
+        let process = RestartProcess { stop };
+        let error = process.restart().expect_err("already stopping");
+        assert!(error.message().contains("stopping"), "{error}");
+        assert_eq!(*stopped.borrow(), Some(Stop::Shutdown));
+    }
 
     #[test]
     fn a_release_build_cannot_be_forced_open() {

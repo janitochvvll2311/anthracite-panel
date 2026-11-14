@@ -20,8 +20,8 @@ absence of generated clients for the system apps.
 | `anth app <alias> <verb>` ↔ app route | pass |
 | `anth audit` ↔ `GET /api/engine/audit` | pass in #163 |
 | `anth doctor` | offline; no API by design |
-| `anth restart` ↔ `POST /api/engine/restart` | **gap**: neither route nor verb exists |
-| `anth login/logout` ↔ session resource | **gap**: API exists, CLI is Unix-socket only |
+| `anth restart` ↔ `POST /api/engine/restart` | pass in the restart PR |
+| `anth login/logout` ↔ session resource | **gap**: API exists, the CLI has no HTTP transport |
 | operator password ↔ `GET`/`PATCH /api/engine/operator` | pass in the operator-cli PR |
 | Panel shell routes (`/login`, `/setup`, `/panel/config.json`, assets) | panel-only; no CLI equivalent |
 | Panel frontend → engine API | pass; audit call is in #163 |
@@ -51,8 +51,6 @@ absence of generated clients for the system apps.
 
 ## Out of scope
 
-- Implementing `restart`: the API route is not implemented either, and it is a
-  daemon lifecycle change.
 - Implementing `anth login/logout`: the CLI's transport is the engine's Unix
   socket, where the peer credential *is* the session. A remote CLI needs an HTTP
   transport and a cookie store, which is a second client; the panel session and
