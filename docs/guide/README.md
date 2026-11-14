@@ -1,0 +1,57 @@
+# The Anthracite guide
+
+This is the official manual for Anthracite **0.6**. It describes how to install,
+configure and operate the engine and the official panel, how to write apps,
+services and panels, and how to sign and release bundles.
+
+The design of record lives separately: [`DESIGN.md`](../../DESIGN.md) and the
+[`docs/design/`](../design/) documents explain *why* the platform is shaped this
+way, and their decisions are binding. The guide links to them where the reason
+matters; it does not repeat the whole design.
+
+## Reading paths
+
+**Operator.** [Installation](installation.md) → [Configuration](configuration.md)
+→ [CLI](cli.md) / [HTTP API](http-api.md) → [Signing](signing.md) →
+[Operations](operations.md) → [Troubleshooting](troubleshooting.md).
+
+**App author.** [Apps](apps.md) → [Signing](signing.md) →
+[Services](services.md) if the app needs host reach → [Panels](panels.md) for a
+UI → the [conformance kit](apps.md#the-conformance-kit).
+
+**Panel author.** [Panels](panels.md) → [HTTP API](http-api.md) →
+[Apps](apps.md) (the surface and slot shapes).
+
+**Contributor.** [`AGENTS.md`](../../AGENTS.md) → [`DESIGN.md`](../../DESIGN.md)
+→ [`docs/design/`](../design/) → the feature reports under
+[`docs/features/`](../features/).
+
+## Pages
+
+| Page | Covers |
+| --- | --- |
+| [Getting started](getting-started.md) | a running panel in minutes, from a release or from source |
+| [Installation](installation.md) | release variants and images, source builds, services, upgrades |
+| [Configuration](configuration.md) | every configuration key, profiles, state layout, environment |
+| [CLI](cli.md) | every `anth` command, flags, exit codes |
+| [HTTP API](http-api.md) | authentication, errors, resources, streaming and assets |
+| [Apps](apps.md) | bundle layout, manifests, WIT, routes, slots, approval, upgrades |
+| [Services](services.md) | native services, classes, placeholders, supervision, sandbox |
+| [Signing](signing.md) | tiers, keys, `anth-sign`, the release ceremony, verification |
+| [Panels](panels.md) | the panel contract, slots, the iframe bridge, building a panel |
+| [Demo](demo.md) | the emulator, the demo variants, ephemeral sessions, images |
+| [Operations](operations.md) | state, backup, audit, logs, restart, upgrades |
+| [Security](security.md) | the authority model, secrets, what is and is not enforced |
+| [Troubleshooting](troubleshooting.md) | symptoms, causes, fixes |
+| [Glossary](glossary.md) | the vocabulary used everywhere else |
+
+## Conventions
+
+- Shell examples use `sh` and assume `anth` is on `PATH`. Set `ANTH_SOCKET` or
+  pass `--socket <path>` when the engine does not use the default
+  `/run/anth/engine.sock`.
+- `$state` is the engine's state directory (default `/var/lib/anth`).
+- `0.6.x` means the 0.6 release line; the exact version is `anth --version`.
+- Links into [`docs/design/`](../design/) explain a reason. If this guide and a
+  design decision disagree, the design decision wins and the guide is wrong:
+  report it.
