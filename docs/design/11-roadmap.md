@@ -103,6 +103,10 @@ the firewall remains a separate bundle and is not an engine feature.
 v0.4.0 inventory is covered as a scope reference, and removing `net` leaves a
 working system with that section gone — not a broken panel.
 
+**Status (v0.6.0):** delivered. The golden suite boots the real system
+composition and removes `net` without breaking the rest; see
+[`docs/features/v0.6-close/report.md`](../features/v0.6-close/report.md).
+
 The **demo** belongs here too, and as a separate instance rather than a flag: a
 `config.demo.toml` with its own `state` that composes `compositions/demo.toml`, whose
 apps export the real interfaces with generated, deterministic data. The engine does
@@ -131,9 +135,11 @@ mechanism is exercised in CI by `scripts/acid-test.sh` against
 `tests/acid/app`, which is outside `apps/` and outside the apps workspace; the
 "not us" half is a release-time check, not something a repository can prove.
 
-**Status (v0.6.0):** the CI flow passes. The external app is built with plain
-`cargo`, signed with its own key, installed with `require-signature = true`,
-approved, composed, served and answered by a real panel.
+**Status (v0.6.0):** delivered. The CI flow passes; the external app is built with
+plain `cargo`, signed with its own key, installed with `require-signature = true`,
+approved, composed, served and answered by a real panel. The milestone close,
+including the operational items that remain, is
+[`docs/features/v0.6-close/report.md`](../features/v0.6-close/report.md).
 
 ### v0.7.0 — the operated edge (M6)
 
