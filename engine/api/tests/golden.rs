@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use anth_api::{router, EngineState, PeerUid};
 use anth_compose::grant::GrantStore;
+use anth_compose::keys::Distribution;
 use anth_compose::registry::Registry;
 use anth_contract::manifest::{Manifest, ServiceClass};
 use anth_contract::{AppId, Composition, Grant, InterfaceId, Risk, GRANT_VERSION};
@@ -83,7 +84,10 @@ fn approve(state: &Path, id_text: &str) {
 
 fn approve_with(state: &Path, id_text: &str, risk: Risk) {
     let id = AppId::parse(id_text).expect("id");
-    let registry = Registry::new(state);
+    // The fixtures are a keyless build: the shipped apps install as
+    // `third-party` there. A build with a distribution key would refuse them
+    // unless that key signed them, which is the point of the namespace rule.
+    let registry = Registry::with_distribution(state, Distribution::none());
     let material = registry
         .approval_material(&id)
         .expect("material")
@@ -245,7 +249,8 @@ fn system_state(include_net: bool) -> (Arc<EngineState>, PathBuf) {
     let state = Arc::new(
         EngineState::new(1000)
             .with_composition(composition)
-            .with_apps(&dir, 1 << 20, false, true),
+            .with_apps(&dir, 1 << 20, false, true)
+            .keyless(),
     );
     (state, dir)
 }
@@ -540,7 +545,7 @@ async fn a_corrupt_grant_is_invalid_not_unapproved() {
 async fn a_disabled_app_is_degraded() {
     let (state, dir) = fixture_state("unapproved.toml", &["org.example.provider"]);
     let id = AppId::parse("org.example.provider").expect("id");
-    Registry::new(&dir)
+    Registry::with_distribution(&dir, Distribution::none())
         .set_enabled(&id, false)
         .expect("disable");
     let value = composition(state).await;

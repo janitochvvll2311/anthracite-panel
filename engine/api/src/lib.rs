@@ -21,6 +21,7 @@ use anth_compose::audit::{timestamp, AuditLog};
 use anth_compose::bundle::Options as BundleOptions;
 use anth_compose::composition::CompositionStore;
 use anth_compose::grant::GrantStore;
+use anth_compose::keys::Distribution;
 use anth_compose::registry::{Installed, Registry};
 use anth_compose::risk::{app_risk, approve, Approval};
 use anth_compose::{composed_dependents, resolve, DegradedReason, InstalledApp, Resolution};
@@ -53,6 +54,9 @@ use tokio::net::UnixListener;
 /// The installed apps and their grants, when this router serves them.
 #[derive(Debug, Clone)]
 pub struct Apps {
+    /// The state tree this registry reads, kept so a host can pin the
+    /// distribution mode before it starts serving.
+    pub state: std::path::PathBuf,
     pub registry: Registry,
     pub grants: GrantStore,
     pub audit: AuditLog,
@@ -126,6 +130,22 @@ impl EngineState {
         self
     }
 
+    /// Drops the compiled distribution key on the app registry.
+    ///
+    /// It can only remove trust, never grant it: a host that calls this cannot
+    /// mint a `system` app, it can only stop honouring the key the binary was
+    /// built with. The daemon does not call it; tests use it to model a keyless
+    /// development build, and a host that wants one says so explicitly.
+    pub fn keyless(mut self) -> Self {
+        if let Some(apps) = self.apps.take() {
+            let mut apps = Arc::try_unwrap(apps)
+                .unwrap_or_else(|_| panic!("`keyless` must be called before the state is shared"));
+            apps.registry = Registry::with_distribution(&apps.state, Distribution::none());
+            self.apps = Some(Arc::new(apps));
+        }
+        self
+    }
+
     /// The daemon is still starting apps; readiness answers `503` until
     /// [`EngineState::mark_ready`].
     pub fn booting(mut self) -> Self {
@@ -156,6 +176,7 @@ impl EngineState {
         allow_third_party_service: bool,
     ) -> Self {
         self.apps = Some(Arc::new(Apps {
+            state: state.to_path_buf(),
             registry: Registry::new(state),
             grants: GrantStore::new(state),
             audit: AuditLog::new(state),

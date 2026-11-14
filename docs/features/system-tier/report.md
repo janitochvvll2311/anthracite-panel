@@ -82,12 +82,13 @@ next PR (see *Pending*).
 
 ## Out of scope
 
-- The release tool that produces `manifest.sig` (next PR).
+- The release tool that produces `manifest.sig` (delivered by
+  [`anth-sign`](../bundle-signer/report.md)).
 - Signing the shipped `apps/*` bundles and making them `system` in a release.
 - Key rotation mechanics beyond "it is a release": there is still no CRL.
-- Enforcing namespace ownership (`anth`, `anthracite`) by tier. The rule is
-  documented in [§7](../../design/07-app.md) and the repo apps still install as
-  third-party in debug, so enforcement waits for release signing.
+- Enforcing namespace ownership (`anth`, `anthracite`) by tier — delivered in the
+  namespace-tier PR: `anthracite` is refused for `third-party` bundles once the
+  build carries a distribution key.
 
 ## Pending and risks
 
