@@ -26,9 +26,9 @@ failures are one of the entries below.
 | `412 precondition-failed` on compose | stale `If-Match` | re-read the composition and retry with its `ETag` |
 | `503` on an app route | the app is not running (degraded, removed, not composed) | fix the composition and restart |
 | `exhausted` | a stream or call hit its budget | raise the manifest `[limits]` or the app's usage |
-| Turnstile: "not accepted" | wrong site key/secret, wrong hostname, wrong action, or an expired token | check `ANTHRACITE_CAPTCHA_*`; the widget must use `action=demo-session` |
-| Turnstile: "temporarily blocked" | five failed challenges from the address in ten minutes | wait an hour, or test from another address |
-| a public launcher refuses to start | no CAPTCHA, or no `ANTHRACITE_CAPTCHA_HOSTNAME` | set the Turnstile variables; bind loopback for local work |
+| Proof of work: "not accepted" | expired or replayed challenge, wrong address binding, wrong difficulty, or an invalid nonce | reload the page; check `ANTHRACITE_POW_*` and that the browser can run Web Workers |
+| Proof of work: "temporarily blocked" | five failed challenges from the address in ten minutes | wait an hour, or test from another address |
+| a public launcher refuses to start | difficulty below 12 bits | raise `ANTHRACITE_POW_DIFFICULTY` to at least 12 |
 | `demo-sessions` child port unreachable | the range is not published | `-p 8100-8199:8100-8199` (or the proxy maps it) and `ANTHRACITE_PORT_BASE` |
 | Docker state is not writable | a bind mount owned by the host user | use a named volume, or `chown 1000:1000` (root for `base`) |
 | Podman/Buildah: `cannot clone: Operation not permitted` | the build sandbox blocks user namespaces and cgroups are read-only | build images with `umoci`/`skopeo`; the archives are Docker-compatible |

@@ -1,10 +1,10 @@
 //! `anth-demo-sessions`: one panel and one emulator state per browser session.
 //!
 //! The public demo runs on its own origin behind an operator's proxy. Each
-//! visitor solves a Cloudflare Turnstile challenge, gets a short-lived session
-//! with its own panel and emulator state, and is signed in without an operator
-//! password. Sessions expire and their state is deleted. Creation is limited
-//! per address and globally, repeated failures block an address, and a
+//! visitor solves a self-hosted proof-of-work challenge, gets a short-lived
+//! session with its own panel and emulator state, and is signed in without an
+//! operator password. Sessions expire and their state is deleted. Creation is
+//! limited per address and globally, repeated failures block an address, and a
 //! cross-origin form cannot start a session.
 //!
 //! This is demo tooling, not a deployment mode: loopback by default, a session
@@ -23,8 +23,10 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -36,12 +38,8 @@ const APPS: &[&str] = &[
 ];
 const HOST_APPS: &[&str] = &["home"];
 
-const TURNSTILE_SCRIPT: &str = "https://challenges.cloudflare.com/turnstile/v0/api.js";
-const TURNSTILE_VERIFY: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
-const TURNSTILE_FIELD: &str = "cf-turnstile-response";
-const TURNSTILE_CLASS: &str = "cf-turnstile";
-const TURNSTILE_ORIGIN: &str = "https://challenges.cloudflare.com";
-const TURNSTILE_ACTION: &str = "demo-session";
+const POW_DEFAULT_DIFFICULTY: u8 = 18;
+const POW_DEFAULT_TTL_SECONDS: u64 = 300;
 
 /// One address may create three demos an hour; the whole launcher six a minute.
 const CREATIONS_PER_IP_HOUR: usize = 3;
@@ -56,11 +54,10 @@ const BLOCK: Duration = Duration::from_secs(60 * 60);
 const MAX_ADDRESSES: usize = 4096;
 
 #[derive(Clone)]
-struct Turnstile {
-    site_key: String,
-    secret: String,
-    hostname: Option<String>,
-    verify_url: String,
+struct Pow {
+    secret: Vec<u8>,
+    difficulty: u8,
+    ttl: Duration,
 }
 
 #[derive(Clone)]
@@ -75,7 +72,7 @@ struct Config {
     max: usize,
     ttl: Duration,
     trust_proxy: bool,
-    captcha: Option<Turnstile>,
+    pow: Pow,
     /// The first port of the child range; zero means an ephemeral port.
     port_base: u16,
     port_count: u16,
@@ -104,6 +101,7 @@ struct App {
     sessions: Mutex<BTreeMap<String, Session>>,
     create_lock: Mutex<()>,
     limiter: Mutex<Limiter>,
+    used_challenges: Mutex<HashMap<String, Instant>>,
     next: AtomicU64,
     client: Client,
 }
@@ -128,16 +126,12 @@ async fn main() -> std::process::ExitCode {
         eprintln!("creating {}: {error}", config.state.display());
         return std::process::ExitCode::from(1);
     }
-    let captcha = if config.captcha.is_some() {
-        "turnstile"
-    } else {
-        "none"
-    };
     let app = Arc::new(App {
         config: config.clone(),
         sessions: Mutex::new(BTreeMap::new()),
         create_lock: Mutex::new(()),
         limiter: Mutex::new(Limiter::default()),
+        used_challenges: Mutex::new(HashMap::new()),
         next: AtomicU64::new(1),
         client: Client::builder()
             .timeout(Duration::from_secs(10))
@@ -149,6 +143,8 @@ async fn main() -> std::process::ExitCode {
         .route("/", get(root))
         .route("/start", post(start))
         .route("/new", get(landing))
+        .route("/solve.js", get(solve_js))
+        .route("/solve-worker.js", get(solve_worker_js))
         .route("/health", get(|| async { "ok" }))
         .route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT }))
         .with_state(Arc::clone(&app));
@@ -161,10 +157,10 @@ async fn main() -> std::process::ExitCode {
         }
     };
     println!(
-        "anth-demo-sessions listening on http://{} (state {}, turnstile {}, ttl {}s)",
+        "anth-demo-sessions listening on http://{} (state {}, pow difficulty {}, ttl {}s)",
         config.listen,
         config.state.display(),
-        captcha,
+        config.pow.difficulty,
         config.ttl.as_secs()
     );
 
@@ -230,9 +226,14 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Config, String> {
     let mut port_base = 0u16;
     let mut port_count = 100u16;
     let mut trust_proxy = env_flag("ANTHRACITE_TRUST_PROXY");
-    let mut site_key = std::env::var("ANTHRACITE_CAPTCHA_SITE_KEY").ok();
-    let mut hostname = std::env::var("ANTHRACITE_CAPTCHA_HOSTNAME").ok();
-    let mut verify_url = None;
+    let mut pow_difficulty: u8 = std::env::var("ANTHRACITE_POW_DIFFICULTY")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(POW_DEFAULT_DIFFICULTY);
+    let mut pow_ttl_seconds: u64 = std::env::var("ANTHRACITE_POW_TTL_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(POW_DEFAULT_TTL_SECONDS);
     let mut args = args.peekable();
     while let Some(argument) = args.next() {
         match argument.as_str() {
@@ -272,53 +273,48 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Config, String> {
                     .map_err(|_| "`--port-count` needs a positive number".to_string())?;
             }
             "--trust-proxy" => trust_proxy = true,
-            "--captcha-site-key" => site_key = args.next(),
-            "--captcha-hostname" => hostname = args.next(),
-            "--captcha-verify-url" => verify_url = args.next(),
+            "--pow-difficulty" => {
+                let value = args.next().ok_or("`--pow-difficulty` needs a number")?;
+                pow_difficulty = value
+                    .parse()
+                    .map_err(|_| "`--pow-difficulty` needs a number".to_string())?;
+            }
+            "--pow-ttl-seconds" => {
+                let value = args.next().ok_or("`--pow-ttl-seconds` needs a number")?;
+                pow_ttl_seconds = value
+                    .parse()
+                    .map_err(|_| "`--pow-ttl-seconds` needs a number".to_string())?;
+            }
             "--help" | "-h" => {
                 println!(
                     "usage: anth-demo-sessions --panel <path> --cli <path> --bundles <dir> \
                      [--state <dir>] [--listen <addr>] [--public-host <host>] [--max <n>] \
                      [--ttl-seconds <n>] [--port-base <n>] [--port-count <n>] [--trust-proxy] \
-                     [--captcha-site-key <key>] [--captcha-hostname <host>] \
-                     [--captcha-verify-url <url>]\n\
-                     Turnstile is configured with ANTHRACITE_CAPTCHA_SITE_KEY (or the flag), \
-                     ANTHRACITE_CAPTCHA_SECRET (env only) and ANTHRACITE_CAPTCHA_HOSTNAME."
+                     [--pow-difficulty <bits>] [--pow-ttl-seconds <n>]\n\
+                     The proof-of-work secret is read from ANTHRACITE_POW_SECRET; when it \
+                     is absent the launcher generates a random one for this process."
                 );
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
-    let secret = std::env::var("ANTHRACITE_CAPTCHA_SECRET")
-        .ok()
-        .filter(|value| !value.is_empty());
-    let captcha = match (site_key, secret) {
-        (None, None) => None,
-        (Some(site_key), Some(secret)) if !site_key.is_empty() => Some(Turnstile {
-            site_key,
-            secret,
-            hostname: hostname.filter(|value| !value.is_empty()),
-            verify_url: verify_url.unwrap_or_else(|| TURNSTILE_VERIFY.to_string()),
-        }),
+    let pow_secret = match std::env::var("ANTHRACITE_POW_SECRET") {
+        Ok(value) if !value.is_empty() => value.into_bytes(),
         _ => {
-            return Err("turnstile needs both a site key and ANTHRACITE_CAPTCHA_SECRET".to_string())
+            eprintln!(
+                "warning: ANTHRACITE_POW_SECRET is unset; generating a random secret for \
+                 this process (challenges become invalid on restart)"
+            );
+            random_secret()
         }
     };
-    if captcha.is_none() && (public_host.is_some() || !listen.ip().is_loopback()) {
-        return Err(
-            "a public demo needs Turnstile: set ANTHRACITE_CAPTCHA_SITE_KEY and \
-             ANTHRACITE_CAPTCHA_SECRET"
-                .to_string(),
-        );
+    if !(4..=30).contains(&pow_difficulty) {
+        return Err("--pow-difficulty must be between 4 and 30 bits".to_string());
     }
-    if (public_host.is_some() || !listen.ip().is_loopback())
-        && captcha.as_ref().and_then(|c| c.hostname.as_ref()).is_none()
-    {
+    if (public_host.is_some() || !listen.ip().is_loopback()) && pow_difficulty < 12 {
         return Err(
-            "a public demo needs ANTHRACITE_CAPTCHA_HOSTNAME so a token from another \
-             site cannot be replayed"
-                .to_string(),
+            "a public demo needs a proof-of-work difficulty of at least 12 bits".to_string(),
         );
     }
     Ok(Config {
@@ -331,7 +327,11 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Config, String> {
         max,
         ttl: Duration::from_secs(ttl_seconds),
         trust_proxy,
-        captcha,
+        pow: Pow {
+            secret: pow_secret,
+            difficulty: pow_difficulty,
+            ttl: Duration::from_secs(pow_ttl_seconds),
+        },
         port_base,
         port_count,
     })
@@ -343,17 +343,27 @@ fn env_flag(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn landing(State(app): State<Arc<App>>) -> Response {
-    landing_page(&app)
+async fn landing(
+    State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let ip = client_ip(&headers, peer, app.config.trust_proxy);
+    landing_page(&app, &ip)
 }
 
-async fn root(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
+async fn root(
+    State(app): State<Arc<App>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let ip = client_ip(&headers, peer, app.config.trust_proxy);
     match cookie_session(&headers) {
         Some(id) => match session_redirect(&app, &id, &headers).await {
             Some(response) => response,
-            None => landing_page(&app),
+            None => landing_page(&app, &ip),
         },
-        None => landing_page(&app),
+        None => landing_page(&app, &ip),
     }
 }
 
@@ -402,19 +412,8 @@ async fn start(
         println!("rate limit {ip}: {reason}");
         return error_page(StatusCode::TOO_MANY_REQUESTS, &reason);
     }
-    if let Some(captcha) = &app.config.captcha {
-        let token = form
-            .get(TURNSTILE_FIELD)
-            .map(String::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if token.is_empty() {
-            return captcha_failure(&app, &ip, "no token").await;
-        }
-        if let Err(reason) = verify_turnstile(&app, captcha, &token, &ip).await {
-            return captcha_failure(&app, &ip, &reason).await;
-        }
+    if let Err(reason) = verify_pow(&app, &form, &ip).await {
+        return challenge_failure(&app, &ip, &reason).await;
     }
     app.limiter.lock().await.record_success(&ip);
     if let Err(reason) = app
@@ -432,59 +431,171 @@ async fn start(
     }
 }
 
-async fn captcha_failure(app: &Arc<App>, ip: &str, reason: &str) -> Response {
+async fn challenge_failure(app: &Arc<App>, ip: &str, reason: &str) -> Response {
     let blocked = app.limiter.lock().await.record_failure(ip, Instant::now());
     match blocked {
         Some(_) => {
-            println!("captcha failure for {ip}: {reason}; blocked for an hour");
+            println!("challenge failure for {ip}: {reason}; blocked for an hour");
             error_page(
                 StatusCode::TOO_MANY_REQUESTS,
                 "Too many failed challenges. This address is blocked for an hour.",
             )
         }
         None => {
-            println!("captcha failure for {ip}: {reason}");
+            println!("challenge failure for {ip}: {reason}");
             error_page(
                 StatusCode::BAD_REQUEST,
-                "The challenge was not accepted. Try again.",
+                "The challenge was not accepted. Reload the page and try again.",
             )
         }
     }
 }
 
-async fn verify_turnstile(
-    app: &Arc<App>,
-    captcha: &Turnstile,
-    token: &str,
+struct Challenge {
+    challenge: String,
+    expires: u64,
+    difficulty: u8,
+    signature: String,
+}
+
+fn issue_challenge(pow: &Pow, ip: &str, now: u64) -> Challenge {
+    let challenge = random_hex(16);
+    let expires = now + pow.ttl.as_secs();
+    let difficulty = pow.difficulty;
+    let signature = sign_challenge(pow, &challenge, expires, difficulty, ip);
+    Challenge {
+        challenge,
+        expires,
+        difficulty,
+        signature,
+    }
+}
+
+fn sign_challenge(pow: &Pow, challenge: &str, expires: u64, difficulty: u8, ip: &str) -> String {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(&pow.secret).expect("HMAC accepts keys of any length");
+    mac.update(pow_message(challenge, expires, difficulty, ip).as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+fn signature_valid(
+    pow: &Pow,
+    challenge: &str,
+    expires: u64,
+    difficulty: u8,
     ip: &str,
-) -> Result<(), String> {
-    let response = app
-        .client
-        .post(&captcha.verify_url)
-        .form(&[
-            ("secret", captcha.secret.as_str()),
-            ("response", token),
-            ("remoteip", ip),
-        ])
-        .send()
-        .await
-        .map_err(|error| format!("unreachable: {error}"))?;
-    let value: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|error| format!("invalid answer: {error}"))?;
-    if value["success"].as_bool() != Some(true) {
-        return Err("refused".to_string());
+    signature: &str,
+) -> bool {
+    let Ok(bytes) = hex::decode(signature) else {
+        return false;
+    };
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(&pow.secret) else {
+        return false;
+    };
+    mac.update(pow_message(challenge, expires, difficulty, ip).as_bytes());
+    mac.verify_slice(&bytes).is_ok()
+}
+
+fn pow_message(challenge: &str, expires: u64, difficulty: u8, ip: &str) -> String {
+    format!("{challenge}:{expires}:{difficulty}:{ip}")
+}
+
+fn valid_pow(challenge: &str, nonce: &str, difficulty: u8) -> bool {
+    if nonce.is_empty() || nonce.len() > 20 || !nonce.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
     }
-    if value["action"].as_str() != Some(TURNSTILE_ACTION) {
-        return Err("wrong action".to_string());
-    }
-    if let Some(hostname) = &captcha.hostname {
-        if value["hostname"].as_str() != Some(hostname.as_str()) {
-            return Err("wrong hostname".to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(challenge.as_bytes());
+    hasher.update(b":");
+    hasher.update(nonce.as_bytes());
+    leading_zero_bits(&hasher.finalize()) >= u32::from(difficulty)
+}
+
+fn leading_zero_bits(bytes: &[u8]) -> u32 {
+    let mut bits = 0;
+    for byte in bytes {
+        if *byte == 0 {
+            bits += 8;
+        } else {
+            bits += byte.leading_zeros();
+            break;
         }
     }
+    bits
+}
+
+async fn verify_pow(
+    app: &Arc<App>,
+    form: &HashMap<String, String>,
+    ip: &str,
+) -> Result<(), String> {
+    let challenge = field(form, "pow_challenge")?;
+    let signature = field(form, "pow_signature")?;
+    let nonce = field(form, "pow_nonce")?;
+    let expires: u64 = field(form, "pow_expires")?
+        .parse()
+        .map_err(|_| "invalid expiry".to_string())?;
+    let difficulty: u8 = field(form, "pow_difficulty")?
+        .parse()
+        .map_err(|_| "invalid difficulty".to_string())?;
+
+    if now_seconds() > expires {
+        return Err("expired challenge".to_string());
+    }
+    if difficulty != app.config.pow.difficulty {
+        return Err("wrong difficulty".to_string());
+    }
+    if !signature_valid(
+        &app.config.pow,
+        challenge,
+        expires,
+        difficulty,
+        ip,
+        signature,
+    ) {
+        return Err("bad signature".to_string());
+    }
+    if !valid_pow(challenge, nonce, difficulty) {
+        return Err("invalid proof of work".to_string());
+    }
+
+    let mut used = app.used_challenges.lock().await;
+    let now = Instant::now();
+    used.retain(|_, until| *until > now);
+    if used.contains_key(challenge) {
+        return Err("challenge already used".to_string());
+    }
+    used.insert(challenge.to_string(), now + app.config.pow.ttl);
     Ok(())
+}
+
+fn field<'a>(form: &'a HashMap<String, String>, name: &str) -> Result<&'a str, String> {
+    form.get(name)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("missing {name}"))
+}
+
+fn now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn random_hex(bytes: usize) -> String {
+    let mut buffer = vec![0u8; bytes];
+    if getrandom::fill(&mut buffer).is_err() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let fallback = now.to_le_bytes();
+        for (index, byte) in buffer.iter_mut().enumerate() {
+            *byte = fallback[index % fallback.len()];
+        }
+    }
+    hex::encode(buffer)
 }
 
 impl Limiter {
@@ -747,6 +858,11 @@ async fn login(app: &Arc<App>, port: u16, password: &str) -> Result<String, Stri
 }
 
 async fn sweep(app: &Arc<App>) {
+    {
+        let mut used = app.used_challenges.lock().await;
+        let now = Instant::now();
+        used.retain(|_, until| *until > now);
+    }
     if app.config.ttl.is_zero() {
         return;
     }
@@ -842,6 +958,19 @@ async fn cli_with_input(
         args.join(" "),
         String::from_utf8_lossy(&output.stderr).trim()
     ))
+}
+
+fn random_secret() -> Vec<u8> {
+    let mut bytes = [0u8; 32];
+    if getrandom::fill(&mut bytes).is_err() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let fallback = now.to_le_bytes();
+        bytes[..fallback.len()].copy_from_slice(&fallback);
+    }
+    bytes.to_vec()
 }
 
 fn random_password() -> String {
@@ -989,45 +1118,141 @@ fn scheme(headers: &HeaderMap) -> &'static str {
     }
 }
 
-fn landing_page(app: &App) -> Response {
-    let (script, widget, csp) = match &app.config.captcha {
-        Some(captcha) => (
-            format!("<script src=\"{TURNSTILE_SCRIPT}\" async defer></script>"),
-            format!(
-                "<div class=\"{TURNSTILE_CLASS}\" data-sitekey=\"{}\" \
-                 data-action=\"{TURNSTILE_ACTION}\"></div>",
-                escape(&captcha.site_key)
-            ),
-            format!(
-                "default-src 'self'; style-src 'self' 'unsafe-inline'; \
-                 script-src 'self' {TURNSTILE_ORIGIN}; frame-src {TURNSTILE_ORIGIN}; \
-                 connect-src 'self' {TURNSTILE_ORIGIN}; base-uri 'none'; form-action 'self'"
-            ),
-        ),
-        None => (
-            String::new(),
-            String::new(),
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; \
-             base-uri 'none'; form-action 'self'"
-                .to_string(),
-        ),
-    };
+fn landing_page(app: &App, ip: &str) -> Response {
+    let challenge = issue_challenge(&app.config.pow, ip, now_seconds());
     let ttl = app.config.ttl.as_secs() / 60;
+    let csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; \
+               script-src 'self'; worker-src 'self'; connect-src 'self'; \
+               base-uri 'none'; form-action 'self'";
     let body = format!(
         "<p>This is a live demo of Anthracite. Every browser gets its own panel \
          and its own emulated host; nothing you do here is visible to another \
          visitor.</p><p>The session and its state disappear after {ttl} minutes.</p>\
-         <form method=\"post\" action=\"/start\">{script}{widget}\
-         <p><button type=\"submit\">Open the demo</button></p></form>"
+         <form method=\"post\" action=\"/start\" id=\"demo-form\">\
+         <input type=\"hidden\" name=\"pow_challenge\" value=\"{challenge}\">\
+         <input type=\"hidden\" name=\"pow_expires\" value=\"{expires}\">\
+         <input type=\"hidden\" name=\"pow_difficulty\" value=\"{difficulty}\">\
+         <input type=\"hidden\" name=\"pow_signature\" value=\"{signature}\">\
+         <input type=\"hidden\" name=\"pow_nonce\" id=\"pow-nonce\" value=\"\">\
+         <p id=\"pow-status\" role=\"status\">Verifying your browser…</p>\
+         <p><button type=\"submit\" id=\"pow-submit\" disabled>Open the demo</button></p>\
+         </form>\
+         <noscript><p>Enable JavaScript to complete the proof-of-work challenge.</p></noscript>\
+         <script src=\"/solve.js\" defer></script>",
+        challenge = escape(&challenge.challenge),
+        expires = challenge.expires,
+        difficulty = challenge.difficulty,
+        signature = escape(&challenge.signature),
     );
     let page = page("Anthracite demo", &body);
     let mut response = Html(page).into_response();
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_str(&csp).expect("a valid CSP"),
+        HeaderValue::from_str(csp).expect("a valid CSP"),
     );
     response
 }
+
+async fn solve_js() -> Response {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        SOLVE_JS,
+    )
+        .into_response()
+}
+
+async fn solve_worker_js() -> Response {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        SOLVE_WORKER_JS,
+    )
+        .into_response()
+}
+
+const SOLVE_JS: &str = r#"
+const form = document.getElementById("demo-form");
+const status = document.getElementById("pow-status");
+const submit = document.getElementById("pow-submit");
+const nonceInput = document.getElementById("pow-nonce");
+const challenge = form.elements.namedItem("pow_challenge").value;
+const difficulty = Number(form.elements.namedItem("pow_difficulty").value);
+
+function fail(message) {
+  status.textContent = message;
+  submit.disabled = true;
+}
+
+if (!window.Worker || !window.crypto || !window.crypto.subtle) {
+  fail("This browser cannot complete the proof-of-work challenge. Try a current browser.");
+} else {
+  const worker = new Worker("/solve-worker.js");
+  worker.onmessage = (event) => {
+    if (event.data.type === "progress") {
+      status.textContent = "Verifying your browser… " + event.data.attempts.toLocaleString() + " hashes";
+    } else if (event.data.type === "solved") {
+      nonceInput.value = event.data.nonce;
+      status.textContent = "Verified. You can open the demo.";
+      submit.disabled = false;
+      submit.focus();
+      worker.terminate();
+    } else if (event.data.type === "error") {
+      fail("Could not verify this browser: " + event.data.message);
+      worker.terminate();
+    }
+  };
+  worker.onerror = () => fail("Could not verify this browser. Reload the page and try again.");
+  worker.postMessage({ challenge, difficulty });
+}
+"#;
+
+const SOLVE_WORKER_JS: &str = r#"
+function leadingZeroBits(bytes) {
+  let bits = 0;
+  for (const byte of bytes) {
+    if (byte === 0) {
+      bits += 8;
+    } else {
+      bits += Math.clz32(byte) - 24;
+      break;
+    }
+  }
+  return bits;
+}
+
+self.onmessage = async (event) => {
+  try {
+    const { challenge, difficulty } = event.data;
+    const encoder = new TextEncoder();
+    let nonce = 0;
+    while (true) {
+      const data = encoder.encode(challenge + ":" + nonce);
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+      if (leadingZeroBits(digest) >= difficulty) {
+        self.postMessage({ type: "solved", nonce: String(nonce) });
+        return;
+      }
+      nonce += 1;
+      if (nonce % 5000 === 0) {
+        self.postMessage({ type: "progress", attempts: nonce });
+      }
+    }
+  } catch (error) {
+    self.postMessage({ type: "error", message: String(error) });
+  }
+};
+"#;
 
 fn error_page(status: StatusCode, message: &str) -> Response {
     let body = format!(
@@ -1144,5 +1369,61 @@ mod tests {
         assert!(password.starts_with("demo-"));
         assert!(password.len() >= 32);
         assert_ne!(password, random_password());
+    }
+
+    fn solve(challenge: &str, difficulty: u8) -> String {
+        let mut nonce = 0u64;
+        loop {
+            let candidate = nonce.to_string();
+            if valid_pow(challenge, &candidate, difficulty) {
+                return candidate;
+            }
+            nonce += 1;
+        }
+    }
+
+    #[test]
+    fn proof_of_work_accepts_a_solved_nonce() {
+        let pow = Pow {
+            secret: b"test-secret".to_vec(),
+            difficulty: 4,
+            ttl: Duration::from_secs(60),
+        };
+        let challenge = issue_challenge(&pow, "203.0.113.5", now_seconds());
+        assert!(signature_valid(
+            &pow,
+            &challenge.challenge,
+            challenge.expires,
+            challenge.difficulty,
+            "203.0.113.5",
+            &challenge.signature,
+        ));
+        assert!(!signature_valid(
+            &pow,
+            &challenge.challenge,
+            challenge.expires,
+            challenge.difficulty,
+            "203.0.113.6",
+            &challenge.signature,
+        ));
+        assert!(!signature_valid(
+            &pow,
+            &challenge.challenge,
+            challenge.expires + 1,
+            challenge.difficulty,
+            "203.0.113.5",
+            &challenge.signature,
+        ));
+
+        let nonce = solve(&challenge.challenge, 4);
+        assert!(valid_pow(&challenge.challenge, &nonce, 4));
+        assert!(!valid_pow(&challenge.challenge, "not-a-number", 4));
+    }
+
+    #[test]
+    fn leading_zero_bits_are_counted() {
+        assert_eq!(leading_zero_bits(&[0, 0, 0x80]), 16);
+        assert_eq!(leading_zero_bits(&[0x40]), 1);
+        assert_eq!(leading_zero_bits(&[0xff]), 0);
     }
 }

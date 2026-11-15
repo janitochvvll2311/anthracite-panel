@@ -49,15 +49,15 @@ side is wrong. The private key stays on the release machine and is never printed
   `RELEASE-NOTES.md`.
 - `demo/sessions/` (`anth-demo-sessions`): the session launcher for the fourth
   variant. A cookie maps a browser to its own panel on its own port and state
-  directory; the visitor solves a Cloudflare Turnstile challenge, the launcher
-  verifies success, action and hostname server-side, signs them in through the
-  engine's session endpoint and forwards the cookie, so there is no operator
-  password. Sessions expire after `--ttl-seconds` (30 min by default) and the
-  launcher deletes their state. Abuse limits: three sessions per address per
-  hour, six per minute and sixty per hour globally, ten attempts per minute and
-  an hour-long block after five failed challenges; `Origin`/`Referer` is checked
-  on the form post. It is demo tooling — loopback by default, no proxy of its
-  own, no framing — not a deployment mode.
+  directory; the visitor solves a self-hosted proof-of-work challenge, the
+  launcher verifies the signed challenge and nonce server-side, signs them in
+  through the engine's session endpoint and forwards the cookie, so there is no
+  operator password. Sessions expire after `--ttl-seconds` (30 min by default)
+  and the launcher deletes their state. Abuse limits: three sessions per address
+  per hour, six per minute and sixty per hour globally, ten attempts per minute
+  and an hour-long block after five failed challenges; `Origin`/`Referer` is
+  checked on the form post. It is demo tooling — loopback by default, no proxy of
+  its own, no framing — not a deployment mode.
 
 ## Tests
 
@@ -89,8 +89,8 @@ side is wrong. The private key stays on the release machine and is never printed
     sessions; reloading a jar keeps its session; creating a user in session A
     is invisible in B; `/start` sets both cookies and the child answers
     authenticated; a TTL of 3 s removes the state and closes the port; a
-    non-loopback launcher without Turnstile refuses to start; with a local
-    verifier a bad token, a wrong action, a wrong hostname and a cross-origin
+    non-loopback launcher below 12 bits refuses to start; a solved challenge
+    passes; an expired, replayed or wrong-address challenge and a cross-origin
     post are refused; five failed challenges block the address and the fourth
     session from one address is `429`; SIGTERM kills the launcher and every
     child panel.
@@ -109,13 +109,13 @@ userspace (busybox, musl loader, passwd) plus the static release binaries under
 | `anthracite-core:0.6.0` | 1000 | 8090 | empty composition |
 | `anthracite-base:0.6.0` | root | 8090 | real system services; `nft` is not in the image, so firewall routes need a host-provided nft and `NET_ADMIN` |
 | `anthracite-demo:0.6.0` | 1000 | 8090 | signed emulator; `run.sh` state per run |
-| `anthracite-demo-sessions:0.6.0` | 1000 | 8091, 8100-8199 | Turnstile env required; `ANTHRACITE_PORT_BASE=8100` |
+| `anthracite-demo-sessions:0.6.0` | 1000 | 8091, 8100-8199 | PoW secret recommended; `ANTHRACITE_PORT_BASE=8100` |
 
 `docker load -i anthracite-0.6.0-core.tar.gz` (or `podman load`), then
 `docker run -p 8090:8090 -v anth-core:/opt/anthracite/state anthracite-core:0.6.0`.
-For `demo-sessions`, publish the launcher and child range and set the CAPTCHA
-variables:
-`-p 8091:8091 -p 8100-8199:8100-8199 -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1`.
+For `demo-sessions`, publish the launcher and child range and set a stable PoW
+secret:
+`-p 8091:8091 -p 8100-8199:8100-8199 -e ANTHRACITE_POW_SECRET -e ANTHRACITE_TRUST_PROXY=1`.
 
 **Why not Podman here.** Podman 5.8.10 and Buildah were installed and tried: this
 sandbox blocks `clone(CLONE_NEWUSER)` and mounts cgroups read-only, so both fail

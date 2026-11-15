@@ -51,7 +51,7 @@ The design of record is [`DESIGN.md`](DESIGN.md); the official manual is
 The fastest path is a pre-release variant: unpack it and run it. `core` has no
 apps, `base` composes the signed system apps, `demo` composes the same eight ids
 served by the host emulator, and `demo-sessions` gives every browser an
-ephemeral, Turnstile-gated copy of that demo.
+ephemeral, proof-of-work-gated copy of that demo.
 
 ```sh
 tar -xzf anthracite-0.6.1-demo-linux-x86_64.tar.gz

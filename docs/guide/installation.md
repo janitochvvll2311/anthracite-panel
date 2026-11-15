@@ -24,7 +24,7 @@ and the panel are ordinary processes.
 | `core` | `anth`, `anth-engine`, `anth-panel`; empty composition | `./run.sh` |
 | `base` | core + the eight signed system bundles | `./run.sh` installs, approves and composes |
 | `demo` | core + the eight emulated system bundles, one state per run | `./run.sh` |
-| `demo-sessions` | demo with one ephemeral, Turnstile-gated session per browser | `./run.sh` (landing page on 8091) |
+| `demo-sessions` | demo with one ephemeral, proof-of-work-gated session per browser | `./run.sh` (landing page on 8091) |
 
 Each archive has `bin/`, `run.sh`, `README.md`, `manifest.json` and
 `SHA256SUMS`; `base`, `demo` and `demo-sessions` also have `bundles/`. Verify
@@ -48,7 +48,7 @@ The four variants are also published as Docker-compatible images
 | `anthracite-core:0.6.1` | 1000 | 8090 | no apps |
 | `anthracite-base:0.6.1` | root | 8090 | real services; `nft` is not in the image |
 | `anthracite-demo:0.6.1` | 1000 | 8090 | the eight emulated system apps |
-| `anthracite-demo-sessions:0.6.1` | 1000 | 8091, 8100-8199 | Turnstile variables required |
+| `anthracite-demo-sessions:0.6.1` | 1000 | 8091, 8100-8199 | proof-of-work; set `ANTHRACITE_POW_SECRET` |
 
 ```sh
 docker load -i anthracite-0.6.1-core.tar.gz
@@ -56,8 +56,7 @@ docker run -p 8090:8090 -v anth-core:/opt/anthracite/state anthracite-core:0.6.1
 
 docker run -p 8091:8091 -p 8100-8199:8100-8199 \
   -v anth-sessions:/opt/anthracite/state \
-  -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET \
-  -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1 \
+  -e ANTHRACITE_POW_SECRET -e ANTHRACITE_TRUST_PROXY=1 \
   anthracite-demo-sessions:0.6.1
 ```
 

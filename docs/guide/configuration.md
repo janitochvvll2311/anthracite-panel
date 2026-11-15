@@ -95,7 +95,7 @@ problem.
 | `ANTH_PANEL_WEB` | debug panel | the frontend directory (default `panel/frontend/dist`) |
 | `ANTHRACITE_DISTRIBUTION_KEY` | build of `anth-compose` | public key compiled into the binary; not runtime configuration |
 | `ANTHRACITE_SIGNING_KEY` | `scripts/package-app.sh` | private key used to sign a staged bundle |
-| `ANTHRACITE_LISTEN`, `ANTHRACITE_DEMO_TTL`, `ANTHRACITE_CAPTCHA_*`, `ANTHRACITE_TRUST_PROXY` | demo variant `run.sh` | demo launcher settings |
+| `ANTHRACITE_LISTEN`, `ANTHRACITE_DEMO_TTL`, `ANTHRACITE_POW_*`, `ANTHRACITE_TRUST_PROXY` | demo variant `run.sh` | demo launcher settings |
 
 `ANTHRACITE_DISTRIBUTION_KEY` is read at compile time. Setting it at runtime has
 no effect; a key is trusted because the binary was built with it, not because a

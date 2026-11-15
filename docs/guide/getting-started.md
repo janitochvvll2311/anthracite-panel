@@ -33,9 +33,9 @@ to the same engine over the Unix socket:
 `base` installs and composes the system apps on the first run; `demo` installs
 the eight emulator bundles under the same ids and prints the session state path.
 `demo-sessions` is the
-public demo: it needs Turnstile variables and its own domain, and is documented
-in [Demo](demo.md). The Docker images are the same variants; see
-[Installation](installation.md#docker-images).
+public demo: it runs a self-hosted proof-of-work challenge, needs its own domain,
+and is documented in [Demo](demo.md). The Docker images are the same variants;
+see [Installation](installation.md#docker-images).
 
 To verify a download before running it:
 

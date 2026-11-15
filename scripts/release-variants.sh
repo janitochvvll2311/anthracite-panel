@@ -406,7 +406,7 @@ done
 cat > "$out/demo-sessions/run.sh" <<'RUN'
 #!/bin/sh
 # One panel and one expired demo state per browser session. No password: the
-# launcher signs the visitor in. A public launcher requires a CAPTCHA.
+# launcher signs the visitor in. A public launcher requires proof of work.
 set -eu
 here=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 listen=${ANTHRACITE_LISTEN:-127.0.0.1:8091}
@@ -438,23 +438,24 @@ endpoint and forwards the session cookie. Sessions last
 \`ANTHRACITE_DEMO_TTL\` seconds (1800 by default); when one expires the launcher
 kills its panel and **deletes its state**.
 
-## Turnstile and abuse limits
+## Proof of work and abuse limits
 
-A launcher that is not loopback, or that sets \`--public-host\`, refuses to start
-without Cloudflare Turnstile and the expected hostname. Set:
+A launcher that is not loopback, or that sets \`--public-host\`, requires at
+least 12 bits of proof-of-work difficulty. Set:
 
 \`\`\`sh
-ANTHRACITE_CAPTCHA_SITE_KEY=<site key>      # public; can also be --captcha-site-key
-ANTHRACITE_CAPTCHA_SECRET=<secret>          # env only, never argv
-ANTHRACITE_CAPTCHA_HOSTNAME=demo.internal   # required for a public launcher
+ANTHRACITE_POW_SECRET=<secret>              # recommended; random per process if unset
+ANTHRACITE_POW_DIFFICULTY=18                # default; minimum 12 for a public launcher
+ANTHRACITE_POW_TTL_SECONDS=300              # challenge lifetime
 ANTHRACITE_TRUST_PROXY=1                    # read CF-Connecting-IP / X-Forwarded-For
 \`\`\`
 
-The landing page renders the Turnstile widget with \`action=demo-session\`; the
-launcher verifies success, action and hostname server-side before creating
-anything, and checks \`Origin\`/\`Referer\` on the form post. On a loopback
-launcher Turnstile is optional, which is what makes local development work
-without keys. \`--captcha-verify-url\` overrides the endpoint for a local verifier.
+The landing page issues a signed, short-lived challenge bound to the visitor's
+address; the browser finds a nonce with the required leading zero bits and the
+launcher verifies the signature, expiry, difficulty, nonce and replay before
+creating anything. \`Origin\`/\`Referer\` is checked on the form post. On a
+loopback launcher a lower difficulty is allowed, which keeps local development
+fast. \`--pow-difficulty\` and \`--pow-ttl-seconds\` override the environment.
 
 Abuse limits: three sessions per address per hour, six per minute and sixty per
 hour globally, ten attempts per address per minute, and five failed challenges in
@@ -482,7 +483,7 @@ caps a Unix socket path at 107 bytes, so keep that root short.
 
 The release also builds a Docker image of this variant
 (\`scripts/release-images.sh\`): it exposes 8091 and 8100-8199, sets
-\`ANTHRACITE_PORT_BASE=8100\` and needs the Turnstile variables at run time.
+\`ANTHRACITE_PORT_BASE=8100\` and accepts \`ANTHRACITE_POW_SECRET\` at run time.
 
 ## Verify
 
@@ -526,7 +527,7 @@ done
     printf '| `core` | panel, CLI, engine, **no apps** | `./run.sh` |\n'
     printf '| `base` | core + the eight signed system apps | `./run.sh` (installs and composes) |\n'
     printf '| `demo` | core + the signed host-emulator bundles, one state per run | `./run.sh` |\n'
-    printf '| `demo-sessions` | demo + one ephemeral, CAPTCHA-gated session per browser | `./run.sh` (landing page) |\n\n'
+    printf '| `demo-sessions` | demo + one ephemeral, proof-of-work-gated session per browser | `./run.sh` (landing page) |\n\n'
     printf 'Each archive contains `bin/`, `run.sh`, a `README.md`, a `manifest.json` and `SHA256SUMS`; `base`, `demo` and `demo-sessions` also carry `bundles/`. Verify with `sha256sum -c SHA256SUMS` (and again over this file for the tarballs).\n\n'
     printf 'Platform: `%s`. These are pre-release artifacts: GitHub Actions has had no runner, the native services have not been exercised on a deployment host, and the key is the pre-release key, not a blessed long-lived release key.\n' "$platform"
 } > "$out/RELEASE-NOTES.md"

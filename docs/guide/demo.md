@@ -66,20 +66,21 @@ files, users, routes and mounts persist until you delete the directory or use
 ## The per-session demo
 
 `demo-sessions` is the public shape: one panel and one emulator state **per
-browser session**, no operator password, and a CAPTCHA gate.
+browser session**, no operator password, and a self-hosted proof-of-work gate.
 
 ```sh
-ANTHRACITE_CAPTCHA_SITE_KEY=<site key> \
-ANTHRACITE_CAPTCHA_SECRET=<secret> \
-ANTHRACITE_CAPTCHA_HOSTNAME=demo.example \
+ANTHRACITE_POW_SECRET=<secret> \
+ANTHRACITE_POW_DIFFICULTY=18 \
 ANTHRACITE_TRUST_PROXY=1 \
 ./run.sh --listen 0.0.0.0:8091 --public-host demo.example
 ```
 
-- `GET /` shows a landing page with **Cloudflare Turnstile**. The token is
-  verified server-side for `success`, `action = demo-session` and the configured
-  hostname; `Origin`/`Referer` is checked too. A non-loopback launcher refuses to
-  start without Turnstile, the site key, the secret and the hostname.
+- `GET /` shows a landing page with a **self-hosted proof-of-work challenge**.
+  The launcher signs a challenge bound to the address and a short expiry; the
+  browser finds a nonce with the required leading zero bits and submits it. The
+  server verifies the signature, expiry, difficulty, nonce and replay before it
+  creates a session. `Origin`/`Referer` is checked too. A public launcher
+  requires at least 12 bits of difficulty.
 - `POST /start` creates a panel on its own port with a fresh state, changes the
   panel's generated password to a random secret, logs the visitor in through the
   engine's session endpoint and forwards the session cookie. The visitor never
@@ -107,8 +108,7 @@ cookie is host-scoped, so one browser maps to one session at a time.
 ```sh
 docker run -p 8091:8091 -p 8100-8199:8100-8199 \
   -v anth-sessions:/opt/anthracite/state \
-  -e ANTHRACITE_CAPTCHA_SITE_KEY -e ANTHRACITE_CAPTCHA_SECRET \
-  -e ANTHRACITE_CAPTCHA_HOSTNAME -e ANTHRACITE_TRUST_PROXY=1 \
+  -e ANTHRACITE_POW_SECRET -e ANTHRACITE_TRUST_PROXY=1 \
   anthracite-demo-sessions:0.6.1
 ```
 
