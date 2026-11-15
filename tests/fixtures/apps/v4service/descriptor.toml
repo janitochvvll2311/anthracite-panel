@@ -1,0 +1,5 @@
+version = 1
+app = "org.example.v4service"
+enabled = true
+tier = "third-party"
+installed_at = "2026-11-15T12:00:00Z"

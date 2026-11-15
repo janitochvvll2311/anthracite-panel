@@ -261,6 +261,25 @@ fn service_launch(
     let shared_text = shared_dir
         .to_str()
         .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
+    // The broker socket is the service's identity for peer calls (§22). The
+    // listener arrives in phase 0c; until then the path is handed over and the
+    // directory exists, so the argv is exactly what the contract freezes.
+    let broker_dir = state.join("broker");
+    std::fs::create_dir_all(&broker_dir)
+        .map_err(|error| Error::internal(format!("creating {}: {error}", broker_dir.display())))?;
+    std::fs::set_permissions(&broker_dir, std::fs::Permissions::from_mode(0o700)).map_err(
+        |error| Error::internal(format!("setting {} to 0700: {error}", broker_dir.display())),
+    )?;
+    let broker_socket = broker_dir.join(format!("{id}.sock"));
+    let broker_text = broker_socket
+        .to_str()
+        .ok_or_else(|| Error::internal("the state path is not UTF-8"))?;
+    if service.uses_broker() && broker_text.len() >= 108 {
+        return Err(Error::invalid(format!(
+            "the broker socket path is {} bytes; the kernel limit is 107",
+            broker_text.len()
+        )));
+    }
     let argv = service
         .argv
         .iter()
@@ -269,6 +288,7 @@ fn service_launch(
                 .replace("{socket}", socket_text)
                 .replace("{data}", data_text)
                 .replace("{shared}", shared_text)
+                .replace("{broker}", broker_text)
         })
         .collect();
     let exports = app
@@ -382,6 +402,9 @@ mod tests {
             approved_at: "2026-11-06T12:00:00Z".to_string(),
             export: Vec::new(),
             import: Vec::new(),
+            roots: Vec::new(),
+            listen: Vec::new(),
+            egress: Vec::new(),
         }
     }
 

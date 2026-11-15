@@ -43,6 +43,13 @@ pub struct Grant {
     pub export: Vec<InterfaceId>,
     #[serde(default)]
     pub import: Vec<InterfaceId>,
+    /// The v4 service intent, frozen exactly as the manifest declared it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listen: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub egress: Vec<String>,
 }
 
 impl Grant {
@@ -111,6 +118,7 @@ impl Grant {
 
         check_unique(&self.export, "exported")?;
         check_unique(&self.import, "imported")?;
+        crate::manifest::validate_service_intent(&self.roots, &self.listen, &self.egress)?;
         Ok(())
     }
 }
@@ -146,6 +154,9 @@ mod tests {
             approved_at: "2026-11-03T20:00:00Z".to_string(),
             export: vec![InterfaceId::parse("example:notes/list@1.0.0").expect("interface")],
             import: vec![InterfaceId::parse("anth:store/kv@1.0.0").expect("interface")],
+            roots: Vec::new(),
+            listen: Vec::new(),
+            egress: Vec::new(),
         }
     }
 
@@ -197,6 +208,38 @@ mod tests {
         grant.accepted = vec![Risk::Write, Risk::Write];
         let error = grant.validate().expect_err("duplicate");
         assert!(error.message().contains("twice"), "{error}");
+    }
+
+    #[test]
+    fn a_grant_freezes_the_service_intent() {
+        let mut grant = grant();
+        grant.roots = vec!["/etc/ssl:ro".to_string(), "/srv/data".to_string()];
+        grant.listen = vec!["tcp:443".to_string()];
+        grant.egress = vec!["example.com:443".to_string()];
+        grant.validate().expect("the intent is valid");
+        let text = grant.to_toml().expect("render");
+        let parsed = Grant::parse(&text).expect("parse");
+        assert_eq!(parsed.roots, grant.roots);
+        assert_eq!(parsed.listen, grant.listen);
+        assert_eq!(parsed.egress, grant.egress);
+    }
+
+    #[test]
+    fn a_grant_with_an_impossible_listener_is_refused() {
+        let mut grant = grant();
+        grant.listen = vec!["http:443".to_string()];
+        let error = grant.validate().expect_err("bad listener");
+        assert!(error.message().contains("tcp:"), "{error}");
+    }
+
+    #[test]
+    fn an_old_grant_without_intent_still_validates() {
+        let text = grant().to_toml().expect("render");
+        assert!(!text.contains("roots"));
+        Grant::parse(&text)
+            .expect("parse")
+            .validate()
+            .expect("valid");
     }
 
     #[test]

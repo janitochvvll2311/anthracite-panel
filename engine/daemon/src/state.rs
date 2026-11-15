@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use anth_contract::{Composition, Error};
 
 /// The directories the tree owns, relative to its root.
-pub const DIRS: &[&str] = &["apps", "grants", "keys", "data", "shared"];
+pub const DIRS: &[&str] = &["apps", "grants", "keys", "data", "shared", "broker"];
 /// Directories added after the first tree shipped: a v0.5 tree may lack them
 /// until the next boot creates them.
-const OPTIONAL_DIRS: &[&str] = &["shared"];
+const OPTIONAL_DIRS: &[&str] = &["shared", "broker"];
 /// The files the tree owns, relative to its root.
 pub const FILES: &[&str] = &[COMPOSITION, AUDIT, anth_auth::CREDENTIALS];
 

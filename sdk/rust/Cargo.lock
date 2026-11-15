@@ -25,7 +25,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "anth-api"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-auth",
  "anth-compose",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "anth-auth"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-contract",
  "serde",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "anth-cli"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-contract",
  "form_urlencoded",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "anth-client"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "percent-encoding",
  "serde",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "anth-compose"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-contract",
  "base64",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "anth-conformance"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-compose",
  "anth-contract",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "anth-contract"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "humantime",
  "semver",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "anth-engine"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-api",
  "anth-auth",
@@ -133,14 +133,14 @@ dependencies = [
 
 [[package]]
 name = "anth-guest"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "wit-bindgen 0.63.0",
 ]
 
 [[package]]
 name = "anth-panel"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-api",
  "anth-auth",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "anth-runtime"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-contract",
  "humantime",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "anth-service"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-contract",
  "futures-core",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "anth-signer"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anth-compose",
  "anth-contract",

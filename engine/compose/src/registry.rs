@@ -1091,6 +1091,62 @@ mod tests {
         fs::remove_dir_all(&state).expect("cleanup");
     }
 
+    fn v4_service_entries() -> Vec<(String, Vec<u8>)> {
+        let binary = b"\x7fELF a fake v4 service";
+        let manifest = format!(
+            "manifest_version = 4\n\n[app]\nid = \"org.example.service\"\nnamespace = \"example:service\"\nname = \"Service\"\nversion = \"0.1.0\"\n\n[service]\npath = \"bin/service\"\nsha256 = \"{}\"\nclass = \"socket\"\nargv = [\"--socket\", \"{{socket}}\", \"--broker\", \"{{broker}}\"]\nroots = [\"/etc/ssl:ro\"]\nlisten = [\"tcp:8080\"]\negress = [\"example.com:443\"]\n\n[[export]]\ninterface = \"example:service/notes@1.0.0\"\n",
+            hex(&Sha256::digest(binary))
+        );
+        let wit = "package example:service@1.0.0;\ninterface notes { all: func(); }\nworld app { export notes; }\n";
+        vec![
+            ("manifest.toml".to_string(), manifest.into_bytes()),
+            ("wit/service.wit".to_string(), wit.as_bytes().to_vec()),
+            ("bin/service".to_string(), binary.to_vec()),
+        ]
+    }
+
+    #[test]
+    fn a_v4_service_installs_with_its_intent() {
+        let state = scratch("v4-service");
+        let registry = Registry::new(&state);
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        let installed = registry
+            .install(&zip(&v4_service_entries()), &allowed)
+            .expect("install");
+        let service = installed.manifest.service.as_ref().expect("service");
+        assert_eq!(service.roots, ["/etc/ssl:ro"]);
+        assert_eq!(service.listen, ["tcp:8080"]);
+        assert_eq!(service.egress, ["example.com:443"]);
+        assert!(service.uses_broker());
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
+    #[test]
+    fn a_v3_bundle_cannot_smuggle_v4_intent() {
+        let mut entries = service_entries();
+        let manifest = entries
+            .iter_mut()
+            .find(|(name, _)| name == "manifest.toml")
+            .expect("manifest");
+        let text = String::from_utf8(manifest.1.clone()).expect("utf8");
+        manifest.1 = text
+            .replace(
+                "argv = [\"--socket\", \"{socket}\"]",
+                "argv = [\"--socket\", \"{socket}\"]\nroots = [\"/etc/ssl:ro\"]",
+            )
+            .into_bytes();
+        let state = scratch("v3-smuggle");
+        let registry = Registry::new(&state);
+        let mut allowed = options();
+        allowed.allow_third_party_service = true;
+        let error = registry
+            .install(&zip(&entries), &allowed)
+            .expect_err("v3 with roots");
+        assert!(error.message().contains("manifest_version = 4"), "{error}");
+        fs::remove_dir_all(&state).expect("cleanup");
+    }
+
     #[test]
     fn a_service_replacement_is_gated_too() {
         let state = scratch("service-replace");
@@ -1684,6 +1740,9 @@ mod tests {
                 anth_contract::InterfaceId::parse("example:notes/notes@1.0.0").expect("interface"),
             ],
             import: Vec::new(),
+            roots: Vec::new(),
+            listen: Vec::new(),
+            egress: Vec::new(),
         };
         GrantStore::new(state).save(&grant).expect("save grant");
     }

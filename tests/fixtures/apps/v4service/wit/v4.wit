@@ -1,0 +1,9 @@
+package example:v4@1.0.0;
+
+interface notes {
+    all: func() -> list<string>;
+}
+
+world app {
+    export notes;
+}

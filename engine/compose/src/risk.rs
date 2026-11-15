@@ -126,6 +126,18 @@ pub fn approve(
         .validate()
         .map_err(ResolutionError::InvalidManifest)?;
     let risk = app_risk(app, installed)?;
+    let (roots, listen, egress) = found
+        .manifest
+        .service
+        .as_ref()
+        .map(|service| {
+            (
+                service.roots.clone(),
+                service.listen.clone(),
+                service.egress.clone(),
+            )
+        })
+        .unwrap_or_default();
     let grant = Grant {
         version: GRANT_VERSION,
         app: app.clone(),
@@ -139,6 +151,9 @@ pub fn approve(
         approved_at: approval.approved_at,
         export: parse_interfaces(found.manifest.export.iter().map(|e| &e.interface))?,
         import: parse_interfaces(found.manifest.import.iter().map(|i| &i.interface))?,
+        roots,
+        listen,
+        egress,
     };
     grant.validate().map_err(ResolutionError::InvalidGrant)?;
     Ok(grant)

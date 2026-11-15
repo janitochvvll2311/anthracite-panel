@@ -27,10 +27,11 @@ pub use id::{parse_version, AppId, InterfaceId, Namespace, Version};
 pub use key::{KeyAlgorithm, TrustedKey, KEY_VERSION};
 pub use manifest::{
     ExportTarget, Manifest, ServiceClass, ServiceSection, MANIFEST_VERSION,
-    SERVICE_MANIFEST_VERSION,
+    SERVICE_INTENT_MANIFEST_VERSION, SERVICE_MANIFEST_VERSION,
 };
 pub use view::{
-    AppProblem, AppView, CompositionView, DegradedApp, FatalView, GrantState, GrantView, KeyView,
-    SurfaceApp, SurfaceCli, SurfaceFabAction, SurfaceLink, SurfaceRoute, SurfaceSlot, SurfaceView,
+    AppProblem, AppView, CompositionView, DegradedApp, FatalView, GrantState, GrantView,
+    IntentMode, KeyView, ServiceView, SurfaceApp, SurfaceCli, SurfaceFabAction, SurfaceLink,
+    SurfaceRoute, SurfaceSlot, SurfaceView,
 };
 pub use world::{World, WorldMismatch};

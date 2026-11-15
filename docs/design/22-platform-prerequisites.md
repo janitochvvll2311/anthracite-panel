@@ -32,7 +32,7 @@ The operator must see what a service intends to bind and where it intends to
 connect before approving it. `argv` shows flags, but a flag is a convention, not
 a contract.
 
-Proposed manifest v4: optional `[service]` keys, with v3 still accepted.
+Manifest v4 (phase 0a, D10): optional `[service]` keys, with v3 still accepted.
 
 ```toml
 [service]

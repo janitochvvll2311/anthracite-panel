@@ -137,6 +137,9 @@ mod tests {
             approved_at: "2026-11-03T20:00:00Z".to_string(),
             export: vec![InterfaceId::parse("example:notes/list@1.0.0").expect("interface")],
             import: vec![InterfaceId::parse("anth:store/kv@1.0.0").expect("interface")],
+            roots: Vec::new(),
+            listen: Vec::new(),
+            egress: Vec::new(),
         }
     }
 

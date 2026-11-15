@@ -1,0 +1,20 @@
+manifest_version = 4
+
+[app]
+id = "org.example.v4service"
+namespace = "example:v4"
+name = "V4 service"
+version = "0.1.0"
+summary = "A v4 fixture: intent shown at approval, inert until L1."
+
+[service]
+path = "bin/service"
+sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+class = "socket"
+argv = ["--socket", "{socket}", "--broker", "{broker}"]
+listen = ["tcp:8080", "tcp:127.0.0.1:8443"]
+egress = ["example.com:443"]
+roots = ["/etc/ssl:ro", "/srv/data"]
+
+[[export]]
+interface = "example:v4/notes@1.0.0"
