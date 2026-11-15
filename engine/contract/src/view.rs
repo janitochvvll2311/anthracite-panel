@@ -13,6 +13,7 @@ use crate::descriptor::Tier;
 use crate::grant::Grant;
 use crate::id::{AppId, InterfaceId};
 use crate::key::TrustedKey;
+use crate::manifest::{ServiceClass, ServiceSection};
 
 /// One installed app as the API presents it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +37,54 @@ pub struct AppView {
     /// Why the grant is unreadable, when it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_problem: Option<String>,
+    /// The v4 service intent, when the app has a service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<ServiceView>,
+}
+
+/// How far a declared rule is enforced today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IntentMode {
+    /// The engine enforces it (L1 roots).
+    Enforced,
+    /// The engine grants the capability (privileged listeners).
+    Capability,
+    /// Shown at approval and frozen, not enforced (egress until L2).
+    Intent,
+}
+
+/// The service intent as the approval surface presents it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceView {
+    pub class: ServiceClass,
+    #[serde(default)]
+    pub roots: Vec<String>,
+    #[serde(default)]
+    pub listen: Vec<String>,
+    #[serde(default)]
+    pub egress: Vec<String>,
+    pub roots_mode: IntentMode,
+    pub listen_mode: IntentMode,
+    pub egress_mode: IntentMode,
+}
+
+impl ServiceView {
+    /// The mode is a property of this engine, not of the bundle. Phase 0a only
+    /// freezes the intent: L1 and the port capability arrive in 0b, so until
+    /// then every rule is published as `intent` rather than claiming a
+    /// confinement the daemon does not yet apply.
+    pub fn of(service: &ServiceSection) -> Self {
+        Self {
+            class: service.class,
+            roots: service.roots.clone(),
+            listen: service.listen.clone(),
+            egress: service.egress.clone(),
+            roots_mode: IntentMode::Intent,
+            listen_mode: IntentMode::Intent,
+            egress_mode: IntentMode::Intent,
+        }
+    }
 }
 
 /// The grant as a client sees it, without the strict-document rules.
@@ -52,6 +101,12 @@ pub struct GrantView {
     pub export: Vec<InterfaceId>,
     #[serde(default)]
     pub import: Vec<InterfaceId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub listen: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub egress: Vec<String>,
     pub manifest_sha256: String,
     pub wit_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +124,9 @@ impl From<Grant> for GrantView {
             approved_at: grant.approved_at,
             export: grant.export,
             import: grant.import,
+            roots: grant.roots,
+            listen: grant.listen,
+            egress: grant.egress,
             manifest_sha256: grant.manifest_sha256,
             wit_sha256: grant.wit_sha256,
             signature: grant.signature,
@@ -268,6 +326,9 @@ mod tests {
             approved_at: "2026-11-03T20:00:00Z".to_string(),
             export: vec![InterfaceId::parse("example:notes/notes@1.0.0").expect("interface")],
             import: Vec::new(),
+            roots: Vec::new(),
+            listen: Vec::new(),
+            egress: Vec::new(),
         }
     }
 
@@ -283,6 +344,7 @@ mod tests {
             grant: Some(GrantView::from(grant())),
             grant_state: GrantState::Current,
             grant_problem: None,
+            service: None,
         }
     }
 

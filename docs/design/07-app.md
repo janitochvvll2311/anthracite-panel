@@ -165,6 +165,35 @@ made owner-executable after verification; `argv` has exactly one `{socket}`, at
 most one `{data}` and at most one `{shared}`, no `.` or `..` segments and is
 frozen in the grant along with the class.
 
+`manifest_version = 4` adds optional service intent: `roots`, `listen`, `egress`
+and the `{broker}` placeholder (D10). v3 keeps its exact meaning, and a v3 bundle
+that declares any of them is refused.
+
+```toml
+manifest_version = 4
+
+[service]
+path = "bin/proxy"
+sha256 = "…"
+class = "socket"
+argv = ["--socket", "{socket}", "--data", "{data}", "--broker", "{broker}"]
+listen = ["tcp:8080", "tcp:8443"]
+egress = ["any"]                    # or ["host:443", "10.0.0.0/8:5432"]
+roots  = ["/etc/ssl:ro", "/srv/data"]
+```
+
+- `roots` are absolute and canonical, `:ro` marks a read-only root, and the
+  implicit `{socket}`, `{data}`, `{shared}` and `{broker}` cannot be redeclared.
+- `listen` is `tcp:<port>`, `tcp:<ip>:<port>` (IPv6 `[::1]:443`) or `udp:<port>`;
+  the engine refuses anything else and never allocates or reserves a port.
+- `egress` is `any` alone, or `host:port` / `cidr:port` entries. It is intent
+  shown at approval and frozen in the grant, not enforced until L2.
+- `{broker}` is the app's private broker socket, `state/broker/<app-id>.sock`;
+  it appears at most once.
+
+The three lists are copied verbatim into the grant, so changing one is a new
+approval, not an edit.
+
 ### 7.3 WIT as the contract
 
 Interfaces are WIT, in the canonical form:
@@ -281,7 +310,8 @@ third-party service is refused unless the daemon starts with
 An app may be wasm-only, service-only, or **hybrid** (both halves in one bundle,
 with disjoint exports). v3 requires at least one half; a `[wasm]` needs at least
 one wasm export and a `[service]` needs at least one service export. v2 apps keep
-their exact meaning, and `[service]` requires `manifest_version = 3`.
+their exact meaning, `[service]` requires `manifest_version = 3`, and the intent
+keys above require `manifest_version = 4`.
 
 ### 7.5 The component world
 

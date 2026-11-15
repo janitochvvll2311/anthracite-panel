@@ -38,14 +38,31 @@ type CompositionView = {
   composition: Composition;
 };
 
+type ServiceView = {
+  class: string;
+  roots: string[];
+  listen: string[];
+  egress: string[];
+  roots_mode: string;
+  listen_mode: string;
+  egress_mode: string;
+};
+
 type ApprovalPreview = {
   risk: string;
   required: Risk[];
+  service?: ServiceView;
 };
 
 type ApprovalState =
   | { status: "loading" }
-  | { status: "ready"; risk: string; required: Risk[]; grant?: AppView["grant"] }
+  | {
+      status: "ready";
+      risk: string;
+      required: Risk[];
+      grant?: AppView["grant"];
+      service?: ServiceView;
+    }
   | { status: "error"; message: string };
 
 type AuditRow = {
@@ -354,6 +371,7 @@ export function mountManager(
         risk: risk.risk,
         required: risk.required ?? [],
         grant: (detail.body as AppView).grant,
+        service: risk.service,
       };
       renderApps();
     } catch (error) {
@@ -435,6 +453,24 @@ export function mountManager(
       );
     }
     approveRoot.append(summary);
+    const service = approval.service;
+    if (service) {
+      const intent = element("div", "mgr-diff");
+      const rule = (label: string, values: string[], mode: string): void => {
+        intent.append(
+          diffRow(
+            `${label} (${mode})`,
+            values.length > 0 ? values.join(", ") : "none",
+            values.length > 0 ? "warn" : "",
+          ),
+        );
+      };
+      intent.append(diffRow("Service class", service.class, ""));
+      rule("Roots", service.roots ?? [], service.roots_mode);
+      rule("Listen", service.listen ?? [], service.listen_mode);
+      rule("Egress", service.egress ?? [], service.egress_mode);
+      approveRoot.append(intent);
+    }
     const risks = element("div", "mgr-risks");
     const chosen: HTMLInputElement[] = [];
     for (const risk of RISKS) {

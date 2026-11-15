@@ -17,6 +17,8 @@ use crate::Risk;
 pub const MANIFEST_VERSION: u32 = 2;
 /// The service/hybrid schema. v2 apps stay valid unchanged.
 pub const SERVICE_MANIFEST_VERSION: u32 = 3;
+/// The service-intent schema: `roots`, `listen`, `egress` and `{broker}`.
+pub const SERVICE_INTENT_MANIFEST_VERSION: u32 = 4;
 
 /// The verbs a route may declare. `OPTIONS` belongs to the engine.
 pub const ROUTE_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
@@ -96,6 +98,22 @@ pub struct ServiceSection {
     pub sha256: String,
     pub class: ServiceClass,
     pub argv: Vec<String>,
+    /// v4: the filesystem roots the service may touch, `:ro` for read-only.
+    #[serde(default)]
+    pub roots: Vec<String>,
+    /// v4: the listeners the service intends to bind.
+    #[serde(default)]
+    pub listen: Vec<String>,
+    /// v4: where the service intends to connect. Intent until L2.
+    #[serde(default)]
+    pub egress: Vec<String>,
+}
+
+impl ServiceSection {
+    /// Whether the service argv asks for the broker socket.
+    pub fn uses_broker(&self) -> bool {
+        self.argv.iter().any(|arg| arg.contains("{broker}"))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,27 +383,29 @@ impl Manifest {
     pub fn validate(&self) -> Result<(), Error> {
         if !matches!(
             self.manifest_version,
-            MANIFEST_VERSION | SERVICE_MANIFEST_VERSION
+            MANIFEST_VERSION | SERVICE_MANIFEST_VERSION | SERVICE_INTENT_MANIFEST_VERSION
         ) {
             return Err(Error::invalid(format!(
                 "manifest_version {} is not supported; this engine speaks \
-                 {MANIFEST_VERSION} and {SERVICE_MANIFEST_VERSION}",
+                 {MANIFEST_VERSION}, {SERVICE_MANIFEST_VERSION} and \
+                 {SERVICE_INTENT_MANIFEST_VERSION}",
                 self.manifest_version
             )));
         }
         if self.manifest_version == MANIFEST_VERSION && self.service.is_some() {
             return Err(Error::invalid("`[service]` needs `manifest_version = 3`"));
         }
-        if self.manifest_version == SERVICE_MANIFEST_VERSION
+        if self.manifest_version >= SERVICE_MANIFEST_VERSION
             && self.wasm.is_none()
             && self.service.is_none()
         {
-            return Err(Error::invalid(
-                "a v3 app needs a `[wasm]` component, a `[service]`, or both",
-            ));
+            return Err(Error::invalid(format!(
+                "a v{} app needs a `[wasm]` component, a `[service]`, or both",
+                self.manifest_version
+            )));
         }
         if let Some(service) = &self.service {
-            check_service(service)?;
+            check_service(service, self.manifest_version)?;
         }
 
         AppId::parse(&self.app.id)?;
@@ -822,7 +842,7 @@ pub fn parse_call(input: &str) -> Result<(String, String), Error> {
 }
 
 /// A relative path inside the bundle.
-fn check_service(service: &ServiceSection) -> Result<(), Error> {
+fn check_service(service: &ServiceSection, version: u32) -> Result<(), Error> {
     let name = service.path.strip_prefix("bin/").ok_or_else(|| {
         Error::invalid(format!(
             "service path `{}` must be under `bin/`",
@@ -846,9 +866,25 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
             "service argv must have between 1 and 64 entries",
         ));
     }
+    let declares_intent = !service.roots.is_empty()
+        || !service.listen.is_empty()
+        || !service.egress.is_empty()
+        || service.uses_broker();
+    if declares_intent && version < SERVICE_INTENT_MANIFEST_VERSION {
+        return Err(Error::invalid(format!(
+            "`roots`, `listen`, `egress` and `{{broker}}` need \
+             `manifest_version = {SERVICE_INTENT_MANIFEST_VERSION}`"
+        )));
+    }
+    if version >= SERVICE_INTENT_MANIFEST_VERSION {
+        check_roots(&service.roots)?;
+        check_listeners(&service.listen)?;
+        check_egress(&service.egress)?;
+    }
     let mut sockets = 0usize;
     let mut data = 0usize;
     let mut shared = 0usize;
+    let mut brokers = 0usize;
     for arg in &service.argv {
         if arg.len() > 4096 {
             return Err(Error::invalid("a service argv entry is longer than 4 KiB"));
@@ -867,10 +903,12 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
         sockets += arg.matches("{socket}").count();
         data += arg.matches("{data}").count();
         shared += arg.matches("{shared}").count();
+        brokers += arg.matches("{broker}").count();
         let rest = arg
             .replace("{socket}", "")
             .replace("{data}", "")
-            .replace("{shared}", "");
+            .replace("{shared}", "")
+            .replace("{broker}", "");
         if rest.contains('{') || rest.contains('}') {
             return Err(Error::invalid(
                 "a service argv entry has an unknown placeholder",
@@ -891,6 +929,218 @@ fn check_service(service: &ServiceSection) -> Result<(), Error> {
         return Err(Error::invalid(
             "service argv may contain at most one `{shared}`",
         ));
+    }
+    if brokers > 1 {
+        return Err(Error::invalid(
+            "service argv may contain at most one `{broker}`",
+        ));
+    }
+    Ok(())
+}
+
+/// The roots a service declares: absolute, no `.`/`..` components, `:ro` for a
+/// read-only root, and never one of the implicit directories.
+fn check_roots(roots: &[String]) -> Result<(), Error> {
+    let mut seen = HashSet::new();
+    for root in roots {
+        if root.len() > 4096 || root.contains('\0') {
+            return Err(Error::invalid(format!(
+                "root `{root}` is not a usable path"
+            )));
+        }
+        let (path, _read_only) = match root.rsplit_once(':') {
+            Some((path, "ro")) => (path, true),
+            Some(_) => {
+                return Err(Error::invalid(format!(
+                    "root `{root}` has an unknown mode; only `:ro` is accepted"
+                )))
+            }
+            None => (root.as_str(), false),
+        };
+        if matches!(path, "{data}" | "{shared}" | "{socket}" | "{broker}") {
+            return Err(Error::invalid(format!(
+                "`{path}` is implicit and cannot be declared as a root"
+            )));
+        }
+        if !path.starts_with('/') {
+            return Err(Error::invalid(format!(
+                "root `{path}` is not an absolute path"
+            )));
+        }
+        let canonical = path == "/"
+            || path
+                .split('/')
+                .skip(1)
+                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+        if path.contains('\\') || !canonical {
+            return Err(Error::invalid(format!(
+                "root `{path}` is not a canonical absolute path"
+            )));
+        }
+        if !seen.insert(path.to_string()) {
+            return Err(Error::invalid(format!("root `{root}` is declared twice")));
+        }
+    }
+    Ok(())
+}
+
+/// `tcp:<port>`, `tcp:<ip>:<port>` (IPv6 `[::1]:443`) or `udp:<port>`.
+fn check_listeners(listen: &[String]) -> Result<(), Error> {
+    let mut seen = HashSet::new();
+    for listener in listen {
+        if !seen.insert(listener.clone()) {
+            return Err(Error::invalid(format!(
+                "listener `{listener}` is declared twice"
+            )));
+        }
+        let rest = listener
+            .strip_prefix("tcp:")
+            .or_else(|| listener.strip_prefix("udp:"))
+            .ok_or_else(|| {
+                Error::invalid(format!("listener `{listener}` is not `tcp:` or `udp:`"))
+            })?;
+        let tcp = listener.starts_with("tcp:");
+        let port = if let Some(after) = rest.strip_prefix('[') {
+            if !tcp {
+                return Err(Error::invalid(format!(
+                    "listener `{listener}`: `udp:` takes a port, not an address"
+                )));
+            }
+            let (ip, port) = after.split_once("]:").ok_or_else(|| {
+                Error::invalid(format!(
+                    "listener `{listener}` has an unclosed IPv6 address"
+                ))
+            })?;
+            check_ip(ip, listener)?;
+            port
+        } else if let Some((host, port)) = rest.rsplit_once(':') {
+            if !tcp {
+                return Err(Error::invalid(format!(
+                    "listener `{listener}`: `udp:` takes a port, not an address"
+                )));
+            }
+            check_ip(host, listener)?;
+            port
+        } else {
+            rest
+        };
+        check_port(port, listener)?;
+    }
+    Ok(())
+}
+
+/// `any`, or `host:port` / `cidr:port` entries. Intent until L2.
+fn check_egress(egress: &[String]) -> Result<(), Error> {
+    if egress.iter().any(|entry| entry == "any") {
+        if egress.len() != 1 {
+            return Err(Error::invalid(
+                "`egress = [\"any\"]` cannot be combined with other entries",
+            ));
+        }
+        return Ok(());
+    }
+    let mut seen = HashSet::new();
+    for entry in egress {
+        if !seen.insert(entry.clone()) {
+            return Err(Error::invalid(format!(
+                "egress `{entry}` is declared twice"
+            )));
+        }
+        if entry.contains("://") || entry.contains('*') || entry.contains(' ') {
+            return Err(Error::invalid(format!(
+                "egress `{entry}` is not a host or cidr with a port"
+            )));
+        }
+        let (host, port) = entry
+            .rsplit_once(':')
+            .ok_or_else(|| Error::invalid(format!("egress `{entry}` has no port")))?;
+        check_port(port, entry)?;
+        if host.is_empty() {
+            return Err(Error::invalid(format!("egress `{entry}` has no host")));
+        }
+        let bare = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(host);
+        if let Some((ip, prefix)) = bare.split_once('/') {
+            if !is_ipv4(ip) {
+                return Err(Error::invalid(format!(
+                    "egress `{entry}` supports IPv4 CIDR only; use a bracketed IPv6 host"
+                )));
+            }
+            let prefix: u8 = prefix
+                .parse()
+                .map_err(|_| Error::invalid(format!("egress `{entry}` has a bad prefix")))?;
+            if prefix > 32 {
+                return Err(Error::invalid(format!(
+                    "egress `{entry}` has a prefix out of range"
+                )));
+            }
+        } else if !is_ip(bare) && !is_hostname(bare) {
+            return Err(Error::invalid(format!(
+                "egress `{entry}` has an invalid host"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Re-checks the frozen service intent of a grant. The grant freezes what the
+/// operator approved; this refuses a document that could not be approved today.
+pub fn validate_service_intent(
+    roots: &[String],
+    listen: &[String],
+    egress: &[String],
+) -> Result<(), Error> {
+    check_roots(roots)?;
+    check_listeners(listen)?;
+    check_egress(egress)
+}
+
+fn check_ip(host: &str, entry: &str) -> Result<(), Error> {
+    if !is_ip(host) {
+        return Err(Error::invalid(format!(
+            "`{entry}` does not contain a valid IP address"
+        )));
+    }
+    Ok(())
+}
+
+fn is_ip(host: &str) -> bool {
+    host.parse::<std::net::IpAddr>().is_ok()
+}
+
+fn is_ipv4(host: &str) -> bool {
+    host.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
+fn is_hostname(host: &str) -> bool {
+    host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+}
+
+fn check_port(port: &str, entry: &str) -> Result<(), Error> {
+    if port.is_empty()
+        || !port.bytes().all(|byte| byte.is_ascii_digit())
+        || (port.len() > 1 && port.starts_with('0'))
+    {
+        return Err(Error::invalid(format!(
+            "`{entry}` does not have a canonical port"
+        )));
+    }
+    let value: u16 = port
+        .parse()
+        .map_err(|_| Error::invalid(format!("`{entry}` has a bad port")))?;
+    if value == 0 {
+        return Err(Error::invalid(format!(
+            "`{entry}` has port 0; ports are 1-65535"
+        )));
     }
     Ok(())
 }
@@ -1846,5 +2096,179 @@ target = "wasm"
         manifest.slot[0].module = "web/notes.txt".to_string();
         let error = manifest.validate().expect_err("module");
         assert!(error.message().contains(".js"), "{error}");
+    }
+
+    const V4: &str = r#"
+manifest_version = 4
+
+[app]
+id = "org.example.proxy"
+namespace = "example:proxy"
+name = "Proxy"
+version = "0.1.0"
+
+[service]
+path = "bin/proxy"
+sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+class = "socket"
+argv = ["--socket", "{socket}", "--data", "{data}", "--broker", "{broker}"]
+listen = ["tcp:8080", "tcp:127.0.0.1:8443", "tcp:[::1]:443", "udp:5353"]
+egress = ["any"]
+roots = ["/etc/ssl:ro", "/srv/data"]
+
+[[export]]
+interface = "example:proxy/edge@1.0.0"
+"#;
+
+    fn v4(text: &str) -> Result<(), Error> {
+        Manifest::parse(text)?.validate()
+    }
+
+    #[test]
+    fn a_v4_manifest_validates_its_intent() {
+        let manifest = Manifest::parse(V4).expect("parse");
+        manifest.validate().expect("validate");
+        let service = manifest.service.as_ref().expect("service");
+        assert_eq!(service.roots, ["/etc/ssl:ro", "/srv/data"]);
+        assert_eq!(service.listen.len(), 4);
+        assert_eq!(service.egress, ["any"]);
+        assert!(service.uses_broker());
+    }
+
+    #[test]
+    fn v3_cannot_declare_the_new_fields_or_the_broker() {
+        let roots = SERVICE.replace(
+            "argv = [\"--socket\", \"{socket}\"]",
+            "argv = [\"--socket\", \"{socket}\"]\nroots = [\"/srv\"]",
+        );
+        let error = v4(&roots).expect_err("roots in v3");
+        assert!(error.message().contains("manifest_version = 4"), "{error}");
+
+        let broker = SERVICE.replace(
+            "argv = [\"--socket\", \"{socket}\"]",
+            "argv = [\"--socket\", \"{socket}\", \"{broker}\"]",
+        );
+        let error = v4(&broker).expect_err("broker in v3");
+        assert!(error.message().contains("manifest_version = 4"), "{error}");
+    }
+
+    #[test]
+    fn roots_must_be_absolute_canonical_and_unique() {
+        for root in ["srv", "/srv/../etc", "/srv//data", "{data}", "/srv\\data"] {
+            let text = V4.replace(
+                "roots = [\"/etc/ssl:ro\", \"/srv/data\"]",
+                &format!("roots = [\"{root}\"]"),
+            );
+            assert!(v4(&text).is_err(), "`{root}` should be refused");
+        }
+        let text = V4.replace(
+            "roots = [\"/etc/ssl:ro\", \"/srv/data\"]",
+            "roots = [\"/srv:ro\", \"/srv\"]",
+        );
+        assert!(
+            v4(&text).is_err(),
+            "a root declared twice should be refused"
+        );
+    }
+
+    #[test]
+    fn the_whole_filesystem_is_a_valid_root() {
+        let text = V4.replace(
+            "roots = [\"/etc/ssl:ro\", \"/srv/data\"]",
+            "roots = [\"/\"]",
+        );
+        let manifest = Manifest::parse(&text).expect("parse");
+        manifest.validate().expect("`/` is a legal broad root");
+        assert_eq!(manifest.service.as_ref().expect("service").roots, ["/"]);
+    }
+
+    #[test]
+    fn an_unknown_root_mode_is_refused() {
+        for root in ["/srv:rw", "/srv:RO", "/srv:"] {
+            let text = V4.replace(
+                "roots = [\"/etc/ssl:ro\", \"/srv/data\"]",
+                &format!("roots = [\"{root}\"]"),
+            );
+            let error = v4(&text).expect_err(root);
+            assert!(error.message().contains("unknown mode"), "{error}");
+        }
+    }
+
+    #[test]
+    fn listeners_and_egress_have_a_closed_grammar() {
+        for listener in [
+            "http:8080",
+            "tcp:0",
+            "tcp:65536",
+            "tcp:0443",
+            "tcp:+443",
+            "udp:127.0.0.1:53",
+            "udp:[::1]:53",
+            "tcp:[::1]",
+        ] {
+            let text = V4.replace(
+                "listen = [\"tcp:8080\", \"tcp:127.0.0.1:8443\", \"tcp:[::1]:443\", \"udp:5353\"]",
+                &format!("listen = [\"{listener}\"]"),
+            );
+            assert!(v4(&text).is_err(), "`{listener}` should be refused");
+        }
+        for egress in [
+            "https://example.com:443",
+            "example.com",
+            "example.com:0",
+            "10.0.0.0/33:5432",
+            "*.example.com:443",
+            "any, example.com:443",
+        ] {
+            let text = V4.replace(
+                "egress = [\"any\"]",
+                &format!("egress = [\"{}\"]", egress.replace(", ", "\", \"")),
+            );
+            assert!(v4(&text).is_err(), "`{egress}` should be refused");
+        }
+        let good = V4.replace(
+            "egress = [\"any\"]",
+            "egress = [\"example.com:443\", \"10.0.0.0/8:5432\", \"[::1]:8443\"]",
+        );
+        v4(&good).expect("the documented egress forms are accepted");
+    }
+
+    #[test]
+    fn a_second_data_or_broker_is_refused() {
+        let data = V4.replace(
+            "\"--broker\", \"{broker}\"",
+            "\"--broker\", \"{broker}\", \"{data}\"",
+        );
+        let error = v4(&data).expect_err("second data");
+        assert!(error.message().contains("at most one `{data}`"), "{error}");
+
+        let broker = V4.replace(
+            "\"--broker\", \"{broker}\"",
+            "\"--broker\", \"{broker}\", \"{broker}\"",
+        );
+        let error = v4(&broker).expect_err("second broker");
+        assert!(
+            error.message().contains("at most one `{broker}`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_v4_bundle_without_the_new_fields_equals_v3() {
+        let text = V4
+            .replace(
+                "listen = [\"tcp:8080\", \"tcp:127.0.0.1:8443\", \"tcp:[::1]:443\", \"udp:5353\"]\n",
+                "",
+            )
+            .replace("egress = [\"any\"]\n", "")
+            .replace("roots = [\"/etc/ssl:ro\", \"/srv/data\"]\n", "")
+            .replace(", \"--broker\", \"{broker}\"", "");
+        let manifest = Manifest::parse(&text).expect("parse");
+        manifest.validate().expect("validate");
+        let service = manifest.service.as_ref().expect("service");
+        assert!(service.roots.is_empty());
+        assert!(service.listen.is_empty());
+        assert!(service.egress.is_empty());
+        assert!(!service.uses_broker());
     }
 }

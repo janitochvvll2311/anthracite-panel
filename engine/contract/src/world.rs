@@ -233,6 +233,9 @@ mod tests {
             approved_at: "2026-11-05T20:00:00Z".to_string(),
             export: export.to_vec(),
             import: import.to_vec(),
+            roots: Vec::new(),
+            listen: Vec::new(),
+            egress: Vec::new(),
         }
     }
 

@@ -850,6 +850,21 @@ mod tests {
                 .iter()
                 .map(|import| InterfaceId::parse(&import.interface).expect("import"))
                 .collect(),
+            roots: manifest
+                .service
+                .as_ref()
+                .map(|service| service.roots.clone())
+                .unwrap_or_default(),
+            listen: manifest
+                .service
+                .as_ref()
+                .map(|service| service.listen.clone())
+                .unwrap_or_default(),
+            egress: manifest
+                .service
+                .as_ref()
+                .map(|service| service.egress.clone())
+                .unwrap_or_default(),
         }
     }
 

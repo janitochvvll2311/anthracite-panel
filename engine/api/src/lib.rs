@@ -29,8 +29,8 @@ use anth_contract::manifest::{parse_call, RouteTransport, SlotSection};
 use anth_contract::{
     AppId, AppProblem, AppView, AuditAction, AuditEntry, Composition, CompositionView, DegradedApp,
     Error, ErrorKind, FatalView, Grant, GrantState, GrantView, InterfaceId, KeyAlgorithm, KeyView,
-    Outcome, Risk, SurfaceApp, SurfaceCli, SurfaceFabAction, SurfaceLink, SurfaceRoute,
-    SurfaceSlot, SurfaceView, TrustedKey, KEY_VERSION,
+    Outcome, Risk, ServiceView, SurfaceApp, SurfaceCli, SurfaceFabAction, SurfaceLink,
+    SurfaceRoute, SurfaceSlot, SurfaceView, TrustedKey, KEY_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::{
@@ -1339,7 +1339,7 @@ async fn preview_approval(
 ) -> Result<Json<Value>, ApiError> {
     let apps = apps(&state)?;
     let id = AppId::parse(&id)?;
-    let _installed = installed_app(apps, &id)?;
+    let installed = installed_app(apps, &id)?;
     let installed_apps = installed_apps(apps)?;
     let risk = app_risk(&id, &installed_apps).map_err(|error| ApiError(error.into_error()))?;
     let required = Grant::required_levels(risk).collect::<Vec<_>>();
@@ -1347,6 +1347,7 @@ async fn preview_approval(
         "app": id,
         "risk": risk,
         "required": required,
+        "service": installed.manifest.service.as_ref().map(ServiceView::of),
     })))
 }
 
@@ -1898,6 +1899,7 @@ fn app_view(apps: &Apps, installed: &Installed, with_grant: bool) -> Result<AppV
         grant,
         grant_state,
         grant_problem,
+        service: installed.manifest.service.as_ref().map(ServiceView::of),
     })
 }
 

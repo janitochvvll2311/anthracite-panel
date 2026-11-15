@@ -115,6 +115,21 @@ fn approve_with(state: &Path, id_text: &str, risk: Risk) {
             .iter()
             .map(|value| InterfaceId::parse(&value.interface).expect("interface"))
             .collect(),
+        roots: manifest
+            .service
+            .as_ref()
+            .map(|service| service.roots.clone())
+            .unwrap_or_default(),
+        listen: manifest
+            .service
+            .as_ref()
+            .map(|service| service.listen.clone())
+            .unwrap_or_default(),
+        egress: manifest
+            .service
+            .as_ref()
+            .map(|service| service.egress.clone())
+            .unwrap_or_default(),
     };
     GrantStore::new(state).save(&grant).expect("grant");
 }
@@ -140,6 +155,33 @@ fn fixture_state(composition: &str, approved: &[&str]) -> (Arc<EngineState>, Pat
             .with_apps(&dir, 1 << 20, false, false),
     );
     (state, dir)
+}
+
+/// An installed tree with one extra fixture app, for a surface that the shared
+/// APPS list must not gain.
+fn fixture_with(fixture: &str, id: &str) -> (Arc<EngineState>, PathBuf) {
+    let dir = scratch();
+    let apps = dir.join("apps");
+    fs::create_dir_all(&apps).expect("apps");
+    fs::set_permissions(&apps, fs::Permissions::from_mode(0o700)).expect("chmod");
+    for (name, id) in APPS {
+        copy_tree(&fixtures().join("apps").join(name), &apps.join(id));
+    }
+    copy_tree(&fixtures().join("apps").join(fixture), &apps.join(id));
+    let state = Arc::new(EngineState::new(1000).with_apps(&dir, 1 << 20, false, false));
+    (state, dir)
+}
+
+async fn get(state: Arc<EngineState>, path: &str) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .uri(path)
+        .body(Body::empty())
+        .expect("request");
+    request.extensions_mut().insert(ConnectInfo(PeerUid(1000)));
+    let response = router(state).oneshot(request).await.expect("response");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    (status, serde_json::from_slice(&body).expect("json"))
 }
 
 fn repo_root() -> PathBuf {
@@ -325,6 +367,36 @@ async fn composition(state: Arc<EngineState>) -> Value {
 
 fn cleanup(dir: PathBuf) {
     let _ = fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_v4_bundle_shows_its_service_intent() {
+    let (state, dir) = fixture_with("v4service", "org.example.v4service");
+    let (status, app) = get(state.clone(), "/api/engine/apps/org.example.v4service").await;
+    assert_eq!(status, StatusCode::OK, "{app}");
+    assert_eq!(app["service"]["class"], "socket");
+    assert_eq!(
+        app["service"]["roots"],
+        serde_json::json!(["/etc/ssl:ro", "/srv/data"])
+    );
+    assert_eq!(
+        app["service"]["listen"],
+        serde_json::json!(["tcp:8080", "tcp:127.0.0.1:8443"])
+    );
+    assert_eq!(
+        app["service"]["egress"],
+        serde_json::json!(["example.com:443"])
+    );
+    // Phase 0a freezes the intent only; L1 and the port capability land in 0b.
+    assert_eq!(app["service"]["roots_mode"], "intent");
+    assert_eq!(app["service"]["listen_mode"], "intent");
+    assert_eq!(app["service"]["egress_mode"], "intent");
+
+    let (status, approval) = get(state, "/api/engine/apps/org.example.v4service/approval").await;
+    assert_eq!(status, StatusCode::OK, "{approval}");
+    assert_eq!(approval["risk"], "admin");
+    assert_eq!(approval["service"]["egress_mode"], "intent");
+    cleanup(dir);
 }
 
 #[tokio::test]

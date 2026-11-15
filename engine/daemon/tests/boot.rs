@@ -84,6 +84,21 @@ fn approve(state: &Path, id_text: &str) {
             .iter()
             .map(|value| InterfaceId::parse(&value.interface).expect("import"))
             .collect(),
+        roots: manifest
+            .service
+            .as_ref()
+            .map(|service| service.roots.clone())
+            .unwrap_or_default(),
+        listen: manifest
+            .service
+            .as_ref()
+            .map(|service| service.listen.clone())
+            .unwrap_or_default(),
+        egress: manifest
+            .service
+            .as_ref()
+            .map(|service| service.egress.clone())
+            .unwrap_or_default(),
     };
     GrantStore::new(state).save(&grant).expect("grant");
 }
@@ -295,6 +310,9 @@ fn service_app(dir: &Path) -> (AppId, PathBuf) {
             .map(|value| InterfaceId::parse(&value.interface).expect("export"))
             .collect(),
         import: Vec::new(),
+        roots: Vec::new(),
+        listen: Vec::new(),
+        egress: Vec::new(),
     };
     GrantStore::new(dir).save(&grant).expect("grant");
     let socket = anth_engine::service::ServiceSupervisor::socket_path(dir, &app);
