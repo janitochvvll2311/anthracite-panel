@@ -17,6 +17,9 @@ v3 contract, streams/events/quotas, the `system` tier with a compiled distributi
 key and the `anth-sign`/`release.sh` ceremony, the sandbox baseline (L0) and the
 external-bundle acid test. Phases 0–9 of `docs/design/18-v0.6-plan.md` shipped as
 PRs into `v0.6.0`; the evidence is `docs/features/v0.6-close/report.md`.
+`v0.6.1` is the final publish of the 0.6 line: the same code plus the official
+guide, the standalone bundle assets and the images in the KolibSoftware
+registry; `v0.6.1a` was the intermediate.
 
 What is left is operational, not code: GitHub Actions has no runner (every job
 fails in two seconds with `runner_id: 0`), no real release key has been used yet,
