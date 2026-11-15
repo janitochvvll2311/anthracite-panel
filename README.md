@@ -10,11 +10,11 @@ optionally TCP). A **panel** is a separate application that links the engine,
 serves a web UI and mounts the contributions of the composed apps. Our official
 panel is one; the SDK lets you write another.
 
-Version **0.6.1** (tag `v0.6.1a`, an intermediate publish of the 0.6 line)
-carries M4–M5: service apps on the v3 manifest, streams and quotas, the `system`
-tier with a compiled distribution key and a signing ceremony, the sandbox
-baseline, and an external-bundle acid test. It also packages the same build as
-variants, Docker images and standalone bundles.
+Version **0.6.1** (tag `v0.6.1`, the final publish of the 0.6 line; `v0.6.1a`
+was the intermediate) carries M4–M5: service apps on the v3 manifest, streams
+and quotas, the `system` tier with a compiled distribution key and a signing
+ceremony, the sandbox baseline, and an external-bundle acid test. It also
+packages the same build as variants, Docker images and standalone bundles.
 The design of record is [`DESIGN.md`](DESIGN.md); the official manual is
 [`docs/guide/`](docs/guide/README.md).
 
@@ -117,8 +117,10 @@ docs/       design, feature reports and the guide
 ## Project status
 
 `v0.6.0` is the final tag of its line and the code is complete through M5;
-`v0.6.1a` publishes the same build with the guide. The release process is
-implemented and exercised with signed pre-release artifacts, but three
+`v0.6.1` publishes the same build with the official guide, the standalone
+bundles and the KolibSoftware registry images (`v0.6.1a` was the intermediate).
+The release process is implemented and exercised with signed release artifacts,
+but three
 operational items remain, and they are not code: GitHub Actions has had no
 runner (every job fails in about two seconds with `runner_id: 0`), no real
 long-lived release key has been used yet (the pre-release key is a rehearsal),
