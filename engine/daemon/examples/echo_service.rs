@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 static SHARED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static DATA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static PROBE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -20,11 +22,15 @@ fn main() {
     let mut listen = true;
     let mut tcp = None;
     let mut shared = None;
+    let mut data = None;
+    let mut probe = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--socket" => socket = args.next().map(PathBuf::from),
             "--no-listen" => listen = false,
             "--shared" => shared = args.next().map(PathBuf::from),
+            "--data" => data = args.next().map(PathBuf::from),
+            "--probe" => probe = args.next().map(PathBuf::from),
             "--tcp" => tcp = args.next().and_then(|value| value.parse::<u16>().ok()),
             "--die-after-ms" => {
                 die_after = args.next().and_then(|value| value.parse::<u64>().ok());
@@ -65,6 +71,12 @@ fn main() {
     }
     if let Some(path) = shared {
         let _ = SHARED.set(path);
+    }
+    if let Some(path) = data {
+        let _ = DATA.set(path);
+    }
+    if let Some(path) = probe {
+        let _ = PROBE.set(path);
     }
     if let Some(port) = tcp {
         // Proves the port capability: binding below 1024 fails without it.
@@ -180,6 +192,25 @@ fn call(body: &[u8]) -> (u16, Vec<u8>) {
             .expect("json"),
         ),
         "fail" => (400, envelope("invalid", "the fixture refused")),
+        "write-data" => {
+            let path = DATA.get().map(|dir| dir.join("fixture-data"));
+            let wrote = path
+                .as_ref()
+                .is_some_and(|path| std::fs::write(path, b"ok").is_ok());
+            (
+                200,
+                serde_json::to_vec(&serde_json::json!({"ok": {"wrote": wrote}})).expect("json"),
+            )
+        }
+        "write-root" => {
+            let wrote = PROBE
+                .get()
+                .is_some_and(|path| std::fs::write(path.join("probe"), b"x").is_ok());
+            (
+                200,
+                serde_json::to_vec(&serde_json::json!({"ok": {"wrote": wrote}})).expect("json"),
+            )
+        }
         "write-shared" => {
             let path = SHARED.get().map(|dir| dir.join("fixture-shared"));
             let wrote = path

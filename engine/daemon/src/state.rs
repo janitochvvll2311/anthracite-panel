@@ -68,15 +68,18 @@ pub fn ensure(root: &Path) -> Result<(), Error> {
     for name in DIRS {
         let path = root.join(name);
         create_dir(&path)?;
-        if *name == "shared" {
-            fs::set_permissions(&path, fs::Permissions::from_mode(SHARED_MODE)).map_err(
-                |error| {
-                    Error::internal(format!(
-                        "setting permissions on {}: {error}",
-                        path.display()
-                    ))
-                },
-            )?;
+        let mode = match *name {
+            "shared" => Some(SHARED_MODE),
+            "data" => Some(ROOT_MODE),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).map_err(|error| {
+                Error::internal(format!(
+                    "setting permissions on {}: {error}",
+                    path.display()
+                ))
+            })?;
         }
     }
     let composition = Composition::empty().to_toml()?;
@@ -129,7 +132,9 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
                     root.display()
                 )));
             }
-            check_mode(root, &metadata, ROOT_MODE)?;
+            // A tree written before L1 is still valid for a read-only check;
+            // the next boot upgrades it.
+            check_mode_any(root, &metadata, &[ROOT_MODE, DIR_MODE])?;
         }
     }
 
@@ -154,12 +159,12 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
                 path.display()
             )));
         }
-        let expected = if *name == "shared" {
-            SHARED_MODE
-        } else {
-            DIR_MODE
+        let accepted: &[u32] = match *name {
+            "shared" => &[SHARED_MODE, DIR_MODE],
+            "data" => &[ROOT_MODE, DIR_MODE],
+            _ => &[DIR_MODE],
         };
-        check_mode(&path, &metadata, expected)?;
+        check_mode_any(&path, &metadata, accepted)?;
     }
 
     for name in FILES {
@@ -284,6 +289,22 @@ fn check_mode(path: &Path, metadata: &fs::Metadata, expected: u32) -> Result<(),
     Ok(())
 }
 
+fn check_mode_any(path: &Path, metadata: &fs::Metadata, accepted: &[u32]) -> Result<(), Error> {
+    let actual = metadata.permissions().mode() & 0o777;
+    if !accepted.contains(&actual) {
+        let expected = accepted
+            .iter()
+            .map(|mode| format!("{mode:04o}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        return Err(Error::invalid(format!(
+            "{} is {actual:04o}; it should be {expected}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn create_dir(path: &Path) -> Result<(), Error> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -368,10 +389,10 @@ mod tests {
             let path = root.join(name);
             assert!(path.is_dir(), "{} should be a directory", path.display());
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            let expected = if *name == "shared" {
-                SHARED_MODE
-            } else {
-                DIR_MODE
+            let expected = match *name {
+                "shared" => SHARED_MODE,
+                "data" => ROOT_MODE,
+                _ => DIR_MODE,
             };
             assert_eq!(
                 mode,
@@ -494,6 +515,19 @@ mod tests {
         assert!(error.message().contains("not writable"), "{error}");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("chmod back");
         fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn a_pre_l1_tree_is_still_valid_for_a_read_only_check() {
+        let root = scratch("pre-l1");
+        ensure(&root).expect("ensure");
+        // A v0.6 tree: 0700 root, 0700 shared and 0700 data.
+        fs::set_permissions(&root, fs::Permissions::from_mode(DIR_MODE)).expect("root");
+        fs::set_permissions(root.join("shared"), fs::Permissions::from_mode(DIR_MODE))
+            .expect("shared");
+        fs::set_permissions(root.join("data"), fs::Permissions::from_mode(DIR_MODE)).expect("data");
+        check(&root).expect("an old tree is readable");
+        fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]

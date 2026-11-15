@@ -112,6 +112,91 @@ async fn a_service_starts_answers_and_stops() {
 }
 
 #[tokio::test]
+async fn the_data_directory_is_writable_on_an_ensured_tree() {
+    let state = scratch("data-ensure");
+    anth_engine::state::ensure(&state).expect("ensure");
+    let data = state.join("data").join(APP);
+    let spec = launch(
+        &state,
+        &["--data", data.to_str().expect("utf8")],
+        Duration::from_millis(500),
+    );
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services.start(spec).await.expect("start");
+    let answer = services
+        .call(APP, INTERFACE, "write-data", json!({}))
+        .await
+        .expect("write-data");
+    assert_eq!(answer["wrote"], true, "{answer}");
+    assert!(data.join("fixture-data").exists());
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_read_only_root_cannot_be_written() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let state = scratch("read-only-root");
+    let probe = state.join("probe");
+    std::fs::create_dir(&probe).expect("probe");
+    let uid = anth_engine::sandbox::allocate_uid(APP);
+    let gid = anth_engine::sandbox::engine_gid();
+    if anth_engine::sandbox::is_root() {
+        let path = CString::new(probe.as_os_str().as_bytes()).expect("path");
+        // SAFETY: chown takes a NUL-terminated path.
+        assert_eq!(unsafe { libc::chown(path.as_ptr(), uid, gid) }, 0);
+    }
+    let mut spec = launch(
+        &state,
+        &["--probe", probe.to_str().expect("utf8")],
+        Duration::from_millis(500),
+    );
+    spec.roots = vec![Root {
+        path: probe.to_string_lossy().into_owned(),
+        read_only: true,
+    }];
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    services.start(spec).await.expect("start");
+    let answer = services
+        .call(APP, INTERFACE, "write-root", json!({}))
+        .await
+        .expect("write-root");
+    // The directory belongs to the service uid, so DAC would allow the write;
+    // only the `:ro` Landlock rule stops it.
+    assert_eq!(answer["wrote"], false, "{answer}");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_missing_root_is_a_landlock_denial() {
+    let state = scratch("missing-root");
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    spec.roots = vec![Root {
+        path: "/does/not/exist/anthracite".to_string(),
+        read_only: true,
+    }];
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let error = services.start(spec).await.expect_err("missing root");
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Denied, "{error}");
+    let entries = AuditLog::new(&state).entries().expect("audit");
+    let deny = entries
+        .iter()
+        .find(|entry| entry.action == AuditAction::ServiceDeny)
+        .expect("denied");
+    assert_eq!(
+        deny.detail
+            .as_ref()
+            .and_then(|detail| detail["layer"].as_str()),
+        Some("landlock"),
+        "{deny:?}"
+    );
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
 async fn the_shared_domain_is_writable_by_the_service() {
     let state = scratch("shared");
     let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));

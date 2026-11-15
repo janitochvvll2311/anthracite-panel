@@ -38,7 +38,7 @@ not a sandbox by itself ([Security](security.md#services-and-the-sandbox)).
 
 | Placeholder | Path | Meaning |
 | --- | --- | --- |
-| `{socket}` | `$state/run/<app-id>/<app-id>-<pid>.sock` | the private socket the service listens on; exactly one |
+| `{socket}` | `$state/run/<app-id>/<pid>.sock` | the private socket the service listens on; exactly one |
 | `{data}` | `$state/data/<app-id>` | the app's own `0700` directory; at most one |
 | `{shared}` | `$state/shared` | the service trust domain; at most one |
 

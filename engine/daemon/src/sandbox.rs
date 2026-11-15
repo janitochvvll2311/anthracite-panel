@@ -32,6 +32,25 @@ pub fn uid_for(app: &str) -> u32 {
     UID_BASE + value % UID_RANGE
 }
 
+/// The uid the service actually gets: the derived one, or the next free id when
+/// the host has a real account (SSSD/AD often allocate from 1,000,000 upward).
+/// `getpwuid` queries NSS, so a directory user is caught too.
+pub fn allocate_uid(app: &str) -> u32 {
+    let mut uid = uid_for(app);
+    for _ in 0..1000 {
+        // SAFETY: `getpwuid` returns a pointer into a static buffer or null.
+        let taken = unsafe { !libc::getpwuid(uid).is_null() };
+        if !taken {
+            return uid;
+        }
+        uid = uid.wrapping_add(1);
+        if uid < UID_BASE {
+            uid = UID_BASE;
+        }
+    }
+    uid_for(app)
+}
+
 /// The engine's effective gid. Services keep it so `{shared}` stays the trust
 /// domain; their own directories are `0700` and owned by their uid.
 pub fn engine_gid() -> u32 {
@@ -360,17 +379,35 @@ pub fn prepare_shared(path: &Path, gid: u32) -> io::Result<()> {
 /// Copies the verified binary into the service's own directory. The bundle tree
 /// stays engine-owned and unreadable; the child executes its private copy.
 pub fn stage_binary(source: &Path, dir: &Path, uid: u32, gid: u32) -> io::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::io::AsRawFd;
     let target = dir.join("service");
-    std::fs::copy(source, &target)?;
-    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
+    // The service owns `dir`, so it could point `service` at a host file. Copy
+    // into a fresh O_EXCL file, fchmod/fchown the descriptor, then rename over
+    // the name: rename replaces a symlink instead of following it.
+    let staged = dir.join(format!("service.{}", std::process::id()));
+    let _ = std::fs::remove_file(&staged);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o700)
+        .open(&staged)?;
+    let mut source = std::fs::File::open(source)?;
+    std::io::copy(&mut source, &mut file)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o700))?;
     if is_root() {
-        let owned = std::ffi::CString::new(target.as_os_str().as_bytes())
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path with NUL"))?;
-        // SAFETY: chown takes a NUL-terminated path.
-        if unsafe { libc::chown(owned.as_ptr(), uid, gid) } == -1 {
-            return Err(io::Error::last_os_error());
+        // SAFETY: `fchown` takes an fd we own.
+        if unsafe { libc::fchown(file.as_raw_fd(), uid, gid) } == -1 {
+            let error = io::Error::last_os_error();
+            let _ = std::fs::remove_file(&staged);
+            return Err(error);
         }
+    }
+    file.sync_all()?;
+    drop(file);
+    if let Err(error) = std::fs::rename(&staged, &target) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(error);
     }
     Ok(target)
 }
@@ -404,12 +441,18 @@ pub fn implicit_rules(
 ) -> Vec<Rule> {
     let write = read_write(abi);
     let mut rules = Vec::with_capacity(8);
-    for path in [data, socket_dir, broker, shared] {
+    for path in [data, socket_dir, shared] {
         rules.push(Rule {
             path: path.to_path_buf(),
             access: write,
         });
     }
+    // The broker listener belongs to the engine. The service connects to the
+    // socket; it must not be able to replace or unlink it.
+    rules.push(Rule {
+        path: broker.to_path_buf(),
+        access: READ,
+    });
     if let Some(parent) = binary.parent() {
         rules.push(Rule {
             path: parent.to_path_buf(),

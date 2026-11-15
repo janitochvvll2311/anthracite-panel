@@ -155,7 +155,7 @@ impl ServiceSupervisor {
         let app = AppId::parse(&launch.app)?;
         self.stop_app(&app).await;
         let uid = if crate::sandbox::is_root() {
-            crate::sandbox::uid_for(app.as_str())
+            crate::sandbox::allocate_uid(app.as_str())
         } else {
             // Without root the uid layer is unavailable; Landlock still applies
             // and the service keeps the engine user. The release runs the
@@ -472,6 +472,18 @@ impl ServiceSupervisor {
                     self.run_dir.display()
                 ))
             })?;
+            // `data/` is engine-owned; each app directory below it is 0700 and
+            // owned by its service, so the parent only needs traversal.
+            let data_root = state.join("data");
+            std::fs::create_dir_all(&data_root).map_err(|error| {
+                denied(format!("uid: creating {}: {error}", data_root.display()))
+            })?;
+            crate::sandbox::make_traversable(&data_root).map_err(|error| {
+                denied(format!(
+                    "uid: making {} traversable: {error}",
+                    data_root.display()
+                ))
+            })?;
         }
         for path in [socket_dir, launch.data_dir.as_path()] {
             crate::sandbox::prepare_owned(path, uid, gid).map_err(|error| {
@@ -499,15 +511,7 @@ impl ServiceSupervisor {
     }
 
     fn denied(&self, app: &AppId, class: ServiceClass, reason: &str) {
-        let layer = if reason.contains("landlock:") {
-            "landlock"
-        } else if reason.contains("capability:") {
-            "capability"
-        } else if reason.contains("uid:") {
-            "uid"
-        } else {
-            "sandbox"
-        };
+        let layer = deny_layer(reason);
         let entry = AuditEntry {
             at: timestamp(),
             actor: "system".to_string(),
@@ -583,6 +587,7 @@ async fn drive(service: Arc<Service>, ready: oneshot::Sender<Result<(), Error>>)
                     Some(serde_json::json!({
                         "reason": error.message(),
                         "class": service.class.as_str(),
+                        "layer": deny_layer(error.message()),
                     })),
                 );
                 let _ = std::fs::remove_file(&service.socket);
@@ -786,12 +791,32 @@ fn spawn(service: &Service) -> Result<Child, Error> {
             Ok(())
         });
     }
-    command.spawn().map_err(|error| {
+    let spawned = command.spawn();
+    // SAFETY: the child has its own copy of the descriptor; the parent must not
+    // leak it across restarts.
+    unsafe {
+        libc::close(ruleset);
+    }
+    spawned.map_err(|error| {
         Error::denied(format!(
             "sandbox: starting `{}`: {error}",
             service.binary.display()
         ))
     })
+}
+
+/// The layer a denial came from, for the audit detail. Kept free so the
+/// spawn-time refusal in `drive` classifies the same way as `prepare`.
+fn deny_layer(reason: &str) -> &'static str {
+    if reason.contains("landlock:") {
+        "landlock"
+    } else if reason.contains("capability:") {
+        "capability"
+    } else if reason.contains("uid:") {
+        "uid"
+    } else {
+        "sandbox"
+    }
 }
 
 fn set_limit(resource: libc::c_int, desired: libc::rlim_t) -> std::io::Result<()> {
