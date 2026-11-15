@@ -940,15 +940,27 @@ fn check_service(service: &ServiceSection, version: u32) -> Result<(), Error> {
 
 /// The roots a service declares: absolute, no `.`/`..` components, `:ro` for a
 /// read-only root, and never one of the implicit directories.
-fn check_roots(roots: &[String]) -> Result<(), Error> {
+pub fn check_roots(roots: &[String]) -> Result<(), Error> {
+    parse_roots(roots).map(|_| ())
+}
+
+/// One declared root, after validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Root {
+    pub path: String,
+    pub read_only: bool,
+}
+
+pub fn parse_roots(roots: &[String]) -> Result<Vec<Root>, Error> {
     let mut seen = HashSet::new();
+    let mut parsed = Vec::with_capacity(roots.len());
     for root in roots {
         if root.len() > 4096 || root.contains('\0') {
             return Err(Error::invalid(format!(
                 "root `{root}` is not a usable path"
             )));
         }
-        let (path, _read_only) = match root.rsplit_once(':') {
+        let (path, read_only) = match root.rsplit_once(':') {
             Some((path, "ro")) => (path, true),
             Some(_) => {
                 return Err(Error::invalid(format!(
@@ -980,13 +992,46 @@ fn check_roots(roots: &[String]) -> Result<(), Error> {
         if !seen.insert(path.to_string()) {
             return Err(Error::invalid(format!("root `{root}` is declared twice")));
         }
+        parsed.push(Root {
+            path: path.to_string(),
+            read_only,
+        });
     }
-    Ok(())
+    Ok(parsed)
 }
 
-/// `tcp:<port>`, `tcp:<ip>:<port>` (IPv6 `[::1]:443`) or `udp:<port>`.
-fn check_listeners(listen: &[String]) -> Result<(), Error> {
+/// A listener the service intends to bind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listener {
+    Tcp {
+        ip: Option<std::net::IpAddr>,
+        port: u16,
+    },
+    Udp {
+        port: u16,
+    },
+}
+
+impl Listener {
+    /// A port the kernel only lets a privileged process bind.
+    pub const fn is_privileged(self) -> bool {
+        self.port() < 1024
+    }
+
+    pub const fn port(self) -> u16 {
+        match self {
+            Self::Tcp { port, .. } | Self::Udp { port } => port,
+        }
+    }
+}
+
+pub fn check_listeners(listen: &[String]) -> Result<(), Error> {
+    parse_listeners(listen).map(|_| ())
+}
+
+pub fn parse_listeners(listen: &[String]) -> Result<Vec<Listener>, Error> {
     let mut seen = HashSet::new();
+    let mut parsed = Vec::with_capacity(listen.len());
     for listener in listen {
         if !seen.insert(listener.clone()) {
             return Err(Error::invalid(format!(
@@ -1000,7 +1045,7 @@ fn check_listeners(listen: &[String]) -> Result<(), Error> {
                 Error::invalid(format!("listener `{listener}` is not `tcp:` or `udp:`"))
             })?;
         let tcp = listener.starts_with("tcp:");
-        let port = if let Some(after) = rest.strip_prefix('[') {
+        let (ip, port) = if let Some(after) = rest.strip_prefix('[') {
             if !tcp {
                 return Err(Error::invalid(format!(
                     "listener `{listener}`: `udp:` takes a port, not an address"
@@ -1012,7 +1057,7 @@ fn check_listeners(listen: &[String]) -> Result<(), Error> {
                 ))
             })?;
             check_ip(ip, listener)?;
-            port
+            (Some(ip.parse().expect("validated IP")), port)
         } else if let Some((host, port)) = rest.rsplit_once(':') {
             if !tcp {
                 return Err(Error::invalid(format!(
@@ -1020,13 +1065,19 @@ fn check_listeners(listen: &[String]) -> Result<(), Error> {
                 )));
             }
             check_ip(host, listener)?;
-            port
+            (Some(host.parse().expect("validated IP")), port)
         } else {
-            rest
+            (None, rest)
         };
         check_port(port, listener)?;
+        let port: u16 = port.parse().expect("validated port");
+        parsed.push(if tcp {
+            Listener::Tcp { ip, port }
+        } else {
+            Listener::Udp { port }
+        });
     }
-    Ok(())
+    Ok(parsed)
 }
 
 /// `any`, or `host:port` / `cidr:port` entries. Intent until L2.

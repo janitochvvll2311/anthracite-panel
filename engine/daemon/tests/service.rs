@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anth_compose::audit::AuditLog;
-use anth_contract::{AppId, AuditAction, ExportTarget, ServiceClass};
+use anth_contract::{AppId, AuditAction, ExportTarget, Listener, Root, ServiceClass};
 use anth_engine::service::{ServiceLaunch, ServiceSupervisor};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -64,6 +64,8 @@ fn launch(state: &Path, extra: &[&str], start_timeout: Duration) -> ServiceLaunc
         argv,
         socket,
         data_dir: state.join("data").join(APP),
+        roots: Vec::new(),
+        listen: Vec::new(),
         exports,
         start_timeout,
     }
@@ -90,11 +92,14 @@ async fn a_service_starts_answers_and_stops() {
         .expect("call");
     assert_eq!(output, json!({"message": "hi"}));
 
-    let status = services
-        .call(APP, INTERFACE, "status", json!({}))
+    // L1: with no declared roots the service cannot read or list `/`, even
+    // though it is a real process on the host.
+    let outside = services
+        .call(APP, INTERFACE, "outside", json!({}))
         .await
-        .expect("status");
-    assert_eq!(status["NoNewPrivs"], "1");
+        .expect("outside");
+    assert_eq!(outside["read"], false, "{outside}");
+    assert_eq!(outside["list"], false, "{outside}");
 
     services.stop(APP).await;
     assert!(!socket.exists(), "the socket is removed on stop");
@@ -107,6 +112,68 @@ async fn a_service_starts_answers_and_stops() {
 }
 
 #[tokio::test]
+async fn the_shared_domain_is_writable_by_the_service() {
+    let state = scratch("shared");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let shared = state.join("shared");
+    let spec = launch(
+        &state,
+        &["--shared", shared.to_str().expect("utf8")],
+        Duration::from_millis(500),
+    );
+    services.start(spec).await.expect("start");
+    let answer = services
+        .call(APP, INTERFACE, "write-shared", json!({}))
+        .await
+        .expect("write-shared");
+    assert_eq!(answer["wrote"], true, "{answer}");
+    assert!(shared.join("fixture-shared").exists());
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_declared_root_is_readable_and_the_rest_is_not() {
+    let state = scratch("roots");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let mut spec = launch(&state, &[], Duration::from_millis(500));
+    spec.roots = vec![Root {
+        path: "/etc".to_string(),
+        read_only: true,
+    }];
+    services.start(spec).await.expect("start");
+    let outside = services
+        .call(APP, INTERFACE, "outside", json!({}))
+        .await
+        .expect("outside");
+    assert_eq!(outside["read"], true, "{outside}");
+    // `/` was not declared, so listing it stays denied.
+    assert_eq!(outside["list"], false, "{outside}");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
+async fn a_declared_privileged_listener_is_granted() {
+    // Port 443 needs CAP_NET_BIND_SERVICE; a host without it refuses, which is
+    // the documented denial. The sandbox this runs in is root with the bit.
+    if !anth_engine::sandbox::is_root() || !anth_engine::sandbox::has_net_bind_service() {
+        eprintln!("skipping: the engine has no CAP_NET_BIND_SERVICE");
+        return;
+    }
+    let state = scratch("privileged");
+    let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
+    let mut spec = launch(&state, &["--tcp", "443"], Duration::from_secs(2));
+    spec.listen = vec![Listener::Tcp {
+        ip: None,
+        port: 443,
+    }];
+    services.start(spec).await.expect("start with 443");
+    services.stop(APP).await;
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[tokio::test]
 async fn a_refused_launch_is_a_denial_not_a_crash() {
     let state = scratch("deny");
     let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
@@ -115,7 +182,7 @@ async fn a_refused_launch_is_a_denial_not_a_crash() {
     // exec what the grant approved.
     spec.binary = state.join("missing-service");
     let error = services.start(spec).await.expect_err("refused");
-    assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
+    assert_eq!(error.kind(), anth_contract::ErrorKind::Denied);
 
     let entries = AuditLog::new(&state).entries().expect("audit");
     let deny = entries
@@ -159,9 +226,8 @@ async fn a_service_error_keeps_its_contract_envelope() {
 async fn a_service_that_never_answers_health_is_degraded() {
     let state = scratch("health");
     let services = ServiceSupervisor::for_state(&state, Duration::from_secs(2));
-    let mut spec = launch(&state, &[], Duration::from_millis(300));
-    // `false` exits immediately, so the socket never answers.
-    spec.binary = PathBuf::from("/bin/false");
+    // The fixture stays up but never binds, so readiness times out.
+    let spec = launch(&state, &["--no-listen"], Duration::from_millis(300));
     let error = services.start(spec).await.expect_err("no health");
     assert_eq!(error.kind(), anth_contract::ErrorKind::Unavailable);
     let _ = std::fs::remove_dir_all(&state);

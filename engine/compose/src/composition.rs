@@ -32,7 +32,7 @@ impl CompositionStore {
     /// Replaces the document. `composition` is validated before anything is
     /// written, so a refused document leaves the old one intact.
     pub fn save(&self, composition: &Composition) -> Result<(), Error> {
-        store::write_atomic(&self.state, FILE, composition.to_toml()?.as_bytes())
+        store::write_atomic_root(&self.state, FILE, composition.to_toml()?.as_bytes())
     }
 
     /// The strong validator of the document: quoted lowercase hex of its
@@ -57,7 +57,7 @@ mod tests {
             .join(format!("anth-composition-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("chmod");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o711)).expect("chmod");
         dir
     }
 

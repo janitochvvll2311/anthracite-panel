@@ -1,7 +1,9 @@
 //! The state tree (§6.8): created once, never inferred.
 //!
-//! Directories are `0700` and files `0600`, and a symlink where a file or
-//! directory should be is a hard error rather than something to follow.
+//! The root is `0711` so a service uid can traverse it; every child is `0700`
+//! (`shared` is `0770`, the trust domain) and files are `0600`. A symlink where
+//! a file or directory should be is a hard error rather than something to
+//! follow.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -22,6 +24,11 @@ const COMPOSITION: &str = "composition.toml";
 const AUDIT: &str = "audit.jsonl";
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
+/// The root is traversable but not listable: a service needs to reach its own
+/// `{data}` and socket, while every child directory stays `0700`.
+const ROOT_MODE: u32 = 0o711;
+/// `{shared}` is the trust domain: every service keeps the engine gid.
+const SHARED_MODE: u32 = 0o770;
 
 /// What `check` found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +59,25 @@ pub fn load_composition(state: &Path) -> Result<Composition, Error> {
 /// Creates the tree if it is missing and checks the shape if it is not.
 pub fn ensure(root: &Path) -> Result<(), Error> {
     create_dir(root)?;
+    fs::set_permissions(root, fs::Permissions::from_mode(ROOT_MODE)).map_err(|error| {
+        Error::internal(format!(
+            "setting permissions on {}: {error}",
+            root.display()
+        ))
+    })?;
     for name in DIRS {
-        create_dir(&root.join(name))?;
+        let path = root.join(name);
+        create_dir(&path)?;
+        if *name == "shared" {
+            fs::set_permissions(&path, fs::Permissions::from_mode(SHARED_MODE)).map_err(
+                |error| {
+                    Error::internal(format!(
+                        "setting permissions on {}: {error}",
+                        path.display()
+                    ))
+                },
+            )?;
+        }
     }
     let composition = Composition::empty().to_toml()?;
     write_missing(&root.join(COMPOSITION), composition.as_bytes())?;
@@ -105,7 +129,7 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
                     root.display()
                 )));
             }
-            check_mode(root, &metadata, DIR_MODE)?;
+            check_mode(root, &metadata, ROOT_MODE)?;
         }
     }
 
@@ -130,7 +154,12 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
                 path.display()
             )));
         }
-        check_mode(&path, &metadata, DIR_MODE)?;
+        let expected = if *name == "shared" {
+            SHARED_MODE
+        } else {
+            DIR_MODE
+        };
+        check_mode(&path, &metadata, expected)?;
     }
 
     for name in FILES {
@@ -333,11 +362,23 @@ mod tests {
     fn the_tree_is_created_with_the_right_modes() {
         let root = scratch("create");
         ensure(&root).expect("ensure");
+        let root_mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(root_mode, ROOT_MODE, "the root should be 0711");
         for name in DIRS {
             let path = root.join(name);
             assert!(path.is_dir(), "{} should be a directory", path.display());
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, DIR_MODE, "{} should be 0700", path.display());
+            let expected = if *name == "shared" {
+                SHARED_MODE
+            } else {
+                DIR_MODE
+            };
+            assert_eq!(
+                mode,
+                expected,
+                "{} should be {expected:04o}",
+                path.display()
+            );
         }
         let composition = fs::read_to_string(root.join("composition.toml")).expect("read");
         let parsed = Composition::parse(&composition).expect("parse");

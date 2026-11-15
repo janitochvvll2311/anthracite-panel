@@ -38,7 +38,7 @@ not a sandbox by itself ([Security](security.md#services-and-the-sandbox)).
 
 | Placeholder | Path | Meaning |
 | --- | --- | --- |
-| `{socket}` | `$state/run/<app-id>.sock` | the private socket the service listens on; exactly one |
+| `{socket}` | `$state/run/<app-id>/<app-id>-<pid>.sock` | the private socket the service listens on; exactly one |
 | `{data}` | `$state/data/<app-id>` | the app's own `0700` directory; at most one |
 | `{shared}` | `$state/shared` | the service trust domain; at most one |
 
@@ -89,11 +89,19 @@ Launch, refusal, crash and stop are audited as `service.start`,
 `service.deny`, `service.crash` and `service.stop`. A refusal is a denial with
 the class and the reason, never a crash, and it is not retried.
 
-**The sandbox baseline is L0.** The child runs as the engine user; there is no
-per-app uid, no namespaces, no Landlock and no seccomp profile in 0.6. The class
-is a risk level, not isolation. Per-app filesystem roots, the port capability and
-the network policy are proposed in [§28](../design/28-service-sandbox.md) and are
-v0.7 work.
+**The sandbox is L0 plus L1.** The child keeps the L0 hygiene and gains a
+Landlock filesystem view built from the v4 `roots` plus the implicit
+directories; there are no namespaces and no seccomp profile in 0.7. When the
+engine runs as root, the service also gets a per-service uid and its `{data}`
+and socket directory are owned by it, so the engine state and another app's data
+stay unreadable even with a broad root. Without root, Landlock still applies but
+the uid layer does not; approve broad roots accordingly.
+
+A privileged listener (`< 1024`) works only when the engine holds
+`CAP_NET_BIND_SERVICE` (root, or the capability in a container). Every other
+capability is dropped; a declared listener without the capability is a
+`service.deny` that names the layer. The network policy (`egress`) is still
+intent until L2. See [§28](../design/28-service-sandbox.md).
 
 ## Third-party switch
 

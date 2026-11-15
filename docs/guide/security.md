@@ -39,19 +39,20 @@ and [§28](../design/28-service-sandbox.md).
 
 ## Services and the sandbox
 
-The class is a **risk** level, not isolation. In 0.6 a service runs as the engine
-user with the L0 baseline: its own session and process group, a cleared
-environment, no stdio, `no_new_privs`, `pdeathsig`, non-dumpable, umask `077`,
-core=0, `RLIMIT_NOFILE` 4096 and a process limit. It does **not** get a per-app
-uid, namespaces, Landlock, seccomp or cgroups; those layers are proposed in
-[§28](../design/28-service-sandbox.md) and are v0.7 work. A compromised `host`
-service can reach what the engine user can.
+The class is a **risk** level; the sandbox is separate. A service keeps the L0
+baseline (own session and process group, cleared environment, no stdio,
+`no_new_privs`, `pdeathsig`, non-dumpable, umask `077`, core=0,
+`RLIMIT_NOFILE` 4096 and a process limit) and gains **L1**: a Landlock view over
+its declared roots plus the implicit directories, and, when the engine runs as
+root, a per-service uid owning its `{data}` and socket directory. It still does
+**not** get namespaces, seccomp or cgroups; those remain proposed in
+[§28](../design/28-service-sandbox.md).
 
-What limits the damage today: the operator sees the class and argv at approval,
-the third-party switch is off by default in a release, the service gets only the
-paths in its argv, and the audit records every launch and denial. A deployment
-that needs enforced filesystem or network isolation waits for the later layers;
-do not describe the current model as a sandbox.
+What limits the damage: the operator sees the roots, listeners and class at
+approval; egress is still intent until L2; the third-party switch is off by
+default in a release; the service gets only the paths in its grant; and the
+audit records every launch, denial and refusal layer. A deployment that needs
+enforced network isolation waits for L2.
 
 ## Secrets
 
@@ -81,8 +82,9 @@ do not describe the current model as a sandbox.
 
 - **No CRL.** Revocation is uninstall, keyring removal, or a release-key
   rotation; an old binary keeps trusting the key it was built with.
-- **No enforced service sandbox** beyond L0; the class is risk, and services share
-  the engine user.
+- **No namespaces, seccomp or cgroups**; L1 confines the filesystem and, under
+  root, the uid. Egress is intent until L2, and a service with a broad root is
+  as broad as the operator approved.
 - **One operator.** There are no roles or per-user profiles; the audit names the
   actor, and the panel shares the operator session.
 - **No per-user isolation in a shared state.** One engine state is one tenant;

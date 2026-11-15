@@ -2,8 +2,8 @@
 
 > Part of the [design index](../../DESIGN.md). Phase 9 of
 > [§18](18-v0.6-plan.md), then phase 0b of [§29](29-v0.7-plan.md). Status:
-> **L0 implemented in v0.6.0**; **L1 and the port half of L3 are v0.7.0 scope**
-> (D19); L2, the seccomp half of L3 and L4 remain proposed.
+> **L0 implemented in v0.6.0**; **L1 and the port half of L3 implemented in
+> v0.7.0** (D19); L2, the seccomp half of L3 and L4 remain proposed.
 
 ## 1. The problem
 
@@ -69,21 +69,22 @@ group, the umask and the limits, and the missing layer is a documented gap.
 Two properties of these values are easy to misread:
 
 - **`RLIMIT_NPROC` counts threads, not just processes, and the kernel enforces it
-  per real user id.** Every service still runs as the engine user, so the limit
-  is shared with the engine and with the other services. A value below the
-  engine's own thread count makes every `fork` in a service fail, and the
-  service looks broken instead of denied.
+  per real user id.** A service under its own uid gets its own budget; an
+  unprivileged engine shares the limit with the engine and the other services.
+  A value below the engine's own thread count makes every `fork` in a service
+  fail, and the service looks broken instead of denied.
 - **`PR_SET_DUMPABLE(0)` makes `/proc/<pid>` root-owned.** A service that reads
   another process's proc files, or a debugger attached by the same user, loses
   that access.
-- **`umask(077)`** is defence in depth, not isolation: services share the engine
-  uid, so a `0600` file in `{shared}` is still readable by another service. It
-  matters once each service gets its own uid.
+- **`umask(077)`** is defence in depth, not isolation: inside `{shared}` every
+  service keeps the engine gid, so a `0600` file is still readable by a peer
+  that runs under the same uid (the unprivileged case). With per-service uids it
+  is one more layer.
 
-L0 is not a complete sandbox. It removes the cheap escapes and gives the later
-layers a stable baseline; it does **not** isolate services from each other,
-because they share the engine user. That needs a per-app uid (L1) and a cgroup
-per service (L4).
+L0 alone is not a complete sandbox: it removes the cheap escapes and gives the
+later layers a stable baseline. L1 adds the filesystem view and, when the engine
+is root, the per-app uid; isolation from a resource-hungry service still needs
+the cgroup per service (L4).
 
 A launch the kernel or the supervisor refuses is audited as `service.deny` with
 the class and the reason, never as `service.crash`, and it is not retried: the
@@ -95,10 +96,18 @@ supervisor cannot fix a refusal by trying again.
   `roots = ["{data}", "{shared}", "/etc/ssl:ro"]` or an equivalent v4 field
   ([§29](29-v0.7-plan.md)).
 - Approval shows every root, its mode and the class.
-- The supervisor applies **Landlock** (preferred, unprivileged) or a mount
-  namespace with read-only binds when Landlock is unavailable.
+- The supervisor applies **Landlock** to every service: the declared roots plus
+  the implicit directories (`{socket}`, `{data}`, `{shared}`, `{broker}`) and the
+  directory of the staged binary. A kernel without Landlock refuses the launch.
+- When the engine runs as root, each service gets a **per-service uid** derived
+  from its app id; `{data}` and its socket directory are `0700` and owned by that
+  uid, `{shared}` is `0770` with the engine gid, and the state root is `0711`
+  (traversable, not listable). The verified binary is copied into the service's
+  socket directory so the bundle tree stays unreadable.
 - A service cannot see the engine state, another app's `{data}`, or a path it
-  did not declare.
+  did not declare. Without root the uid layer is unavailable; Landlock still
+  applies, and the release runs the engine as root or with the equivalent
+  capabilities (D19).
 - `{socket}`, `{data}` and `{shared}` are always implicit; a second declaration
   is an error.
 
@@ -118,10 +127,13 @@ A private network namespace is **not** the default for `socket`: a proxy or an
 ACME client needs the host network. The class says which reach is approved; the
 sandbox narrows everything else.
 
-### L3 — capabilities and seccomp (port half in v0.7.0)
+### L3 — capabilities and seccomp (port half implemented in v0.7.0)
 
-- Drop the capability bounding set to the class and the declared ports:
-  `CAP_NET_BIND_SERVICE` for a privileged listener, `CAP_NET_ADMIN` for `admin`,
+- **Implemented:** every capability is dropped from the bounding set except
+  `CAP_NET_BIND_SERVICE`, which is installed as the only permitted, effective
+  and ambient capability when a declared listener is below 1024. Without the
+  capability in the engine, the launch is a `service.deny` naming the layer.
+- **Proposed:** widen the class set to `CAP_NET_ADMIN` for `admin` and
   `CAP_SYS_ADMIN` only for `host`/`admin` where the argv needs a mount.
 - A seccomp allowlist per class: no `ptrace`, no `bpf`, no `keyctl`, no
   `userfaultfd`, no module loading, no `kexec`, no namespace creation after
