@@ -70,17 +70,18 @@ pub struct ServiceView {
 }
 
 impl ServiceView {
-    /// The mode is a property of this engine, not of the bundle: L1 enforces
-    /// roots, the port capability covers privileged listeners, and egress waits
-    /// for network isolation.
+    /// The mode is a property of this engine, not of the bundle. Phase 0a only
+    /// freezes the intent: L1 and the port capability arrive in 0b, so until
+    /// then every rule is published as `intent` rather than claiming a
+    /// confinement the daemon does not yet apply.
     pub fn of(service: &ServiceSection) -> Self {
         Self {
             class: service.class,
             roots: service.roots.clone(),
             listen: service.listen.clone(),
             egress: service.egress.clone(),
-            roots_mode: IntentMode::Enforced,
-            listen_mode: IntentMode::Capability,
+            roots_mode: IntentMode::Intent,
+            listen_mode: IntentMode::Intent,
             egress_mode: IntentMode::Intent,
         }
     }

@@ -387,8 +387,9 @@ async fn a_v4_bundle_shows_its_service_intent() {
         app["service"]["egress"],
         serde_json::json!(["example.com:443"])
     );
-    assert_eq!(app["service"]["roots_mode"], "enforced");
-    assert_eq!(app["service"]["listen_mode"], "capability");
+    // Phase 0a freezes the intent only; L1 and the port capability land in 0b.
+    assert_eq!(app["service"]["roots_mode"], "intent");
+    assert_eq!(app["service"]["listen_mode"], "intent");
     assert_eq!(app["service"]["egress_mode"], "intent");
 
     let (status, approval) = get(state, "/api/engine/apps/org.example.v4service/approval").await;

@@ -948,8 +948,13 @@ fn check_roots(roots: &[String]) -> Result<(), Error> {
                 "root `{root}` is not a usable path"
             )));
         }
-        let (path, _read_only) = match root.strip_suffix(":ro") {
-            Some(path) => (path, true),
+        let (path, _read_only) = match root.rsplit_once(':') {
+            Some((path, "ro")) => (path, true),
+            Some(_) => {
+                return Err(Error::invalid(format!(
+                    "root `{root}` has an unknown mode; only `:ro` is accepted"
+                )))
+            }
             None => (root.as_str(), false),
         };
         if matches!(path, "{data}" | "{shared}" | "{socket}" | "{broker}") {
@@ -962,12 +967,12 @@ fn check_roots(roots: &[String]) -> Result<(), Error> {
                 "root `{path}` is not an absolute path"
             )));
         }
-        if path.contains('\\')
+        let canonical = path == "/"
             || path
                 .split('/')
                 .skip(1)
-                .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-        {
+                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
+        if path.contains('\\') || !canonical {
             return Err(Error::invalid(format!(
                 "root `{path}` is not a canonical absolute path"
             )));
@@ -996,6 +1001,11 @@ fn check_listeners(listen: &[String]) -> Result<(), Error> {
             })?;
         let tcp = listener.starts_with("tcp:");
         let port = if let Some(after) = rest.strip_prefix('[') {
+            if !tcp {
+                return Err(Error::invalid(format!(
+                    "listener `{listener}`: `udp:` takes a port, not an address"
+                )));
+            }
             let (ip, port) = after.split_once("]:").ok_or_else(|| {
                 Error::invalid(format!(
                     "listener `{listener}` has an unclosed IPv6 address"
@@ -1116,7 +1126,10 @@ fn is_hostname(host: &str) -> bool {
 }
 
 fn check_port(port: &str, entry: &str) -> Result<(), Error> {
-    if port.is_empty() || (port.len() > 1 && port.starts_with('0')) {
+    if port.is_empty()
+        || !port.bytes().all(|byte| byte.is_ascii_digit())
+        || (port.len() > 1 && port.starts_with('0'))
+    {
         return Err(Error::invalid(format!(
             "`{entry}` does not have a canonical port"
         )));
@@ -2159,13 +2172,38 @@ interface = "example:proxy/edge@1.0.0"
     }
 
     #[test]
+    fn the_whole_filesystem_is_a_valid_root() {
+        let text = V4.replace(
+            "roots = [\"/etc/ssl:ro\", \"/srv/data\"]",
+            "roots = [\"/\"]",
+        );
+        let manifest = Manifest::parse(&text).expect("parse");
+        manifest.validate().expect("`/` is a legal broad root");
+        assert_eq!(manifest.service.as_ref().expect("service").roots, ["/"]);
+    }
+
+    #[test]
+    fn an_unknown_root_mode_is_refused() {
+        for root in ["/srv:rw", "/srv:RO", "/srv:"] {
+            let text = V4.replace(
+                "roots = [\"/etc/ssl:ro\", \"/srv/data\"]",
+                &format!("roots = [\"{root}\"]"),
+            );
+            let error = v4(&text).expect_err(root);
+            assert!(error.message().contains("unknown mode"), "{error}");
+        }
+    }
+
+    #[test]
     fn listeners_and_egress_have_a_closed_grammar() {
         for listener in [
             "http:8080",
             "tcp:0",
             "tcp:65536",
             "tcp:0443",
+            "tcp:+443",
             "udp:127.0.0.1:53",
+            "udp:[::1]:53",
             "tcp:[::1]",
         ] {
             let text = V4.replace(
