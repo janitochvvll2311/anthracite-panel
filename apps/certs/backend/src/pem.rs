@@ -207,7 +207,11 @@ pub fn chain_ok(certs: &[CertInfo]) -> bool {
     let Some(last) = parsed.last() else {
         return false;
     };
-    last.issuer().as_raw() == last.subject().as_raw() && last.verify_signature(None).is_ok()
+    let closed =
+        last.issuer().as_raw() == last.subject().as_raw() && last.verify_signature(None).is_ok();
+    // A `fullchain.pem` from certbot or ACME stops at an intermediate: the last
+    // certificate is a CA that links, but the root is not shipped with it.
+    closed || (parsed.len() > 1 && last.is_ca())
 }
 
 fn hex(bytes: &[u8]) -> String {

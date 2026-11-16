@@ -938,4 +938,46 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn a_fullchain_ending_in_an_intermediate_is_valid() {
+        let (service, root) = service();
+        let mut ca_params = CertificateParams::new(vec!["root.test".to_string()]).unwrap();
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "root.test");
+        let ca_key = RcgenKey::generate().unwrap();
+        let ca = ca_params.self_signed(&ca_key).unwrap();
+        let mut intermediate_params =
+            CertificateParams::new(vec!["intermediate.test".to_string()]).unwrap();
+        intermediate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        intermediate_params
+            .distinguished_name
+            .push(DnType::CommonName, "intermediate.test");
+        let intermediate_key = RcgenKey::generate().unwrap();
+        let intermediate = intermediate_params
+            .signed_by(&intermediate_key, &ca, &ca_key)
+            .unwrap();
+        let mut leaf_params = CertificateParams::new(vec!["leaf.test".to_string()]).unwrap();
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "leaf.test");
+        let leaf_key = RcgenKey::generate().unwrap();
+        let leaf = leaf_params
+            .signed_by(&leaf_key, &intermediate, &intermediate_key)
+            .unwrap();
+        let record = import(
+            &service,
+            &leaf.pem(),
+            &intermediate.pem(),
+            &leaf_key.serialize_pem(),
+        )
+        .expect("fullchain");
+        let id = record["id"].as_str().unwrap();
+        let validation = service.validate(id);
+        assert_eq!(validation["chain-ok"], true, "{validation}");
+        assert_eq!(validation["ok"], true, "{validation}");
+        let _ = fs::remove_dir_all(root);
+    }
 }

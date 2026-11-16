@@ -167,7 +167,10 @@ function mount(root, context) {
     const close = document.createElement("button");
     close.type = "button";
     close.textContent = "Close";
-    actions.append(validate, publish, remove, close);
+    if (cert["fingerprint-sha256"]) {
+      actions.append(validate, publish, remove);
+    }
+    actions.append(close);
     if (cert.source === "acme") {
       const renew = document.createElement("label");
       renew.className = "ct-check";
