@@ -52,6 +52,10 @@
             "verb": "restore"
           }
         ],
+        "exports": [
+          "anthracite:fs/read@1.2.0",
+          "anthracite:fs/write@1.2.0"
+        ],
         "icon": "folder",
         "id": "org.anthracite.fs",
         "risk": "host",
@@ -210,6 +214,10 @@
             "verb": "session-close"
           }
         ],
+        "exports": [
+          "anthracite:terminal/terminal@1.0.0",
+          "anthracite:terminal/subscription@1.0.0"
+        ],
         "icon": "terminal",
         "id": "org.anthracite.terminal",
         "risk": "host",
@@ -300,6 +308,9 @@
             "verb": "process-spawn"
           }
         ],
+        "exports": [
+          "anthracite:proc/proc@1.1.0"
+        ],
         "icon": "activity",
         "id": "org.anthracite.proc",
         "risk": "admin",
@@ -389,6 +400,9 @@
             "interface": "anthracite:net/net@1.2.0",
             "verb": "route-remove"
           }
+        ],
+        "exports": [
+          "anthracite:net/net@1.2.0"
         ],
         "icon": "network",
         "id": "org.anthracite.net",
@@ -504,6 +518,9 @@
             "verb": "policy"
           }
         ],
+        "exports": [
+          "anthracite:firewall/firewall@1.0.0"
+        ],
         "icon": "shield",
         "id": "org.anthracite.firewall",
         "risk": "host",
@@ -607,6 +624,9 @@
             "interface": "anthracite:storage/storage@1.2.0",
             "verb": "unmount"
           }
+        ],
+        "exports": [
+          "anthracite:storage/storage@1.2.0"
         ],
         "icon": "disk",
         "id": "org.anthracite.storage",
@@ -718,6 +738,9 @@
             "interface": "anthracite:accounts/accounts@1.2.0",
             "verb": "group-delete"
           }
+        ],
+        "exports": [
+          "anthracite:accounts/accounts@1.2.0"
         ],
         "icon": "users",
         "id": "org.anthracite.accounts",
@@ -846,6 +869,9 @@
             "interface": "anthracite:home/host@1.0.0",
             "verb": "info"
           }
+        ],
+        "exports": [
+          "anthracite:home/host@1.0.0"
         ],
         "icon": "web/icon.svg",
         "icon_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

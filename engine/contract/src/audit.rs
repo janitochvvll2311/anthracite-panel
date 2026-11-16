@@ -53,6 +53,8 @@ pub enum AuditAction {
     ServiceCrash,
     #[serde(rename = "service.deny")]
     ServiceDeny,
+    #[serde(rename = "broker.call")]
+    BrokerCall,
 }
 
 impl AuditAction {
@@ -75,6 +77,7 @@ impl AuditAction {
         AuditAction::ServiceStop,
         AuditAction::ServiceCrash,
         AuditAction::ServiceDeny,
+        AuditAction::BrokerCall,
     ];
 }
 
@@ -187,6 +190,7 @@ mod tests {
                 "service.stop",
                 "service.crash",
                 "service.deny",
+                "broker.call",
             ]
         );
     }

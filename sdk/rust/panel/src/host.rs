@@ -135,9 +135,19 @@ impl Host {
                 )))
                 .with_restart(Arc::new(RestartProcess { stop: stop.clone() }))
                 .with_auth(auth)
+                .with_service_uid(Arc::new(|id: &anth_contract::AppId| {
+                    anth_engine::sandbox::allocate_uid(id.as_str()).ok()
+                }))
                 .booting(),
         );
 
+        if let Err(error) = state.start_brokers() {
+            logger.warn(&format!(
+                "the broker did not start: {}: {}; serving so it can be repaired",
+                error.kind().code(),
+                error.message()
+            ));
+        }
         let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
         anth_engine::socket::restrict(&config.socket)?;
         logger.info(&format!("listening on {}", config.socket.display()));

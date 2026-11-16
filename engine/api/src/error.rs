@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 /// An error rendered with the one envelope of §7.11.
+#[derive(Debug)]
 pub struct ApiError(pub Error);
 
 impl From<Error> for ApiError {

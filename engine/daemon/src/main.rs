@@ -193,6 +193,9 @@ async fn run(args: Args) -> Result<(), Error> {
             )))
             .with_restart(Arc::new(RestartProcess { stop: stop.clone() }))
             .with_auth(auth)
+            .with_service_uid(Arc::new(|id: &anth_contract::AppId| {
+                anth_engine::sandbox::allocate_uid(id.as_str()).ok()
+            }))
             .booting(),
     );
     let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
@@ -241,6 +244,13 @@ async fn run(args: Args) -> Result<(), Error> {
         None => None,
     };
 
+    if let Err(error) = state.start_brokers() {
+        logger.warn(&format!(
+            "the broker did not start: {}: {}; serving so it can be repaired",
+            error.kind().code(),
+            error.message()
+        ));
+    }
     let composition = state.composition.read().expect("composition").clone();
     let report = anth_engine::boot::start_composed(
         &supervisor,

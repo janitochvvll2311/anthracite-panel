@@ -5,17 +5,18 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anth_api::{router, EngineState, PeerUid};
+use anth_compose::audit::AuditLog;
 use anth_compose::grant::GrantStore;
 use anth_compose::keys::Distribution;
 use anth_compose::registry::Registry;
 use anth_contract::manifest::{Manifest, ServiceClass};
-use anth_contract::{AppId, Composition, Grant, InterfaceId, Risk, GRANT_VERSION};
+use anth_contract::{AppId, Composition, Grant, InterfaceId, Outcome, Risk, GRANT_VERSION};
 use axum::body::{to_bytes, Body};
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
@@ -367,6 +368,282 @@ async fn composition(state: Arc<EngineState>) -> Value {
 
 fn cleanup(dir: PathBuf) {
     let _ = fs::remove_dir_all(dir);
+}
+
+struct EchoCaller;
+
+impl anth_api::AppCaller for EchoCaller {
+    fn call<'a>(
+        &'a self,
+        _app: &'a str,
+        _interface: &'a str,
+        _function: &'a str,
+        input: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<serde_json::Value, anth_contract::Error>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Ok(serde_json::json!({"echo": input})) })
+    }
+}
+
+#[tokio::test]
+async fn a_broker_call_uses_the_grant_and_is_audited() {
+    let (_, dir) = fixture_state(
+        "golden.toml",
+        &["org.example.provider", "org.example.consumer"],
+    );
+    let composition = Composition::parse(
+        &fs::read_to_string(fixtures().join("compositions/golden.toml")).expect("composition"),
+    )
+    .expect("parse");
+    let state = Arc::new(
+        EngineState::new(1000)
+            .with_composition(composition)
+            .with_apps(&dir, 1 << 20, false, false)
+            .with_caller(Arc::new(EchoCaller)),
+    );
+    let value = anth_api::broker::call(
+        &state,
+        "org.example.consumer",
+        &serde_json::json!({
+            "interface": "example:provider/greeting@1.0.0",
+            "function": "greet",
+            "input": {"name": "Ada"}
+        }),
+    )
+    .await
+    .expect("brokered call");
+    assert_eq!(value["echo"]["name"], "Ada");
+
+    let denied = anth_api::broker::call(
+        &state,
+        "org.example.consumer",
+        &serde_json::json!({
+            "interface": "example:provider/other@1.0.0",
+            "function": "greet"
+        }),
+    )
+    .await
+    .expect_err("not imported");
+    assert_eq!(denied.0.kind(), anth_contract::ErrorKind::Denied);
+
+    let bridge = anth_api::broker::call(
+        &state,
+        "org.example.consumer",
+        &serde_json::json!({
+            "interface": anth_api::broker::AUDIT_INTERFACE,
+            "function": "record",
+            "input": {"action": "proxy.apply", "detail": {"password": "hidden", "host": "a"}}
+        }),
+    )
+    .await
+    .unwrap_or_else(|anth_api::ApiError(error)| panic!("audit bridge: {error}"));
+    assert_eq!(bridge["recorded"], true);
+
+    let entries = AuditLog::new(&dir).entries().expect("audit");
+    let calls: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.action == anth_contract::AuditAction::BrokerCall)
+        .collect();
+    assert!(calls.len() >= 2, "{entries:?}");
+    let denials: Vec<_> = calls
+        .iter()
+        .filter(|entry| entry.result == Outcome::Denied)
+        .collect();
+    assert!(
+        denials.iter().any(|entry| {
+            entry
+                .detail
+                .as_ref()
+                .and_then(|detail| detail["interface"].as_str())
+                == Some("example:provider/other@1.0.0")
+        }),
+        "the denied call is audited: {entries:?}"
+    );
+    let bridged = calls
+        .iter()
+        .find(|entry| {
+            entry
+                .detail
+                .as_ref()
+                .and_then(|detail| detail["bridge"].as_bool())
+                == Some(true)
+        })
+        .expect("bridge entry");
+    let detail = &bridged.detail.as_ref().expect("detail")["detail"];
+    assert!(detail.get("password").is_none(), "{detail}");
+    assert_eq!(detail["host"], "a");
+
+    // The socket the service actually gets: start the brokers and speak the
+    // protocol over `state/broker/<id>.sock`.
+    state.start_brokers().expect("brokers");
+    let socket = anth_api::broker::socket_path(
+        &dir,
+        &anth_contract::AppId::parse("org.example.consumer").expect("id"),
+    );
+    let broker_dir = dir.join("broker");
+    let mode = fs::metadata(&broker_dir)
+        .expect("broker dir")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o711, "a service traverses the broker directory");
+    let socket_meta = fs::metadata(&socket).expect("socket");
+    assert_eq!(
+        socket_meta.permissions().mode() & 0o777,
+        0o600,
+        "the socket is private to its service"
+    );
+    if unsafe { libc::geteuid() } == 0 {
+        assert_eq!(
+            socket_meta.uid(),
+            anth_compose::service_uid("org.example.consumer"),
+            "the socket belongs to the service uid"
+        );
+    }
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("connect");
+    let body = br#"{"interface":"example:provider/greeting@1.0.0","function":"greet","input":{"name":"Ada"}}"#;
+    let head = format!(
+        "POST /__anth/call HTTP/1.1\r\nHost: anthracite\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await.expect("head");
+    stream.write_all(body).await.expect("body");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.expect("answer");
+    let text = String::from_utf8_lossy(&answer);
+    assert!(text.contains(r#""ok""#), "{text}");
+    assert!(text.contains(r#""echo""#), "{text}");
+    cleanup(dir);
+}
+
+struct StreamCaller;
+
+impl anth_api::AppCaller for StreamCaller {
+    fn call<'a>(
+        &'a self,
+        _app: &'a str,
+        _interface: &'a str,
+        _function: &'a str,
+        _input: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<serde_json::Value, anth_contract::Error>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Ok(serde_json::json!({})) })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        _app: &'a str,
+        _interface: &'a str,
+        _function: &'a str,
+        _input: serde_json::Value,
+    ) -> anth_api::StreamFuture<'a> {
+        Box::pin(async move {
+            let chunks: Vec<Result<Vec<u8>, anth_contract::Error>> = vec![
+                Ok(b"one".to_vec()),
+                Ok(b"two".to_vec()),
+                Ok(b"three".to_vec()),
+            ];
+            Ok(Box::pin(futures_util::stream::iter(chunks)) as anth_api::ChunkStream)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_broker_stream_ends_exhausted_at_the_provider_budget() {
+    let dir = scratch();
+    let apps = dir.join("apps");
+    fs::create_dir_all(&apps).expect("apps");
+    fs::set_permissions(&apps, fs::Permissions::from_mode(0o700)).expect("chmod");
+    for (fixture, id) in APPS {
+        copy_tree(&fixtures().join("apps").join(fixture), &apps.join(id));
+    }
+    // A provider that may emit four bytes in total: the second three-byte chunk
+    // is over budget, so the broker must end the stream with `exhausted`.
+    let manifest = apps.join("org.example.provider/manifest.toml");
+    let mut text = fs::read_to_string(&manifest).expect("manifest");
+    text.push_str("\n[limits]\nbytes-total = 4\n");
+    fs::write(&manifest, text).expect("limits");
+    approve(&dir, "org.example.provider");
+    approve(&dir, "org.example.consumer");
+    let composition = Composition::parse(
+        &fs::read_to_string(fixtures().join("compositions/golden.toml")).expect("composition"),
+    )
+    .expect("parse");
+    let state = Arc::new(
+        EngineState::new(1000)
+            .with_composition(composition)
+            .with_apps(&dir, 1 << 20, false, false)
+            .with_caller(Arc::new(StreamCaller)),
+    );
+    state.start_brokers().expect("brokers");
+    let socket =
+        anth_api::broker::socket_path(&dir, &AppId::parse("org.example.consumer").expect("id"));
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("connect");
+    let body = br#"{"interface":"example:provider/greeting@1.0.0","function":"chunks","input":{}}"#;
+    let head = format!(
+        "POST /__anth/stream HTTP/1.1\r\nHost: anthracite\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await.expect("head");
+    stream.write_all(body).await.expect("body");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.expect("answer");
+    let text = String::from_utf8_lossy(&answer);
+    assert!(text.contains(r#""chunk":"b25l""#), "{text}");
+    assert!(text.contains(r#""code":"exhausted""#), "{text}");
+    let entries = AuditLog::new(&dir).entries().expect("audit");
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.result == Outcome::Failed && entry.detail.is_some()),
+        "{entries:?}"
+    );
+    cleanup(dir);
+}
+
+#[tokio::test]
+async fn a_truncated_broker_body_is_an_error_not_a_panic() {
+    let (state, dir) = fixture_state(
+        "golden.toml",
+        &["org.example.provider", "org.example.consumer"],
+    );
+    state.start_brokers().expect("brokers");
+    let socket =
+        anth_api::broker::socket_path(&dir, &AppId::parse("org.example.consumer").expect("id"));
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("connect");
+    // Announce more bytes than the request carries and close: the broker must
+    // answer a typed 400 instead of indexing out of bounds and aborting.
+    stream
+        .write_all(
+            b"POST /__anth/call HTTP/1.1\r\nHost: anthracite\r\nContent-Length: 100\r\n\r\n{",
+        )
+        .await
+        .expect("head");
+    stream.shutdown().await.expect("shutdown");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.expect("answer");
+    let text = String::from_utf8_lossy(&answer);
+    assert!(text.starts_with("HTTP/1.1 400"), "{text}");
+    cleanup(dir);
 }
 
 #[tokio::test]

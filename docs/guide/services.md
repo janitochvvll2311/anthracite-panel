@@ -71,6 +71,29 @@ exported by the bundle and approved, and the class/argv must match. A call is
 bounded by the app's limits and is audited with the caller, the callee and the
 result.
 
+## Calling another service: the broker
+
+A service that imports an interface calls its provider through `{broker}`, not
+through `/api/apps/...`:
+
+```rust
+// `broker_path` is the value of `{broker}` in the service argv.
+let broker = anth_service::Broker::new(broker_path);
+let answer = broker
+    .call("anthracite:fs/read@1.2.0", "list", serde_json::json!({"path": "/"}))
+    .await?;
+broker.audit("proxy.apply", serde_json::json!({"host": "a"})).await?;
+```
+
+The engine owns the socket and checks the caller's grant: an interface the
+manifest does not import is a denial, and every call is audited as
+`broker.call` with the caller, the provider, the function and the outcome. The
+provider's own limits apply. `anth:audit/record@1.0.0` is served on the same
+socket and drops secret-shaped keys from the detail before writing it.
+
+`GET /api/engine/composition` lists each app's `exports`, so a panel or a
+manager can find the provider of an interface without reading a manifest.
+
 ## Supervision
 
 At boot the supervisor:
