@@ -18,7 +18,7 @@ not through the public router.
   `SO_PEERCRED` before reading a request, so another service cannot open a
   peer's socket and inherit its grant. Without root the services share the
   engine uid and that check cannot tell them apart (the uid-layer gap in
-  [Services](../../guide/services.md#supervision)). The service posts
+  [Services](../guide/services.md#supervision)). The service posts
   `interface#function` plus `input` to `/__anth/call`; the broker checks that
   the caller's grant imports the interface, resolves the composed provider,
   reuses `AppCaller` (and therefore the provider's budget), and audits every call
