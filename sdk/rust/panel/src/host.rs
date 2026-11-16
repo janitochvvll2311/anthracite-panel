@@ -138,6 +138,7 @@ impl Host {
                 .booting(),
         );
 
+        state.start_brokers()?;
         let socket = anth_engine::socket::bind(&config.socket, &logger).await?;
         anth_engine::socket::restrict(&config.socket)?;
         logger.info(&format!("listening on {}", config.socket.display()));

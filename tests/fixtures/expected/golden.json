@@ -21,6 +21,9 @@
             "verb": "greet"
           }
         ],
+        "exports": [
+          "example:provider/greeting@1.0.0"
+        ],
         "id": "org.example.provider",
         "risk": "read",
         "routes": [
@@ -45,6 +48,9 @@
       },
       {
         "cli": [],
+        "exports": [
+          "example:consumer/note@1.0.0"
+        ],
         "id": "org.example.consumer",
         "risk": "read",
         "routes": [],

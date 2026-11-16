@@ -11,13 +11,22 @@ mechanism: none mentions a certificate, a container or a store.
 A service must be able to call another service's interface through the grant,
 not through the public router.
 
-- **Today:** a route is the only door into an app (D-Cli-Invocation), and a
-  service sees `interface`, `function` and `input`, never `/api/apps/...`.
-- **Needed:** a private broker socket, handed to the service as `{broker}` (a new
-  v4 placeholder beside `{socket}`), and a generated service client. The broker
-  resolves the interface to the composed provider, applies the same grant and
-  budget checks as `AppCaller`, and audits the call. It is the service half of
-  the shim in [§19 §10](19-v0.6-baseline.md#10-adapter-and-shim).
+- **Implemented in v0.7.0 (phase 0c):** the engine binds
+  `state/broker/<app-id>.sock` for every composed app and hands the path over as
+  `{broker}`. The service posts `interface#function` plus `input` to
+  `/__anth/call`; the broker checks that the caller's grant imports the
+  interface, resolves the composed provider, reuses `AppCaller` (and therefore
+  the provider's budget), and audits every call as `broker.call`. A call to an
+  interface the caller does not import is a denial with the caller in the record.
+- **Audit bridge:** `anth:audit/record@1.0.0` is served on the same socket; the
+  engine sanitizes the app-supplied detail before writing it.
+- **Client:** `anth_service::Broker` speaks the protocol for a service author;
+  `SurfaceApp.exports` lists every app's interfaces so a panel can find a
+  provider without reading a manifest.
+- **Why it gates the plan:** ACME imports the certificate store; a future
+  DNS-01 provider bundle would be the second typed consumer. A file drop or a
+  panel courier would put private keys or operator authority in the wrong
+  process.
 - **Why it gates the plan:** ACME imports the certificate store; a future
   DNS-01 provider bundle would be the second typed consumer. A file drop or a
   panel courier would put private keys or operator authority in the wrong

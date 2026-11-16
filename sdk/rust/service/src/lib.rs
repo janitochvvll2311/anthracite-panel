@@ -364,6 +364,9 @@ pub fn read_error(payload: &[u8]) -> Option<Error> {
     })
 }
 
+pub mod broker;
+pub use broker::Broker;
+
 #[cfg(test)]
 mod tests {
     use super::*;

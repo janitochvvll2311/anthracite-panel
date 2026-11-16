@@ -186,6 +186,10 @@ pub struct SurfaceApp {
     /// CLI verbs (§7.9).
     #[serde(default)]
     pub cli: Vec<SurfaceCli>,
+    /// Interfaces the app exports, so a client can find a provider by interface
+    /// without reading the manifest (§22).
+    #[serde(default)]
+    pub exports: Vec<InterfaceId>,
 }
 
 /// One HTTP route of a running app.
@@ -458,6 +462,9 @@ mod tests {
                             .expect("interface"),
                         function: "list".to_string(),
                     }],
+                    exports: vec![
+                        InterfaceId::parse("example:notes/notes@1.0.0").expect("interface")
+                    ],
                 }],
                 degraded: vec![DegradedApp {
                     app: AppId::parse("org.example.consumer").expect("id"),

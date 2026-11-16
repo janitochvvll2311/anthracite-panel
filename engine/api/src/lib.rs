@@ -178,6 +178,14 @@ impl EngineState {
         self.ready.store(true, Ordering::Release);
     }
 
+    /// Starts the private broker for every composed app. Called by the host
+    /// before it starts services, so a service that connects at boot finds its
+    /// socket. Idempotent for the process: a second call replaces stale
+    /// listeners.
+    pub fn start_brokers(self: &Arc<Self>) -> Result<(), Error> {
+        broker::start_all(self)
+    }
+
     pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
@@ -829,6 +837,12 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
+        let exports = found
+            .manifest
+            .export
+            .iter()
+            .map(|export| InterfaceId::parse(&export.interface))
+            .collect::<Result<Vec<_>, Error>>()?;
         apps.push(SurfaceApp {
             id: id.clone(),
             version: found.manifest.app.version.clone(),
@@ -838,6 +852,7 @@ fn surface_view(resolution: &Resolution, installed: &[InstalledApp]) -> Result<S
             routes,
             slots,
             cli,
+            exports,
         });
     }
     let degraded = resolution
@@ -1935,6 +1950,7 @@ fn surface_slot(slot: &SlotSection) -> SurfaceSlot {
     }
 }
 
+pub mod broker;
 mod error;
 mod guard;
 mod session;

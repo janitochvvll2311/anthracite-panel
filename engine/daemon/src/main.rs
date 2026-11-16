@@ -241,6 +241,7 @@ async fn run(args: Args) -> Result<(), Error> {
         None => None,
     };
 
+    state.start_brokers()?;
     let composition = state.composition.read().expect("composition").clone();
     let report = anth_engine::boot::start_composed(
         &supervisor,

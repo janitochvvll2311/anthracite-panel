@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anth_api::{router, EngineState, PeerUid};
+use anth_compose::audit::AuditLog;
 use anth_compose::grant::GrantStore;
 use anth_compose::keys::Distribution;
 use anth_compose::registry::Registry;
@@ -367,6 +368,126 @@ async fn composition(state: Arc<EngineState>) -> Value {
 
 fn cleanup(dir: PathBuf) {
     let _ = fs::remove_dir_all(dir);
+}
+
+struct EchoCaller;
+
+impl anth_api::AppCaller for EchoCaller {
+    fn call<'a>(
+        &'a self,
+        _app: &'a str,
+        _interface: &'a str,
+        _function: &'a str,
+        input: serde_json::Value,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<serde_json::Value, anth_contract::Error>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Ok(serde_json::json!({"echo": input})) })
+    }
+}
+
+#[tokio::test]
+async fn a_broker_call_uses_the_grant_and_is_audited() {
+    let (_, dir) = fixture_state(
+        "golden.toml",
+        &["org.example.provider", "org.example.consumer"],
+    );
+    let composition = Composition::parse(
+        &fs::read_to_string(fixtures().join("compositions/golden.toml")).expect("composition"),
+    )
+    .expect("parse");
+    let state = Arc::new(
+        EngineState::new(1000)
+            .with_composition(composition)
+            .with_apps(&dir, 1 << 20, false, false)
+            .with_caller(Arc::new(EchoCaller)),
+    );
+    let value = anth_api::broker::call(
+        &state,
+        "org.example.consumer",
+        &serde_json::json!({
+            "interface": "example:provider/greeting@1.0.0",
+            "function": "greet",
+            "input": {"name": "Ada"}
+        }),
+    )
+    .await
+    .expect("brokered call");
+    assert_eq!(value["echo"]["name"], "Ada");
+
+    let denied = anth_api::broker::call(
+        &state,
+        "org.example.consumer",
+        &serde_json::json!({
+            "interface": "example:provider/other@1.0.0",
+            "function": "greet"
+        }),
+    )
+    .await
+    .expect_err("not imported");
+    assert_eq!(denied.0.kind(), anth_contract::ErrorKind::Denied);
+
+    let bridge = anth_api::broker::call(
+        &state,
+        "org.example.consumer",
+        &serde_json::json!({
+            "interface": anth_api::broker::AUDIT_INTERFACE,
+            "function": "record",
+            "input": {"action": "proxy.apply", "detail": {"password": "hidden", "host": "a"}}
+        }),
+    )
+    .await
+    .unwrap_or_else(|anth_api::ApiError(error)| panic!("audit bridge: {error}"));
+    assert_eq!(bridge["recorded"], true);
+
+    let entries = AuditLog::new(&dir).entries().expect("audit");
+    let calls: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.action == anth_contract::AuditAction::BrokerCall)
+        .collect();
+    assert!(calls.len() >= 2, "{entries:?}");
+    let bridged = calls
+        .iter()
+        .find(|entry| {
+            entry
+                .detail
+                .as_ref()
+                .and_then(|detail| detail["bridge"].as_bool())
+                == Some(true)
+        })
+        .expect("bridge entry");
+    let detail = &bridged.detail.as_ref().expect("detail")["detail"];
+    assert!(detail.get("password").is_none(), "{detail}");
+    assert_eq!(detail["host"], "a");
+
+    // The socket the service actually gets: start the brokers and speak the
+    // protocol over `state/broker/<id>.sock`.
+    state.start_brokers().expect("brokers");
+    let socket = anth_api::broker::socket_path(
+        &dir,
+        &anth_contract::AppId::parse("org.example.consumer").expect("id"),
+    );
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::UnixStream::connect(&socket)
+        .await
+        .expect("connect");
+    let body = br#"{"interface":"example:provider/greeting@1.0.0","function":"greet","input":{"name":"Ada"}}"#;
+    let head = format!(
+        "POST /__anth/call HTTP/1.1\r\nHost: anthracite\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await.expect("head");
+    stream.write_all(body).await.expect("body");
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.expect("answer");
+    let text = String::from_utf8_lossy(&answer);
+    assert!(text.contains(r#""ok""#), "{text}");
+    assert!(text.contains(r#""echo""#), "{text}");
+    cleanup(dir);
 }
 
 #[tokio::test]

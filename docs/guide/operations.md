@@ -26,7 +26,7 @@ line, append-only. Actions are `app.install`, `app.upgrade`, `app.approve`,
 `app.revoke`, `app.enable`, `app.disable`, `app.remove`, `compose`,
 `engine.restart`, `key.add`, `key.remove`, `acknowledge`, `deny`,
 `session.login`, `service.start`, `service.stop`, `service.crash`,
-`service.deny`. Each entry has `at`, `actor`, `action`, `app`, `result` and a
+`service.deny`, `broker.call`. Each entry has `at`, `actor`, `action`, `app`, `result` and a
 sanitized `detail`; denials are recorded even when nothing changed.
 
 Read it with `anth audit [--limit n] [--before cursor]` or `GET
