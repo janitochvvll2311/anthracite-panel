@@ -159,6 +159,16 @@ impl EngineState {
                 return Ok(Arc::clone(view));
             }
         }
+        // Build under the write lock: an invalidation that lands while the
+        // composition or the registry is being read must not be overwritten by
+        // the older snapshot afterwards.
+        let mut guard = self
+            .broker_view
+            .write()
+            .map_err(|_| Error::internal("the broker view lock is poisoned"))?;
+        if let Some(view) = guard.as_ref() {
+            return Ok(Arc::clone(view));
+        }
         let store = self
             .apps
             .as_ref()
@@ -178,9 +188,7 @@ impl EngineState {
             resolution,
             installed,
         });
-        if let Ok(mut guard) = self.broker_view.write() {
-            *guard = Some(Arc::clone(&view));
-        }
+        *guard = Some(Arc::clone(&view));
         Ok(view)
     }
 

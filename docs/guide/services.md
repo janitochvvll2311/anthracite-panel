@@ -77,7 +77,8 @@ A service that imports an interface calls its provider through `{broker}`, not
 through `/api/apps/...`:
 
 ```rust
-let broker = anth_service::Broker::new("$state/broker/org.example.consumer.sock");
+// `broker_path` is the value of `{broker}` in the service argv.
+let broker = anth_service::Broker::new(broker_path);
 let answer = broker
     .call("anthracite:fs/read@1.2.0", "list", serde_json::json!({"path": "/"}))
     .await?;

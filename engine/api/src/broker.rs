@@ -169,7 +169,9 @@ async fn serve(
     }
     if method == "POST" && path == "/__anth/stream" {
         return match stream_call(&state, caller.as_str(), &body).await {
-            Ok(chunks) => relay(&mut stream, &state, caller.as_str(), chunks).await,
+            Ok((route, chunks)) => {
+                relay(&mut stream, &state, caller.as_str(), &route, chunks).await
+            }
             Err(ApiError(error)) => {
                 respond(
                     &mut stream,
@@ -196,6 +198,7 @@ async fn relay(
     stream: &mut UnixStream,
     state: &Arc<EngineState>,
     caller: &str,
+    route: &Route,
     mut chunks: crate::ChunkStream,
 ) -> std::io::Result<()> {
     stream
@@ -220,7 +223,13 @@ async fn relay(
                         action: AuditAction::BrokerCall,
                         app: Some(caller.to_string()),
                         result: Outcome::Failed,
-                        detail: Some(json!({"stream": true, "error": error.message()})),
+                        detail: Some(json!({
+                            "stream": true,
+                            "callee": route.provider,
+                            "interface": route.interface,
+                            "function": route.function,
+                            "error": error.message(),
+                        })),
                     };
                     let _ = store.audit.append(&entry);
                 }
@@ -393,11 +402,11 @@ pub async fn call(state: &Arc<EngineState>, caller: &str, body: &Value) -> Resul
 /// One brokered stream: same grant resolution as [`call`], then the provider's
 /// chunks are bounded by the provider manifest's byte budget. The stream ends
 /// with `exhausted` when that budget runs out.
-pub async fn stream_call(
+pub(crate) async fn stream_call(
     state: &Arc<EngineState>,
     caller: &str,
     body: &Value,
-) -> Result<crate::ChunkStream, ApiError> {
+) -> Result<(Route, crate::ChunkStream), ApiError> {
     let store = state
         .apps
         .as_ref()
@@ -407,7 +416,7 @@ pub async fn stream_call(
         .caller
         .as_ref()
         .ok_or_else(|| ApiError(Error::unavailable("this host has no app caller")))?;
-    let chunks = caller_impl
+    let chunks = match caller_impl
         .stream(
             route.provider.as_str(),
             &route.interface,
@@ -415,7 +424,27 @@ pub async fn stream_call(
             route.input.clone(),
         )
         .await
-        .map_err(ApiError)?;
+    {
+        Ok(chunks) => chunks,
+        Err(error) => {
+            let entry = anth_contract::AuditEntry {
+                at: anth_compose::audit::timestamp(),
+                actor: format!("app:{caller}"),
+                action: AuditAction::BrokerCall,
+                app: Some(caller.to_string()),
+                result: Outcome::Failed,
+                detail: Some(json!({
+                    "stream": true,
+                    "callee": route.provider,
+                    "interface": route.interface,
+                    "function": route.function,
+                    "error": error.message(),
+                })),
+            };
+            let _ = store.audit.append(&entry);
+            return Err(ApiError(error));
+        }
+    };
     let entry = anth_contract::AuditEntry {
         at: anth_compose::audit::timestamp(),
         actor: format!("app:{caller}"),
@@ -430,11 +459,12 @@ pub async fn stream_call(
         })),
     };
     let _ = store.audit.append(&entry);
-    Ok(limited_stream(chunks, &route.provider_app))
+    let chunks = limited_stream(chunks, &route.provider_app);
+    Ok((route, chunks))
 }
 
 /// The resolved provider of one call, plus the caller's input.
-struct Route {
+pub(crate) struct Route {
     provider: AppId,
     interface: String,
     function: String,
