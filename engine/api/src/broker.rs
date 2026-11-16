@@ -67,14 +67,16 @@ pub fn start_all(state: &Arc<EngineState>) -> Result<(), Error> {
         // The socket is private to the service uid: `0600` plus the uid that
         // actually runs the service. The directory stays `0711`, so a service
         // reaches its own socket without listing its peers. On a non-root host
-        // the service keeps the engine uid and no chown is needed.
-        let uid = state.service_uid_of(id);
+        // the service keeps the engine uid and no ownership check applies.
+        let uid = if unsafe { libc::geteuid() } == 0 {
+            state.service_uid_of(id)
+        } else {
+            None
+        };
         if let Some(uid) = uid {
-            if unsafe { libc::geteuid() } == 0 {
-                std::os::unix::fs::chown(&path, Some(uid), None).map_err(|error| {
-                    Error::internal(format!("owning {} by uid {uid}: {error}", path.display()))
-                })?;
-            }
+            std::os::unix::fs::chown(&path, Some(uid), None).map_err(|error| {
+                Error::internal(format!("owning {} by uid {uid}: {error}", path.display()))
+            })?;
         }
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(
