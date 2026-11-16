@@ -34,21 +34,44 @@ pub fn uid_for(app: &str) -> u32 {
 
 /// The uid the service actually gets: the derived one, or the next free id when
 /// the host has a real account (SSSD/AD often allocate from 1,000,000 upward).
-/// `getpwuid` queries NSS, so a directory user is caught too.
-pub fn allocate_uid(app: &str) -> u32 {
+/// `getpwuid_r` queries NSS with a caller-owned buffer, so concurrent launches
+/// do not share a static one.
+pub fn allocate_uid(app: &str) -> io::Result<u32> {
     let mut uid = uid_for(app);
     for _ in 0..1000 {
-        // SAFETY: `getpwuid` returns a pointer into a static buffer or null.
-        let taken = unsafe { !libc::getpwuid(uid).is_null() };
-        if !taken {
-            return uid;
+        if !uid_taken(uid)? {
+            return Ok(uid);
         }
         uid = uid.wrapping_add(1);
         if uid < UID_BASE {
             uid = UID_BASE;
         }
     }
-    uid_for(app)
+    Err(io::Error::other(format!(
+        "no free service uid near {}",
+        uid_for(app)
+    )))
+}
+
+/// Whether a real account already owns `uid`.
+pub fn uid_taken(uid: u32) -> io::Result<bool> {
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut buffer = [0u8; 1024];
+    let mut result: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: the entry, buffer and result pointers are valid for the call.
+    let code = unsafe {
+        libc::getpwuid_r(
+            uid,
+            &mut entry,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if code != 0 {
+        return Err(io::Error::from_raw_os_error(code));
+    }
+    Ok(!result.is_null())
 }
 
 /// The engine's effective gid. Services keep it so `{shared}` stays the trust
@@ -473,6 +496,39 @@ mod tests {
         assert_ne!(first, uid_for("org.anthracite.net"));
         assert!(first >= UID_BASE);
         assert!(first < UID_BASE + UID_RANGE);
+    }
+
+    #[test]
+    fn the_allocated_uid_has_no_account_and_is_stable() {
+        let uid = allocate_uid("org.example.sandbox-uid").expect("uid");
+        assert!(!uid_taken(uid).expect("probe"));
+        assert_eq!(uid, allocate_uid("org.example.sandbox-uid").expect("uid"));
+    }
+
+    #[test]
+    fn a_planted_symlink_is_replaced_not_followed() {
+        let dir = std::env::temp_dir()
+            .join("anthracite-panel")
+            .join(format!("sandbox-stage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let source = dir.join("source");
+        std::fs::write(&source, b"bundle bytes").expect("source");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"must not change").expect("victim");
+        std::os::unix::fs::symlink(&victim, dir.join("service")).expect("symlink");
+        let staged =
+            stage_binary(&source, &dir, uid_for("org.example"), engine_gid()).expect("stage");
+        assert_eq!(std::fs::read(&victim).expect("victim"), b"must not change");
+        assert_eq!(std::fs::read(&staged).expect("staged"), b"bundle bytes");
+        assert!(
+            std::fs::symlink_metadata(&staged)
+                .expect("metadata")
+                .file_type()
+                .is_file(),
+            "the symlink is replaced by the copied file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

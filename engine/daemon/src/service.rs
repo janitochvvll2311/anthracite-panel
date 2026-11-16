@@ -155,7 +155,14 @@ impl ServiceSupervisor {
         let app = AppId::parse(&launch.app)?;
         self.stop_app(&app).await;
         let uid = if crate::sandbox::is_root() {
-            crate::sandbox::allocate_uid(app.as_str())
+            match crate::sandbox::allocate_uid(app.as_str()) {
+                Ok(uid) => uid,
+                Err(error) => {
+                    let reason = format!("uid: allocating an id for {app}: {error}");
+                    self.denied(&app, launch.class, &reason);
+                    return Err(Error::denied(reason));
+                }
+            }
         } else {
             // Without root the uid layer is unavailable; Landlock still applies
             // and the service keeps the engine user. The release runs the
@@ -782,12 +789,14 @@ fn spawn(service: &Service) -> Result<Child, Error> {
             // ruleset was built before the fork so a root the service cannot
             // open itself (the bundle directory) still got a rule.
             if root {
-                crate::sandbox::drop_bounding_set(keep_bind)?;
+                crate::sandbox::drop_bounding_set(keep_bind)
+                    .map_err(|error| prefixed("capability", error))?;
             }
-            crate::sandbox::become_service(uid, gid, keep_bind)?;
+            crate::sandbox::become_service(uid, gid, keep_bind)
+                .map_err(|error| prefixed("uid", error))?;
             let restricted = crate::sandbox::restrict_with(ruleset);
             libc::close(ruleset);
-            restricted?;
+            restricted.map_err(|error| prefixed("landlock", error))?;
             Ok(())
         });
     }
@@ -803,6 +812,12 @@ fn spawn(service: &Service) -> Result<Child, Error> {
             service.binary.display()
         ))
     })
+}
+
+/// Adds the layer to an `io::Error` produced between fork and exec, so the
+/// spawn-time audit entry can classify it.
+fn prefixed(layer: &str, error: std::io::Error) -> std::io::Error {
+    std::io::Error::new(error.kind(), format!("{layer}: {error}"))
 }
 
 /// The layer a denial came from, for the audit detail. Kept free so the
@@ -1180,5 +1195,24 @@ impl anth_api::AppCaller for EngineCaller {
                 _ => self.wasm.stream(app, interface, function, input).await,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deny_layer;
+
+    #[test]
+    fn a_prefixed_sandbox_error_keeps_its_layer() {
+        assert_eq!(
+            deny_layer("sandbox: starting x: landlock: /x: no"),
+            "landlock"
+        );
+        assert_eq!(
+            deny_layer("sandbox: starting x: capability: no bit"),
+            "capability"
+        );
+        assert_eq!(deny_layer("sandbox: starting x: uid: EPERM"), "uid");
+        assert_eq!(deny_layer("sandbox: starting x: ENOENT"), "sandbox");
     }
 }

@@ -141,7 +141,7 @@ async fn a_read_only_root_cannot_be_written() {
     let state = scratch("read-only-root");
     let probe = state.join("probe");
     std::fs::create_dir(&probe).expect("probe");
-    let uid = anth_engine::sandbox::allocate_uid(APP);
+    let uid = anth_engine::sandbox::allocate_uid(APP).expect("uid");
     let gid = anth_engine::sandbox::engine_gid();
     if anth_engine::sandbox::is_root() {
         let path = CString::new(probe.as_os_str().as_bytes()).expect("path");
