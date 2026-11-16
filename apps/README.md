@@ -35,8 +35,9 @@ apps/firewall/build.sh      # managed nftables table, rules and policies
 apps/certs/build.sh         # certificate inventory, custody and publication
 ```
 
-The native Files, Terminal, Processes, Network, Storage, Accounts, Firewall and
-Certificates bundles replace the emulator bundle under the same app id. They declare `host`, `exec`
+The native Files, Terminal, Processes, Network, Storage, Accounts and Firewall
+bundles replace the emulator bundle under the same app id; Certificates is a new
+native app with no emulator counterpart. They declare `host`, `exec`
 and `admin` service classes, so approval needs
 `--accept-write --accept-admin --accept-host`.
 Their `manifest.toml.in` uses

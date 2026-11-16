@@ -58,7 +58,7 @@ sed \
     -e "s/{{app_summary}}/Certificate inventory, custody and atomic publication for the proxy./g" \
     -e "s|{{service_path}}|bin/certs-service|g" \
     -e "s/{{service_class}}/admin/g" \
-    -e "s|{{service_argv}}|[\"--socket\", \"{socket}\", \"--data\", \"{data}\", \"--shared\", \"{shared}\", \"--scan\", \"/etc/ssl/certs\", \"--scan\", \"/etc/letsencrypt/live\", \"--broker\", \"{broker}\"]|g" \
+    -e "s|{{service_argv}}|[\"--socket\", \"{socket}\", \"--data\", \"{data}\", \"--shared\", \"{shared}\", \"--scan\", \"/etc/ssl/certs\", \"--broker\", \"{broker}\"]|g" \
     "$app/manifest.toml.in" > "$tmp/manifest.toml"
 
 mkdir -p "$(dirname "$out")"

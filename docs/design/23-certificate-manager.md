@@ -8,8 +8,9 @@ Bundle `org.anthracite.certs`, package `anthracite:certs@1.0.0`, service class
 
 ## 1. Scope
 
-- Inventory certificates from approved roots: `/etc/ssl/certs`,
-  `/etc/letsencrypt/live`, a service import directory, and the managed store.
+- Inventory certificates from approved roots: `/etc/ssl/certs`, an
+  operator-declared `/etc/letsencrypt/live`, a service import directory, and the
+  managed store.
 - Show names, issuer, validity, key type, fingerprint and chain state.
 - Import a PEM chain and key, validate that they match, and publish them for
   consumers.
@@ -144,9 +145,10 @@ browser and recommends ACME or the service import directory for production.
   say that publishing a key makes it readable by every service with `{shared}`.
 - **System roots vary.** Distros disagree on `/etc/ssl/certs` and
   `/etc/letsencrypt`, and the engine user may not be able to read them. The
-  defaults are scan roots, not promises; the operator edits argv or fixes the
-  permission boundary. The service reports an unreadable root instead of
-  pretending it is empty.
+  bundle grants `/etc/ssl/certs` and the operator adds `/etc/letsencrypt/live`
+  (root and `--scan`) when it exists; a declared root that is missing is a
+  denial, so it is not granted by default. The service reports an unreadable
+  root instead of pretending it is empty.
 - **Remove while in use.** A removed certificate leaves the published files until
   the proxy reloads; the panel warns, and the proxy keeps its last-good config
   until the reload.

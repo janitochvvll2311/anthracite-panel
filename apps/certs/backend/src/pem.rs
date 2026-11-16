@@ -17,9 +17,9 @@ use x509_parser::prelude::*;
 /// One parsed certificate, with the fields the inventory exposes.
 #[derive(Debug, Clone)]
 pub struct CertInfo {
+    pub der: Vec<u8>,
     pub names: Vec<String>,
     pub issuer: String,
-    pub subject: String,
     pub not_before: u64,
     pub not_after: u64,
     pub key_type: String,
@@ -84,7 +84,6 @@ fn parse_cert(der: &[u8]) -> Result<CertInfo, Error> {
     let spki = cert.public_key().subject_public_key.data.to_vec();
     let fingerprint = hex(&Sha256::digest(der));
     let issuer = name_text(cert.issuer());
-    let subject = name_text(cert.subject());
     let mut names = Vec::new();
     if let Some(cn) = cert
         .subject()
@@ -119,9 +118,9 @@ fn parse_cert(der: &[u8]) -> Result<CertInfo, Error> {
     names.sort();
     names.dedup();
     Ok(CertInfo {
+        der: der.to_vec(),
         names,
         issuer,
-        subject,
         not_before,
         not_after,
         key_type,
@@ -179,19 +178,36 @@ pub fn key_matches(key: &KeyPair, cert: &CertInfo) -> Result<bool, Error> {
     Ok(key.public_bytes()? == cert.spki)
 }
 
-/// Whether a chain is linked leaf → intermediates → self-signed root.
+/// Whether a chain is linked and signed leaf → intermediates → self-signed root.
+/// Name matching alone is not enough: each certificate must verify against the
+/// next one's public key, and the last one must verify against itself.
 pub fn chain_ok(certs: &[CertInfo]) -> bool {
     if certs.is_empty() {
         return false;
     }
-    let linked = certs
-        .windows(2)
-        .all(|pair| pair[0].issuer == pair[1].subject);
-    let closed = certs
-        .last()
-        .map(|cert| cert.issuer == cert.subject)
-        .unwrap_or(false);
-    linked && closed
+    let parsed: Vec<X509Certificate<'_>> = match certs
+        .iter()
+        .map(|cert| parse_x509_certificate(&cert.der))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(parsed) => parsed.into_iter().map(|(_, cert)| cert).collect(),
+        Err(_) => return false,
+    };
+    for pair in parsed.windows(2) {
+        if pair[0].issuer().as_raw() != pair[1].subject().as_raw() {
+            return false;
+        }
+        if pair[0]
+            .verify_signature(Some(pair[1].public_key()))
+            .is_err()
+        {
+            return false;
+        }
+    }
+    let Some(last) = parsed.last() else {
+        return false;
+    };
+    last.issuer().as_raw() == last.subject().as_raw() && last.verify_signature(None).is_ok()
 }
 
 fn hex(bytes: &[u8]) -> String {

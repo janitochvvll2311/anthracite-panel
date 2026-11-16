@@ -13,6 +13,7 @@ use std::io::{Read, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +21,7 @@ use anth_contract::Error;
 use anth_service::Handler;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use pem::{chain_ok, key_matches, parse_certs, parse_key, CertInfo, KeyPair};
 
@@ -27,6 +29,7 @@ const STORE: &str = "anthracite:certs/store@1.0.0";
 const AUDIT: &str = "anth:audit/record@1.0.0";
 const DAY: u64 = 86_400;
 const EXPIRING_DAYS: u64 = 30;
+static TEMP: AtomicU64 = AtomicU64::new(0);
 
 type Found = (Vec<CertInfo>, Option<KeyPair>, Option<Meta>);
 
@@ -92,9 +95,13 @@ impl Service {
         let mut records = Vec::new();
         let mut seen = HashSet::new();
         for id in self.managed_ids()? {
-            if let Some((record, fingerprint)) = self.managed_record(&id)? {
-                seen.insert(fingerprint);
-                records.push(record);
+            match self.managed_record(&id) {
+                Ok(Some((record, fingerprint))) => {
+                    seen.insert(fingerprint);
+                    records.push(record);
+                }
+                Ok(None) => {}
+                Err(_) => records.push(self.corrupt_managed(&id)),
             }
         }
         for record in self.system_records(&seen)? {
@@ -171,6 +178,15 @@ impl Service {
         let mut records = Vec::new();
         let mut known = seen.clone();
         for root in &self.scans {
+            let readable = match fs::metadata(root) {
+                Ok(metadata) if metadata.is_dir() => fs::read_dir(root).is_ok(),
+                Ok(metadata) if metadata.is_file() => fs::read(root).is_ok(),
+                _ => false,
+            };
+            if !readable {
+                records.push(self.unreadable_root(root));
+                continue;
+            }
             let mut files = Vec::new();
             collect_cert_files(root, &mut files);
             for path in files {
@@ -191,6 +207,41 @@ impl Service {
         Ok(records)
     }
 
+    fn corrupt_managed(&self, id: &str) -> Value {
+        let record_id = if id.len() == 16 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            id.to_string()
+        } else {
+            short_hash(id)
+        };
+        json!({
+            "id": record_id,
+            "names": [id],
+            "issuer": "corrupt managed store",
+            "not-before": 0,
+            "not-after": 0,
+            "key-type": "unknown",
+            "source": "imported",
+            "fingerprint-sha256": "",
+            "status": "invalid",
+            "auto-renew": false,
+        })
+    }
+
+    fn unreadable_root(&self, root: &Path) -> Value {
+        json!({
+            "id": short_hash(&root.display().to_string()),
+            "names": [root.display().to_string()],
+            "issuer": "unreadable scan root",
+            "not-before": 0,
+            "not-after": 0,
+            "key-type": "unknown",
+            "source": "system",
+            "fingerprint-sha256": "",
+            "status": "invalid",
+            "auto-renew": false,
+        })
+    }
+
     fn record(&self, cert: &CertInfo, source: &str, auto_renew: bool) -> Value {
         json!({
             "id": &cert.fingerprint[..16],
@@ -207,6 +258,7 @@ impl Service {
     }
 
     fn find(&self, id: &str) -> Result<Option<Found>, Error> {
+        validate_id(id)?;
         let dir = self.store().join(id);
         let fullchain = dir.join("fullchain.pem");
         if let Ok(text) = fs::read_to_string(&fullchain) {
@@ -292,6 +344,7 @@ impl Service {
     }
 
     fn publish(&self, id: &str) -> Result<Value, Error> {
+        validate_id(id)?;
         let store = self.store().join(id);
         let fullchain = fs::read(store.join("fullchain.pem")).map_err(|error| {
             Error::not_found(format!("reading the certificate `{id}`: {error}"))
@@ -334,6 +387,7 @@ impl Service {
     }
 
     fn remove(&self, id: &str) -> Result<bool, Error> {
+        validate_id(id)?;
         let dir = self.store().join(id);
         if !dir.is_dir() {
             return Ok(false);
@@ -347,6 +401,7 @@ impl Service {
     }
 
     fn set_auto_renew(&self, id: &str, enabled: bool) -> Result<Value, Error> {
+        validate_id(id)?;
         let dir = self.store().join(id);
         let meta = self
             .read_meta(&dir)
@@ -360,11 +415,13 @@ impl Service {
             source: meta.source,
             auto_renew: enabled,
         };
-        write_private(
-            &dir.join("meta.json"),
-            &serde_json::to_vec_pretty(&meta)
-                .map_err(|error| Error::internal(format!("encoding meta: {error}")))?,
-        )?;
+        let encoded = serde_json::to_vec_pretty(&meta)
+            .map_err(|error| Error::internal(format!("encoding meta: {error}")))?;
+        write_private(&dir.join("meta.json"), &encoded)?;
+        let published = self.publish.join(id);
+        if published.is_dir() {
+            write_private(&published.join("meta.json"), &encoded)?;
+        }
         self.audit("certs.auto-renew", json!({"id": id, "enabled": enabled}));
         let (certs, _, _) = self
             .find(id)?
@@ -501,6 +558,26 @@ fn text<'a>(input: &'a Value, key: &str) -> Result<&'a str, Error> {
         .ok_or_else(|| Error::invalid(format!("the call needs `{key}`")))
 }
 
+/// Certificate ids are the 16-hex prefix of the SHA-256 fingerprint. Refusing
+/// anything else keeps `Path::join` from accepting `..`, separators or dots.
+fn validate_id(id: &str) -> Result<(), Error> {
+    if id.len() == 16 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(Error::invalid(
+            "the certificate id is not a 16-character hex fingerprint",
+        ))
+    }
+}
+
+fn short_hash(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn collect_cert_files(path: &Path, out: &mut Vec<PathBuf>) {
     let Ok(metadata) = fs::metadata(path) else {
         return;
@@ -547,11 +624,12 @@ fn set_dir_mode(path: &Path) -> Result<(), Error> {
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let tmp = path.with_file_name(format!(
-        ".{}.tmp-{}",
+        ".{}.tmp-{}-{}",
         path.file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("write"),
-        std::process::id()
+        std::process::id(),
+        TEMP.fetch_add(1, Ordering::Relaxed)
     ));
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -591,7 +669,6 @@ fn scans() -> Vec<PathBuf> {
     }
     if values.is_empty() {
         values.push(PathBuf::from("/etc/ssl/certs"));
-        values.push(PathBuf::from("/etc/letsencrypt/live"));
     }
     values
 }
@@ -770,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_scan_root_is_an_empty_inventory_not_a_failure() {
+    fn a_missing_scan_root_is_reported_not_a_failure() {
         let root = std::env::temp_dir().join(format!(
             "anthracite-panel/certs-scan-{}-{}",
             std::process::id(),
@@ -790,7 +867,75 @@ mod tests {
         let inventory = service
             .call(STORE, "inventory", json!({}))
             .expect("inventory");
-        assert_eq!(inventory.as_array().unwrap().len(), 0);
+        let records = inventory.as_array().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["issuer"], "unreadable scan root");
+        assert_eq!(records[0]["status"], "invalid");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_path_like_id_is_refused() {
+        let (service, root) = service();
+        for id in ["../etc", "a/b", "..", "0123456789abcde"] {
+            let error = service
+                .call(STORE, "remove-certificate", json!({"id": id}))
+                .expect_err("id");
+            assert_eq!(error.kind(), anth_contract::ErrorKind::Invalid, "{id}");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn acme_auto_renew_updates_the_published_meta() {
+        let (service, root) = service();
+        let (cert, key) = pair("acme.test");
+        let record = service
+            .call(
+                STORE,
+                "store-issued",
+                json!({
+                    "cert-pem": cert,
+                    "chain-pem": "",
+                    "key-pem": key,
+                    "names": [],
+                    "auto-renew": true,
+                }),
+            )
+            .expect("issue");
+        let id = record["id"].as_str().unwrap();
+        let published = service.publish.join(id).join("meta.json");
+        let meta: serde_json::Value =
+            serde_json::from_slice(&fs::read(&published).expect("meta")).expect("json");
+        assert_eq!(meta["auto_renew"], true);
+        service
+            .call(STORE, "set-auto-renew", json!({"id": id, "enabled": false}))
+            .expect("disable");
+        let meta: serde_json::Value =
+            serde_json::from_slice(&fs::read(&published).expect("meta")).expect("json");
+        assert_eq!(meta["auto_renew"], false);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_corrupt_managed_entry_does_not_hide_the_inventory() {
+        let (service, root) = service();
+        let id = "0123456789abcdef";
+        let dir = service.store().join(id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("fullchain.pem"), b"not a pem").unwrap();
+        let inventory = service
+            .call(STORE, "inventory", json!({}))
+            .expect("inventory");
+        let records = inventory.as_array().unwrap();
+        assert!(
+            records.iter().any(|record| {
+                record["id"] == id
+                    && record["issuer"] == "corrupt managed store"
+                    && record["status"] == "invalid"
+            }),
+            "{inventory}"
+        );
         let _ = fs::remove_dir_all(root);
     }
 }
