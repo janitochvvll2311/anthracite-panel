@@ -13,20 +13,21 @@ not through the public router.
 
 - **Implemented in v0.7.0 (phase 0c):** the engine binds
   `state/broker/<app-id>.sock` for every composed app and hands the path over as
-  `{broker}`. The service posts `interface#function` plus `input` to
-  `/__anth/call`; the broker checks that the caller's grant imports the
-  interface, resolves the composed provider, reuses `AppCaller` (and therefore
-  the provider's budget), and audits every call as `broker.call`. A call to an
-  interface the caller does not import is a denial with the caller in the record.
+  `{broker}`. The socket is `0600` and owned by the service uid (the directory
+  stays `0711`), and the broker checks `SO_PEERCRED` before reading a request:
+  another service cannot open a peer's socket and inherit its grant. The service
+  posts `interface#function` plus `input` to `/__anth/call`; the broker checks
+  that the caller's grant imports the interface, resolves the composed provider,
+  reuses `AppCaller` (and therefore the provider's budget), and audits every call
+  as `broker.call`. A call to an interface the caller does not import is a
+  denial with the caller in the record. `POST /__anth/stream` carries the same
+  authority for a streamed function; the provider's manifest budget bounds the
+  chunks and the stream ends with `exhausted` when it runs out.
 - **Audit bridge:** `anth:audit/record@1.0.0` is served on the same socket; the
   engine sanitizes the app-supplied detail before writing it.
 - **Client:** `anth_service::Broker` speaks the protocol for a service author;
   `SurfaceApp.exports` lists every app's interfaces so a panel can find a
   provider without reading a manifest.
-- **Why it gates the plan:** ACME imports the certificate store; a future
-  DNS-01 provider bundle would be the second typed consumer. A file drop or a
-  panel courier would put private keys or operator authority in the wrong
-  process.
 - **Why it gates the plan:** ACME imports the certificate store; a future
   DNS-01 provider bundle would be the second typed consumer. A file drop or a
   panel courier would put private keys or operator authority in the wrong

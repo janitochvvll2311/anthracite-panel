@@ -376,6 +376,15 @@ async fn a_service_only_app_starts_answers_and_stops() {
     .expect("boot");
     assert_eq!(report.started, vec![app.clone()]);
     assert!(socket.exists());
+    let mode = fs::metadata(dir.join("broker"))
+        .expect("broker directory")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o711,
+        "boot must not turn the broker directory back into 0700"
+    );
     let value = services
         .call(
             app.as_str(),

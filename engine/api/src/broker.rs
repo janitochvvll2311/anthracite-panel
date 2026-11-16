@@ -11,13 +11,15 @@ use std::os::unix::fs::FileTypeExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anth_compose::Provider;
+use anth_compose::{InstalledApp, Provider};
 use anth_contract::{AppId, AuditAction, Error, InterfaceId, Outcome};
+use base64::Engine as _;
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::{current_composition, installed_apps, ApiError, EngineState};
+use crate::{limited_stream, ApiError, EngineState};
 
 const CALL_CAP: usize = 4 * 1024 * 1024;
 const HEAD_CAP: usize = 8 * 1024;
@@ -25,16 +27,14 @@ pub const AUDIT_INTERFACE: &str = "anth:audit/record@1.0.0";
 
 /// Starts one broker listener per composed app. A stale socket from a previous
 /// boot is replaced; the directory is `0711` so a service uid can reach its own
-/// socket, while the socket itself is `0660` with the engine gid.
+/// socket, while the socket itself is `0600` and owned by that uid.
 pub fn start_all(state: &Arc<EngineState>) -> Result<(), Error> {
     let store = state
         .apps
         .as_ref()
         .ok_or_else(|| Error::unavailable("the engine has no state tree to broker"))?;
-    let composition = current_composition(state).map_err(|ApiError(error)| error)?;
-    let installed = installed_apps(store)?;
-    let resolution =
-        anth_compose::resolve(&composition, &installed).map_err(|error| error.into_error())?;
+    let view = state.broker_view()?;
+    let resolution = &view.resolution;
     let dir = store.state.join("broker");
     std::fs::create_dir_all(&dir)
         .map_err(|error| Error::internal(format!("creating {}: {error}", dir.display())))?;
@@ -64,8 +64,21 @@ pub fn start_all(state: &Arc<EngineState>) -> Result<(), Error> {
         let listener = UnixListener::bind(&path).map_err(|error| {
             Error::internal(format!("binding the broker {}: {error}", path.display()))
         })?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).map_err(
-            |error| Error::internal(format!("setting {} to 0660: {error}", path.display())),
+        // The socket is private to the service uid: `0600` plus the uid that
+        // actually runs the service. The directory stays `0711`, so a service
+        // reaches its own socket without listing its peers. On a non-root host
+        // the service keeps the engine uid and no chown is needed.
+        let uid = state.service_uid_of(id);
+        if let Some(uid) = uid {
+            if unsafe { libc::geteuid() } == 0 {
+                std::os::unix::fs::chown(&path, Some(uid), None).map_err(|error| {
+                    Error::internal(format!("owning {} by uid {uid}: {error}", path.display()))
+                })?;
+            }
+        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(
+            |error| Error::internal(format!("setting {} to 0600: {error}", path.display())),
         )?;
         let caller = id.clone();
         let state = Arc::clone(state);
@@ -74,7 +87,7 @@ pub fn start_all(state: &Arc<EngineState>) -> Result<(), Error> {
                 let state = Arc::clone(&state);
                 let caller = caller.clone();
                 tokio::spawn(async move {
-                    let _ = serve(stream, state, caller).await;
+                    let _ = serve(stream, state, caller, uid).await;
                 });
             }
         });
@@ -91,7 +104,39 @@ async fn serve(
     mut stream: UnixStream,
     state: Arc<EngineState>,
     caller: AppId,
+    expected_uid: Option<u32>,
 ) -> std::io::Result<()> {
+    // The socket is `0600` and owned by the service, but the credential check
+    // is the authority: root is the engine (and the test harness) and a peer
+    // with any other uid is rejected, even if the mode let it connect.
+    if let Some(expected) = expected_uid {
+        let peer = stream
+            .peer_cred()
+            .map(|credential| credential.uid())
+            .unwrap_or(u32::MAX);
+        if peer != 0 && peer != expected {
+            if let Some(store) = state.apps.as_ref() {
+                let entry = anth_contract::AuditEntry {
+                    at: anth_compose::audit::timestamp(),
+                    actor: format!("app:{caller}"),
+                    action: AuditAction::BrokerCall,
+                    app: Some(caller.to_string()),
+                    result: Outcome::Denied,
+                    detail: Some(json!({"peer_uid": peer, "expected_uid": expected})),
+                };
+                let _ = store.audit.append(&entry);
+            }
+            let error = Error::denied(format!(
+                "peer uid {peer} cannot use the broker of `{caller}`"
+            ));
+            return respond(
+                &mut stream,
+                error.status(),
+                &serde_json::to_value(error.envelope()).unwrap_or(Value::Null),
+            )
+            .await;
+        }
+    }
     let (method, path, body) = match request(&mut stream).await {
         Ok(request) => request,
         Err(error) => {
@@ -104,23 +149,100 @@ async fn serve(
             .await;
         }
     };
-    let (status, value) = if method == "GET" && path == "/health" {
-        (200, json!({"status": "ok"}))
-    } else if method == "POST" && path == "/__anth/call" {
-        match call(&state, caller.as_str(), &body).await {
-            Ok(value) => (200, json!({"ok": value})),
-            Err(ApiError(error)) => (
-                error.status(),
-                serde_json::to_value(error.envelope()).unwrap_or(Value::Null),
-            ),
-        }
-    } else {
-        (
-            404,
-            json!({"error": {"code": "not-found", "message": "no such endpoint"}}),
+    if method == "GET" && path == "/health" {
+        return respond(&mut stream, 200, &json!({"status": "ok"})).await;
+    }
+    if method == "POST" && path == "/__anth/call" {
+        return match call(&state, caller.as_str(), &body).await {
+            Ok(value) => respond(&mut stream, 200, &json!({"ok": value})).await,
+            Err(ApiError(error)) => {
+                respond(
+                    &mut stream,
+                    error.status(),
+                    &serde_json::to_value(error.envelope()).unwrap_or(Value::Null),
+                )
+                .await
+            }
+        };
+    }
+    if method == "POST" && path == "/__anth/stream" {
+        return match stream_call(&state, caller.as_str(), &body).await {
+            Ok(chunks) => relay(&mut stream, &state, caller.as_str(), chunks).await,
+            Err(ApiError(error)) => {
+                respond(
+                    &mut stream,
+                    error.status(),
+                    &serde_json::to_value(error.envelope()).unwrap_or(Value::Null),
+                )
+                .await
+            }
+        };
+    }
+    respond(
+        &mut stream,
+        404,
+        &json!({"error": {"code": "not-found", "message": "no such endpoint"}}),
+    )
+    .await
+}
+
+/// Relays a bounded provider stream as chunked JSON frames: `{"chunk": <base64>}`
+/// per chunk and a terminal `{"error": …}` when the provider or its budget ends
+/// the stream early. Keeping the error inside the body lets the caller see
+/// `exhausted` instead of a truncated connection.
+async fn relay(
+    stream: &mut UnixStream,
+    state: &Arc<EngineState>,
+    caller: &str,
+    mut chunks: crate::ChunkStream,
+) -> std::io::Result<()> {
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\
+              Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
         )
-    };
-    respond(&mut stream, status, &value).await
+        .await?;
+    while let Some(item) = chunks.next().await {
+        match item {
+            Ok(bytes) => {
+                let frame = json!({
+                    "chunk": base64::engine::general_purpose::STANDARD.encode(bytes),
+                });
+                write_frame(stream, &frame).await?;
+            }
+            Err(error) => {
+                if let Some(store) = state.apps.as_ref() {
+                    let entry = anth_contract::AuditEntry {
+                        at: anth_compose::audit::timestamp(),
+                        actor: format!("app:{caller}"),
+                        action: AuditAction::BrokerCall,
+                        app: Some(caller.to_string()),
+                        result: Outcome::Failed,
+                        detail: Some(json!({"stream": true, "error": error.message()})),
+                    };
+                    let _ = store.audit.append(&entry);
+                }
+                write_frame(
+                    stream,
+                    &serde_json::to_value(error.envelope()).unwrap_or(Value::Null),
+                )
+                .await?;
+                stream.write_all(b"0\r\n\r\n").await?;
+                return stream.flush().await;
+            }
+        }
+    }
+    stream.write_all(b"0\r\n\r\n").await?;
+    stream.flush().await
+}
+
+async fn write_frame(stream: &mut UnixStream, value: &Value) -> std::io::Result<()> {
+    let body = serde_json::to_vec(value).unwrap_or_default();
+    stream
+        .write_all(format!("{:x}\r\n", body.len()).as_bytes())
+        .await?;
+    stream.write_all(&body).await?;
+    stream.write_all(b"\r\n").await
 }
 
 async fn respond(stream: &mut UnixStream, status: u16, value: &Value) -> std::io::Result<()> {
@@ -176,7 +298,10 @@ async fn request(stream: &mut UnixStream) -> std::io::Result<(String, String, Va
     while buffer.len() < body_start + length {
         let read = stream.read(&mut chunk).await?;
         if read == 0 {
-            break;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "the request ended before its body",
+            ));
         }
         buffer.extend_from_slice(&chunk[..read]);
     }
@@ -229,33 +354,18 @@ pub async fn call(state: &Arc<EngineState>, caller: &str, body: &Value) -> Resul
         return Ok(json!({"recorded": true}));
     }
 
-    let composition = current_composition(state).map_err(|ApiError(error)| error)?;
-    let installed = installed_apps(store)?;
-    let resolution =
-        anth_compose::resolve(&composition, &installed).map_err(|error| error.into_error())?;
-    let link = resolution
-        .links
-        .iter()
-        .find(|link| link.consumer.as_str() == caller && link.interface.to_string() == interface)
-        .ok_or_else(|| {
-            ApiError(Error::denied(format!(
-                "`{caller}` does not import `{interface}` in the composition"
-            )))
-        })?;
-    let provider = match &link.provider {
-        Provider::App(provider) => provider.clone(),
-        Provider::Engine => {
-            return Err(ApiError(Error::denied(format!(
-                "`{interface}` is an engine interface and is not a broker target"
-            ))))
-        }
-    };
+    let route = route(state, caller, body).await?;
     let caller_impl = state
         .caller
         .as_ref()
         .ok_or_else(|| ApiError(Error::unavailable("this host has no app caller")))?;
     let result = caller_impl
-        .call(provider.as_str(), interface, function, input)
+        .call(
+            route.provider.as_str(),
+            &route.interface,
+            &route.function,
+            route.input.clone(),
+        )
         .await;
     let entry = anth_contract::AuditEntry {
         at: anth_compose::audit::timestamp(),
@@ -268,14 +378,141 @@ pub async fn call(state: &Arc<EngineState>, caller: &str, body: &Value) -> Resul
             Outcome::Denied
         },
         detail: Some(json!({
-            "callee": provider,
-            "interface": interface,
-            "function": function,
+            "callee": route.provider,
+            "interface": route.interface,
+            "function": route.function,
             "error": result.as_ref().err().map(|error| error.message()),
         })),
     };
     let _ = store.audit.append(&entry);
     result.map_err(ApiError)
+}
+
+/// One brokered stream: same grant resolution as [`call`], then the provider's
+/// chunks are bounded by the provider manifest's byte budget. The stream ends
+/// with `exhausted` when that budget runs out.
+pub async fn stream_call(
+    state: &Arc<EngineState>,
+    caller: &str,
+    body: &Value,
+) -> Result<crate::ChunkStream, ApiError> {
+    let store = state
+        .apps
+        .as_ref()
+        .ok_or_else(|| ApiError(Error::unavailable("the engine has no state tree")))?;
+    let route = route(state, caller, body).await?;
+    let caller_impl = state
+        .caller
+        .as_ref()
+        .ok_or_else(|| ApiError(Error::unavailable("this host has no app caller")))?;
+    let chunks = caller_impl
+        .stream(
+            route.provider.as_str(),
+            &route.interface,
+            &route.function,
+            route.input.clone(),
+        )
+        .await
+        .map_err(ApiError)?;
+    let entry = anth_contract::AuditEntry {
+        at: anth_compose::audit::timestamp(),
+        actor: format!("app:{caller}"),
+        action: AuditAction::BrokerCall,
+        app: Some(caller.to_string()),
+        result: Outcome::Ok,
+        detail: Some(json!({
+            "stream": true,
+            "callee": route.provider,
+            "interface": route.interface,
+            "function": route.function,
+        })),
+    };
+    let _ = store.audit.append(&entry);
+    Ok(limited_stream(chunks, &route.provider_app))
+}
+
+/// The resolved provider of one call, plus the caller's input.
+struct Route {
+    provider: AppId,
+    interface: String,
+    function: String,
+    input: Value,
+    provider_app: InstalledApp,
+}
+
+/// Resolves the caller's import to a running provider. A missing import or an
+/// engine target is a denial and is audited before it is returned.
+async fn route(state: &Arc<EngineState>, caller: &str, body: &Value) -> Result<Route, ApiError> {
+    let interface = body
+        .get("interface")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError(Error::invalid("the call needs an `interface`")))?;
+    let function = body
+        .get("function")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError(Error::invalid("the call needs a `function`")))?;
+    let input = body.get("input").cloned().unwrap_or(Value::Null);
+    InterfaceId::parse(interface).map_err(ApiError)?;
+    let view = state.broker_view().map_err(ApiError)?;
+    let link =
+        match view.resolution.links.iter().find(|link| {
+            link.consumer.as_str() == caller && link.interface.to_string() == interface
+        }) {
+            Some(link) => link,
+            None => {
+                let error = Error::denied(format!(
+                    "`{caller}` does not import `{interface}` in the composition"
+                ));
+                audit_denied(state, caller, interface, function, &error);
+                return Err(ApiError(error));
+            }
+        };
+    let provider = match &link.provider {
+        Provider::App(provider) => provider.clone(),
+        Provider::Engine => {
+            let error = Error::denied(format!(
+                "`{interface}` is an engine interface and is not a broker target"
+            ));
+            audit_denied(state, caller, interface, function, &error);
+            return Err(ApiError(error));
+        }
+    };
+    let provider_app = view
+        .installed
+        .get(provider.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            ApiError(Error::internal(format!(
+                "`{provider}` is resolved but its manifest is missing"
+            )))
+        })?;
+    Ok(Route {
+        provider,
+        interface: interface.to_string(),
+        function: function.to_string(),
+        input,
+        provider_app,
+    })
+}
+
+/// Writes the denial into the audit log before the caller can see it (§22).
+fn audit_denied(state: &EngineState, caller: &str, interface: &str, function: &str, error: &Error) {
+    let Some(store) = state.apps.as_ref() else {
+        return;
+    };
+    let entry = anth_contract::AuditEntry {
+        at: anth_compose::audit::timestamp(),
+        actor: format!("app:{caller}"),
+        action: AuditAction::BrokerCall,
+        app: Some(caller.to_string()),
+        result: Outcome::Denied,
+        detail: Some(json!({
+            "interface": interface,
+            "function": function,
+            "reason": error.message(),
+        })),
+    };
+    let _ = store.audit.append(&entry);
 }
 
 /// Drops values that look like secrets from an app-supplied bridge detail.

@@ -13,6 +13,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use sha2::{Digest, Sha256};
+
 pub mod audit;
 pub mod bundle;
 pub mod composition;
@@ -28,6 +30,19 @@ use anth_contract::catalog;
 use anth_contract::{
     parse_version, AppId, Composition, Error, Grant, InterfaceId, Manifest, Profile, Risk,
 };
+
+/// The first uid the service sandbox hands out. Above any system or login user.
+const SERVICE_UID_BASE: u32 = 1_000_000;
+pub const SERVICE_UID_RANGE: u32 = 1_000_000_000;
+
+/// The stable uid of an app's service, derived from its id so the mapping
+/// survives a restart without a second state file. The broker and the sandbox
+/// must agree on it: the broker owns the socket the service connects to.
+pub fn service_uid(app: &str) -> u32 {
+    let digest = Sha256::digest(app.as_bytes());
+    let value = u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]);
+    SERVICE_UID_BASE + value % SERVICE_UID_RANGE
+}
 
 /// What a grant freezes about the installed bytes (D-Wit-Hash).
 #[derive(Debug, Clone, PartialEq, Eq)]

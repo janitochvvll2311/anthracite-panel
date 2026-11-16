@@ -17,19 +17,13 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 /// The first uid the allocator hands out. Above any system or login user.
 const UID_BASE: u32 = 1_000_000;
-const UID_RANGE: u32 = 1_000_000_000;
 
-/// A stable, per-app uid. Deriving it from the id keeps the mapping across
-/// restarts without a second state file; the range makes a collision between
-/// two installed apps practically impossible.
+/// A stable, per-app uid. The derivation lives in the composer so the broker
+/// and the sandbox agree on the value.
 pub fn uid_for(app: &str) -> u32 {
-    let digest = Sha256::digest(app.as_bytes());
-    let value = u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]]);
-    UID_BASE + value % UID_RANGE
+    anth_compose::service_uid(app)
 }
 
 /// The uid the service actually gets: the derived one, or the next free id when
@@ -495,7 +489,7 @@ mod tests {
         assert_eq!(first, uid_for("org.anthracite.fs"));
         assert_ne!(first, uid_for("org.anthracite.net"));
         assert!(first >= UID_BASE);
-        assert!(first < UID_BASE + UID_RANGE);
+        assert!(first < UID_BASE + anth_compose::SERVICE_UID_RANGE);
     }
 
     #[test]

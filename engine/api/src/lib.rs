@@ -7,7 +7,7 @@
 //! exists, and the session-authenticated one a TCP listener serves. `/health` is
 //! public on both; everything under `/api` needs a peer or a session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -90,6 +90,10 @@ pub trait Restart: Send + Sync {
     fn restart(&self) -> Result<(), Error>;
 }
 
+/// Resolves the uid a service runs as. The host supplies it when it allocates
+/// uids; without it the broker uses `anth_compose::service_uid`.
+pub type ServiceUidResolver = Arc<dyn Fn(&AppId) -> Option<u32> + Send + Sync>;
+
 /// What the router needs from the engine.
 #[derive(Clone)]
 pub struct EngineState {
@@ -113,6 +117,21 @@ pub struct EngineState {
     caller: Option<Arc<dyn AppCaller>>,
     /// The process owner, when this host can replace itself.
     restart: Option<Arc<dyn Restart>>,
+    /// The uid each service runs as, when the host allocates uids. The broker
+    /// uses it to own the socket and to check the peer credential; without it,
+    /// the deterministic derivation in `anth_compose::service_uid` is used.
+    service_uid: Option<ServiceUidResolver>,
+    /// The broker's resolved view, rebuilt only when the composition or the
+    /// installed set changes. Re-resolving per call would re-read every manifest
+    /// and grant on the IPC hot path.
+    broker_view: Arc<RwLock<Option<Arc<BrokerView>>>>,
+}
+
+/// What the broker needs from one resolution: the links and the installed apps
+/// (for their service budget), frozen until a mutation invalidates it.
+pub struct BrokerView {
+    pub resolution: Resolution,
+    pub installed: HashMap<String, InstalledApp>,
 }
 
 impl EngineState {
@@ -128,6 +147,64 @@ impl EngineState {
             ready: Arc::new(AtomicBool::new(true)),
             caller: None,
             restart: None,
+            service_uid: None,
+            broker_view: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// The broker's resolved view, computed once per composition/app change.
+    pub(crate) fn broker_view(&self) -> Result<Arc<BrokerView>, Error> {
+        if let Ok(guard) = self.broker_view.read() {
+            if let Some(view) = guard.as_ref() {
+                return Ok(Arc::clone(view));
+            }
+        }
+        let store = self
+            .apps
+            .as_ref()
+            .ok_or_else(|| Error::unavailable("the engine has no state tree to broker"))?;
+        let composition = self
+            .composition
+            .read()
+            .map_err(|_| Error::internal("the composition lock is poisoned"))?
+            .clone();
+        let installed = installed_apps(store)?;
+        let resolution = resolve(&composition, &installed).map_err(|error| error.into_error())?;
+        let installed = installed
+            .into_iter()
+            .map(|app| (app.manifest.app.id.clone(), app))
+            .collect();
+        let view = Arc::new(BrokerView {
+            resolution,
+            installed,
+        });
+        if let Ok(mut guard) = self.broker_view.write() {
+            *guard = Some(Arc::clone(&view));
+        }
+        Ok(view)
+    }
+
+    /// Drops the broker's cached view after a composition or app mutation.
+    pub fn invalidate_broker(&self) {
+        if let Ok(mut guard) = self.broker_view.write() {
+            *guard = None;
+        }
+    }
+
+    /// The host knows the uid each service runs as (it allocates it after
+    /// probing NSS). The broker uses it to chown the socket and to reject a
+    /// peer with a different uid.
+    pub fn with_service_uid(mut self, resolver: ServiceUidResolver) -> Self {
+        self.service_uid = Some(resolver);
+        self
+    }
+
+    /// The uid the broker expects on a socket's peer, or `None` when the host
+    /// does not run services under separate ids.
+    pub fn service_uid_of(&self, id: &AppId) -> Option<u32> {
+        match &self.service_uid {
+            Some(resolver) => resolver(id),
+            None => Some(anth_compose::service_uid(id.as_str())),
         }
     }
 
@@ -464,7 +541,7 @@ impl Stream for LimitedStream {
                 this.total = this.total.saturating_add(chunk.len() as u64);
                 if this.total > this.budget.total {
                     this.done = true;
-                    return Poll::Ready(Some(Err(Error::too_large(format!(
+                    return Poll::Ready(Some(Err(Error::exhausted(format!(
                         "the stream exceeded its {} byte budget",
                         this.budget.total
                     )))));
@@ -708,6 +785,7 @@ async fn replace_composition(
         .write()
         .map_err(|_| ApiError(Error::internal("the composition lock is poisoned")))? =
         composition.clone();
+    state.invalidate_broker();
     audit(
         apps,
         &actor.0,
@@ -1430,6 +1508,7 @@ async fn install_app(
         }
     };
     let id = AppId::parse(&installed.manifest.app.id)?;
+    state.invalidate_broker();
     audit(
         apps,
         &actor,
@@ -1466,6 +1545,7 @@ async fn replace_app(
     // leaves the app installed but unapproved. Resurrection would be worse than
     // a re-approval the operator can give in one command.
     apps.grants.remove(&id)?;
+    state.invalidate_broker();
     let installed = match apps.registry.replace(&id, &body, &apps.options()) {
         Ok(installed) => installed,
         Err(error) => {
@@ -1481,6 +1561,7 @@ async fn replace_app(
             ));
         }
     };
+    state.invalidate_broker();
     audit(
         apps,
         &actor,
@@ -1506,6 +1587,7 @@ async fn remove_app(
     // Revoke authority before touching the content: a corrupt or half-removed
     // tree must never keep a grant. A missing app simply has no grant to remove.
     apps.grants.remove(&id)?;
+    state.invalidate_broker();
     match apps.registry.remove(&id) {
         Ok(true) => {}
         Ok(false) => {
@@ -1526,6 +1608,7 @@ async fn remove_app(
             ));
         }
     }
+    state.invalidate_broker();
     audit(
         apps,
         &actor,
@@ -1573,6 +1656,7 @@ async fn patch_app(
         require_ack(&state, apps, &actor, &id, "app.disable", &headers)?;
     }
     let installed = apps.registry.configure(&id, body.enabled, body.alias)?;
+    state.invalidate_broker();
     if let Some(enabled) = body.enabled {
         let action = if enabled {
             AuditAction::AppEnable
@@ -1658,6 +1742,7 @@ async fn approve_app(
         )
     })?;
     apps.grants.save(&grant)?;
+    state.invalidate_broker();
     audit(
         apps,
         &actor,
@@ -1698,6 +1783,7 @@ async fn revoke_grant(
     if !apps.grants.remove(&id)? {
         return Err(ApiError(Error::not_found(format!("`{id}` has no grant"))));
     }
+    state.invalidate_broker();
     audit(
         apps,
         &actor,

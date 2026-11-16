@@ -267,8 +267,11 @@ fn service_launch(
     let broker_dir = state.join("broker");
     std::fs::create_dir_all(&broker_dir)
         .map_err(|error| Error::internal(format!("creating {}: {error}", broker_dir.display())))?;
-    std::fs::set_permissions(&broker_dir, std::fs::Permissions::from_mode(0o700)).map_err(
-        |error| Error::internal(format!("setting {} to 0700: {error}", broker_dir.display())),
+    // `0711`: a service uid traverses to its own socket without listing the
+    // peers. `0700` here would undo the broker's own permission and make every
+    // call fail with EACCES when the engine runs as root.
+    std::fs::set_permissions(&broker_dir, std::fs::Permissions::from_mode(0o711)).map_err(
+        |error| Error::internal(format!("setting {} to 0711: {error}", broker_dir.display())),
     )?;
     let broker_socket = broker_dir.join(format!("{id}.sock"));
     let broker_text = broker_socket
