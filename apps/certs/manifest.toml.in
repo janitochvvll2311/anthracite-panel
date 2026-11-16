@@ -1,0 +1,110 @@
+manifest_version = 4
+
+[app]
+id = "org.anthracite.certs"
+namespace = "anthracite:certs"
+name = "{{app_name}}"
+version = "0.7.0"
+summary = "{{app_summary}}"
+license = "Apache-2.0"
+icon = "shield"
+
+[service]
+path = "{{service_path}}"
+sha256 = "{{sha256}}"
+class = "{{service_class}}"
+argv = {{service_argv}}
+roots = ["/etc/ssl/certs:ro"]
+
+[[export]]
+interface = "anthracite:certs/store@1.0.0"
+
+[[route]]
+method = "GET"
+path = "/certs"
+call = "anthracite:certs/store@1.0.0#inventory"
+
+[[route]]
+method = "GET"
+path = "/certificate"
+call = "anthracite:certs/store@1.0.0#get-certificate"
+
+[[route]]
+method = "POST"
+path = "/certs"
+call = "anthracite:certs/store@1.0.0#import-certificate"
+
+[[route]]
+method = "DELETE"
+path = "/certificate"
+call = "anthracite:certs/store@1.0.0#remove-certificate"
+
+[[route]]
+method = "POST"
+path = "/certificate/validate"
+call = "anthracite:certs/store@1.0.0#validate"
+
+[[route]]
+method = "POST"
+path = "/certificate/publish"
+call = "anthracite:certs/store@1.0.0#publish"
+
+[[route]]
+method = "POST"
+path = "/certificate/auto-renew"
+call = "anthracite:certs/store@1.0.0#set-auto-renew"
+
+[[slot]]
+id = "panel.view"
+label = "Certificates"
+icon = "shield"
+order = 23
+tag = "anth-certs"
+module = "web/certs.js"
+sha256 = "{{module_sha256}}"
+
+[[slot]]
+id = "panel.fab"
+label = "Certificates"
+icon = "plus"
+order = 23
+tag = "certs-fab"
+view = "anth-certs"
+module = ""
+sha256 = ""
+
+[[slot.actions]]
+label = "Import certificate"
+icon = "upload"
+tag = "import"
+target = "certs-import-modal"
+
+[[slot.actions]]
+label = "Refresh"
+icon = "refresh"
+tag = "refresh"
+action = "refresh"
+
+[[slot]]
+id = "panel.modal"
+label = "Import certificate"
+order = 32
+tag = "certs-import-modal"
+module = "web/certs-modal.js"
+sha256 = "{{modal_sha256}}"
+
+[[cli]]
+call = "anthracite:certs/store@1.0.0#inventory"
+verb = "list"
+
+[[cli]]
+call = "anthracite:certs/store@1.0.0#get-certificate"
+verb = "show"
+
+[[cli]]
+call = "anthracite:certs/store@1.0.0#import-certificate"
+verb = "import"
+
+[[cli]]
+call = "anthracite:certs/store@1.0.0#validate"
+verb = "validate"

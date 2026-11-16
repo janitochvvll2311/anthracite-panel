@@ -1,0 +1,59 @@
+package anthracite:certs@1.0.0;
+
+interface store {
+    use anth:error/kinds@1.0.0.{error};
+
+    enum source {
+        acme,
+        imported,
+        system,
+    }
+
+    enum status {
+        valid,
+        expiring,
+        expired,
+        invalid,
+    }
+
+    record certificate {
+        id: string,
+        names: list<string>,
+        issuer: string,
+        not-before: u64,
+        not-after: u64,
+        key-type: string,
+        source: source,
+        fingerprint-sha256: string,
+        status: status,
+        auto-renew: bool,
+    }
+
+    record import-request {
+        cert-pem: string,
+        chain-pem: string,
+        key-pem: string,
+        names: list<string>,
+        auto-renew: bool,
+    }
+
+    record validation {
+        ok: bool,
+        reason: option<string>,
+        chain-ok: bool,
+        key-matches: bool,
+    }
+
+    inventory: func() -> list<certificate>;
+    get-certificate: func(id: string) -> option<certificate>;
+    import-certificate: func(request: import-request) -> result<certificate, error>;
+    store-issued: func(request: import-request) -> result<certificate, error>;
+    remove-certificate: func(id: string) -> result<bool, error>;
+    validate: func(id: string) -> validation;
+    publish: func(id: string) -> result<certificate, error>;
+    set-auto-renew: func(id: string, enabled: bool) -> result<certificate, error>;
+}
+
+world app {
+    export store;
+}
