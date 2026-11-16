@@ -13,11 +13,14 @@ not through the public router.
 
 - **Implemented in v0.7.0 (phase 0c):** the engine binds
   `state/broker/<app-id>.sock` for every composed app and hands the path over as
-  `{broker}`. The socket is `0600` and owned by the service uid (the directory
-  stays `0711`), and the broker checks `SO_PEERCRED` before reading a request:
-  another service cannot open a peer's socket and inherit its grant. The service
-  posts `interface#function` plus `input` to `/__anth/call`; the broker checks
-  that the caller's grant imports the interface, resolves the composed provider,
+  `{broker}`. The socket is `0600` and, when the engine runs as root, owned by
+  the service uid (the directory stays `0711`); the broker then checks
+  `SO_PEERCRED` before reading a request, so another service cannot open a
+  peer's socket and inherit its grant. Without root the services share the
+  engine uid and that check cannot tell them apart (the uid-layer gap in
+  [Services](../../guide/services.md#supervision)). The service posts
+  `interface#function` plus `input` to `/__anth/call`; the broker checks that
+  the caller's grant imports the interface, resolves the composed provider,
   reuses `AppCaller` (and therefore the provider's budget), and audits every call
   as `broker.call`. A call to an interface the caller does not import is a
   denial with the caller in the record. `POST /__anth/stream` carries the same
