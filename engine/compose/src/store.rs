@@ -83,6 +83,39 @@ pub(crate) fn read(path: &Path) -> Result<Option<String>, Error> {
 /// the new one, never a half-written file.
 pub(crate) fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), Error> {
     ensure_dir(dir)?;
+    write_bytes(dir, name, bytes)
+}
+
+/// The state root is `0711` (traversable for service uids) and still owns
+/// `composition.toml`; a subdirectory must stay `0700`.
+pub(crate) fn write_atomic_root(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), Error> {
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(Error::invalid(format!(
+                    "{} is not a real directory",
+                    dir.display()
+                )));
+            }
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode != 0o711 {
+                return Err(Error::invalid(format!(
+                    "{} is {mode:04o}; the state root should be 0711",
+                    dir.display()
+                )));
+            }
+        }
+        Err(error) => {
+            return Err(Error::internal(format!(
+                "inspecting {}: {error}",
+                dir.display()
+            )))
+        }
+    }
+    write_bytes(dir, name, bytes)
+}
+
+fn write_bytes(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), Error> {
     let path = dir.join(name);
     reject_symlink(&path)?;
     let temp = dir.join(format!(

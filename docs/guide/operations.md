@@ -42,7 +42,7 @@ composition, credentials and the audit log. Back it up as a unit.
 1. Stop the panel/engine (or accept a crash-consistent copy; a stopped copy is
    the supported one).
 2. Copy `$state` with permissions (`rsync -a`, `tar -cp`). The directory is
-   `0700`; a backup that leaks the keyring and the credentials is a backup of the
+   `0711` at the root and `0700` below; a backup that leaks the keyring and the credentials is a backup of the
    operator's authority.
 3. Restore it to the same path on the same or a new host, then start the panel.
 

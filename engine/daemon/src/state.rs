@@ -1,7 +1,9 @@
 //! The state tree (§6.8): created once, never inferred.
 //!
-//! Directories are `0700` and files `0600`, and a symlink where a file or
-//! directory should be is a hard error rather than something to follow.
+//! The root is `0711` so a service uid can traverse it; every child is `0700`
+//! (`shared` is `0770`, the trust domain) and files are `0600`. A symlink where
+//! a file or directory should be is a hard error rather than something to
+//! follow.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -22,6 +24,11 @@ const COMPOSITION: &str = "composition.toml";
 const AUDIT: &str = "audit.jsonl";
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
+/// The root is traversable but not listable: a service needs to reach its own
+/// `{data}` and socket, while every child directory stays `0700`.
+const ROOT_MODE: u32 = 0o711;
+/// `{shared}` is the trust domain: every service keeps the engine gid.
+const SHARED_MODE: u32 = 0o770;
 
 /// What `check` found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +59,28 @@ pub fn load_composition(state: &Path) -> Result<Composition, Error> {
 /// Creates the tree if it is missing and checks the shape if it is not.
 pub fn ensure(root: &Path) -> Result<(), Error> {
     create_dir(root)?;
+    fs::set_permissions(root, fs::Permissions::from_mode(ROOT_MODE)).map_err(|error| {
+        Error::internal(format!(
+            "setting permissions on {}: {error}",
+            root.display()
+        ))
+    })?;
     for name in DIRS {
-        create_dir(&root.join(name))?;
+        let path = root.join(name);
+        create_dir(&path)?;
+        let mode = match *name {
+            "shared" => Some(SHARED_MODE),
+            "data" => Some(ROOT_MODE),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).map_err(|error| {
+                Error::internal(format!(
+                    "setting permissions on {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
     }
     let composition = Composition::empty().to_toml()?;
     write_missing(&root.join(COMPOSITION), composition.as_bytes())?;
@@ -105,7 +132,9 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
                     root.display()
                 )));
             }
-            check_mode(root, &metadata, DIR_MODE)?;
+            // A tree written before L1 is still valid for a read-only check;
+            // the next boot upgrades it.
+            check_mode_any(root, &metadata, &[ROOT_MODE, DIR_MODE])?;
         }
     }
 
@@ -130,7 +159,12 @@ pub fn check(root: &Path) -> Result<StateStatus, Error> {
                 path.display()
             )));
         }
-        check_mode(&path, &metadata, DIR_MODE)?;
+        let accepted: &[u32] = match *name {
+            "shared" => &[SHARED_MODE, DIR_MODE],
+            "data" => &[ROOT_MODE, DIR_MODE],
+            _ => &[DIR_MODE],
+        };
+        check_mode_any(&path, &metadata, accepted)?;
     }
 
     for name in FILES {
@@ -255,6 +289,22 @@ fn check_mode(path: &Path, metadata: &fs::Metadata, expected: u32) -> Result<(),
     Ok(())
 }
 
+fn check_mode_any(path: &Path, metadata: &fs::Metadata, accepted: &[u32]) -> Result<(), Error> {
+    let actual = metadata.permissions().mode() & 0o777;
+    if !accepted.contains(&actual) {
+        let expected = accepted
+            .iter()
+            .map(|mode| format!("{mode:04o}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        return Err(Error::invalid(format!(
+            "{} is {actual:04o}; it should be {expected}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn create_dir(path: &Path) -> Result<(), Error> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -333,11 +383,23 @@ mod tests {
     fn the_tree_is_created_with_the_right_modes() {
         let root = scratch("create");
         ensure(&root).expect("ensure");
+        let root_mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(root_mode, ROOT_MODE, "the root should be 0711");
         for name in DIRS {
             let path = root.join(name);
             assert!(path.is_dir(), "{} should be a directory", path.display());
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, DIR_MODE, "{} should be 0700", path.display());
+            let expected = match *name {
+                "shared" => SHARED_MODE,
+                "data" => ROOT_MODE,
+                _ => DIR_MODE,
+            };
+            assert_eq!(
+                mode,
+                expected,
+                "{} should be {expected:04o}",
+                path.display()
+            );
         }
         let composition = fs::read_to_string(root.join("composition.toml")).expect("read");
         let parsed = Composition::parse(&composition).expect("parse");
@@ -453,6 +515,19 @@ mod tests {
         assert!(error.message().contains("not writable"), "{error}");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("chmod back");
         fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn a_pre_l1_tree_is_still_valid_for_a_read_only_check() {
+        let root = scratch("pre-l1");
+        ensure(&root).expect("ensure");
+        // A v0.6 tree: 0700 root, 0700 shared and 0700 data.
+        fs::set_permissions(&root, fs::Permissions::from_mode(DIR_MODE)).expect("root");
+        fs::set_permissions(root.join("shared"), fs::Permissions::from_mode(DIR_MODE))
+            .expect("shared");
+        fs::set_permissions(root.join("data"), fs::Permissions::from_mode(DIR_MODE)).expect("data");
+        check(&root).expect("an old tree is readable");
+        fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]

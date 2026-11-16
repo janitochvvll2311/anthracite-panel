@@ -65,23 +65,25 @@ and exits with the engine's diagnostics.
 
 ## The state tree
 
-The engine owns one directory, created `0700` on first boot:
+The engine owns one directory. The root is `0711` (traversable, not listable)
+so a service uid can reach the directory it owns:
 
 ```
 $state/
   apps/<app-id>/          verified bundle + descriptor.toml (engine-written)
   grants/<app-id>.toml    the frozen authority
   keys/<fingerprint>.toml the third-party keyring
-  data/<app-id>/          the app's {data}, 0700
-  shared/                 the service trust domain ({shared})
-  run/                    native service sockets
+  data/<app-id>/          the app's {data}, 0700, owned by its service uid
+  shared/                 the service trust domain ({shared}), 0770
+  run/<app-id>/           the service's private socket directory, 0700
+  broker/                 the per-service broker sockets (0c)
   composition.toml        the composed profiles
   credentials.txt         the operator password and the first-boot flag
   audit.jsonl             one JSON object per line, append-only
 ```
 
-Directories are `0700` and the credentials are `0600`; the audit log is `0644`
-so a log shipper can read it. The engine refuses a symlinked or
+Directories are `0700` (`{shared}` is `0770`) and the credentials are `0600`;
+the audit log is `0644` so a log shipper can read it. The engine refuses a symlinked or
 wrong-mode state root rather than following it. The `apps/` tree is not a
 scratch area: editing it breaks the grant, and the engine reports the app as a
 problem.

@@ -161,7 +161,8 @@ fn apps_state_with(composed: &[&str]) -> (Arc<EngineState>, std::path::PathBuf) 
     let web = app.join("web");
     std::fs::create_dir_all(&wit).expect("mkdir");
     std::fs::create_dir_all(&web).expect("mkdir");
-    for path in [&dir, &dir.join("apps"), &app, &wit, &web] {
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o711)).expect("chmod");
+    for path in [&dir.join("apps"), &app, &wit, &web] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("chmod");
     }
     let manifest = "manifest_version = 2\n\n[app]\nid = \"org.example.notes\"\nnamespace = \"example:notes\"\nname = \"Notes\"\nversion = \"0.1.0\"\n\n[wasm]\npath = \"wasm/test.wasm\"\nsha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\n[[export]]\ninterface = \"example:notes/thing@1.0.0\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/notes\"\ncall = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/stream\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\n\n[[route]]\nmethod = \"GET\"\npath = \"/socket\"\ncall = \"example:notes/thing@1.0.0#follow\"\nstream = true\ntransport = \"websocket\"\nwrite = \"example:notes/thing@1.0.0#ping\"\n\n[[route]]\nmethod = \"GET\"\npath = \"/events\"\ncall = \"example:notes/thing@1.0.0#watch\"\nstream = true\nevents = true\n\n[[slot]]\nid = \"panel.view\"\nlabel = \"Notes\"\norder = 1\ntag = \"notes\"\nmodule = \"web/notes.js\"\nsha256 = \"a87f13cb0f53003ce287621f67b588959fe569bcc8864527feb741b8bf5d6c71\"\n\n[[cli]]\ncall = \"example:notes/thing@1.0.0#ping\"\nverb = \"list\"\n";

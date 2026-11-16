@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use anth_compose::audit::{timestamp, AuditLog};
 use anth_contract::{
-    AppId, AuditAction, AuditEntry, Error, ErrorEnvelope, ErrorKind, ExportTarget, Outcome,
-    ServiceClass,
+    AppId, AuditAction, AuditEntry, Error, ErrorEnvelope, ErrorKind, ExportTarget, Listener,
+    Outcome, Root, ServiceClass,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -63,6 +63,10 @@ pub struct ServiceLaunch {
     pub socket: PathBuf,
     /// The per-app data directory substituted for `{data}`.
     pub data_dir: PathBuf,
+    /// The v4 roots the operator approved; empty means the implicit set only.
+    pub roots: Vec<Root>,
+    /// The v4 listeners the operator approved.
+    pub listen: Vec<Listener>,
     pub exports: BTreeMap<String, ExportTarget>,
     pub start_timeout: Duration,
 }
@@ -74,6 +78,11 @@ struct Service {
     class: ServiceClass,
     argv: Vec<String>,
     socket: PathBuf,
+    data_dir: PathBuf,
+    roots: Vec<Root>,
+    listen: Vec<Listener>,
+    uid: u32,
+    gid: u32,
     exports: BTreeMap<String, ExportTarget>,
     start_timeout: Duration,
     audit: AuditLog,
@@ -130,9 +139,13 @@ impl ServiceSupervisor {
     /// fast restart cannot have the old engine unlink the new engine's sockets
     /// while its services are shutting down.
     pub fn socket_path(state: &Path, app: &AppId) -> PathBuf {
-        state
-            .join("run")
-            .join(format!("{app}-{}.sock", std::process::id()))
+        Self::run_dir(state, app).join(format!("{}.sock", std::process::id()))
+    }
+
+    /// The per-service socket directory. It belongs to the service uid so the
+    /// child can bind its socket; the parent `run/` stays engine-owned.
+    pub fn run_dir(state: &Path, app: &AppId) -> PathBuf {
+        state.join("run").join(app.as_str())
     }
 
     /// Launches the service and waits for `GET /health`. A slow service is an
@@ -141,6 +154,40 @@ impl ServiceSupervisor {
         self.ensure_run_dir()?;
         let app = AppId::parse(&launch.app)?;
         self.stop_app(&app).await;
+        let uid = if crate::sandbox::is_root() {
+            match crate::sandbox::allocate_uid(app.as_str()) {
+                Ok(uid) => uid,
+                Err(error) => {
+                    let reason = format!("uid: allocating an id for {app}: {error}");
+                    self.denied(&app, launch.class, &reason);
+                    return Err(Error::denied(reason));
+                }
+            }
+        } else {
+            // Without root the uid layer is unavailable; Landlock still applies
+            // and the service keeps the engine user. The release runs the
+            // engine as root or with the capability (D19).
+            // SAFETY: `geteuid` has no preconditions.
+            unsafe { libc::geteuid() }
+        };
+        let gid = crate::sandbox::engine_gid();
+        let socket_dir = launch
+            .socket
+            .parent()
+            .ok_or_else(|| Error::internal("the socket has no parent directory"))?
+            .to_path_buf();
+        self.prepare(&app, &launch, &socket_dir, uid, gid)?;
+        let binary = match crate::sandbox::stage_binary(&launch.binary, &socket_dir, uid, gid) {
+            Ok(binary) => binary,
+            Err(error) => {
+                let reason = format!(
+                    "uid: staging {} for uid {uid}: {error}",
+                    launch.binary.display()
+                );
+                self.denied(&app, launch.class, &reason);
+                return Err(Error::denied(reason));
+            }
+        };
         match std::fs::symlink_metadata(&launch.socket) {
             Ok(metadata) if metadata.file_type().is_socket() => {
                 std::fs::remove_file(&launch.socket).map_err(|error| {
@@ -167,10 +214,15 @@ impl ServiceSupervisor {
 
         let service = Arc::new(Service {
             app: app.clone(),
-            binary: launch.binary,
+            binary,
             class: launch.class,
             argv: launch.argv,
             socket: launch.socket,
+            data_dir: launch.data_dir,
+            roots: launch.roots,
+            listen: launch.listen,
+            uid,
+            gid,
             exports: launch.exports,
             start_timeout: launch.start_timeout,
             audit: self.audit.clone(),
@@ -375,13 +427,120 @@ impl ServiceSupervisor {
         service.running.store(false, Ordering::Release);
     }
 
+    /// The L1 preconditions and the directories the service owns. A failure is
+    /// a `service.deny` with the layer, not a crash: the launch is not retried.
+    fn prepare(
+        &self,
+        app: &AppId,
+        launch: &ServiceLaunch,
+        socket_dir: &Path,
+        uid: u32,
+        gid: u32,
+    ) -> Result<(), Error> {
+        let denied = |reason: String| {
+            self.denied(app, launch.class, &reason);
+            Error::denied(reason)
+        };
+        if crate::sandbox::abi().is_none() {
+            return Err(denied(
+                "landlock: the kernel has no Landlock (5.13+); refusing to run unconfined"
+                    .to_string(),
+            ));
+        }
+        if launch
+            .listen
+            .iter()
+            .any(|listener| listener.is_privileged())
+            && !crate::sandbox::has_net_bind_service()
+        {
+            return Err(denied(
+                "capability: a declared listener is below 1024 and the engine has no \
+                 CAP_NET_BIND_SERVICE"
+                    .to_string(),
+            ));
+        }
+        let state = launch
+            .data_dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| Error::internal("the data directory has no state root"))?;
+        if crate::sandbox::is_root() {
+            // The service uid must be able to traverse the engine's root and
+            // `run/` to reach the directory it owns; neither is listable.
+            crate::sandbox::make_traversable(state).map_err(|error| {
+                denied(format!(
+                    "uid: making {} traversable: {error}",
+                    state.display()
+                ))
+            })?;
+            crate::sandbox::make_traversable(&self.run_dir).map_err(|error| {
+                denied(format!(
+                    "uid: making {} traversable: {error}",
+                    self.run_dir.display()
+                ))
+            })?;
+            // `data/` is engine-owned; each app directory below it is 0700 and
+            // owned by its service, so the parent only needs traversal.
+            let data_root = state.join("data");
+            std::fs::create_dir_all(&data_root).map_err(|error| {
+                denied(format!("uid: creating {}: {error}", data_root.display()))
+            })?;
+            crate::sandbox::make_traversable(&data_root).map_err(|error| {
+                denied(format!(
+                    "uid: making {} traversable: {error}",
+                    data_root.display()
+                ))
+            })?;
+        }
+        for path in [socket_dir, launch.data_dir.as_path()] {
+            crate::sandbox::prepare_owned(path, uid, gid).map_err(|error| {
+                denied(format!(
+                    "uid: preparing {} for uid {uid}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        crate::sandbox::prepare_shared(&state.join("shared"), gid).map_err(|error| {
+            denied(format!(
+                "uid: preparing {}: {error}",
+                state.join("shared").display()
+            ))
+        })?;
+        // The broker's listener belongs to the engine (0c); the service only
+        // needs the path in its argv, not write access to the directory.
+        std::fs::create_dir_all(state.join("broker")).map_err(|error| {
+            denied(format!(
+                "uid: preparing {}: {error}",
+                state.join("broker").display()
+            ))
+        })?;
+        Ok(())
+    }
+
+    fn denied(&self, app: &AppId, class: ServiceClass, reason: &str) {
+        let layer = deny_layer(reason);
+        let entry = AuditEntry {
+            at: timestamp(),
+            actor: "system".to_string(),
+            action: AuditAction::ServiceDeny,
+            app: Some(app.to_string()),
+            result: Outcome::Denied,
+            detail: Some(serde_json::json!({
+                "reason": reason,
+                "class": class.as_str(),
+                "layer": layer,
+            })),
+        };
+        let _ = self.audit.append(&entry);
+    }
+
     fn ensure_run_dir(&self) -> Result<(), Error> {
         match std::fs::symlink_metadata(&self.run_dir) {
             Ok(metadata) if metadata.is_dir() => {
-                std::fs::set_permissions(&self.run_dir, std::fs::Permissions::from_mode(0o700))
+                std::fs::set_permissions(&self.run_dir, std::fs::Permissions::from_mode(0o711))
                     .map_err(|error| {
                         Error::internal(format!(
-                            "setting {} to 0700: {error}",
+                            "setting {} to 0711: {error}",
                             self.run_dir.display()
                         ))
                     })?;
@@ -395,10 +554,10 @@ impl ServiceSupervisor {
                 std::fs::create_dir(&self.run_dir).map_err(|error| {
                     Error::internal(format!("creating {}: {error}", self.run_dir.display()))
                 })?;
-                std::fs::set_permissions(&self.run_dir, std::fs::Permissions::from_mode(0o700))
+                std::fs::set_permissions(&self.run_dir, std::fs::Permissions::from_mode(0o711))
                     .map_err(|error| {
                         Error::internal(format!(
-                            "setting {} to 0700: {error}",
+                            "setting {} to 0711: {error}",
                             self.run_dir.display()
                         ))
                     })
@@ -435,6 +594,7 @@ async fn drive(service: Arc<Service>, ready: oneshot::Sender<Result<(), Error>>)
                     Some(serde_json::json!({
                         "reason": error.message(),
                         "class": service.class.as_str(),
+                        "layer": deny_layer(error.message()),
                     })),
                 );
                 let _ = std::fs::remove_file(&service.socket);
@@ -531,7 +691,46 @@ async fn drive(service: Arc<Service>, ready: oneshot::Sender<Result<(), Error>>)
     }
 }
 
+/// The Landlock view: the implicit directories the contract guarantees plus
+/// every root the operator approved. Roots that cover the engine state are
+/// allowed only as far as the per-service uid already narrows them.
+fn landlock_rules(service: &Service) -> Result<Vec<crate::sandbox::Rule>, Error> {
+    let abi = crate::sandbox::abi()
+        .ok_or_else(|| Error::denied("landlock: the kernel has no Landlock (5.13+)"))?;
+    let state = service
+        .data_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| Error::internal("the data directory has no state root"))?;
+    let socket_dir = service
+        .socket
+        .parent()
+        .ok_or_else(|| Error::internal("the socket has no parent directory"))?;
+    let mut rules = crate::sandbox::implicit_rules(
+        abi,
+        &service.data_dir,
+        socket_dir,
+        &state.join("broker"),
+        &state.join("shared"),
+        &service.binary,
+    );
+    for root in &service.roots {
+        rules.push(crate::sandbox::Rule {
+            path: PathBuf::from(&root.path),
+            access: if root.read_only {
+                crate::sandbox::READ
+            } else {
+                crate::sandbox::read_write(abi)
+            },
+        });
+    }
+    Ok(rules)
+}
+
 fn spawn(service: &Service) -> Result<Child, Error> {
+    let rules = landlock_rules(service)?;
+    let ruleset =
+        crate::sandbox::build(&rules).map_err(|error| Error::denied(error.to_string()))?;
     let mut command = Command::new(&service.binary);
     command
         .args(&service.argv)
@@ -542,6 +741,13 @@ fn spawn(service: &Service) -> Result<Child, Error> {
         .stderr(Stdio::null())
         .kill_on_drop(true);
     let class = service.class;
+    let uid = service.uid;
+    let gid = service.gid;
+    let keep_bind = service
+        .listen
+        .iter()
+        .any(|listener| listener.is_privileged());
+    let root = crate::sandbox::is_root();
     // SAFETY: every call is async-signal-safe, the closure allocates nothing,
     // and it runs between fork and exec, which is the only place it can run.
     unsafe {
@@ -578,12 +784,54 @@ fn spawn(service: &Service) -> Result<Child, Error> {
                 }
             };
             set_limit(libc::RLIMIT_NPROC, nproc)?;
+            // L1: the capability bounding set first (needs the engine's
+            // CAP_SETPCAP), then the uid, then the filesystem view. The
+            // ruleset was built before the fork so a root the service cannot
+            // open itself (the bundle directory) still got a rule.
+            if root {
+                crate::sandbox::drop_bounding_set(keep_bind)
+                    .map_err(|error| prefixed("capability", error))?;
+            }
+            crate::sandbox::become_service(uid, gid, keep_bind)
+                .map_err(|error| prefixed("uid", error))?;
+            let restricted = crate::sandbox::restrict_with(ruleset);
+            libc::close(ruleset);
+            restricted.map_err(|error| prefixed("landlock", error))?;
             Ok(())
         });
     }
-    command.spawn().map_err(|error| {
-        Error::unavailable(format!("starting `{}`: {error}", service.binary.display()))
+    let spawned = command.spawn();
+    // SAFETY: the child has its own copy of the descriptor; the parent must not
+    // leak it across restarts.
+    unsafe {
+        libc::close(ruleset);
+    }
+    spawned.map_err(|error| {
+        Error::denied(format!(
+            "sandbox: starting `{}`: {error}",
+            service.binary.display()
+        ))
     })
+}
+
+/// Adds the layer to an `io::Error` produced between fork and exec, so the
+/// spawn-time audit entry can classify it.
+fn prefixed(layer: &str, error: std::io::Error) -> std::io::Error {
+    std::io::Error::new(error.kind(), format!("{layer}: {error}"))
+}
+
+/// The layer a denial came from, for the audit detail. Kept free so the
+/// spawn-time refusal in `drive` classifies the same way as `prepare`.
+fn deny_layer(reason: &str) -> &'static str {
+    if reason.contains("landlock:") {
+        "landlock"
+    } else if reason.contains("capability:") {
+        "capability"
+    } else if reason.contains("uid:") {
+        "uid"
+    } else {
+        "sandbox"
+    }
 }
 
 fn set_limit(resource: libc::c_int, desired: libc::rlim_t) -> std::io::Result<()> {
@@ -947,5 +1195,24 @@ impl anth_api::AppCaller for EngineCaller {
                 _ => self.wasm.stream(app, interface, function, input).await,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deny_layer;
+
+    #[test]
+    fn a_prefixed_sandbox_error_keeps_its_layer() {
+        assert_eq!(
+            deny_layer("sandbox: starting x: landlock: /x: no"),
+            "landlock"
+        );
+        assert_eq!(
+            deny_layer("sandbox: starting x: capability: no bit"),
+            "capability"
+        );
+        assert_eq!(deny_layer("sandbox: starting x: uid: EPERM"), "uid");
+        assert_eq!(deny_layer("sandbox: starting x: ENOENT"), "sandbox");
     }
 }

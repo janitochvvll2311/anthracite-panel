@@ -297,6 +297,8 @@ fn service_launch(
         .iter()
         .map(|export| (export.interface.clone(), app.manifest.export_target(export)))
         .collect();
+    let roots = anth_contract::parse_roots(&service.roots)?;
+    let listen = anth_contract::parse_listeners(&service.listen)?;
     Ok(ServiceLaunch {
         app: id.to_string(),
         binary,
@@ -304,6 +306,8 @@ fn service_launch(
         argv,
         socket,
         data_dir,
+        roots,
+        listen,
         exports,
         start_timeout: std::time::Duration::from_millis(limits.start_timeout_ms),
     })
